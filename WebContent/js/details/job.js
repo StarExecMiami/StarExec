@@ -15,6 +15,7 @@ var getPanelTableInitializer;
 // have not yet returned. If the user clicks on a new job space, these requests will all
 // be aborted, as they will no longer be useful.
 var openAjaxRequests = [];
+var includeUnknown = false;
 
 $(document).ready(function() {
     initializeGlobalPageVariables();
@@ -28,12 +29,13 @@ $(document).ready(function() {
 			pairTable.fnDraw(false);
 		}, 30000);
 	}
-
 	//puts data into the data tables
 	reloadTables($("#spaceId").attr("value"));
 
 	$("#solverSummaryField").hide()
 	$("#graphField").hide()
+	setupEverythingForUnknownStatusWrapper();
+	
 });
 
 // Initializes the fields of the global DETAILS_JOB object.
@@ -47,7 +49,8 @@ function initializeGlobalPageVariables() {
 	DETAILS_JOB.primitivesToAnonymize = $('#primitivesToAnonymize')
 	.attr('value');
 	DETAILS_JOB.anonymousLinkUuid = getParameterByName('anonId');
-	DETAILS_JOB.spaceExplorerJsonData = getSpaceExplorerJsonData();		
+	DETAILS_JOB.spaceExplorerJsonData = getSpaceExplorerJsonData();	
+	
 
 	log("starexecUrl: " + DETAILS_JOB.starexecUrl);
 	log("isLocalJobPage: " + isLocalJobPage);
@@ -98,9 +101,65 @@ function setSyncResultsText() {
 	}
 }
 
+/* 
+* This function takes the json and returns a 2d array representing the data we need for our datatable
+* but alex, what if we had a million job pairs, wouldn't this be slow? If we had that amout, the user
+* problably won't download the local job page. We warned the users that this might take a while to 
+* download for large jobs when the user tries to download it...
+* @author aguo2
+*/
+function parseStatsForLJP(json, isShortStats) {
+	/* as of right now, the last 8 items are excluded in short stats. 
+	   we need to CHANGE THIS IF THE API CHANGES OR IT WILL BREAK!
+	   This choice for the api was originaly made to reduce the data
+	   sent from the backend
+	*/
+	if (isShortStats) {
+		var array = json.aaData;
+		for (var i = 0; i < array.length; i ++ ) {
+			for (var j = 0; j < 8; j++) {
+				array[i].pop();
+			}
+		}
+		return array;
+	}
+	else {
+		//we want the full stats, just return the aadata
+		return json.aaData;
+	}
+
+}
+
+/* 
+* goes through each of the subspace summaries and reloads the data based on if
+* this is a local job page
+* @author aguo2 and pathawks
+*/
 function refreshPanels() {
-	for (var i = 0; i < panelArray.length; i++) {
-		panelArray[i].api().ajax.reload(null, true);
+	if (!isLocalJobPage) {
+		for (var i = 0; i < panelArray.length; i++) {
+			panelArray[i].api().ajax.reload(null, true);
+		}
+	}
+	else {
+		//go through all the subspace sumaries and refresh it
+		for (var i = 0; i < panelArray.length; i ++) {
+				
+			//the simplest way is to just parse the element out of the id.
+			let id = parseInt(panelArray[i].attr("id").replace('panel',''));
+			//get the json and parse for current pannel
+			let json = $.parseJSON($(getIDStringForJSON(id)).attr("value"));
+			/*console.log has some weird problem as shown in the link, this is why was do 
+			stringify to make sure it works. This took me an hour to figure out...
+			let this be a WARNING to the next person that sees this
+			https://stackoverflow.com/questions/23392111/console-log-async-or-sync
+			*/
+			//console.log(JSON.stringify(json));
+			var newDataArray = parseStatsForLJP(json, true);
+			//console.log(JSON.stringify(json));
+			panelArray[i].DataTable().clear().rows.add(newDataArray).draw();
+			}
+			loadStatsIntoSolveTbl();
 	}
 }
 
@@ -186,6 +245,58 @@ function createDownloadRequest(item, type, returnIds, getCompleted) {
 	window.location.href = href;
 }
 
+/*
+* given an IDs of the pair table as an int[], attatch the links for each
+* pair table
+*/
+function attatchLinksHelper(tables) {
+	tables.forEach(
+		function(id) {
+			var $pairTbl = $('#' + id + 'pairTbl');
+			$pairTbl.find("tbody").on("click", "tr", function() {
+				var pairId = $(this).find('input').val();
+				window.location.assign("./pair_" + pairId + ".html");
+			}).hover(
+				function () {
+					//mouse is over table item
+					document.body.style.cursor = "pointer";
+				},
+				function () {
+					//mouse is over table item
+					document.body.style.cursor = "auto";
+		
+				}
+			);
+		}
+	)
+}
+
+/* 
+* This function attatches all the links for the jobpairtable 
+* iff it's a local job page
+*/
+function initPairLinksForLJP() {
+	var currentID = $("#spaceId").attr("value");
+	var ids = []
+	ids.push(currentID);
+	//if the job has multiple subspaces, get each of the subspaces and 
+	//attatch the links also.
+	var unparsedIds = $("#exploreList").children().find("ul").children();
+	if (unparsedIds.length > 0) {
+		//we actually have subspaces
+		unparsedIds.each(
+			function(i) {
+				ids.push($(this).attr('id'));
+			}
+		)
+	}
+	//unparsed Ids is an array of dom elements that contain the subspace ids in the id field. 
+
+
+	attatchLinksHelper(ids);
+	
+}
+
 function initSpaceExplorer() {
 	// Set the path to the css theme for the jstree plugin
 
@@ -237,6 +348,9 @@ function initSpaceExplorer() {
 			//no solvers will be selected when a space changes, so hide this button
 			$("#compareSolvers").hide();
 			reloadTables(id);
+			if (isLocalJobPage) {
+				loadStatsIntoSolveTbl();
+			}
 		}
 	}).on("click", "a", function(event, data) {
 		event.preventDefault();  // This just disable's links in the node title
@@ -290,12 +404,18 @@ function reloadTables(id) {
 			refreshStats(id);
 
 		} else {
+			//if its a local job page:
 			$('[id$=pairTbl_wrapper]').hide();
 			$('#pairTblField').show();
-			$('#' + id + 'pairTbl_wrapper').show();
-			$('[id$=solveTbl_wrapper]').hide();
-			$('#' + id + 'solveTbl_wrapper').show();
-			log('showing id: ' + id);
+			//we should hide the pair table field if there are no elements in the table. 
+			//IE when we have a job with multiple subspaces and we are at the root
+			if ($('#' + id + 'pairTbl').length == 0) {
+				$('#pairTblField').hide();
+			}
+			else {
+				$('#' + id + 'pairTbl_wrapper').show();
+			}
+			
 		}
 		initializePanels();
 	}
@@ -514,10 +634,14 @@ function initUI() {
 			$('.wallclockTime').hide();
 		}
 		setTimeButtonText();
+		refreshPanels();
 		if (!isLocalJobPage) {
-			refreshPanels();
 			refreshStats(curSpaceId);
 			pairTable.fnDraw(false);
+		}
+		else {
+			refreshPanels();
+			loadStatsIntoSolveTbl();
 		}
 	});
 
@@ -729,6 +853,7 @@ function initUI() {
 	setupPostProcessButton();
 	attachSortButtonFunctions();
 
+
 	//set the two default solvers to compare
 	var defaultSolver1 = $('#solverChoice1').attr('default');
 	$('#solverChoice1 option[value=' + defaultSolver1 + ']')
@@ -839,6 +964,47 @@ function setupDeleteJobButton() {
 			}
 		});
 	});
+}
+
+/* 
+* this sets up everything related to getting stats for solvers with unknown satus. This 
+* includes all the hash maps for state, and the buttons
+*/
+function setupEverythingForUnknownStatus(subspaces) {
+	var button = $("#includeUnknown");
+	button.button(
+		{icons: {
+			primary: "ui-icon-refresh"
+		}
+	}
+	);
+	if (!isLocalJobPage) {
+		button.click(
+			function () {
+				includeUnknown = !includeUnknown;
+				setUnknownButtonText();
+				//go through all the subspace sumaries and refresh it
+				refreshPanels();
+				$("#solveTbl").DataTable().ajax.reload();
+			}
+		)
+	}
+	else {
+		loadStatsIntoSolveTbl();
+		button.click(
+			function () {
+				includeUnknown = !includeUnknown;
+				setUnknownButtonText();
+				refreshPanels();
+				loadStatsIntoSolveTbl();
+				}
+				
+			
+		)
+		
+	}
+	 
+
 }
 
 function setupSetHighPriorityButton() {
@@ -1195,7 +1361,6 @@ function openSpace(childId) {
 function getPanelTable(space) {
 	var spaceName = space.attr("name");
 	var spaceId = parseInt(space.attr("id"));
-
 	return "<fieldset class=\"panelField\">" +
 		"<legend class=\"panelHeader\">" + spaceName + "</legend>" +
 		"<table id=panel" + spaceId + " spaceId=\"" + spaceId + "\" class=\"panel\"><thead>" +
@@ -1207,13 +1372,31 @@ function getPanelTable(space) {
 		"<tbody></tbody> </table></fieldset>";
 }
 
+/* 
+* only set up everything once.
+*/
+function setupEverythingForUnknownStatusWrapper() {
+	if (isLocalJobPage) {
+		var panelJson = $.parseJSON($("#subspacePanelJson" + curSpaceId)
+		.attr("value"));
+		setupEverythingForUnknownStatus(panelJson);
+
+	} else if (DETAILS_JOB.isAnonymousPage) {
+		$.getJSON(starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize + "?id=" + curSpaceId,
+		setupEverythingForUnknownStatus);
+	} else {
+		$.getJSON(starexecRoot + "services/space/" + jobId + "/jobspaces/false?id=" + curSpaceId,
+		setupEverythingForUnknownStatus);
+	}
+}
+
 function initializePanels() {
 	DETAILS_JOB.sentSpaceId = curSpaceId;
 	if (isLocalJobPage) {
 		var panelJson = $.parseJSON($("#subspacePanelJson" + DETAILS_JOB.sentSpaceId)
 		.attr("value"));
 		handleSpacesData(panelJson);
-		$("#subspacePanelJson" + DETAILS_JOB.sentSpaceId).remove();
+
 	} else if (DETAILS_JOB.isAnonymousPage) {
 		$.getJSON(starexecRoot + "services/space/anonymousLink/" + DETAILS_JOB.anonymousLinkUuid + "/jobspaces/false/" + DETAILS_JOB.primitivesToAnonymize + "?id=" + DETAILS_JOB.sentSpaceId,
 			handleSpacesData);
@@ -1232,6 +1415,7 @@ function handleSpacesData(spaces) {
 		$("#subspaceSummaryField").show();
 	}
 
+
 	/* I'm so sorry, but because JavaScript is a Function scoped language, I
 	 * need to wrap the body of this loop inside an anonymous function so that
 	 * the variables we create are limited to the body of the loop.
@@ -1249,38 +1433,41 @@ function handleSpacesData(spaces) {
 				return;
 			}
 			$("#panelActions").after(child); //put the table after the panelActions fieldset
-
+			//if this is a local job page, the getPanelTableInitializer gets the json for the space and parses it.
 			var panelTableInitializer = getPanelTableInitializer(jobId,
 				spaceId);
 			var $panel = $("#panel" + spaceId);
-
+			//for each panel attach the following event handler to be executed when the fieldset is opened
+			//then, immediately get rid of the event listener
 			$panel.parents(".panelField").one("open.expandable", function() {
 				var $this = $(this);
 				panelArray.push($panel.dataTable(panelTableInitializer));
 
-				/* We want each panel to reload its contents every 30 seconds while
-				  * it is open. If it is closed, it should not reload its contents. Upon
-				  * being opened, it should immediately refresh its contents because we
-				  * don't know how long it has been closed and we do not want to show
-				  * stale data for 30 seconds.
-				  * We can keep track of the interval handle internally as
-				  * `panelRefreshInterval`, but we must also expose it to `clearPanels`.
-				  * For this reason, we will let jQuery save the handle also so that we
-				  * can clear the interval if the panel is cleared.
-				  */
-				var panelRefreshInterval;
-				var reload = $panel.dataTable().api().ajax.reload;
-				$this.on("open.expandable", function() {
-					reload();
-					panelRefreshInterval = window.setInterval(reload, 30000);
-					$panel.data("panelRefreshInterval", panelRefreshInterval);
-				}).on("close.expandable", function() {
-					window.clearInterval(panelRefreshInterval);
-				});
+				//only reload the subspace summary if it's not a local job page
+				if (!isLocalJobPage) {
+					/* We want each panel to reload its contents every 30 seconds while
+					* it is open. If it is closed, it should not reload its contents. Upon
+					* being opened, it should immediately refresh its contents because we
+					* don't know how long it has been closed and we do not want to show
+					* stale data for 30 seconds.
+					* We can keep track of the interval handle internally as
+					* `panelRefreshInterval`, but we must also expose it to `clearPanels`.
+					* For this reason, we will let jQuery save the handle also so that we
+					* can clear the interval if the panel is cleared.
+					*/
+					var panelRefreshInterval;
+					var reload = $panel.dataTable().api().ajax.reload;
+					$this.on("open.expandable", function() {
+						reload();
+						panelRefreshInterval = window.setInterval(reload, 30000);
+						$panel.data("panelRefreshInterval", panelRefreshInterval);
+					}).on("close.expandable", function() {
+						window.clearInterval(panelRefreshInterval);
+					});
+				}
 			});
 		})();
 	}
-
 	$(".viewSubspace").click(function() {
 		var spaceId = $(this).parents("table.panel").attr("spaceId");
 		openSpace(spaceId);
@@ -1356,14 +1543,55 @@ function initDataTables() {
 
 	//Set up row click to send to pair details page
 	if (!DETAILS_JOB.isAnonymousPage) {
-		$pairTbl.find("tbody").on("click", "tr", function() {
-			var pairId = $(this).find('input').val();
-			window.location.assign(DETAILS_JOB.starexecUrl + "secure/details/pair.jsp?id=" + pairId);
-		});
-	}
+		if (!isLocalJobPage) {
+            //if its not a local job page, redirect to the server page.
+            $pairTbl.find("tbody").on("click", "tr", function() {
+                var pairId = $(this).find('input').val();
+                window.location.assign(DETAILS_JOB.starexecUrl + "secure/details/pair.jsp?id=" + pairId);
+            });
+        }
+		else {
+			initPairLinksForLJP();
+
+		}}
 
 	// Change the filter so that it only queries the server when the user stops typing
 	$pairTbl.dataTable().fnFilterOnDoneTyping();
+}
+
+/* 
+* loads the solver stats for the long form solverstats table
+* @author aguo2
+*/
+function loadStatsIntoSolveTbl() {
+	//get the datatable api
+	var id = parseInt(curSpaceId);
+	var $solveTbl = $("#solveTbl").DataTable()
+	let json = $.parseJSON($(getIDStringForJSON(id)).attr("value"));
+	var newDataArray = parseStatsForLJP(json, false);
+	$solveTbl.clear().rows.add(newDataArray).draw()
+}
+
+/*
+* For the local job page, we have json that's embedded into the html.
+* Given the space id, produce the string that gets the correct json.
+*/
+function getIDStringForJSON(id) {
+	var str = "#solverStats"
+	if (useWallclock) {
+		str += "WallTime"
+	}
+	else {
+		str += "CpuTime"
+	}
+	if (includeUnknown) {
+		str += "IncludeUnknowns"
+	}
+	else {
+		str += "ExcludeUnknowns"
+	}
+	str += id;
+	return str; 
 }
 
 //
@@ -1531,34 +1759,49 @@ function getSolverTableInitializer() {
 		return link(href, val[CONFLICTS]);
 	};
 
-	var panelTableInitializer = new window.star.DataTableConfig({
-		"dom": 'rt<"clear">',
-		"pageLength": 1000, // make sure we show every entry
-		"aoColumns": [
-			{"mRender": formatSolver},
-			{"mRender": formatConfig},
-			{"mRender": formatSolvedText},
-			{"mRender": formatTime},
-		]
-	});
+	var panelTableInitializer;
+	if (!isLocalJobPage) {
+		panelTableInitializer = new window.star.DataTableConfig({
+			"dom": 'rt<"clear">',
+			"pageLength": 1000, // make sure we show every entry
+			"aoColumns": [
+				{"mRender": formatSolver},
+				{"mRender": formatConfig},
+				{"mRender": formatSolvedText},
+				{"mRender": formatTime},
+			]
+		})
+	}
+	else {
+		//if its a local job page, take out the links when rendering...
+		
+		formatSolver = function(row, type, val) {
+			var href = getSolverLink(val[SOLVER_ID]);
+			return val[SOLVER_NAME];
+		};
+
+		formatConfig = function(row, type, val) {
+			return val[CONFIG_NAME];
+		}
+		panelTableInitializer = new window.star.DataTableConfig({
+			"dom": 'rt<"clear">',
+			"pageLength": 1000, // make sure we show every entry
+			"aoColumns": [
+				{"mRender": formatSolver},
+				{"mRender": formatConfig},
+				{"mRender": formatSolvedText},
+				{"mRender": formatTime},
+			]
+		})
+	}
 
 	if (isLocalJobPage) {
 		window.getPanelTableInitializer = function(jobId, spaceId) {
-			if (useWallclock) {
-				// get the JSON directly from the page if this is a local page.
-				return $.extend({},
-					$.parseJSON($('#jobSpaceWallclockTimeSolverStats' + spaceId)
-					.attr('value')),
-					panelTableInitializer
-				);
-			} else {
-				// get the JSON directly from the page if this is a local page.
-				return $.extend({},
-					$.parseJSON($('#jobSpaceCpuTimeSolverStats' + spaceId)
-					.attr('value')),
-					panelTableInitializer
-				);
-			}
+			return $.extend({},
+				$.parseJSON($(getIDStringForJSON(spaceId))
+				.attr('value')),
+				panelTableInitializer
+			);
 		}
 	} else {
 		var paginationUrlTemplate;
@@ -1610,16 +1853,19 @@ function getSolverTableInitializer() {
 	if (!isLocalJobPage) {
 		solverTableInitializer["sAjaxSource"] = starexecRoot + "services/jobs/";
 		solverTableInitializer["fnServerData"] = fnStatsPaginationHandler;
-	} else {
-		delete solverTableInitializer["aoColumns"];
 	}
 
 	return solverTableInitializer;
 }
 
 function fnShortStatsPaginationHandler(sSource, aoData, fnCallback) {
-	$.post(
-		sSource + useWallclock + "/" + getSelectedStage(),
+	/* 
+	I'm so sorry, but because the way that this is build, we need to parse the spaceid out of the url
+	there is no other way to get it cleanly without having to rewrite all of it :(
+	*/
+	var spaceId = parseInt(sSource.split("/")[6]);
+	var xhr = $.post(
+		sSource + useWallclock + "/" + getSelectedStage() + "/" + includeUnknown,
 		aoData,
 		function(nextDataTablePage) {
 			//if the user has clicked on a different space since this was called, we want those results, not these
@@ -1632,6 +1878,8 @@ function fnShortStatsPaginationHandler(sSource, aoData, fnCallback) {
 	).fail(function(code, textStatus) {
 		handleAjaxError(textStatus);
 	});
+
+	openAjaxRequests.push(xhr);
 }
 
 function fnStatsPaginationHandler(sSource, aoData, fnCallback) {
@@ -1643,9 +1891,9 @@ function fnStatsPaginationHandler(sSource, aoData, fnCallback) {
 	if (DETAILS_JOB.isAnonymousPage) {
 		postUrl = sSource + "solvers/anonymousLink/pagination/" + curSpaceId + "/" + getParameterByName(
 			"anonId") +
-			"/" + DETAILS_JOB.primitivesToAnonymize + "/false/" + useWallclock + "/" + getSelectedStage();
+			"/" + DETAILS_JOB.primitivesToAnonymize + "/false/" + useWallclock + "/" + getSelectedStage() + "/" + includeUnknown;
 	} else {
-		postUrl = sSource + "solvers/pagination/" + curSpaceId + "/false/" + useWallclock + "/" + getSelectedStage();
+		postUrl = sSource + "solvers/pagination/" + curSpaceId + "/false/" + useWallclock + "/" + getSelectedStage() + "/" + includeUnknown;
 	}
 	// var xhr = $.post(
 	// 	postUrl,

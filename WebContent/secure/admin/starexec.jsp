@@ -5,6 +5,7 @@
 	try {
 		request.setAttribute("debugModeActive", R.DEBUG_MODE_ACTIVE);
 		request.setAttribute("freezePrimitives", RESTHelpers.freezePrimitives());
+		request.setAttribute("readOnly", RESTHelpers.getReadOnly());
 	} catch (NumberFormatException nfe) {
 		response.sendError(
 				HttpServletResponse.SC_BAD_REQUEST,
@@ -69,7 +70,8 @@
 				When frozen, no new solvers or benchmarks can be uploaded.
 				Solvers and benchmarks cannot be copied between spaces
 				(though they can still be <em>linked</em>).
-			</p><p>
+			</p>
+			<p id="frozenDesc">
 				This mode is designed to be used when migrating primitives to a new drive.
 			</p>
 			<ul id="actionList">
@@ -82,7 +84,21 @@
 			<script>
 				var star = star || {};
 				star.freezePrimitives = ${freezePrimitives}
+				star.readOnly = ${readOnly}
+
+
 			</script>
+		</fieldset>
+		<fieldset>
+			<legend>read only</legend>
+			<p id="readOnly">When read-only mode is enabled, no new jobs can be created.</p>
+			<ul id="actionList">
+				<li>
+					<button type="button" id="toggleReadOnly">
+						${readOnly ? "Disable" : "Enable"} Read Only
+					</button>
+				</li>
+			</ul>
 		</fieldset>
 	</div>
 </star:template>

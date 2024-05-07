@@ -17,4 +17,5 @@
 		   roleNameCol="role"
 		   digest="SHA-512" />
 	  </Realm>
+		<CookieProcessor className="org.apache.tomcat.util.http.LegacyCookieProcessor"/>
 	</Context>

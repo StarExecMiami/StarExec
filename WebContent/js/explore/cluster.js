@@ -291,6 +291,24 @@ function getDetails(id, type, parent_node) {
 	var url = '';
 	selectedId = id;
 	jobPairTable.fnClearTable();	//immediately get rid of the current data, which makes it look more responsive
+	//get the queue, not that the global is set later so we can't use it
+	if (!(id === undefined)) {
+		$.get(starexecRoot + "/services/queue/" + id + "/getDesc").done(
+			function(data) {
+				if (data === undefined) {
+					$("#queueDescriptionText").text("")
+				}
+				else {
+					$("#queueDescriptionText").text(data);
+				}
+
+			}
+		).fail(function () {
+			$("#queueDescriptionText").text("There was an error fetching the description")
+		});
+	} 
+	
+	
 	if (type == 'active_queue' || type == 'inactive_queue') {
 		var $jobs = $("#jobs");
 		$("#clusterExpd").html("<span class='list-count'/> Enqueued Job Pairs <span>(+)</span>");
@@ -308,6 +326,7 @@ function getDetails(id, type, parent_node) {
 				10000);
 		}
 		$("#detailField .expdContainer").css("display", "none");
+		$("#descriptionContainer").show();
 	} else if (type == 'enabled_node' || type == 'disabled_node') {
 		$("#clusterExpd").html("<span class='list-count'/> Running Job Pairs");
 		$("#jobsContainer").hide();
@@ -319,6 +338,8 @@ function getDetails(id, type, parent_node) {
 			delete star.JobTableRefresh;
 		}
 		$("#detailField .expdContainer").css("display", "block");
+		//hide the queue desc
+		$("#descriptionContainer").hide();
 	} else {
 		showMessage('error', "Invalid node type", 5000);
 		return;

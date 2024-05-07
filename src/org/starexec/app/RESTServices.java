@@ -27,6 +27,7 @@ import org.starexec.test.integration.TestResult;
 import org.starexec.test.integration.TestSequence;
 import org.starexec.util.*;
 
+import javax.annotation.PostConstruct;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -51,7 +52,7 @@ public class RESTServices {
 	private static final ValidatorStatusCode ERROR_INVALID_WEBSITE_TYPE=new ValidatorStatusCode(false, "The supplied website type was invalid");
 	private static final ValidatorStatusCode ERROR_EDIT_VAL_ABSENT=new ValidatorStatusCode(false, "No value specified");
 	private static final ValidatorStatusCode ERROR_IDS_NOT_GIVEN=new ValidatorStatusCode(false, "No ids specified");
-
+	
 	private static final ValidatorStatusCode ERROR_INVALID_PERMISSIONS=new ValidatorStatusCode(false, "You do not have permission to perform the requested operation");
 
 	private static final ValidatorStatusCode ERROR_INVALID_PARAMS=new ValidatorStatusCode(false, "The supplied parameters are invalid");
@@ -62,6 +63,14 @@ public class RESTServices {
 	protected static final ValidatorStatusCode  ERROR_TOO_MANY_SOLVER_CONFIG_PAIRS=new ValidatorStatusCode(false, "There are too many solver / configuration pairs to display");
 
 	public static final ValidatorStatusCode ERROR_LOG_SUBSCRIPTION_SUCCESS = new ValidatorStatusCode(true, "User subscribed successfully.");
+
+
+	@GET
+	@Path("/queue/{qid}/getDesc")
+	@Produces("text/plain")
+	public static String getDescription(@PathParam("qid") int qid) {
+		return RESTHelpers.getQueueDescription(qid);
+	}
 
 	/**
 	 * Recompiles all the job spaces for the given job
@@ -355,6 +364,23 @@ public class RESTServices {
 			log.warn(methodName, "Caught IOException.");
 			throw RESTException.INTERNAL_SERVER_ERROR;
 		}
+	}
+
+	/*
+	 * get the value of the read_only system flag
+	 * @author aguo2
+	 */
+	@GET
+	@Path("/isReadOnly")
+	@Produces("text/plain")
+	public String GetReadOnly() {
+		try {
+			return Boolean.toString(RESTHelpers.getReadOnly());
+		} 
+		catch (Exception e) {
+			throw RESTException.INTERNAL_SERVER_ERROR;
+		}
+		
 	}
 
 	/**
@@ -1237,11 +1263,12 @@ public class RESTServices {
 	 * @param shortFormat Whether to get the full stats for the stats table (true) or a truncated version for the
 	 * space overview table
 	 * @param wallclock True to use wallclock time and false to use cpu time
+	 * @param includeUnknown if we include solvers with unknown status
 	 * @param request HTTP request
 	 * @return json DataTables object containing the next page of SolverStats objects
 	 */
 	@POST
-	@Path("/jobs/solvers/anonymousLink/pagination/{jobSpaceId}/{anonymousJobLink}/{primitivesToAnonymizeName}/{shortFormat}/{wallclock}/{stageNum}/")
+	@Path("/jobs/solvers/anonymousLink/pagination/{jobSpaceId}/{anonymousJobLink}/{primitivesToAnonymizeName}/{shortFormat}/{wallclock}/{stageNum}/{includeUnknown}")
 	@Produces("application/json")
 	public String getAnonymousJobStatsPaginated(
 			@PathParam("stageNum") int stageNumber,
@@ -1250,11 +1277,11 @@ public class RESTServices {
 			@PathParam("primitivesToAnonymizeName") String primitivesToAnonymizeName,
 			@PathParam("shortFormat") boolean shortFormat,
 			@PathParam("wallclock") boolean wallclock,
+			@PathParam("includeUnknown") boolean includeUnknown,
 			@Context HttpServletRequest request ) {
 
 		final String methodName = "getAnonymousJobStatsPaginated";
 		try {
-
 			ValidatorStatusCode status = JobSecurity.isAnonymousLinkAssociatedWithJobSpace(anonymousJobLink, jobSpaceId);
 			if ( !status.isSuccess() ) {
 				return gson.toJson( status );
@@ -1262,7 +1289,7 @@ public class RESTServices {
 				PrimitivesToAnonymize primitivesToAnonymize = AnonymousLinks.createPrimitivesToAnonymize( primitivesToAnonymizeName );
 				JobSpace jobSpace = Spaces.getJobSpace(jobSpaceId);
 
-				return RESTHelpers.getNextDataTablePageForJobStats( stageNumber, jobSpace, primitivesToAnonymize, shortFormat, wallclock );
+				return RESTHelpers.getNextDataTablePageForJobStats( stageNumber, jobSpace, primitivesToAnonymize, shortFormat, wallclock, includeUnknown);
 			}
 		} catch (RuntimeException e) {
 			// Catch all runtime exceptions so we can debug them
@@ -1277,24 +1304,24 @@ public class RESTServices {
 	 * @param stageNumber the stage number to get job pair data for
 	 * @param shortFormat Whether to retrieve the fields for the full stats table or the truncated stats for the space summary tables
 	 * @param wallclock True to use wallclock time and false to use cpu time
+	 * @param includeUnknown True to include pairs with unknown status in time calculation
 	 * @param request HTTP request
 	 * @return a json DataTables object containing the next page of stats.
 	 * @author Eric Burns
 	 */
 	@POST
-	@Path("/jobs/solvers/pagination/{jobSpaceId}/{shortFormat}/{wallclock}/{stageNum}")
+	@Path("/jobs/solvers/pagination/{jobSpaceId}/{shortFormat}/{wallclock}/{stageNum}/{includeUnknown}")
 	@Produces("application/json")
 	public String getJobStatsPaginated(@PathParam("stageNum") int stageNumber, @PathParam("jobSpaceId") int jobSpaceId,
-			@PathParam("shortFormat") boolean shortFormat, @PathParam("wallclock") boolean wallclock,
+			@PathParam("shortFormat") boolean shortFormat, @PathParam("wallclock") boolean wallclock, @PathParam("includeUnknown") boolean includeUnknown,
 			@Context HttpServletRequest request) {
 		int userId=SessionUtil.getUserId(request);
 		ValidatorStatusCode status=JobSecurity.canUserSeeJobSpace(jobSpaceId, userId);
-
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		} else {
 			JobSpace space = Spaces.getJobSpace(jobSpaceId);
-			return RESTHelpers.getNextDataTablePageForJobStats( stageNumber, space, PrimitivesToAnonymize.NONE, shortFormat, wallclock );
+			return RESTHelpers.getNextDataTablePageForJobStats(stageNumber, space, PrimitivesToAnonymize.NONE, shortFormat, wallclock, includeUnknown);
 		}
 	}
 
@@ -1973,6 +2000,7 @@ public class RESTServices {
 	@Path("/edit/queue/{id}")
 	@Produces("application/json")
 	public String editQueueInfo(@PathParam("id") int id, @Context HttpServletRequest request) {
+		log.debug("entered into edit queue"); 
 		int userId = SessionUtil.getUserId(request);
 
 		if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {
@@ -1984,6 +2012,7 @@ public class RESTServices {
 		}
 		int cpuTimeout=0;
 		int wallTimeout=0;
+		String desc = request.getParameter("description");
 		try {
 			cpuTimeout=Integer.parseInt(request.getParameter("cpuTimeout"));
 			wallTimeout=Integer.parseInt(request.getParameter("wallTimeout"));
@@ -1995,8 +2024,8 @@ public class RESTServices {
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
-
-		boolean success=Queues.updateQueueCpuTimeout(id, cpuTimeout) && Queues.updateQueueWallclockTimeout(id, wallTimeout);
+		boolean success=Queues.updateQueueCpuTimeout(id, cpuTimeout) && Queues.updateQueueWallclockTimeout(id, wallTimeout) && Queues.updateQueueDesc(id, desc);
+		log.debug("about to exit edit queue");
 		return success ? gson.toJson(new ValidatorStatusCode(true,"Queue edited successfully")) : gson.toJson(ERROR_DATABASE);
 	}
 
@@ -4077,7 +4106,12 @@ public class RESTServices {
 			}
 
 			Permission p = Permissions.getFullPermission();
+			//give the users leader permissions
 			Permissions.set(userId, spaceId, p);
+
+			//update quotas
+			Users.setDiskQuota(userId, R.CL_DEFAULT_DISK_QUOTA);
+			Users.setPairQuota(userId, R.CL_PAIR_QUOTA);
 		}
 		return gson.toJson(new ValidatorStatusCode(true,"User promoted successfully"));
 	}
@@ -4105,7 +4139,10 @@ public class RESTServices {
 
 		Permission p = Permissions.getFullPermission();
 		p.setLeader(false);
-		return Permissions.set(userIdBeingDemoted, spaceId, p) ? gson.toJson(new ValidatorStatusCode(true,"User demoted successfully")) : gson.toJson(ERROR_DATABASE);
+		boolean success = Permissions.set(userIdBeingDemoted, spaceId, p);
+		//note that the desired behavior for quotas when a user is being demoted is to not reduce their quotas
+		//The analogy I was given: "Think of former leaders as retired emperors..."
+		return success ? gson.toJson(new ValidatorStatusCode(true,"User demoted successfully")) : gson.toJson(ERROR_DATABASE);
 	}
 
 	/**
@@ -4364,6 +4401,7 @@ public class RESTServices {
 	public String getUserBenchmarksPaginated(@PathParam("id") int usrId, @Context HttpServletRequest request) {
 		int requestUserId=SessionUtil.getUserId(request);
 		ValidatorStatusCode status=UserSecurity.canViewUserPrimitives(usrId, requestUserId);
+		log.error("made it to getUserBenchmarksPaginated");
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}		// Query for the next page of solver pairs and return them to the user
@@ -4371,6 +4409,26 @@ public class RESTServices {
 
 		return nextDataTablesPage == null ? gson.toJson(ERROR_DATABASE) : gson.toJson(nextDataTablesPage);
 	}
+
+	/* The post request in User.js calls this method. Given a user and a HTTPRequest, return string (Json) of next page
+ 	* @param int usrId the id of the user to be fetched
+	* @param HTTPServletRequest the request
+	* Docs by @AGUO2
+	* @author ArchieKipp
+ 	*/
+	@POST
+	@Path("/users/{id}/uploads/pagination")
+	@Produces("application/json")
+    	public String getUserUploadsPaginated(@PathParam("id") int usrId, @Context HttpServletRequest request) {
+		int requestUserId=SessionUtil.getUserId(request);
+		ValidatorStatusCode status=UserSecurity.canViewUserPrimitives(usrId, requestUserId);
+		if (!status.isSuccess()) {
+		    return gson.toJson(status);
+		}
+		JsonObject nextDataTablesPage = RESTHelpers.getNextDataTablesPageForUserDetails(Primitive.UPLOAD, usrId, request, false, false);
+		return nextDataTablesPage == null ? gson.toJson(ERROR_DATABASE) : gson.toJson(nextDataTablesPage);
+    }
+
 
 	/**
 	 * Get the paginated result of the solvers belong to a specified user
@@ -4551,8 +4609,6 @@ public class RESTServices {
 			success=LoggingManager.setLoggingLevelForClass(StarLevel.INFO,className);
 		} else if (level.equalsIgnoreCase("error")) {
 			success=LoggingManager.setLoggingLevelForClass(StarLevel.ERROR,className);
-		} else if(level.equalsIgnoreCase("fatal")) {
-			success=LoggingManager.setLoggingLevelForClass(StarLevel.FATAL,className);
 		} else if (level.equalsIgnoreCase("off")) {
 			success=LoggingManager.setLoggingLevelForClass(StarLevel.OFF,className);
 		} else if (level.equalsIgnoreCase("warn")) {
@@ -4595,8 +4651,6 @@ public class RESTServices {
 			level =StarLevel.INFO;
 		} else if (inputLevel.equalsIgnoreCase("error")) {
 			level =StarLevel.ERROR;
-		} else if(inputLevel.equalsIgnoreCase("fatal")) {
-			level =StarLevel.FATAL;
 		} else if (inputLevel.equalsIgnoreCase("off")) {
 			level =StarLevel.OFF;
 		} else if (inputLevel.equalsIgnoreCase("warn")) {
@@ -4643,8 +4697,6 @@ public class RESTServices {
 			LoggingManager.setLoggingLevel(StarLevel.INFO);
 		} else if (level.equalsIgnoreCase("error")) {
 			LoggingManager.setLoggingLevel(StarLevel.ERROR);
-		} else if(level.equalsIgnoreCase("fatal")) {
-			LoggingManager.setLoggingLevel(StarLevel.FATAL);
 		} else if (level.equalsIgnoreCase("off")) {
 			LoggingManager.setLoggingLevel(StarLevel.OFF);
 		} else if (level.equalsIgnoreCase("warn")) {
@@ -5209,6 +5261,25 @@ public class RESTServices {
 		}
 	}
 
+	@POST
+	@Path("/admin/readOnly")
+	@Produces("application/json")
+	public String readOnly(@FormParam("readOnly") boolean readOnly, @Context HttpServletRequest request ) {
+		log.debug("made it into readOnly API CALL readOnly: " + readOnly);
+		int userId = SessionUtil.getUserId(request);
+		if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			return gson.toJson(new ValidatorStatusCode(true, "Only Admins can set read only"));
+		}
+		try {
+			RESTHelpers.setReadOnly(readOnly);
+			return gson.toJson(new ValidatorStatusCode(true, "ReadOnly is now " + (readOnly ? "enabled" : "disabled")));
+		} 
+		catch (Exception e) {
+			log.error("There was a exception when setting readonly: " + e.getMessage());
+			throw RESTException.INTERNAL_SERVER_ERROR;
+		}
+	}
+
 	/**
 	 * @param frozen True to freeze primitives, false to unfreeze primitives
 	 * @param request HTTP request
@@ -5224,7 +5295,7 @@ public class RESTServices {
 		}
 		try {
 			RESTHelpers.setFreezePrimitives(frozen);
-			return gson.toJson(new ValidatorStatusCode(true, "Uploading benchmarks and solvers is now " + (frozen ? "allowed" : "disallowed")));
+			return gson.toJson(new ValidatorStatusCode(true, "Uploading benchmarks and solvers is now " + (frozen ? "disallowed" : "allowed")));
 		} catch (SQLException e) {
 			log.error("freezePrimitives", e);
 			throw RESTException.INTERNAL_SERVER_ERROR;

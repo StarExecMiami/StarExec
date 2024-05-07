@@ -1288,56 +1288,7 @@ function initDataTables() {
 		$(this).toggleClass('hovered');
 	});
 
-
-	
-	//Hook up select all/ none buttons
-	$('.selectAllJobs, .selectAllSolvers, .selectAllBenchmarks, .selectAllUsers')
-	.click(function() {
-		$(this)
-		.parents('.expdContainer')
-		.find('tbody>tr')
-		.addClass('row_selected');
-	});
-	$('.unselectAllJobs, .unselectAllSolvers, .unselectAllBenchmarks, .unselectAllUsers')
-	.click(function() {
-		$(this)
-		.parents('.expdContainer')
-		.find('tbody>tr')
-		.removeClass('row_selected');
-	});
-
-
-
-	// this was getting overridden and I couldn't find out where
-	// so I did something bad...feel free to get rid of the bad setInterval if you can
-	// find out how to prevent it from being overridden.
-
-	setInterval(function(){
-		$('.dataTable > tbody > tr').off(".namespace").on("click.namespace",function(e){
-			if(e.shiftKey){
-				let rows = $(this).parent().children();
-				let toSelect = [];
-				for(let i=0; i<rows.length; i++){
-					let row = rows[i];
-					toSelect.push(row);
-					
-					if(row == this){
-						break;
-					}
-	
-					if(row.classList.contains("row_selected")){
-						toSelect = [];
-					}
-				}
-				console.log("selecting " + toSelect);
-				for(let row of toSelect){
-					$(row).addClass("row_selected");
-				}
-			}
-		});
-	},2000);
-
-
+	linkButtons()
 
 	// Set all fieldsets as expandable (except for action fieldset)
 	$('fieldset.expd').expandable(true);
@@ -1362,6 +1313,55 @@ function initDataTables() {
 	log('all datatables initialized');
 }
 
+/*
+* Links all the all/none buttons that were broken before.
+* This one function handles jobs, benchmarks, solvers, users tables 
+* @author aguo2
+*/
+function linkButtons() {
+	$('.selectAllJobs').click(
+		function() {
+			selectAllInTable('#jobs');
+		}
+	)
+		$('.selectAllSolvers').click(
+		function() {
+			selectAllInTable('#solvers');
+		}
+	)
+	$('.selectAllBenchmarks').click(
+		function() {
+			selectAllInTable('#benchmarks');
+		}
+	)
+	$('.selectAllUsers').click(
+		function() {
+			selectAllInTable('#users');
+		}
+	)
+	$('.unselectAllJobs').click(
+		function() {
+			selectNoneInTable('#jobs');
+		}
+	)
+		$('.unselectAllSolvers').click(
+		function() {
+			selectNoneInTable('#solvers');
+		}
+	)
+	$('.unselectAllBenchmarks').click(
+		function() {
+			selectNoneInTable('#benchmarks');
+		}
+	)
+	$('.unselectAllUsers').click(
+		function() {
+			selectNoneInTable('#users');
+		}
+	)
+
+
+}
 /**
  * Adds fnProcessingIndicator and fnFilterOnDoneTyping to dataTables api
  */

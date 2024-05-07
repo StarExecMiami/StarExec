@@ -14,6 +14,7 @@ import org.starexec.logger.StarLogger;
 import org.starexec.util.SessionUtil;
 import org.starexec.util.Util;
 import org.starexec.util.Validator;
+import org.starexec.app.RESTHelpers;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.Cookie;
@@ -207,6 +208,11 @@ public class CreateJob extends HttpServlet {
 		final String method = "doPost";
 		log.debug(method, "starting job post");
 		try {
+			log.debug("made it to submit job");
+			if (RESTHelpers.getReadOnly()) {
+				response.sendError(HttpServletResponse.	SC_SERVICE_UNAVAILABLE, "Read only mode is enabled, no new jobs can be created.");
+				return;
+			}
 			// Make sure the request is valid
 			ValidatorStatusCode status = isValid(request);
 			if (!status.isSuccess()) {
@@ -452,7 +458,7 @@ public class CreateJob extends HttpServlet {
 					Analytics.JOB_CREATE_QUICKJOB.record(userId);
 					response.sendRedirect(Util.docRoot("secure/details/job.jsp?id=" + j.getId()));
 				} else {
-					response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp"));
+					response.sendRedirect(Util.docRoot("secure/details/job.jsp?id=" + j.getId()));
 				}
 			} else { // if not submitSuccess
 				response.sendError(
@@ -460,9 +466,13 @@ public class CreateJob extends HttpServlet {
 						"Your job failed to submit for an unknown reason. Please try again."
 				);
 			}
+		} 
+		catch (SQLException sqle) {
+			log.error("Caught SQLException in CreateJob.doPost: " + sqle.getMessage());
 		} catch (Exception e) {
 			log.warn(method, "Caught Exception in CreateJob.doPost.", e);
 			throw e;
+			
 		}
 	}
 
@@ -636,6 +646,11 @@ public class CreateJob extends HttpServlet {
 
 				// Check to see if we have a valid list of configuration ids
 				if (!Validator.isValidIntegerList(request.getParameterValues(configs))) {
+					if (request.getParameterValues(configs) == null) {
+						return new ValidatorStatusCode(false,
+					                               "You need to select at least one configuration to run a " + "job"
+					);
+					} 
 					return new ValidatorStatusCode(false, "All selected configuration IDs need to be valid integers");
 				}
 
@@ -643,11 +658,7 @@ public class CreateJob extends HttpServlet {
 				for (Integer cid : Util.toIntegerList(request.getParameterValues(configs))) {
 					solverIds.add(Solvers.getSolverByConfig(cid, false).getId());
 				}
-				if (solverIds.isEmpty()) {
-					return new ValidatorStatusCode(false,
-					                               "You need to select at least one configuration to run a " + "job"
-					);
-				}
+				
 				// Make sure the user is using solvers they can see
 				if (!Permissions.canUserSeeSolvers(solverIds, userId)) {
 					return new ValidatorStatusCode(false,

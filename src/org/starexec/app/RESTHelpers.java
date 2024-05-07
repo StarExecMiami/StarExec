@@ -3,14 +3,17 @@ package org.starexec.app;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.annotations.Expose;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.apache.commons.lang3.tuple.Triple;
+import org.starexec.app.RESTHelpers.JSTreeItem;
 import org.starexec.command.C;
 import org.starexec.command.Connection;
+import org.starexec.command.JsonHandler;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
@@ -25,6 +28,7 @@ import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.AttributesTableRow;
 import org.starexec.data.to.tuples.Locatable;
 import org.starexec.data.to.tuples.SolverConfig;
+import org.starexec.exceptions.RESTException;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.test.integration.TestResult;
@@ -37,6 +41,7 @@ import java.awt.*;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.sql.CallableStatement;
 import java.sql.SQLException;
 //import java.sql.CallableStatement;
 //import java.sql.ResultSet;
@@ -83,6 +88,15 @@ public class RESTHelpers {
 		}
 
 		return list;
+	}
+
+	/*
+	 * This just calls the Queue.getDescription. This choice was made so only this
+	 * class needs to know about queues i.e RestServices dosen't need to know about 
+	 * queues.
+	 */
+	public static String getQueueDescription(int qid) {
+		return Queues.getDescForQueue(qid);
 	}
 
 	/**
@@ -208,12 +222,16 @@ public class RESTHelpers {
 				int sortColumnIndex = Integer.parseInt(iSortCol);
 				query.setSortColumn(sortColumnIndex);
 			}
-
-			//Validates that the sort direction is specified and valid
+			//set the sortASC flag
 			if (Util.isNullOrEmpty(sDir)) {
+				//WARNING: if you don't do this check, sometimes null gets passed, and this
+				//causes null pointer exception. This is extremely hard to debug. DO NOT REMOVE!
 				query.setSortASC(false);
-			} else if (sDir.contains("asc") || sDir.contains("desc")) {
-				query.setSortASC(sDir.equals("asc"));
+			}
+			else if (sDir.contains("asc")) {
+				query.setSortASC(true);
+			} else if (sDir.contains("desc")) {
+				query.setSortASC(false);
 			} else {
 				log.warn("getAttrMap", "sDir is not 'asc' or 'desc': "+sDir);
 				return null;
@@ -235,7 +253,7 @@ public class RESTHelpers {
 
 			return query;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			log.error("There was a problem getting the paramaters for the datatables query:" + e.getCause());
 		}
 
 		return null;
@@ -365,9 +383,10 @@ public class RESTHelpers {
 	 * @param primitivesToAnonymize a PrimitivesToAnonymize enum describing which primitives should be given anonymous names.
 	 * @param shortFormat Whether to use the abbreviated short format.
 	 * @param wallclock Whether times should be in wallclock time or cpu time.
+	 * @param includeUnknown True to include pairs with unknown status in time calculation
 	 * @author Albert Giegerich
 	 */
-	protected static String getNextDataTablePageForJobStats(int stageNumber, JobSpace jobSpace, PrimitivesToAnonymize primitivesToAnonymize, boolean shortFormat, boolean wallclock) {
+	protected static String getNextDataTablePageForJobStats(int stageNumber, JobSpace jobSpace, PrimitivesToAnonymize primitivesToAnonymize, boolean shortFormat, boolean wallclock, boolean includeUnknown) {
 		StopWatch stopWatch = new StopWatch();
 		stopWatch.start();
 
@@ -375,7 +394,7 @@ public class RESTHelpers {
 		// had to split up a function call chain to one version that includes configs marked as deleted and another that does not
 		// this includes them; used to construct the solver summary table in the job space view
 		// Alexander Brown, 9/20
-		Collection<SolverStats> solverStats = Jobs.getAllJobStatsInJobSpaceHierarchyIncludeDeletedConfigs(jobSpace, stageNumber, primitivesToAnonymize);
+		Collection<SolverStats> solverStats = Jobs.getAllJobStatsInJobSpaceHierarchyIncludeDeletedConfigs(jobSpace, stageNumber, primitivesToAnonymize, includeUnknown);
 		stopWatch.stop();
 		log.debug("getNextDataTablePageForJobStats", "Time taken to get all jobs: " + stopWatch.toString());
 
@@ -385,7 +404,6 @@ public class RESTHelpers {
 
 
 		JsonObject nextDataTablesPage = RESTHelpers.convertSolverStatsToJsonObject(solverStats, new DataTablesQuery(solverStats.size(), solverStats.size(), 1), jobSpace.getId(), jobSpace.getJobId(), shortFormat, wallclock, primitivesToAnonymize);
-
 		return gson.toJson(nextDataTablesPage);
 	}
 
@@ -939,7 +957,6 @@ public class RESTHelpers {
 		if (query == null) {
 			return null;
 		}
-
 		// Retrieves the relevant Job objects to use in constructing the
 		// JSON to send to the client
 		List<Job> jobsToDisplay = Jobs.getJobsForNextPage(query, id);
@@ -1025,6 +1042,12 @@ public class RESTHelpers {
 		return convertSpacesToJsonObject(spacesToDisplay, query);
 	}
 
+	/*
+	 * Given data about a request, return a json object representing the next page
+	 * Docs by @aguo2
+	 * @author ArchieKipp
+	 * 
+	 */
 	public static JsonObject getNextDataTablesPageForUserDetails(Primitive type, int id, HttpServletRequest request, boolean recycled, boolean dataAsObjects) {
 		// Parameter validation
 		DataTablesQuery query = RESTHelpers.getAttrMap(type, request);
@@ -1073,6 +1096,17 @@ public class RESTHelpers {
 				}
 				return convertSolversToJsonObject(solversToDisplay, query);
 
+			case UPLOAD:
+				query.setTotalRecords(Uploads.getUploadCountByUser(id));
+				if (!query.hasSearchQuery()) {
+				    query.setTotalRecordsAfterQuery(query.getTotalRecords());
+				} else {
+				    query.setTotalRecordsAfterQuery(Uploads.getUploadCountByUser(id, query.getSearchQuery()));
+				}
+				query.setSortASC(!query.isSortASC());
+		    	List<BenchmarkUploadStatus> uploadsToDisplay = Uploads.getUploadsByUserForNextPage(query, id);
+				JsonObject obj =  convertUploadsToJsonObject(uploadsToDisplay, query);
+				return obj;
 
 			case BENCHMARK:
 				String sortOverride = request.getParameter(SORT_COLUMN_OVERRIDE);
@@ -1080,14 +1114,12 @@ public class RESTHelpers {
 					query.setSortColumn(Integer.parseInt(sortOverride));
 					query.setSortASC(Boolean.parseBoolean(request.getParameter(SORT_COLUMN_OVERRIDE_DIR)));
 				}
-
 				List<Benchmark> benchmarksToDisplay = Benchmarks.getBenchmarksByUserForNextPage(query, id, recycled);
 				if (!recycled) {
 					query.setTotalRecords(Benchmarks.getBenchmarkCountByUser(id));
 				} else {
 					query.setTotalRecords(Benchmarks.getRecycledBenchmarkCountByUser(id));
 				}
-
 				// If no search is provided, TOTAL_RECORDS_AFTER_QUERY = TOTAL_RECORDS
 				if (!query.hasSearchQuery()) {
 					query.setTotalRecordsAfterQuery(query.getTotalRecords());
@@ -1098,7 +1130,6 @@ public class RESTHelpers {
 						query.setTotalRecordsAfterQuery(Benchmarks.getRecycledBenchmarkCountByUser(id, query.getSearchQuery()));
 					}
 				}
-
 				return convertBenchmarksToJsonObject(benchmarksToDisplay, query);
 			default:
 				log.error("invalid type given = " + type);
@@ -1106,6 +1137,7 @@ public class RESTHelpers {
 		return null;
 	}
 
+	
 	/**
 	 * Generate the HTML for the next DataTable page of entries
 	 *
@@ -1766,6 +1798,42 @@ public class RESTHelpers {
 		return createPageDataJsonObject(query, dataTablePageEntries);
 	}
 
+		/*given a list of the current page of	 benchmark uploads for some user, convert this to a json object
+		* @param uploads List of the uploads
+		* @param query Data about the query
+		* Documentation by @aguo2
+		* @author unknown
+		*/
+		
+        public static JsonObject convertUploadsToJsonObject(List<BenchmarkUploadStatus> uploads, DataTablesQuery query) {
+	    JsonArray dataTablePageEntries = new JsonArray();
+	    for (BenchmarkUploadStatus upload: uploads) {
+			StringBuilder sb = new StringBuilder();
+			sb.append("<input type=\"hidden\" value =\"");
+			sb.append(upload.getId());
+			sb.append("\" prim=\"upload\" userId=\"").append(upload.getUserId()).append("\"/>");
+			String hiddenUploadId = sb.toString();
+			sb = new StringBuilder();
+			sb.append("<a href =\"").append(Util.docRoot("secure/details/uploadStatus.jsp?id="));
+			sb.append(upload.getId());
+			sb.append("\" target=\"_blank\">");
+			sb.append(upload.getUploadDate().toString());
+			RESTHelpers.addImg(sb);
+			sb.append(hiddenUploadId);
+			String uploadLink = sb.toString();
+			JsonArray entry = new JsonArray();
+			entry.add(new JsonPrimitive(uploadLink));
+			entry.add(new JsonPrimitive(upload.getTotalBenchmarks()));
+			entry.add(new JsonPrimitive(upload.isEverythingComplete()));
+			dataTablePageEntries.add(entry);
+	    }
+		
+		JsonObject entries = createPageDataJsonObject(query, dataTablePageEntries);
+	    return entries;
+	}
+
+
+
 	/**
 	 * Given a list of benchmarks, creates a JsonObject that can be used to
 	 * populate a datatable client-side
@@ -1878,16 +1946,15 @@ public class RESTHelpers {
 		return sb.toString();
 	}
 
-	public static Map<Integer, String> getJobSpaceIdToSolverStatsJsonMap(List<JobSpace> jobSpaces, int stageNumber, boolean wallclock) {
+	public static Map<Integer, String> getJobSpaceIdToSolverStatsJsonMap(List<JobSpace> jobSpaces, int stageNumber, boolean wallclock, Boolean includeUnknown) {
 		Map<Integer, String> jobSpaceIdToSolverStatsJsonMap = new HashMap<>();
-
 		for (JobSpace jobSpace : jobSpaces) {
-			Collection<SolverStats> stats = Jobs.getAllJobStatsInJobSpaceHierarchy(jobSpace, stageNumber, PrimitivesToAnonymize.NONE);
+			Collection<SolverStats> stats = Jobs.getAllJobStatsInJobSpaceHierarchyIncludeDeletedConfigs(jobSpace, stageNumber, PrimitivesToAnonymize.NONE, includeUnknown);
 			DataTablesQuery query = new DataTablesQuery();
 			query.setTotalRecords(stats.size());
 			query.setTotalRecordsAfterQuery(stats.size());
 			query.setSyncValue(1);
-			JsonObject solverStatsJson = RESTHelpers.convertSolverStatsToJsonObject(stats, query, jobSpace.getId(), jobSpace.getJobId(), true, wallclock, PrimitivesToAnonymize.NONE);
+			JsonObject solverStatsJson = RESTHelpers.convertSolverStatsToJsonObject(stats, query, jobSpace.getId(), jobSpace.getJobId(), false, wallclock, PrimitivesToAnonymize.NONE);
 			if (solverStatsJson != null) {
 				jobSpaceIdToSolverStatsJsonMap.put(jobSpace.getId(), gson.toJson(solverStatsJson));
 			}
@@ -2083,6 +2150,12 @@ public class RESTHelpers {
 		return createPageDataJsonObject(query, dataTablePageEntries);
 	}
 
+	/*
+	 * Given an JSONArray of the next page and the query,
+	 * return a JsonObject of the elements displayed in the front end table
+	 * @author PressDodd
+	 * @docs aguo2
+	 */
 	private static JsonObject createPageDataJsonObject(DataTablesQuery query, JsonArray entries) {
 		JsonObject nextPage = new JsonObject();
 		// Build the actual JSON response object and populated it with the
@@ -2091,7 +2164,6 @@ public class RESTHelpers {
 		nextPage.addProperty(TOTAL_RECORDS, query.getTotalRecords());
 		nextPage.addProperty(TOTAL_RECORDS_AFTER_QUERY, query.getTotalRecordsAfterQuery());
 		nextPage.add("aaData", entries);
-
 		// Return the next DataTable page
 		return nextPage;
 	}
@@ -2258,6 +2330,32 @@ public class RESTHelpers {
 					return results.getBoolean("freeze_primitives");
 				}
 		);
+	}
+
+	
+	public static void setReadOnly(boolean readOnly) throws SQLException{
+		log.debug(
+			readOnly ? "READ ONLY IS ENABLED, no new jobs can be ran" 
+			: "READ ONLY IS DISABLED, jobs can be ran normally"
+		);
+			Common.update(
+				"{CALL SetReadOnly(?)}",
+				procedure -> {
+				procedure.setBoolean(1, readOnly);
+				});
+		
+	}
+
+	public static boolean getReadOnly() throws SQLException {
+		return Common.query(
+				"{CALL GetReadOnly()}",
+				procedure -> {},
+				results -> {
+					results.next();
+					return results.getBoolean("read_only");
+				}
+		);
+
 	}
 
 	public static void setFreezePrimitives(boolean frozen) throws SQLException {

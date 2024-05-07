@@ -521,8 +521,9 @@ function sendNode {
 	local NODE=$(dbEscape $1)
 	local SANDBOX=$(($2))
 	log "sending Node Id $NODE to $REPORT_HOST in sandbox $SANDBOX"
+	sendStatus $STATUS_RUNNING
+	sendStageStatus $STATUS_RUNNING ${STAGE_NUMBERS[STAGE_INDEX]}
 	dbExec "
-		CALL UpdatePairStatus($PAIR_ID, $STATUS_RUNNING);
 		CALL UpdateNodeId($PAIR_ID, '$NODE', $SANDBOX);
 	"
 }
@@ -555,7 +556,7 @@ function processAttributes {
 		# Only process if key and value are both non-null strings
 		if [[ -n $key && -n $value ]]; then
 			key=$(dbEscape $key)
-			value=$(dbEscape $value)
+			# value=$(dbEscape $value)
 			log "processing attribute $a (pair=$PAIR_ID, key='$key', value='$value' stage='$STAGE')"
 			QUERY+="CALL AddJobAttr($PAIR_ID, '$key', '$value', $STAGE);"
 		else
@@ -686,13 +687,15 @@ function copyOutputNoStats {
 	fi
 
 	if (($3 != 1)); then
-		rsync --prune-empty-dirs -r -u "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
+		log "mv $OUT_DIR/output_files/ $PAIR_OTHER_OUTPUT_PATH"
+		mv "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
 	fi
 	SAVED_PAIR_OUTPUT_PATH="$SAVED_OUTPUT_DIR/$1"
 	SAVED_PAIR_OTHER_OUTPUT_PATH=$SAVED_OUTPUT_DIR"/"$1"_output"
 
 	cp "$STDOUT_FILE" "$SAVED_PAIR_OUTPUT_PATH"
-	rsync -r -u "$OUT_DIR/output_files/" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+	log "mv $OUT_DIR/output_files/ $SAVED_PAIR_OTHER_OUTPUT_PATH"
+	mv "$OUT_DIR/output_files/" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
 }
 
 # takes in a stage number as an argument so we know where to put the output
@@ -722,6 +725,7 @@ function copyOutput {
 		fi
 
 		log "processing attributes"
+		atts=$(<$OUT_DIR/attributes.txt)
 		processAttributes $OUT_DIR/attributes.txt $1
 	fi
 
