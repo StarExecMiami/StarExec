@@ -1274,6 +1274,7 @@ int main(int argc, char **argv)
 	break;
       case 1007:
 	solver.setTimeStampingAddEOF(true);
+        break;
       case 1008:
 	solver.setSignal(optarg);
 	break;
