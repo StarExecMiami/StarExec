@@ -5,8 +5,8 @@ CFLAGS=-Dtmpdebug -DVERSION=\"$(VERSION)\" -DSVNVERSION=\"$(SVNVERSION)\"
 #DEBUG=-g
 DEBUG=-O3
 
-STATIC=
-#STATIC=-static
+#STATIC=
+STATIC=-static
 
 SRC=runsolver.cc SignalNames.cc SyscallNames.cc
 OBJ=$(SRC:.cc=.o)
@@ -22,7 +22,7 @@ include $(SRC:.cc=.d)
 	g++ $(CFLAGS) $(DEBUG) -c $*.cc
 
 runsolver: $(OBJ)
-	g++  $(STATIC) $(DEBUG) -o $@ $^ -lpthread
+	g++ $(STATIC) $(DEBUG) -o $@ $^ -lpthread
 
 testlimit: testlimit.cc
 	g++ -o testlimit testlimit.cc
