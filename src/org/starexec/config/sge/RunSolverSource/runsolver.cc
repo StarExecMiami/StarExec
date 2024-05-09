@@ -532,7 +532,7 @@ public:
 
   void setSignal(const char *signalName)
   {
-    throw runtime_error("unimplemented");
+    throw runtime_error(signalName);
   }
 
   /**
