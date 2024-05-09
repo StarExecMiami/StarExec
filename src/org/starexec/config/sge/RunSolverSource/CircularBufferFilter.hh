@@ -102,7 +102,7 @@ private:
   unsigned long long int activateSize,maxSize,bufferSize;
 
   char *data; // circular buffer
-  int w; // position where to write in the circular buffer
+  unsigned int w; // position where to write in the circular buffer
 
   int fd; // file descriptor to write to
 
@@ -144,7 +144,7 @@ public:
       systemWrite(fd,buffer,len);
     else
     {
-      int n,r=0;
+      unsigned int n,r=0;
 
       if (!data)
       {

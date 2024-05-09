@@ -28,7 +28,7 @@ void getExistingCores(vector<unsigned short int> &list, bool physicalView)
 
   list.clear();
 
-  for(int cpu=0;cpu<sizeof(cpu_set_t)<<3;++cpu)
+  for(unsigned int cpu=0;cpu<sizeof(cpu_set_t)<<3;++cpu)
     if(!CPU_ISSET(cpu,&cores)) // if we didn't already found that core
     {
       snprintf(fname,sizeof(fname),
@@ -99,7 +99,7 @@ void getAllocatedCoresByProcessorOrder(vector<unsigned short int> &allocatedCore
 
   sched_getaffinity(0,sizeof(cpu_set_t),&affinityMask);
 
-  for(int cpu=0;cpu<sizeof(cpu_set_t)<<3;++cpu)
+  for(unsigned int cpu=0;cpu<sizeof(cpu_set_t)<<3;++cpu)
     if(CPU_ISSET(cpu,&affinityMask))
     {
       snprintf(fname,sizeof(fname),
@@ -156,7 +156,7 @@ void getAllocatedCores(vector<unsigned short int> &list, pid_t pid=0)
   
   sched_getaffinity(pid,sizeof(cpu_set_t),&mask);
 
-  for(int i=0;i<sizeof(cpu_set_t)<<3;++i)
+  for(unsigned int i=0;i<sizeof(cpu_set_t)<<3;++i)
     if(CPU_ISSET(i,&mask))
       list.push_back(i);
 }

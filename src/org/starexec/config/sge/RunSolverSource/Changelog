@@ -1,3 +1,57 @@
+version 3.4.1 2023-07-04
+
+- fixed a bug : some kernels (4.18 at least) may report a tid of 0 in /proc/xx/task.  In such a case, the main process is counted twice. It seems to happen for solvers which create a lot of temporary threads.
+
+version 3.4.0 2017-08-12
+
+- use (and require) prctl(PR_SET_CHILD_SUBREAPER,...) (available since Linux 3.4)
+- fixed incorrect parsing of SwapFree/SwapTotal
+
+version 3.3.7   2016-
+
+- introduction of a new memory limit (-R, --rss-swap-limit) to cope with programs that map a lot of virtual memory but actually use only a portion of it (such as Java). This limit is set on the sum of RSS (Resident Set Size, or in other words, amount of RAM used) and swap.
+
+- renaming of (-M, --mem-limit) as (-V, --vsize-limit). (-M, --mem-limit) becomes deprecated because its name is ambiguous. It will be removed in a future release.
+
+version 3.3.6	2016-
+
+- introduction of the --sig option to select which signal to send to the solver
+
+- introduction of the --bin-var option to ease the transmission of
+  the statistics to a calling program
+
+- introduction of a separate Watcher class, in charge of watching the processes
+
+- added a --watchdog option, in order to kill runsolver after a given delay (for debugging)
+
+- fixed a bug which caused runsolver to kill itself sometimes just after the solver end
+	
+version 3.3.5	2015-02-03
+
+- fixed problem with concurrent access to process tree, which caused some 
+  random crashes
+
+- removed the interception of system calls, which is unused, too costly and 
+  complicates compilation.
+
+version 3.3.4	2013-11-28
+
+- fix compilation problems on Ubuntu and get rid of compilation warnings
+
+version 3.3.3	2013-07-19
+
+- fixed a bug which occurs on very short executions of the solver
+  (such as `echo test`). In such a case, runsolver did not have the time to
+  get the correct process group id (i.e. the watcher read /proc
+  before the child could run setpgid()) and in the end runsolver
+  signalled its own process group and killed itself. Besides, the
+  default ProcessTree::currentRootPID was set to 1, which means that
+  we could kill our whole session (kill(-1,...))
+
+- fixed 2 bugs in timestamping: the CPU time didn't take into
+  account the lostCPUtime and the EOF line didn't appear on its own
+  line when the solver didn't print an EOL at the end.
+
 version 3.3.2	2013-04-19
 
 - add option -v to save the most relevant information (times, ...)

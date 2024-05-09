@@ -1,14 +1,25 @@
-VERSION=3.3.3
+VERSION=3.4.1
 #SVNVERSION=`svnversion .`
-SVNVERSION=$(word 2,$$Rev: 1446 $$)
-CFLAGS=-Dtmpdebug -DVERSION=\"$(VERSION)\" -DSVNVERSION=\"$(SVNVERSION)\"
+SVNVERSION=$(word 2,$$Rev: 4412 $$)
 #DEBUG=-g
-DEBUG=-O3
+DEBUG=-O3 -g
 
 #STATIC=
-STATIC=-static
+STATIC=-static 
 
-SRC=runsolver.cc SignalNames.cc SyscallNames.cc
+WSIZE:=$(shell if [ `uname -m` = 'x86_64' ] ; then echo 64; else echo 32; fi )
+
+CFLAGS=-fpermissive -std=c++11 -DWITH_NUMA -Dtmpdebug -Wall -DVERSION=\"$(VERSION)\" -DSVNVERSION=\"$(SVNVERSION)\" -DWSIZE=$(WSIZE)
+LDFLAGS= $(STATIC) -Wl,--build-id
+LIBS=-lnuma
+
+# local adaptation
+# ifneq ($(findstring alineos.net,$(HOSTNAME)),)
+# # if needed, path to the dynamic library we use
+# LDFLAGS+=-Wl,-rpath,$(HOME)/tools-centos7/lib64
+# endif
+
+SRC=runsolver.cc SignalNames.cc
 OBJ=$(SRC:.cc=.o)
 
 all:runsolver
@@ -19,22 +30,17 @@ install: runsolver
 include $(SRC:.cc=.d)
 
 .cc.o:
+	@if [ ! -e /usr/include/numa.h ] ; then echo "WARNING: NUMA headers not found. Compilation may fail. In such a case, install numactl-devel" ; fi
 	g++ $(CFLAGS) $(DEBUG) -c $*.cc
 
 runsolver: $(OBJ)
-	g++ $(STATIC) $(DEBUG) -o $@ $^ -lpthread
+	g++  $(LDFLAGS) $(DEBUG) -o $@ $^ -pthread $(LIBS)
 
 testlimit: testlimit.cc
 	g++ -o testlimit testlimit.cc
 
 testthread: testthread.cc
-	g++ -o testthread testthread.cc -lpthread
-
-SyscallNames.cc SyscallNames.hh: CreateSyscallsNames.cc /usr/include/asm/unistd.h
-	grep __NR /usr/include/asm/unistd.h | grep -v '^/' | awk '{print $$2}' | sed -e 's/^__NR_//' | awk '{printf "list[__NR_%s]=\"%s\";\n",$$1,$$1}' > tmpSyscallList.cc
-	g++ -o CreateSyscallsNames CreateSyscallsNames.cc
-	./CreateSyscallsNames
-	rm tmpSyscallList.cc CreateSyscallsNames 
+	g++ -o testthread testthread.cc -pthread
 
 .PHONY: clean realclean archive
 
@@ -43,7 +49,7 @@ archive: /tmp/runsolver-$(VERSION).tar.bz2
 
 /tmp/runsolver-$(VERSION).tar.bz2: realclean $(SRC) Makefile
 	sed -i -e 's/^Version:.*/Version:\t'$(VERSION)'/' runsolver.spec
-	tar cvjf /tmp/runsolver-$(VERSION).tar.bz2 -C ../.. runsolver/src --exclude .svn
+	tar cvjf /tmp/runsolver-$(VERSION).tar.bz2 -C ../.. --exclude .svn --exclude server runsolver/src
 
 rpm: /tmp/runsolver-$(VERSION).tar.bz2
 	rpmbuild -tb /tmp/runsolver-$(VERSION).tar.bz2
@@ -55,7 +61,7 @@ clean:
 	rm -f runsolver $(OBJ) *.class testlimit testtimestamper vlineSplitter testProcessTree runtestlimit testthread
 
 realclean: clean
-	rm -f *.d *~ SyscallNames.*
+	rm -f *.d *~
 
 
 %.d: %.cc

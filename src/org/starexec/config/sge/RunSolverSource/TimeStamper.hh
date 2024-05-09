@@ -146,7 +146,7 @@ public:
   void timeStampLines()
   {
     fd_set tmp;
-    int result;
+    int result,watchDog=0;
 
     while (watched.size())
     {
@@ -155,7 +155,22 @@ public:
       // wait for data to become available on one of the watched files
       result=select(max,&tmp,NULL,NULL,NULL);
 
-      for(int i=0;i<watched.size();)
+      if(result<0)
+      {
+	cout << "timestamper::select: " << strerror(errno) << endl; // ???
+
+        if(++watchDog<10)
+          continue;
+        else
+        {
+          cout << "Error in TimeStamper::timeStampLines(), select() keeps returning errors, exiting." << endl;
+          break;
+        }
+      }
+
+      watchDog=0;
+
+      for(size_t i=0;i<watched.size();)
       {
 	int fd=watched[i].inputdescr;
 	bool del=false;
@@ -177,7 +192,7 @@ public:
 
 	  // recompute max
 	  max=1;
-	  for(int i=0;i<watched.size();++i)
+	  for(size_t i=0;i<watched.size();++i)
 	    if(watched[i].inputdescr>=max)
 	      max=watched[i].inputdescr+1;
 	}
@@ -232,18 +247,24 @@ public:
     pthread_mutex_unlock(&cputimeMutex);
 
     // store time stamp in tstampbuffer
-    int size;
-
     if(withCPUtime)
     {
       // CPU time+Wall Clock time
       if(name)
 	tstampsize=snprintf(tstampbuffer,sizeof(tstampbuffer),
+#if WSIZE==32
 			    "%c%.2f/%d.%02d\t",
+#else
+			    "%c%.2f/%ld.%02ld\t",
+#endif
 			    name,cputimeCopy,tv.tv_sec,tv.tv_usec/10000);
       else
 	tstampsize=snprintf(tstampbuffer,sizeof(tstampbuffer),
+#if WSIZE==32
 			    "%.2f/%d.%02d\t",
+#else
+			    "%.2f/%ld.%02ld\t",
+#endif
 			    cputimeCopy,
 			    tv.tv_sec,tv.tv_usec/10000);
     }
@@ -252,11 +273,19 @@ public:
       // no CPU time
       if(name)
 	tstampsize=snprintf(tstampbuffer,sizeof(tstampbuffer),
+#if WSIZE==32
 			    "%c%d.%02d\t",
+#else
+			    "%c%ld.%02ld\t",
+#endif
 			    name,tv.tv_sec,tv.tv_usec/10000);
       else
 	tstampsize=snprintf(tstampbuffer,sizeof(tstampbuffer),
+#if WSIZE==32
 			    "%d.%02d\t",
+#else
+			    "%ld.%02ld\t",
+#endif
 			    tv.tv_sec,tv.tv_usec/10000);
     }
 
