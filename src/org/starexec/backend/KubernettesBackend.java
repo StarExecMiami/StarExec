@@ -115,47 +115,47 @@ public class KubernettesBackend implements Backend {
 
     @Override
     public int submitScript(String scriptPath, String workingDirectoryPath, String logPath) {
-        // 
+        return 0; // TODO: only here so it compiles
     }
 
     @Override
     public boolean killPair(int execId) {
-
+        return false; // TODO: only here so it compiles
     }
 
     @Override
     public boolean killAll() {
-
+        return false; // TODO: only here so it compiles
     }
 
     @Override
     public String getRunningJobsStatus() {
-
+        return ""; // TODO: only here so it compiles
     }
 
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
-
+        return new HashSet<>(); // TODO: only here so it compiles
     }
 
     @Override
     public String[] getWorkerNodes() {
-
+        return new String[] { "localhost" }; // TODO: only here so it compiles
     }
 
     @Override
     public String[] getQueues() {
-
+        return new String[] { R.DEFAULT_QUEUE_NAME }; // TODO: only here so it compiles
     }
 
     @Override
     public Map<String, String> getNodeQueueAssociations() {
-
+        return new HashMap<>(); // TODO: only here so it compiles
     }
 
     @Override
     public boolean clearNodeErrorStates() {
-
+        return true; // TODO: only here so it compiles
     }
 
     @Override
@@ -165,13 +165,13 @@ public class KubernettesBackend implements Backend {
 
     @Override
     public boolean createQueue(String newQueueName, String[] nodeNames, String[] sourceQueueNames) {
-
+        return false; // TODO: only here so it compiles
     }
 
     @Override
     public boolean createQueueWithSlots(String newQueueName, String[] nodeNames, String[] sourceQueueNames,
             Integer slots) {
-
+        return false; // TODO: only here so it compiles
     }
 
     @Override
