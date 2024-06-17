@@ -370,12 +370,20 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			# get prover tag:
 			PROVER=$(cat "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/prover.txt")
 
+			# Extract last character if it is a digit
+			if [[ $SANDBOX_PARAM =~ ([0-9])$ ]]; then
+				SANDBOX_NUM=${BASH_REMATCH[1]}
+			else
+				SANDBOX_NUM=1
+			fi
+
+			# Use SANDBOX_NUM in your command
 			RUNIMAGE_CMD="python3 \"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image.py\" \"$PROVER\" \
-				-P \"$LOCAL_BENCH_PATH\" \
-				-C $CURRENT_STAGE_CPU \
-				-W $CURRENT_STAGE_WALLCLOCK \
-				-M \"$CURRENT_STAGE_MEMORY\" \
-				--starexec=${SANDBOX_PARAM: -1}"
+							-P \"$LOCAL_BENCH_PATH\" \
+							-C $CURRENT_STAGE_CPU \
+							-W $CURRENT_STAGE_WALLCLOCK \
+							-M \"$CURRENT_STAGE_MEMORY\" \
+							--starexec=$SANDBOX_NUM"
 
 			log "Running run_image.py: $RUNIMAGE_CMD"
 			log "Dry run: `$RUNIMAGE_CMD --dry-run`"
