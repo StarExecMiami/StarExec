@@ -386,7 +386,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 							--starexec=$SANDBOX_NUM"
 
 			log "Running run_image.py: $RUNIMAGE_CMD"
-			log "Dry run: `$RUNIMAGE_CMD --dry-run`"
 			eval "$RUNIMAGE_CMD"
 
 		else
