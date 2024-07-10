@@ -409,7 +409,8 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 							-C $CURRENT_STAGE_CPU \
 							-W $CURRENT_STAGE_WALLCLOCK \
 							-M \"$CURRENT_STAGE_MEMORY\" \
-							--sandbox=$WHICH_SANDBOX"
+							--sandbox=$WHICH_SANDBOX" \
+							--job-template-path="$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/job_template.yaml"
 			
 			log "Running run_image_k8s.py: $RUNIMAGE_CMD"
 			eval "$RUNIMAGE_CMD"
