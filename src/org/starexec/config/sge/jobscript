@@ -370,7 +370,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			# get prover tag:
 			PROVER=$(cat "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/prover.txt")
 
-			# Extract last character if it is a digit
+			# sandbox or sandbox2
 			if [[ $SANDBOX_PARAM =~ ([0-9])$ ]]; then
 				SANDBOX_NUM=${BASH_REMATCH[1]}
 			else
@@ -387,6 +387,29 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 			log "Running run_image.py: $RUNIMAGE_CMD"
 			eval "$RUNIMAGE_CMD"
+
+		elif [ -f "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image_k8s.py" ]; then
+			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
+			# in kubernettes instead of podman remote. Assumes kubectl is working in the container.
+
+			# get prover tag:
+			PROVER=$(cat "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/prover.txt")
+
+			# sandbox or sandbox2?
+			if [[ $SANDBOX_PARAM =~ ([0-9])$ ]]; then
+				SANDBOX_NUM=${BASH_REMATCH[1]}
+			else
+				SANDBOX_NUM=""
+			fi
+
+			WHICH_SANDBOX="sandbox$SANDBOX_NUM" # "sandbox" or "sandbox2"
+
+			RUNIMAGE_CMD="python3 \"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image_k8s.py\" \"$PROVER\" \
+							-P \"$LOCAL_BENCH_PATH\" \
+							-C $CURRENT_STAGE_CPU \
+							-W $CURRENT_STAGE_WALLCLOCK \
+							-M \"$CURRENT_STAGE_MEMORY\" \
+							--sandbox=$WHICH_SANDBOX"
 
 		else
 			# Assemble the runsolver command, including placeholders that will be dynamically replaced
