@@ -683,8 +683,8 @@ function copyOutputNoStats {
 	fi
 
 	if (($2 != 1)); then
+ 		log "cp \"$STDOUT_FILE\" \"$PAIR_OUTPUT_PATH\""
 		cp "$STDOUT_FILE" "$PAIR_OUTPUT_PATH"
-		log "cp \"$STDOUT_FILE\" \"$PAIR_OUTPUT_PATH\""
 	fi
 
 	if (($3 != 1)); then
