@@ -25,7 +25,6 @@
 
 export readonly BENCHEXEC='BENCHEXEC'
 export readonly RUNSOLVER='RUNSOLVER'
-export readonly RUNIMAGE='RUNIMAGE'
 
 export BENCH_NAME_LENGTH_LIMIT='$$BENCH_NAME_LENGTH_MAX$$'
 export PRIMARY_PREPROCESSOR_PATH='$$PRIMARY_PREPROCESSOR_PATH$$'
@@ -363,8 +362,9 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			ADDEOF_PARAM="--add-eof"
 		fi
 
-		# If $WORKING_DIR/solver/bin/RUNIMAGE.txt exists, we use run_image.py 
-		# instead of runsolver...a bit hacky but it works.
+		# If $WORKING_DIR/solver/bin/run_image.py exists, we use it instead of runsolver.
+		# Also, in this case, we're using the local backend, so this jobscript is actually running on the
+		# head node of starexec.
 		if [ -f "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# get prover tag:
