@@ -74,6 +74,9 @@ function adjustForK8s {
     # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
     log "adjustForK8s called"
     for STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
+    	log "adjustForK8s stage Index: $STAGE_INDEX:"
+     	ls -al "${SOLVER_PATHS[$STAGE_INDEX]}"
+      	ls -al "${SOLVER_PATHS[$STAGE_INDEX]}/bin/"
         # Check if the run_image_k8s.py script exists in the current stage's bin directory
         if [[ -f "${SOLVER_PATHS[$STAGE_INDEX]}/bin/run_image_k8s.py" ]]; then
             # Redefine WORKING_DIR_BASE to the new path
