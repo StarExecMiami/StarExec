@@ -60,6 +60,49 @@ JOB_IN_DIR="$SHARED_DIR/jobin"
 # Path to the job output directory
 JOB_OUT_DIR="$SHARED_DIR/joboutput"
 
+
+
+#######################################################################
+# when running StarExec in k8s (kubernetes),                          #
+# the jobscript is run on the head node (local backend)               #
+# which then will run a run_image_k8s.py script which will            #
+# run a k8s job on the cluster.                                       #
+#						                      #
+# In order for this to work, some global variables need to be changed.#
+#######################################################################
+function adjustForK8s {
+    # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
+    for STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
+        # Check if the run_image_k8s.py script exists in the current stage's bin directory
+        if [[ -f "${SOLVER_PATHS[$STAGE_INDEX]}/bin/run_image_k8s.py" ]]; then
+            # Redefine WORKING_DIR_BASE to the new path
+            WORKING_DIR_BASE="$DATA_DIR/k8sSandboxes/$PAIR_ID"
+
+            # Redefine lock files and active lock indicators based on the new WORKING_DIR_BASE
+            SANDBOX_LOCK_DIR=$WORKING_DIR_BASE'/sandboxlock.lock'
+            SANDBOX2_LOCK_DIR=$WORKING_DIR_BASE'/sandbox2lock.lock'
+            SANDBOX_LOCK_USED=$WORKING_DIR_BASE'/sandboxlock.active'
+            SANDBOX2_LOCK_USED=$WORKING_DIR_BASE'/sandbox2lock.active'
+
+            # Create the k8sSandboxes directory if it does not exist
+            mkdir -p "$WORKING_DIR_BASE"
+
+            echo "Adjusted WORKING_DIR_BASE to $WORKING_DIR_BASE"
+            break
+        fi
+    done
+}
+
+
+
+
+
+
+
+
+
+
+
 ######################################################################
 
 # setup the memory limit for this stage
