@@ -72,6 +72,7 @@ JOB_OUT_DIR="$SHARED_DIR/joboutput"
 #######################################################################
 function adjustForK8s {
     # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
+    log "adjustForK8s called"
     for STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
         # Check if the run_image_k8s.py script exists in the current stage's bin directory
         if [[ -f "${SOLVER_PATHS[$STAGE_INDEX]}/bin/run_image_k8s.py" ]]; then
@@ -87,7 +88,7 @@ function adjustForK8s {
             # Create the k8sSandboxes directory if it does not exist
             mkdir -p "$WORKING_DIR_BASE"
 
-            echo "Adjusted WORKING_DIR_BASE to $WORKING_DIR_BASE"
+            log "Adjusted WORKING_DIR_BASE to $WORKING_DIR_BASE"
             break
         fi
     done
