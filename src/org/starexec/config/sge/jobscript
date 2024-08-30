@@ -119,6 +119,11 @@ NUM_STAGES=${#STAGE_NUMBERS[@]}
 
 ((NUM_BENCH_INPUTS = ${#BENCH_INPUT_PATHS[@]} - 1)) # we terminate the array with an empty string, so the number is the size-1
 
+adjustForK8s
+
+
+
+
 #==========================================================================
 # Signal Traps
 #
@@ -130,7 +135,6 @@ NUM_STAGES=${#STAGE_NUMBERS[@]}
 trap "limitExceeded 'file write' $EXCEED_FILE_WRITE" SIGXFSZ
 trap 'echo "Jobscript received USR2."' USR2
 trap exitJobscript EXIT
-
 
 #==========================================================================
 # Execute (prolog will take care of data staging)
@@ -364,7 +368,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 		# If $WORKING_DIR/solver/bin/run_image.py exists, we use it instead of runsolver.
 		# Also, in this case, we're using the local backend, so this jobscript is actually running on the
-		# head node of starexec.
+		# head node of starexec. (this run_image without k8s is likely buggy and should be considered deprecated.)
 		if [ -f "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# get prover tag:
@@ -395,21 +399,12 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			# get prover tag:
 			PROVER=$(cat "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/prover.txt")
 
-			# sandbox or sandbox2?
-			if [[ $SANDBOX_PARAM =~ ([0-9])$ ]]; then
-				SANDBOX_NUM=${BASH_REMATCH[1]}
-			else
-				SANDBOX_NUM=""
-			fi
-
-			WHICH_SANDBOX="sandbox$SANDBOX_NUM" # "sandbox" or "sandbox2"
-
 			RUNIMAGE_CMD="python3 \"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image_k8s.py\" \"$PROVER\" \
 							-P \"$LOCAL_BENCH_PATH\" \
 							-C $CURRENT_STAGE_CPU \
 							-W $CURRENT_STAGE_WALLCLOCK \
 							-M \"$CURRENT_STAGE_MEMORY\" \
-							--sandbox=\"$WHICH_SANDBOX\" \
+							--sandbox=\"$WORKING_DIR_BASE/$SANDBOX_PARAM\" \
 							--job-template-path=\"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/job_template.yaml\" "
 			
 			log "Running run_image_k8s.py: $RUNIMAGE_CMD"
