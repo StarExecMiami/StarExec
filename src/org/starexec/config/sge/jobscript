@@ -119,7 +119,6 @@ NUM_STAGES=${#STAGE_NUMBERS[@]}
 
 ((NUM_BENCH_INPUTS = ${#BENCH_INPUT_PATHS[@]} - 1)) # we terminate the array with an empty string, so the number is the size-1
 
-adjustForK8s
 
 
 
@@ -140,6 +139,7 @@ trap exitJobscript EXIT
 # Execute (prolog will take care of data staging)
 #==========================================================================
 
+
 echo "STAREXEC Job Log"
 echo "(C) $(date +%Y) The University of Iowa"
 echo "====================================="
@@ -151,6 +151,7 @@ echo "benchmark id: $BENCH_ID"
 echo "execution host: $HOSTNAME"
 echo "benchmarking framework: $BENCHMARKING_FRAMEWORK"
 echo "whoami: $(whoami)"
+adjustForK8s
 
 if [ "$BENCHMARKING_FRAMEWORK" == "$BENCHEXEC" ]; then
 	log "Using benchexec."
