@@ -71,16 +71,24 @@ JOB_OUT_DIR="$SHARED_DIR/joboutput"
 # In order for this to work, some global variables need to be changed.#
 #######################################################################
 function adjustForK8s {
-    # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
     log "adjustForK8s called"
+    # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
     for STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
-    	log "adjustForK8s stage Index: $STAGE_INDEX:"
-     	ls -al "${SOLVER_PATHS[$STAGE_INDEX]}"
-      	ls -al "${SOLVER_PATHS[$STAGE_INDEX]}/bin/"
-        # Check if the run_image_k8s.py script exists in the current stage's bin directory
-        if [[ -f "${SOLVER_PATHS[$STAGE_INDEX]}/bin/run_image_k8s.py" ]]; then
+        log "adjustForK8s stage Index: $STAGE_INDEX"
+
+        # Decode the base64 encoded path
+        DECODED_PATH=$(echo "${SOLVER_PATHS[$STAGE_INDEX]}" | base64 --decode)
+
+        # Log directory contents for debugging
+        log "Listing contents of: $DECODED_PATH"
+        ls -al "$DECODED_PATH"
+        ls -al "$DECODED_PATH/bin/"
+
+        # Check if the run_image_k8s.py script exists in the decoded path's bin directory
+        if [[ -f "$DECODED_PATH/bin/run_image_k8s.py" ]]; then
+            log "run_image_k8s.py found at $DECODED_PATH/bin/"
             # Redefine WORKING_DIR_BASE to the new path
-            WORKING_DIR_BASE="$DATA_DIR/k8sSandboxes/$PAIR_ID"
+            WORKING_DIR_BASE="$SHARED_DIR/k8sSandboxes/$PAIR_ID"
 
             # Redefine lock files and active lock indicators based on the new WORKING_DIR_BASE
             SANDBOX_LOCK_DIR=$WORKING_DIR_BASE'/sandboxlock.lock'
@@ -91,11 +99,14 @@ function adjustForK8s {
             # Create the k8sSandboxes directory if it does not exist
             mkdir -p "$WORKING_DIR_BASE"
 
-            log "Adjusted WORKING_DIR_BASE to $WORKING_DIR_BASE"
+            log "Adjusted WORKING_DIR_BASE to $WORKING_DIR_BASE and directory ensured"
             break
+        else
+            log "run_image_k8s.py not found at $DECODED_PATH/bin/"
         fi
     done
 }
+
 
 
 
