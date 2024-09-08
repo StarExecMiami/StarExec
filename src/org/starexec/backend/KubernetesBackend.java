@@ -5,7 +5,7 @@ package org.starexec.backend;
  * 
  * The head node itself needn't be a kubernetes node I believe.
  * LocalBackend is where a lot of this code comes from, but I didn't
- * want to extend it directly since kubernettes isn't local.
+ * want to extend it directly since kubernetes isn't local.
  * 
  */
 
@@ -19,8 +19,8 @@ import org.starexec.util.RobustRunnable;
 import org.starexec.util.Util;
 
 
-public class KubernettesBackend implements Backend {
-    private static final StarLogger log = StarLogger.getLogger(KubernettesBackend.class);
+public class KubernetesBackend implements Backend {
+    private static final StarLogger log = StarLogger.getLogger(KubernetesBackend.class);
     final java.util.Queue<LocalJob> jobsToRun = new ArrayDeque<>();
     private final Map<Integer, LocalJob> activeIds = new HashMap<>();
     private int curID = 1;
