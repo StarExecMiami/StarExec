@@ -126,6 +126,7 @@ public class R {
 			break;
 		case K8S_TYPE:
 			b = new KubernetesBackend();
+			break;
 		default:
 			log.error("BACKEND", "Not a valid BACKEND_TYPE: " + BACKEND_TYPE);
 			b = null;
