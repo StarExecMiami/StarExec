@@ -22,7 +22,15 @@ import org.starexec.util.Util;
 
 public class KubernetesBackend implements Backend {
     private static final StarLogger log = StarLogger.getLogger(KubernetesBackend.class);
-    private static final int MAX_CONCURRENT_JOBS = 30;  // You can set this to any desired number
+    
+    // You can set this to any desired number 
+    // (Should be >= num compute nodes in cluster, so they can all be used concurrently)
+    // However, because the k8s backend runs the runscript/jobscript locally on the head node (which then dispatches the actual heavy jobs via k8s),
+    // this needs to be low enough that the head node can handle it.
+    // Think about "ulimit -Sn" which shows the max number of subprocesses a user/process can make.
+    private static final int MAX_CONCURRENT_JOBS = 50;
+
+    
     private final Map<Integer, LocalJob> activeIds = new HashMap<>();
     
     private String NODE_NAME = "n001";
