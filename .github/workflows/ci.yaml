@@ -1,6 +1,10 @@
 name: CI Build
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ UMprod, main, develop, feature/*, containerised ]
+  pull_request:
+    branches: [ UMprod, main, develop, feature/*, containerised ]
 
 jobs:
   build:

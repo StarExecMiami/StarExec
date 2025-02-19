@@ -2,9 +2,9 @@ name: Docker Build and Test
 
 on:
   push:
-    branches:
-      - main
+    branches: [ UMprod, main, develop, feature/*, containerised ]
   pull_request:
+    branches: [ UMprod, main, develop, feature/*, containerised ]
 
 jobs:
   docker:
