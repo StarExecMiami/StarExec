@@ -62,7 +62,7 @@ jobs:
           ${{ runner.os }}-maven-
 
     - name: Build with Ant
-      run: ant deploy
+      run: ant build
 
     - name: Run tests
       run: ant test
