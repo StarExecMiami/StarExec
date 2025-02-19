@@ -14,6 +14,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      - name: Generate SSH keys
+        run: |
+          echo "using ssh-keygen to make pub/priv keys in the current directory"
+          echo "(only if they don't already exist)"
+          [ -f starexec_podman_key ] || ssh-keygen -t ed25519 -N '' -f starexec_podman_key
+          ssh-keyscan -H localhost >> ~/.ssh/known_hosts
+          chmod 600 starexec_podman_key
+    
       - name: Build Docker image
         run: docker build -t starexec:latest .
 
