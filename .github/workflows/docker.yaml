@@ -1,0 +1,21 @@
+name: Docker Build and Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Build Docker image
+        run: docker build -t starexec:latest .
+
+      - name: Run Docker container (smoke test)
+        run: docker run --rm starexec:latest echo "Container started successfully"

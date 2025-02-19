@@ -1,0 +1,28 @@
+name: CI Build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Display Podman version
+        run: podman --version
+
+      - name: Reset Podman and Build with Makefile
+        run: |
+          # Note: This command resets Podman. Depending on your runner, you may need cache improvements.
+          make real-clean
+          make starexec
+          
+      - name: Cleanup images and volumes after build
+        run: make clean
