@@ -25,7 +25,7 @@ jobs:
       - name: Reset Podman and Build with Makefile
         run: |
           # Note: This command resets Podman. Depending on your runner, you may need cache improvements.
-          make real-clean
+          make clean
           make starexec
           
       - name: Cleanup images and volumes after build
