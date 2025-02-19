@@ -40,7 +40,7 @@ jobs:
       - name: Reset Podman and Build with Makefile
         run: |
           make clean
-          make starexec ULIMIT_FLAG=
+          make starexec
 
       - name: Cleanup images and volumes after build
         run: make clean
