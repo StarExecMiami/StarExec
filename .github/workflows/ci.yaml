@@ -19,6 +19,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
 
+      - name: Create SSH directory and files
+        run: |
+          mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
+          touch ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/known_hosts
+
       - name: Display Podman version
         run: podman --version
 
