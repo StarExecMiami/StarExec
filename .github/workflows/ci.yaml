@@ -14,10 +14,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install Podman
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            make \
+            gcc \
+            g++ \
+            git \
+            libnuma-dev
+          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Create SSH directory and files
         run: |
@@ -32,9 +39,8 @@ jobs:
 
       - name: Reset Podman and Build with Makefile
         run: |
-          # Note: This command resets Podman. Depending on your runner, you may need cache improvements.
           make clean
           make starexec
-          
+
       - name: Cleanup images and volumes after build
         run: make clean
