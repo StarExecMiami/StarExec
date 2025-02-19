@@ -35,7 +35,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ant ruby ruby-dev rubygems g++ make
+        sudo apt-get install -y ant ruby ruby-dev rubygems g++ make curl tar
 
     - name: Configure MariaDB
       run: |
@@ -52,6 +52,16 @@ jobs:
         sudo chmod -R 755 /home/starexec
         sudo mkdir -p /local/sandbox
         sudo chmod 770 /local/sandbox
+
+    - name: Setup Tomcat
+      run: |
+        export TOMCAT_VERSION=7.0.109
+        export MYSQL_CON_VERSION=8.0.30
+        sudo mkdir -p /project && cd /project
+        sudo curl -fsSL https://archive.apache.org/dist/tomcat/tomcat-7/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz | sudo tar -xz
+        sudo mv apache-tomcat-${TOMCAT_VERSION} apache-tomcat-7
+        sudo curl -fsSL -o /project/apache-tomcat-7/lib/mysql-connector-java-${MYSQL_CON_VERSION}.jar \
+          https://search.maven.org/remotecontent?filepath=mysql/mysql-connector-java/${MYSQL_CON_VERSION}/mysql-connector-java-${MYSQL_CON_VERSION}.jar
 
     - name: Cache Maven packages
       uses: actions/cache@v3
