@@ -44,5 +44,5 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          docker buildx create --use
+          docker buildx create --driver docker-container --use
           docker buildx build --cache-to type=gha,mode=max --build-arg BUILDKIT_INLINE_CACHE=1 --push -t ghcr.io/${{ github.repository_owner }}/starexec:latest .
