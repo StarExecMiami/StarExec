@@ -50,7 +50,7 @@ jobs:
           DOCKER_CLI_EXPERIMENTAL: enabled
           DOCKER_BUILDKIT: 1
           DOCKER_CONFIG: ${{ github.workspace }}
-          DOCKER_HOST: ssh://docker@localhost
+          DOCKER_HOST: unix:///var/run/docker.sock
           DOCKER_TLS_CERTDIR: /workspace/.certs
           DOCKER_TLS_VERIFY: 1
           DOCKER_USERNAME: ${{ github.actor }}
