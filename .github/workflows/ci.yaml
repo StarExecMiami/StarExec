@@ -26,7 +26,7 @@ jobs:
         fetch-depth: 0
 
     - name: Setup Podman
-      uses: containers/podman-action@v1
+      uses: redhat-actions/podman-build@v2
       with:
         version: ${{ env.PODMAN_VERSION }}
 
