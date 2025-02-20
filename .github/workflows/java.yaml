@@ -60,7 +60,7 @@ jobs:
       run: ant -Djava.security.egd=file:/dev/./urandom test
 
     - name: Code coverage
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: coverage-report
         path: target/site/jacoco/
