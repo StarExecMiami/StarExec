@@ -2,7 +2,7 @@ name: CI Build and Package
 
 on:
   push:
-    branches: [ UMprod, main, develop, feature/*, containerised ]
+    branches: [ UMprod, develop, feature/*, containerised ]
     paths:
       - 'src/**'
       - 'Makefile'
