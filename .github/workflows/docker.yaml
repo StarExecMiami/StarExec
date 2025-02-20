@@ -7,6 +7,8 @@ on:
       - 'Dockerfile'
       - 'Makefile'
       - '!**.md'
+  pull_request:
+    branches: [UMprod, develop, feature/*, containerised]
 
 jobs:
   build:
