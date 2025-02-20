@@ -3,11 +3,7 @@ name: Java CI
 on:
   push:
     branches: [UMprod, develop, feature/*, containerised]
-    paths:
-      - 'src/**'
-      - 'pom.xml'
-      - 'build.xml'
-      - '!**.md'
+
   pull_request:
     branches: [UMprod, develop, feature/*, containerised]
 

@@ -3,10 +3,6 @@ name: CI Build and Package
 on:
   push:
     branches: [ UMprod, develop, feature/*, containerised ]
-    paths:
-      - 'src/**'
-      - 'Makefile'
-      - '!**.md'
 
   pull_request:
     branches: [ UMprod, develop, feature/*, containerised ]
