@@ -3,10 +3,7 @@ name: Docker Build and Publish
 on:
   push:
     branches: [UMprod, develop, feature/*, containerised]
-    paths:
-      - 'Dockerfile'
-      - 'Makefile'
-      - '!**.md'
+
   pull_request:
     branches: [UMprod, develop, feature/*, containerised]
 
