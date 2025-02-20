@@ -21,10 +21,10 @@ jobs:
       mysql:
         image: mariadb:10.3
         env:
-          MARIADB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          MARIADB_ROOT_PASSWORD: rootpassword
           MARIADB_DATABASE: ${{ env.DB_NAME }}
           MARIADB_USER: ${{ env.DB_USER }}
-          MARIADB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MARIADB_PASSWORD: userpassword
         ports:
           - 3306:3306
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
