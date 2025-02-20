@@ -9,7 +9,7 @@ on:
       - '!**.md'
 
   pull_request:
-    branches: [ UMprod, develop ]
+    branches: [ UMprod, develop, feature/*, containerised ]
 
 concurrency:
   group: ci-${{ github.ref }}
