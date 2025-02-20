@@ -1,46 +1,63 @@
-name: CI Build
+name: CI Build and Package
 
 on:
   push:
     branches: [ UMprod, main, develop, feature/*, containerised ]
+    paths:
+      - 'src/**'
+      - 'Makefile'
+      - '!**.md'
+
   pull_request:
-    branches: [ UMprod, main, develop, feature/*, containerised ]
+    branches: [ UMprod, develop ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    name: Build with Podman
     runs-on: ubuntu-latest
+    env:
+      PODMAN_VERSION: 4.0
+      BUILD_IMAGE: starexec-builder
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            make \
-            gcc \
-            g++ \
-            git \
-            libnuma-dev
-          sudo rm -rf /var/lib/apt/lists/*
+    - name: Setup Podman
+      uses: containers/podman-action@v1
+      with:
+        version: ${{ env.PODMAN_VERSION }}
 
-      - name: Create SSH directory and files
-        run: |
-          mkdir -p ~/.ssh
-          touch ~/.ssh/known_hosts
-          touch ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/known_hosts
+    - name: Cache build artifacts
+      uses: actions/cache@v3
+      with:
+        path: |
+          build/
+          target/
+        key: ${{ runner.os }}-build-${{ hashFiles('Makefile', '**/CMakeLists.txt') }}
 
-      - name: Display Podman version
-        run: podman --version
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          libnuma-dev \
+          git-core
 
-      - name: Reset Podman and Build with Makefile
-        run: |
-          make clean
-          make starexec
+    - name: Build executable
+      run: |
+        podman build -t ${{ env.BUILD_IMAGE }} .
+        podman run --rm -v $(pwd):/build ${{ env.BUILD_IMAGE }} make starexec
 
-      - name: Cleanup images and volumes after build
-        run: make clean
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: starexec-binaries
+        path: |
+          build/**
+          !build/**/*.o
