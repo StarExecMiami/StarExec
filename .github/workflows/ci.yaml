@@ -51,7 +51,7 @@ jobs:
         podman run --rm -v $(pwd):/build ${{ env.BUILD_IMAGE }} make starexec
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: starexec-binaries
         path: |
