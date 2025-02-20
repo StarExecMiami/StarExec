@@ -45,4 +45,20 @@ jobs:
       - name: Build and push Docker image
         run: |
           docker buildx create --driver docker-container --use
-          docker buildx build --cache-to type=gha,mode=max --build-arg BUILDKIT_INLINE_CACHE=1 --push -t ghcr.io/${{ github.repository_owner }}/starexec:latest .
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag ghcr.io/${{ github.repository }}:latest \
+            --tag ghcr.io/${{ github.repository }}:${{ github.sha }} \
+            --push .
+        env:
+          DOCKER_CLI_EXPERIMENTAL: enabled
+          DOCKER_BUILDKIT: 1
+          DOCKER_CONFIG: ${{ github.workspace }}
+          DOCKER_HOST: ssh://docker@localhost
+          DOCKER_TLS_CERTDIR: /workspace/.certs
+          DOCKER_TLS_VERIFY: 1
+          DOCKER_USERNAME: ${{ github.actor }}
+          DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_REGISTRY: ghcr.io
+          DOCKER_REPOSITORY: ${{ github.repository }}
+          DOCKER_IMAGE: ${{ github.repository }}
