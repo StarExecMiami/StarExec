@@ -41,8 +41,9 @@ jobs:
           chmod 600 starexec_podman_key
       - name: Build and push Docker image
         run: |
+          REPO_LOWER=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
           docker buildx build --builder ${{ steps.buildx.outputs.name }} \
             --platform linux/amd64,linux/arm64 \
-            --tag ghcr.io/${{ github.repository }}:latest \
-            --tag ghcr.io/${{ github.repository }}:${{ github.sha }} \
+            --tag ghcr.io/${REPO_LOWER}:latest \
+            --tag ghcr.io/${REPO_LOWER}:${{ github.sha }} \
             --push .
