@@ -86,7 +86,6 @@ jobs:
         path: target/site/jacoco/
 
     - name: Publish to GitHub Packages
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
       run: mvn --batch-mode deploy
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
