@@ -65,14 +65,6 @@ jobs:
         sudo curl -fsSL -o /project/apache-tomcat-7/lib/mysql-connector-java-${MYSQL_CON_VERSION}.jar \
           https://search.maven.org/remotecontent?filepath=mysql/mysql-connector-java/${MYSQL_CON_VERSION}/mysql-connector-java-${MYSQL_CON_VERSION}.jar
 
-    - name: Cache Maven packages
-      uses: actions/cache@v3
-      with:
-        path: ~/.m2/repository
-        key: ${{ runner.os }}-maven-${{ hashFiles('pom.xml') }}
-        restore-keys: |
-          ${{ runner.os }}-maven-
-
     - name: Build with Ant
       run: ant build
 
@@ -84,9 +76,16 @@ jobs:
       with:
         name: coverage-report
         path: target/site/jacoco/
+    
+    - name: Publish code coverage
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: target/site/jacoco/
 
-    - name: Publish to GitHub Packages
-      run: mvn --batch-mode deploy
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Publish artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: starexec
+        path: target/starexec.war
       
