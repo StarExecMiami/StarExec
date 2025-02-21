@@ -24,7 +24,7 @@ RUN make clean && make
 # ---------------------------
 # Stage 2: Final runtime
 # ---------------------------
-FROM ubuntu:22.04
+FROM --platform=linux/amd64 ubuntu:22.04
 
 LABEL maintainer="Starexec Team"
 
