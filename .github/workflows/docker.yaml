@@ -39,7 +39,6 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H localhost >> ~/.ssh/known_hosts
           chmod 600 starexec_podman_key
-
       - name: Build and push Docker image
         run: |
           REPO_LOWER=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
