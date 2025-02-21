@@ -51,7 +51,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC
 
 # Update and install runtime dependencies
-RUN apt-get update --fix-missing && apt-get upgrade -y && \
+RUN apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends --no-install-suggests \
     ca-certificates tzdata sudo git unzip file apache2 tcsh libnuma-dev \
     openssl dnsutils curl ant ant-optional mariadb-client mariadb-server podman locales && \
