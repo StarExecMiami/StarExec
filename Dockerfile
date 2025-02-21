@@ -1,7 +1,7 @@
 # ---------------------------
 # Stage 1: Build runsolver
 # ---------------------------
-FROM ubuntu:22.04 AS builder
+FROM --platform=linux/amd64 ubuntu:22.04 AS builder
 
 # Install build dependencies
 RUN apt-get update && \
