@@ -76,7 +76,7 @@ jobs:
           mkdir -p /project && cd /project
           curl -fsSL "https://archive.apache.org/dist/tomcat/tomcat-7/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" | tar -xz
           mv apache-tomcat-${TOMCAT_VERSION} apache-tomcat-7
-          chown -R $USER:$USER apache-tomcat-7
+          chown -R $(whoami):$(whoami) apache-tomcat-7
           curl -fsSL -o /project/apache-tomcat-7/lib/mysql-connector-java-${MYSQL_CON_VERSION}.jar \
             "https://search.maven.org/remotecontent?filepath=mysql/mysql-connector-java/${MYSQL_CON_VERSION}/mysql-connector-java-${MYSQL_CON_VERSION}.jar"
 
