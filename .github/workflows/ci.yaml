@@ -2,9 +2,19 @@ name: CI Build
 
 on:
   push:
-    branches: [ UMprod, main, develop, feature/*, containerised ]
+    branches:
+      - UMprod
+      - main
+      - develop
+      - 'feature/*'
+      - containerised
   pull_request:
-    branches: [ UMprod, main, develop, feature/*, containerised ]
+    branches:
+      - UMprod
+      - main
+      - develop
+      - 'feature/*'
+      - containerised
 
 jobs:
   build:
@@ -14,7 +24,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -25,19 +35,21 @@ jobs:
             git \
             libnuma-dev
           sudo rm -rf /var/lib/apt/lists/*
-      - name: Create SSH directory and files
+
+      - name: Setup SSH configuration
         run: |
           mkdir -p ~/.ssh
-          touch ~/.ssh/known_hosts
-          touch ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/known_hosts
-      - name: Display Podman version
+          touch ~/.ssh/known_hosts ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/known_hosts ~/.ssh/authorized_keys
+
+      - name: Show Podman version
         run: podman --version
 
-      - name: Reset Podman and Build with Makefile
+      - name: Build project with Makefile
         run: |
           make clean
           make starexec
+
       - name: Cleanup images and volumes after build
+        if: always()
         run: make clean
