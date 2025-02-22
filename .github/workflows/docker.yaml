@@ -2,13 +2,21 @@ name: Docker Build and Publish
 
 on:
   push:
-    branches: [UMprod, develop, feature/*, containerised]
-
+    branches:
+      - UMprod
+      - develop
+      - 'feature/*'
+      - containerised
   pull_request:
-    branches: [UMprod, develop, feature/*, containerised]
+    branches:
+      - UMprod
+      - develop
+      - 'feature/*'
+      - containerised
 
 jobs:
   build:
+    name: Build and Publish Docker Image
     runs-on: ubuntu-latest
 
     steps:
@@ -31,20 +39,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate SSH keys
+      - name: Generate SSH keys if missing
         run: |
-          echo "using ssh-keygen to make pub/priv keys in the current directory"
-          echo "(only if they don't already exist)"
-          [ -f starexec_podman_key ] || ssh-keygen -t ed25519 -N '' -f starexec_podman_key
+          KEY_FILE=starexec_podman_key
+          echo "Checking if SSH keys exist in the workspace..."
+          if [ ! -f "$KEY_FILE" ]; then
+            echo "Keys not found. Generating new SSH keys..."
+            ssh-keygen -t ed25519 -N "" -f "$KEY_FILE"
+          else
+            echo "SSH keys already exist."
+          fi
           mkdir -p ~/.ssh
           ssh-keyscan -H localhost >> ~/.ssh/known_hosts
-          chmod 600 starexec_podman_key
+          chmod 600 "$KEY_FILE"
 
-      - name: Build and push Docker image
+      - name: Build and Push Docker Image
         run: |
-          REPO_LOWER=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
+          echo "Building and pushing Docker images..."
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           docker buildx build --builder ${{ steps.buildx.outputs.name }} \
             --platform linux/amd64,linux/arm64 \
-            --tag ghcr.io/${REPO_LOWER}:latest \
-            --tag ghcr.io/${REPO_LOWER}:${{ github.sha }} \
+            --tag ghcr.io/$REPO_LOWER:latest \
+            --tag ghcr.io/$REPO_LOWER:${{ github.sha }} \
             --push .
