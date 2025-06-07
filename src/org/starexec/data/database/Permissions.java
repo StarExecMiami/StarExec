@@ -414,7 +414,7 @@ public class Permissions {
 			procedure.setInt(2, spaceId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				Permission p = resultsToPermissionWithId(userId, results);
 				if (results.wasNull()) {
 					/* If the permission doesn't exist we always get a result
