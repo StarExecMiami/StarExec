@@ -1894,7 +1894,7 @@ public class Spaces {
 			procedure.setInt(1, spaceId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return results.getBoolean("public");
 			}
 		} catch (Exception e) {
@@ -1924,7 +1924,7 @@ public class Spaces {
 			procedure.setInt(1, spaceId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return (results.getInt(1) > 0);
 			}
 		} catch (Exception e) {

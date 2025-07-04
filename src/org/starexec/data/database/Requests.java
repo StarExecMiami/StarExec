@@ -543,7 +543,7 @@ public class Requests {
 
 			// There should only be 1 result since the user id is the primary
 			// key.
-			results.first();
+			results.next();
 			newEmail = results.getString("new_email");
 			emailChangeCodeAssociatedWithUser = results.getString("code");
 		} catch (Exception e) {
