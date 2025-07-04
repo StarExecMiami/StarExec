@@ -543,9 +543,14 @@ public class Requests {
 
 			// There should only be 1 result since the user id is the primary
 			// key.
-			results.next();
-			newEmail = results.getString("new_email");
-			emailChangeCodeAssociatedWithUser = results.getString("code");
+			if (results.next()) {
+				newEmail = results.getString("new_email");
+				emailChangeCodeAssociatedWithUser = results.getString("code");
+			} else {
+				throw new StarExecDatabaseException(
+					"No change email request found for user with id=" + userId + "."
+				);
+			}
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to get a change email request for user with id=" + userId + ".",
