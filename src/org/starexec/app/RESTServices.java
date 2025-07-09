@@ -2096,14 +2096,6 @@ public class RESTServices {
 					log.debug("Email sent to user with id=" + userId + " at address " + newValue +
 									  " to validate email change request.");
 					messageToUser = "A verification email has been sent to the new email address.";
-				} catch (IOException e) {
-					log.warn(
-							"(editUserInfo) an error occurred while trying to send a change email verification " +
-									"email.",
-							e
-					);
-					messageToUser = "Could not send verification email.";
-					success = false;
 				} catch (StarExecDatabaseException e) {
 					log.error("(editUserInfo) an error occurred while trying to add a change email request.", e);
 					messageToUser = "Internal error: could not complete email change request.";
@@ -4085,13 +4077,26 @@ public class RESTServices {
 		// Get the id of the user who initiated the promotion
 		int userIdOfPromotion = SessionUtil.getUserId(request);
 		User user = Users.get(userIdOfPromotion);
-		// Permissions check; ensure the user an admin
+		
+		// Verify that the user exists
+		if (user == null) {
+			log.error("makeLeader: User with ID " + userIdOfPromotion + " not found");
+			return gson.toJson(new ValidatorStatusCode(false, "User not found"));
+		}
+		
+		// Permissions check; ensure the user is an admin
 		if (!GeneralSecurity.hasAdminWritePrivileges(user.getId())) {
 			return gson.toJson(ERROR_INVALID_PERMISSIONS);
 		}
 
 		// Extract the String user id's and convert them to Integer
 		List<Integer> selectedUsers = Util.toIntegerList(request.getParameterValues("selectedIds[]"));
+		
+		// Verify that the conversion was successful
+		if (selectedUsers == null || selectedUsers.isEmpty()) {
+			log.error("makeLeader: Failed to convert selected IDs to integers or list is empty");
+			return gson.toJson(new ValidatorStatusCode(false, "Invalid user IDs provided"));
+		}
 
 		// Validate the list of users to promote by:
 		// 1 - Ensuring the leader who initiated the promotion of users from a space isn't themselves in the list of users to remove
@@ -4101,17 +4106,36 @@ public class RESTServices {
 				return gson.toJson(ERROR_CANT_PROMOTE_SELF);
 			}
 
-			if	(Permissions.get(userId, spaceId).isLeader()) {
+			// Check if user permissions exist for this space
+			Permission userPermission = Permissions.get(userId, spaceId);
+			if (userPermission == null) {
+				log.error("makeLeader: No permissions found for user " + userId + " in space " + spaceId);
+				return gson.toJson(new ValidatorStatusCode(false, "User permissions not found"));
+			}
+
+			if (userPermission.isLeader()) {
 				return gson.toJson(ERROR_CANT_PROMOTE_LEADER);
 			}
 
 			Permission p = Permissions.getFullPermission();
+			if (p == null) {
+				log.error("makeLeader: Failed to get full permission object");
+				return gson.toJson(new ValidatorStatusCode(false, "Internal error creating permissions"));
+			}
+			
 			//give the users leader permissions
-			Permissions.set(userId, spaceId, p);
+			if (!Permissions.set(userId, spaceId, p)) {
+				log.error("makeLeader: Failed to set permissions for user " + userId + " in space " + spaceId);
+				return gson.toJson(new ValidatorStatusCode(false, "Failed to update user permissions"));
+			}
 
 			//update quotas
-			Users.setDiskQuota(userId, R.CL_DEFAULT_DISK_QUOTA);
-			Users.setPairQuota(userId, R.CL_PAIR_QUOTA);
+			if (!Users.setDiskQuota(userId, R.CL_DEFAULT_DISK_QUOTA)) {
+				log.warn("makeLeader: Failed to set disk quota for user " + userId);
+			}
+			if (!Users.setPairQuota(userId, R.CL_PAIR_QUOTA)) {
+				log.warn("makeLeader: Failed to set pair quota for user " + userId);
+			}
 		}
 		return gson.toJson(new ValidatorStatusCode(true,"User promoted successfully"));
 	}
