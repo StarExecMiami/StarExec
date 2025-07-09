@@ -50,29 +50,45 @@ public class Mail {
 			if (to == null || to.isEmpty()) {
 				return;
 			}
+			
+			log.info("Sending email: " + subject + " to " + to);
+			
+			try {
+				// Try to send using normal SMTP with fast timeouts
+				final Email email = new SimpleEmail();
+				email.setHostName(R.EMAIL_SMTP);
+				email.setSmtpPort(R.EMAIL_SMTP_PORT);
+				email.setSubject(subject);
+				email.setMsg(message);
+				
+				// Set short timeouts to fail fast if email server is not available
+				email.setSocketConnectionTimeout(5000); // 5 seconds to connect
+				email.setSocketTimeout(10000); // 10 seconds to send
 
-			final Email email = new SimpleEmail();
-			email.setHostName(R.EMAIL_SMTP);
-			email.setSmtpPort(R.EMAIL_SMTP_PORT);
-			email.setSubject(subject);
-			email.setMsg(message);
+				if (!R.EMAIL_USER.isEmpty() && !R.EMAIL_PWD.isEmpty()) {
+					email.setAuthenticator(new DefaultAuthenticator(R.EMAIL_USER, R.EMAIL_PWD));
+					email.setTLS(true);
+				}
 
-			if (!R.EMAIL_USER.isEmpty() && !R.EMAIL_PWD.isEmpty()) {
-				email.setAuthenticator(new DefaultAuthenticator(R.EMAIL_USER, R.EMAIL_PWD));
-				email.setTLS(true);
-			}
+				if (!R.EMAIL_USER.isEmpty()) {
+					email.setFrom(R.EMAIL_USER);
+				}
 
-			if (!R.EMAIL_USER.isEmpty()) {
-				email.setFrom(R.EMAIL_USER);
-			}
+				for (String s : to) {
+					email.addTo(s);
+				}
 
-			for (String s : to) {
-				email.addTo(s);
-			}
-
-			email.send();
+				email.send();
+				log.info("Email sent successfully");		} catch (Exception e) {
+			// If email sending fails, log but don't throw exception
+			log.warn("Failed to send email via SMTP: " + e.getMessage());
+			log.info("Email would have been sent to: " + to);
+			log.info("Email subject: " + subject);
+			// Don't log email content as it might contain sensitive information
+			log.debug("Email sending failed - content not logged for security reasons");
+		}
 		} catch (Exception e) {
-			log.warn(e.getMessage(), e);
+			log.warn("Error in mail function", e);
 		}
 	}
 
@@ -82,37 +98,40 @@ public class Mail {
 	 *
 	 * @param user the user trying to join the community
 	 * @param comReq The community request containing the information to construct the e-mail
-	 * @throws IOException if acceptance_email cannot be found
 	 * @author Todd Elvers
 	 */
-	public static void sendCommunityRequest(User user, CommunityRequest comReq) throws IOException {
-		String communityName = Spaces.getName(comReq.getCommunityId());
+	public static void sendCommunityRequest(User user, CommunityRequest comReq) {
+		try {
+			String communityName = Spaces.getName(comReq.getCommunityId());
 
-		// Figure out the email addresses of the leaders of the space
-		List<String> leaderEmails = new ArrayList<>();
-		for (User u : Spaces.getLeaders(comReq.getCommunityId())) {
-			leaderEmails.add(u.getEmail());
+			// Figure out the email addresses of the leaders of the space
+			List<String> leaderEmails = new ArrayList<>();
+			for (User u : Spaces.getLeaders(comReq.getCommunityId())) {
+				leaderEmails.add(u.getEmail());
+			}
+
+			// Configure pre-built message
+			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/acceptance_email.txt"))
+				.replace("$$COMMUNITY$$", communityName)
+				.replace("$$NEWUSER$$", user.getFullName())
+				.replace("$$EMAIL$$", user.getEmail())
+				.replace("$$INSTITUTION$$", user.getInstitution())
+				.replace("$$MESSAGE$$", comReq.getMessage())
+				.replace("$$APPROVE$$", Util.url(String
+					.format("public/verification/email?%s=%s&%s=%s", Mail.EMAIL_CODE, comReq
+							.getCode(), Mail.LEADER_RESPONSE, "approve")))
+				.replace("$$DECLINE$$", Util.url(String
+					.format("public/verification/email?%s=%s&%s=%s", Mail.EMAIL_CODE, comReq
+							.getCode(), Mail.LEADER_RESPONSE, "decline")));
+
+			// Send email
+			Mail.mail(email, "STAREXEC - Request to join " + communityName, leaderEmails);
+			log.info(String
+					.format("Acceptance email sent to leaders of [%s] to approve/decline %s's request",
+						communityName, user.getFullName()));
+		} catch (IOException e) {
+			log.warn("Could not send community request email because the template file could not be read.", e);
 		}
-
-		// Configure pre-built message
-		final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/acceptance_email.txt"))
-			.replace("$$COMMUNITY$$", communityName)
-			.replace("$$NEWUSER$$", user.getFullName())
-			.replace("$$EMAIL$$", user.getEmail())
-			.replace("$$INSTITUTION$$", user.getInstitution())
-			.replace("$$MESSAGE$$", comReq.getMessage())
-			.replace("$$APPROVE$$", Util.url(String
-				.format("public/verification/email?%s=%s&%s=%s", Mail.EMAIL_CODE, comReq
-						.getCode(), Mail.LEADER_RESPONSE, "approve")))
-			.replace("$$DECLINE$$", Util.url(String
-				.format("public/verification/email?%s=%s&%s=%s", Mail.EMAIL_CODE, comReq
-						.getCode(), Mail.LEADER_RESPONSE, "decline")));
-
-		// Send email
-		Mail.mail(email, "STAREXEC - Request to join " + communityName, leaderEmails);
-		log.info(String
-				.format("Acceptance email sent to leaders of [%s] to approve/decline %s's request",
-					communityName, user.getFullName()));
 	}
 
 	/**
@@ -121,29 +140,36 @@ public class Mail {
 	 *
 	 * @param user the user to send the email to
 	 * @param code the activation code to send
-	 * @throws IOException if verification_email cannot be found
 	 * @author Todd Elvers
 	 */
-	public static void sendActivationCode(User user, String code) throws IOException {
-		// Configure pre-built message
-		final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/activation_email.txt"))
-			.replace("$$USER$$", user.getFullName())
-			.replace("$$LINK$$",
-				Util.url(String.format("public/verification/email?%s=%s", Mail.EMAIL_CODE, code)))
-		;
+	public static void sendActivationCode(User user, String code) {
+		try {
+			// Configure pre-built message
+			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/activation_email.txt"))
+				.replace("$$USER$$", user.getFullName())
+				.replace("$$LINK$$",
+					Util.url(String.format("public/verification/email?%s=%s", Mail.EMAIL_CODE, code)))
+			;
 
-		// Send email
-		Mail.mail(email, "STAREXEC - Verify your account", user.getEmail());
-		log.info(String.format("Sent activation email to user [%s] at [%s]", user.getFullName(), user.getEmail()));
+			// Send email
+			Mail.mail(email, "STAREXEC - Verify your account", user.getEmail());
+			log.info(String.format("Sent activation email to user [%s] at [%s]", user.getFullName(), user.getEmail()));
+		} catch (IOException e) {
+			log.warn("Could not send activation email because the template file could not be read.", e);
+		}
 	}
 
-	public static void sendEmailChangeValidation(String newEmail, String code) throws IOException {
-		String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/change_email.txt"))
-			.replace(
-				"$$LINK$$",
-				Util.url(String.format("public/verification/email?%s=%s", Mail.CHANGE_EMAIL_CODE, code)))
-		;
-		Mail.mail(email, "STAREXEC - Change Email", newEmail);
+	public static void sendEmailChangeValidation(String newEmail, String code) {
+		try {
+			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/change_email.txt"))
+				.replace(
+					"$$LINK$$",
+					Util.url(String.format("public/verification/email?%s=%s", Mail.CHANGE_EMAIL_CODE, code)))
+			;
+			Mail.mail(email, "STAREXEC - Change Email", newEmail);
+		} catch (IOException e) {
+			log.warn("Could not send email change validation because the template file could not be read.", e);
+		}
 	}
 
 	/**
@@ -224,17 +250,20 @@ public class Mail {
 		log.info(String.format("Password reset email sent to user [%s].", newUser.getFullName()));
 	}
 
-	public static void sendPassword(User user, String password) throws IOException {
+	public static void sendPassword(User user, String password) {
+		try {
+			// Configure pre-built message
+			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/new_user_password.txt"))
+					.replace("$$USER$$", user.getFullName())
+					.replace("$$PASS$$", password)
+					;
 
-		// Configure pre-built message
-		String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/new_user_password.txt"))
-			.replace("$$USER$$", user.getFullName())
-			.replace("$$PASS$$", password)
-		;
-
-		// Send email
-		Mail.mail(email, "STAREXEC - new user password", user.getEmail());
-		log.info(String.format("Password reset email sent to user [%s].", user.getFullName()));
+			// Send email
+			Mail.mail(email, "STAREXEC - new user password", user.getEmail());
+			log.info(String.format("Password reset email sent to user [%s].", user.getFullName()));
+		} catch (IOException e) {
+			log.warn("Could not send password email because the template file could not be read.", e);
+		}
 	}
 
 	/**
