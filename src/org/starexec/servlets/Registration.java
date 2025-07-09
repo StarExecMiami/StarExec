@@ -251,7 +251,8 @@ public class Registration extends HttpServlet {
 				} catch (Exception e) {
 					log.warn("Failed to send activation email to user " + user.getEmail(), e);
 					return new ValidatorStatusCode(true, "email_failed");
-				}			return new ValidatorStatusCode(true);
+				}
+				return new ValidatorStatusCode(true);
 		} else {
 			// Sanitize user name for logging to prevent log injection
 			String sanitizedName = user.getFullName().replaceAll("[\\r\\n]", "_");
