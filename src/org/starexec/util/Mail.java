@@ -79,7 +79,8 @@ public class Mail {
 				}
 
 				email.send();
-				log.info("Email sent successfully");		} catch (Exception e) {
+				log.info("Email sent successfully");
+			} catch (Exception e) {
 			// If email sending fails, log but don't throw exception
 			log.warn("Failed to send email via SMTP: " + e.getMessage());
 			log.info("Email would have been sent to: " + to);
