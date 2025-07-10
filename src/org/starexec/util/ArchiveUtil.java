@@ -168,20 +168,21 @@ public class ArchiveUtil {
 				// Util.executeCommand(unzipCmd);
 				log.debug("now removing the archived file " + fileName);
 				ArchiveUtil.removeArchive(fileName);
-
 			} else if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz") || fileName.endsWith(".tar")) {
 				// First rename it if it's a .tgz
 
-				String[] tarCmd = new String[8];
+				String[] tarCmd = new String[10];
 				tarCmd[0] = "sudo";
 				tarCmd[1] = "-u";
 				tarCmd[2] = R.SANDBOX_USER_ONE;
 				tarCmd[3] = "tar";
-				tarCmd[4] = "-xf";
-				tarCmd[5] = fileName;
-				tarCmd[6] = "-C";
-				tarCmd[7] = destination;
-				log.debug("about to execute command tar command");
+				tarCmd[4] = "--no-same-permissions";
+				tarCmd[5] = "--no-same-owner";
+				tarCmd[6] = "-xf";
+				tarCmd[7] = fileName;
+				tarCmd[8] = "-C";
+				tarCmd[9] = destination;
+				log.debug("about to execute command tar command with container-safe options");
 				Util.executeCommand(tarCmd);
 				ArchiveUtil.removeArchive(fileName);
 				Util.chmodDirectory(destination, false);
