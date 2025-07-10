@@ -1,6 +1,8 @@
 package org.starexec.servlets;
 
 import org.starexec.constants.R;
+import org.starexec.data.database.Communities;
+import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -48,20 +50,123 @@ public class Registration extends HttpServlet {
 		try {
 			final String method = "doPost";
 			log.entry(method);
-
-			// Begin registration for a new user
-			ValidatorStatusCode result = register(request);
-			if (result.isSuccess()) {
-				response.sendRedirect(Util.docRoot("public/registrationConfirmation.jsp"));
+			log.debug("Starting registration process");
+			ValidatorStatusCode result;
+			try {
+				// Begin registration for a new user
+				result = register(request);
+			} catch (IOException e) {
+				log.error("Caught IOException in Registration.doPost while calling register", e);
+				result = new ValidatorStatusCode(false, "Internal error during registration.");
+			}
+			
+			// Check if admin user is making the request
+			int userIdOfRequest = -1;
+			try {
+				userIdOfRequest = SessionUtil.getUserId(request);
+			} catch (Exception e) {
+				log.debug("No user session found - assuming normal registration");
+			}
+			
+			boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest);
+			log.debug("Is admin request: " + isAdmin);
+			
+			String redirectUrl;
+			if (isAdmin) {
+				redirectUrl = "secure/admin/addUser.jsp";
 			} else {
+				redirectUrl = "public/registrationConfirmation.jsp";
+			}
+			
+			if (result.isSuccess()) {
+				log.debug("Registration successful, redirecting with status: " + 
+						(result.getMessage() != null ? result.getMessage() : "success"));
+				
+				String url = Util.docRoot(redirectUrl);
+				if ("email_failed".equals(result.getMessage())) {
+					url += "?result=email_failed";
+				} else {
+					url += "?result=regSuccess";
+				}
+				
+				try {
+					response.sendRedirect(url);
+				} catch (Exception e) {
+					log.error("Failed to redirect after successful registration", e);
+					response.setStatus(HttpServletResponse.SC_OK);
+					response.setContentType("text/html; charset=UTF-8");
+					// Escape URL to prevent XSS
+					String escapedUrl = url.replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;");
+					response.getWriter().write("<html><body>Registration successful. <a href=\"" + 
+							escapedUrl + "\">Click here to continue</a></body></html>");
+				}
+			} else {
+				log.debug("Registration failed with message: " + result.getMessage());
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, result.getMessage()));
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST, result.getMessage());
+				try {
+					// Sanitize cookie value to prevent injection attacks
+					String cookieValue = result.getMessage();
+					if (cookieValue != null) {
+						// Remove control characters and limit length to prevent cookie injection
+						cookieValue = cookieValue.replaceAll("[\\r\\n\\x00]", "");
+						if (cookieValue.length() > 4000) { // HTTP cookie size limit
+							cookieValue = cookieValue.substring(0, 4000);
+						}
+					}
+					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, cookieValue));
+					response.sendRedirect(Util.docRoot(redirectUrl + "?result=regFail"));
+				} catch (Exception e) {
+					log.error("Failed to redirect after failed registration", e);
+					response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+					response.setContentType("text/html; charset=UTF-8");
+					// Escape error message and URL to prevent XSS
+					String escapedMessage = result.getMessage()
+							.replace("&", "&amp;")
+							.replace("<", "&lt;")
+							.replace(">", "&gt;")
+							.replace("\"", "&quot;")
+							.replace("'", "&#x27;");
+					String escapedUrl = Util.docRoot(redirectUrl)
+							.replace("\"", "&quot;")
+							.replace("<", "&lt;")
+							.replace(">", "&gt;");
+					response.getWriter().write("<html><body>Registration failed: " + 
+							escapedMessage + ". <a href=\"" + escapedUrl + 
+							"\">Click here to try again</a></body></html>");
+				}
 			}
 			log.exit(method);
 		} catch (Exception e) {
-			log.warn("Caught Exception in Registration.doPost.", e);
-			throw e;
+			log.error("Caught Exception in Registration.doPost", e);
+			// Don't rethrow exception to avoid 500 error, write a basic HTML response
+			try {
+				// Determine appropriate redirect URL based on user privileges
+				int userIdOfRequest = -1;
+				try {
+					userIdOfRequest = SessionUtil.getUserId(request);
+				} catch (Exception ex) {
+					// No session, assume normal registration
+				}
+				
+				String fallbackUrl;
+				if (GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest)) {
+					fallbackUrl = Util.docRoot("secure/admin/addUser.jsp");
+				} else {
+					fallbackUrl = Util.docRoot("public/registration.jsp");
+				}
+				
+				response.setStatus(HttpServletResponse.SC_OK);
+				response.setContentType("text/html; charset=UTF-8");
+				// Escape URL to prevent XSS
+				String escapedUrl = fallbackUrl
+						.replace("\"", "&quot;")
+						.replace("<", "&lt;")
+						.replace(">", "&gt;");
+				response.getWriter().write("<html><body>An error occurred during registration. " +
+						"<a href=\"" + escapedUrl + "\">Click here to try again</a></body></html>");
+			} catch (Exception ex) {
+				log.error("Failed even to write error page", ex);
+			}
 		}
 	}
 
@@ -108,7 +213,23 @@ public class Registration extends HttpServlet {
 			int id = Users.add(user);
 			boolean success = Users.associate(id, communityId);
 			if (success) {
+				// Create a personal subspace for the user like normal registration does
+				user.setId(id); // Set the ID so createPersonalSubspace can use it
+				try {
+					Communities.createPersonalSubspace(communityId, user);
+					// Sanitize user name for logging to prevent log injection
+					String sanitizedName = user.getFullName().replaceAll("[\\r\\n]", "_");
+					log.info("Created personal subspace for admin-created user: " + sanitizedName);
+				} catch (Exception e) {
+					log.warn("Failed to create personal subspace for user " + user.getEmail(), e);
+					// Don't fail the registration if personal space creation fails
+				}
+						try {
 				Mail.sendPassword(user, request.getParameter(Registration.USER_PASSWORD));
+			} catch (Exception e) {
+				log.warn("Failed to send password email to user " + user.getEmail(), e);
+				return new ValidatorStatusCode(true, "email_failed");
+			}
 				return new ValidatorStatusCode(true);
 			} else {
 				return new ValidatorStatusCode(false, "Internal database error registering user");
@@ -119,17 +240,25 @@ public class Registration extends HttpServlet {
 
 			// Add user to the database and get the UUID that was created
 			boolean added = Users.register(user, communityId, code, request.getParameter(Registration.USER_MESSAGE));
+		// If the user was successfully added to the database, send an activation email
+		if (added) {
+			// Sanitize user name for logging to prevent log injection
+			String sanitizedName = user.getFullName().replaceAll("[\\r\\n]", "_");
+			log.info(String.format("Registration was successfully started for user [%s].", sanitizedName));
 
-			// If the user was successfully added to the database, send an activation email
-			if (added) {
-				log.info(String.format("Registration was successfully started for user [%s].", user.getFullName()));
-
-				Mail.sendActivationCode(user, code);
+				try {
+					Mail.sendActivationCode(user, code);
+				} catch (Exception e) {
+					log.warn("Failed to send activation email to user " + user.getEmail(), e);
+					return new ValidatorStatusCode(true, "email_failed");
+				}
 				return new ValidatorStatusCode(true);
-			} else {
-				log.info(String.format("Registration was unsuccessfully started for user [%s].", user.getFullName()));
-				return new ValidatorStatusCode(false, "Internal database error registering user");
-			}
+		} else {
+			// Sanitize user name for logging to prevent log injection
+			String sanitizedName = user.getFullName().replaceAll("[\\r\\n]", "_");
+			log.info(String.format("Registration was unsuccessfully started for user [%s].", sanitizedName));
+			return new ValidatorStatusCode(false, "Internal database error registering user");
+		}
 		}
 	}
 
