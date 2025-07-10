@@ -21,7 +21,7 @@ public class Logins {
 					"{CALL GetNumberOfUniqueLogins()}",
 					p -> {},
 					results -> {
-						results.first();
+						results.next();
 						return results.getInt(1);
 					}
 			);

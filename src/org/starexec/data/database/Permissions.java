@@ -92,7 +92,7 @@ public class Permissions {
 			procedure.setInt(2, userId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return results.getBoolean(1);
 			}
 		} catch (Exception e) {
@@ -202,7 +202,7 @@ public class Permissions {
 			procedure.setInt(2, userId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				boolean userCanSeeJob = results.getBoolean(1);
 				if (userCanSeeJob) {
 					log.debug(methodName, "User can see job.");
@@ -260,7 +260,7 @@ public class Permissions {
 			procedure.setInt(2, userId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return results.getBoolean(1);
 			}
 		} catch (Exception e) {
@@ -360,7 +360,7 @@ public class Permissions {
 			procedure.setInt(2, userId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return results.getBoolean(1);
 			}
 		} catch (Exception e) {
@@ -510,7 +510,7 @@ public class Permissions {
 			procedure.setInt(1, spaceId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return resultsToPermissionWithId(results.getInt("id"), results);
 			}
 		} catch (Exception e) {

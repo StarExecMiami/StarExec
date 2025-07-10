@@ -175,7 +175,7 @@ public class Statistics {
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 
-			if (results.first()) {
+			if (results.next()) {
 				return Statistics.getMapFromResult(results);
 			}
 
