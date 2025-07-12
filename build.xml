@@ -24,6 +24,7 @@
 		<fileset dir="${web-inf}/lib" includes="**/*.jar"/>
 		<fileset dir="${tomcat-dir}/lib" includes="**/*.jar"/>
 		<fileset dir="local-lib" includes="**/*.jar"/>
+		<pathelement location="${web-inf}/lib/javax.activation-1.2.0.jar"/>
 	</path>
 	<path id="starcomclasspath">
 		<fileset dir="${starcomlib}" includes="**/*.jar"/>
