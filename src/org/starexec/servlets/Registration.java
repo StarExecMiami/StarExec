@@ -18,6 +18,7 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
 import java.io.IOException;
 import java.util.UUID;
 
@@ -51,6 +52,20 @@ public class Registration extends HttpServlet {
 			final String method = "doPost";
 			log.entry(method);
 			log.debug("Starting registration process");
+
+			// Check if admin user is making the request BEFORE processing
+			int userIdOfRequest = -1;
+			HttpSession session = request.getSession(false);
+			try {
+				userIdOfRequest = SessionUtil.getUserId(request);
+				log.debug("Found user session with ID: " + userIdOfRequest);
+			} catch (Exception e) {
+				log.debug("No user session found - assuming normal registration");
+			}
+
+			boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest);
+			log.debug("Is admin request: " + isAdmin);
+
 			ValidatorStatusCode result;
 			try {
 				// Begin registration for a new user
@@ -59,36 +74,31 @@ public class Registration extends HttpServlet {
 				log.error("Caught IOException in Registration.doPost while calling register", e);
 				result = new ValidatorStatusCode(false, "Internal error during registration.");
 			}
-			
-			// Check if admin user is making the request
-			int userIdOfRequest = -1;
-			try {
-				userIdOfRequest = SessionUtil.getUserId(request);
-			} catch (Exception e) {
-				log.debug("No user session found - assuming normal registration");
-			}
-			
-			boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest);
-			log.debug("Is admin request: " + isAdmin);
-			
+
 			String redirectUrl;
 			if (isAdmin) {
 				redirectUrl = "secure/admin/addUser.jsp";
 			} else {
 				redirectUrl = "public/registrationConfirmation.jsp";
 			}
-			
+
 			if (result.isSuccess()) {
-				log.debug("Registration successful, redirecting with status: " + 
-						(result.getMessage() != null ? result.getMessage() : "success"));
-				
+				log.debug("Registration successful, redirecting with status: " +
+				          (result.getMessage() != null ? result.getMessage() : "success"));
+
+				// Preserve session for admin users
+				if (isAdmin && session != null) {
+					session.setMaxInactiveInterval(30 * 60); // Extend session to 30 minutes
+					log.debug("Extended admin session after user creation");
+				}
+
 				String url = Util.docRoot(redirectUrl);
 				if ("email_failed".equals(result.getMessage())) {
 					url += "?result=email_failed";
 				} else {
 					url += "?result=regSuccess";
 				}
-				
+
 				try {
 					response.sendRedirect(url);
 				} catch (Exception e) {
@@ -97,8 +107,8 @@ public class Registration extends HttpServlet {
 					response.setContentType("text/html; charset=UTF-8");
 					// Escape URL to prevent XSS
 					String escapedUrl = url.replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;");
-					response.getWriter().write("<html><body>Registration successful. <a href=\"" + 
-							escapedUrl + "\">Click here to continue</a></body></html>");
+					response.getWriter().write("<html><body>Registration successful. <a href=\"" +
+					                           escapedUrl + "\">Click here to continue</a></body></html>");
 				}
 			} else {
 				log.debug("Registration failed with message: " + result.getMessage());
@@ -120,7 +130,11 @@ public class Registration extends HttpServlet {
 					response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
 					response.setContentType("text/html; charset=UTF-8");
 					// Escape error message and URL to prevent XSS
-					String escapedMessage = result.getMessage()
+					String message = result.getMessage();
+					if (message == null) {
+						message = "An unknown error occurred.";
+					}
+					String escapedMessage = message
 							.replace("&", "&amp;")
 							.replace("<", "&lt;")
 							.replace(">", "&gt;")
@@ -130,9 +144,9 @@ public class Registration extends HttpServlet {
 							.replace("\"", "&quot;")
 							.replace("<", "&lt;")
 							.replace(">", "&gt;");
-					response.getWriter().write("<html><body>Registration failed: " + 
-							escapedMessage + ". <a href=\"" + escapedUrl + 
-							"\">Click here to try again</a></body></html>");
+					response.getWriter().write("<html><body>Registration failed: " +
+					                           escapedMessage + ". <a href=\"" + escapedUrl +
+					                           "\">Click here to try again</a></body></html>");
 				}
 			}
 			log.exit(method);
@@ -147,14 +161,14 @@ public class Registration extends HttpServlet {
 				} catch (Exception ex) {
 					// No session, assume normal registration
 				}
-				
+
 				String fallbackUrl;
 				if (GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest)) {
 					fallbackUrl = Util.docRoot("secure/admin/addUser.jsp");
 				} else {
 					fallbackUrl = Util.docRoot("public/registration.jsp");
 				}
-				
+
 				response.setStatus(HttpServletResponse.SC_OK);
 				response.setContentType("text/html; charset=UTF-8");
 				// Escape URL to prevent XSS
@@ -163,7 +177,7 @@ public class Registration extends HttpServlet {
 						.replace("<", "&lt;")
 						.replace(">", "&gt;");
 				response.getWriter().write("<html><body>An error occurred during registration. " +
-						"<a href=\"" + escapedUrl + "\">Click here to try again</a></body></html>");
+				                           "<a href=\"" + escapedUrl + "\">Click here to try again</a></body></html>");
 			} catch (Exception ex) {
 				log.error("Failed even to write error page", ex);
 			}
