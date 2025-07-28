@@ -987,29 +987,55 @@ public class Benchmarks {
 	 * @author Benton McCune
 	 */
 	private static Integer findDependentBench(Integer spaceId, String includePath, Boolean linked, Integer userId) {
-		String[] spaces = includePath.split("/");//splitting up path
-		log.debug("Length of spaces string array = " + spaces.length);
-		if (spaces.length == 0) {
+		log.debug("findDependentBench called with: spaceId=" + spaceId + ", includePath=" + includePath + ", linked=" + linked + ", userId=" + userId);
+
+		if (includePath == null) {
+			log.warn("includePath is null");
 			return -1;
 		}
-		int index = (linked) ? 1 : 0;
-		log.debug("First Space(or Bench) to look for = " + spaces[index]);
-		//List<Space> subSpaces;
+
+		String[] spaces = includePath.split("/");
+		log.debug("Split includePath: " + Arrays.toString(spaces));
+		log.debug("Length of spaces string array = " + spaces.length);
+
+		if (spaces.length == 0) {
+			log.warn("No elements in includePath after split");
+			return -1;
+		}
+
+		int index = (linked != null && linked) ? 1 : 0;
+		log.debug("Index to start searching: " + index);
+
 		Integer currentSpaceId = spaceId;
-		log.debug("Current Space Id = " + currentSpaceId);
-		//dig through subspaces while you have to
-		while ((index < (spaces.length - 1)) && (currentSpaceId > -1)) {
-			log.info("Looking for SubSpace " + spaces[index] + " in Space " + currentSpaceId);
-			currentSpaceId = Spaces.getSubSpaceIDbyName(currentSpaceId, userId, spaces[index]);
-			log.info("Returned with subspace " + currentSpaceId);
+		log.debug("Initial currentSpaceId: " + currentSpaceId);
+
+		// Defensive: check index bounds
+		if (index >= spaces.length) {
+			log.warn("Index " + index + " is out of bounds for spaces array of length " + spaces.length);
+			return -1;
+		}
+
+		// dig through subspaces while you have to
+		while ((index < (spaces.length - 1)) && (currentSpaceId != null && currentSpaceId > -1)) {
+			log.info("Looking for SubSpace '" + spaces[index] + "' in Space " + currentSpaceId);
+			Integer nextSpaceId = Spaces.getSubSpaceIDbyName(currentSpaceId, userId, spaces[index]);
+			log.info("Returned with subspace id: " + nextSpaceId + " for name: " + spaces[index]);
+			if (nextSpaceId == null || nextSpaceId <= -1) {
+				log.warn("Subspace not found for name: " + spaces[index] + " in space: " + currentSpaceId);
+				return -1;
+			}
+			currentSpaceId = nextSpaceId;
 			index++;
 		}
-		//now find bench in the subspace you've found
-		if (currentSpaceId > 1) {
-			log.info("Looking for Benchmark " + spaces[index] + " in Space " + currentSpaceId);
+
+		// now find bench in the subspace you've found
+		if (currentSpaceId != null && currentSpaceId > 1 && index < spaces.length) {
+			log.info("Looking for Benchmark '" + spaces[index] + "' in Space " + currentSpaceId);
 			Integer benchId = Benchmarks.getBenchIdByName(currentSpaceId, spaces[index]);
-			log.info("Returned with bench " + benchId);
+			log.info("Returned with bench id: " + benchId + " for name: " + spaces[index]);
 			return benchId;
+		} else {
+			log.warn("Invalid currentSpaceId (" + currentSpaceId + ") or index (" + index + ") out of bounds for spaces array");
 		}
 		return -1;
 	}
@@ -1373,38 +1399,37 @@ public class Benchmarks {
 	 * @author Benton McCune
 	 */
 	public static Integer getBenchIdByName(Integer spaceId, String benchName) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
 		log.debug("getBenchIdByName", "Looking for Benchmark " + benchName + " in Space " + spaceId);
-		try {
-			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchByName(?,?)}");
+		
+		try (Connection con = Common.getConnection();
+			CallableStatement procedure = con.prepareCall("{CALL GetBenchByName(?,?)}")) {
+			
 			procedure.setInt(1, spaceId);
 			procedure.setString(2, benchName);
-
-			results = procedure.executeQuery();
-			Integer benchId = -1;
-
-			if (results.next()) {
-				benchId = (results.getInt("bench.id"));
-				log.debug("Bench Id = " + benchId);
+			
+			try (ResultSet results = procedure.executeQuery()) {
+				Integer benchId = null;
+				int count = 0;
+				
+				while (results.next()) {
+					count++;
+					if (count == 1) {
+						benchId = results.getInt("bench.id");
+						log.debug("Bench Id = " + benchId);
+					} else {
+						log.debug("Multiple benchmarks found with name: " + benchName);
+						return -1;
+					}
+				}
+				
+				log.debug("# of Benchmarks with this name = " + count);
+				return count == 1 ? benchId : -1;
 			}
-			results.last();
-			Integer numResults = results.getRow();
-			log.debug("# of Benchmarks with this name = " + numResults);
-			if (numResults != 1) {
-				return -1;
-			}
-			return benchId;
+			
 		} catch (Exception e) {
 			log.error("getBenchIdByName", e);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
-			Common.safeClose(results);
+			return -1;
 		}
-		return -1;
 	}
 
 	/**
