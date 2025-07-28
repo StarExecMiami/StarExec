@@ -1415,7 +1415,7 @@ public class Spaces {
 	}
 
 	/**
-	 * returns id of subspace with a particular name (-1 if more or less than 1 found)
+	 * Returns id of subspace with a particular name (-1 if more or less than 1 found)
 	 *
 	 * @param spaceId id of parent space
 	 * @param userId id of user making request
@@ -1425,39 +1425,50 @@ public class Spaces {
 	 * @author Benton McCune
 	 */
 	public static Integer getSubSpaceIDbyName(Integer spaceId, Integer userId, String subSpaceName, Connection con) {
-		CallableStatement procedure = null;
-		ResultSet results = null;
-		try {
-			procedure = con.prepareCall("{CALL GetSubSpaceByName(?,?,?)}");
-
-			log.debug("Space ID = " + spaceId);
+		log.debug("getSubSpaceIDbyName called with spaceId=" + spaceId + ", userId=" + userId + ", subSpaceName=" + subSpaceName);
+		
+		try (CallableStatement procedure = con.prepareCall("{CALL GetSubSpaceByName(?,?,?)}")) {
+			
+			log.debug("Preparing statement: {CALL GetSubSpaceByName(?,?,?)}");
+			
 			procedure.setInt(1, spaceId);
-			log.debug("User Id = " + userId);
+			log.debug("Set spaceId param: " + spaceId);
 			procedure.setInt(2, userId);
-			log.debug("Subspace named " + subSpaceName);
+			log.debug("Set userId param: " + userId);
 			procedure.setString(3, subSpaceName);
-			results = procedure.executeQuery();
-			Integer subSpaceId = -1;
+			log.debug("Set subSpaceName param: " + subSpaceName);
 
-			if (results.next()) {
-				subSpaceId = (results.getInt("id"));
-				log.debug("SubSpace Id = " + subSpaceId);
+			try (ResultSet results = procedure.executeQuery()) {
+				Integer subSpaceId = null;
+				int count = 0;
+				
+				while (results.next()) {
+					count++;
+					if (count == 1) {
+						subSpaceId = results.getInt("id");
+						log.debug("SubSpace Id from results: " + subSpaceId);
+					} else {
+						log.debug("Multiple subspaces found with name: " + subSpaceName + ", returning -1");
+						return -1;
+					}
+				}
+				
+				log.debug("Total # of subspaces named '" + subSpaceName + "' = " + count);
+				
+				if (count == 1) {
+					log.debug("Returning subSpaceId: " + subSpaceId);
+					return subSpaceId;
+				} else {
+					log.debug(count == 0 ? "No results found for subspace name: " + subSpaceName : 
+							"More than one subspace found, returning -1");
+					return -1;
+				}
 			}
-			results.last();
-			log.debug("# of subspaces named " + subSpaceName + " = " + results.getRow());
-			if (results.getRow() != 1) //should only be getting one result
-			{
-				log.debug("returning -1");
-				return -1;
-			}
-			return subSpaceId;
+			
 		} catch (Exception e) {
 			log.error("getSubSpaceIDbyName", e);
-		} finally {
-			Common.safeClose(procedure);
-			Common.safeClose(results);
+			return -1;
 		}
-		return -1;
 	}
 
 	/**
