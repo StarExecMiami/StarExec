@@ -1,0 +1,12 @@
+{
+  "name": "starexec",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build tooling for StarExec web assets",
+  "scripts": {
+    "sass-build": "sass --style=compressed --load-path WebContent/css WebContent/css:WebContent/css"
+  },
+  "devDependencies": {
+    "sass": "1.69.5"
+  }
+}
