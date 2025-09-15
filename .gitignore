@@ -1,95 +1,72 @@
+####################################
+# Build artifacts (Maven output)
+####################################
+/target/
+
+# Compiled files
 *.class
-*.css.map
 *.war
+*.ear
+
+####################################
+# Logs & temporary files
+####################################
+*.log
+*.tmp
+output.log
+
+####################################
+# OS & Editor junk
+####################################
+.DS_Store
 Thumbs.db
+*~
+*.swp
+*.swo
 
-# /
-/.classpath
-/.project
-/.settings
-/.sass-cache
-/bin
-/junittestoutput
-/data_dir
-/deployed-upload-test
+####################################
+# IDE & Project files
+####################################
+.classpath
+.project
+.settings/
+.idea/
+*.iml
+.vscode/
 
-# /WebContent/META-INF/
-/WebContent/META-INF/context.xml
+####################################
+# Sass cache
+####################################
+.sass-cache/
 
-# /WebContent/WEB-INF/lib/
-/WebContent/WEB-INF/lib/drmaa.jar
+####################################
+# Legacy/Ant output (if still used)
+####################################
+bin/
+build/
+junittestoutput/
+data_dir/
+deployed-upload-test/
 
-# /WebContent/WEB-INF/tags/
+####################################
+# Web runtime artifacts
+####################################
+WEB-INF/classes/
+WEB-INF/lib/
+META-INF/maven/
 
-# /WebContent/css/
-/WebContent/css/_properties.scss
-/WebContent/css/about.css
-/WebContent/css/error.css
-/WebContent/css/global.css
-/WebContent/css/jobDetails.css
+####################################
+# Python cache
+####################################
+__pycache__/
 
-# /WebContent/css/accounts/
-/WebContent/css/accounts/login.css
-/WebContent/css/accounts/registration.css
+####################################
+# Archives
+####################################
+distribution/*.zip
 
-# /WebContent/css/admin/
-/WebContent/css/admin/admin.css
-/WebContent/css/admin/analytics.css
-/WebContent/css/admin/testing.css
-
-# /WebContent/css/common/
-/WebContent/css/common/dataTable.css
-/WebContent/css/common/dataTables.fixedColumns.css
-/WebContent/css/common/delaySpinner.css
-/WebContent/css/common/table.css
-
-# /WebContent/css/details/
-/WebContent/css/details/benchmark.css
-/WebContent/css/details/configuration.css
-/WebContent/css/details/job.css
-/WebContent/css/details/pair.css
-/WebContent/css/details/shared.css
-
-# /WebContent/css/edit/
-/WebContent/css/edit/account.css
-/WebContent/css/edit/shared.css
-
-# /WebContent/css/explore/
-/WebContent/css/explore/common.css
-/WebContent/css/explore/spaces.css
-/WebContent/css/explore/cluster.css
-
-# /WebContent/css/prettify/
-/WebContent/css/prettify/prettify.css
-
-# /WebContent/css/shared/
-/WebContent/css/shared/copyToStardev.css
-
-# /WebContent/public/
-/WebContent/public/*.xsd
-/WebContent/public/*.xml
-/WebContent/public/starexeccommand.zip
-/WebContent/public/machine-specs.txt
-
-# /WebContent/public/resources/
-/WebContent/public/resources/postproc.sh
-/WebContent/public/resources/CVC4Config.txt
-/WebContent/public/resources/postproc.zip
-
-# /build/
-# /build/overrides.properties
-
-# /script/
-/script/newInstallWithTestData.sh
-/script/soft-deploy.sh
-/script/starsql.sh
-
-# /sql/
-/sql/NewInstall.sql
-
-# /src/org/starexec/command/
-/src/org/starexec/command/build
-/src/org/starexec/command/compile
-
-# /src/org/starexec/test/junit/
-/src/org/starexec/test/junit/test.java
+####################################
+# Node
+####################################
+node/
+node_modules/
