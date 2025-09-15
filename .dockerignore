@@ -1,0 +1,8 @@
+target/
+.git
+.gitignore
+README.markdown
+*.log
+.env
+node_modules/
+web-docs/
