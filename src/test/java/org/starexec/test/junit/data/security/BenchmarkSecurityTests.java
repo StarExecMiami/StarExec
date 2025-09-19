@@ -18,9 +18,9 @@ import org.starexec.util.Validator;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.Matchers.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.mock;
-/*
+
 @RunWith(PowerMockRunner.class)
 @PrepareForTest({
         Benchmarks.class,

@@ -16,13 +16,11 @@ import org.starexec.data.to.Job;
 import org.starexec.data.to.Queue;
 import org.starexec.util.Util;
 
-import static org.mockito.Matchers.any;
-/*
+import static org.mockito.ArgumentMatchers.any;
 @RunWith(PowerMockRunner.class)
 @PrepareForTest({Jobs.class})
 public class JobTests {
-
-	private int jobId = 1;
+	
 	private final static String TEST_QUEUE_NAME = "all.q";
 
 	@Before
