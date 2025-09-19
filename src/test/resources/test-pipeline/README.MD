@@ -1,37 +1,55 @@
-@Author Alex Guo of UIowa
+# Test Pipeline
 
-The purpose of this directory is to have a test pipeline such that we can 
-create test jobs for pipelines. Please see the source file for more information.
+## Description
 
-I have included test.xml, which you need to submit to the server. If you don't use the
-provided XML file, you will not get any stages. You also need to replace the bench-id
-and config-id with the ids of the config and benchmark you will be using. This information
-can be aquired by running a job with your desired config/benchmark, downloading the job XML, 
-and copying the values. If you run into any unanticipated errors, more documentation can be found here: https://wiki.uiowa.edu/display/stardev/User+Guide.
+This directory contains resources for testing the functionality of StarExec pipelines. A pipeline consists of multiple stages where the output of one stage becomes the input of the next.
 
-I have also included the source code in C, as well as the benchmark and the text file it was 
-creared from.
+## Author
 
-The dummySolver.tar contains the executable and config files. Starexec should automagically find 
-the config and add it to the solver. The solver was compiled using GCC for redhat linux. 
+Alex Guo (University of Iowa)
 
+## Contents
 
-Here is sample output for each stage
-------------------------------------------------------------------------------------------
-Stage 1:
+- **`DummySolver.c`** - Source code of the test solver
+- **`dummySolver`** - Compiled executable of the solver (Linux x86_64)  
+- **`dummySolver.tar`** - Solver packaged for uploading to StarExec
+- **`bench.txt`** - Simple benchmark for testing
+- **`benchmark.tar`** - Benchmark packaged for uploading to StarExec
+- **`test.xml`** - Job XML configuration with a 3-stage pipeline
+
+## DummySolver Functionality
+
+The solver reads an input file and:
+
+1. Prints the content of the file
+2. Adds the string "Starexec4ever!"
+
+In a 3-stage pipeline, this produces a cumulative output where each stage adds more time prefixes.
+
+## Expected Output
+
+### Stage 1
+
+```
 0.00/0.01	Starexec4ever!
 0.00/0.01	Starexec4ever! 
 0.00/0.01	EOF
-------------------------------------------------------------------------------------------
-Stage 2: 
+```
+
+### Stage 2
+
+```
 0.00/0.01	0.00/0.01	Starexec4ever!
 0.00/0.01	0.00/0.01	Starexec4ever! 
 0.00/0.01	0.00/0.01	EOF
 0.00/0.01	
 0.00/0.01	Starexec4ever! 
 0.00/0.01	EOF
-------------------------------------------------------------------------------------------
-Stage 3: 
+```
+
+### Stage 3
+
+```
 0.00/0.00	0.00/0.01	0.00/0.01	Starexec4ever!
 0.00/0.00	0.00/0.01	0.00/0.01	Starexec4ever! 
 0.00/0.00	0.00/0.01	0.00/0.01	EOF
@@ -41,10 +59,22 @@ Stage 3:
 0.00/0.00	
 0.00/0.00	Starexec4ever! 
 0.00/0.01	EOF
+```
 
+## Usage
 
+1. Upload the solver (`dummySolver.tar`) to StarExec
+2. Upload the benchmark (`benchmark.tar`) to StarExec  
+3. Modify `test.xml` with the correct configuration and benchmark IDs
+4. Submit the job using the XML file
 
+**Note:** The IDs in `test.xml` must be updated with the real values from your StarExec instance.
 
+## Additional Documentation
+
+For more information on using pipelines, see: https://wiki.uiowa.edu/display/stardev/User+Guide
+
+## License
 
 The MIT License (MIT)
 
