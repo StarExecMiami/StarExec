@@ -445,6 +445,20 @@ $rootUrl: "/${starexec.appname}/";
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.2.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>org.starexec.command.Shell</mainClass>
+                        </manifest>
+                    </archive>
+                    <finalName>StarexecCommand</finalName>
+                    <classifier>jar-with-dependencies</classifier>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-war-plugin</artifactId>
                 <version>3.3.2</version>
                 <configuration>
@@ -453,4 +467,101 @@ $rootUrl: "/${starexec.appname}/";
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>upload-test-data</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <executions>
+                            <execution>
+                                <id>upload-test-data</id>
+                                <phase>install</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>java</executable>
+                                    <arguments>
+                                        <argument>-jar</argument>
+                                        <argument>${project.build.directory}/StarexecCommand.jar</argument>
+                                        <argument>testDataCommands.txt</argument>
+                                    </arguments>
+                                    <workingDirectory>${project.basedir}/src/test/resources/upload-test</workingDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        
+        <profile>
+            <id>build-test-pipeline</id>
+            <build>
+                <plugins>
+                    <!-- Compile the DummySolver.c for pipeline tests -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.0.0</version>
+                        <executions>
+                            <execution>
+                                <id>compile-dummy-solver</id>
+                                <phase>compile</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>gcc</executable>
+                                    <arguments>
+                                        <argument>-o</argument>
+                                        <argument>dummySolver</argument>
+                                        <argument>DummySolver.c</argument>
+                                    </arguments>
+                                    <workingDirectory>${project.basedir}/src/test/resources/test-pipeline</workingDirectory>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>package-solver</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>tar</executable>
+                                    <arguments>
+                                        <argument>-cf</argument>
+                                        <argument>dummySolver.tar</argument>
+                                        <argument>dummySolver</argument>
+                                    </arguments>
+                                    <workingDirectory>${project.basedir}/src/test/resources/test-pipeline</workingDirectory>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>package-benchmark</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>tar</executable>
+                                    <arguments>
+                                        <argument>-cf</argument>
+                                        <argument>benchmark.tar</argument>
+                                        <argument>bench.txt</argument>
+                                    </arguments>
+                                    <workingDirectory>${project.basedir}/src/test/resources/test-pipeline</workingDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
