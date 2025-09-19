@@ -1,11 +1,11 @@
 # Stage 1: Compile SCSS with dart-sass (npx)
-FROM node:20-alpine AS assets
+FROM docker.io/library/node:20-alpine AS assets
 WORKDIR /app
 COPY . .
 RUN npx -y sass --style=compressed --load-path src/main/webapp/css src/main/webapp/css:src/main/webapp/css
 
 # Stage 2: Build the WAR with Maven
-FROM maven:3.8.8-eclipse-temurin-11 AS builder
+FROM docker.io/library/maven:3.8.8-eclipse-temurin-11 AS builder
 WORKDIR /app
 COPY . .
 # Bring the already compiled CSS from the assets stage
@@ -18,10 +18,10 @@ RUN echo "BUILD_VERSION=\"$(git describe --tags --always 2>/dev/null || echo 'un
     echo "# Generated build info for StarExec" >> /app/build-info.env
 
 # Build the WAR
-RUN mvn -q clean package -Dmaven.test.skip=true
+RUN mvn -q clean package
 
 # Stage 3: Run in Tomcat
-FROM tomcat:9.0-jdk11-temurin
+FROM docker.io/library/tomcat:9.0-jdk11-temurin
 RUN rm -rf /usr/local/tomcat/webapps/*
 # Copy build information
 COPY --from=builder /app/build-info.env /tmp/build-info.env
