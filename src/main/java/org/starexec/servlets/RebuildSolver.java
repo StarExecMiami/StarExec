@@ -42,7 +42,7 @@ public class RebuildSolver extends HttpServlet {
 		int userId = SessionUtil.getUserId(request);
 		int trySolverId = 0;
 		try {
-			trySolverId = new Integer(request.getParameter("id"));
+			trySolverId = Integer.parseInt(request.getParameter("id"));
 		} catch (Exception e) {
 			log.debug(method, e);
 			response.setStatus(400);
