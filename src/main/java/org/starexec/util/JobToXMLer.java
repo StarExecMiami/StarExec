@@ -11,10 +11,16 @@ import org.starexec.data.to.pipelines.PipelineStage;
 import org.starexec.data.to.pipelines.SolverPipeline;
 import org.starexec.data.to.pipelines.StageAttributes;
 import org.starexec.logger.StarLogger;
+import org.w3c.dom.DOMConfiguration;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
+import org.w3c.dom.ls.DOMImplementationLS;
+import org.w3c.dom.ls.LSOutput;
+import org.w3c.dom.ls.LSSerializer;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.List;
 
@@ -38,17 +44,32 @@ public class JobToXMLer {
 	 *  @throws Exception
 	 */
 	public File generateXMLfile(Job job, int userId) throws Exception{
-		//TODO : attributes are being sorted alphabetically, is there a way to keep order of insertion instead?
 
 		log.info("Start generating XML for Job = " +job.getId());
 
 		doc = XMLUtil.generateNewDocument();
 		Element rootSpace = generateJobsXML(job, userId);
 		doc.appendChild(rootSpace);
-		return XMLUtil.writeDocumentToFile(job.getName()+".xml", doc);
+		return writeDocumentPreservingAttrOrder(job.getName()+".xml", doc);
 
 	}
 
+	public static File writeDocumentPreservingAttrOrder(String fileName, Document doc) throws Exception {
+		File out = new File(fileName);
+		DOMImplementationLS impl = (DOMImplementationLS) doc.getImplementation().getFeature("LS", "3.0");
+		LSSerializer serializer = impl.createLSSerializer();
+		DOMConfiguration cfg = serializer.getDomConfig();
+		if (cfg.canSetParameter("format-pretty-print", Boolean.TRUE)) {
+			cfg.setParameter("format-pretty-print", Boolean.TRUE);
+		}
+		LSOutput output = impl.createLSOutput();
+		output.setEncoding("UTF-8");
+		try (OutputStream os = new FileOutputStream(out)) {
+			output.setByteStream(os);
+			serializer.write(doc, output);
+		}
+		return out;
+	}
 
 	/**
 	 * Given a StageAttributes object, creates an XML element to represent it.
