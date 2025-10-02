@@ -19,12 +19,32 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Handles all database interaction for users
  */
 public class Users {
 	private static final StarLogger log = StarLogger.getLogger(Users.class);
+	
+	// Cache for isAdmin results to reduce database calls
+	private static final ConcurrentHashMap<Integer, CacheEntry<Boolean>> isAdminCache = new ConcurrentHashMap<>();
+	private static final long CACHE_DURATION_MS = TimeUnit.MINUTES.toMillis(5); // Cache for 5 minutes
+
+	private static class CacheEntry<T> {
+		final T value;
+		final long timestamp;
+
+		CacheEntry(T value) {
+			this.value = value;
+			this.timestamp = System.currentTimeMillis();
+		}
+
+		boolean isExpired(long duration) {
+			return (System.currentTimeMillis() - timestamp) > duration;
+		}
+	}
 
 	/**
 	 * Associates a user with a space (i.e. adds the user to the space)
@@ -1133,6 +1153,17 @@ public class Users {
 			// so we can still get the users job id's from the database.
 			deleteUsersPrimitiveDirectories(userToDeleteId);
 
+			// Delete the user's personal space if it exists
+			Space personalSpace = Spaces.getPersonalSpace(userToDeleteId);
+			if (personalSpace != null) {
+				log.info("Deleting personal space for user " + userToDeleteId + " with space id " + personalSpace.getId());
+				if (!Spaces.removeSubspace(personalSpace.getId())) {
+					log.warn("Failed to delete personal space for user " + userToDeleteId);
+					// Continue anyway - we don't want to fail user deletion because of this
+				}
+			} else {
+				log.debug("No personal space found for user " + userToDeleteId);
+			}
 
 			// Delete the user from the database, this should delete all benchmarks and solvers and jobs
 			// from the database using cascading deletes.
@@ -1211,13 +1242,52 @@ public class Users {
 	 * @return True if the user is an admin and false otherwise (including if there was an error)
 	 */
 	public static boolean isAdmin(int userId) {
-		User u = Users.get(userId);
-		return u != null && u.getRole().equals(R.ADMIN_ROLE_NAME);
+		// Check cache first
+		CacheEntry<Boolean> entry = isAdminCache.get(userId);
+		if (entry != null && !entry.isExpired(CACHE_DURATION_MS)) {
+			return entry.value;
+		}
+
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			boolean isAdmin = isAdmin(con, userId);
+			// Update cache after DB check
+			isAdminCache.put(userId, new CacheEntry<>(isAdmin));
+			return isAdmin;
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		} finally {
+			Common.safeClose(con);
+		}
+		return false;
 	}
 
 	public static boolean isAdmin(Connection con, int userId) {
+		// Check cache first, even with a connection
+		CacheEntry<Boolean> entry = isAdminCache.get(userId);
+		if (entry != null && !entry.isExpired(CACHE_DURATION_MS)) {
+			return entry.value;
+		}
+
 		User u = Users.get(con, userId);
-		return u != null && u.getRole().equals(R.ADMIN_ROLE_NAME);
+		boolean isAdmin = u != null && u.getRole().equals(R.ADMIN_ROLE_NAME);
+		// Only log once when value changes or cache expires
+		if (entry == null || entry.value != isAdmin) {
+			log.info("Checking isAdmin for userId=" + userId + ", result=" + isAdmin);
+		}
+		// Update cache after DB check
+		isAdminCache.put(userId, new CacheEntry<>(isAdmin));
+		return isAdmin;
+	}
+
+	/**
+	 * Invalidates the isAdmin cache for a specific user. Call this when a user's role changes.
+	 * @param userId The ID of the user to invalidate.
+	 */
+	public static void invalidateIsAdminCache(int userId) {
+		isAdminCache.remove(userId);
+		log.debug("Invalidated isAdmin cache for userId=" + userId);
 	}
 
 	/**
@@ -1343,6 +1413,9 @@ public class Users {
 			procedure.setInt(1, userId);
 			procedure.setString(2, role);
 			procedure.executeUpdate();
+			
+			// Invalidate cache after role change
+			invalidateIsAdminCache(userId);
 
 			return true;
 		} catch (Exception e) {
