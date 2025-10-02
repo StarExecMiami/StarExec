@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Handles all SGE interactions for job submission and maintenance
@@ -111,7 +112,7 @@ public abstract class JobManager {
 					} else {
 						joblist = Queues.getPendingJobs(qId);
 					}
-					if (!joblist.isEmpty() || joblist != null) {
+					if (joblist != null && !joblist.isEmpty()) {
 						log.debug("about to submit this many jobs " + joblist.size());
 						submitJobs(joblist, q, queueSize, nodeCount);
 					} else {
@@ -146,11 +147,10 @@ public abstract class JobManager {
 	 * @author Aaron Stump
 	 */
 	protected static void initMainTemplateIf() {
-		if (mainTemplate == null) {
 			// Read in the job script template and format it for this global configuration
 			File f = new File(R.CONFIG_PATH, "sge/jobscript");
 			try {
-				mainTemplate = FileUtils.readFileToString(f);
+				mainTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
 			} catch (IOException e) {
 				log.error("Error reading the jobscript at " + f, e);
 			}
@@ -168,7 +168,6 @@ public abstract class JobManager {
 			mainTemplate = mainTemplate.replace("$$WORKING_DIR_BASE$$", R.BACKEND_WORKING_DIR);
 			mainTemplate = mainTemplate.replace("$$SCRIPT_DIR$$", R.getScriptDir());
 			mainTemplate = mainTemplate.replace("$$JOBPAR_EXECUTION_PREFIX$$", R.JOBPAIR_EXECUTION_PREFIX);
-		}
 	}
 
 	/**
@@ -198,6 +197,7 @@ public abstract class JobManager {
 		}
 	}
 
+	@SuppressWarnings("unused")
 	private static void logSchedulingState(final String methodName, final SchedulingState s, final int tabLevel) {
 		final StringBuilder logMessage = new StringBuilder();
 		for (int i = 0; i < tabLevel; i++) {
@@ -205,8 +205,8 @@ public abstract class JobManager {
 		}
 
 		logMessage.append("( jobId: ").append(s.job.getId()).append(", userId: ").append(s.job.getUserId())
-		          .append(", isHighPriority: ").append(s.job.isHighPriority()).append(", hasNext: ")
-		          .append(s.pairIter.hasNext()).append(" )");
+				  .append(", isHighPriority: ").append(s.job.isHighPriority()).append(", hasNext: ")
+				  .append(s.pairIter.hasNext()).append(" )");
 
 		log.debug(methodName, logMessage.toString());
 	}
@@ -558,31 +558,48 @@ public abstract class JobManager {
 
 	}
 
+	private static Map<Integer, Boolean> getQuotaExceededMapAsync(final List<Job> jobs) {
+		final Set<Integer> userIds = jobs.stream().map(Job::getUserId).collect(Collectors.toSet());
+		final Map<Integer, Boolean> result = new HashMap<>();
+		final List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+		final java.util.concurrent.ExecutorService exec = java.util.concurrent.Executors.newFixedThreadPool(
+				Math.min(userIds.size(), R.MAX_THREADS));
+		for (final Integer userId : userIds) {
+			futures.add(exec.submit(() -> {
+				// contains users that we have identified as exceeding their quota. These users will be skipped
+				result.put(userId, Users.isDiskQuotaExceeded(userId));
+				if (result.get(userId)) {
+					Jobs.pauseAllUserJobs(userId);
+				}
+			}));
+		}
+		exec.shutdown();
+		for (final java.util.concurrent.Future<?> f : futures) {
+			try {
+				f.get();
+			} catch (Exception e) {
+				log.error("getQuotaExceededMapAsync", e);
+			}
+		}
+		return result;
+	}
+
 	/**
 	 * Helper method that builds the schedule to be used for scheduling.
 	 */
 	private static LinkedList<SchedulingState> buildSchedule(final List<Job> joblist, final Queue q, int queueSize,
-	                                                         final int nodeCount) {
+															 final int nodeCount) {
 
 		Map<Integer, JobCount> userToJobCountMap = buildUserToJobCountMap(joblist);
 		final LinkedList<SchedulingState> schedule = new LinkedList<>();
+		// Precompute quota exceeded map in parallel to speed up scheduling.
+		final Map<Integer, Boolean> quotaExceededUsers = getQuotaExceededMapAsync(joblist);
 		// add all the jobs in jobList to a SchedulingState in the schedule.
+
 		for (final Job job : joblist) {
-
 			String jobTemplate = mainTemplate.replace("$$QUEUE$$", q.getName());
-
-
-			// contains users that we have identified as exceeding their quota. These users will be skipped
-			final Map<Integer, Boolean> quotaExceededUsers = new HashMap<>();
-
-			if (!quotaExceededUsers.containsKey(job.getUserId())) {
-				//TODO: Handle in a new thread if this looks slow on Starexec
-				quotaExceededUsers.put(job.getUserId(), Users.isDiskQuotaExceeded(job.getUserId()));
-				if (quotaExceededUsers.get(job.getUserId())) {
-					Jobs.pauseAllUserJobs(job.getUserId());
-				}
-			}
-			if (quotaExceededUsers.get(job.getUserId())) {
+			// If we have already determined that this user has exceeded their quota, skip them.
+			if (Boolean.TRUE.equals(quotaExceededUsers.get(job.getUserId()))) {
 				continue;
 			}
 			// By default we split the memory
@@ -1165,7 +1182,6 @@ public abstract class JobManager {
 		c.setName("starexec_build");
 		c.setSolverId(solverId);
 		c.setDescription("Build Configuration for solver: " + solverId);
-		int cId = Solvers.addConfiguration(s, c);
 		JobPair pair = new JobPair();
 		JoblineStage stage = new JoblineStage();
 		stage.setStageNumber(1);
