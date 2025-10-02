@@ -476,7 +476,7 @@ public class AnonymousLinks {
 	}
 
 	private static void delete(String uuid, Connection con) throws SQLException {
-		final String methodName = "delete(String, Connection)";
+		// final String methodName = "delete(String, Connection)";
 
 		CallableStatement procedure = null;
 
@@ -579,8 +579,24 @@ public class AnonymousLinks {
 		}
 	}
 
+	public static Map<Integer, String> getAnonymizedBenchmarkNames(List<Benchmark> benchmarks) {
+		return buildAnonymizedBenchmarkNamesMap(benchmarks);
+	}
+
+	public static Map<Integer, String> getAnonymizedSolverNames(int jobId, int stageNumber) {
+		Job job = Jobs.getWithSimplePairs(jobId);
+		List<Solver> solvers = new ArrayList<>();
+		for (JobPair pair : job.getJobPairs()) {
+			for (JoblineStage stage : pair.getStages()) {
+				if (stage.getStageNumber() == stageNumber) {
+					solvers.add(stage.getSolver());
+				}
+			}
+		}
+		return buildAnonymizedSolverNamesMap(solvers);
+	}
 	/**
-	 * @param jobId the id of the anonynmized job to get solver information for.
+	 * @param jobId the id of the anonymized job to get solver information for.
 	 * @author Albert Giegerich
 	 */
 	public static List<Triple<String, String, Integer>> getAnonymousSolverNamesKey(int jobId) throws SQLException {
