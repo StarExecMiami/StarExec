@@ -550,9 +550,11 @@ class CommandParser {
 
 			return Status.ERROR_COMMAND_FILE_TERMINATING;
 		} finally {
-			try {
-				br.close();
-			} catch (IOException e) {
+			if (br != null) {
+				try {
+					br.close();
+				} catch (IOException e) {
+				}
 			}
 		}
 	}
