@@ -22,6 +22,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.function.Supplier;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Handles all database interaction for benchmarks.
@@ -920,7 +921,7 @@ public class Benchmarks {
 		// Search for description file within the directory...
 		File descriptionFile = new File(directory, R.BENCHMARK_DESC_PATH);
 		if (descriptionFile.exists()) {
-			spaceDescription = FileUtils.readFileToString(descriptionFile);
+			spaceDescription = FileUtils.readFileToString(descriptionFile, StandardCharsets.UTF_8);
 		}
 
 		space.setDescription(spaceDescription);
@@ -1242,11 +1243,9 @@ public class Benchmarks {
 			procedure.setInt(1, jobId);
 		}, results -> {
 			List<Benchmark> benchmarks = new ArrayList<>();
-			int test = 0;
 			log.debug("Compiling result for GetBenchmarksByJob");
 			while (results.next()) {
 				log.debug("GetBenchmarksByJob results.next() called");
-				test += 1;
 				benchmarks.add(resultToBenchmark(results));
 			}
 			return benchmarks;
@@ -1408,9 +1407,9 @@ public class Benchmarks {
 			procedure.setString(2, benchName);
 			
 			try (ResultSet results = procedure.executeQuery()) {
-				Integer benchId = null;
+				int benchId = -1;
 				int count = 0;
-				
+
 				while (results.next()) {
 					count++;
 					if (count == 1) {
@@ -2576,14 +2575,26 @@ public class Benchmarks {
 		try {
 			//will stores Benchmarks according to their IDs, used to remove duplicates
 			HashMap<Integer, Benchmark> uniqueBenchmarks = new HashMap<>();
-			for (Benchmark s : getByOwner(userId)) {
-				uniqueBenchmarks.put(s.getId(), s);
+			
+			List<Benchmark> ownedBenchmarks = getByOwner(userId);
+			if (ownedBenchmarks != null) {
+				for (Benchmark s : ownedBenchmarks) {
+					uniqueBenchmarks.put(s.getId(), s);
+				}
 			}
-			for (Benchmark s : Benchmarks.getPublicBenchmarks()) {
-				uniqueBenchmarks.put(s.getId(), s);
+			
+			List<Benchmark> publicBenchmarks = Benchmarks.getPublicBenchmarks();
+			if (publicBenchmarks != null) {
+				for (Benchmark s : publicBenchmarks) {
+					uniqueBenchmarks.put(s.getId(), s);
+				}
 			}
-			for (Benchmark s : Benchmarks.getBenchmarksInSharedSpaces(userId)) {
-				uniqueBenchmarks.put(s.getId(), s);
+			
+			List<Benchmark> sharedBenchmarks = Benchmarks.getBenchmarksInSharedSpaces(userId);
+			if (sharedBenchmarks != null) {
+				for (Benchmark s : sharedBenchmarks) {
+					uniqueBenchmarks.put(s.getId(), s);
+				}
 			}
 			List<Benchmark> benchmarks = new ArrayList<>();
 			benchmarks.addAll(uniqueBenchmarks.values());
