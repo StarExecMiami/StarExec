@@ -1,6 +1,7 @@
 package org.starexec.data.security;
 
 import org.starexec.app.RESTHelpers;
+import org.starexec.logger.StarLogger;
 import org.starexec.data.database.Uploads;
 import org.starexec.data.to.BenchmarkUploadStatus;
 
@@ -10,6 +11,7 @@ import java.sql.SQLException;
  * Determines whether users have authorization to view BenchmarkUploadStatus data
  */
 public class UploadSecurity {
+	private static final StarLogger log = StarLogger.getLogger(UploadSecurity.class);
 
 	/**
 	 * Determines whether a user can see a BenchmarkUploadStatus object that owns the given unvalidated benchmark
@@ -34,9 +36,13 @@ public class UploadSecurity {
 	 * @return True if uploads are currently prohibitted, false otherwise
 	 */
 	public static boolean uploadsFrozen() {
+		long t0 = System.currentTimeMillis();
 		try {
-			return RESTHelpers.freezePrimitives();
+			boolean frozen = RESTHelpers.freezePrimitives();
+			log.debug("uploadsFrozen: freezePrimitives returned="+frozen+" in "+(System.currentTimeMillis()-t0)+" ms");
+			return frozen;
 		} catch (SQLException e) {
+			log.error("uploadsFrozen: SQL exception (treating as frozen)", e);
 			return true;
 		}
 	}
