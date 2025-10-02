@@ -4,7 +4,6 @@ import org.starexec.logger.StarLogger;
 
 import com.google.gson.*;
 import java.sql.SQLException;
-import java.util.Optional;
 
 public class StatusMessage {
 	private static final StarLogger log = StarLogger.getLogger(StatusMessage.class);
