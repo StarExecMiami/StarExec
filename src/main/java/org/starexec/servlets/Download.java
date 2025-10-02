@@ -1,9 +1,7 @@
 package org.starexec.servlets;
 
 import org.apache.catalina.connector.ClientAbortException;
-import org.apache.commons.io.FileUtils;
 import org.starexec.constants.R;
-import org.starexec.constants.Web;
 import org.starexec.data.database.*;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
 import org.starexec.data.security.BenchmarkSecurity;
@@ -13,7 +11,6 @@ import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.*;
 import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.data.to.pipelines.JoblineStage;
-import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
 
@@ -28,6 +25,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
+import java.nio.file.Files;
+
 
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 
@@ -242,6 +241,10 @@ public class Download extends HttpServlet {
 			}
 		}
 
+		if (j == null) {
+			log.error("Job object is null. Cannot proceed with generating baseName.");
+			return false;
+		}
 		String baseName = "Job" + String.valueOf(j.getId()) + "_output";
 
 		Download.addJobPairsToZipOutput(pairs, response, baseName, longPath, null);
@@ -454,19 +457,21 @@ public class Download extends HttpServlet {
 						sb.append(",");
 						sb.append(props.getProperty(R.EXPECTED_RESULT, "-"));
 					}
-					for (String attr : attrNames) {
-						if (!attr.equals(R.STAREXEC_RESULT) && !attr.equals(R.EXPECTED_RESULT)) {
-							/* we skip printing the starexec-result, and starexec-expected-result attributes,
-							   because we printed them already */
-							sb.append(",");
-							sb.append(props.getProperty(attr, "-"));
+					if (props != null) {
+						for (String attr : attrNames) {
+							if (!attr.equals(R.STAREXEC_RESULT) && !attr.equals(R.EXPECTED_RESULT)) {
+								/* we skip printing the starexec-result, and starexec-expected-result attributes,
+								   because we printed them already */
+								sb.append(",");
+								sb.append(props.getProperty(attr, "-"));
+							}
 						}
 					}
 				}
 				sb.append("\r\n");
 			}
 		}
-		FileUtils.write(new File(filename), sb.toString());
+		Files.write(new File(filename).toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
 		return filename;
 	}
 
@@ -595,7 +600,7 @@ public class Download extends HttpServlet {
 			int pairsFound = 0;
 			int runningPairsFound = 0;
 
-			final Iterator it = pairs.iterator();
+			final Iterator<JobPair> it = pairs.iterator();
 			while (it.hasNext()) {
 				final JobPair x = (JobPair) it.next();
 				log.trace("found pair id = " + x.getId() + " with completion id = " + x.getCompletionId());
