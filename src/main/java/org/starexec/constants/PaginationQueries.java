@@ -4,6 +4,7 @@ import org.apache.commons.io.FileUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 public class PaginationQueries {
 	private static final String GET_PAIRS_IN_SPACE_PATH = "/pagination/PairInJobSpacePagination.sql";
@@ -50,18 +51,18 @@ public class PaginationQueries {
 	 * @throws IOException
 	 */
 	public static void loadPaginationQueries() throws IOException {
-		GET_PAIRS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_PAIRS_IN_SPACE_PATH));
-		GET_BENCHMARKS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_BENCHMARKS_IN_SPACE_PATH));
-		GET_BENCHMARKS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_BENCHMARKS_BY_USER_PATH));
-		GET_JOBS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_JOBS_IN_SPACE_PATH));
-		GET_JOBS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_JOBS_BY_USER_PATH));
-		GET_USERS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_USERS_IN_SPACE_PATH));
-		GET_SUBSPACES_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_SUBSPACES_IN_SPACE_PATH));
-		GET_SOLVERS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_SOLVERS_IN_SPACE_PATH));
-		GET_SOLVERS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_SOLVERS_BY_USER_PATH));
-		GET_PAIRS_IN_SPACE_HIERARCHY_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_PAIRS_IN_SPACE_HIERARCHY_PATH));
-		GET_PAIRS_ENQUEUED_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_PAIRS_ENQUEUED_PATH));
-		GET_USERS_ADMIN_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_USERS_ADMIN_PATH));
-		GET_UPLOADS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_UPLOADS_BY_USER_PATH));
+		GET_PAIRS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_PAIRS_IN_SPACE_PATH), StandardCharsets.UTF_8);
+		GET_BENCHMARKS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_BENCHMARKS_IN_SPACE_PATH), StandardCharsets.UTF_8);
+		GET_BENCHMARKS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_BENCHMARKS_BY_USER_PATH), StandardCharsets.UTF_8);
+		GET_JOBS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_JOBS_IN_SPACE_PATH), StandardCharsets.UTF_8);
+		GET_JOBS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_JOBS_BY_USER_PATH), StandardCharsets.UTF_8);
+		GET_USERS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_USERS_IN_SPACE_PATH), StandardCharsets.UTF_8);
+		GET_SUBSPACES_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_SUBSPACES_IN_SPACE_PATH), StandardCharsets.UTF_8);
+		GET_SOLVERS_IN_SPACE_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_SOLVERS_IN_SPACE_PATH), StandardCharsets.UTF_8);
+		GET_SOLVERS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_SOLVERS_BY_USER_PATH), StandardCharsets.UTF_8);
+		GET_PAIRS_IN_SPACE_HIERARCHY_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_PAIRS_IN_SPACE_HIERARCHY_PATH), StandardCharsets.UTF_8);
+		GET_PAIRS_ENQUEUED_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_PAIRS_ENQUEUED_PATH), StandardCharsets.UTF_8);
+		GET_USERS_ADMIN_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_USERS_ADMIN_PATH), StandardCharsets.UTF_8);
+		GET_UPLOADS_BY_USER_QUERY = FileUtils.readFileToString(new File(R.CONFIG_PATH, GET_UPLOADS_BY_USER_PATH), StandardCharsets.UTF_8);
 	}
 }
