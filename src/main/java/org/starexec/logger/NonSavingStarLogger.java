@@ -2,14 +2,14 @@ package org.starexec.logger;
 
 public class NonSavingStarLogger extends BaseStarLogger {
 
-    private NonSavingStarLogger(Class clazz) {
+    private NonSavingStarLogger(Class<?> clazz) {
         super(clazz);
     }
     private NonSavingStarLogger(String name) {
         super(name);
     }
 
-    public static NonSavingStarLogger getLogger(Class clazz) {
+    public static NonSavingStarLogger getLogger(Class<?> clazz) {
         return new NonSavingStarLogger(clazz);
     }
     public static NonSavingStarLogger getLogger(String name) {
@@ -17,6 +17,6 @@ public class NonSavingStarLogger extends BaseStarLogger {
     }
     @Override
     protected void log(StarLevel level, final String method, final String message, final Throwable t) {
-	sendToLogger(level, getMessage(method,message,t));
+    sendToLogger(level, getMessage(method, message, t), t);
     }
 }
