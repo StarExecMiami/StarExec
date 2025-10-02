@@ -7,6 +7,7 @@ import org.starexec.logger.StarLogger;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 public class ClearCacheManager {
 	private static final StarLogger log = StarLogger.getLogger(ClearCacheManager.class);
@@ -17,7 +18,7 @@ public class ClearCacheManager {
 			// Read in the job script template and format it for this global configuration
 			File f = new File(R.CONFIG_PATH, "sge/clearCacheScript");
 			try {
-				scriptTemplate = FileUtils.readFileToString(f);
+				scriptTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
 			}
 			catch (IOException e) {
 				log.error("Error reading the jobscript at "+f,e);

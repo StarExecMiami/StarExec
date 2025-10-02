@@ -20,6 +20,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Supports the saving of new configuration files to the Starexec file system (i.e. writing a configuration file instead
@@ -120,7 +121,7 @@ public class SaveConfiguration extends HttpServlet {
 			}
 
 			// Write the new configuration file to disk
-			FileUtils.writeStringToFile(newConfigFile, configContents);
+			FileUtils.writeStringToFile(newConfigFile, configContents, StandardCharsets.UTF_8);
 
 			// Make sure the configuration has the right line endings
 			Util.normalizeFile(newConfigFile);
