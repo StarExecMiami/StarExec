@@ -7,6 +7,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 
 
 public class PartWrapper {
@@ -42,15 +43,14 @@ public class PartWrapper {
 	public String getName() {
 		return Paths.get(filePath).getFileName().toString();
 	}
-	
 	/**
-	 * Retrieves the contents of this Part as a string using the default
+	 * Retrieves the contents of this Part as a string using UTF-8
 	 * character encoding
 	 * @return
 	 * @throws IOException 
 	 */
 	public String getString() throws IOException {
-		return IOUtils.toString(this.p.getInputStream());
+		return IOUtils.toString(this.p.getInputStream(), StandardCharsets.UTF_8);
 	}
 	
 	/**
