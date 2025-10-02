@@ -395,7 +395,8 @@ public class Permissions {
 		}
 
 		//the admin has full permissions everywhere
-		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+		boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userId);
+		if (isAdmin) {
 			log.debug("permissions for an admin were obtained userId = " + userId);
 			return Permissions.getFullPermission();
 		}
