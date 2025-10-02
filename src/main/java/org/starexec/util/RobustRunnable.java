@@ -1,6 +1,5 @@
 package org.starexec.util;
 
-import org.starexec.util.Timer;
 import org.starexec.logger.StarLogger;
 
 public abstract class RobustRunnable implements Runnable {
