@@ -9,7 +9,6 @@ import org.starexec.data.database.Reports;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.JobSecurity;
-import org.starexec.data.security.UploadSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Solver.ExecutableType;
@@ -21,19 +20,22 @@ import org.starexec.data.to.tuples.UploadSolverResult.UploadSolverStatus;
 import org.starexec.jobs.JobManager;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
+import org.starexec.util.SessionUtil;
 import org.xml.sax.SAXException;
 
 import javax.servlet.ServletException;
-import javax.servlet.annotation.MultipartConfig;
 import javax.servlet.http.Cookie;
+import javax.servlet.annotation.MultipartConfig;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.xml.parsers.ParserConfigurationException;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -41,6 +43,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
 
+import java.nio.file.Files;
+import javax.xml.parsers.ParserConfigurationException;
 /**
  * Allows for the uploading and handling of Solvers. Solvers can come in .zip, .tar, or .tar.gz format, and
  * configurations can be included in a top level "bin" directory. Each Solver is saved in a unique directory on the
@@ -48,7 +52,8 @@ import java.util.Optional;
  *
  * @author Skylar Stark
  */
-@MultipartConfig
+// Explicit multipart limits to surface if large request is stuck before parsing (1GB caps temporary for debugging)
+@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = 1024L * 1024L * 1024L, maxRequestSize = 1024L * 1024L * 1024L)
 public class UploadSolver extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadSolver.class);
@@ -63,41 +68,65 @@ public class UploadSolver extends HttpServlet {
 	private static final String DESC_METHOD = "descMethod";
 	private static final String FILE_URL = "url";
 	private static final String RUN_TEST_JOB = "runTestJob";
-	private static final String SETTING_ID = "setting";
-	private static final String SOLVER_TYPE = "type";
+	private static final String SETTING_ID = "settingId";
+	private static final String SOLVER_TYPE = "execType";
 	private final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
 
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
+		final String method = "doPost";
+		log.entry(method);
 		int userId = SessionUtil.getUserId(request);
 		try {
 			// If we're dealing with an upload request...
 			log.info("doPost begins");
-
-			if (UploadSecurity.uploadsFrozen()) {
-				response.sendError(
-					HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-					"Uploading solvers is currently disabled"
-				);
+			if (abortIfUploadsFrozen(response)) {
 				return;
 			}
 
-			if (ServletFileUpload.isMultipartContent(request)) {
-				HashMap<String, Object> form = Util.parseMultipartRequest(request);
+			final String rawCt = request.getHeader("Content-Type");
+			boolean headerHeuristic = rawCt != null && rawCt.toLowerCase().startsWith("multipart/form-data");
+			boolean skipCommons = Boolean.parseBoolean(System.getProperty("starexec.skip.commons.multipart","true"));
+			Boolean commonsResult = null;
+			if (!skipCommons) {
+				try {
+					commonsResult = ServletFileUpload.isMultipartContent(request);
+				} catch (Throwable ex) {
+					log.warn("doPost: exception inside ServletFileUpload.isMultipartContent (will rely on header heuristic)", ex);
+				}
+			}
+			boolean isMultipart = headerHeuristic || Boolean.TRUE.equals(commonsResult);
+			if (commonsResult != null && commonsResult != headerHeuristic) {
+				log.warn("doPost: mismatch commonsResult="+commonsResult+" headerHeuristic="+headerHeuristic);
+			}
+			if (isMultipart) {
+				HashMap<String, Object> form = null;
+				try {
+					form = Util.parseMultipartRequest(request);
+				} catch (Exception ex) {
+					log.error("doPost: exception while parsing multipart request", ex);
+					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Failed to parse multipart request: "+ex.getMessage());
+					return;
+				}
 
-				log.debug("Parsed multipart request");
+				if (form == null) {
+					log.error("doPost: form map is null after parsing (unexpected)");
+					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed multipart request");
+					return;
+				}
 
 				// Make sure the request is valid
-
-
+				// Backward compatibility: some clients send 'type' instead of 'execType'
+				if (!form.containsKey(SOLVER_TYPE) && form.containsKey("type")) {
+					form.put(SOLVER_TYPE, form.get("type"));
+				}
 				ValidatorStatusCode status = this.isValidRequest(form, request);
 				if (!status.isSuccess()) {
 					//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, encodeCookieValue(status.getMessage())));
 					response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 					return;
 				}
-				log.debug("Validated the request");
 
 				int spaceId = Integer.parseInt((String) form.get(SPACE_ID));
 				boolean runTestJob = Boolean.parseBoolean((String) form.get(RUN_TEST_JOB));
@@ -109,12 +138,11 @@ public class UploadSolver extends HttpServlet {
 				switch (result.status) {
 				case SUCCESS:
 					if (result.isBuildJob) {
-						log.debug("Submitting job to build solver.");
 						int job_return = JobManager.addBuildJob(result.solverId, spaceId);
 						if (job_return >= 0) {
 							log.info("Job created successfully. JobId: " + job_return);
 						} else {
-							log.debug("Error in job creation for buildJob for solver: " + result.solverId);
+							log.warn("Error in job creation for buildJob for solver: " + result.solverId);
 						}
 					}
 
@@ -131,8 +159,6 @@ public class UploadSolver extends HttpServlet {
 						//if this solver has some configurations, we should check to see if the user wanted a test
 						// job
 						if (runTestJob) {
-							log.debug("attempting to run test job");
-
 							int settingsId = Communities.getDefaultSettings(spaceId).getId();
 							//if the user gave a setting ID, then they need to have permission to use that profile
 							// otherwise, the community default is used
@@ -171,12 +197,11 @@ public class UploadSolver extends HttpServlet {
 					break;
 				}
 			} else {
-				// Got a non multi-part request, invalid
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST);
+				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Expected multipart/form-data");
 			}
 		} catch (Exception e) {
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
 			log.error("Caught Exception in UploadSolver.doPost", e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
 		}
 	}
 
@@ -206,16 +231,10 @@ public class UploadSolver extends HttpServlet {
 		final String methodName = "handleSolver";
 		log.info("handleSolver begins");
 
-		//int[] returnArray = new int[3];
-		//returnArray[0] = 0;
-		//returnArray[1] = 0;
-		//returnArray[2] = 0; //0 if prebuilt, 1 if contains buildscript
-
 		File sandboxDir = null;
 
 		try {
 			sandboxDir = Util.getRandomSandboxDirectory();
-			Util.logSandboxContents();
 			String upMethod = (String) form.get(UploadSolver.UPLOAD_METHOD); //file upload or url
 			PartWrapper item = null;
 			String name = null;
@@ -225,8 +244,7 @@ public class UploadSolver extends HttpServlet {
 				item = (PartWrapper) form.get(UploadSolver.UPLOAD_FILE);
 			} else {
 				try {
-
-					url = new URL((String) form.get(UploadSolver.FILE_URL));
+					url = URI.create((String) form.get(UploadSolver.FILE_URL)).toURL();
 				} catch (Exception e) {
 					log.error(e.getMessage(), e);
 					return new UploadSolverResult(UploadSolverStatus.CANNOT_ACCESS_FILE, -1, false, false);
@@ -262,13 +280,15 @@ public class UploadSolver extends HttpServlet {
 			File archiveFile = null;
 			//String FileName=null;
 			if (upMethod.equals("local")) {
-				//Using IE will cause item.getName() to return a full path, which is why we wrap it with the
-				// FilenameUtils call
-				archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
-				new File(archiveFile.getParent()).mkdir();
-				item.write(archiveFile);
-				//item.write(archiveFile);
-				//		log.info("handleSolver just wrote archive to disk");
+				if (item != null) {
+					//Using IE will cause item.getName() to return a full path, which is why we wrap it with the
+					// FilenameUtils call
+					archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
+					new File(archiveFile.getParent()).mkdir();
+					item.write(archiveFile);
+				} else {
+					throw new Exception("Upload file is null");
+				}
 			} else {
 				archiveFile = new File(uniqueDir, name);
 				new File(archiveFile.getParent()).mkdir();
@@ -290,13 +310,9 @@ public class UploadSolver extends HttpServlet {
 			}
 
 			//move the archive to the sandbox
-			log.debug("in UploadSolver.handleSolver() about to copy the archive to the sandbox directory where\nsandboxDir: "+sandboxDir);
-
 			FileUtils.copyFileToDirectory(archiveFile, sandboxDir);
 			archiveFile.delete();
 			archiveFile = new File(sandboxDir, archiveFile.getName());
-			log.debug("location of archive file = " + archiveFile.getAbsolutePath() + " and archive file exists =" +
-					          archiveFile.exists());
 
 			// in the change from tc7 to tc9, the temporary directory, sandboxDir, is not created with the permissions we expect
 			// this call manually changes them to what we expect -- this allows for the sandbox user using the unzip command
@@ -313,7 +329,6 @@ public class UploadSolver extends HttpServlet {
 			//if there was an extraction error or if the temp directory is still empty.
 			if (!extracted || sandboxDir.listFiles().length == 0) {
 				log.warn("there was an error extracting the new solver archive");
-				Util.logSandboxContents();
 				if(!extracted){
 					log.warn("Failed to extract archive!");
 				}else{
@@ -371,7 +386,7 @@ public class UploadSolver extends HttpServlet {
 				try {
 					File descriptionFile = new File(uniqueDir, R.SOLVER_DESC_PATH);
 					if (descriptionFile.exists()) {
-						String description = FileUtils.readFileToString(descriptionFile);
+						String description = Files.readString(descriptionFile.toPath());
 						if (!Validator.isValidPrimDescription(description)) {
 							return new UploadSolverResult(
 									UploadSolverStatus.DESCRIPTION_MALFORMED, -1, false, isBuildJob);
@@ -391,7 +406,6 @@ public class UploadSolver extends HttpServlet {
 			for (Configuration c : Solvers.findConfigs(uniqueDir.getAbsolutePath())) {
 				newSolver.addConfiguration(c);
 			}
-			Util.logSandboxContents();
 
 			boolean hadConfigs = !newSolver.getConfigurations().isEmpty();
 
@@ -403,40 +417,31 @@ public class UploadSolver extends HttpServlet {
 
 			UploadSolverResult result = new UploadSolverResult(status, solverId, hadConfigs, isBuildJob);
 			// Now that we've added the solver to the database, run a test job
-			final File runOnUploadXml = new File(sandboxDir, R.UPLOAD_TEST_JOB_XML);
-			if (runOnUploadXml.exists()) {
+			if (containsRunOnUploadXml(sandboxDir)) {
+				final File runOnUploadXml = new File(sandboxDir, R.UPLOAD_TEST_JOB_XML);
 				JobUtil jobUtil = createTestJobFromXml(runOnUploadXml, userId, spaceId, solverId);
 				if (!jobUtil.getJobCreationSuccess()) {
 					String message = "Test job creation failed: " + jobUtil.getErrorMessage();
 					// Set the optional message so the user gets some more spectific feedback.
 					result.optionalMessage = Optional.of(message);
-					log.debug(message);
 				}
 			}
-
-			//if we were successful and this solver had a build script, save the build output to show the uploader
-/*		if (solver_Success>0 && build) {
-			File buildOutputFile=Solvers.getSolverBuildOutput(solver_Success);
-			log.debug("output file = "+buildOutputFile.getAbsolutePath());
-			buildOutputFile.getParentFile().mkdirs();
-			try {
-				FileUtils.writeStringToFile(buildOutputFile, buildstr);
-
-			} catch (Exception e) {
-				log.error(e.getMessage(),e);
-			}
-		} */
 
 			// if the solver was uploaded successfully log the upload in the weekly report table
 			Reports.addToEventOccurrencesNotRelatedToQueue("solvers uploaded", 1);
 
-
 			return result;
 		} finally {
 			try {
-				FileUtils.deleteDirectory(sandboxDir);
+				if (sandboxDir != null) {
+					FileUtils.deleteDirectory(sandboxDir);
+				}
 			} catch (Exception e) {
-				log.error("unable to delete temporary directory at " + sandboxDir.getAbsolutePath());
+				if (sandboxDir != null) {
+					log.error("unable to delete temporary directory at " + sandboxDir.getAbsolutePath());
+				} else {
+					log.error("unable to delete temporary directory: sandboxDir is null");
+				}
 				log.error(e.getMessage(), e);
 			}
 		}
@@ -449,7 +454,6 @@ public class UploadSolver extends HttpServlet {
 
 		JobXmlType solverUploadType = JobXmlType.SOLVER_UPLOAD;
 		List<Configuration> configs = Solvers.getConfigsForSolver(newSolverId);
-
 
 		ConfigAttrMapPair configAttrMapPair = new ConfigAttrMapPair(ConfigXmlAttribute.NAME);
 		// Map all the config names to their config id so we can figure out their id based on name only.
@@ -472,16 +476,14 @@ public class UploadSolver extends HttpServlet {
 	 * @return true iff the request is valid
 	 */
 	private ValidatorStatusCode isValidRequest(HashMap<String, Object> form, HttpServletRequest request) {
-		final String method = "isValidRequest";
+		// final String method = "isValidRequest";
 		try {
-			log.entry(method);
 			int userId = SessionUtil.getUserId(request);
 			//defines the set of attributes that are required
 			if (!form.containsKey(UPLOAD_METHOD) || !form.containsKey(UploadSolver.SOLVER_TYPE) ||
 					(!form.containsKey(UploadSolver.UPLOAD_FILE) && form.get(UPLOAD_METHOD).equals("local")) ||
 					!form.containsKey(DESC_METHOD) ||
 					(!form.containsKey(SOLVER_DESC_FILE) && form.get(DESC_METHOD).equals("file"))) {
-
 				return new ValidatorStatusCode(false, "Required parameters are missing from the request");
 			}
 
@@ -504,7 +506,6 @@ public class UploadSolver extends HttpServlet {
 
 
 			if (!Validator.isValidSolverName((String) form.get(UploadSolver.SOLVER_NAME))) {
-
 				return new ValidatorStatusCode(
 						false, "The given name is invalid-- please refer to the help files to see the proper format");
 			}
@@ -574,6 +575,20 @@ public class UploadSolver extends HttpServlet {
 		} catch (Exception e) {
 			log.warn(e.getMessage(), e);
 		}
-		return new ValidatorStatusCode(false, "Internal error uploading solver");
+			return new ValidatorStatusCode(false, "Internal error uploading solver");
+		}
+
+		private boolean abortIfUploadsFrozen(HttpServletResponse response) throws IOException {
+			boolean frozen = org.starexec.data.security.UploadSecurity.uploadsFrozen();
+			if (frozen) {
+				response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Uploading solvers is currently disabled");
+				return true;
+			}
+			return false;
+		}
+
+		private String encodeCookieValue(String v) {
+			if (v == null) { return ""; }
+			try { return URLEncoder.encode(v, StandardCharsets.UTF_8.name()); } catch (Exception e) { return ""; }
+		}
 	}
-}
