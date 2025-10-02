@@ -371,6 +371,7 @@ public class Matrix {
 	 * has in it.
 	 * @author Albert Giegerich
 	 */
+	@SuppressWarnings("unused")
 	private static List<Pair<String, Integer>> getSpacesInJobOrderedAlphabetically(Job job) {
 		final String method = "getSpacesInJobOrderedAlphabetically";
 		log.entry(method);
