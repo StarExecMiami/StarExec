@@ -6,9 +6,7 @@ import org.starexec.backend.LocalBackend;
 import org.starexec.backend.OARBackend;
 import org.starexec.backend.KubernetesBackend;
 import org.starexec.config.EnvironmentConfig;
-import org.starexec.data.to.User;
 import org.starexec.data.to.enums.BenchmarkingFramework;
-import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 
 import java.sql.Timestamp;
@@ -419,6 +417,7 @@ public class R {
 	public static final String ERROR_MESSAGE_READ_ONLY_JOB =
 		"This job is Read Only while StarExec is in Migration Mode";
 
+	public static final int MAX_THREADS = Runtime.getRuntime().availableProcessors();
 
 	public static Timestamp earliestDateToRerunFailedPairs(){
 		DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
@@ -428,7 +427,7 @@ public class R {
 			return new Timestamp(time);
 		} catch (ParseException e) {
 			// This should never happen.
-			return null;
+			return new Timestamp(System.currentTimeMillis());
 		}
 	}
 
