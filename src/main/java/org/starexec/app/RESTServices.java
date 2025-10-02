@@ -27,7 +27,6 @@ import org.starexec.test.integration.TestResult;
 import org.starexec.test.integration.TestSequence;
 import org.starexec.util.*;
 
-import javax.annotation.PostConstruct;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -35,6 +34,7 @@ import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
 
@@ -404,7 +404,7 @@ public class RESTServices {
 			if(!output.exists()) {
 				throw RESTException.NOT_FOUND;
 			}
-			return FileUtils.readFileToString(output);
+			return FileUtils.readFileToString(output, StandardCharsets.UTF_8);
 		} catch (Exception e) {
 			log.error(e.getMessage(),e);
 			throw RESTException.INTERNAL_SERVER_ERROR;
@@ -1329,7 +1329,7 @@ public class RESTServices {
 	@Path("/jobs/addJobPairs/confirmation")
 	@Produces("application/json")
 	public String getNumberOfPairsToBeAddedAndDeleted( @Context HttpServletRequest request ) {
-		final String methodName = "getNumberOfPairsToBeAddedAndDeleted";
+		// final String methodName = "getNumberOfPairsToBeAddedAndDeleted";
 		final String jobIdParam = "jobId";
 		final String configsParam = "configs";
 		final String addToAllParam = "addToAll";
@@ -2273,6 +2273,9 @@ public class RESTServices {
 
 			boolean success = false;
 			// Go through all the cases, depending on what attribute we are changing.
+			if (defaultSettingAttribute == null) {
+				return gson.toJson(new ValidatorStatusCode(false, "Invalid default setting attribute."));
+			}
 			switch (defaultSettingAttribute) {
 			case PostProcess:
 				success = Settings.updateSettingsProfile(id, 1, Integer.parseInt(newValue));
@@ -3658,16 +3661,16 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 
+		// Extract parameters from request before starting background thread
+		final boolean recycleAllAllowed = Util.paramExists("recyclePrims", request) && 
+			Boolean.parseBoolean(request.getParameter("recyclePrims"));
+		if (recycleAllAllowed) {
+			log.debug("Request to delete all solvers and benchmarks in a hierarchy received");
+		}
+
 		// Fork a new thread to delete the subspaces so the user's browser doesn't hang.
 		Runnable removeSubspacesProcess = () -> {
             try {
-                boolean recycleAllAllowed=false;
-                if (Util.paramExists("recyclePrims", request)) {
-                    if (Boolean.parseBoolean(request.getParameter("recyclePrims"))) {
-                        log.debug("Request to delete all solvers and benchmarks in a hierarchy received");
-                        recycleAllAllowed=true;
-                    }
-                }
                 Set<Solver> solvers= new HashSet<>();
                 Set<Benchmark> benchmarks= new HashSet<>();
                 if (recycleAllAllowed) {
@@ -5205,7 +5208,7 @@ public class RESTServices {
     @Path("/jobs/attributes/header/{jobSpaceId}")
     @Produces("application/json")
     public String getJobAttributesTableHeader(@PathParam("jobSpaceId") int jobSpaceId, @Context HttpServletRequest request) throws SQLException {
-		final String methodName = "getJobAttributesTableHeader";
+		// final String methodName = "getJobAttributesTableHeader";
         int userId = SessionUtil.getUserId(request);
 		ValidatorStatusCode status=JobSecurity.canUserSeeJobSpace(jobSpaceId, userId);
 
