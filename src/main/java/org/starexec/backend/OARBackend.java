@@ -128,7 +128,7 @@ public class OARBackend implements Backend {
 	public Map<String, String> getNodeQueueAssociations() {
 		try {
 			String json = Util.executeCommand("oarnodes -J");
-			JsonObject object = new JsonParser().parse(json).getAsJsonObject();
+			JsonObject object = JsonParser.parseString(json).getAsJsonObject();
 			HashMap<String, String> nodesToQueues = new HashMap<>();
 			for (Entry<String, JsonElement> s : object.entrySet()) {
 				nodesToQueues.put(s.getValue().getAsJsonObject().get("network_address").getAsString(),
@@ -203,7 +203,7 @@ public class OARBackend implements Backend {
 	public Set<Integer> getActiveExecutionIds() throws IOException {
 		try {
 			String json = Util.executeCommand("oarstat -J");
-			JsonObject object = new JsonParser().parse(json).getAsJsonObject();
+			JsonObject object = JsonParser.parseString(json).getAsJsonObject();
 			Set<Integer> ids = new HashSet<>();
 			for (Entry<String, JsonElement> s : object.entrySet()) {
 				ids.add(s.getValue().getAsJsonObject().get("Job_Id").getAsInt());
