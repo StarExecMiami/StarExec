@@ -272,72 +272,62 @@ public class Communities {
 			Common.safeClose(con);
 		}
 
-		return null;
+		return new DefaultSettings(); // Return empty settings object instead of null
 	}
 
 	protected static DefaultSettings getDefaultSettings(Connection con, int id) {
-		CallableStatement procedure = null;
-		ResultSet results = null;
 		//if the current space is the root, we just want to return the default profile
 		if (id == 1) {
 			return new DefaultSettings();
 		}
 		try {
 			//first, find the ID of the community this space is a part of
-			procedure = con.prepareCall("{CALL GetCommunityOfSpace(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
-
-			int community;
-			if (results.next()) {
-				//if we found the community, get the default settings
-				community = results.getInt("community");
-				Common.safeClose(results);
-				Common.safeClose(procedure);
-
-				//this means the community was NULL, which occurs when this is called on the root space.
-				if (community <= 0) {
-					log.debug("no default settings profile set for space = " + id);
-					return null;
+			Integer community = Common.queryUsingConnection(con, "{CALL GetCommunityOfSpace(?)}", procedure -> {
+				procedure.setInt(1, id);
+			}, results -> {
+				if (results.next()) {
+					return results.getInt("community");
 				}
-
-				List<DefaultSettings> settings =
-						Settings.getDefaultSettingsByPrimIdAndType(community, SettingType.COMMUNITY);
-
-				if (!settings.isEmpty()) {
-					return settings.get(0);
-				} else {
-					//no settings existed, so create one for this community and return that
-					log.debug("unable to find any default settings for community id = " + community);
-					DefaultSettings d = new DefaultSettings();
-					String name = Spaces.getName(community);
-					if (name.length() > DB.SETTINGS_NAME_LEN) {
-						name = name.substring(0, DB.SETTINGS_NAME_LEN); //make sure it isn't too large
-					}
-					d.setName(name);
-					d.setPrimId(community);
-					log.debug("calling createNewDefaultSettings on community with id = " + community);
-					int newId = createNewDefaultSettings(d);
-					if (newId > 0) {
-						return d;
-					} else {
-						//failed to create new profile
-						log.error("error creating new default settings profile");
-						return null;
-					}
-				}
-			} else {
-				log.error("We were unable to find the community for the space =" + id);
 				return null;
+			});
+
+			//this means the community was NULL, which occurs when this is called on the root space.
+			if (community == null || community <= 0) {
+				log.debug("no default settings profile set for space = " + id);
+				return new DefaultSettings(); // Return empty settings object
+			}
+
+			List<DefaultSettings> settings =
+					Settings.getDefaultSettingsByPrimIdAndType(con, community, SettingType.COMMUNITY);
+
+			if (settings != null && !settings.isEmpty()) {
+				return settings.get(0);
+			} else {
+				//no settings existed, so create one for this community and return that
+				log.debug("unable to find any default settings for community id = " + community);
+				DefaultSettings d = new DefaultSettings();
+				String name = Spaces.getName(community);
+				if (name != null && name.length() > DB.SETTINGS_NAME_LEN) {
+					name = name.substring(0, DB.SETTINGS_NAME_LEN); //make sure it isn't too large
+				}
+				d.setName(name);
+				d.setPrimId(community);
+				log.debug("calling createNewDefaultSettings on community with id = " + community);
+				int newId = createNewDefaultSettings(d);
+				if (newId > 0) {
+					d.setId(newId);
+					return d;
+				} else {
+					//failed to create new profile
+					log.error("error creating new default settings profile");
+					return new DefaultSettings(); // Return empty settings object
+				}
 			}
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
-		} finally {
-			Common.safeClose(procedure);
-			Common.safeClose(results);
+			log.error("Error getting default settings for space " + id, e);
 		}
 
-		return null;
+		return new DefaultSettings(); // Return empty settings object on any error
 	}
 
 	/**
@@ -424,9 +414,10 @@ public class Communities {
 	 *
 	 * @param communityId the id of the space this new personal space will be a subspace of
 	 * @param user the user for whom this new personal space is being created
-	 * @return true if the personal subspace was successfully created, false otherwise
+	 * @return the ID of the newly created personal space
+	 * @throws RuntimeException if the personal space could not be created
 	 */
-	public static void createPersonalSubspace(int communityId, User user) {
+	public static int createPersonalSubspace(int communityId, User user) {
 		// Generate space name (e.g. IF name = Todd Elvers, THEN personal space name = todd_elvers)
 		final String name = (user.getFirstName() + "_" + user.getLastName()).toLowerCase();
 
@@ -438,15 +429,17 @@ public class Communities {
 		s.setPermission(new Permission(true));
 		s.setParentSpace(getUsersSpace(communityId));
 
-		// If Spaces.add returns -1 it means there was a problem
-		// TODO: Just throw an exception
-		if (Spaces.add(s, user.getId()) > 0) {
+		// Create the space and handle errors properly
+		int newSpaceId = Spaces.add(s, user.getId());
+		if (newSpaceId > 0) {
 			log.info("createPersonalSubspace",
-			         "Personal space successfully created for user [" + user.getFullName() + "]");
+					 "Personal space successfully created for user [" + user.getFullName() + "] with ID " + newSpaceId);
+			return newSpaceId;
 		} else {
-			log.error("createPersonalSubspace",
-			          "Personal space NOT successfully created for user [" + user.getFullName() +
-			          "] in community " + communityId);
+			String errorMessage = "Personal space could not be created for user [" + user.getFullName() + 
+								 "] in community " + communityId + ". Spaces.add returned: " + newSpaceId;
+			log.error("createPersonalSubspace", errorMessage);
+			throw new RuntimeException(errorMessage);
 		}
 	}
 
