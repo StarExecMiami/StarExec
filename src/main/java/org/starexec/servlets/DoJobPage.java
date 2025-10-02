@@ -1,32 +1,21 @@
 package org.starexec.servlets;
-import org.apache.catalina.connector.ClientAbortException;
 import org.apache.commons.io.FileUtils;
 import org.starexec.constants.R;
 import org.starexec.constants.Web;
 import org.starexec.data.database.*;
-import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
-import org.starexec.data.security.BenchmarkSecurity;
-import org.starexec.data.security.JobSecurity;
-import org.starexec.data.security.SolverSecurity;
-import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.*;
-import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
 
-import javax.servlet.ServletException;
 import javax.servlet.http.Cookie;
-import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.FileWriter;
 import java.nio.charset.StandardCharsets;
-import java.sql.SQLException;
 import java.util.*;
 
 /*
@@ -131,7 +120,6 @@ public class DoJobPage {
 				List<Cookie> requestCookies = Arrays.asList(request.getCookies());
 				String url = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + "/" + R.STAREXEC_APPNAME +
 				"/secure/details/pair.jsp?id=" + jp.getId() + "&localJobPage=true";
-				Map<String, String> queryParameters = new HashMap<>();
 				//if we don't have to cookies, it throws an unauth error
 				String htmlText = Util.getWebPage(url, requestCookies);
 				FileUtils.writeStringToFile(htmlFile, htmlText, StandardCharsets.UTF_8);
@@ -243,7 +231,6 @@ public class DoJobPage {
 				"/secure/details/job.jsp?id=" + jobId + "&" + Web.LOCAL_JOB_PAGE_PARAMETER + "=true";
 		log.debug("Getting job page from " + urlToGetJobPageFrom);
 		List<Cookie> requestCookies = Arrays.asList(request.getCookies());
-		Map<String, String> queryParameters = new HashMap<>();
 		//if we don't have to cookies, it throws an unauth error
 		String htmlText = Util.getWebPage(urlToGetJobPageFrom, requestCookies);
 		FileUtils.writeStringToFile(htmlFile, htmlText, StandardCharsets.UTF_8);
