@@ -106,10 +106,9 @@ public enum Analytics {
 		Date now = now();
 		for (Analytics event : Analytics.values()) {
 			if (event.id != -1) {
-				Iterator it = event.events.entrySet().iterator();
+				Iterator<Map.Entry<Date, Data>> it = event.events.entrySet().iterator();
 				while (it.hasNext()) {
-					@SuppressWarnings("unchecked")
-					Map.Entry<Date,Data> kv = (Map.Entry<Date,Data>)it.next();
+					Map.Entry<Date,Data> kv = it.next();
 					Date date = kv.getKey();
 					Data v = kv.getValue();
 					try {
