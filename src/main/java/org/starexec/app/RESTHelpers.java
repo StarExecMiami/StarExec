@@ -3,17 +3,14 @@ package org.starexec.app;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.annotations.Expose;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.time.StopWatch;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.apache.commons.lang3.tuple.Triple;
-import org.starexec.app.RESTHelpers.JSTreeItem;
 import org.starexec.command.C;
 import org.starexec.command.Connection;
-import org.starexec.command.JsonHandler;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
@@ -28,7 +25,6 @@ import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.AttributesTableRow;
 import org.starexec.data.to.tuples.Locatable;
 import org.starexec.data.to.tuples.SolverConfig;
-import org.starexec.exceptions.RESTException;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.test.integration.TestResult;
@@ -41,7 +37,6 @@ import java.awt.*;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.sql.CallableStatement;
 import java.sql.SQLException;
 //import java.sql.CallableStatement;
 //import java.sql.ResultSet;
@@ -857,6 +852,7 @@ public class RESTHelpers {
 			// Parameter validation
 			DataTablesQuery query = RESTHelpers.getAttrMap(Primitive.NODE, request);
 			if (query == null) {
+				log.debug("getNextDataTablesPageCluster","query was null for type="+type+" id="+id+" params="+request.getQueryString());
 				return null;
 			}
 
