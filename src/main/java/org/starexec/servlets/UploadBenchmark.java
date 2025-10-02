@@ -21,9 +21,11 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
+import java.net.URI;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.nio.charset.StandardCharsets;
 
 @MultipartConfig
 public class UploadBenchmark extends HttpServlet {
@@ -146,7 +148,7 @@ public class UploadBenchmark extends HttpServlet {
 		try {
 			log.debug("trying to add benchmark with text = " + benchText + " and name = " + name);
 			File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
-			FileUtils.writeStringToFile(new File(uniqueDir, name), benchText);
+			FileUtils.writeStringToFile(new File(uniqueDir, name), benchText, StandardCharsets.UTF_8);
 			List<Benchmark> bench =
 					Benchmarks.extractSpacesAndBenchmarks(uniqueDir, typeId, userId, downloadable, null, null)
 					          .getBenchmarksRecursively();
@@ -213,7 +215,6 @@ public class UploadBenchmark extends HttpServlet {
 			String uploadMethod, int statusId, boolean hasDependencies, boolean linked, Integer depRootSpaceId
 	) throws IOException, StarExecException {
 
-		ArrayList<Integer> benchmarkIds = new ArrayList<>();
 		// Create a unique path the zip file will be extracted to
 		final File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
 
@@ -314,7 +315,6 @@ public class UploadBenchmark extends HttpServlet {
 		public static void addBenchmarksGit(File gitSpace, int userId, int spaceId, int typeId, boolean downloadable, Permission perm,
 		String uploadMethod, int statusId, boolean hasDependencies, boolean linked, Integer depRootSpaceId)
 		throws IOException, StarExecException{
-			ArrayList<Integer> benchmarkIds = new ArrayList<>();
 
 			//get the approximate files size, larger than actual beacause the .git directory is present still
 			long fileSize = FileUtils.sizeOf(gitSpace);
@@ -401,7 +401,7 @@ public class UploadBenchmark extends HttpServlet {
 		String tempName = null;
 		PartWrapper tempFileToUpload = null;
 		if (localOrUrlOrGit.equals("URL")) {
-			tempURL = new URL((String) form.get(FILE_URL));
+			tempURL = new URI((String) form.get(FILE_URL)).toURL();
 			try {
 				tempName = tempURL.toString().substring(tempURL.toString().lastIndexOf('/'));
 			} catch (Exception e) {
@@ -411,9 +411,8 @@ public class UploadBenchmark extends HttpServlet {
 			tempFileToUpload = ((PartWrapper) form.get(BENCHMARK_FILE));
 		}
 		String tempGitUrl = null;
-		//for the git url
 		if (localOrUrlOrGit.equals("Git")) {
-			tempURL = new URL((String) form.get(FILE_GIT));
+			tempURL = new URI((String) form.get(FILE_GIT)).toURL();
 			tempGitUrl = ((String) form.get(FILE_GIT)).trim();
 			log.debug("URL is : " + ((String) form.get(FILE_GIT)));
 			try {
@@ -461,6 +460,9 @@ public class UploadBenchmark extends HttpServlet {
 		File archive = null;
 		String gitSpaceString = null;
 		if (localOrUrlOrGit.equals("local")) {
+			if (fileToUpload == null) {
+				throw new Exception("No uploaded benchmark file provided for local upload");
+			}
 			archive = new File(uniqueDir, FilenameUtils.getName(fileToUpload.getName()));
 			fileToUpload.write(archive);
 		}
@@ -511,7 +513,7 @@ public class UploadBenchmark extends HttpServlet {
 			Util.threadPoolExecute(() -> {
 				try {
 					addBenchmarksGit(gitSpace, userId, spaceId, typeId, downloadable, perm, uploadMethod,
-					                         statusId, hasDependencies, linked, depRootSpaceId
+											 statusId, hasDependencies, linked, depRootSpaceId
 					);
 
 					BenchmarkUploadStatus status = Uploads.getBenchmarkStatus(statusId);
@@ -524,9 +526,10 @@ public class UploadBenchmark extends HttpServlet {
 						Reports.addToEventOccurrencesNotRelatedToQueue("benchmarks uploaded", totalBenchmarksUploaded);
 					}
 				} catch (Exception e) {
+					String fileName = (archiveFile != null) ? archiveFile.getName() : (gitSpace != null ? gitSpace.getName() : "unknown");
 					String msg = "userId:      " + userId
 						+ "\nspaceId:     " + spaceId
-						+ "\narchiveFile: " + archiveFile.getName()
+						+ "\narchiveFile: " + fileName
 					;
 					log.error("handleUploadRequest", msg, e);
 				} finally {
@@ -538,7 +541,7 @@ public class UploadBenchmark extends HttpServlet {
 			Util.threadPoolExecute(() -> {
 				try {
 					addBenchmarksFromArchive(archiveFile, userId, spaceId, typeId, downloadable, perm, uploadMethod,
-					                         statusId, hasDependencies, linked, depRootSpaceId
+											 statusId, hasDependencies, linked, depRootSpaceId
 					);
 
 					BenchmarkUploadStatus status = Uploads.getBenchmarkStatus(statusId);
@@ -551,9 +554,10 @@ public class UploadBenchmark extends HttpServlet {
 						Reports.addToEventOccurrencesNotRelatedToQueue("benchmarks uploaded", totalBenchmarksUploaded);
 					}
 				} catch (Exception e) {
+					String fileName = (archiveFile != null) ? archiveFile.getName() : (gitSpace != null ? gitSpace.getName() : "unknown");
 					String msg = "userId:      " + userId
 						+ "\nspaceId:     " + spaceId
-						+ "\narchiveFile: " + archiveFile.getName()
+						+ "\narchiveFile: " + fileName
 					;
 					log.error("handleUploadRequest", msg, e);
 				} finally {
