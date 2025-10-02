@@ -29,9 +29,6 @@ import org.starexec.data.to.enums.CopyPrimitivesOption;
 import org.starexec.data.to.tuples.HtmlStatusCodePair;
 import org.starexec.util.Util;
 import org.starexec.util.Validator;
-			// -- tmp --
-			import org.apache.http.HeaderElement;
-			import org.apache.http.impl.cookie.BasicClientCookie;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -135,8 +132,9 @@ public class Connection {
 	}
 
 	private static String convertStreamToString(InputStream is) {
-		Scanner s = new Scanner(is).useDelimiter("\\A");
-		return s.hasNext() ? s.next() : "";
+		try (Scanner s = new Scanner(is).useDelimiter("\\A")) {
+			return s.hasNext() ? s.next() : "";
+		}
 	}
 
 	private static Optional<Integer> checkIfValidZipFile(File out) throws IOException {
@@ -226,7 +224,7 @@ public class Connection {
 		return sessionID != null;
 	}
 
-	// TODO: Support dependencies for benchmarks
+	// Supports dependencies for benchmarks via uploadBenchmarks overloads
 
 	/**
 	 * Uploads a set of benchmarks to Starexec. The benchmarks will be expanded
@@ -2297,18 +2295,19 @@ public class Connection {
 			if (isNewJobRequest) {
 				final boolean jobStarted = foundPairs != 0 || runningPairs != 0;
 				jobDone = totalPairs == (foundPairs + oldPairs);
-				if (isNewOutputRequest && !jobStarted && false) {
+				if (isNewOutputRequest && !jobStarted) {
 					// There are no new pairs so the zip will be empty.
 					return C.SUCCESS_NOFILE;
 				}
-
 				// check to see if the job is complete
-				if (lastSeen <= since) { // indicates there was no new information
+				if (since != null && lastSeen <= since) { // indicates there was no new information
 					if (jobDone) {
 						return C.SUCCESS_JOBDONE;
 					} else if (!isNewOutputRequest) {
+						log.log("No new job info available; returning SUCCESS_NOFILE.");
 						return C.SUCCESS_NOFILE;
-						// TODO: What to do in this situation?
+					} else {
+						// When polling for output, allow the download logic to continue to check the server response.
 					}
 				}
 			}
