@@ -1,47 +1,47 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
-        import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Spaces, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Permission, org.starexec.util.SessionUtil" %>
+		import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Spaces, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Permission, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%
 	try {
+		// Validate and parse the space ID parameter
+		String sidParam = request.getParameter("sid");
+		if (sidParam == null || sidParam.trim().isEmpty()) {
+			response.sendError(HttpServletResponse.SC_BAD_REQUEST, "The parent space id is required");
+			return;
+		}
+		int spaceId = Integer.parseInt(sidParam.trim());
 
-		// Get parent space info for display
-		int spaceId = Integer.parseInt(request.getParameter("sid"));
+		// Get user ID from session
 		int userId = SessionUtil.getUserId(request);
+
+		// Set request attributes for the view
 		request.setAttribute("isRoot", spaceId == 1);
 		request.setAttribute("space", Spaces.get(spaceId));
 		request.setAttribute("namePattern", R.PRIMITIVE_NAME_PATTERN);
 		request.setAttribute("nameLength", DB.SPACE_NAME_LEN);
 		request.setAttribute("descLength", DB.SPACE_DESC_LEN);
-		// Verify this user can add spaces to this space
+
+		// Verify user permissions to add spaces
 		Permission p = SessionUtil.getPermission(request, spaceId);
-		if ((p == null || !p.canAddSpace()) &&
-				!GeneralSecurity.hasAdminReadPrivileges(userId)) {
-			response.sendError(
-					HttpServletResponse.SC_FORBIDDEN,
-					"You do not have permission to add a space here"
-			);
+		if ((p == null || !p.canAddSpace()) && !GeneralSecurity.hasAdminReadPrivileges(userId)) {
+			response.sendError(HttpServletResponse.SC_FORBIDDEN, "You do not have permission to add a space here");
 			return;
 		}
 	} catch (NumberFormatException nfe) {
-		response.sendError(
-				HttpServletResponse.SC_BAD_REQUEST,
-				"The parent space id was not in the correct format"
-		);
+		response.sendError(HttpServletResponse.SC_BAD_REQUEST, "The parent space id must be a valid integer");
 		return;
 	} catch (Exception e) {
-		response.sendError(
-				HttpServletResponse.SC_NOT_FOUND,
-				"You do not have permission to add to this space or the space does not exist" +
-						e.getMessage()
-		);
+		// Log the exception for debugging, but do not expose details to the user
+		// e.g., log.error("Error in add/space.jsp", e);
+		response.sendError(HttpServletResponse.SC_NOT_FOUND, "You do not have permission to add to this space or the space does not exist");
 		return;
 	}
 %>
 
 <star:template title="add subspace to ${space.name}" css="add/space"
                js="lib/jquery.validate.min, add/space">
-	<form id="addForm" method="post" action="${starexecRoot}/secure/add/space">
+	<form id="addForm" method="post" action="${pageContext.request.contextPath}/secure/add/space">
 		<input type="hidden" name="parent" value="${space.id}"/>
 		<fieldset>
 			<legend>new space</legend>
