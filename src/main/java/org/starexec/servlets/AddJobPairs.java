@@ -24,7 +24,6 @@ import java.util.Set;
 public class AddJobPairs extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(AddJobPairs.class);
 	private static final String jobIdParam = "jobId";
-	final JsonParser parser = new JsonParser();
 
 	/**
 	 * @see HttpServlet#doGet(HttpServletRequest request, HttpServletResponse response)
@@ -52,7 +51,7 @@ public class AddJobPairs extends HttpServlet {
 			final int userId = SessionUtil.getUserId(request);
 
 			RESTServices services = new RESTServices();
-			JsonObject o = parser.parse(services.getNumberOfPairsToBeAddedAndDeleted(request)).getAsJsonObject();
+			JsonObject o = JsonParser.parseString(services.getNumberOfPairsToBeAddedAndDeleted(request)).getAsJsonObject();
 			int pairsAdded = o.get("pairsToBeAdded").getAsInt();
 			int pairsDeleted = o.get("pairsToBeDeleted").getAsInt();
 			int remainingQuota = o.get("remainingQuota").getAsInt();
