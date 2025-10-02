@@ -70,20 +70,19 @@ public class GeneralSecurity {
 		return ESAPI.encoder().encodeForHTML(str);
 	}
 
-    /**
-     * a test method to make sure ESAPI is working correctly 
-     */
-    public static void test() {
-	try {
-	    String str = getHTMLSafeString("test");
-	}
-	catch(Exception e) {
-	    log.error("Caught exception checking that ESAPI is working: " + Util.getStackTrace(e));
-	    return;
-	}
-	log.info("ESAPI test passed.");
-    }
-	    
+	/**
+	 * a test method to make sure ESAPI is working correctly 
+	 */
+	public static void test() {
+		try {
+			String str = getHTMLSafeString("test");
+			log.info("ESAPI test passed: " + str);
+		}
+		catch(Exception e) {
+			log.error("Caught exception checking that ESAPI is working: " + Util.getStackTrace(e));
+			return;
+		}
+	}	
 
 	/**
 	 * Formats a string so it is safe to insert in to an HTML attribute
