@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.regex.Pattern;
+import java.nio.charset.StandardCharsets;
 
 /**
  * This is a backend implementation that uses Sun Grid Engine
@@ -431,7 +432,7 @@ public class GridEngineBackend implements Backend{
 					  "\nhostlist " + hostList;
 
 			File f = new File("/tmp/newHost30.hgrp");
-			FileUtils.writeStringToFile(f, newHost);
+			FileUtils.writeStringToFile(f, newHost, StandardCharsets.UTF_8);
 			f.setReadable(true, false);
 			f.setWritable(true, false);
 
@@ -494,7 +495,7 @@ public class GridEngineBackend implements Backend{
 						"\nh_vmem                INFINITY";
 
 			File f2 = new File("/tmp/newQueue30.q");
-			FileUtils.writeStringToFile(f2, newQueue);
+			FileUtils.writeStringToFile(f2, newQueue, StandardCharsets.UTF_8);
 			f2.setReadable(true, false);
 			f2.setWritable(true, false);
 
