@@ -264,10 +264,10 @@ public class Statistics {
 		return map;
 	}
 
-	private static PieDataset createCommunityDataset(
+	private static PieDataset<String> createCommunityDataset(
 			List<Space> communities, HashMap<Integer, HashMap<String, Long>> communityInfo, String type
 	) {
-		DefaultPieDataset dataset = new DefaultPieDataset();
+		DefaultPieDataset<String> dataset = new DefaultPieDataset<>();
 
 		String name;
 		int id;
@@ -304,21 +304,16 @@ public class Statistics {
 			Collections.sort(times, new Comparator<Date>() {
 				@Override
 				public int compare(Date d1, Date d2) {
-					if(d1 == null && d2 != null) {
+					if (d1 == d2) {
+						return 0;
+					}
+					if (d1 == null) {
 						return 1;
 					}
-					if(d1 != null && d2 == null) {
+					if (d2 == null) {
 						return -1;
 					}
-					if(d1 == null && d2 == null) {
-						return 0;
-					}
-					if(d1.getTime() < d2.getTime()) {
-						return -1;
-					} else if(d1.getTime() == d2.getTime()) {
-						return 0;
-					}
-					return 1;
+					return Long.compare(d1.getTime(), d2.getTime());
 				}
 			});
 			
@@ -389,9 +384,9 @@ public class Statistics {
 
 			String[] infoTypes = {"users", "solvers", "benchmarks", "jobs", "job_pairs", "disk_usage"};
 
-			PieDataset dataset;
+			PieDataset<String> dataset;
 			JFreeChart chart;
-			PiePlot plot;
+			PiePlot<?> plot;
 			File output;
 			String filename;
 			List<String> filenames = new ArrayList<>();
@@ -412,7 +407,7 @@ public class Statistics {
 				chart.setBackgroundPaint(backgroundColor);
 				chart.getTitle().setPaint(titleColor);
 
-				plot = (PiePlot) chart.getPlot();
+				plot = (PiePlot<?>) chart.getPlot();
 				plot.setLabelFont(new Font("SansSerif", Font.PLAIN, 12));
 				plot.setNoDataMessage("No data available");
 				plot.setCircular(true);
@@ -502,7 +497,6 @@ public class Statistics {
 	 * string being an HTML image map for the graph. Returns null on error
 	 * @author Eric Burns
 	 */
-	@SuppressWarnings("deprecation")
 	public static List<String> makeSolverComparisonChart(
 			List<JobPair> pairs1, List<JobPair> pairs2, int jobSpaceId, int edgeLengthInPixels, Color axisColor,
 			int stageNumber, PrimitivesToAnonymize primitivesToAnonymize
@@ -526,19 +520,16 @@ public class Statistics {
 			String xAxisName = null;
 			String yAxisName = null;
 
-			/* TODO
-			if ( AnonymousLinks.areSolversAnonymized( primitivesToAnonymize )) {
-				int jobId = Spaces.getJobSpace( jobSpaceId ).getJobId();
+			if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
+				int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
 				// Use anonymous solver names for the axis titles.
-				Map<Integer, String> solverIdToAnonymizedName = AnonymousLinks.getAnonymizedSolverNames(jobId,
-				stageNumber);
-				xAxisName = solverIdToAnonymizedName.get( stage1.getSolver().getId() );
-				yAxisName = solverIdToAnonymizedName.get( stage2.getSolver().getId() );
+				Map<Integer, String> solverIdToAnonymizedName = AnonymousLinks.getAnonymizedSolverNames(jobId, stageNumber);
+				xAxisName = solverIdToAnonymizedName.get(stage1.getSolver().getId()) + " time(s)";
+				yAxisName = solverIdToAnonymizedName.get(stage2.getSolver().getId()) + " time(s)";
 			} else {
-			*/
-			xAxisName = stage1.getSolver().getName() + "/" + stage1.getConfiguration().getName() + " time(s)";
-			yAxisName = stage2.getSolver().getName() + "/" + stage2.getConfiguration().getName() + " time(s)";
-			//}
+				xAxisName = stage1.getSolver().getName() + "/" + stage1.getConfiguration().getName() + " time(s)";
+				yAxisName = stage2.getSolver().getName() + "/" + stage2.getConfiguration().getName() + " time(s)";
+			}
 			//data in these hashmaps is needed to create the image map
 			HashMap<String, Integer> urls = new HashMap<>();
 			HashMap<String, String> names = new HashMap<>();
@@ -549,12 +540,17 @@ public class Statistics {
 			//for now, we are not including error pairs in this chart
 			int debugItem = 0;
 			int debugSeries = 0;
-			// TODO
-			//Map<Integer, String> benchmarkIdToAnonymizedName = AnonymousLinks.getAnonymizedBenchmarkNames( jobId );
+			Map<Integer, String> benchmarkIdToAnonymizedName = null;
+			if (AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)) {
+				List<Benchmark> benchmarks = new ArrayList<>();
+				for (JobPair p : pairs1) {
+					benchmarks.add(p.getBench());
+				}
+				benchmarkIdToAnonymizedName = AnonymousLinks.getAnonymizedBenchmarkNames(benchmarks);
+			}
 			for (JobPair jp : pairs1) {
+				JobPair jp2 = pairs2Map.get(jp.getBench().getId());
 				if (jp.getStatus().getCode() == Status.StatusCode.STATUS_COMPLETE) {
-					JobPair jp2 = pairs2Map.get(jp.getBench().getId());
-
 					//if we can find a second pair with this benchmark
 					if (jp2 != null && jp2.getStatus().getCode() == Status.StatusCode.STATUS_COMPLETE) {
 						//points are identified by their series and item number
@@ -565,13 +561,11 @@ public class Statistics {
 
 						//put the name in names so we can create a tooltip of the name
 						//when hovering over the point in the image map
-						/* TODO
-						if ( AnonymousLinks.areBenchmarksAnonymized( primitivesToAnonymize )) {
-							names.put(key, benchmarkIdToAnonymizedName.get( jp.getBench().getId() ));
+						if (AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize) && benchmarkIdToAnonymizedName != null) {
+							names.put(key, benchmarkIdToAnonymizedName.get(jp.getBench().getId()));
 						} else {
-						*/
-						names.put(key, jp.getBench().getName());
-						//}
+							names.put(key, jp.getBench().getName());
+						}
 						item += 1;
 
 						stage1 = jp.getStageFromNumber(stageNumber);
