@@ -2,16 +2,11 @@ package org.starexec.servlets;
 
 import com.google.gson.Gson;
 import org.apache.commons.lang3.tuple.Pair;
-import org.starexec.constants.R;
 import org.starexec.constants.Web;
-import org.starexec.data.database.Communities;
 import org.starexec.data.database.Requests;
-import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.CommunityRequest;
-import org.starexec.data.to.Permission;
-import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
@@ -113,11 +108,10 @@ public class Verify extends HttpServlet {
 
 		CommunityRequest comRequest = Requests.getCommunityRequest(code);
 
-		// TODO Give requests that were sent by email parameter too.
+		// Requests sent by email do not carry this parameter and will be handled via JSP redirect.
 		boolean sentFromCommunityPage = Util.paramExists(Web.SENT_FROM_COMMUNITY_PAGE, request);
 
-		boolean requestHasBeenHandled = checkIfRequestHasBeenHandled(response, comRequest, sentFromCommunityPage);
-		if (requestHasBeenHandled) {
+		if (checkIfRequestHasBeenHandled(response, comRequest, sentFromCommunityPage)) {
 			return;
 		}
 
