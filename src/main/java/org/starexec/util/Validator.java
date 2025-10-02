@@ -172,7 +172,22 @@ public class Validator {
 	 * contains only letters, numbers and dashes
 	 */
 	public static boolean isValidSpaceName(String name) {
-		return name != null && patternSpaceName.matcher(name).matches();
+		if (name == null) {
+			return false;
+		}
+		// Lazy initialization safeguard to prevent NullPointerException if initialize() not called yet
+		if (patternSpaceName == null) {
+			synchronized (Validator.class) {
+				if (patternSpaceName == null) { // double-check
+					initialize();
+					if (patternSpaceName == null) {
+						log.error("patternSpaceName is null after initialize() - configuration patterns not loaded yet");
+						return false;
+					}
+				}
+			}
+		}
+		return patternSpaceName.matcher(name).matches();
 	}
 
 	/**
