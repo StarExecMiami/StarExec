@@ -12,7 +12,7 @@ public abstract class BaseStarLogger {
     protected final String name;
     private static final String methodSeparator = " - ";
 
-    protected BaseStarLogger(Class clazz) {
+    protected BaseStarLogger(Class<?> clazz) {
 
         log = LoggerFactory.getLogger(clazz);
         this.name = clazz.getName();
@@ -126,27 +126,47 @@ public abstract class BaseStarLogger {
         log(StarLevel.ERROR, null, message, t);
     }
 
-    protected void sendToLogger(StarLevel level, String message) {
-	switch (level) {
-	case ERROR:
-	    log.error(message);
-	    break;
-	case WARN:
-	    log.warn(message);
-	    break;
-	case INFO:
-	    log.info(message);
-	    break;
-	case DEBUG:
-	    log.debug(message);
-	    break;
-	case TRACE:
-	    log.trace(message);
-	    break;
-	}
-   }
+    protected void sendToLogger(StarLevel level, String message, Throwable t) {
+        switch (level) {
+            case ERROR:
+                if (t != null) { log.error(message, t); } else { log.error(message); }
+                break;
+            case WARN:
+                if (t != null) { log.warn(message, t); } else { log.warn(message); }
+                break;
+            case INFO:
+                if (t != null) { log.info(message, t); } else { log.info(message); }
+                break;
+            case DEBUG:
+                if (t != null) { log.debug(message, t); } else { log.debug(message); }
+                break;
+            case TRACE:
+                if (t != null) { log.trace(message, t); } else { log.trace(message); }
+                break;
+            case OFF:
+                // Do nothing
+                break;
+            case ALL:
+                if (t != null) { log.trace(message, t); } else { log.trace(message); }
+                break;
+        }
+    }
+
     protected String getMessage(final String method, final String message, final Throwable t) {
-	return (method == null ? message : prefix(method)+message + (t == null ? "" : t.toString()));
+        String base;
+        if (message != null && !message.trim().isEmpty()) {
+            base = message.trim();
+        } else if (t != null && t.getMessage() != null && !t.getMessage().trim().isEmpty()) {
+            base = t.getMessage().trim();
+        } else if (t != null) {
+            base = t.getClass().getName();
+        } else {
+            base = "<no message>";
+        }
+        if (method != null) {
+            return prefix(method) + base;
+        }
+        return base;
     }
 
     protected abstract void log(StarLevel level, String method, String message, Throwable t);
