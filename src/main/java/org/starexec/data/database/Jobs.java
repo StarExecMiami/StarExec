@@ -207,7 +207,6 @@ public class Jobs {
 			int jobId, Set<Integer> configIds, Set<Integer> idsOfDeletedJobPairs
 	) {
 		Job job = Jobs.getWithSimplePairs(jobId);
-		List<JobPair> jobPairsToAdd = new ArrayList<>();
 		List<JobPair> jobPairs = job.getJobPairs();
 		int countOfJobPairsToAdd = 0;
 
@@ -260,7 +259,7 @@ public class Jobs {
 					// Add the new benchmark-solver-config pair so that we don't add it as a duplicate.
 					addBenchSolverConfigTripleToJobMap(jobMap, pairBenchId, solverIdToAdd, configIdToAdd);
 
-					final int pairSolverId = pair.getPrimaryStage().getSolver().getId();
+					// final int pairSolverId = pair.getPrimaryStage().getSolver().getId();
 					/*
 					log.debug( "Counting job pairs to add, old bench-solver-config triple:
 					"+pairBenchId+"-"+pairSolverId+"-"
@@ -2272,12 +2271,7 @@ public class Jobs {
 	}
 
 	/**
-<<<<<<< HEAD
 	 * Returns all of the successfully completed job pairs in a given job space hierarchy, populated with all the fields necessary to display
-=======
-	 
-   
->>>>>>> 028325927bb56db6ee1c5404fffb3ef4c13ffdb2
 	 * in a SolverStats table. All job pair stages are obtained
 	 * This alternate version is to fix the job graphs, Alexander Brown 6/21
 	 *
@@ -4277,7 +4271,6 @@ public class Jobs {
 		CallableStatement procedure = null;
 		try {
 			int numPairs = 0;
-			final int paused = StatusCode.STATUS_PAUSED.getVal();
 			final StopWatch timer = new StopWatch();
 			timer.start();
 
@@ -5473,6 +5466,7 @@ public class Jobs {
 		}
 	}
 
+	@SuppressWarnings("unused")
 	private static boolean setJobDiskSize(int jobId, long diskSize) {
 		Connection con = null;
 		CallableStatement procedure = null;
@@ -5511,7 +5505,7 @@ public class Jobs {
 			Common.safeClose(procedure);
 			Common.safeClose(results);
 		}
-		return jobCopiesBackResultsIncrementally;
+		return jobCopiesBackResultsIncrementally == null ? false : jobCopiesBackResultsIncrementally;
 	}
 
 	public static List<String> getJobAttributeValues(int jobSpaceId) throws SQLException {
