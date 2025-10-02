@@ -102,32 +102,49 @@ public class JspHelpers {
 				long memory=j.getMaxMemory();
 				JobSpace jobSpace=Spaces.getJobSpace(jobSpaceId);
 
-				User u=Users.get(j.getUserId());
-
 				String jobSpaceTreeJson = RESTHelpers.getJobSpacesTreeJson( j.getId(), userId);
 				List<JobSpace> jobSpaces = Spaces.getSubSpacesForJob(jobSpaceId, true);
 				jobSpaces.add(jobSpace);
 				request.setAttribute("jobSpaces", jobSpaces);
 
-				//TODO: This code isn't going to work for pipelines. It just always does stage 1.
+				// Determine which pipeline stage to display; default to 1 if not provided or invalid.
+				int selectedStageNumber = 1;
+				String stageParam = request.getParameter("stage");
+				if (stageParam == null) {
+					stageParam = request.getParameter("stageNumber");
+				}
+				if (stageParam != null) {
+					try {
+						int parsed = Integer.parseInt(stageParam);
+						if (parsed > 0) {
+							try {
+								if (j.getStageAttributesByStageNumber(parsed) != null) {
+									selectedStageNumber = parsed;
+								}
+							} catch (Exception ignored) { }
+						}
+					} catch (NumberFormatException ignored) { }
+				}
+				request.setAttribute("selectedStageNumber", selectedStageNumber);
+
 				if (isLocalJobPage) {
 					Map<Integer, String> jobSpaceIdToSubspaceJsonMap = RESTHelpers.getJobSpaceIdToSubspaceJsonMap(j.getId(), jobSpaces);
 					request.setAttribute("jobSpaceIdToSubspaceJsonMap", jobSpaceIdToSubspaceJsonMap);
 
 					Map<Integer, String> jobSpaceIdToCpuTimeSolverStatsJsonMapExcludeUnknowns =
-							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, 1, false, false);
+							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, false, false);
 					request.setAttribute("jobSpaceIdToCpuTimeSolverStatsJsonMapExcludeUnknowns", jobSpaceIdToCpuTimeSolverStatsJsonMapExcludeUnknowns);
 
 					Map<Integer, String> jobSpaceIdToWallclockTimeSolverStatsJsonMapExcludeUnknowns =
-							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, 1, true,false);
+							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, true,false);
 					//used to creat the panels for subspace summaries
 					request.setAttribute("jobSpaceIdToWallclockTimeSolverStatsJsonMapExcludeUnknowns", jobSpaceIdToWallclockTimeSolverStatsJsonMapExcludeUnknowns);
 					Map<Integer, String> jobSpaceIdToCpuTimeSolverStatsJsonMapIncludeUnknowns =
-							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, 1, false, true);
+							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, false, true);
 					request.setAttribute("jobSpaceIdToCpuTimeSolverStatsJsonMapIncludeUnknowns", jobSpaceIdToCpuTimeSolverStatsJsonMapIncludeUnknowns);
 
 					Map<Integer, String> jobSpaceIdToWallclockTimeSolverStatsJsonMapIncludeUnknowns =
-							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, 1, true, true);
+							RESTHelpers.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, true, true);
 					//used to creat the panels for subspace summaries
 					request.setAttribute("jobSpaceIdToWallclockTimeSolverStatsJsonMapIncludeUnknowns", jobSpaceIdToWallclockTimeSolverStatsJsonMapIncludeUnknowns);
 					Map<Integer, List<JobPair>> jobSpaceIdToPairMap = JobPairs.buildJobSpaceIdToJobPairMapWithWallCpuTimesRounded(j);
@@ -138,13 +155,13 @@ public class JspHelpers {
 				request.setAttribute( "primitivesToAnonymize", primitivesToAnonymizeName );
 				request.setAttribute( "isAnonymousPage", isAnonymousPage );
 				request.setAttribute("jobSpaceTreeJson", jobSpaceTreeJson);
-				if (isAnonymousPage) {
-					// For anonymous pages reset the userId for the permissions actually used on the page.
-					userId = SessionUtil.getUserId( request );
-				}
-				request.setAttribute("isAdmin",Users.isAdmin(userId));
-				request.setAttribute("usr",u);
-				request.setAttribute("job", j);
+				request.setAttribute("initialSpaceName", isAnonymousPage ? "" : jobSpace.getName() );
+				Processor selectedStagePostProc=j.getStageAttributesByStageNumber(selectedStageNumber).getPostProcessor();
+				Processor selectedStagePreProc=j.getStageAttributesByStageNumber(selectedStageNumber).getPreProcessor();
+				request.setAttribute("firstPostProc",selectedStagePostProc);
+				request.setAttribute("firstPreProc",selectedStagePreProc);
+
+				request.setAttribute("queues", Queues.getUserQueues(userId));
 				request.setAttribute("jobspace",jobSpace);
 				request.setAttribute("isPaused", isPaused);
 				request.setAttribute("isAdminPaused", isAdminPaused);
