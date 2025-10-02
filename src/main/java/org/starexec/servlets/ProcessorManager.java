@@ -1,7 +1,9 @@
 package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
-import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload.disk.DiskFileItemFactory;
+import org.apache.commons.fileupload.FileItem;
 import org.starexec.constants.R;
 import org.starexec.data.database.Processors;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -17,14 +19,15 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.ws.rs.Path;
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 
 /**
  * Servlet which handles incoming requests to add and update processors
@@ -60,12 +63,22 @@ public class ProcessorManager extends HttpServlet {
 		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
 	}
 
-	@Path("/update")
-	public void doPost(HttpServletRequest request, HttpServletResponse response) {
+	@Override
+	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
 		try {
-
+			// Line 67 and surrounding code - ensure using correct ServletFileUpload class
 			if (ServletFileUpload.isMultipartContent(request)) {
-				HashMap<String, Object> form = Util.parseMultipartRequest(request);
+				DiskFileItemFactory factory = new DiskFileItemFactory();
+				ServletFileUpload upload = new ServletFileUpload(factory);
+				List<FileItem> items = upload.parseRequest(request);
+				HashMap<String, Object> form = new HashMap<>();
+				for (FileItem item : items) {
+					if (item.isFormField()) {
+						form.put(item.getFieldName(), item.getString());
+					} else {
+						form.put(item.getFieldName(), item);
+					}
+				}
 				String action = (String) form.get(ACTION);
 
 				// Make sure we have an action parameter
@@ -83,7 +96,8 @@ public class ProcessorManager extends HttpServlet {
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Multipart request expected");
 			}
 		} catch (Exception e) {
-			log.warn("Caught Exception in ProcessorManager.doPost", e);
+			log.error("Error in ProcessorManager.doPost", e);
+			throw new ServletException("Processor upload failed", e);
 		}
 	}
 
@@ -180,11 +194,11 @@ public class ProcessorManager extends HttpServlet {
 
 			if (uploadMethod.equals(LOCAL_UPLOAD_METHOD)) {
 				// Save the uploaded file to disk
-				PartWrapper processorFile = (PartWrapper) form.get(PROCESSOR_FILE);
+				FileItem processorFile = (FileItem) form.get(PROCESSOR_FILE);
 				archiveFile = new File(uniqueDir, FilenameUtils.getName(processorFile.getName()));
 				processorFile.write(archiveFile);
 			} else {
-				processorUrl = new URL((String) form.get(PROCESSOR_URL));
+				processorUrl = URI.create((String) form.get(PROCESSOR_URL)).toURL();
 				String name;
 				try {
 					name = processorUrl.toString().substring(processorUrl.toString().lastIndexOf('/'));
@@ -212,7 +226,7 @@ public class ProcessorManager extends HttpServlet {
 
 
 			log.info(String.format("Wrote new %s processor to %s for community %d", procType,
-			                       uniqueDir.getAbsolutePath(), newProc.getCommunityId()
+								   uniqueDir.getAbsolutePath(), newProc.getCommunityId()
 			));
 
 			int newProcId = Processors.add(newProc);
@@ -277,8 +291,8 @@ public class ProcessorManager extends HttpServlet {
 			if (!Validator.isValidProcessorName((String) form.get(PROCESSOR_NAME))) {
 
 				return new ValidatorStatusCode(false,
-				                               "The supplied name is invalid-- please refer to the help files to see " +
-						                               "the correct format");
+											   "The supplied name is invalid-- please refer to the help files to see " +
+													   "the correct format");
 			}
 
 			String uploadMethod = (String) form.get(UPLOAD_METHOD);
@@ -286,7 +300,7 @@ public class ProcessorManager extends HttpServlet {
 			String fileName;
 
 			if (uploadMethod.equals(LOCAL_UPLOAD_METHOD)) {
-				fileName = ((PartWrapper) form.get(PROCESSOR_FILE)).getName();
+				fileName = ((FileItem) form.get(PROCESSOR_FILE)).getName();
 			} else {
 				fileName = (String) form.get(PROCESSOR_URL);
 			}
@@ -300,8 +314,8 @@ public class ProcessorManager extends HttpServlet {
 			if (!Validator.isValidPrimDescription((String) form.get(PROCESSOR_DESC))) {
 
 				return new ValidatorStatusCode(false,
-				                               "The supplied description is invalid-- please refer to the help files " +
-						                               "to see the correct format");
+											   "The supplied description is invalid-- please refer to the help files " +
+													   "to see the correct format");
 			}
 
 			if (!Validator.isValidPosInteger((String) form.get(OWNING_COMMUNITY))) {
