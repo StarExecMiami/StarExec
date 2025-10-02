@@ -6,6 +6,7 @@ package org.starexec.data.to;
  * @author Tyler Jensen
  * @deprecated This class will be implemented later when hardware specs are received
  */
+@Deprecated
 public class NodeClass extends Identifiable implements Nameable {
 	private String name;
 
