@@ -11,13 +11,13 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
-import org.xml.sax.SAXException;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
@@ -46,7 +46,6 @@ public class BatchUtil {
 	 */
 	public File generateXMLfile(Space space, int userId, boolean includeAttributes, boolean updates, int upid) throws
 			Exception {
-		//TODO : attributes are being sorted alphabetically, want to preserve order of insertion instead
 		log.debug("Generating XML for Space = " + space.getId());
 
 		doc = XMLUtil.generateNewDocument();
@@ -110,7 +109,7 @@ public class BatchUtil {
 		attrsElement.appendChild(stickyLeadersElement);
 
 
-		// TODO: Find out if the users from the parent space are inherited (inherit-users)
+		// Find out if the users from the parent space are inherited (inherit-users)
 		Element inheritUsersElement = doc.createElement("inherit-users");
 		inheritUsersElement.setAttribute("value", "false");
 		attrsElement.appendChild(inheritUsersElement);
@@ -207,13 +206,16 @@ public class BatchUtil {
 				if (includeAttributes) {
 					String timeStamp = new SimpleDateFormat("MM/dd/yyyy HH:mm:ss").format(benchmark.getUploadDate());
 					benchElement.setAttribute("uploadTime", timeStamp);
-					Map<String, String> attrs = Benchmarks.getAttributes(benchmark.getId());
-					if (attrs != null) {
-						for (String attr : attrs.keySet()) {
-							String val = attrs.get(attr);
+
+					// Preserve insertion order if provided by the DAO; do not sort here
+					Map<String, String> attrsFromDao = Benchmarks.getAttributes(benchmark.getId());
+					if (attrsFromDao != null) {
+						// Use LinkedHashMap to preserve iteration order if source map supports it
+						Map<String, String> attrs = new LinkedHashMap<>(attrsFromDao);
+						for (Map.Entry<String, String> e : attrs.entrySet()) {
 							Element attre = doc.createElement("Attribute");
-							attre.setAttribute("name", attr);
-							attre.setAttribute("value", val);
+							attre.setAttribute("name", e.getKey());
+							attre.setAttribute("value", e.getValue());
 							benchElement.appendChild(attre);
 						}
 					}
@@ -240,7 +242,6 @@ public class BatchUtil {
 	 *
 	 * @param file The file that we wish to validate
 	 * @return Boolean true if the file is valid
-	 * @throws SAXException
 	 * @throws ParserConfigurationException
 	 * @throws IOException
 	 * @author Benton McCune
@@ -266,7 +267,7 @@ public class BatchUtil {
 	 * @author Benton Mccune
 	 */
 	public List<Integer> createSpacesFromFile(File file, int userId, int parentSpaceId, Integer statusId) throws
-			SAXException, ParserConfigurationException, IOException {
+			org.xml.sax.SAXException, ParserConfigurationException, IOException {
 		List<Integer> spaceIds = new ArrayList<>();
 		if (!validateAgainstSchema(file)) {
 			log.debug("File from User " + userId + " is not Schema valid.");
@@ -531,32 +532,31 @@ public class BatchUtil {
 			}
 		}
 
-		Random rand = new Random();
 		String baseSpaceName = space.getName();
 
 
 		space.setPermission(permission);
 
 		//------------------------------------------------------------------------
-
-		//Is appending a random number to the name what we want?
-		//Also, this will hang if there are too many spaces with the given name
-		//seems unrealistic to run into that, but just in case, we'll count attempts
-		// TODO Perhaps we should use the timestamp?
-		int attempt = 0;
-		while (Spaces.notUniquePrimitiveName(space.getName(), parentId)) {
-			int appendInt = rand.nextInt();
-			space.setName(baseSpaceName + appendInt);
-			if (attempt > 1000) {
-				//give up
-				log.error("Could not generate a unique space name.");
-				errorMessage = "Internal error.";
-				return -1;
-
+		// Generate a unique name using timestamp (with bounded retries), then UUID fallback.
+		if (Spaces.notUniquePrimitiveName(space.getName(), parentId)) {
+			String timeSuffix = new SimpleDateFormat("yyyyMMddHHmmssSSS").format(new Date());
+			String candidate = baseSpaceName + "-" + timeSuffix;
+			int attempt = 0;
+			while (Spaces.notUniquePrimitiveName(candidate, parentId) && attempt < 100) {
+				candidate = baseSpaceName + "-" + timeSuffix + "-" + attempt;
+				attempt++;
 			}
-			attempt++;
+			if (Spaces.notUniquePrimitiveName(candidate, parentId)) {
+				candidate = baseSpaceName + "-" + UUID.randomUUID();
+				if (Spaces.notUniquePrimitiveName(candidate, parentId)) {
+					log.error("Could not generate a unique space name.");
+					errorMessage = "Internal error.";
+					return -1;
+				}
+			}
+			space.setName(candidate);
 		}
-
 
 		// Space elements that are children of spaceElement
 		List<Element> childSpaces = new LinkedList<>();
@@ -669,7 +669,6 @@ public class BatchUtil {
 
 			} else {
 				//do nothing, as it's probably just whitespace
-				//log.warn("Space " + spaceId + " has a node that should be an element, but isn't");
 			}
 		}
 
@@ -708,21 +707,27 @@ public class BatchUtil {
 			Uploads.incrementXMLCompletedBenchmarks(statusId, benchmarks.size());
 			Benchmarks.associate(benchmarks, spaceId);
 			log.debug("(createSpaceFromElement) completed benchmarks so far: " +
-			          Uploads.getSpaceXMLStatus(statusId).getCompletedBenchmarks());
+					  Uploads.getSpaceXMLStatus(statusId).getCompletedBenchmarks());
 			log.debug("(createSpaceFromElement) number of benchmarks: " + benchmarks.size());
 		}
 		if (!solvers.isEmpty()) {
 			Solvers.associate(solvers, spaceId);
 			Uploads.incrementXMLCompletedSolvers(statusId, solvers.size());
 		}
-		//TODO: Set error message for failed updates here?
+		// Set error message for failed updates here
 		if (!updates.isEmpty()) {
 			//Add the updates to the database and system.
 			updateIds = addUpdates(updates);
 			Uploads.incrementXMLCompletedUpdates(statusId, updates.size());
 			log.debug("updateIds: " + updateIds);
 			//associate new updates with the space given.
-			Benchmarks.associate(updateIds, spaceId);
+			if (updateIds != null && !updateIds.isEmpty()) {
+				Benchmarks.associate(updateIds, spaceId);
+			}
+			int failed = updates.size() - (updateIds == null ? 0 : updateIds.size());
+			if (failed > 0) {
+				errorMessage = "Failed to create " + failed + " update benchmark(s).";
+			}
 		}
 		return spaceId;
 	}
@@ -740,14 +745,14 @@ public class BatchUtil {
 		List<Integer> updateIds = new ArrayList<>();
 		for (Update update : updates) {
 			log.debug("Got here adding update ID = " + update.id + " PID = " + update.pid + " BID = " + update.bid +
-			          " Text = " + update.text);
+					  " Text = " + update.text);
 			//Get the information out of the update.
 
 			//Get the files.
 			List<File> files = new ArrayList<>();
 			log.debug("Update name = " + update.name);
 			log.debug("Update name = empty " + (update.name.isEmpty()));
-			String name = "";
+			String name;
 			Benchmark b = Benchmarks.get(update.id);
 
 			if (update.name.isEmpty()) {
@@ -757,10 +762,18 @@ public class BatchUtil {
 			}
 			log.debug("name = " + name);
 			Processor up = Processors.get(update.pid);
-			Processor bp = Processors.get(update.bid);
+
+			// If a custom benchmark processor was provided, use it; otherwise fall back to the original benchmark's type
+			Processor bp = null;
+			if (update.bid != R.NO_TYPE_PROC_ID) {
+				bp = Processors.get(update.bid);
+			}
+
 			files.add(new File(b.getPath()));
 			files.add(new File(up.getFilePath()));
-			files.add(new File(bp.getFilePath()));
+			if (bp != null) {
+				files.add(new File(bp.getFilePath()));
+			}
 			File sb = null;
 			File newSb = null;
 			try {
@@ -771,7 +784,7 @@ public class BatchUtil {
 
 				text.createNewFile();
 
-				FileUtils.writeStringToFile(text, update.text);
+				FileUtils.writeStringToFile(text, update.text, StandardCharsets.UTF_8);
 
 				String benchPath = new File(sb, new File(b.getPath()).getName()).getAbsolutePath();
 				File processFile = new File(sb, new File(up.getFilePath()).getName());
@@ -799,7 +812,7 @@ public class BatchUtil {
 					log.error("Update Processor failed to create an output");
 				}
 
-				log.debug("outputFile contents: %n" + FileUtils.readFileToString(outputFile));
+				log.debug("outputFile contents: %n" + FileUtils.readFileToString(outputFile, StandardCharsets.UTF_8));
 
 
 				//Rename the the output file to correct name
@@ -823,17 +836,19 @@ public class BatchUtil {
 				}
 
 
-				// Set the benchmark processor of the benchmark to the bid attribute of the Update element.
-				int benchmarkProcessorId = bp.getId();
+				// Set the benchmark processor of the benchmark to the bid attribute of the Update element if provided.
+				int benchmarkProcessorId = (bp != null) ? bp.getId() : b.getType().getId();
 				log.debug("addUpdates - Benchmark processor ID of original benchmark: " + b.getType().getId());
 				log.debug("addUpdates - Benchmark processor ID of updated benchmark: " + benchmarkProcessorId);
 				int newBenchID = UploadBenchmark
 						.addBenchmarkFromFile(renamedFile, b.getUserId(), benchmarkProcessorId, b.isDownloadable());
 
-
 				if (newBenchID != -1) {
-					// An error occurred, such as the benchmark was not valid
+					// Success: collect the new benchmark ID
 					updateIds.add(newBenchID);
+				} else {
+					// Failure case
+					log.warn("Failed to create updated benchmark for original benchmark id " + b.getId());
 				}
 
 
