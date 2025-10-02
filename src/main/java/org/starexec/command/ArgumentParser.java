@@ -889,6 +889,9 @@ class ArgumentParser {
 			type = Integer.parseInt(commandParams.get(C.PARAM_TYPE));
 		}
 		if (upMethod.equals("local")) {
+			if (f == null) {
+				throw new IllegalArgumentException("File parameter is missing or invalid.");
+			}
 			return con.uploadSolver(name, desc, descMethod, Integer.parseInt(space), f.getAbsolutePath(), downloadable,
 					runTestJob, settingId, type);
 		} else {
