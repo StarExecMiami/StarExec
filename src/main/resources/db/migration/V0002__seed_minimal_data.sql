@@ -6,7 +6,7 @@
 -- the password for admin is admin -- recommended to change
 -- the password for public is public
 INSERT INTO users (email, first_name, last_name, institution, created, password, disk_quota)
-SELECT 'admin', 'Admin', 'User', 'The University of Miami', SYSDATE(), 'x61Ey612Kl2gpFL56FT9weDnpSo4AV8j8+qx2AuTHdRyY036xxzTTrw10Wq3+4qQ yB+XURPWx1ONxp3Y3pB37A==', 107374182400
+SELECT 'admin', 'Admin', 'User', 'The University of Miami', SYSDATE(), 'c7ad44cbad762a5da0a452f9e854fdc1e0e7a52a38015f23f3eab1d80b931dd472634dfac71cd34ebc35d16ab7fb8a90c81f975113d6c7538dc69dd8de9077ec', 107374182400
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM users WHERE email='admin');
 
 INSERT INTO users (email, first_name, last_name, institution, created, password, disk_quota)
