@@ -2,7 +2,6 @@ package org.starexec.servlets;
 
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
-import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
