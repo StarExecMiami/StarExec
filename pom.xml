@@ -13,10 +13,14 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>1.8</maven.compiler.target>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Flyway version for DB migrations -->
-        <flyway.version>9.22.3</flyway.version>
+        <flyway.version>11.13.1</flyway.version>
+        <mysql.connector.version>8.4.0</mysql.connector.version>
+        <STAREXEC_LOG>/usr/local/tomcat/logs/starexec.log</STAREXEC_LOG>
+        <LOGGING_LEVEL>INFO</LOGGING_LEVEL>
     </properties>
 
     <dependencies>
@@ -73,12 +77,12 @@
         <dependency>
             <groupId>commons-fileupload</groupId>
             <artifactId>commons-fileupload</artifactId>
-            <version>1.4</version>
+            <version>1.5</version>
         </dependency>
         <dependency>
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>
-            <version>2.8.0</version>
+            <version>2.11.0</version>
         </dependency>
         <dependency>
             <groupId>commons-jxpath</groupId>
@@ -135,7 +139,19 @@
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
-            <version>8.0.33</version>
+            <version>${mysql.connector.version}</version>
+        </dependency>
+        
+        <!-- Flyway for database migrations -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+            <version>${flyway.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+            <version>${flyway.version}</version>
         </dependency>
 
         <dependency>
@@ -163,6 +179,18 @@
             <groupId>org.owasp.esapi</groupId>
             <artifactId>esapi</artifactId>
             <version>2.2.3.1</version>
+        </dependency>
+        <!-- Exclude slf4j-simple pulled transitively via antisamy to avoid multiple SLF4J bindings -->
+        <dependency>
+            <groupId>org.owasp.antisamy</groupId>
+            <artifactId>antisamy</artifactId>
+            <version>1.6.3</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Testing -->
@@ -289,7 +317,44 @@
 
     <build>
         <finalName>starexec</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-war-plugin</artifactId>
+                <version>3.3.2</version>
+                <configuration>
+                    <warSourceDirectory>src/main/webapp</warSourceDirectory>
+                    <webResources>
+                        <resource>
+                            <directory>src/main/resources</directory>
+                            <filtering>true</filtering>
+                        </resource>
+                    </webResources>
+                    <containerConfigXML>src/main/webapp/META-INF/context.xml</containerConfigXML>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <encoding>UTF-8</encoding>
+                    <propertiesEncoding>UTF-8</propertiesEncoding>
+                    <useDefaultDelimiters>false</useDefaultDelimiters>
+                    <delimiters>
+                        <delimiter>@</delimiter>
+                    </delimiters>
+                    <nonFilteredFileExtensions>
+                        <nonFilteredFileExtension>jks</nonFilteredFileExtension>
+                    </nonFilteredFileExtensions>
+                </configuration>
+            </plugin>
             <!-- Flyway DB migrations (run with: mvn -DskipTests flyway:migrate) -->
             <plugin>
                 <groupId>org.flywaydb</groupId>
@@ -306,7 +371,7 @@
                     <!-- Primary location under classpath; optional filesystem path to ease transition -->
                     <locations>
                         <location>classpath:db/migration</location>
-                        <location>filesystem:${project.basedir}/sql/migrations</location>
+                        <location>filesystem:${project.basedir}/src/main/resources/db/migration</location>
                     </locations>
                     <!-- For existing DBs, set a baseline tag and migrate forward -->
                     <baselineOnMigrate>true</baselineOnMigrate>
@@ -327,30 +392,6 @@
                     </dependency>
                 </dependencies>
             </plugin>
-            <!-- Generate SCSS properties used by stylesheets
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
-                <executions>
-                    <execution>
-                        <id>generate-scss-properties</id>
-                        <phase>generate-resources</phase>
-                        <configuration>
-                            <target>
-                                <echo file="${project.basedir}/src/main/webapp/css/_properties.scss">
-/* generated by Maven */
-$rootUrl: "/${starexec.appname}/";
-                                </echo>
-                            </target>
-                        </configuration>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin> -->
-
             <!-- Install Node + sass and compile SCSS to CSS before packaging -->
             <plugin>
                 <groupId>com.github.eirslett</groupId>
@@ -377,67 +418,12 @@ $rootUrl: "/${starexec.appname}/";
                             <arguments>install</arguments>
                         </configuration>
                     </execution>
-                    <!-- The 'compile-scss' execution is disabled to avoid running npm during IDE/m2e workspace builds
-                         which can fail with exit code 65; re-enable manually if you want Maven to run the frontend build during CI/package. -->
-                    <!--
-                    <execution>
-                        <id>compile-scss</id>
-                        <goals>
-                            <goal>npm</goal>
-                        </goals>
-                        <phase>generate-resources</phase>
-                        <configuration>
-                            <arguments>run sass-build</arguments>
-                        </configuration>
-                    </execution>
-                    -->
-                   
                 </executions>
-            </plugin>
-
-            <!-- Prevent Eclipse m2e from trying to execute frontend plugin during workspace builds -->
-            <plugin>
-                <groupId>org.eclipse.m2e</groupId>
-                <artifactId>lifecycle-mapping</artifactId>
-                <version>1.0.0</version>
-                <configuration>
-                    <lifecycleMappingMetadata>
-                        <pluginExecutions>
-                            <pluginExecution>
-                                <pluginExecutionFilter>
-                                    <groupId>com.github.eirslett</groupId>
-                                    <artifactId>frontend-maven-plugin</artifactId>
-                                    <versionRange>[1.12.1,)</versionRange>
-                                    <goals>
-                                        <goal>install-node-and-npm</goal>
-                                        <goal>npm</goal>
-                                    </goals>
-                                </pluginExecutionFilter>
-                                <action>
-                                    <ignore />
-                                </action>
-                            </pluginExecution>
-                            <pluginExecution>
-                                <pluginExecutionFilter>
-                                    <groupId>org.apache.maven.plugins</groupId>
-                                    <artifactId>maven-antrun-plugin</artifactId>
-                                    <versionRange>[3.1.0,)</versionRange>
-                                    <goals>
-                                        <goal>run</goal>
-                                    </goals>
-                                </pluginExecutionFilter>
-                                <action>
-                                    <ignore />
-                                </action>
-                            </pluginExecution>
-                        </pluginExecutions>
-                    </lifecycleMappingMetadata>
-                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.8.1</version>
+                <version>3.11.0</version>
                 <configuration>
                     <source>${maven.compiler.source}</source>
                     <target>${maven.compiler.target}</target>
@@ -457,17 +443,8 @@ $rootUrl: "/${starexec.appname}/";
                     <classifier>jar-with-dependencies</classifier>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-war-plugin</artifactId>
-                <version>3.3.2</version>
-                <configuration>
-                    <warSourceDirectory>src/main/webapp</warSourceDirectory>
-                </configuration>
-            </plugin>
         </plugins>
     </build>
-
     <profiles>
         <profile>
             <id>upload-test-data</id>
@@ -511,8 +488,8 @@ $rootUrl: "/${starexec.appname}/";
                         <version>3.0.0</version>
                         <executions>
                             <execution>
-                                <id>compile-dummy-solver</id>
-                                <phase>compile</phase>
+                                <id>compile-dummy-solver-c</id>
+                                <phase>test-compile</phase>
                                 <goals>
                                     <goal>exec</goal>
                                 </goals>
@@ -520,42 +497,40 @@ $rootUrl: "/${starexec.appname}/";
                                     <executable>gcc</executable>
                                     <arguments>
                                         <argument>-o</argument>
-                                        <argument>dummySolver</argument>
-                                        <argument>DummySolver.c</argument>
+                                        <argument>${project.basedir}/src/test/resources/test-pipeline/bin/DummySolver</argument>
+                                        <argument>${project.basedir}/src/test/resources/test-pipeline/src/DummySolver.c</argument>
                                     </arguments>
-                                    <workingDirectory>${project.basedir}/src/test/resources/test-pipeline</workingDirectory>
                                 </configuration>
                             </execution>
                             <execution>
-                                <id>package-solver</id>
-                                <phase>package</phase>
+                                <id>compile-starexec-solver-c</id>
+                                <phase>test-compile</phase>
                                 <goals>
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>tar</executable>
+                                    <executable>gcc</executable>
                                     <arguments>
-                                        <argument>-cf</argument>
-                                        <argument>dummySolver.tar</argument>
-                                        <argument>dummySolver</argument>
+                                        <argument>-o</argument>
+                                        <argument>${project.basedir}/src/test/resources/test-pipeline/bin/starexec-solver</argument>
+                                        <argument>${project.basedir}/src/test/resources/test-pipeline/src/starexec-solver.c</argument>
                                     </arguments>
-                                    <workingDirectory>${project.basedir}/src/test/resources/test-pipeline</workingDirectory>
                                 </configuration>
                             </execution>
                             <execution>
-                                <id>package-benchmark</id>
-                                <phase>package</phase>
+                                <id>compile-starexec-kill-c</id>
+                                <phase>test-compile</phase>
                                 <goals>
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>tar</executable>
+                                    <executable>gcc</executable>
                                     <arguments>
-                                        <argument>-cf</argument>
-                                        <argument>benchmark.tar</argument>
-                                        <argument>bench.txt</argument>
+                                        <argument>-o</argument>
+                                        <argument>${project.basedir}/src/test/resources/test-pipeline/bin/starexec-kill</argument>
+                                        <argument>${project.basedir}/src/test/resources/test-pipeline/src/starexec-kill.c</argument>
+                                        <argument>-lpthread</argument>
                                     </arguments>
-                                    <workingDirectory>${project.basedir}/src/test/resources/test-pipeline</workingDirectory>
                                 </configuration>
                             </execution>
                         </executions>
