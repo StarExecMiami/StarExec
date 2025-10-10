@@ -24,7 +24,6 @@ import org.starexec.util.SessionUtil;
 import org.xml.sax.SAXException;
 
 import javax.servlet.ServletException;
-import javax.servlet.http.Cookie;
 import javax.servlet.annotation.MultipartConfig;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -78,51 +77,53 @@ public class UploadSolver extends HttpServlet {
 		log.entry(method);
 		int userId = SessionUtil.getUserId(request);
 		try {
-			// If we're dealing with an upload request...
 			log.info("doPost begins");
+			long t0 = System.currentTimeMillis();
+
 			if (abortIfUploadsFrozen(response)) {
 				return;
 			}
 
 			final String rawCt = request.getHeader("Content-Type");
+			final long rawLen = request.getContentLengthLong();
 			boolean headerHeuristic = rawCt != null && rawCt.toLowerCase().startsWith("multipart/form-data");
 			boolean skipCommons = Boolean.parseBoolean(System.getProperty("starexec.skip.commons.multipart","true"));
 			Boolean commonsResult = null;
 			if (!skipCommons) {
+				long tCommons = System.currentTimeMillis();
 				try {
 					commonsResult = ServletFileUpload.isMultipartContent(request);
 				} catch (Throwable ex) {
-					log.warn("doPost: exception inside ServletFileUpload.isMultipartContent (will rely on header heuristic)", ex);
+					log.warn("Exception inside ServletFileUpload.isMultipartContent", ex);
 				}
 			}
 			boolean isMultipart = headerHeuristic || Boolean.TRUE.equals(commonsResult);
 			if (commonsResult != null && commonsResult != headerHeuristic) {
-				log.warn("doPost: mismatch commonsResult="+commonsResult+" headerHeuristic="+headerHeuristic);
+				log.warn("Mismatch commonsResult=" + commonsResult + " headerHeuristic=" + headerHeuristic);
 			}
 			if (isMultipart) {
+				long tParseStart = System.currentTimeMillis();
 				HashMap<String, Object> form = null;
 				try {
 					form = Util.parseMultipartRequest(request);
 				} catch (Exception ex) {
-					log.error("doPost: exception while parsing multipart request", ex);
+					log.error("Exception while parsing multipart request", ex);
 					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Failed to parse multipart request: "+ex.getMessage());
 					return;
 				}
 
 				if (form == null) {
-					log.error("doPost: form map is null after parsing (unexpected)");
+					log.error("Form map is null after parsing");
 					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Malformed multipart request");
 					return;
 				}
 
-				// Make sure the request is valid
 				// Backward compatibility: some clients send 'type' instead of 'execType'
 				if (!form.containsKey(SOLVER_TYPE) && form.containsKey("type")) {
 					form.put(SOLVER_TYPE, form.get("type"));
 				}
 				ValidatorStatusCode status = this.isValidRequest(form, request);
 				if (!status.isSuccess()) {
-					//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, encodeCookieValue(status.getMessage())));
 					response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 					return;
@@ -140,9 +141,9 @@ public class UploadSolver extends HttpServlet {
 					if (result.isBuildJob) {
 						int job_return = JobManager.addBuildJob(result.solverId, spaceId);
 						if (job_return >= 0) {
-							log.info("Job created successfully. JobId: " + job_return);
+							log.info("Build job created successfully. JobId: " + job_return);
 						} else {
-							log.warn("Error in job creation for buildJob for solver: " + result.solverId);
+							log.error("Error in job creation for buildJob for solver: " + result.solverId);
 						}
 					}
 
@@ -150,18 +151,12 @@ public class UploadSolver extends HttpServlet {
 					if (result.isBuildJob && !runTestJob) {
 						response.sendRedirect(Util.docRoot("secure/details/solver.jsp?id=" + result.solverId +
 																   "&buildmsg=Building Solver On Starexec"));
-					} else if (!result.hadConfigs) { //If there are no configs. We do not attempt to run a test
-						// job in
-						// this case
+					} else if (!result.hadConfigs) {
 						response.sendRedirect(Util.docRoot("secure/details/solver.jsp?id=" + result.solverId +
 																   "&msg=No configurations for the new solver"));
 					} else {
-						//if this solver has some configurations, we should check to see if the user wanted a test
-						// job
 						if (runTestJob) {
 							int settingsId = Communities.getDefaultSettings(spaceId).getId();
-							//if the user gave a setting ID, then they need to have permission to use that profile
-							// otherwise, the community default is used
 							if (form.containsKey(SETTING_ID)) {
 								settingsId = Integer.parseInt((String) form.get(SETTING_ID));
 							}
@@ -235,7 +230,7 @@ public class UploadSolver extends HttpServlet {
 
 		try {
 			sandboxDir = Util.getRandomSandboxDirectory();
-			String upMethod = (String) form.get(UploadSolver.UPLOAD_METHOD); //file upload or url
+			String upMethod = (String) form.get(UploadSolver.UPLOAD_METHOD);
 			PartWrapper item = null;
 			String name = null;
 			URL url = null;
@@ -266,7 +261,6 @@ public class UploadSolver extends HttpServlet {
 			log.info("Handling upload of solver " + newSolver.getName());
 
 			//Set up the unique directory to store the solver
-			//The directory is (base path)/user's ID/solver name/date/
 			File uniqueDir = new File(R.getSolverPath(), "" + userId);
 			uniqueDir = new File(uniqueDir, newSolver.getName());
 			uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
@@ -275,14 +269,10 @@ public class UploadSolver extends HttpServlet {
 
 			uniqueDir.mkdirs();
 
-
 			//Process the archive file and extract
 			File archiveFile = null;
-			//String FileName=null;
 			if (upMethod.equals("local")) {
 				if (item != null) {
-					//Using IE will cause item.getName() to return a full path, which is why we wrap it with the
-					// FilenameUtils call
 					archiveFile = new File(uniqueDir, FilenameUtils.getName(item.getName()));
 					new File(archiveFile.getParent()).mkdir();
 					item.write(archiveFile);
@@ -303,50 +293,36 @@ public class UploadSolver extends HttpServlet {
 			long allowedBytes = currentUser.getDiskQuota();
 			long usedBytes = currentUser.getDiskUsage();
 
-			//the user does not have enough disk quota to upload this solver
 			if (fileSize > allowedBytes - usedBytes) {
 				archiveFile.delete();
 				return new UploadSolverResult(UploadSolverStatus.EXCEED_QUOTA, -1, false, false);
 			}
 
-			//move the archive to the sandbox
 			FileUtils.copyFileToDirectory(archiveFile, sandboxDir);
 			archiveFile.delete();
 			archiveFile = new File(sandboxDir, archiveFile.getName());
 
-			// in the change from tc7 to tc9, the temporary directory, sandboxDir, is not created with the permissions we expect
-			// this call manually changes them to what we expect -- this allows for the sandbox user using the unzip command
 			Util.sandboxChmodDirectoryDirect(sandboxDir);
 
-			//extracts the given archive using the sandbox user
 			boolean extracted =
 					ArchiveUtil.extractArchiveAsSandbox(archiveFile.getAbsolutePath(), sandboxDir.getAbsolutePath());
 
-			//give sandbox full permissions over the solver directory
 			Util.sandboxChmodDirectory(sandboxDir);
 
-
-			//if there was an extraction error or if the temp directory is still empty.
 			if (!extracted || sandboxDir.listFiles().length == 0) {
-				log.warn("there was an error extracting the new solver archive");
-				if(!extracted){
-					log.warn("Failed to extract archive!");
-				}else{
-					log.warn("Zero files in sandbox dir!");
-				}
+				log.warn("Error extracting the new solver archive");
 				FileUtils.deleteDirectory(sandboxDir);
 				FileUtils.deleteDirectory(uniqueDir);
 				FileUtils.deleteQuietly(archiveFile);
 				return new UploadSolverResult(UploadSolverStatus.EXTRACTING_ERROR, -1, false, false);
 			}
 			boolean isBuildJob = false;
-			//Checks to see if a build script exists and needs to be built.
 			if (containsBuildScript(sandboxDir)) {
 				SolverBuildStatus status = new SolverBuildStatus();
 				status.setCode(SolverBuildStatus.SolverBuildStatusCode.UNBUILT);
 				newSolver.setBuildStatus(status);
 
-				isBuildJob = true; //Set build flag
+				isBuildJob = true;
 				uniqueDir = new File(newSolver.getPath() + "_src");
 				newSolver.setPath(uniqueDir.getAbsolutePath());
 				uniqueDir.mkdirs();
@@ -355,7 +331,6 @@ public class UploadSolver extends HttpServlet {
 				status.setCode(1);
 				newSolver.setBuildStatus(status);
 			}
-
 
 			Util.sandboxChmodDirectory(sandboxDir);
 
@@ -372,7 +347,6 @@ public class UploadSolver extends HttpServlet {
 				}
 			}
 
-
 			String DescMethod = (String) form.get(UploadSolver.DESC_METHOD);
 			switch (DescMethod) {
 			case "text":
@@ -382,7 +356,7 @@ public class UploadSolver extends HttpServlet {
 				PartWrapper item_desc = (PartWrapper) form.get(UploadSolver.SOLVER_DESC_FILE);
 				newSolver.setDescription(item_desc.getString());
 				break;
-			default:     //Upload starexec_description.txt
+			default:
 				try {
 					File descriptionFile = new File(uniqueDir, R.SOLVER_DESC_PATH);
 					if (descriptionFile.exists()) {
@@ -392,15 +366,12 @@ public class UploadSolver extends HttpServlet {
 									UploadSolverStatus.DESCRIPTION_MALFORMED, -1, false, isBuildJob);
 						}
 						newSolver.setDescription(description);
-					} else {
-						log.debug("description file option chosen, but file was not present");
 					}
 				} catch (Exception e) {
 					log.error(e.getMessage(), e);
 				}
 				break;
 			}
-
 
 			//Find configurations from the top-level "bin" directory
 			for (Configuration c : Solvers.findConfigs(uniqueDir.getAbsolutePath())) {
@@ -410,24 +381,20 @@ public class UploadSolver extends HttpServlet {
 			boolean hadConfigs = !newSolver.getConfigurations().isEmpty();
 
 			newSolver.setType(ExecutableType.valueOf(Integer.parseInt((String) form.get(SOLVER_TYPE))));
-			//Try adding the solver to the database
 			int solverId = Solvers.add(newSolver, spaceId);
 
 			UploadSolverStatus status = UploadSolverStatus.SUCCESS;
 
 			UploadSolverResult result = new UploadSolverResult(status, solverId, hadConfigs, isBuildJob);
-			// Now that we've added the solver to the database, run a test job
 			if (containsRunOnUploadXml(sandboxDir)) {
 				final File runOnUploadXml = new File(sandboxDir, R.UPLOAD_TEST_JOB_XML);
 				JobUtil jobUtil = createTestJobFromXml(runOnUploadXml, userId, spaceId, solverId);
 				if (!jobUtil.getJobCreationSuccess()) {
 					String message = "Test job creation failed: " + jobUtil.getErrorMessage();
-					// Set the optional message so the user gets some more spectific feedback.
 					result.optionalMessage = Optional.of(message);
 				}
 			}
 
-			// if the solver was uploaded successfully log the upload in the weekly report table
 			Reports.addToEventOccurrencesNotRelatedToQueue("solvers uploaded", 1);
 
 			return result;
@@ -437,12 +404,7 @@ public class UploadSolver extends HttpServlet {
 					FileUtils.deleteDirectory(sandboxDir);
 				}
 			} catch (Exception e) {
-				if (sandboxDir != null) {
-					log.error("unable to delete temporary directory at " + sandboxDir.getAbsolutePath());
-				} else {
-					log.error("unable to delete temporary directory: sandboxDir is null");
-				}
-				log.error(e.getMessage(), e);
+				log.error("Unable to delete temporary directory at " + (sandboxDir != null ? sandboxDir.getAbsolutePath() : "null"), e);
 			}
 		}
 	}
@@ -456,9 +418,6 @@ public class UploadSolver extends HttpServlet {
 		List<Configuration> configs = Solvers.getConfigsForSolver(newSolverId);
 
 		ConfigAttrMapPair configAttrMapPair = new ConfigAttrMapPair(ConfigXmlAttribute.NAME);
-		// Map all the config names to their config id so we can figure out their id based on name only.
-		// This is necessary because if the user uploaded a test job with their solver, the configs did not have
-		// ids in the system when the XML file was originally created.
 		for (Configuration c : configs) {
 			configAttrMapPair.configNameToId.put(c.getName(), c.getId());
 		}
@@ -479,7 +438,6 @@ public class UploadSolver extends HttpServlet {
 		// final String method = "isValidRequest";
 		try {
 			int userId = SessionUtil.getUserId(request);
-			//defines the set of attributes that are required
 			if (!form.containsKey(UPLOAD_METHOD) || !form.containsKey(UploadSolver.SOLVER_TYPE) ||
 					(!form.containsKey(UploadSolver.UPLOAD_FILE) && form.get(UPLOAD_METHOD).equals("local")) ||
 					!form.containsKey(DESC_METHOD) ||
@@ -487,7 +445,6 @@ public class UploadSolver extends HttpServlet {
 				return new ValidatorStatusCode(false, "Required parameters are missing from the request");
 			}
 
-			//ensure the space ID is valid
 			if (!Validator.isValidPosInteger((String) form.get(SPACE_ID))) {
 				return new ValidatorStatusCode(false, "The given space ID is not a valid integer");
 			}
@@ -503,7 +460,6 @@ public class UploadSolver extends HttpServlet {
 			if (type == null) {
 				return new ValidatorStatusCode(false, "Invalid executable type");
 			}
-
 
 			if (!Validator.isValidSolverName((String) form.get(UploadSolver.SOLVER_NAME))) {
 				return new ValidatorStatusCode(
@@ -551,11 +507,8 @@ public class UploadSolver extends HttpServlet {
 			}
 			Boolean runTestJob = Boolean.parseBoolean((String) form.get(RUN_TEST_JOB));
 
-			//if the user wants to run a test job, there is some additional validation to do
 			if (runTestJob) {
 				int settingsId = Communities.getDefaultSettings(spaceId).getId();
-				//if the user gave a setting ID, then they need to have permission to use that profile
-				// otherwise, the community default is used
 				if (form.containsKey(SETTING_ID)) {
 					if (!Validator.isValidPosInteger((String) form.get(SETTING_ID))) {
 						return new ValidatorStatusCode(false, "The given setting ID is not a valid integer");
@@ -563,8 +516,6 @@ public class UploadSolver extends HttpServlet {
 					settingsId = Integer.parseInt((String) form.get(SETTING_ID));
 				}
 
-
-				// user must have permission to run a job in the given space
 				ValidatorStatusCode testJobStatus =
 						JobSecurity.canCreateQuickJobWithCommunityDefaults(userId, spaceId, settingsId);
 				if (!testJobStatus.isSuccess()) {
@@ -575,20 +526,20 @@ public class UploadSolver extends HttpServlet {
 		} catch (Exception e) {
 			log.warn(e.getMessage(), e);
 		}
-			return new ValidatorStatusCode(false, "Internal error uploading solver");
-		}
-
-		private boolean abortIfUploadsFrozen(HttpServletResponse response) throws IOException {
-			boolean frozen = org.starexec.data.security.UploadSecurity.uploadsFrozen();
-			if (frozen) {
-				response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Uploading solvers is currently disabled");
-				return true;
-			}
-			return false;
-		}
-
-		private String encodeCookieValue(String v) {
-			if (v == null) { return ""; }
-			try { return URLEncoder.encode(v, StandardCharsets.UTF_8.name()); } catch (Exception e) { return ""; }
-		}
+		return new ValidatorStatusCode(false, "Internal error uploading solver");
 	}
+
+	private boolean abortIfUploadsFrozen(HttpServletResponse response) throws IOException {
+		boolean frozen = org.starexec.data.security.UploadSecurity.uploadsFrozen();
+		if (frozen) {
+			response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Uploading solvers is currently disabled");
+			return true;
+		}
+		return false;
+	}
+
+	private String encodeCookieValue(String v) {
+		if (v == null) { return ""; }
+		try { return URLEncoder.encode(v, StandardCharsets.UTF_8.name()); } catch (Exception e) { return ""; }
+	}
+}
