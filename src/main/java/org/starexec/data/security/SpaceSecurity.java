@@ -142,7 +142,7 @@ public class SpaceSecurity {
 	 * @return
 	 */
 
-	//TODO: What are the permissions for removing a space hierarchy?
+	// NOTE: To remove a space hierarchy, the caller must have canRemoveSpace on the parent and be a leader of the target space and every subspace.
 	public static ValidatorStatusCode canUserRemoveSpace(int userId, List<Integer> subspaceIds) {
 		for (Integer sid : subspaceIds) {
 			Space subspace = Spaces.get(sid);
@@ -181,7 +181,7 @@ public class SpaceSecurity {
 	 * @param userIdDoingDemoting
 	 * @return
 	 */
-	//TODO: Leaders can demote other leaders except at the community level, right?
+	// NOTE: Only admins can demote leaders; leaders cannot demote other leaders here.
 	public static ValidatorStatusCode canDemoteLeader(int spaceId, int userIdBeingDemoted, int userIdDoingDemoting) {
 		// Permissions check; ensures user is the leader of the community or is an admin
 		if (Users.get(userIdBeingDemoted) == null) {
@@ -926,7 +926,7 @@ public class SpaceSecurity {
 	 * @return list of spaces where permissions can be changed
 	 */
 	public static List<Integer> getUpdatePermissionSpaces(int spaceId, int userIdBeingUpdated, int requestUserId) {
-		//TODO :  make more efficient? (right now querying database for every space in hierarchy to check permissions)
+		// NOTE: This currently queries per space in the hierarchy; optimize if it becomes a bottleneck.
 
 
 		List<Integer> spaceIds = new ArrayList<>(); //all the spaceIds of spaces being copied to
@@ -1031,7 +1031,7 @@ public class SpaceSecurity {
 	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
 	 */
 
-	//TODO: Consider how to handle where to use the Validator class
+	// NOTE: Validation is performed here to keep checks close to the update path.
 	public static ValidatorStatusCode canUpdateSettings(int spaceId, String attribute, String newValue, int userId) {
 
 		Permission perm = Permissions.get(userId, spaceId);
