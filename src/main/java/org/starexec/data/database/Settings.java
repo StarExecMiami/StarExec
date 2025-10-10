@@ -296,7 +296,6 @@ public class Settings {
 		Connection con = null;
 
 		try {
-			List<DefaultSettings> settings = new ArrayList<>();
 			con = Common.getConnection();
 			return getDefaultSettingsByPrimIdAndType(con, id, type);
 		} catch (Exception e) {
@@ -343,9 +342,13 @@ public class Settings {
 	public static List<DefaultSettings> getDefaultSettingsVisibleByUser(int userId) {
 		List<DefaultSettings> listOfDefaultSettings = new ArrayList<>();
 		List<Space> comms = Communities.getAllCommunitiesUserIsIn(userId);
-		for (Space comm : comms) {
-			DefaultSettings s = Communities.getDefaultSettings(comm.getId());
-			listOfDefaultSettings.add(s);
+		if (comms != null) {
+			for (Space comm : comms) {
+				DefaultSettings s = Communities.getDefaultSettings(comm.getId());
+				if (s != null) {
+					listOfDefaultSettings.add(s);
+				}
+			}
 		}
 		List<DefaultSettings> userSettings = Settings.getDefaultSettingsOwnedByUser(userId);
 		if (userSettings != null) {
@@ -357,9 +360,13 @@ public class Settings {
 	public static List<DefaultSettings> getDefaultSettingsVisibleByUser(Connection con, int userId) {
 		List<DefaultSettings> listOfDefaultSettings = new ArrayList<>();
 		List<Space> comms = Communities.getAllCommunitiesUserIsIn(con, userId);
-		for (Space comm : comms) {
-			DefaultSettings s = Communities.getDefaultSettings(con, comm.getId());
-			listOfDefaultSettings.add(s);
+		if (comms != null) {
+			for (Space comm : comms) {
+				DefaultSettings s = Communities.getDefaultSettings(con, comm.getId());
+				if (s != null) {
+					listOfDefaultSettings.add(s);
+				}
+			}
 		}
 		List<DefaultSettings> userSettings = Settings.getDefaultSettingsOwnedByUser(con, userId);
 		if (userSettings != null) {
@@ -390,7 +397,7 @@ public class Settings {
 	 * @return
 	 */
 	public static boolean canUserSeeSolverInSettings(int userId, int solverId) {
-		final String methodName = "canUserSeeSolverInSettings";
+		// final String methodName = "canUserSeeSolverInSettings";
 		Connection con = null;
 		try {
 			con = Common.getConnection();
