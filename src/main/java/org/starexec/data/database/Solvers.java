@@ -41,7 +41,7 @@ public class Solvers {
 	 * @author Skylar Stark
 	 */
 	public static int add(Solver s, int spaceId) throws SQLException {
-		final String methodName = "add";
+		// final String methodName = "add";
 		Connection con = null;
 		CallableStatement procedure = null;
 		try {
@@ -177,7 +177,7 @@ public class Solvers {
 	 * @author Todd Elvers
 	 */
 	protected static void associate(Connection con, List<Integer> solverIds, int spaceId) throws Exception {
-		final String methodName = "associate";
+		// final String methodName = "associate";
 		for (int sid : solverIds) {
 			Solvers.associate(con, spaceId, sid);
 		}
@@ -192,7 +192,7 @@ public class Solvers {
 	 * @author Eric Burns
 	 */
 	public static boolean associate(int solverId, int spaceId) {
-		final String methodName = "associate";
+		// final String methodName = "associate";
 		List<Integer> solverIds = new ArrayList<>();
 		solverIds.add(solverId);
 		return associate(solverIds, spaceId);
@@ -245,7 +245,7 @@ public class Solvers {
 	public static boolean associate(
 			List<Integer> solverIds, int rootSpaceId, boolean linkInSubspaces, int userId, boolean includeRoot
 	) {
-		final String methodName = "associate";
+		// final String methodName = "associate";
 		// Either copy the solvers to the destination space or the destination space and all of its subspaces (that
 		// the user can see)
 		if (linkInSubspaces) {
@@ -840,7 +840,7 @@ public class Solvers {
 	 * @return The list of solvers
 	 */
 	public static List<Solver> getByUserWithConfigs(int userId) {
-		final String methodName = "getByUserWithConfigs";
+		// final String methodName = "getByUserWithConfigs";
 		List<Solver> solvers = getByUser(userId);
 		for (Solver s : solvers) {
 			s.getConfigurations().addAll(Solvers.getConfigsForSolver(s.getId()));
@@ -860,15 +860,26 @@ public class Solvers {
 		try {
 			//will stores solvers according to their IDs, used to remove duplicates
 			HashMap<Integer, Solver> uniqueSolvers = new HashMap<>();
-			for (Solver s : getByOwner(userId)) {
-				uniqueSolvers.put(s.getId(), s);
+			
+			List<Solver> ownedSolvers = getByOwner(userId);
+			if (ownedSolvers != null) {
+				for (Solver s : ownedSolvers) {
+					uniqueSolvers.put(s.getId(), s);
+				}
 			}
-			for (Solver s : Solvers.getPublicSolvers()) {
-				uniqueSolvers.put(s.getId(), s);
+			
+			List<Solver> publicSolvers = Solvers.getPublicSolvers();
+			if (publicSolvers != null) {
+				for (Solver s : publicSolvers) {
+					uniqueSolvers.put(s.getId(), s);
+				}
 			}
 
-			for (Solver s : Solvers.getSolversInSharedSpaces(userId)) {
-				uniqueSolvers.put(s.getId(), s);
+			List<Solver> sharedSolvers = Solvers.getSolversInSharedSpaces(userId);
+			if (sharedSolvers != null) {
+				for (Solver s : sharedSolvers) {
+					uniqueSolvers.put(s.getId(), s);
+				}
 			}
 
 			List<Solver> solvers = new ArrayList<>();
@@ -1123,7 +1134,7 @@ public class Solvers {
 	 * @author Eric Burns
 	 */
 	public static List<Solver> getBySpaceHierarchy(int spaceId, int userId) {
-		final String methodName = "getBySpaceHierarchy";
+		// final String methodName = "getBySpaceHierarchy";
 		List<Solver> solvers = new ArrayList<>();
 		solvers.addAll(Solvers.getBySpace(spaceId));
 		List<Space> spaceIds = Spaces.getSubSpaceHierarchy(spaceId, userId);
@@ -1474,7 +1485,7 @@ public class Solvers {
 	 * @author Tyler Jensen
 	 */
 	protected static Solver getSolverByConfig(Connection con, int configId, boolean includeDeleted) {
-		final String methodName = "getSolverByConfig";
+		// final String methodName = "getSolverByConfig";
 		Configuration c = Solvers.getConfiguration(con, configId);
 		if (c == null) {
 			log.debug("getSolverByConfig called with configId = " + configId + " but config was null");
@@ -1992,7 +2003,7 @@ public class Solvers {
 	public static List<Triple<Solver, Configuration, String>> getSolverConfigResultsForBenchmarkInJob(
 			int jobId, int benchId, int stageNum
 	) throws SQLException {
-		final String methodName = "getSolverConfigResultsForBenchmarkInJob";
+		// final String methodName = "getSolverConfigResultsForBenchmarkInJob";
 		return Common.query("{CALL GetSolverConfigResultsForBenchmarkInJob(?,?,?)}", procedure -> {
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, benchId);
@@ -2454,7 +2465,7 @@ public class Solvers {
 	 * includes the search query.
 	 */
 	protected static List<Solver> filterSolvers(List<Solver> solvers, String searchQuery) {
-		final String methodName = "filterSolvers";
+		// final String methodName = "filterSolvers";
 		//no filtering is necessary if there's no query
 		if (Util.isNullOrEmpty(searchQuery)) {
 			return solvers;
@@ -2486,7 +2497,7 @@ public class Solvers {
 	 * @return Solvers to display on the next page, in order
 	 */
 	public static List<Solver> getSolversForNextPageByUser(DataTablesQuery query, int userId, int[] totals) {
-		final String methodName = "getSolversForNextPageByUser";
+		// final String methodName = "getSolversForNextPageByUser";
 		List<Solver> solvers = Solvers.getByUser(userId);
 
 		totals[0] = solvers.size();
