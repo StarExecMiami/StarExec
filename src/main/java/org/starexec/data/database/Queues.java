@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Handles all DB interaction for queues
@@ -26,6 +27,50 @@ import java.util.Map;
  */
 public class Queues {
 	private static final StarLogger log = StarLogger.getLogger(Queues.class);
+	// Simple in-memory cache to avoid repeated DB hits for queue lookups.
+	// Keyed by queue id. Cleared on any write that may change queue data.
+	private static final ConcurrentHashMap<Integer, Queue> queueCache = new ConcurrentHashMap<>();
+
+	private static void invalidateQueueCache() {
+		log.debug("invalidateQueueCache", "Invalidating queue cache");
+		try {
+			queueCache.clear();
+		} catch (Exception e) {
+			log.error("invalidateQueueCache", e);
+		}
+	}
+
+	// Defensive copy helper to avoid returning or storing mutable shared instances.
+	private static Queue copyQueue(Queue src) {
+		if (src == null) return null;
+		try {
+			Queue dst = new Queue();
+			dst.setId(src.getId());
+			dst.setName(src.getName());
+			// status is a String in resultSetToQueue
+			dst.setStatus(src.getStatus());
+			dst.setWallTimeout(src.getWallTimeout());
+			dst.setCpuTimeout(src.getCpuTimeout());
+			dst.setGlobalAccess(src.getGlobalAccess());
+			return dst;
+		} catch (Exception e) {
+			log.error("copyQueue", e);
+			return null;
+		}
+	}
+
+	// Safe cache put that stores a defensive copy.
+	private static void cachePutSafe(int id, Queue q) {
+		if (q == null || id <= 0) {
+			return;
+		}
+		try {
+			Queue stored = copyQueue(q);
+			if (stored != null) queueCache.put(id, stored);
+		} catch (Exception e) {
+			log.error("cachePutSafe", e);
+		}
+	}
 
 	/**
 	 * @return returns the default queue name, default queue should always exist
@@ -41,7 +86,6 @@ public class Queues {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean removeQueue(int queueId) {
-
 		Queue q = Queues.get(queueId);
 		if (q == null) {
 			return true;
@@ -65,7 +109,6 @@ public class Queues {
 		}
 
 		boolean success = true;
-
 
 		/* DELETE THE QUEUE */
 
@@ -112,7 +155,6 @@ public class Queues {
 	 * @author Tyler Jensen
 	 */
 	protected static int add(Connection con, String queueName, int cpuTimeout, int wallTimeout) {
-		log.entry("add");
 		CallableStatement procedure = null;
 		try {
 
@@ -126,10 +168,10 @@ public class Queues {
 			int newQueueId = procedure.getInt(4);
 
 			if (newQueueId == 0) {
-				log.info("add", "New queue with name [" + queueName + "] not created because it already exists");
 				return -1;
 			} else {
-				log.info("add", "New queue with name [" + queueName + "] was successfully created with id [" + newQueueId + "]");
+				// Invalidate cache because queue set changed
+				invalidateQueueCache();
 			}
 			return newQueueId;
 		} catch (Exception e) {
@@ -154,7 +196,8 @@ public class Queues {
 
 		try {
 			con = Common.getConnection();
-			return Queues.add(con, queueName, cpuTimeout, wallTimeout);
+			int result = Queues.add(con, queueName, cpuTimeout, wallTimeout);
+			return result;
 		} catch (Exception e) {
 			log.error("add", e);
 		} finally {
@@ -182,6 +225,8 @@ public class Queues {
 			procedure.setString(2, nodeName);
 
 			procedure.executeUpdate();
+			// association change can affect queue/node mapping; clear cache
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("associate", e);
@@ -205,6 +250,7 @@ public class Queues {
 			con = Common.getConnection();
 			procedure = con.prepareCall("{CALL clearQueueAssociations()}");
 			procedure.executeUpdate();
+			invalidateQueueCache();
 		} catch (Exception e) {
 			log.error("clearQueueAssociations", e);
 		} finally {
@@ -223,24 +269,44 @@ public class Queues {
 	 */
 	protected static Queue get(Connection con, int qid) {
 		final String methodName = "get";
-		log.entry(methodName);
-		log.debug(methodName, "\tqid = " + qid);
 		ResultSet results = null;
 		CallableStatement procedure = null;
+
+		// Try cache first for positive ids
+		try {
+			if (qid > 0) {
+				Queue cached = queueCache.get(qid);
+				if (cached != null) {
+					// Return a defensive copy to avoid shared mutable objects
+					return copyQueue(cached);
+				}
+			}
+		} catch (Exception e) {
+			log.error(methodName + " cache lookup", e);
+		}
 
 		try {
 			procedure = con.prepareCall("{CALL GetQueue(?)}");
 			procedure.setInt(1, qid);
 			results = procedure.executeQuery();
 			if (results.next()) {
-				return resultSetToQueue(results);
+				Queue q = resultSetToQueue(results);
+				try {
+					if (q != null && q.getId() > 0) {
+						// Store a defensive copy in the cache
+						cachePutSafe(q.getId(), q);
+					}
+				} catch (Exception e) {
+					log.error(methodName + " cache put", e);
+				}
+				// Return a defensive copy to caller
+				return copyQueue(q);
 			}
 		} catch (Exception e) {
 			log.error(methodName, e);
 		} finally {
 			Common.safeClose(results);
 			Common.safeClose(procedure);
-			log.exit(methodName);
 		}
 		return null;
 	}
@@ -256,7 +322,8 @@ public class Queues {
 
 		try {
 			con = Common.getConnection();
-			return Queues.get(con, qid);
+			Queue result = Queues.get(con, qid);
+			return result;
 		} catch (Exception e) {
 			log.error("get", e);
 		} finally {
@@ -273,7 +340,8 @@ public class Queues {
 	 * @author Aaron Stump
 	 */
 	public static List<Queue> getAllActive() {
-		return getQueues(0);
+		List<Queue> result = getQueues(0);
+		return result;
 	}
 
 	/**
@@ -283,7 +351,8 @@ public class Queues {
 	 * @author Wyatt Kaiser
 	 */
 	public static List<Queue> getAllAdmin() {
-		return getQueues(-2);
+		List<Queue> result = getQueues(-2);
+		return result;
 	}
 
 	protected static int getCountOfEnqueuedPairsByQueue(Connection con, int qId) {
@@ -296,7 +365,8 @@ public class Queues {
 			results = procedure.executeQuery();
 
 			if (results.next()) {
-				return results.getInt("count");
+				int count = results.getInt("count");
+				return count;
 			}
 
 			return -1;
@@ -312,7 +382,7 @@ public class Queues {
 	/**
 	 * Gets the number of pairs that are enqueued in the given queue.
 	 *
- 	 * @param qId The id of the queue to get pairs for
+	 * @param qId The id of the queue to get pairs for
 	 * @return A list of job pair objects that belong to the given queue.
 	 * @author Wyatt Kaiser
 	 */
@@ -321,7 +391,8 @@ public class Queues {
 
 		try {
 			con = Common.getConnection();
-			return getCountOfEnqueuedPairsByQueue(con, qId);
+			int result = getCountOfEnqueuedPairsByQueue(con, qId);
+			return result;
 		} catch (Exception e) {
 			log.error("getCountOfEnqueuedPairsShallow", "qid: " + qId, e);
 		} finally {
@@ -351,7 +422,8 @@ public class Queues {
 			results = procedure.executeQuery();
 
 			if (results.next()) {
-				return results.getInt("id");
+				int id = results.getInt("id");
+				return id;
 			}
 		} catch (Exception e) {
 			log.error("getIdByName", e);
@@ -396,12 +468,12 @@ public class Queues {
 
 		while (results.next()) {
 			JobPair jp = new JobPair();
-			jp.setPrimaryStageNumber(
-					results.getInt("job_pairs.primary_jobpair_data")); //because we are only populating the one stage
-			jp.setPath(results.getString("job_pairs.path"));
-			jp.setJobId(results.getInt("job_pairs.job_id"));
-			jp.setId(results.getInt("job_pairs.id"));
-			jp.setQueueSubmitTime(results.getTimestamp("job_pairs.queuesub_time"));
+			// Column labels returned by JDBC omit table qualifiers unless explicitly aliased.
+			jp.setPrimaryStageNumber(results.getInt("primary_jobpair_data"));
+			jp.setPath(results.getString("path"));
+			jp.setJobId(results.getInt("job_id"));
+			jp.setId(results.getInt("id"));
+			jp.setQueueSubmitTime(results.getTimestamp("queuesub_time"));
 			Status stat = new Status();
 			//enqueued by definition, so we don't want to retrieve extra data from the db
 			stat.setCode(StatusCode.STATUS_ENQUEUED);
@@ -413,20 +485,19 @@ public class Queues {
 
 			jp.addStage(stage);
 
-			log.debug("resultSetToClusterPagePairs", "attempting to get benchmark with ID = " + results.getInt("bench_id"));
 			Benchmark b = new Benchmark();
-			b.setId(results.getInt("job_pairs.bench_id"));
-			b.setName(results.getString("job_pairs.bench_name"));
+			b.setId(results.getInt("bench_id"));
+			b.setName(results.getString("bench_name"));
 			jp.setBench(b);
 
 			Solver s = new Solver();
-			s.setId(results.getInt("jobpair_stage_data.solver_id"));
-			s.setName(results.getString("jobpair_stage_data.solver_name"));
+			s.setId(results.getInt("solver_id"));
+			s.setName(results.getString("solver_name"));
 			stage.setSolver(s);
 
 			Configuration c = new Configuration();
-			c.setId(results.getInt("jobpair_stage_data.config_id"));
-			c.setName(results.getString("jobpair_stage_data.config_name"));
+			c.setId(results.getInt("config_id"));
+			c.setName(results.getString("config_name"));
 			stage.setConfiguration(c);
 			jp.getPrimarySolver().addConfiguration(c);
 
@@ -464,7 +535,8 @@ public class Queues {
 			procedure = con.prepareCall("CALL GetPairsRunningOnNode(?)");
 			procedure.setInt(1, nodeId);
 			results = procedure.executeQuery();
-			return resultSetToClusterPagePairs(results);
+			List<JobPair> result = resultSetToClusterPagePairs(results);
+			return result;
 		} catch (Exception e) {
 			log.error("getPairsRunningOnNode", e);
 		} finally {
@@ -486,7 +558,7 @@ public class Queues {
 	public static List<JobPair> getJobPairsForNextClusterPage(DataTablesQuery query, int id) {
 		PaginationQueryBuilder builder = null;
 		builder = new PaginationQueryBuilder(PaginationQueries.GET_PAIRS_ENQUEUED_QUERY,
-		                                     getPairOrderColumnForClusterPage(query.getSortColumn()), query
+											 getPairOrderColumnForClusterPage(query.getSortColumn()), query
 		);
 		Connection con = null;
 		NamedParameterStatement procedure = null;
@@ -494,12 +566,15 @@ public class Queues {
 		try {
 			con = Common.getConnection();
 
-			procedure = new NamedParameterStatement(con, builder.getSQL());
+			String sql = builder.getSQL();
+			procedure = new NamedParameterStatement(con, sql);
 
+			// Parameter name must match placeholder in EnqueuedPairPagination.sql (currently :id)
 			procedure.setInt("id", id);
 			results = procedure.executeQuery();
 
-			return resultSetToClusterPagePairs(results);
+			List<JobPair> result = resultSetToClusterPagePairs(results);
+			return result;
 		} catch (Exception e) {
 			log.error("getJobPairsForNextClusterPage","queue: " + id, e);
 		} finally {
@@ -518,7 +593,8 @@ public class Queues {
 	 * @author Tyler Jensen
 	 */
 	public static List<WorkerNode> getNodes(int id) {
-		return Cluster.getNodesForQueue(id);
+		List<WorkerNode> result = Cluster.getNodesForQueue(id);
+		return result;
 	}
 
 	/**
@@ -528,7 +604,8 @@ public class Queues {
 	 * @return the list of Jobs for that queue which have pending job pairs
 	 */
 	public static List<Job> getPendingJobs(int queueId) {
-		return getPendingJobsHelper(queueId, false);
+		List<Job> result = getPendingJobsHelper(queueId, false);
+		return result;
 	}
 
 	/**
@@ -538,7 +615,8 @@ public class Queues {
 	 * @return the list of Jobs for that queue which have pending job pairs
 	 */
 	public static List<Job> getPendingDeveloperJobs(int queueId) {
-		return getPendingJobsHelper(queueId, true);
+		List<Job> result = getPendingJobsHelper(queueId, true);
+		return result;
 	}
 
 	/**
@@ -602,7 +680,9 @@ public class Queues {
 				procedure = con.prepareCall("{CALL GetPendingDeveloperJobs(?)}");
 				procedure.setInt(1, queueId);
 				results = procedure.executeQuery();
-				return results.next();
+				if (results.next()) {
+					return true;
+				}
 			} catch (Exception e) {
 				log.error("developerJobsExist", e);
 			} finally {
@@ -622,7 +702,6 @@ public class Queues {
 		q.setWallTimeout(results.getInt("clockTimeout"));
 		q.setCpuTimeout(results.getInt("cpuTimeout"));
 		q.setGlobalAccess(results.getBoolean("global_access"));
-
 		return q;
 	}
 
@@ -693,7 +772,8 @@ public class Queues {
 			results = procedure.executeQuery();
 
 			if (results.next()) {
-				return results.getLong("queue_load");
+				Long load = results.getLong("queue_load");
+				return load;
 			}
 		} catch (Exception e) {
 			log.error("getUserLoadOnQueue", e);
@@ -787,6 +867,8 @@ public class Queues {
 			}
 
 			procedure.executeUpdate();
+			// updates change queue data -> invalidate cache
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("setStatus", e);
@@ -808,7 +890,8 @@ public class Queues {
 	 */
 
 	public static boolean notUniquePrimitiveName(String queueName) {
-		return Queues.getIdByName(queueName) >= 0;
+		boolean result = Queues.getIdByName(queueName) >= 0;
+		return result;
 	}
 
 	/**
@@ -830,7 +913,8 @@ public class Queues {
 
 			results = procedure.executeQuery();
 			if (results.next()) {
-				return results.getString("name");
+				String name = results.getString("name");
+				return name;
 			}
 		} catch (Exception e) {
 			log.error("getIdByName", e);
@@ -859,6 +943,7 @@ public class Queues {
 			procedure.setInt(1, queueId);
 			procedure.setInt(2, timeout);
 			procedure.executeUpdate();
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("updateQueueCpuTimeout" + e.toString());
@@ -885,6 +970,7 @@ public class Queues {
 			procedure.setInt(1, queueId);
 			procedure.setInt(2, timeout);
 			procedure.executeUpdate();
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("updateQueueWallclockTimeout", e);
@@ -914,7 +1000,8 @@ public class Queues {
 
 			results = procedure.executeQuery();
 			if (results.next()) {
-				return results.getBoolean("global_access");
+				boolean global = results.getBoolean("global_access");
+				return global;
 			}
 		} catch (Exception e) {
 			log.error("isQueueGlobal", e);
@@ -942,6 +1029,7 @@ public class Queues {
 			procedure = con.prepareCall("{CALL RemoveQueue(?)}");
 			procedure.setInt(1, queueId);
 			procedure.executeUpdate();
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("delete", e);
@@ -968,6 +1056,7 @@ public class Queues {
 			procedure.setInt(1, queueId);
 			procedure.executeUpdate();
 
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("makeGlobal", e);
@@ -993,6 +1082,7 @@ public class Queues {
 			procedure.setInt(1, queueId);
 			procedure.executeUpdate();
 
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("removeGlobal", e);
@@ -1018,6 +1108,7 @@ public class Queues {
 			procedure.setInt(1, queueId);
 			procedure.executeUpdate();
 
+			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
 			log.error("setTestQueue", e);
@@ -1034,7 +1125,8 @@ public class Queues {
 	 * @return The default queue, or null if it could not be found.
 	 */
 	public static Queue getAllQ() {
-		return Queues.get(R.DEFAULT_QUEUE_ID);
+		Queue result = Queues.get(R.DEFAULT_QUEUE_ID);
+		return result;
 	}
 
 	/**
@@ -1077,7 +1169,6 @@ public class Queues {
 	 * @return True on success and false on error.
 	 */
 	public static boolean setQueueCommunityAccess(List<Integer> community_ids, int queue_id) {
-		log.entry("setQueueCommunityAccess");
 		Connection con = null;
 		CallableStatement procedure = null;
 		ResultSet results = null;
@@ -1096,6 +1187,8 @@ public class Queues {
 			}
 
 			Common.endTransaction(con);
+			// community access affects queue visibility -> clear cache
+			invalidateQueueCache();
 
 			return true;
 		} catch (Exception e) {
@@ -1124,7 +1217,7 @@ public class Queues {
 			results = procedure.executeQuery();
 			String result = "";
 			if (results.next()) {
-        		// Move the cursor to the first row and access the data
+				// Move the cursor to the first row and access the data
 				result = results.getString("description");
 			}
 			return result;
@@ -1140,8 +1233,6 @@ public class Queues {
 			Common.safeClose(procedure);
 			Common.safeClose(results);
 		}
-		
-		
 	}
 
 	public static Boolean updateQueueDesc(int qid, String desc) {
@@ -1153,6 +1244,8 @@ public class Queues {
 			procedure.setInt(1, qid);
 			procedure.setString(2, desc);
 			procedure.executeUpdate();
+			// A description change affects queue metadata -> clear cache
+			invalidateQueueCache();
 			return true;
 		}
 		catch (Exception e) {
@@ -1164,5 +1257,5 @@ public class Queues {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
 		}}
-
 }
+
