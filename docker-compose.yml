@@ -53,7 +53,7 @@ services:
 
   mysql:
     container_name: starexec_mysql
-    image: docker.io/library/mysql:8.0
+    image: docker.io/library/mysql:8.4
     environment:
       MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: starexec
@@ -63,6 +63,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    command: ["docker-entrypoint.sh", "mysqld", "--log-bin-trust-function-creators=1"] # Required for certain MySQL functions used by StarExec
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u starexec -pstarexec_password"]
       interval: 10s
