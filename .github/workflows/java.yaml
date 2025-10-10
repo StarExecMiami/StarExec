@@ -20,21 +20,24 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
+
       - name: Verify Java version
         run: java -version
+        
       - name: Verify Maven version
         run: mvn -version
 
       - name: Build project with Maven
         run: mvn clean package -DskipTests
 
-      - name: Upload artifacts
+      - name: Upload coverage report artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: target/site/jacoco/
 
-      - name: Publish built artifact
+      - name: Publish built artifact only on UMprod branch
+        if: github.ref == 'refs/heads/UMprod'
         uses: actions/upload-artifact@v4
         with:
           name: starexec
