@@ -23,6 +23,7 @@ import org.starexec.util.*;
 import org.starexec.util.SessionUtil;
 import org.xml.sax.SAXException;
 
+import javax.servlet.http.Cookie;
 import javax.servlet.ServletException;
 import javax.servlet.annotation.MultipartConfig;
 import javax.servlet.http.HttpServlet;
@@ -78,19 +79,16 @@ public class UploadSolver extends HttpServlet {
 		int userId = SessionUtil.getUserId(request);
 		try {
 			log.info("doPost begins");
-			long t0 = System.currentTimeMillis();
 
 			if (abortIfUploadsFrozen(response)) {
 				return;
 			}
 
 			final String rawCt = request.getHeader("Content-Type");
-			final long rawLen = request.getContentLengthLong();
 			boolean headerHeuristic = rawCt != null && rawCt.toLowerCase().startsWith("multipart/form-data");
 			boolean skipCommons = Boolean.parseBoolean(System.getProperty("starexec.skip.commons.multipart","true"));
 			Boolean commonsResult = null;
 			if (!skipCommons) {
-				long tCommons = System.currentTimeMillis();
 				try {
 					commonsResult = ServletFileUpload.isMultipartContent(request);
 				} catch (Throwable ex) {
@@ -102,7 +100,6 @@ public class UploadSolver extends HttpServlet {
 				log.warn("Mismatch commonsResult=" + commonsResult + " headerHeuristic=" + headerHeuristic);
 			}
 			if (isMultipart) {
-				long tParseStart = System.currentTimeMillis();
 				HashMap<String, Object> form = null;
 				try {
 					form = Util.parseMultipartRequest(request);
