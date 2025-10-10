@@ -136,37 +136,66 @@ public class ArchiveUtil {
 	public static Boolean extractArchiveAsSandbox(String fileName, String destination) {
 		log.debug("ExtractingArchive for " + fileName);
 		try {
-
-			// // print the permissions of the tmp directory, the parent directory (sandbox), and the archive file
-			// String[] lsCmd = new String[3];
-			// tstCmd3[0] = "ls";
-			// tstCmd3[1] = "-al";
-			// tstCmd3[2] = destination;
-			// Util.executeCommand(lsCmd);
-
 			// Check for the appropriate file extension and hand off to the appropriate method
 			if (fileName.endsWith(".zip")) {
-				String[] unzipCmd = new String[7];
-				unzipCmd[0] = "sudo";
-				unzipCmd[1] = "-u";
-				unzipCmd[2] = R.SANDBOX_USER_ONE;
-				unzipCmd[3] = "unzip";
-				unzipCmd[4] = fileName;
-				unzipCmd[5] = "-d";
-				unzipCmd[6] = destination;
+				log.debug("Extracting ZIP using pure Java (Apache Commons Compress)");
 				
-				log.debug("id is run here: " + Util.executeCommand("id"));
-
-				log.debug(Util.executeCommand("chmod g+w " + destination));
-				log.debug(Util.executeCommand("ls -la " + destination));
-
-				log.debug("about to execute command unzip command");
-				log.debug("unzip said: " + Util.executeCommand(unzipCmd));
+				// Ensure destination directory exists
+				File destDir = new File(destination);
+				if (!destDir.exists()) {
+					destDir.mkdirs();
+					log.debug("Created destination directory: " + destination);
+				}
 				
-				log.debug(Util.executeCommand("ls -la " + destination));
-				// log.debug("about to execute command unzip command");
-				// Util.executeCommand(unzipCmd);
-				log.debug("now removing the archived file " + fileName);
+				// Extract using Apache Commons Compress (pure Java, no external dependencies)
+				try (ZipFile zipFile = new ZipFile(new File(fileName))) {
+					Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
+					while (entries.hasMoreElements()) {
+						ZipArchiveEntry entry = entries.nextElement();
+						File outputFile = new File(destination, entry.getName());
+						
+						if (entry.isDirectory()) {
+							// Create directory
+							if (!outputFile.exists()) {
+								outputFile.mkdirs();
+								log.debug("Created directory: " + entry.getName());
+							}
+						} else {
+							// Create parent directories if needed
+							File parent = outputFile.getParentFile();
+							if (parent != null && !parent.exists()) {
+								parent.mkdirs();
+							}
+							
+							// Extract file
+							try (InputStream is = zipFile.getInputStream(entry);
+							     OutputStream os = new FileOutputStream(outputFile)) {
+								IOUtils.copy(is, os);
+								log.debug("Extracted file: " + entry.getName());
+							}
+						}
+					}
+					log.debug("Java-based ZIP extraction completed successfully");
+				}
+				
+				// Transfer ownership to sandbox user
+				boolean sudoAvailable = Util.isSudoAvailable();
+				if (sudoAvailable) {
+					log.debug("Transferring ownership to " + R.SANDBOX_USER_ONE);
+					String[] chownCmd = new String[]{"chown", "-R", 
+						R.SANDBOX_USER_ONE + ":" + R.SANDBOX_USER_ONE, destination};
+					String chownResult = Util.executeCommand(chownCmd);
+					log.debug("chown result: " + chownResult);
+					
+					// Verify ownership
+					String[] lsCmd = new String[]{"ls", "-la", destination};
+					String lsResult = Util.executeCommand(lsCmd);
+					log.debug("Post-extraction ls: " + lsResult);
+				} else {
+					log.warn("sudo not available; files will be owned by current user (root)");
+				}
+				
+				log.debug("Removing archive file: " + fileName);
 				ArchiveUtil.removeArchive(fileName);
 			} else if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz") || fileName.endsWith(".tar")) {
 				// First rename it if it's a .tgz
