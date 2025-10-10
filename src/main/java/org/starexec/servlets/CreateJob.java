@@ -22,6 +22,8 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
 
@@ -85,8 +87,6 @@ public class CreateJob extends HttpServlet {
 	 * @param sId The ID of the space to put the job in
 	 */
 	public static void buildQuickJob(Job j, int solverId, List<Integer> benchmarkIds, Integer sId) {
-		//Setup the job's attributes
-
 		List<Configuration> config = Solvers.getConfigsForSolver(solverId);
 		List<Integer> configIds = new ArrayList<>();
 		for (Configuration c : config) {
@@ -113,9 +113,9 @@ public class CreateJob extends HttpServlet {
 		int postProcessorId = ((settings.getPostProcessorId() == null) ? -1 : settings.getPreProcessorId());
 		Job j = JobManager
 				.setupJob(userId, s.getName(), "test job for new solver " + s.getName() + " " + "(" + s.getId() + ")",
-				          preProcessorId, postProcessorId, Queues.getTestQueue(), 0, settings.getCpuTimeout(),
-				          settings.getWallclockTimeout(), settings.getMaxMemory(), false, 0, SaveResultsOption.SAVE,
-				          R.DEFAULT_BENCHMARKING_FRAMEWORK
+						  preProcessorId, postProcessorId, Queues.getTestQueue(), 0, settings.getCpuTimeout(),
+						  settings.getWallclockTimeout(), settings.getMaxMemory(), false, 0, SaveResultsOption.SAVE,
+						  R.DEFAULT_BENCHMARKING_FRAMEWORK
 				);
 
 		buildQuickJob(j, solverId, settings.getBenchIds(), spaceId);
@@ -159,25 +159,25 @@ public class CreateJob extends HttpServlet {
 		Queue q = Queues.get(queueId);
 		if (wallclockLimit != null && wallclockLimit > q.getWallTimeout()) {
 			return new ValidatorStatusCode(false,
-			                               "The given wallclock timeout exceeds the maximum allowed for this queue, " +
-					                               "which is " +
-					                               q.getWallTimeout()
+										   "The given wallclock timeout exceeds the maximum allowed for this queue, " +
+												   "which is " +
+												   q.getWallTimeout()
 			);
 		}
 
 		if (cpuLimit != null && cpuLimit > q.getCpuTimeout()) {
 			return new ValidatorStatusCode(false,
-			                               "The given cpu timeout exceeds the maximum allowed for this queue, which is" +
-					                               " " +
-					                               q.getCpuTimeout()
+										   "The given cpu timeout exceeds the maximum allowed for this queue, which is" +
+												   " " +
+												   q.getCpuTimeout()
 			);
 		}
 
 		if (preProcId != null) {
 			if (!ProcessorSecurity.canUserSeeProcessor(preProcId, userId).isSuccess()) {
 				return new ValidatorStatusCode(false,
-				                               "You do not have permission to use the given preprocessor, or it" +
-						                               " does not exist"
+											   "You do not have permission to use the given preprocessor, or it" +
+													   " does not exist"
 				);
 			}
 		}
@@ -208,22 +208,20 @@ public class CreateJob extends HttpServlet {
 		final String method = "doPost";
 		log.debug(method, "starting job post");
 		try {
-			log.debug("made it to submit job");
 			if (RESTHelpers.getReadOnly()) {
+				log.debug(method, "Read-only mode enabled, rejecting job creation");
 				response.sendError(HttpServletResponse.	SC_SERVICE_UNAVAILABLE, "Read only mode is enabled, no new jobs can be created.");
 				return;
 			}
 			// Make sure the request is valid
 			ValidatorStatusCode status = isValid(request);
 			if (!status.isSuccess()) {
-				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				log.debug(method, "received an invalid job creation request");
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+				log.debug(method, "received an invalid job creation request: " + status.getMessage());
+				response.addCookie(createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 				return;
 			}
 
-			// Check if user can use BenchExec
 			int userId = SessionUtil.getUserId(request);
 			BenchmarkingFramework framework =
 					BenchmarkingFramework.valueOf(request.getParameter(R.BENCHMARKING_FRAMEWORK_OPTION));
@@ -271,7 +269,6 @@ public class CreateJob extends HttpServlet {
 			if (Util.paramExists(R.SUPPRESS_TIMESTAMP_INPUT_NAME, request)) {
 				suppressTimestamp = request.getParameter(R.SUPPRESS_TIMESTAMP_INPUT_NAME).equals("yes");
 			}
-			log.debug(method, "User chose " + (suppressTimestamp ? "" : "not ") + "to suppress timestamps.");
 
 			SaveResultsOption option = SaveResultsOption.SAVE;
 
@@ -284,10 +281,10 @@ public class CreateJob extends HttpServlet {
 			//Setup the job's attributes
 			Job j = JobManager
 					.setupJob(userId, (String) request.getParameter(name), (String) request.getParameter(description),
-					          Integer.parseInt((String) request.getParameter(preProcessor)),
-					          Integer.parseInt((String) request.getParameter(postProcessor)),
-					          Integer.parseInt((String) request.getParameter(workerQueue)), seed, cpuLimit, runLimit,
-					          memoryLimit, suppressTimestamp, resultsIntervalNum, option, framework
+							  Integer.parseInt((String) request.getParameter(preProcessor)),
+							  Integer.parseInt((String) request.getParameter(postProcessor)),
+							  Integer.parseInt((String) request.getParameter(workerQueue)), seed, cpuLimit, runLimit,
+							  memoryLimit, suppressTimestamp, resultsIntervalNum, option, framework
 					);
 
 			try {
@@ -303,7 +300,7 @@ public class CreateJob extends HttpServlet {
 					}
 				}
 			} catch (NumberFormatException e) {
-				log.debug(method, "No killDelay/softTimeLimit provided");
+				// No killDelay/softTimeLimit provided
 			}
 
 			String selection = request.getParameter(run);
@@ -318,28 +315,23 @@ public class CreateJob extends HttpServlet {
 					String bName = request.getParameter(benchName);
 					int benchProc = Integer.parseInt(request.getParameter(benchProcessor));
 					int benchId = UploadBenchmark.addBenchmarkFromText(benchText, bName, userId, benchProc, false);
-					log.debug(method, "new benchmark created for quickJob with id = " + benchId);
 					buildQuickJob(j, solverId, benchId, space);
 					break;
 				case "keepHierarchy": {
-					log.debug(method, "User selected keepHierarchy");
 					//Create the HashMap to be used for creating job-pair path
 					HashMap<Integer, String> SP =
 							Spaces.spacePathCreate(userId, Spaces.getSubSpaceHierarchy(space, userId), space);
 					List<Space> spaces = Spaces.trimSubSpaces(userId,
-					                                          Spaces.getSubSpaceHierarchy(space, userId)
+															  Spaces.getSubSpaceHierarchy(space, userId)
 					); //Remove spaces the user is not a member of
 
-					log.debug(method, "got all the subspaces for the job");
 					spaces.add(0, Spaces.get(space));
 
 					HashMap<Integer, List<JobPair>> spaceToPairs = new HashMap<>();
 					for (Space s : spaces) {
 						List<JobPair> pairs = JobManager.addJobPairsFromSpace(s.getId(), SP.get(s.getId()));
-
 						spaceToPairs.put(s.getId(), pairs);
 					}
-					log.debug(method, "added all the job pairs from every space");
 
 					//if we're doing "depth first", we just add all the pairs from space1, then all the pairs from
 					// space2,
@@ -348,7 +340,6 @@ public class CreateJob extends HttpServlet {
 						JobManager.addJobPairsDepthFirst(j, spaceToPairs);
 						//otherwise, we are doing "breadth first", so we interleave pairs from all the spaces
 					} else {
-						log.debug(method, "adding pairs round robin");
 						JobManager.addJobPairsRoundRobin(j, spaceToPairs);
 					}
 					break;
@@ -368,7 +359,6 @@ public class CreateJob extends HttpServlet {
 						}
 						break;
 					case "runAllBenchInHierarchy":
-						log.debug(method, "got request to run all in bench hierarchy");
 
 						Map<Integer, List<JobPair>> spaceToPairs = JobManager
 								.addBenchmarksFromHierarchy(Integer.parseInt(request.getParameter(spaceId)),
@@ -376,10 +366,8 @@ public class CreateJob extends HttpServlet {
 								);
 
 						if (traversalMethod.equals("depth")) {
-							log.debug(method, "User selected depth-first traversal");
 							JobManager.addJobPairsDepthFirst(j, spaceToPairs);
 						} else {
-							log.debug(method, "users selected round robin traversal");
 							JobManager.addJobPairsRoundRobin(j, spaceToPairs);
 						}
 						break;
@@ -409,7 +397,7 @@ public class CreateJob extends HttpServlet {
 					message = "Error: no job pairs created for the job. There are no valid solver benchmark pairs in" +
 							" " + "this space hierarchy. Could not proceed with job submission.";
 				}
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, message));
+				response.addCookie(createEncodedCookie(R.STATUS_MESSAGE_COOKIE, message));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, message);
 				// No pairs in the job means something went wrong; error out
 				return;
@@ -424,7 +412,7 @@ public class CreateJob extends HttpServlet {
 				String message =
 						"Error: You are trying to create " + pairCount + " pairs, but you have " + pairsAvailable +
 								" remaining in your quota. Please delete some old jobs before continuing.";
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, message));
+				response.addCookie(createEncodedCookie(R.STATUS_MESSAGE_COOKIE, message));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, message);
 				// No pairs in the job means something went wrong; error out
 				return;
@@ -492,7 +480,7 @@ public class CreateJob extends HttpServlet {
 
 			if (!Util.paramExists(R.BENCHMARKING_FRAMEWORK_OPTION, request)) {
 				return new ValidatorStatusCode(false,
-				                               "You must specify which benchmarking framework you want to use" + "."
+											   "You must specify which benchmarking framework you want to use" + "."
 				);
 			}
 
@@ -543,8 +531,8 @@ public class CreateJob extends HttpServlet {
 			if (Util.paramExists(resultsInterval, request)) {
 				if (!Validator.isValidPosInteger(request.getParameter(resultsInterval))) {
 					return new ValidatorStatusCode(false,
-					                               "The interval for obtaining results must be greater than or " +
-							                               "equal to 0"
+												   "The interval for obtaining results must be greater than or " +
+														   "equal to 0"
 					);
 				}
 				int i = Integer.parseInt(request.getParameter(resultsInterval));
@@ -587,8 +575,8 @@ public class CreateJob extends HttpServlet {
 			// Ensure the job description is valid
 			if (!Validator.isValidPrimDescription((String) request.getParameter(description))) {
 				return new ValidatorStatusCode(false,
-				                               "The given description is invalid, please see the help files to " +
-						                               "see the valid format"
+											   "The given description is invalid, please see the help files to " +
+													   "see the valid format"
 				);
 			}
 			if (!Util.paramExists(run, request)) {
@@ -597,8 +585,8 @@ public class CreateJob extends HttpServlet {
 			if (Util.paramExists(otherOutputOption, request)) {
 				if (!Validator.isValidBool(request.getParameter(otherOutputOption))) {
 					return new ValidatorStatusCode(false,
-					                               "Whether to save extra output files needs to be a valid " +
-							                               "boolean"
+												   "Whether to save extra output files needs to be a valid " +
+														   "boolean"
 					);
 				}
 			}
@@ -648,7 +636,7 @@ public class CreateJob extends HttpServlet {
 				if (!Validator.isValidIntegerList(request.getParameterValues(configs))) {
 					if (request.getParameterValues(configs) == null) {
 						return new ValidatorStatusCode(false,
-					                               "You need to select at least one configuration to run a " + "job"
+												   "You need to select at least one configuration to run a " + "job"
 					);
 					} 
 					return new ValidatorStatusCode(false, "All selected configuration IDs need to be valid integers");
@@ -662,7 +650,7 @@ public class CreateJob extends HttpServlet {
 				// Make sure the user is using solvers they can see
 				if (!Permissions.canUserSeeSolvers(solverIds, userId)) {
 					return new ValidatorStatusCode(false,
-					                               "You do not have permission to use all of the selected " + "solvers"
+												   "You do not have permission to use all of the selected " + "solvers"
 					);
 				}
 			}
@@ -691,13 +679,31 @@ public class CreateJob extends HttpServlet {
 				return new ValidatorStatusCode(false, "softTimeLimit must be a positive integer");
 			}
 
-			// Passed all type checks-- next we check permissions
-			return CreateJob.isValid(userId, queueId, cpuLimit, runLimit, preProc, postProc);
-		} catch (Exception e) {
-			log.warn(e.getMessage(), e);
-		}
+		// Passed all type checks-- next we check permissions
+		return CreateJob.isValid(userId, queueId, cpuLimit, runLimit, preProc, postProc);
+	} catch (Exception e) {
+		log.warn(e.getMessage(), e);
+	}
 
-		// Return false control flow is broken and ends up here
-		return new ValidatorStatusCode(false, "Internal error creating job");
+	// Return false control flow is broken and ends up here
+	return new ValidatorStatusCode(false, "Internal error creating job");
+}
+
+	/**
+	 * Creates a cookie with a URL-encoded value to ensure RFC 6265 compliance.
+	 * This prevents issues with special characters like spaces in cookie values.
+	 *
+	 * @param name The cookie name
+	 * @param value The cookie value (will be URL-encoded)
+	 * @return A new Cookie with the encoded value
+	 */
+	private static Cookie createEncodedCookie(String name, String value) {
+		try {
+			String encodedValue = URLEncoder.encode(value, StandardCharsets.UTF_8.toString());
+			return new Cookie(name, encodedValue);
+		} catch (Exception e) {
+			log.warn("Failed to encode cookie value, using original: " + e.getMessage());
+			return new Cookie(name, value);
+		}
 	}
 }
