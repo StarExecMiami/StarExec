@@ -26,8 +26,8 @@
 	
 					
 				-- Exclude Jobs whose name and status don't contain the query string
-				WHERE 	(name				LIKE	CONCAT('%', :query, '%')
-				OR		GetJobStatus(jobs.id)	LIKE	CONCAT('%', :query, '%'))
+				WHERE 	(name				LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		GetJobStatus(jobs.id)	LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))
 											
 				-- Exclude Jobs that aren't in the specified space
 				AND (assoc.space_id=:spaceId)

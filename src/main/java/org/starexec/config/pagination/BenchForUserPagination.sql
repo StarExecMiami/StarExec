@@ -25,6 +25,6 @@
 				where user_id = :userId and deleted=false AND recycled=:recycled
 				
 				-- Exclude benchmarks whose name doesn't contain the query string
-				AND 	(benchmarks.name	LIKE	CONCAT('%', :query, '%')
-				OR		processors.name	LIKE 	CONCAT('%', :query, '%'))										
+				AND 	(benchmarks.name	LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		processors.name	LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))										
 			

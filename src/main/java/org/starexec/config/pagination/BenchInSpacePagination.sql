@@ -20,6 +20,6 @@
 
 				
 				-- Query Filtering
-				WHERE 	(benchmarks.name 									LIKE	CONCAT('%', :query, '%')
-				OR		(processors.name	LIKE 	CONCAT('%', :query, '%') 
-				OR (processors.name is null AND 'none' LIKE CONCAT('%', :query, '%'))))
+				WHERE 	(benchmarks.name 									LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		(processors.name	LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%') 
+				OR (processors.name is null AND 'none' LIKE CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))))

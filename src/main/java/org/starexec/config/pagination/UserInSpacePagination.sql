@@ -22,6 +22,6 @@
 				user_assoc.space_id= :spaceId
 							
 				-- Exclude Users whose name and description don't contain the query string
-				AND 	(CONCAT(first_name, ' ', last_name)	LIKE	CONCAT('%', :query, '%')
-				OR		institution							LIKE 	CONCAT('%', :query, '%')
-				OR		email								LIKE 	CONCAT('%', :query, '%'))
+				AND 	(CONCAT(first_name, ' ', last_name)	LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		institution							LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		email								LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))

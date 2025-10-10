@@ -26,5 +26,5 @@
 					WHERE users.id= :userId))
 																
 				-- Exclude Spaces whose name and description don't contain the query string
-				AND 	(spaces.name			LIKE	CONCAT('%', :query, '%')
-				OR		spaces.description		LIKE 	CONCAT('%', :query, '%'))
+				AND 	(spaces.name			LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		spaces.description		LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))

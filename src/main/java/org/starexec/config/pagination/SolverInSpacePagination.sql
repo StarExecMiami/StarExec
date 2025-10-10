@@ -11,9 +11,9 @@
 				INNER JOIN solver_assoc AS assoc ON assoc.solver_id=id
 				INNER JOIN executable_types AS types ON types.type_id=solvers.executable_type
 				-- Exclude solvers whose name and description don't contain the query string
-				WHERE 	(name 		LIKE	CONCAT('%', :query, '%')
-				OR		description	LIKE 	CONCAT('%', :query, '%')
-				OR 		type_name			LIKE	CONCAT('%', :query, '%'))
+				WHERE 	(name 		LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR		description	LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
+				OR 		type_name			LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))
 										
 				-- Exclude solvers that aren't in the specified space
 				AND assoc.space_id= :spaceId
