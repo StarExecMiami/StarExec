@@ -322,11 +322,11 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	fi
 
 	if [ $BUILD_JOB == "true" ]; then
-		cd $WORKING_DIR_BASE/$SANDBOX_PARAM/solver
+		cd $WORKING_DIR/solver
 		rm "$LOCAL_BENCH_PATH"
 		LOCAL_BENCH_PATH=""
 	else
-		cd $WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin
+		cd $WORKING_DIR/solver/bin
 	fi
 
 	pwd
@@ -355,25 +355,26 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		# make a blank watchfile
 		touch "$WATCHFILE"
 	elif [ "$BENCHMARKING_FRAMEWORK" == "$RUNSOLVER" ]; then
-		# run runsolver
+	# run runsolver
 
-		if [ "$SUPPRESS_TIMESTAMP" = true ]; then
-			log "Suppressing timestamp."
-			TIMESTAMP_PARAM=""
-			ADDEOF_PARAM=""
-		else
-			log "Not suppressing timestamp."
-			TIMESTAMP_PARAM="--timestamp"
-			ADDEOF_PARAM="--add-eof"
-		fi
-
-		# If $WORKING_DIR/solver/bin/run_image.py exists, we use it instead of runsolver.
+	# In containerized environments, runsolver --timestamp and --add-eof flags cause "unimplemented" errors
+	# Always suppress timestamps to avoid this issue in Docker/Podman/Kubernetes
+	if [ "$SUPPRESS_TIMESTAMP" = true ] || [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
+		log "Suppressing timestamp (containerized environment or user preference)."
+		SUPPRESS_TIMESTAMP=true
+		TIMESTAMP_PARAM=""
+		ADDEOF_PARAM=""
+	else
+		log "Not suppressing timestamp."
+		TIMESTAMP_PARAM="--timestamp"
+		ADDEOF_PARAM="--add-eof"
+	fi		# If $WORKING_DIR/solver/bin/run_image.py exists, we use it instead of runsolver.
 		# Also, in this case, we're using the local backend, so this jobscript is actually running on the
 		# head node of starexec. (this run_image without k8s is likely buggy and should be considered deprecated.)
-		if [ -f "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image.py" ]; then
+		if [ -f "$WORKING_DIR/solver/bin/run_image.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# get prover tag:
-			PROVER=$(cat "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/prover.txt")
+			PROVER=$(cat "$WORKING_DIR/solver/bin/prover.txt")
 
 			# sandbox or sandbox2
 			if [[ $SANDBOX_PARAM =~ ([0-9])$ ]]; then
@@ -383,7 +384,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			fi
 
 			# Use SANDBOX_NUM in your command
-			RUNIMAGE_CMD="python3 \"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image.py\" \"$PROVER\" \
+			RUNIMAGE_CMD="python3 \"$WORKING_DIR/solver/bin/run_image.py\" \"$PROVER\" \
 							-P \"$LOCAL_BENCH_PATH\" \
 							-C $CURRENT_STAGE_CPU \
 							-W $CURRENT_STAGE_WALLCLOCK \
@@ -393,20 +394,20 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 			log "Running run_image.py: $RUNIMAGE_CMD"
 			eval "$RUNIMAGE_CMD"
 
-		elif [ -f "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image_k8s.py" ]; then
+		elif [ -f "$WORKING_DIR/solver/bin/run_image_k8s.py" ]; then
 			# Run a theorem proving image: https://www.eprover.org/EVENTS/IWIL-2024/IWIL-24-Preproceedings.pdf
 			# in kubernettes instead of podman remote. Assumes kubectl is working in the container.
 
 			# get prover tag:
-			PROVER=$(cat "$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/prover.txt")
+			PROVER=$(cat "$WORKING_DIR/solver/bin/prover.txt")
 
-			RUNIMAGE_CMD="python3 \"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/run_image_k8s.py\" \"$PROVER\" \
+			RUNIMAGE_CMD="python3 \"$WORKING_DIR/solver/bin/run_image_k8s.py\" \"$PROVER\" \
 							-P \"$LOCAL_BENCH_PATH\" \
 							-C $CURRENT_STAGE_CPU \
 							-W $CURRENT_STAGE_WALLCLOCK \
 							-M \"$CURRENT_STAGE_MEMORY\" \
-							--sandbox=\"$WORKING_DIR_BASE/$SANDBOX_PARAM\" \
-							--job-template-path=\"$WORKING_DIR_BASE/$SANDBOX_PARAM/solver/bin/job_template.yaml\" "
+							--sandbox=\"$WORKING_DIR\" \
+							--job-template-path=\"$WORKING_DIR/solver/bin/job_template.yaml\" "
 			
 			log "Running run_image_k8s.py: $RUNIMAGE_CMD"
 			eval "$RUNIMAGE_CMD"
@@ -420,7 +421,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 				STAREXEC_WALLCLOCK_LIMIT=\"$CURRENT_STAGE_WALLCLOCK\" \
 				$$JOBPAR_EXECUTION_PREFIX$$ \"$LOCAL_RUNSOLVER_PATH\" \
 				$TIMESTAMP_PARAM $ADDEOF_PARAM \
-				--cores $CORES \
 				-C $CURRENT_STAGE_CPU \
 				-W $CURRENT_STAGE_WALLCLOCK \
 				$KILL_DELAY_FLAG \
@@ -440,7 +440,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 
 	# move the working directory back to the top level sandbox
-	cd $WORKING_DIR_BASE/$SANDBOX_PARAM
+	cd $WORKING_DIR
 	if ((RESULTS_INTERVAL > 0)); then
 		kill $COPY_OUTPUT_INCREMENTALLY_PID
 	fi
