@@ -28,7 +28,7 @@ public class Common {
 	private static int connectionsDrift  = 0;
 
 	//args to append to the mysql URL.
-	private static final String MYSQL_URL_ARGUMENTS = "?noAccessToProcedureBodies=true&autoReconnect=true&zeroDateTimeBehavior=convertToNull&rewriteBatchedStatements=true";
+	private static final String MYSQL_URL_ARGUMENTS = "?noAccessToProcedureBodies=true&autoReconnect=true&zeroDateTimeBehavior=convertToNull&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&connectionCollation=utf8mb4_unicode_ci&characterEncoding=UTF-8&sessionVariables=collation_connection=utf8mb4_unicode_ci";
 
 	/**
 	 * Creates a new historical record in the logins table which keeps track of all user logins.
