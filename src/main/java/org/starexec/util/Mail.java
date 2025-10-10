@@ -23,6 +23,7 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Contains utilities for sending mail from the local SMTP server
@@ -67,7 +68,7 @@ public class Mail {
 
 				if (!R.EMAIL_USER.isEmpty() && !R.EMAIL_PWD.isEmpty()) {
 					email.setAuthenticator(new DefaultAuthenticator(R.EMAIL_USER, R.EMAIL_PWD));
-					email.setTLS(true);
+					email.setStartTLSEnabled(true);
 				}
 
 				if (!R.EMAIL_USER.isEmpty()) {
@@ -111,8 +112,8 @@ public class Mail {
 				leaderEmails.add(u.getEmail());
 			}
 
-			// Configure pre-built message
-			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/acceptance_email.txt"))
+			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/community_request_email.txt"), StandardCharsets.UTF_8)
+				.replace("$$USERID$$", Integer.toString(user.getId()))
 				.replace("$$COMMUNITY$$", communityName)
 				.replace("$$NEWUSER$$", user.getFullName())
 				.replace("$$EMAIL$$", user.getEmail())
@@ -145,8 +146,7 @@ public class Mail {
 	 */
 	public static void sendActivationCode(User user, String code) {
 		try {
-			// Configure pre-built message
-			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/activation_email.txt"))
+			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/activation_email.txt"), StandardCharsets.UTF_8)
 				.replace("$$USER$$", user.getFullName())
 				.replace("$$LINK$$",
 					Util.url(String.format("public/verification/email?%s=%s", Mail.EMAIL_CODE, code)))
@@ -161,8 +161,8 @@ public class Mail {
 	}
 
 	public static void sendEmailChangeValidation(String newEmail, String code) {
-		try {
-			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/change_email.txt"))
+		try {	
+			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/change_email.txt"), StandardCharsets.UTF_8)
 				.replace(
 					"$$LINK$$",
 					Util.url(String.format("public/verification/email?%s=%s", Mail.CHANGE_EMAIL_CODE, code)))
@@ -187,11 +187,11 @@ public class Mail {
 	public static void sendRequestResults(User user, String communityName, boolean wasApproved, boolean wasDeleted)
 			throws IOException {
 		if (wasApproved) {
-			// Configure pre-built message
-			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/approved_email.txt"))
+			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/approved_email.txt"), StandardCharsets.UTF_8)
 				.replace("$$USER$$", user.getFullName())
 				.replace("$$COMMUNITY$$", communityName)
 				.replace("$$LINK$$", Util.url("secure/index.jsp"))
+			;
 			;
 
 			// Send email
@@ -203,15 +203,12 @@ public class Mail {
 		} else {
 			// Configure pre-built message
 			String email;
-
 			if (wasDeleted) {
-				email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/declined_deleted_email.txt"))
+				email = org.apache.commons.io.FileUtils.readFileToString(new java.io.File(org.starexec.constants.R.CONFIG_PATH, "/email/declined_deleted_email.txt"), java.nio.charset.StandardCharsets.UTF_8)
 					.replace("$$LINK$$", Util.url("public/registration.jsp"))
 				;
 			} else {
-				email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "declined_email.txt"))
-					.replace("$$LINK$$", Util.url("pages/make_invite.jsp"))
-				;
+				email = org.apache.commons.io.FileUtils.readFileToString(new java.io.File(org.starexec.constants.R.CONFIG_PATH, "/email/declined_email.txt"), java.nio.charset.StandardCharsets.UTF_8);
 			}
 
 			email = email.replace("$$USER$$", user.getFullName())
@@ -238,12 +235,12 @@ public class Mail {
 	 * @author Todd Elvers
 	 */
 	public static void sendPasswordReset(User newUser, String code) throws IOException {
-		// Configure pre-built message
-		String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/password_reset_email.txt"))
+		String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/password_reset_email.txt"), StandardCharsets.UTF_8)
 			.replace("$$USER$$", newUser.getFullName())
 			.replace("$$LINK$$", Util.url(String.format("public/reset_password?%s=%s",
 					PasswordReset.PASS_RESET, code))
 			)
+		;
 		;
 
 		// Send email
@@ -253,10 +250,10 @@ public class Mail {
 
 	public static void sendPassword(User user, String password) {
 		try {
-			// Configure pre-built message
-			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/new_user_password.txt"))
+			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/new_user_password.txt"), StandardCharsets.UTF_8)
 					.replace("$$USER$$", user.getFullName())
 					.replace("$$PASS$$", password)
+					;
 					;
 
 			// Send email
@@ -325,11 +322,13 @@ public class Mail {
 	 * @author Albert Giegerich
 	 */
 	public static String generateGenericReportsEmail() throws IOException, SQLException {
-		String email = null;
+		String email;
+		{
 		try {
-			email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/reports_email.txt"));
+			email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/reports_email.txt"), StandardCharsets.UTF_8);
 		} catch (IOException e) {
 			throw new IOException("Could not open reports_email.txt", e);
+		}
 		}
 
 		SimpleDateFormat yearMonthDay = new SimpleDateFormat("MMMMM dd, yyyy");
@@ -414,8 +413,9 @@ public class Mail {
 		} catch (Exception e) {
 			log.error("", e);
 		} finally {
-			return "";
+			// nothing to do
 		}
+		return "";
 	}
 
 	/**
@@ -450,9 +450,8 @@ public class Mail {
 	public static void notifyUserOfJobStatus(User user, int jobId, JobStatus status) {
 		final String method = "notifyUserOfJobStatus";
 		String message = "";
-
 		try {
-			message = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/notifyJob_email.txt"));
+			message = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/notifyJob_email.txt"), StandardCharsets.UTF_8);
 		} catch (Exception e) {
 			log.error(method, "Cannot open email template", e);
 			return;
