@@ -3,10 +3,9 @@ package org.starexec.util;
 import org.starexec.logger.StarLevel;
 import org.starexec.logger.StarLogger;
 
-import java.util.List;
 
 public class LoggingManager {
-	private static final StarLogger log = StarLogger.getLogger(LoggingManager.class);
+	// private static final StarLogger log = StarLogger.getLogger(LoggingManager.class);
 
 	public static void setLoggingLevel(StarLevel level) {
 		StarLogger.getRootLogger().setLevel(level);
