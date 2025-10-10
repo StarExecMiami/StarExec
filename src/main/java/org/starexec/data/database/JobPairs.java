@@ -22,6 +22,7 @@ import java.io.StringReader;
 import java.sql.*;
 import java.util.*;
 import java.util.Map.Entry;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Contains handles on database queries for retrieving and updating job pairs.
@@ -51,7 +52,7 @@ public class JobPairs {
 						totalPairsSubmitted += batchSize;
 						log.debug(
 								methodName,
-								"Submitting batch of " + batchSize + ", total pairs submitted: " + totalPairsSubmitted
+								"Submitting batch of " + batchSize + " inputs. Total pairs submitted: " + totalPairsSubmitted
 						);
 						procedure.executeBatch();
 						batchCounter = 0;
@@ -62,12 +63,12 @@ public class JobPairs {
 				totalPairsSubmitted += batchCounter;
 				log.debug(
 						methodName,
-						"Submitting batch of " + batchCounter + ", total pairs submitted: " + totalPairsSubmitted
+						"Submitting final batch of " + batchCounter + " inputs. Total pairs submitted: " + totalPairsSubmitted
 				);
 				procedure.executeBatch();
 			}
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			log.error(methodName, "Exception occurred while adding job pair inputs.", e);
 		} finally {
 			Common.safeClose(procedure);
 		}
@@ -142,7 +143,7 @@ public class JobPairs {
 						}
 						if (s.isDeleted() || s.isRecycled()) {
 							return Optional.of("This solver associated with config " + configId +
-									                   " has been deleted or recycled, solverId: " + s.getId());
+													   " has been deleted or recycled, solverId: " + s.getId());
 						}
 
 						if (!Permissions.canUserSeeSolver(con, s.getId(), userId)) {
@@ -298,13 +299,15 @@ public class JobPairs {
 			log.entry(methodName);
 			boolean success = incrementTotalJobPairsForJob(jobId, pairs.size(), con);
 			if (!success) {
+				log.error(methodName, "Failed to increment total job pairs for jobId: " + jobId);
 				return;
 			}
-			log.trace(methodName, "two");
+			log.debug(methodName, "Successfully incremented total job pairs for jobId: " + jobId);
+
 			addJobPairs(con, jobId, pairs);
 			log.exit(methodName);
 		} catch (SQLException e) {
-			log.error(methodName, e);
+			log.error(methodName, "SQL Exception occurred while adding job pairs for jobId: " + jobId, e);
 		} finally {
 			Common.endTransaction(con);
 			Common.safeClose(con);
@@ -342,7 +345,6 @@ public class JobPairs {
 				// Update the pair's ID so it can be used outside this method
 				int newPairId = procedure.getInt(8);
 				pair.setId(newPairId);
-
 				pairsProcessed += 1;
 				if (pairsProcessed % 1000 == 0) {
 					log.debug(methodName, "Pairs Processed: " + pairsProcessed);
@@ -356,7 +358,7 @@ public class JobPairs {
 			addJobPairInputs(pairs, con);
 			return true;
 		} catch (Exception e) {
-			log.error(methodName, e);
+			log.error(methodName, "Exception occurred while adding job pairs to the database.", e);
 		} finally {
 			Common.safeClose(procedure);
 		}
@@ -774,7 +776,7 @@ public class JobPairs {
 	 * @param pairs The pairs to filter
 	 * @param searchQuery The query
 	 * @return A filtered list of job pairs
-	 * @author Eric burns
+	 * @author Eric Burns
 	 */
 
 	protected static List<JobPair> filterPairs(List<JobPair> pairs, String searchQuery, int stageNumber) {
@@ -846,7 +848,7 @@ public class JobPairs {
 	/**
 	 * Retrieves all attributes (key/value) of the given job pair
 	 *
-	 * @param pairId The id of the job pair to get the attributes of
+	 * @param pairId The id of the pair to get the attributes of
 	 * @return The properties object which holds all the pair's attributes
 	 * @author Tyler Jensen
 	 */
@@ -1034,7 +1036,7 @@ public class JobPairs {
 			File logFile = new File(logPath);
 
 			if (logFile.exists()) {
-				return FileUtils.readFileToString(logFile);
+				return FileUtils.readFileToString(logFile, StandardCharsets.UTF_8);
 			}
 		} catch (Exception e) {
 			log.warn(e.getMessage(), e);
@@ -1503,7 +1505,7 @@ public class JobPairs {
 	 *
 	 * @param pairId
 	 * @param statusCode
-	 * @param con An open connection to make calls on
+	 * @param con An open database connection to make calls on
 	 * @return True on success and false on error
 	 */
 	public static boolean setAllPairStageStatus(int pairId, int statusCode, Connection con) {
@@ -1562,7 +1564,7 @@ public class JobPairs {
 	 */
 	public static ImmutableSet<Integer> getNodesThatMayHavePairsEnqueuedLongerThan(int minutes) throws SQLException {
 		return Common.query("{CALL GetNodesThatMayHavePairsEnqueuedLongerThan(?)}",
-		                    procedure -> procedure.setInt(1, minutes), results -> {
+							procedure -> procedure.setInt(1, minutes), results -> {
 					Set<Integer> potentiallyBrokenNodes = new HashSet<>();
 					while (results.next()) {
 						potentiallyBrokenNodes.add(results.getInt("node_id"));
