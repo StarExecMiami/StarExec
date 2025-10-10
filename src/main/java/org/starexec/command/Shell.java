@@ -1,6 +1,6 @@
 package org.starexec.command;
 
-import org.starexec.logger.StarLogger;
+// import org.starexec.logger.StarLogger;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;

@@ -470,7 +470,7 @@ public class JobUtil {
 	private Integer createJobFromElement(int userId, Integer spaceId, Element jobElement, HashMap<String,
 			SolverPipeline> pipelines, ConfigAttrMapPair configAttrMapPair) {
 		try {
-			final String method = "createJobFromElement";
+			// final String method = "createJobFromElement";
 
 			Element jobAttributes = DOMHelper.getElementByName(jobElement, "JobAttributes");
 			HashMap<Integer, Solver> configIdsToSolvers = new HashMap<>();
