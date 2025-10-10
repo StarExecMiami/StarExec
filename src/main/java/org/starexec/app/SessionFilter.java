@@ -9,7 +9,6 @@ import org.starexec.util.SessionUtil;
 import org.starexec.util.Util;
 
 import javax.servlet.*;
-import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
@@ -43,7 +42,7 @@ public class SessionFilter implements Filter {
 	private static boolean isFromCommand(HttpServletRequest request) {
 		final String userAgent = request.getHeader("User-Agent");
 		return userAgent != null
-		    && StarExecCommand.matcher(userAgent).find();
+			&& StarExecCommand.matcher(userAgent).find();
 	}
 
 	/** This RegEx is used to match known Python API User-Agent headers. */
@@ -57,7 +56,7 @@ public class SessionFilter implements Filter {
 	private static boolean isFromPython(HttpServletRequest request) {
 		final String userAgent = request.getHeader("User-Agent");
 		return userAgent != null
-		    && PythonUserAgent.matcher(userAgent).find();
+			&& PythonUserAgent.matcher(userAgent).find();
 	}
 
 	@Override
@@ -79,32 +78,12 @@ public class SessionFilter implements Filter {
 			}
 
 			HttpSession session = httpRequest.getSession();
-			log.debug(method, "isRequestedSessionIdFromURL: "+httpRequest.isRequestedSessionIdFromURL());
-			log.debug(method, "User-Agent: "+httpRequest.getHeader("User-Agent"));
-			log.debug(method, "isRequestedSessionIdFromCookie: "+httpRequest.isRequestedSessionIdFromCookie());
-			log.debug(method, "isRequestedSessionIdValid: "+httpRequest.isRequestedSessionIdValid());
-			log.debug(method, "authType: "+httpRequest.getAuthType());
-			Cookie[] cookies = httpRequest.getCookies();
-			if ( cookies != null ) {
-				log.debug(method, "Cookies: ");
-				for (Cookie cookie : cookies) {
-					log.debug(method, "\tName : "+cookie.getName());
-					log.debug(method, "\tValue: "+cookie.getValue());
-				}
-			} else {
-				log.debug(method, "Cookies was null");
-			}
-			if (session != null) {
-				log.debug(method, "Session ID: "+session.getId());
-			} else {
-				log.debug(method, "Session was null.");
-			}
 
 			// Allow access to public resources
 			if (httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/public/") ||
-			    httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/login") ||
-			    httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/j_security_check") ||
-			    httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/assets/")) {
+				httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/login") ||
+				httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/j_security_check") ||
+				httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/assets/")) {
 				chain.doFilter(request, response);
 				return;
 			}
@@ -129,36 +108,36 @@ public class SessionFilter implements Filter {
 
 			// If the user is logged in...
 			if (SessionUtil.getUser(httpRequest) != null && SessionUtil.getUser(httpRequest).getId() != R.PUBLIC_USER_ID) {
-			    User user = SessionUtil.getUser(httpRequest);
-			    String userEmail = user.getEmail();
-			    // Check if they have the necessary user SessionUtil stored in their session
-			    int userId = user.getId();
-			    log.debug(method, "User Id of request was: " + userId);
-			    log.debug(method, "User email of request was: " + userEmail);
+				User user = SessionUtil.getUser(httpRequest);
+				String userEmail = user.getEmail();
+				// Check if they have the necessary user SessionUtil stored in their session
+				int userId = user.getId();
+				log.debug(method, "User Id of request was: " + userId);
+				log.debug(method, "User email of request was: " + userEmail);
 
-			    if (R.DEBUG_MODE_ACTIVE) {
-			        log.debug(method, "Debug mode is active.");
-			        if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {
-			            log.debug(method, "User does not have admin read privileges, redirecting to index...");
-			            httpRequest.getSession().invalidate();
-			            httpResponse.sendRedirect(Util.docRoot(""));
-			            return;
-			        }
-			    }
-			    log.debug(method, "User role was found to be "+user.getRole());
-			    //suspended and unauthorized users cannot utilize the system: always place them back on the index page
-			    //whenever they try to access anything secure.
-			    if (user.getRole().equals(R.SUSPENDED_ROLE_NAME) || user.getRole().equals(R.UNAUTHORIZED_ROLE_NAME)) {
-			        if (!httpRequest.getRequestURI().equals("/" + R.STAREXEC_APPNAME + "/")) {
-			            log.debug(method, "Redirecting "+user.getRole()+" user to index.");
-			            httpResponse.sendRedirect(Util.docRoot(""));
-			        }
-			    }
+				if (R.DEBUG_MODE_ACTIVE) {
+					log.debug(method, "Debug mode is active.");
+					if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {
+						log.debug(method, "User does not have admin read privileges, redirecting to index...");
+						httpRequest.getSession().invalidate();
+						httpResponse.sendRedirect(Util.docRoot(""));
+						return;
+					}
+				}
+				log.debug(method, "User role was found to be "+user.getRole());
+				//suspended and unauthorized users cannot utilize the system: always place them back on the index page
+				//whenever they try to access anything secure.
+				if (user.getRole().equals(R.SUSPENDED_ROLE_NAME) || user.getRole().equals(R.UNAUTHORIZED_ROLE_NAME)) {
+					if (!httpRequest.getRequestURI().equals("/" + R.STAREXEC_APPNAME + "/")) {
+						log.debug(method, "Redirecting "+user.getRole()+" user to index.");
+						httpResponse.sendRedirect(Util.docRoot(""));
+					}
+				}
 			} else {
-			    // User not logged in - let Tomcat's security system handle authentication
-			    // Do NOT redirect manually, as this interferes with j_security_check
-			    log.debug(method, "User not logged in, letting container handle authentication.");
-			    // Continue with the filter chain to allow Tomcat's authentication to work
+				// User not logged in - let Tomcat's security system handle authentication
+				// Do NOT redirect manually, as this interferes with j_security_check
+				log.debug(method, "User not logged in, letting container handle authentication.");
+				// Continue with the filter chain to allow Tomcat's authentication to work
 			}
 
 			// Be nice and pass on the request to the next filter
