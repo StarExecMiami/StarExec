@@ -1,0 +1,206 @@
+{{- /*
+ Support three deployment modes:
+ 1. Podman with named volumes (usePodmanVolumes=true) - RECOMMENDED for local dev
+ 2. Podman with hostPath (useHostPathForPodman=true) - Legacy/debugging only
+ 3. Kubernetes Deployment with PVCs (default)
+ 
+ Podman play kube requires Pod resource (not Deployment).
+*/ -}}
+{{- if or .Values.persistence.usePodmanVolumes .Values.persistence.useHostPathForPodman }}
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "chart.name" . }}
+  labels:
+    app: {{ include "chart.name" . }}
+spec:
+  restartPolicy: Always
+  volumes:
+    - name: data
+      {{- if .Values.persistence.usePodmanVolumes }}
+      persistentVolumeClaim:
+        claimName: {{ .Values.persistence.podmanVolumes.data.name | default "starexec-data" }}
+      {{- else }}
+      hostPath:
+        path: /tmp/starexec-data
+        type: DirectoryOrCreate
+      {{- end }}
+    - name: mysql-data
+      {{- if and .Values.mysql.persistence.enabled .Values.persistence.usePodmanVolumes }}
+      persistentVolumeClaim:
+        claimName: {{ .Values.persistence.podmanVolumes.mysql.name | default "starexec-mysql" }}
+      {{- else if .Values.persistence.useHostPathForPodman }}
+      hostPath:
+        path: /tmp/mysql-data
+        type: DirectoryOrCreate
+      {{- else }}
+      emptyDir: {}
+      {{- end }}
+  containers:
+    - name: app
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      ports:
+        - containerPort: 8080
+          hostPort: 7827
+      env:
+        - name: STAREXEC_DB_HOST
+          value: "mysql"
+        - name: STAREXEC_DB_USER
+          value: {{ .Values.mysql.user | quote }}
+        - name: STAREXEC_DB_PASSWORD
+          value: {{ .Values.mysql.password | quote }}
+        - name: STAREXEC_DB_NAME
+          value: {{ .Values.mysql.database | quote }}
+        - name: STAREXEC_CLUSTER_DB_USER
+          value: {{ .Values.mysql.user | quote }}
+        - name: STAREXEC_CLUSTER_DB_PASSWORD
+          value: {{ .Values.mysql.password | quote }}
+        - name: STAREXEC_REPORT_HOST
+          value: "mysql"
+        - name: STAREXEC_BACKEND_TYPE
+          value: {{ .Values.backend.type | quote }}
+        - name: STAREXEC_BACKEND_ROOT
+          value: {{ .Values.backend.root | quote }}
+        - name: STAREXEC_BACKEND_WORKING_DIR
+          value: {{ .Values.backend.workingDir | quote }}
+        - name: STAREXEC_DATA_DIR
+          value: {{ .Values.dataDir | quote }}
+        - name: STAREXEC_SANDBOX_DIR
+          value: {{ .Values.sandboxDir | quote }}
+        {{- range $key, $value := .Values.env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+      volumeMounts:
+        - name: data
+          mountPath: /app/data
+      resources:
+        {{- toYaml .Values.resources.app | nindent 8 }}
+
+    - name: mysql
+      image: "{{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}"
+      imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+      ports:
+        - containerPort: 3306
+          hostPort: 3306
+      env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: {{ .Values.mysql.rootPassword | quote }}
+        - name: MYSQL_DATABASE
+          value: {{ .Values.mysql.database | quote }}
+        - name: MYSQL_USER
+          value: {{ .Values.mysql.user | quote }}
+        - name: MYSQL_PASSWORD
+          value: {{ .Values.mysql.password | quote }}
+      volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      resources:
+        {{- toYaml .Values.resources.mysql | nindent 8 }}
+
+{{- else }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "chart.name" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "chart.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "chart.name" . }}
+    spec:
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          ports:
+            - containerPort: 7827
+          env:
+            - name: STAREXEC_DB_HOST
+              value: {{ .Values.mysql.host | quote }}
+            - name: STAREXEC_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chart.name" . }}-secret-mysql
+                  key: user
+            - name: STAREXEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chart.name" . }}-secret-mysql
+                  key: password
+            - name: STAREXEC_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chart.name" . }}-secret-mysql
+                  key: database
+            - name: STAREXEC_BACKEND_TYPE
+              value: {{ .Values.backend.type | quote }}
+            - name: STAREXEC_BACKEND_ROOT
+              value: {{ .Values.backend.root | quote }}
+            - name: STAREXEC_BACKEND_WORKING_DIR
+              value: {{ .Values.backend.workingDir | quote }}
+            - name: STAREXEC_DATA_DIR
+              value: {{ $.Values.dataDir | quote }}
+            - name: STAREXEC_SANDBOX_DIR
+              value: {{ $.Values.sandboxDir | quote }}
+            {{- range $key, $value := $.Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+        - name: mysql
+          image: "{{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}"
+          imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chart.name" . }}-secret-mysql
+                  key: rootPassword
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysql.database | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.mysql.user | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "chart.name" . }}-secret-mysql
+                  key: password
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "chart.name" . }}-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: mysql-data
+          {{- if .Values.mysql.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "chart.name" . }}-mysql-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+{{- end }}
