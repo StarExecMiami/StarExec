@@ -49,25 +49,24 @@ public class CreateQueue extends HttpServlet {
 	 */
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
+		log.info("Starting queue creation process.");
 		try {
 			//make sure that the user supplied values are valid
 			ValidatorStatusCode status = isRequestValid(request);
 			if (!status.isSuccess()) {
+				log.warn("Request validation failed: " + status.getMessage());
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_FORBIDDEN, status.getMessage());
 				return;
 			}
 
-
 			//get all the node data required to re-assign the selected nodes from their original queues
 			List<Integer> nodeIds = Util.toIntegerList(request.getParameterValues(nodes));
-			log.debug("nodeIds = " + nodeIds);
 			LinkedList<String> nodeNames = new LinkedList<>();
 			LinkedList<String> queueNames = new LinkedList<>();
 			if (nodeIds != null) {
 				for (int id : nodeIds) {
-					log.debug("id = " + id);
 					Queue q = Cluster.getQueueForNode(id);
 					nodeNames.add(Cluster.getNodeNameById(id));
 					if (q == null) {
@@ -80,14 +79,16 @@ public class CreateQueue extends HttpServlet {
 
 			//creates the queue
 			String queue_name = (String) request.getParameter(name);
-			log.debug("queue_name: " + queue_name);
 			String qName = queue_name + ".q";
 			Integer jobsPerQueue = Integer.parseInt(request.getParameter(numberOfJobsPerQueue));
 			String[] nNames = nodeNames.toArray(new String[nodeNames.size()]);
 			String[] qNames = queueNames.toArray(new String[queueNames.size()]);
 			boolean backend_success = R.BACKEND.createQueueWithSlots(qName, nNames, qNames, jobsPerQueue);
-			log.debug("backend_success: " + backend_success);
-
+			if (!backend_success) {
+				log.error("Backend failed to create queue: " + qName);
+				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Backend failed to create queue");
+				return;
+			}
 
 			//reloads worker nodes and queues
 			Cluster.loadWorkerNodes();
@@ -95,7 +96,11 @@ public class CreateQueue extends HttpServlet {
 
 			//DatabaseChanges, sets the timeOut values, and the descriptions
 			int queueId = Queues.getIdByName(qName);
-			log.debug("just added new queue with id = " + queueId);
+			if (queueId <= 0) {
+				log.error("Failed to retrieve queue ID for: " + qName);
+				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to retrieve queue ID");
+				return;
+			}
 			Integer cpuTimeout = Integer.parseInt(request.getParameter(maxCpuTimeout));
 			Integer wallTimeout = Integer.parseInt(request.getParameter(maxWallTimeout));
 			String description = request.getParameter("description");
@@ -112,7 +117,8 @@ public class CreateQueue extends HttpServlet {
 				response.sendRedirect(Util.docRoot("secure/admin/cluster.jsp"));
 			}
 		} catch (Exception e) {
-			log.error("Caught Exception in CreateQueue.doPost" + e.getMessage());
+			log.error("Caught Exception in CreateQueue.doPost: " + e.getMessage(), e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Internal server error");
 		}
 	}
 
@@ -141,7 +147,7 @@ public class CreateQueue extends HttpServlet {
 
 			return QueueSecurity.canUserMakeQueue(userId, queueName);
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			log.error("Exception during request validation: " + e.getMessage(), e);
 		}
 
 		return new ValidatorStatusCode(false, "Internal error processing queue creation request");
