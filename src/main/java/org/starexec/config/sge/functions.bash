@@ -981,10 +981,10 @@ function copyDependencies {
 	log "chmod gu+rwx on the solver directory on the execution host ($LOCAL_SOLVER_DIR)"
 	chmod -R gu+rwx $LOCAL_SOLVER_DIR
 
-	log "copying runSolver to execution host..."
-	cp "$RUNSOLVER_PATH" "$LOCAL_RUNSOLVER_PATH"
-
-	log "runsolver copy complete"
+	# Use system runsolver instead of copying to avoid "unimplemented" errors in containers
+	# The container-compiled runsolver at /usr/local/bin/runsolver works correctly
+	log "using system runsolver at /usr/local/bin/runsolver"
+	LOCAL_RUNSOLVER_PATH="/usr/local/bin/runsolver"
 	ls -l "$LOCAL_RUNSOLVER_PATH"
 
 	log "copying benchmark $BENCH_PATH to $LOCAL_BENCH_PATH on execution host..."
