@@ -3,7 +3,6 @@ package org.starexec.util;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Spaces;
-import org.starexec.data.database.Users;
 import org.starexec.data.to.Permission;
 import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
@@ -16,33 +15,35 @@ import java.util.HashMap;
  * Contains handy methods for accessing data within a user's session
  * @author Tyler Jensen
  */
-
 public class SessionUtil {	
 	private static final StarLogger log = StarLogger.getLogger(SessionUtil.class);
 	public static final String USER = "user";	// The string we store the user's User object under
 	public static final String PERMISSION_CACHE = "perm";	// The string we store the user's permission cache object under
-	private static User publicUser = null;
 	/**
 	 * @param request The request to retrieve the user object from
 	 * @return The user object representing the currently logged in user
 	 */
 	public static User getUser(HttpServletRequest request) {
-		final String methodName = "getUser";
-		Object user = request.getSession().getAttribute(SessionUtil.USER);
-		if (user==null) {
-			log.debug(methodName, "User was null.");
-			if (publicUser==null) {
-				log.debug(methodName, "public user was null.");
-				publicUser = Users.get(R.PUBLIC_USER_ID);
+		final String method = "getUser";
+		log.entry(method);
+		
+		// If they have a valid session, then check for the user object
+		User u = null;
+		try {
+			if (request.getSession(false) != null) {
+				u = (User) request.getSession().getAttribute(SessionUtil.USER);
 			}
-			return publicUser;
+		} catch (Exception e) {
+			log.debug(method, "Exception getting user: " + e.getMessage(), e);
 		}
-		User castUser = (User)user;
-		log.debug("Returning user with id="+castUser.getId()+" email="+((User) user).getEmail());
-		return castUser;
-	}
-	
-	/**
+		
+		// Only log when there's an issue (reduce log spam)
+		if (u == null && request.getSession(false) != null) {
+			log.debug(method, "User session exists but user not found in session");
+		}
+		
+		return u;
+	}	/**
 	 * @param request The request to get the user's id from
 	 * @return The current user's id
 	 */
@@ -76,7 +77,9 @@ public class SessionUtil {
 	@SuppressWarnings("unchecked")
 	public static HashMap<Integer, Permission> getPermissionCache(HttpSession session) {
 		if (session.getAttribute(SessionUtil.PERMISSION_CACHE)==null) {
-			return new HashMap<>();
+			HashMap<Integer, Permission> newCache = new HashMap<>();
+			session.setAttribute(SessionUtil.PERMISSION_CACHE, newCache);
+			return newCache;
 		}
 		return (HashMap<Integer, Permission>)session.getAttribute(SessionUtil.PERMISSION_CACHE);
 	}
@@ -97,28 +100,43 @@ public class SessionUtil {
 	 * @return The permission associated with the given space
 	 */
 	private static Permission getPermission(HttpSession session, int spaceId) {
+		final int userId = SessionUtil.getUserId(session);
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
-		
-
-		// If the cache doesn't contain the requested permission...
 		if(!cache.containsKey(spaceId)) {
-			// Then cache it
 			SessionUtil.cachePermission(session, spaceId);
-		}
-		
-		if(cache.containsKey(spaceId)) {
-			// If the cache was successful and it was added, return the permission
-			return cache.get(spaceId);
+			cache = SessionUtil.getPermissionCache(session);
+		} else {
+			log.debug("Cache hit for spaceId="+spaceId);
 		}
 
-		//if the cache couldn't add it, or it doesn't exist, but the space is public
-		if (Spaces.isPublicSpace(spaceId)){
-			log.debug("Returning public users permissions");
+		Permission p = cache.get(spaceId);
+		if (p != null) {
+			log.debug("Returning cached permission: "+p);
+			return p;
+		}
+
+		boolean isPublic = Spaces.isPublicSpace(spaceId);
+
+		if (userId != R.PUBLIC_USER_ID) {
+			// For a real (logged in) user, attempt a one-time forced reload before falling back.
+			forceReloadPermission(session, spaceId);
+			p = cache.get(spaceId); // cache reference unchanged; entry may have been added
+			if (p != null) {
+				log.debug("Reload succeeded, returning permission: "+p);
+				return p;
+			}
+		}
+
+		if (isPublic) {
+			if (userId == R.PUBLIC_USER_ID) {
+				log.debug("Public space and public user; returning empty permission");
+			} else {
+				log.debug("Public space but no specific permission row; returning empty permission");
+			}
 			return Permissions.getEmptyPermission();
 		}
-		
-		
-		// Return null if the cache couldn't add it and space is private, or it doesn't exist
+
+		log.debug("Permission unresolved (private space) returning null");
 		return null;
 	}
 
@@ -129,16 +147,21 @@ public class SessionUtil {
 	 * @param spaceId The id of the space to cache the permission for
 	 */
 	private static void cachePermission(HttpSession session, int spaceId) {
-		// Make sure we cache the permission for this space for the user
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
-		if(!cache.containsKey(spaceId)) {
-			// If the cache does not have the permission, add it
-			Permission p = Permissions.get(SessionUtil.getUserId(session), spaceId);
-			
-			if(p != null) {
-				cache.put(spaceId, p);
-			}
+		int userId = SessionUtil.getUserId(session);
+		if (cache.containsKey(spaceId)) { return; }
+		Permission p = Permissions.get(userId, spaceId);
+		if (p != null) {
+			cache.put(spaceId, p);
 		}
+	}
+
+	// Force re-query permission ignoring existing cached absence
+	private static void forceReloadPermission(HttpSession session, int spaceId) {
+		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
+		cache.remove(spaceId);
+		// log.debug("forceReloadPermission: removed cache entry for spaceId="+spaceId);
+		cachePermission(session, spaceId);
 	}
 	
 	/**
