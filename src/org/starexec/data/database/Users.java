@@ -1160,7 +1160,7 @@ public class Users {
 	 * This includes: solvers, benchmarks, jobs, and ALL pictures (user, solver, and benchmark).
 	 *
 	 * @param userId Id of user whose data is to be completely deleted.
-	 * @author Albert Giegerich, Andres Cadavid (comprehensive cleanup)
+	 * @author Albert Giegerich, Andres Caicedo (comprehensive cleanup)
 	 */
 	private static void deleteUsersPrimitiveDirectories(int userId) {
 		final String method = "deleteUsersPrimitiveDirectories";
