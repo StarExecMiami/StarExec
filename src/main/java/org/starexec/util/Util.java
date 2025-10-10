@@ -7,7 +7,6 @@ import org.apache.commons.io.filefilter.FileFilterUtils;
 import org.apache.commons.io.filefilter.IOFileFilter;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.starexec.constants.R;
-import org.starexec.data.database.Common;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 
@@ -23,7 +22,6 @@ import java.net.URL;
 import java.net.URI;
 import java.net.URLConnection;
 import java.sql.Timestamp;
-import java.sql.SQLException;
 import java.text.DecimalFormat;
 import java.util.*;
 import java.util.List;
@@ -86,7 +84,6 @@ public class Util {
 	 */
 	public static Optional<String> readFileLimited(File f, int lineLimit) throws IOException {
 		final String methodName = "readFileLimited";
-		LineIterator lineItr = null;
 		log.debug(methodName, "calling readFileLimited");
 		try {
 			// Set limit to max if it's less than 0 (anything less than 0 inclusive indicates no limit)
@@ -96,21 +93,23 @@ public class Util {
 			if (f.exists()) {
 				// Create a buffer to store the lines in and an iterator to iterate over the lines
 				StringBuilder sb = new StringBuilder();
-				lineItr = FileUtils.lineIterator(f);
 				int i = 0;
 
-				// While there are more lines in the file...
-				while (lineItr.hasNext()) {
-					// If we've reached the line limit, break out, we're done.
-					if (i++ == lineLimit) {
-						break;
+				// Use try-with-resources to ensure the LineIterator is closed without using deprecated APIs
+				try (LineIterator lineItr = FileUtils.lineIterator(f, java.nio.charset.StandardCharsets.UTF_8.name())) {
+					// While there are more lines in the file...
+					while (lineItr.hasNext()) {
+						// If we've reached the line limit, break out, we're done.
+						if (i++ == lineLimit) {
+							break;
+						}
+
+						// If we're still under the limit, add the line to the buffer
+						sb.append(lineItr.nextLine());
+
+						// Don't forget to add a new line, since they are stripped as they are read
+						sb.append("\n");
 					}
-
-					// If we're still under the limit, add the line to the buffer
-					sb.append(lineItr.nextLine());
-
-					// Don't forget to add a new line, since they are stripped as they are read
-					sb.append("\n");
 				}
 
 				// Return the buffer
@@ -125,9 +124,6 @@ public class Util {
 					"Caught IOException with inputs: " + "\n\tFile f: " + f.getAbsolutePath() + "\n\tint lineLimit: " +
 					lineLimit);
 			throw e;
-		} finally {
-			// Release the line iterator without potential error
-			LineIterator.closeQuietly(lineItr);
 		}
 	}
 
@@ -294,21 +290,39 @@ public class Util {
 	 * @throws Exception If the request is malformed
 	 */
 	public static HashMap<String, Object> parseMultipartRequest(HttpServletRequest request) throws Exception {
-		// Use Tomcat's multipart form utilities
+		long t0 = System.currentTimeMillis();
+		log.debug("parseMultipartRequest: begin parsing multipart request");
 		HashMap<String, Object> form = new HashMap<>();
-		for (Part p : request.getParts()) {
+		Collection<Part> parts;
+		try {
+			log.debug("parseMultipartRequest: calling request.getParts()...");
+			parts = request.getParts();
+			log.debug("parseMultipartRequest: request.getParts() returned " + (parts==null?"null":parts.size()+" parts") + " in " + (System.currentTimeMillis()-t0) + " ms");
+		} catch (Throwable ex) {
+			log.error("parseMultipartRequest: exception obtaining parts after " + (System.currentTimeMillis()-t0) + " ms", ex);
+			throw ex instanceof Exception ? (Exception) ex : new Exception(ex);
+		}
+		if (parts == null) {
+			log.warn("parseMultipartRequest: parts collection is null");
+			return form;
+		}
+		int idx = 0;
+		for (Part p : parts) {
+			long ps = p.getSize();
+			String pn = p.getName();
+			String ct = p.getContentType();
+			log.debug("parseMultipartRequest: processing part #"+idx+" name="+pn+" size="+ps+" contentType="+ct);
+			idx++;
 			PartWrapper wrapper = new PartWrapper(p);
-			// If we're dealing with a regular form field...
 			if (wrapper.isFile()) {
-				// Else we've encountered a file, so add the entire wrapper to the HashMap.
-				// The wrapper provides all the relevant interface of a FileItem
-				form.put(p.getName(), wrapper);
+				form.put(pn, wrapper);
 			} else {
-				// Add the field name and field value to the hashmap
-				form.put(p.getName(), IOUtils.toString(p.getInputStream()));
+				try (InputStream is = p.getInputStream()) {
+					form.put(pn, IOUtils.toString(is, java.nio.charset.StandardCharsets.UTF_8));
+				}
 			}
 		}
-
+		log.debug("parseMultipartRequest: completed parsing " + form.size() + " fields in " + (System.currentTimeMillis()-t0) + " ms");
 		return form;
 	}
 
@@ -320,7 +334,17 @@ public class Util {
 	 * @throws IOException
 	 */
 	public static String executeCommand(String command) throws IOException {
-		final String[] cmd = {command};
+		// Use a system shell so that whitespace-separated commands like
+		// "ls -l -R /path" are interpreted correctly. The previous implementation
+		// wrapped the entire string as a single executable name, causing
+		// java.io.IOException: Cannot run program "ls -l -R /path": error=2.
+		String os = System.getProperty("os.name").toLowerCase();
+		String[] cmd;
+		if (os.contains("win")) {
+			cmd = new String[]{"cmd.exe", "/c", command};
+		} else {
+			cmd = new String[]{"/bin/sh", "-c", command};
+		}
 		return executeCommand(cmd, null, null);
 	}
 
@@ -333,7 +357,13 @@ public class Util {
 	 * @throws IOException
 	 */
 	public static String executeCommand(String command, String[] env) throws IOException {
-		final String[] cmd = {command};
+		String os = System.getProperty("os.name").toLowerCase();
+		String[] cmd;
+		if (os.contains("win")) {
+			cmd = new String[]{"cmd.exe", "/c", command};
+		} else {
+			cmd = new String[]{"/bin/sh", "-c", command};
+		}
 		return executeCommand(cmd, env, null);
 	}
 
@@ -359,7 +389,24 @@ public class Util {
 	}
 
 	/**
-	 * Executes a command as the sandbox user using sudo
+	 * Checks if sudo command is available on the system
+	 * @return true if sudo is available, false otherwise
+	 */
+	public static boolean isSudoAvailable() {
+		log.debug("isSudoAvailable", "Checking if sudo is available on the system.");
+		try {
+			ProcessBuilder pb = new ProcessBuilder("which", "sudo");
+			Process process = pb.start();
+			process.waitFor();
+			log.debug("isSudoAvailable", "which sudo returned exit code: " + process.exitValue());
+			return process.exitValue() == 0;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	/**
+	 * Executes a command as the sandbox user using sudo (if available) (if available)
 	 *
 	 * @param command The command to execute, tokenized
 	 * @param envp Environment variables for the command
@@ -369,12 +416,20 @@ public class Util {
 	 */
 	public static String executeSandboxCommand(String[] command, String[] envp, File workingDirectory) throws
 			IOException {
-		String[] newCommand = new String[command.length + 3];
-		newCommand[0] = "sudo";
-		newCommand[1] = "-u";
-		newCommand[2] = R.SANDBOX_USER_ONE;
-		System.arraycopy(command, 0, newCommand, 3, command.length);
-		return executeCommand(newCommand, envp, workingDirectory);
+		// Check if sudo is available - if not (e.g., in Docker container), execute command directly
+		if (isSudoAvailable()) {
+			log.debug("sudo is available, executing command with sudo: " + java.util.Arrays.toString(command));
+			String[] newCommand = new String[command.length + 3];
+			newCommand[0] = "sudo";
+			newCommand[1] = "-u";
+			newCommand[2] = R.SANDBOX_USER_ONE;
+			System.arraycopy(command, 0, newCommand, 3, command.length);
+			return executeCommand(newCommand, envp, workingDirectory);
+		} else {
+			// In containerized environments, execute command directly
+			log.debug("sudo not available, executing command directly: " + java.util.Arrays.toString(command));
+			return executeCommand(command, envp, workingDirectory);
+		}
 	}
 
 	/**
@@ -401,11 +456,7 @@ public class Util {
 		}
 		log.info(methodName, b.toString());
 
-		if (command.length == 1) {
-			return r.exec(command[0], envp, workingDirectory);
-		} else {
-			return r.exec(command, envp, workingDirectory);
-		}
+		return r.exec(command, envp, workingDirectory);
 	}
 
 	/**
@@ -988,16 +1039,30 @@ public class Util {
 		}
 		
 		//give sandbox full permissions over the solver directory
-		String[] chmod = new String[7];
-		chmod[0] = "sudo";
-		chmod[1] = "-u";
-		chmod[2] = R.SANDBOX_USER_ONE;
-		chmod[3] = "chmod";
-		chmod[4] = "-R";
-		chmod[5] = "u+rwx,g+rwx";
-		for (File f : dir.listFiles()) {
-			chmod[6] = f.getAbsolutePath();
-			Util.executeCommand(chmod);
+		if (isSudoAvailable()) {
+			// Use sudo if available
+			String[] chmod = new String[7];
+			chmod[0] = "sudo";
+			chmod[1] = "-u";
+			chmod[2] = R.SANDBOX_USER_ONE;
+			chmod[3] = "chmod";
+			chmod[4] = "-R";
+			chmod[5] = "u+rwx,g+rwx";
+			for (File f : dir.listFiles()) {
+				chmod[6] = f.getAbsolutePath();
+				Util.executeCommand(chmod);
+			}
+		} else {
+			// In containerized environments, execute chmod directly
+			log.debug("sudo not available, executing chmod directly for directory: " + dir.getAbsolutePath());
+			String[] chmod = new String[4];
+			chmod[0] = "chmod";
+			chmod[1] = "-R";
+			chmod[2] = "u+rwx,g+rwx";
+			for (File f : dir.listFiles()) {
+				chmod[3] = f.getAbsolutePath();
+				Util.executeCommand(chmod);
+			}
 		}
 	}
 	// public static void sandboxChownDirectory(File dir) throws IOException {
@@ -1126,6 +1191,7 @@ public class Util {
 		try {
 			log.debug("logging sandbox contents");
 			log.debug("PERMISSION CHECK");
+			// Using shell execution; command will be run via /bin/sh -c
 			log.debug(Util.executeCommand("ls -l -R " + Util.getSandboxDirectory().getAbsolutePath()));
 
 		} catch (Exception e) {
