@@ -1,46 +1,104 @@
 # StarExec
 
-StarExec is a cross community logic solving service developed at the University
+StarExec is a cross community logic solving service developed at the University.
 of Iowa under the direction of principal investigators Aaron Stump (Iowa), Geoff
 Sutcliffe (University of Miami), and Cesare Tinelli (Iowa).
 
-Its main goal is to facilitate the experimental evaluation of logic solvers,
-broadly understood as automated tools based on formal reasoning. The service is
-designed to provide a single piece of storage and computing infrastructure to
-logic solving communities and their members. It aims at reducing duplication of
-effort and resources as well as enabling individual researchers or groups with
-no access to comparable infrastructure.
+1. **Build and Run:**
+    From the root of the project, run:
 
-StarExec allows
+    ```bash
+    docker-compose up --build
+    ```
 
- * community organizers to store, manage and make available benchmark libraries;
- * competition organizers to run logic solver competitions; and
- * community members to perform comparative evaluations of logic solvers on
-   public or private benchmark problems.
+    This command will:
+    * Build the StarExec Docker image, which includes compiling SCSS, building the `.war` file with Maven, and setting up a Tomcat 9 server.
+    * Start the StarExec application container and a MySQL 8 database container.
+    * Apply database migrations using Flyway on startup.
 
-Development details can be found on our
-[public development wiki](http://wiki.uiowa.edu/display/stardev/Home).
+2. **Accessing the Application:**
+    Once the containers are running, you can access StarExec at:
+    [http://localhost:8080/](http://localhost:8080/)
 
-## Dependencies
+3. **Stopping the Application:**
+    To stop the containers, press `Ctrl+C`. To remove the containers, run:
 
-### Java
+    ```bash
+    docker-compose down
+    ```
+
+## Manual Build (Without Docker)
+
+While Docker is recommended, you can still build and run StarExec manually.
+
+### Dependencies
+
+* **Java 11+**: Required for building and running the application.
+* **Maven 3.8+**: Used for dependency management and building the project.
+* **Node.js 20+**: Required for compiling SCSS stylesheets with Dart Sass.
+* **MySQL 8.0+**: The database backend.
+* **Tomcat 9.0+**: The application server.
+
+### Building the WAR file
+
+To compile the source code and package it into a `.war` file, run:
+
+```bash
+mvn clean package
+```
+
+The resulting `starexec.war` file will be located in the `target/` directory. You can then deploy this file to your Tomcat server.
+
+### Database Setup
+
+Database schema and data migrations are managed by [Flyway](https://flywaydb.org/). The migration scripts are located in `src/main/resources/db/migration`.
+
+To apply migrations, you will need to configure the Flyway Maven plugin in `pom.xml` with your database credentials and run:
+
+```bash
+mvn flyway:migrate
+```
+
+For more details, see [`README-db-migrations.md`](README-db-migrations.md).
+
+## Backend Implementations
+
+StarExec's backend refers to the utility that is responsible for accepting new
+jobs from the web app and distributing them over the available compute nodes.
+StarExec supports 3 different backend implementations:
+[SGE](https://arc.liv.ac.uk/trac/SGE),
+[OAR](https://oar.imag.fr/),
+or a simple local backend implemented in StarExec itself.
+
+When running with Docker Compose, the `local` backend is used by default.
+
+<details>
+<summary>Legacy Documentation</summary>
+
+The following sections describe the previous Ant-based build process and manual configuration. They are preserved for historical reference but are no longer applicable.
+
+---
+
+### Legacy Dependencies
+
+#### Java
 
 StarExec requires Ant to build, and has been tested with version 1.9.2.
 An installation guide for Ant is below, or you may use any applicable
 package manager.
 
-http://ant.apache.org/manual/install.html
+<http://ant.apache.org/manual/install.html>
 
-### SASS
+#### SASS
 
 StarExec requires [Sass](https://sass-lang.com) at build time to compile `.scss`
 stylesheets to `.css`. Sass depends on [Ruby](https://www.ruby-lang.org/en/).
 
 We are currently using Ruby Sass 3.4.24
 
-https://sass-lang.com/install
+<https://sass-lang.com/install>
 
-### Apache Tomcat
+#### Apache Tomcat
 
 StarExec depends on Apache Tomcat 7.0.64. While newer versions may work, we have
 frequently seen that even minor version releases of Tomcat can have breaking
@@ -54,41 +112,19 @@ is required for StarExec to connect to its database, and as such we
 recommend that you install Tomcat using the provided archive. If you would like
 to install a clean copy of Tomcat, you will need to copy MySQL connector to the new lib directory.
 
-PLEASE NOTE: We recently migrated our servers from centOS to Rocky8. Due to this, DRMAA is no longer 
-a required dependency. Instead, we will be using qsub. For more information about this command, please 
-see [https://www.jlab.org/hpc/PBS/qsub.html](https://www.jlab.org/hpc/PBS/qsub.html)
+PLEASE NOTE: We recently migrated our servers from centOS to Rocky8. Due to this, DRMAA is no longer a required dependency. Instead, we will be using qsub. For more information about this command, please see [https://www.jlab.org/hpc/PBS/qsub.html](https://www.jlab.org/hpc/PBS/qsub.html)
 
 If you install Tomcat using the provided archive, you may need to update
 permissions on the install directory to make Tomcat's scripts executable. This
 can be done, for example, by using `chmod 700 -R tomcat_directory`
 
-### MySQL and MariaDB
+#### MySQL and MariaDB
 
 StarExec depends on MariaDB 5.5.56.
 
-https://downloads.mariadb.org/
+<https://downloads.mariadb.org/>
 
-
-### Backend
-
-StarExec's backend refers to the utility that is responsible for accepting new
-jobs from the web app and distributing them over the available compute nodes.
-StarExec supports 3 different backend implementations:
-[SGE](https://arc.liv.ac.uk/trac/SGE),
-[OAR](https://oar.imag.fr/),
-or a simple local backend implemented in StarExec itself.
-
-To install SGE or OAR, you will need to refer to their documentation. In the
-case of OAR, the document
-[`distribution/OAR installation notes.txt`](distribution/OAR%20installation%20notes.txt)
-describes extra installation steps you should take to configure OAR for use with
-StarExec.
-
-The local backend is a primitive solution if you only want to run jobs on the
-same machine that StarExec is running off of. The local backend does not support
-multiple queues or nodes, and only a single job will run at a time.
-
-## Configuration
+### Legacy Configuration
 
 StarExec is configured by Ant at build time.
 
@@ -111,7 +147,7 @@ An empty configuration file is provided as
 This file also explains the properties that must be set for a particular
 StarExec instance.
 
-### Database
+#### Database
 
 `DB.User` must be set to the username of a MariaDB user that has full
 permissions for the database. `DB.Pass` must be set to the password for that
@@ -122,7 +158,7 @@ report results to the database. This user _only_ needs `EXECUTE` permission, and
 is configured via `Cluster.DB.User` and `Cluster.DB.Pass`. If unspecified, these
 will default to the values of `DB.User` and `DB.Pass`.
 
-### Email
+#### Email
 
 StarExec sends automated emails for several purposes, such as sending
 notifications when new users are registered or sending weekly status updates.
@@ -134,7 +170,7 @@ StarExec is also configured to use a `Email.Contact`, which is intended to
 receive emails directed at StarExec admins. This email address will appear
 on the site for users who want to send bug reports or ask questions.
 
-### Backend
+#### Backend
 
 You will need to make sure that you have mapped the StarExec data directory,
 (`data_dir`), to a matching path on each compute node, as your compute nodes
@@ -175,7 +211,9 @@ Additionally, use `chmod g+s` to set the GID for the directory.
 Finally, use the following command to ensure that new directories in the sandbox
 have `g+rwx` permissions.
 
+```bash
     setfacl -d -m g::rwx sandbox
+```
 
 The directory configured as `Backend.WorkingDir` needs to be created.
 `tomcat` should be the owner and `star-web` should be the group.
@@ -187,8 +225,7 @@ StarExec uses `sudo` in several locations to execute commands as other users,
 most often to execute commands using the `Cluster.UserOne` and `Cluster.UserTwo`
 users. The `tomcat` user will need all of the following `sudo` permissions.
 
-
-#### HEAD NODE
+##### HEAD NODE
 
 User `tomcat` may run the following commands on this host:
 
@@ -201,8 +238,7 @@ Replace `/cluster/gridengine-8.1.8/bin/lx-amd64/` in each path with your install
 
     (sgeadmin) NOPASSWD: /cluster/gridengine-8.1.8/bin/lx-amd64/qconf, /cluster/gridengine-8.1.8/bin/lx-amd64/qmod
 
-
-####  COMPUTE NODE (or head node if you are using a local backend)
+##### COMPUTE NODE (or head node if you are using a local backend)
 
 User `tomcat` may run the following commands on this host:
 
@@ -219,3 +255,5 @@ respectively.
 The same applies as on the head node for the following commands
 
     (sgeadmin) NOPASSWD: /cluster/gridengine-8.1.8/bin/lx-amd64/qconf, /cluster/gridengine-8.1.8/bin/lx-amd64/qmod
+
+</details>

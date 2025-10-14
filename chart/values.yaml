@@ -1,0 +1,79 @@
+# Default values for chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+image:
+  repository: localhost/local/starexec
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 5Gi
+  # Podman dev: Set usePodmanVolumes=true for named volumes (RECOMMENDED)
+  # Legacy: useHostPathForPodman=true uses /tmp hostPath (not recommended)
+  useHostPathForPodman: false
+  usePodmanVolumes: false  # Override to true in values-dev.yaml
+  
+  # Named volume configuration for Podman (only when usePodmanVolumes=true)
+  podmanVolumes:
+    data:
+      name: starexec-data
+    mysql:
+      name: starexec-mysql
+
+mysql: # For production, use an external database
+  image:
+    repository: docker.io/library/mysql
+    pullPolicy: IfNotPresent
+    tag: 8.0
+  host: localhost
+  port: 3306
+  user: starexec
+  password: starexec_password
+  database: starexec  # Fixed: moved from metadata.database to database
+  rootPassword: starexec_password  # Added: needed by secret template
+  # In production DO NOT define password here
+  # The chart only references an external secret
+
+  persistence:
+    enabled: false
+    storageClass: ""
+    size: 20Gi
+
+  # COMMENT OUT OR REMOVE existingSecret to let Helm create the secret
+  # existingSecret: "{{ include \"chart.fullname\" . }}-secret-mysql"
+  # existingSecretKeys:
+  #   user: user
+  #   password: password
+  #   database: database
+  #   rootPassword: rootPassword
+
+env: {}
+
+backend:
+  type: "local"
+  root: "/app/backend"
+  workingDir: "/app/work"
+
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+# Resource requests and limits
+resources:
+  app:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  mysql:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"

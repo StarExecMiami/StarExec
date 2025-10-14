@@ -1,0 +1,72 @@
+# Development environment values (Podman local development)
+# Usage: make deploy-podman ENV=dev
+#        or: VALS=chart/values-dev.yaml make deploy-podman
+
+image:
+  repository: localhost/local/starexec
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Podman development mode: uses named volumes for proper lifecycle
+persistence:
+  enabled: true
+  storageClass: ""  # Not applicable to Podman
+  size: 5Gi
+  useHostPathForPodman: false  # Use named volumes instead
+  usePodmanVolumes: true  # Enable Podman-specific named volume handling
+  
+  # Named volume configuration (Podman creates/manages these)
+  podmanVolumes:
+    data:
+      name: starexec-dev-data
+    mysql:
+      name: starexec-dev-mysql
+
+mysql:
+  image:
+    repository: docker.io/library/mysql
+    pullPolicy: IfNotPresent
+    tag: "8.0"
+  
+  host: localhost  # Within pod, containers share localhost
+  port: 3306
+  user: starexec
+  password: starexec_dev_password  # Dev-only; use env override for local testing
+  database: starexec
+  rootPassword: starexec_dev_password
+  
+  persistence:
+    enabled: true  # Enable persistence in dev for database continuity
+
+backend:
+  type: "local"
+  root: "/app/backend"
+  workingDir: "/app/work"
+
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+resources:
+  app:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  mysql:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Development-specific configurations
+env:
+  LOG_LEVEL: "DEBUG"
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+  STAREXEC_WEB_ADDRESS: "localhost:7827"
+  STAREXEC_URL_PREFIX: "http"
