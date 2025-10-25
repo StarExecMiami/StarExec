@@ -60,12 +60,20 @@ jobs:
           COMPOSE_IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep starexec | head -1)
           echo "Found image: $COMPOSE_IMAGE"
           
+          # Always tag with commit SHA (immutable reference)
           docker tag $COMPOSE_IMAGE ${IMAGE_NAME}:${{ github.sha }}
           docker push ${IMAGE_NAME}:${{ github.sha }}
-
-          if [ "${{ github.ref }}" = "refs/heads/containerised" ]; then
+          
+          # Tag with branch name (mutable, points to latest commit in branch)
+          BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
+          docker tag ${IMAGE_NAME}:${{ github.sha }} ${IMAGE_NAME}:${BRANCH_NAME}
+          docker push ${IMAGE_NAME}:${BRANCH_NAME}
+          
+          # Only tag "latest" for production branch (containerised)
+          if [ "${BRANCH_NAME}" = "containerised" ]; then
             docker tag ${IMAGE_NAME}:${{ github.sha }} ${IMAGE_NAME}:latest
             docker push ${IMAGE_NAME}:latest
+            echo "✓ Pushed to latest (production branch)"
           fi
       
       - name: Collect logs on failure
