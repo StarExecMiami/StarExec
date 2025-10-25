@@ -1,0 +1,115 @@
+# GitHub Actions CI/CD Pipeline for StarExec
+
+name: StarExec CI
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    branches: [UMprod, dev, containerised]
+  pull_request:
+    branches: [UMprod, dev, containerised]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/starexec
+  IMAGE_TAG: ci-${{ github.sha }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman mvn
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${REGISTRY} -u "${{ github.actor }}" --password-stdin
+      
+      - name: Build image
+        run: |
+          make build IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+      
+      - name: Deploy ephemeral environment
+        env:
+          STAREXEC_DB_PASSWORD: ci_test_password
+        run: |
+          make deploy-podman ENV=ci IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+      
+      - name: Wait for services
+        run: |
+          timeout 120 bash -c 'until podman exec starexec-mysql mysqladmin ping -h localhost --silent; do sleep 2; done'
+          timeout 120 bash -c 'until curl -f http://localhost:7827/starexec > /dev/null 2>&1; do sleep 2; done'
+      
+      - name: Run migrations
+        env:
+          STAREXEC_DB_PASSWORD: ci_test_password
+        run: |
+          make migrate-podman IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+      
+      - name: Run integration tests
+        run: |
+          # Add your test commands here
+          curl -f http://localhost:7827/starexec/health || exit 1
+
+      - name: Push image to GitHub Container Registry
+        if: github.event_name == 'push'
+        run: |
+          podman push ${IMAGE_NAME}:${IMAGE_TAG}
+          if [ "${{ github.ref }}" = "refs/heads/]; then
+            podman tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+            podman push ${IMAGE_NAME}:latest
+          fi
+      
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          podman logs starexec-app > app-logs.txt
+          podman logs starexec-mysql > mysql-logs.txt
+      
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-logs
+          path: |
+            app-logs.txt
+            mysql-logs.txt
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          make undeploy-podman IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+          podman system prune -af
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+      
+      - name: Lint Helm charts
+        run: make lint
+      
+      - name: Validate all environments
+        run: |
+          for env in dev ci prod; do
+            echo "Validating ENV=$env"
+            helm template starexec ./chart -f chart/values-$env.yaml > /dev/null
+          done
