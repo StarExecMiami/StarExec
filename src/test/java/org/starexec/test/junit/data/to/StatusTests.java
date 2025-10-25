@@ -4,7 +4,7 @@ import org.junit.Test;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
+import java.io.InputStreamReader;
 import java.util.EnumSet;
 
 import static org.junit.Assert.assertFalse;
@@ -121,24 +121,30 @@ public class StatusTests {
 	 */
 	@Test
 	public void enumMatchesShell() {
-		final String filename = "src/org/starexec/config/sge/status_codes.bash";
-		BufferedReader reader = null;
+		final String resourceName = "org/starexec/config/sge/status_codes.bash";
 
-		try {
-			reader = new BufferedReader(new FileReader(filename));
-		} catch (java.io.FileNotFoundException e) {
-			fail("File not found: " + filename);
+		var inputStream = StatusTests.class.getClassLoader().getResourceAsStream(resourceName);
+		if (inputStream == null) {
+			fail("Could not find resource: " + resourceName);
 		}
 
-		reader.lines() // For every line in the script
-			.filter( l -> !l.isEmpty() && l.charAt(0) != '#' ) // Strip all lines that are empty or comments
-			.forEach( l -> {
-				String[] line = l.split("="); // Split the line at =
-				String shellStatusName = line[0].replaceAll("^readonly\\s+",""); // Name is left of =
-				int statusCode = Integer.parseInt(line[1]); // Code is right of =
-				String enumStatusName = StatusCode.toStatusCode(statusCode).toString(); // Find the corresponding enum status code
-				assertEquals(shellStatusName, enumStatusName); // Make sure they match
-			})
-		;
+		try (
+			var reader = new BufferedReader(new InputStreamReader(inputStream))
+		) {
+			reader.lines() // For every line in the script
+				.filter( l -> !l.isEmpty() && l.charAt(0) != '#' ) // Strip all lines that are empty or comments
+				.forEach( l -> {
+					String[] line = l.split("="); // Split the line at =
+					String shellStatusName = line[0].replaceAll("^readonly\\s+",""); // Name is left of =
+					int statusCode = Integer.parseInt(line[1]); // Code is right of =
+					String enumStatusName = StatusCode.toStatusCode(statusCode).toString(); // Find the corresponding enum status code
+					assertEquals(shellStatusName, enumStatusName); // Make sure they match
+				})
+			;
+		} catch (java.io.FileNotFoundException e) {
+			fail("File not found: " + resourceName);
+		} catch (java.io.IOException e) {
+			fail("I/O error reading file: " + resourceName);
+		}
 	}
 }
