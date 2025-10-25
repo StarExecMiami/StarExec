@@ -60,11 +60,11 @@ jobs:
           COMPOSE_IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep starexec | head -1)
           echo "Found image: $COMPOSE_IMAGE"
           
-          docker tag $COMPOSE_IMAGE ${IMAGE_NAME}:{{ github.sha }}
-          docker push ${IMAGE_NAME}:{{ github.sha }}
+          docker tag $COMPOSE_IMAGE ${IMAGE_NAME}:${{ github.sha }}
+          docker push ${IMAGE_NAME}:${{ github.sha }}
 
           if [ "${{ github.ref }}" = "refs/heads/containerised" ]; then
-            docker tag ${IMAGE_NAME}:{{ github.sha }} ${IMAGE_NAME}:latest
+            docker tag ${IMAGE_NAME}:${{ github.sha }} ${IMAGE_NAME}:latest
             docker push ${IMAGE_NAME}:latest
           fi
       
