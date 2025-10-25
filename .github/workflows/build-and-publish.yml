@@ -69,6 +69,10 @@ jobs:
           MYSQL_CONTAINER=$(podman ps --format '{{.Names}}' | grep mysql | head -1)
           echo "Found MySQL container: $MYSQL_CONTAINER"
           
+          # Show MySQL logs immediately for diagnostics
+          echo "Initial MySQL logs:"
+          podman logs --tail 20 $MYSQL_CONTAINER 2>&1 || true
+          
           # Wait for MySQL to be ready (with progress indicators)
           for i in {1..60}; do
             if podman exec $MYSQL_CONTAINER mysqladmin ping -h localhost --silent 2>/dev/null; then
@@ -79,13 +83,18 @@ jobs:
             sleep 2
             if [ $i -eq 60 ]; then
               echo "ERROR: MySQL did not become ready in time"
-              echo "MySQL container logs:"
-              podman logs $MYSQL_CONTAINER --tail 50
+              echo "=== Full MySQL container logs ==="
+              podman logs --tail 100 $MYSQL_CONTAINER 2>&1
+              echo "=== Container inspect ==="
+              podman inspect $MYSQL_CONTAINER 2>&1
               exit 1
             fi
           done
           
           echo "Waiting for StarExec application..."
+          APP_CONTAINER=$(podman ps --format '{{.Names}}' | grep starexec | grep -v mysql | head -1)
+          echo "Found app container: $APP_CONTAINER"
+          
           for i in {1..60}; do
             if curl -f http://localhost:7827/starexec > /dev/null 2>&1; then
               echo "✓ StarExec application is ready after $i attempts"
@@ -95,9 +104,8 @@ jobs:
             sleep 2
             if [ $i -eq 60 ]; then
               echo "ERROR: StarExec application did not become ready in time"
-              echo "Application container logs:"
-              APP_CONTAINER=$(podman ps --format '{{.Names}}' | grep starexec | grep -v mysql | head -1)
-              podman logs $APP_CONTAINER --tail 50
+              echo "=== Application container logs ==="
+              podman logs --tail 100 $APP_CONTAINER 2>&1
               exit 1
             fi
           done
@@ -147,8 +155,30 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          make undeploy-podman IMAGE_NAME=${{ steps.image_name.outputs.image_name }} IMAGE_TAG=${{ steps.image_name.outputs.image_tag }}
-          podman system prune -af
+          echo "Cleaning up deployment..."
+          # Force remove all pods (ignore errors)
+          for pod in starexec starexec-pod; do
+            podman pod rm -f $pod 2>/dev/null || true
+          done
+          
+          # Force remove any orphaned containers (ignore errors)
+          for container in $(podman ps -aq 2>/dev/null); do
+            podman rm -f $container 2>/dev/null || true
+          done
+          
+          # Remove secrets (ignore errors)
+          for secret in $(podman secret ls --format '{{.Name}}' 2>/dev/null | grep starexec); do
+            podman secret rm $secret 2>/dev/null || true
+          done
+          
+          # Clean up volumes (CI uses ephemeral volumes)
+          podman volume prune -f 2>/dev/null || true
+          
+          # Clean up system without interactive prompts
+          echo "Pruning Podman system..."
+          podman system prune -af --volumes 2>/dev/null || true
+          
+          echo "✓ Cleanup complete"
 
   helm-lint:
     runs-on: ubuntu-latest
