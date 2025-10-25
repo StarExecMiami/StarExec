@@ -70,3 +70,10 @@ distribution/*.zip
 ####################################
 node/
 node_modules/
+
+####################################
+# Configuration files
+####################################
+render.yaml
+secret-render.yaml
+backups/
