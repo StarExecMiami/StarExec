@@ -238,7 +238,8 @@ deploy-podman-helm:
 	IMAGE_VER="$(IMAGE_TAG)"; \
 	helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set image.repository=$$IMAGE_REPO \
-		--set image.tag=$$IMAGE_VER > render.yaml
+		--set image.tag=$$IMAGE_VER \
+		--set image.pullPolicy=Never > render.yaml
 	@podman play kube render.yaml
 	@echo ""
 	@echo "✓ Deployment complete!"
