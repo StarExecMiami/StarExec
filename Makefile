@@ -234,7 +234,11 @@ deploy-podman-helm:
 		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
 	done
 	@echo "Deploying application pod..."
-	@helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" > render.yaml
+	@IMAGE_REPO=$$(echo "$(IMAGE_NAME)" | cut -d: -f1); \
+	IMAGE_VER="$(IMAGE_TAG)"; \
+	helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
+		--set image.repository=$$IMAGE_REPO \
+		--set image.tag=$$IMAGE_VER > render.yaml
 	@podman play kube render.yaml
 	@echo ""
 	@echo "✓ Deployment complete!"
