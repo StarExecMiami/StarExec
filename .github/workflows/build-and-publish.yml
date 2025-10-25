@@ -26,6 +26,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Set lowercase image name
+        id: image_name
+        run: |
+          echo "image_name=$(echo 'ghcr.io/${{ github.repository_owner }}/starexec' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          echo "image_tag=ci-${{ github.sha }}" >> $GITHUB_OUTPUT
+      
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -49,13 +55,13 @@ jobs:
       
       - name: Build image
         run: |
-          make build IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+          make build IMAGE_NAME=${{ steps.image_name.outputs.image_name }} IMAGE_TAG=${{ steps.image_name.outputs.image_tag }}
       
       - name: Deploy ephemeral environment
         env:
           STAREXEC_DB_PASSWORD: ci_test_password
         run: |
-          make deploy-podman ENV=ci IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+          make deploy-podman ENV=ci IMAGE_NAME=${{ steps.image_name.outputs.image_name }} IMAGE_TAG=${{ steps.image_name.outputs.image_tag }}
       
       - name: Wait for services
         run: |
@@ -72,7 +78,7 @@ jobs:
         env:
           STAREXEC_DB_PASSWORD: ci_test_password
         run: |
-          make migrate-podman IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+          make migrate-podman IMAGE_NAME=${{ steps.image_name.outputs.image_name }} IMAGE_TAG=${{ steps.image_name.outputs.image_tag }}
       
       - name: Run integration tests
         run: |
@@ -82,10 +88,10 @@ jobs:
       - name: Push image to GitHub Container Registry
         if: github.event_name == 'push'
         run: |
-          podman push ${IMAGE_NAME}:${IMAGE_TAG}
+          podman push ${{ steps.image_name.outputs.image_name }}:${{ steps.image_name.outputs.image_tag }}
           if [ "${{ github.ref }}" = "refs/heads/containerised" ]; then
-            podman tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
-            podman push ${IMAGE_NAME}:latest
+            podman tag ${{ steps.image_name.outputs.image_name }}:${{ steps.image_name.outputs.image_tag }} ${{ steps.image_name.outputs.image_name }}:latest
+            podman push ${{ steps.image_name.outputs.image_name }}:latest
           fi
       
       - name: Collect logs on failure
@@ -111,7 +117,7 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          make undeploy-podman IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG}
+          make undeploy-podman IMAGE_NAME=${{ steps.image_name.outputs.image_name }} IMAGE_TAG=${{ steps.image_name.outputs.image_tag }}
           podman system prune -af
 
   helm-lint:
