@@ -26,10 +26,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Run unit tests
+        run: |
+          mvn test
+      
       - name: Install Podman
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman mvn
+          sudo apt-get install -y podman
 
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push'
@@ -48,8 +59,14 @@ jobs:
       
       - name: Wait for services
         run: |
-          timeout 120 bash -c 'until podman exec starexec-mysql mysqladmin ping -h localhost --silent; do sleep 2; done'
+          echo "Waiting for MySQL to be ready..."
+          MYSQL_CONTAINER=$(podman ps --format '{{.Names}}' | grep mysql | head -1)
+          echo "Found MySQL container: $MYSQL_CONTAINER"
+          timeout 120 bash -c "until podman exec $MYSQL_CONTAINER mysqladmin ping -h localhost --silent; do sleep 2; done"
+          
+          echo "Waiting for StarExec application..."
           timeout 120 bash -c 'until curl -f http://localhost:7827/starexec > /dev/null 2>&1; do sleep 2; done'
+          echo "Services are ready!"
       
       - name: Run migrations
         env:
@@ -66,7 +83,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           podman push ${IMAGE_NAME}:${IMAGE_TAG}
-          if [ "${{ github.ref }}" = "refs/heads/]; then
+          if [ "${{ github.ref }}" = "refs/heads/containerised" ]; then
             podman tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
             podman push ${IMAGE_NAME}:latest
           fi
@@ -74,8 +91,14 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: |
-          podman logs starexec-app > app-logs.txt
-          podman logs starexec-mysql > mysql-logs.txt
+          echo "Listing all containers..."
+          podman ps -a
+          echo ""
+          echo "Collecting logs from all containers..."
+          for container in $(podman ps -a --format '{{.Names}}' | grep -E 'starexec|mysql'); do
+            echo "Collecting logs from: $container"
+            podman logs "$container" > "${container}-logs.txt" 2>&1 || echo "Failed to collect logs from $container"
+          done
       
       - name: Upload logs
         if: failure()
@@ -83,8 +106,7 @@ jobs:
         with:
           name: container-logs
           path: |
-            app-logs.txt
-            mysql-logs.txt
+            *-logs.txt
       
       - name: Cleanup
         if: always()
