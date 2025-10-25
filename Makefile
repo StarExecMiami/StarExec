@@ -25,31 +25,6 @@ start: deploy-podman
 
 stop: undeploy-podman
 
-deploy-podman-cached:
-	@if [ ! -f render.yaml ]; then \
-		echo "Error: render.yaml not found. Run 'make template' first or use 'make deploy-podman'"; \
-		exit 1; \
-	fi
-	@echo "Deploying using cached render.yaml..."
-	@echo "Cleaning up existing deployment..."
-	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
-		if podman pod exists $$pod 2>/dev/null; then \
-			echo "  Removing existing pod: $$pod"; \
-			podman pod rm -f $$pod 2>/dev/null || true; \
-		fi \
-	done
-	@for container in starexec-app starexec-mysql; do \
-		if podman container exists $$container 2>/dev/null; then \
-			echo "  Removing orphaned container: $$container"; \
-			podman rm -f $$container 2>/dev/null || true; \
-		fi \
-	done
-	@podman play kube render.yaml
-	@echo ""
-	@echo "✓ Deployment complete (using cached manifest)!"
-	@echo "  Access: http://localhost:7827/starexec"
-	@echo ""
-	@echo "Note: To regenerate manifest, run 'make template' or 'make deploy-podman'"
 
 help:
 	@echo "StarExec DevOps Build System"
@@ -305,6 +280,32 @@ deploy-podman-direct:
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
 	@echo "  podman logs starexec-app   - Application logs"
 	@echo "  podman logs starexec-mysql - Database logs"
+
+deploy-podman-cached:
+	@if [ ! -f render.yaml ]; then \
+		echo "WARNING: render.yaml not found! Running 'make template' to generate..."; \
+		$(MAKE) template; \
+	fi
+	@echo "Deploying using cached render.yaml..."
+	@echo "Cleaning up existing deployment..."
+	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
+		if podman pod exists $$pod 2>/dev/null; then \
+			echo "  Removing existing pod: $$pod"; \
+			podman pod rm -f $$pod 2>/dev/null || true; \
+		fi \
+	done
+	@for container in starexec-app starexec-mysql; do \
+		if podman container exists $$container 2>/dev/null; then \
+			echo "  Removing orphaned container: $$container"; \
+			podman rm -f $$container 2>/dev/null || true; \
+		fi \
+	done
+	@podman play kube render.yaml
+	@echo ""
+	@echo "✓ Deployment complete (using cached manifest)!"
+	@echo "  Access: http://localhost:7827/starexec"
+	@echo ""
+	@echo "Note: To regenerate manifest, run 'make template' or 'make deploy-podman'"
 
 undeploy-podman:
 	@echo "Removing Podman deployment (volumes preserved)"
