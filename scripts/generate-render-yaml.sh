@@ -38,8 +38,8 @@ sed -e "s|\${STAREXEC_DB_USER:-starexec}|$STAREXEC_DB_USER|g" \
     -e "s|\${STAREXEC_DB_NAME:-starexec}|$STAREXEC_DB_NAME|g" \
     -e "s|\${STAREXEC_DATA_VOL:-starexec-dev-data}|$STAREXEC_DATA_VOL|g" \
     -e "s|\${STAREXEC_MYSQL_VOL:-starexec-dev-mysql}|$STAREXEC_MYSQL_VOL|g" \
-    -e "s|\${IMAGE_NAME:-localhost/local/starexec}:|\$IMAGE_NAME:|g" \
+    -e "s|\${IMAGE_NAME:-localhost/local/starexec}:|$IMAGE_NAME:|g" \
     -e "s|\${IMAGE_TAG:-dev}|$IMAGE_TAG|g" \
-    "$TEMPLATE_FILE" | sed "s|\$IMAGE_NAME|$IMAGE_NAME|g" > "$OUTPUT_FILE"
+    "$TEMPLATE_FILE" > "$OUTPUT_FILE"
 
 echo "✓ Generated: $OUTPUT_FILE"
