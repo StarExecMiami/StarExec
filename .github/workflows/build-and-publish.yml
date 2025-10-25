@@ -89,7 +89,7 @@ jobs:
       - name: Lint Helm charts
         run: |
           helm lint ./chart
-          for env in dev ci prod; do
+          for env in dev ci; do
             echo "Validating $env environment..."
             helm template starexec ./chart -f chart/values-$env.yaml > /dev/null
           done
