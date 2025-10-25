@@ -13,8 +13,12 @@ VOLUME_SCRIPT=./scripts/podman-volumes.sh
 VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
-.PHONY: help build build-fresh build-prod \
-	deploy-podman deploy-podman-helm deploy-podman-direct deploy-podman-cached undeploy-podman \
+# Add network configuration variables at the top
+PODMAN_NETWORK?=pasta
+PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
+
+.PHONY: help build build-fresh build-prod image \
+	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
@@ -36,10 +40,11 @@ help:
 	@echo "  build                  Build container image (uses cache)"
 	@echo "  build-fresh            Build without cache (slower, guaranteed fresh)"
 	@echo "  build-prod             Build production image with registry tag"
+	@echo "  image                  Ensure image exists (pull from GHCR if needed)"
 	@echo ""
 	@echo "Deployment Targets:"
-	@echo "  deploy-podman          Deploy to Podman (build + render + apply)"
-	@echo "  deploy-podman-cached   Fast deploy using existing render.yaml (no rebuild)"
+	@echo "  deploy-podman          Deploy to Podman (ensures image + render + apply)"
+	@echo "  deploy-podman-cached   Fast deploy using existing render.yaml (ensures image)"
 	@echo "  deploy-k8s             Deploy to Kubernetes (requires Helm)"
 	@echo "  undeploy-podman        Remove Podman deployment"
 	@echo "  undeploy-k8s           Remove Kubernetes deployment"
@@ -97,6 +102,25 @@ build-prod:
 	IMAGE_VERSION=$${IMAGE_VERSION:-1.0.0}; \
 	podman build -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "Push with: podman push $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
+
+image:
+	@echo "Checking for image: $(IMAGE_NAME):$(IMAGE_TAG)"
+	@if ! podman image exists $(IMAGE_NAME):$(IMAGE_TAG); then \
+		echo "Image not found locally, attempting to pull from GHCR..."; \
+		PULL_IMAGE=$$(echo "$(IMAGE_NAME):$(IMAGE_TAG)" | tr '[:upper:]' '[:lower:]'); \
+		if podman pull $$PULL_IMAGE 2>/dev/null; then \
+			echo "✓ Successfully pulled $$PULL_IMAGE"; \
+			if [ "$$PULL_IMAGE" != "$(IMAGE_NAME):$(IMAGE_TAG)" ]; then \
+				podman tag $$PULL_IMAGE $(IMAGE_NAME):$(IMAGE_TAG); \
+				echo "✓ Tagged as $(IMAGE_NAME):$(IMAGE_TAG)"; \
+			fi; \
+		else \
+			echo "⚠️  Image not available in GHCR. Building locally..."; \
+			$(MAKE) build; \
+		fi; \
+	else \
+		echo "✓ Image $(IMAGE_NAME):$(IMAGE_TAG) found locally"; \
+	fi
 
 # ============================================================================
 # VOLUME MANAGEMENT (Podman Named Volumes - RECOMMENDED APPROACH)
@@ -198,8 +222,29 @@ migrate-podman:
 # ============================================================================
 # PODMAN DEPLOYMENT
 # ============================================================================
+network-setup:
+	@echo "Configuring Podman network (rootless mode)"
+	@if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+		echo "⚠️  Running in rootful mode. Consider running rootless for better security."; \
+		echo "See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
+	fi
+	@# For rootless, prefer pasta (requires passt package) or slirp4netns
+	@if ! podman network exists starexec-net 2>/dev/null; then \
+		if command -v pasta >/dev/null 2>&1; then \
+			echo "Creating network with pasta driver"; \
+			podman network create --driver=pasta starexec-net; \
+		elif command -v slirp4netns >/dev/null 2>&1; then \
+			echo "Creating network with slirp4netns driver"; \
+			podman network create starexec-net; \
+		else \
+			echo "⚠️  Neither pasta nor slirp4netns found. Install passt package for better rootless networking."; \
+			echo "Ubuntu/Debian: sudo apt-get install passt"; \
+			echo "Fedora/RHEL: sudo dnf install passt"; \
+			podman network create starexec-net; \
+		fi \
+	fi
 
-deploy-podman: build volumes-create
+deploy-podman: image network-setup volumes-create
 	@echo "Deploying to Podman with environment: $(ENV)"
 	@echo "Using values file: $(VALS)"
 	@if command -v helm >/dev/null 2>&1; then \
@@ -286,7 +331,7 @@ deploy-podman-direct:
 	@echo "  podman logs starexec-app   - Application logs"
 	@echo "  podman logs starexec-mysql - Database logs"
 
-deploy-podman-cached:
+deploy-podman-cached: image
 	@if [ ! -f render.yaml ]; then \
 		echo "WARNING: render.yaml not found! Running 'make template' to generate..."; \
 		$(MAKE) template; \
