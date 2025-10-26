@@ -1,7 +1,8 @@
 # StarExec DevOps Build System
 
-IMAGE_NAME=localhost/local/starexec
-IMAGE_TAG=dev
+IMAGE_REGISTRY?=ghcr.io/andrescdo
+IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
+IMAGE_TAG?=latest
 CHART_DIR=./chart
 RELEASE_NAME?=starexec
 HELM_VALUES?=values.yaml
@@ -13,7 +14,7 @@ VOLUME_SCRIPT=./scripts/podman-volumes.sh
 VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
-# Add network configuration variables at the top
+# Network configuration
 PODMAN_NETWORK?=pasta
 PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
 
@@ -105,21 +106,17 @@ build-prod:
 
 image:
 	@echo "Checking for image: $(IMAGE_NAME):$(IMAGE_TAG)"
-	@if ! podman image exists $(IMAGE_NAME):$(IMAGE_TAG); then \
-		echo "Image not found locally, attempting to pull from GHCR..."; \
-		PULL_IMAGE=$$(echo "$(IMAGE_NAME):$(IMAGE_TAG)" | tr '[:upper:]' '[:lower:]'); \
-		if podman pull $$PULL_IMAGE 2>/dev/null; then \
-			echo "✓ Successfully pulled $$PULL_IMAGE"; \
-			if [ "$$PULL_IMAGE" != "$(IMAGE_NAME):$(IMAGE_TAG)" ]; then \
-				podman tag $$PULL_IMAGE $(IMAGE_NAME):$(IMAGE_TAG); \
-				echo "✓ Tagged as $(IMAGE_NAME):$(IMAGE_TAG)"; \
-			fi; \
+	@if podman image inspect $(IMAGE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
+		echo "✓ Image $(IMAGE_NAME):$(IMAGE_TAG) found locally"; \
+	else \
+		echo "Image not found locally at $(IMAGE_NAME):$(IMAGE_TAG)"; \
+		echo "Attempting to pull from registry..."; \
+		if podman pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
+			echo "✓ Successfully pulled $(IMAGE_NAME):$(IMAGE_TAG)"; \
 		else \
-			echo "⚠️  Image not available in GHCR. Building locally..."; \
+			echo "⚠️  Image not available in registry. Building locally..."; \
 			$(MAKE) build; \
 		fi; \
-	else \
-		echo "✓ Image $(IMAGE_NAME):$(IMAGE_TAG) found locally"; \
 	fi
 
 # ============================================================================
