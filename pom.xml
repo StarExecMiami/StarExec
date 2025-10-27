@@ -314,6 +314,19 @@
             <version>3.26.0</version>
         </dependency>
 
+        <!-- Dependencia para el cliente Docker/Podman -->
+        <dependency>
+            <groupId>com.github.docker-java</groupId>
+            <artifactId>docker-java</artifactId>
+            <version>3.3.6</version>
+        </dependency>
+
+        <!-- Implementación del cliente HTTP para docker-java -->
+        <dependency>
+            <groupId>com.github.docker-java</groupId>
+            <artifactId>docker-java-transport-httpclient5</artifactId>
+            <version>3.3.6</version>
+        </dependency>
     </dependencies>
 
     <build>
