@@ -103,6 +103,13 @@ spec:
       ports:
         - containerPort: 3306
           hostPort: 3306
+      command:
+        - /bin/sh
+        - -c
+        - |
+          exec docker-entrypoint.sh mysqld \
+            --log-bin-trust-function-creators=1 \
+            --default-authentication-plugin=mysql_native_password
       env:
         - name: MYSQL_ROOT_PASSWORD
           value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
