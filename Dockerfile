@@ -174,6 +174,13 @@ COPY --from=runsolver-builder /tmp/runsolver-output/runsolver /usr/local/bin/run
 RUN chmod +x /usr/local/bin/runsolver && \
     chown root:root /usr/local/bin/runsolver
 
+# Copy GetComputerInfo binary for system monitoring
+COPY scripts/GetComputerInfo /usr/local/bin/GetComputerInfo
+RUN chmod +x /usr/local/bin/GetComputerInfo && \
+    chown root:root /usr/local/bin/GetComputerInfo && \
+    mkdir -p /home/starexec/bin && \
+    ln -s /usr/local/bin/GetComputerInfo /home/starexec/bin/GetComputerInfo
+
 # Copy WAR from builder and expand it
 COPY --from=builder --chown=starexec:starexec /build/output/starexec.war ${CATALINA_HOME}/webapps/starexec.war
 
