@@ -1,0 +1,62 @@
+# Staging/CI environment values (ephemeral testing)
+# Usage: make deploy-podman ENV=ci
+#        or in CI pipeline: helm template ./chart -f chart/values-ci.yaml | podman play kube -
+
+image:
+  repository: localhost/local/starexec
+  tag: "ci-${CI_COMMIT_SHA:-latest}"
+  pullPolicy: Always  # Always pull latest in CI
+
+replicaCount: 1
+
+# Ephemeral mode: no persistence, fresh state each run
+persistence:
+  enabled: false
+  useHostPathForPodman: false
+  usePodmanVolumes: false
+
+mysql:
+  image:
+    repository: docker.io/library/mysql
+    pullPolicy: IfNotPresent
+    tag: "8.0"
+  
+  host: localhost
+  port: 3306
+  user: starexec_ci
+  password: test_password_ci_only
+  database: starexec_test
+  rootPassword: root_ci_only
+  
+  persistence:
+    enabled: false  # Ephemeral for CI tests
+
+backend:
+  type: "local"
+  root: "/tmp/backend"
+  workingDir: "/tmp/work"
+
+dataDir: "/tmp/data"
+sandboxDir: "/tmp/sandbox"
+
+resources:
+  app:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  mysql:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+env:
+  LOG_LEVEL: "DEBUG"
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+  FLYWAY_CLEAN_DISABLED: "false"  # Allow clean in CI
+  STAREXEC_APP_NAME: ""

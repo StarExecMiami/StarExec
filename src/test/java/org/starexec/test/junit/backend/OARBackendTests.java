@@ -3,11 +3,9 @@ package org.starexec.test.junit.backend;
 import org.apache.commons.lang3.ArrayUtils;
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
 import org.mockito.BDDMockito;
-import org.powermock.api.mockito.PowerMockito;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.OARBackend;
 import org.starexec.util.Util;
 import org.testng.Assert;
@@ -16,8 +14,6 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 /*
-@RunWith(PowerMockRunner.class)
-@PrepareForTest({Util.class})
 public class OARBackendTests {
 	final OARBackend backend = new OARBackend();
 	private static final String oarnotifyTestString = "admin \n" +

@@ -118,8 +118,8 @@ public class DoJobPage {
 				File htmlFile= new File(directory, "pair_" + jp.getId() + ".html");
 				//for each jobpair on the job, do the following 
 				List<Cookie> requestCookies = Arrays.asList(request.getCookies());
-				String url = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + "/" + R.STAREXEC_APPNAME +
-				"/secure/details/pair.jsp?id=" + jp.getId() + "&localJobPage=true";
+				String url = Util.buildUrl(R.STAREXEC_URL_PREFIX, R.STAREXEC_SERVERNAME, R.PROXY_PORT, 
+				"/" + R.STAREXEC_APPNAME + "/secure/details/pair.jsp?id=" + jp.getId() + "&localJobPage=true");
 				//if we don't have to cookies, it throws an unauth error
 				String htmlText = Util.getWebPage(url, requestCookies);
 				FileUtils.writeStringToFile(htmlFile, htmlText, StandardCharsets.UTF_8);
@@ -227,8 +227,8 @@ public class DoJobPage {
 		// Create a new html file in the sandbox.
 		File htmlFile = new File(sandboxDirectory, "job.html");
 		// Make an HTTP request to our own server to get the HTML for the job page and write it to the new html file.
-		String urlToGetJobPageFrom = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + "/" + R.STAREXEC_APPNAME +
-				"/secure/details/job.jsp?id=" + jobId + "&" + Web.LOCAL_JOB_PAGE_PARAMETER + "=true";
+		String urlToGetJobPageFrom = Util.buildUrl(R.STAREXEC_URL_PREFIX, R.STAREXEC_SERVERNAME, R.PROXY_PORT,
+				"/" + R.STAREXEC_APPNAME + "/secure/details/job.jsp?id=" + jobId + "&" + Web.LOCAL_JOB_PAGE_PARAMETER + "=true");
 		log.debug("Getting job page from " + urlToGetJobPageFrom);
 		List<Cookie> requestCookies = Arrays.asList(request.getCookies());
 		//if we don't have to cookies, it throws an unauth error

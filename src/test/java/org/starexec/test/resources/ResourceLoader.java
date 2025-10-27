@@ -32,7 +32,8 @@ import java.io.File;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 
 /**
  * This file contains functions for loading test objects into the database.
@@ -331,11 +332,10 @@ public class ResourceLoader implements AutoCloseable {
 	 * @param solverId The ID of the solver to give the configuration to
 	 * @return The Configuration object with all of its fields set (name, ID, etc.)
 	 */
-
 	public Configuration loadConfigurationFileIntoDatabase(String fileName, int solverId) {
 		try {
 			File file=getResource(fileName);
-			return loadConfigurationIntoDatabase(FileUtils.readFileToString(file), solverId);
+			return loadConfigurationIntoDatabase(FileUtils.readFileToString(file, StandardCharsets.UTF_8), solverId);
 
 		} catch(Exception e) {
 			log.error("loadConfigurationFileIntoDatabase", e);
@@ -363,7 +363,7 @@ public class ResourceLoader implements AutoCloseable {
 			if(newConfigFile.exists()){
 				return null;
 			}
-			FileUtils.writeStringToFile(newConfigFile, contents);
+			FileUtils.writeStringToFile(newConfigFile, contents, StandardCharsets.UTF_8);
 
 			// Make sure the configuration has the right line endings
 			Util.normalizeFile(newConfigFile);
@@ -664,7 +664,7 @@ public class ResourceLoader implements AutoCloseable {
 	    WebElement userName=driver.findElement(By.name("j_username"));
 	    userName.sendKeys(email);
 	    driver.findElement(By.name("j_password")).sendKeys(password);
-	    driver.manage().timeouts().implicitlyWait(2, TimeUnit.SECONDS);
+	    driver.manage().timeouts().implicitlyWait( Duration.ofSeconds(5));
 	    userName.submit();
 
 	    return driver;
@@ -694,7 +694,7 @@ public class ResourceLoader implements AutoCloseable {
 			f=f.getParentFile();
 			f.mkdirs();
 			String randomOutput=TestUtil.getRandomAlphaString(1000);
-			FileUtils.writeStringToFile(new File(f,pair.getId()+".txt"), randomOutput);
+			FileUtils.writeStringToFile(new File(f,pair.getId()+".txt"), randomOutput, StandardCharsets.UTF_8);
 
 		} catch (Exception e) {
 			log.error(e.getMessage(),e);
@@ -747,7 +747,7 @@ public class ResourceLoader implements AutoCloseable {
 
 	private File getTestXMLFile(TestXML testXml, Map<String, String> templateReplacements) throws IOException {
 		File templateFile = getResource(testXml.filename);
-		String xmlString = FileUtils.readFileToString(templateFile);
+		String xmlString = FileUtils.readFileToString(templateFile, StandardCharsets.UTF_8);
 		final String schemaLocParam = "$$SCHEMA_LOC$$";
 		if (!xmlString.contains(schemaLocParam)) {
 			throw new IllegalStateException("Test XML files must contain the "+schemaLocParam+" template parameter.");
@@ -761,7 +761,7 @@ public class ResourceLoader implements AutoCloseable {
 		log.debug(xmlString);
 
 		File f = new File(new File(R.STAREXEC_ROOT, R.DOWNLOAD_FILE_DIR), TestUtil.getRandomAlphaString(50)+".xml");
-		FileUtils.writeStringToFile(f, xmlString);
+		FileUtils.writeStringToFile(f, xmlString, StandardCharsets.UTF_8);
 		return f;
 	}
 	/**

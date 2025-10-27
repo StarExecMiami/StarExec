@@ -304,9 +304,11 @@ public class UploadSolver extends HttpServlet {
 			boolean extracted =
 					ArchiveUtil.extractArchiveAsSandbox(archiveFile.getAbsolutePath(), sandboxDir.getAbsolutePath());
 
-			Util.sandboxChmodDirectory(sandboxDir);
+			// Note: Permissions are now set inside extractArchiveAsSandbox before ownership transfer
+			// After ownership transfer to sandbox user, the starexec user can no longer list the directory
+			// So we rely solely on the extracted boolean result
 
-			if (!extracted || sandboxDir.listFiles().length == 0) {
+			if (!extracted) {
 				log.warn("Error extracting the new solver archive");
 				FileUtils.deleteDirectory(sandboxDir);
 				FileUtils.deleteDirectory(uniqueDir);
@@ -331,7 +333,15 @@ public class UploadSolver extends HttpServlet {
 
 			Util.sandboxChmodDirectory(sandboxDir);
 
-			for (File f : sandboxDir.listFiles()) {
+			File[] files = sandboxDir.listFiles();
+			if (files == null) {
+				log.error("Unable to list files in sandbox directory: " + sandboxDir.getAbsolutePath());
+				FileUtils.deleteDirectory(sandboxDir);
+				FileUtils.deleteDirectory(uniqueDir);
+				return new UploadSolverResult(UploadSolverStatus.EXTRACTING_ERROR, -1, false, isBuildJob);
+			}
+
+			for (File f : files) {
 				if (f.isDirectory()) {
 					try {
 						FileUtils.copyDirectoryToDirectory(f, uniqueDir);
@@ -381,7 +391,6 @@ public class UploadSolver extends HttpServlet {
 			int solverId = Solvers.add(newSolver, spaceId);
 
 			UploadSolverStatus status = UploadSolverStatus.SUCCESS;
-
 			UploadSolverResult result = new UploadSolverResult(status, solverId, hadConfigs, isBuildJob);
 			if (containsRunOnUploadXml(sandboxDir)) {
 				final File runOnUploadXml = new File(sandboxDir, R.UPLOAD_TEST_JOB_XML);

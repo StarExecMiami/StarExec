@@ -4,6 +4,29 @@ StarExec is a cross community logic solving service developed at the University.
 of Iowa under the direction of principal investigators Aaron Stump (Iowa), Geoff
 Sutcliffe (University of Miami), and Cesare Tinelli (Iowa).
 
+## Quick Start
+
+### Option 1: Podman/Makefile (Recommended for Development)
+
+```bash
+# First-time deployment (auto-builds and configures everything)
+make start
+
+# Fast subsequent deployments (reuses cached manifests)
+make deploy-podman-cached
+
+# Stop deployment
+make stop
+```
+
+**Access:** http://localhost:7827/starexec
+
+**Learn more:** See [docs/DEPLOYMENT-WORKFLOW.md](docs/DEPLOYMENT-WORKFLOW.md) for deployment modes, environment variables, and troubleshooting.
+
+---
+
+### Option 2: Docker Compose (Simple Alternative)
+
 1. **Build and Run:**
     From the root of the project, run:
 
@@ -19,7 +42,6 @@ Sutcliffe (University of Miami), and Cesare Tinelli (Iowa).
 2. **Accessing the Application:**
     Once the containers are running, you can access StarExec at:
     [http://localhost:8080/](http://localhost:8080/)
-
 3. **Stopping the Application:**
     To stop the containers, press `Ctrl+C`. To remove the containers, run:
 
@@ -27,13 +49,61 @@ Sutcliffe (University of Miami), and Cesare Tinelli (Iowa).
     docker-compose down
     ```
 
+### Option 3: Raw Podman / Docker (Manual Setup)
+
+```bash
+# Build image locally (required when source changes)
+podman build -t localhost/local/starexec:dev .
+
+# Network so containers can communicate
+podman network create starexec-net
+
+# Persistent volumes
+podman volume create starexec-app-data
+podman volume create starexec-mysql-data
+
+# Database container (start first)
+podman run -d --name starexec-mysql \
+  --network starexec-net \
+  -e MYSQL_ROOT_PASSWORD=admin \
+  -e MYSQL_DATABASE=starexec \
+  -e MYSQL_USER=starexec \
+  -e MYSQL_PASSWORD=admin \
+  -v starexec-mysql-data:/var/lib/mysql \
+  -p 3306:3306 \
+  docker.io/library/mysql:8.0
+
+# Application container
+podman run -d --name starexec-app \
+  --network starexec-net \
+  -e STAREXEC_DB_HOST=starexec-mysql \
+  -e STAREXEC_DB_PASSWORD=admin \
+  -e STAREXEC_DB_USER=starexec \
+  -e STAREXEC_DB_DATABASE=starexec \
+  -v starexec-app-data:/app/data \
+  -p 8080:8080 \
+  localhost/local/starexec:dev
+```
+
+**Mandatory flags:** database host/password, volume mounts (`/app/data`, `/var/lib/mysql`), and port `8080`.
+
+**Optional overrides (defaults shown):**
+
+* `STAREXEC_DB_USER=starexec`, `STAREXEC_DB_DATABASE=starexec`
+* `STAREXEC_BACKEND_TYPE=local`, `STAREXEC_DATA_DIR=/app/data`, `STAREXEC_BACKEND_WORKING_DIR=/app/work`, `STAREXEC_SANDBOX_DIR=/app/sandbox`
+* Swap `podman` for `docker` if preferred; all flags are identical.
+
+Access via `http://localhost:8080/starexec`. Seed credentials: `admin/admin`, `public/public` (change for production use).
+
+---
+
 ## Manual Build (Without Docker)
 
 While Docker is recommended, you can still build and run StarExec manually.
 
 ### Dependencies
 
-* **Java 11+**: Required for building and running the application.
+* **Java 17+**: Required for building and running the application.
 * **Maven 3.8+**: Used for dependency management and building the project.
 * **Node.js 20+**: Required for compiling SCSS stylesheets with Dart Sass.
 * **MySQL 8.0+**: The database backend.
@@ -58,8 +128,6 @@ To apply migrations, you will need to configure the Flyway Maven plugin in `pom.
 ```bash
 mvn flyway:migrate
 ```
-
-For more details, see [`README-db-migrations.md`](README-db-migrations.md).
 
 ## Backend Implementations
 
