@@ -1039,30 +1039,23 @@ public class Util {
 		}
 		
 		//give sandbox full permissions over the solver directory
-		if (isSudoAvailable()) {
-			// Use sudo if available
-			String[] chmod = new String[7];
-			chmod[0] = "sudo";
-			chmod[1] = "-u";
-			chmod[2] = R.SANDBOX_USER_ONE;
-			chmod[3] = "chmod";
-			chmod[4] = "-R";
-			chmod[5] = "u+rwx,g+rwx";
-			for (File f : dir.listFiles()) {
-				chmod[6] = f.getAbsolutePath();
-				Util.executeCommand(chmod);
-			}
-		} else {
-			// In containerized environments, execute chmod directly
-			log.debug("sudo not available, executing chmod directly for directory: " + dir.getAbsolutePath());
-			String[] chmod = new String[4];
-			chmod[0] = "chmod";
-			chmod[1] = "-R";
-			chmod[2] = "u+rwx,g+rwx";
-			for (File f : dir.listFiles()) {
-				chmod[3] = f.getAbsolutePath();
-				Util.executeCommand(chmod);
-			}
+		// Execute chmod as the current user (starexec) who owns the files
+		// The sandbox user will later access these files via group permissions
+		log.debug("Executing chmod for directory: " + dir.getAbsolutePath());
+		
+		File[] files = dir.listFiles();
+		if (files == null) {
+			log.warn("Cannot list files in directory (permission denied or not a directory): " + dir.getAbsolutePath());
+			return;
+		}
+		
+		String[] chmod = new String[4];
+		chmod[0] = "chmod";
+		chmod[1] = "-R";
+		chmod[2] = "u+rwx,g+rwx";
+		for (File f : files) {
+			chmod[3] = f.getAbsolutePath();
+			Util.executeCommand(chmod);
 		}
 	}
 	// public static void sandboxChownDirectory(File dir) throws IOException {
