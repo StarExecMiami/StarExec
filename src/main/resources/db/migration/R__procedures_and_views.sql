@@ -1270,12 +1270,11 @@ CREATE PROCEDURE SetPairEndTime(IN _id INT)
 		(SELECT queue_id FROM jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id), 0);
 
 		UPDATE jobpair_time_delta
-		SET time_delta = (SELECT jobs.clockTimeout - CEIL(SUM(jobpair_stage_data.wallclock)+1)+time_delta
+		SET time_delta = (SELECT ANY_VALUE(jobs.clockTimeout) - CEIL(SUM(jobpair_stage_data.wallclock)+1)+ANY_VALUE(time_delta)
 						  FROM jobpair_stage_data JOIN job_pairs ON job_pairs.id=jobpair_stage_data.jobpair_id
 						  JOIN jobs ON jobs.id = job_pairs.job_id WHERE jobpair_stage_data.jobpair_id=_id)
 		WHERE user_id=(SELECT user_id FROM jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id)
 		AND queue_id=(SELECT queue_id FROM jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id);
-
 	END //
 
 -- Counts the number of pairs with the given status code that completed in within the given
