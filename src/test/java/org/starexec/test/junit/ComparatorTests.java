@@ -179,7 +179,8 @@ public class ComparatorTests {
 	
 	@Test
 	public void SolverComparisionComparatorTest() {
-		SolverComparisonComparator comp=new SolverComparisonComparator(0,false,true,0);
+		// construct the comparator to ensure it can be created without keeping an unused local variable
+		new SolverComparisonComparator(0,false,true,0);
 	}
 
 }
