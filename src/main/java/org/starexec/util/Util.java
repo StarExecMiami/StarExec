@@ -804,7 +804,16 @@ public class Util {
 	private static void initDocRootUrl() {
 		initDocRoot();
 		if (isNull(docRootUrl)) {
-			docRootUrl = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + docRoot;
+			// Include port in URL if it's non-standard
+			String port = "";
+			boolean isHttp = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("http");
+			boolean isHttps = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("https");
+			
+			if ((isHttp && R.PROXY_PORT != 80) || (isHttps && R.PROXY_PORT != 443)) {
+				port = ":" + R.PROXY_PORT;
+			}
+			
+			docRootUrl = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + port + docRoot;
 		}
 	}
 
@@ -830,6 +839,28 @@ public class Util {
 	public static String url(String s) {
 		initDocRootUrl();
 		return docRootUrl + s;
+	}
+
+	/**
+	 * Build a URL with the correct scheme, server name, port, and path.
+	 * Includes port in URL if non-standard (not 80 for HTTP, not 443 for HTTPS).
+	 *
+	 * @param scheme The URL scheme (http or https)
+	 * @param host The hostname
+	 * @param port The port number
+	 * @param path The path portion of the URL
+	 * @return Complete URL with scheme://host:port/path format (port omitted if standard)
+	 */
+	public static String buildUrl(String scheme, String host, int port, String path) {
+		String portStr = "";
+		boolean isHttp = scheme.equalsIgnoreCase("http");
+		boolean isHttps = scheme.equalsIgnoreCase("https");
+		
+		if ((isHttp && port != 80) || (isHttps && port != 443)) {
+			portStr = ":" + port;
+		}
+		
+		return scheme + "://" + host + portStr + path;
 	}
 
 	/**

@@ -13,7 +13,6 @@ import org.starexec.logger.StarLogger;
 
 import java.io.*;
 import java.util.*;
-import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.Files;
 
 /**

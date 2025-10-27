@@ -201,11 +201,16 @@ public class JspHelpers {
 					}
 					starexecUrl = String.format("%s://%s/%s/", scheme, forwardedHost, R.STAREXEC_APPNAME);
 				} else {
-					// Direct access
-					starexecUrl = String.format("%s://%s/%s/", R.STAREXEC_URL_PREFIX, R.STAREXEC_SERVERNAME, R.STAREXEC_APPNAME);
+					// Direct access - include port if non-standard
+					String port = "";
+					boolean isHttp = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("http");
+					boolean isHttps = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("https");
+					if ((isHttp && R.PROXY_PORT != 80) || (isHttps && R.PROXY_PORT != 443)) {
+						port = ":" + R.PROXY_PORT;
+					}
+					starexecUrl = String.format("%s://%s%s/%s/", R.STAREXEC_URL_PREFIX, R.STAREXEC_SERVERNAME, port, R.STAREXEC_APPNAME);
 				}
-				request.setAttribute("starexecUrl", starexecUrl);
-
+				request.setAttribute("starexecUrl", starexecUrl);			
 			} else {
 				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "The details for this job could not be obtained");
 			}
