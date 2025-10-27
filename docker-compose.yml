@@ -63,7 +63,9 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-    command: ["docker-entrypoint.sh", "mysqld", "--log-bin-trust-function-creators=1"] # Required for certain MySQL functions used by StarExec
+    command: ["docker-entrypoint.sh", "mysqld", 
+              "--log-bin-trust-function-creators=1",
+              "--default-authentication-plugin=mysql_native_password"]
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u starexec -pstarexec_password"]
       interval: 10s
