@@ -804,7 +804,16 @@ public class Util {
 	private static void initDocRootUrl() {
 		initDocRoot();
 		if (isNull(docRootUrl)) {
-			docRootUrl = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + docRoot;
+			// Include port in URL if it's non-standard
+			String port = "";
+			boolean isHttp = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("http");
+			boolean isHttps = R.STAREXEC_URL_PREFIX.equalsIgnoreCase("https");
+			
+			if ((isHttp && R.PROXY_PORT != 80) || (isHttps && R.PROXY_PORT != 443)) {
+				port = ":" + R.PROXY_PORT;
+			}
+			
+			docRootUrl = R.STAREXEC_URL_PREFIX + "://" + R.STAREXEC_SERVERNAME + port + docRoot;
 		}
 	}
 
@@ -830,6 +839,28 @@ public class Util {
 	public static String url(String s) {
 		initDocRootUrl();
 		return docRootUrl + s;
+	}
+
+	/**
+	 * Build a URL with the correct scheme, server name, port, and path.
+	 * Includes port in URL if non-standard (not 80 for HTTP, not 443 for HTTPS).
+	 *
+	 * @param scheme The URL scheme (http or https)
+	 * @param host The hostname
+	 * @param port The port number
+	 * @param path The path portion of the URL
+	 * @return Complete URL with scheme://host:port/path format (port omitted if standard)
+	 */
+	public static String buildUrl(String scheme, String host, int port, String path) {
+		String portStr = "";
+		boolean isHttp = scheme.equalsIgnoreCase("http");
+		boolean isHttps = scheme.equalsIgnoreCase("https");
+		
+		if ((isHttp && port != 80) || (isHttps && port != 443)) {
+			portStr = ":" + port;
+		}
+		
+		return scheme + "://" + host + portStr + path;
 	}
 
 	/**
@@ -1039,30 +1070,23 @@ public class Util {
 		}
 		
 		//give sandbox full permissions over the solver directory
-		if (isSudoAvailable()) {
-			// Use sudo if available
-			String[] chmod = new String[7];
-			chmod[0] = "sudo";
-			chmod[1] = "-u";
-			chmod[2] = R.SANDBOX_USER_ONE;
-			chmod[3] = "chmod";
-			chmod[4] = "-R";
-			chmod[5] = "u+rwx,g+rwx";
-			for (File f : dir.listFiles()) {
-				chmod[6] = f.getAbsolutePath();
-				Util.executeCommand(chmod);
-			}
-		} else {
-			// In containerized environments, execute chmod directly
-			log.debug("sudo not available, executing chmod directly for directory: " + dir.getAbsolutePath());
-			String[] chmod = new String[4];
-			chmod[0] = "chmod";
-			chmod[1] = "-R";
-			chmod[2] = "u+rwx,g+rwx";
-			for (File f : dir.listFiles()) {
-				chmod[3] = f.getAbsolutePath();
-				Util.executeCommand(chmod);
-			}
+		// Execute chmod as the current user (starexec) who owns the files
+		// The sandbox user will later access these files via group permissions
+		log.debug("Executing chmod for directory: " + dir.getAbsolutePath());
+		
+		File[] files = dir.listFiles();
+		if (files == null) {
+			log.warn("Cannot list files in directory (permission denied or not a directory): " + dir.getAbsolutePath());
+			return;
+		}
+		
+		String[] chmod = new String[4];
+		chmod[0] = "chmod";
+		chmod[1] = "-R";
+		chmod[2] = "u+rwx,g+rwx";
+		for (File f : files) {
+			chmod[3] = f.getAbsolutePath();
+			Util.executeCommand(chmod);
 		}
 	}
 	// public static void sandboxChownDirectory(File dir) throws IOException {

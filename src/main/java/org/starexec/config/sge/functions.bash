@@ -452,11 +452,12 @@ function copyOutputIncrementally {
 function cleanWorkspace {
 	log "cleaning execution host workspace..."
 
+	# Create the working directory first if it doesn't exist
+	mkdir -p $WORKING_DIR
+
 	cd $WORKING_DIR
 	# change ownership and permissions to make sure we can clean everything up
 	sudo chown -R $(whoami) $WORKING_DIR
-
-	mkdir -p $WORKING_DIR
 
 	chmod 770 $WORKING_DIR
 	chmod g+s $WORKING_DIR
@@ -770,10 +771,20 @@ function copyOutput {
 		mkdir $OUT_DIR/postProcessor
 		safeCpAll "copying post processor" "$POST_PROCESSOR_PATH" "$OUT_DIR/postProcessor"
 		chmod -R gu+rwx $OUT_DIR/postProcessor
+		# Recursively chmod to ensure all files and directories are executable
+		# The postprocessor may have a nested structure like process/process
+		find $OUT_DIR/postProcessor -type f -exec chmod a+x {} \;
+		find $OUT_DIR/postProcessor -type d -exec chmod a+x {} \;
 		cd "$OUT_DIR"/postProcessor
 		log "executing post processor"
 		log "time limit: $POST_PROCESSOR_TIME_LIMIT minutes"
-		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m ./process "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt
+		# The postprocessor may be in process/process subdirectory or directly as process
+		if [ -d "./process" ]; then
+			PROC_SCRIPT="./process/process"
+		else
+			PROC_SCRIPT="./process"
+		fi
+		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt
 		if (( $? != 0 )); then
 			log "post processor timeout"
 			sendStatus "$ERROR_POST_PROCESSOR"

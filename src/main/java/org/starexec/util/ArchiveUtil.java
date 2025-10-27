@@ -13,7 +13,6 @@ import org.starexec.logger.StarLogger;
 
 import java.io.*;
 import java.util.*;
-import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.Files;
 
 /**
@@ -178,22 +177,12 @@ public class ArchiveUtil {
 					log.debug("Java-based ZIP extraction completed successfully");
 				}
 				
-				// Transfer ownership to sandbox user
-				boolean sudoAvailable = Util.isSudoAvailable();
-				if (sudoAvailable) {
-					log.debug("Transferring ownership to " + R.SANDBOX_USER_ONE);
-					String[] chownCmd = new String[]{"chown", "-R", 
-						R.SANDBOX_USER_ONE + ":" + R.SANDBOX_USER_ONE, destination};
-					String chownResult = Util.executeCommand(chownCmd);
-					log.debug("chown result: " + chownResult);
-					
-					// Verify ownership
-					String[] lsCmd = new String[]{"ls", "-la", destination};
-					String lsResult = Util.executeCommand(lsCmd);
-					log.debug("Post-extraction ls: " + lsResult);
-				} else {
-					log.warn("sudo not available; files will be owned by current user (root)");
-				}
+				// Set permissions for group access
+				// Files remain owned by starexec user for now to allow further processing
+				log.debug("Setting group permissions for extracted files");
+				String[] chmodCmd = new String[]{"chmod", "-R", "u+rwx,g+rwx", destination};
+				String chmodResult = Util.executeCommand(chmodCmd);
+				log.debug("chmod result: " + chmodResult);
 				
 				log.debug("Removing archive file: " + fileName);
 				ArchiveUtil.removeArchive(fileName);

@@ -4,7 +4,6 @@ import org.mockito.Mockito;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.starexec.constants.DB;
-import org.starexec.constants.R;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.data.to.enums.ProcessorType;

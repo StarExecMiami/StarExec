@@ -1,0 +1,131 @@
+# ============================================================================
+# StarExec Podman Deployment Manifest Template
+# ============================================================================
+#
+# This is a REFERENCE template showing the structure of the deployment manifest.
+# The actual render.yaml is auto-generated with environment-specific values.
+#
+# USAGE:
+#   Option 1 (Recommended): Auto-generate during deployment
+#     make deploy-podman              # Auto-generates and deploys
+#     make deploy-podman-cached       # Uses existing render.yaml (fast)
+#
+#   Option 2: Generate manually first
+#     make template                   # Generate render.yaml from Helm/values
+#     make deploy-podman-cached       # Deploy using generated file
+#
+#   Option 3: Manual customization (without Helm)
+#     cp render.yaml.template render.yaml
+#     # Edit render.yaml with your values
+#     make deploy-podman-cached
+#
+# ENVIRONMENT VARIABLES (with defaults):
+#   STAREXEC_DB_USER                (default: starexec)
+#   STAREXEC_DB_PASSWORD            (default: starexec_dev_password)
+#   STAREXEC_DB_NAME                (default: starexec)
+#   STAREXEC_DATA_VOL               (default: starexec-dev-data)
+#   STAREXEC_MYSQL_VOL              (default: starexec-dev-mysql)
+#   IMAGE_NAME                      (default: localhost/local/starexec)
+#   IMAGE_TAG                       (default: dev)
+#
+# ============================================================================
+---
+# Source: starexec/templates/deployment.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: starexec
+  labels:
+    app: starexec
+spec:
+  restartPolicy: Always
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: ${STAREXEC_DATA_VOL:-starexec-dev-data}
+    - name: mysql-data
+      persistentVolumeClaim:
+        claimName: ${STAREXEC_MYSQL_VOL:-starexec-dev-mysql}
+  containers:
+    - name: app
+      image: "${IMAGE_NAME:-localhost/local/starexec}:${IMAGE_TAG:-dev}"
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8080
+          hostPort: 7827
+      env:
+        - name: STAREXEC_DB_HOST
+          value: "mysql"
+        - name: STAREXEC_DB_USER
+          value: "${STAREXEC_DB_USER:-starexec}"
+        - name: STAREXEC_DB_PASSWORD
+          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+        - name: STAREXEC_DB_NAME
+          value: "${STAREXEC_DB_NAME:-starexec}"
+        - name: STAREXEC_CLUSTER_DB_USER
+          value: "${STAREXEC_DB_USER:-starexec}"
+        - name: STAREXEC_CLUSTER_DB_PASSWORD
+          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+        - name: STAREXEC_REPORT_HOST
+          value: "mysql"
+        - name: STAREXEC_BACKEND_TYPE
+          value: "local"
+        - name: STAREXEC_BACKEND_ROOT
+          value: "/app/backend"
+        - name: STAREXEC_BACKEND_WORKING_DIR
+          value: "/app/work"
+        - name: STAREXEC_DATA_DIR
+          value: "/app/data"
+        - name: STAREXEC_SANDBOX_DIR
+          value: "/app/sandbox"
+        - name: FLYWAY_BASELINE_ON_MIGRATE
+          value: "true"
+        - name: LOG_LEVEL
+          value: "DEBUG"
+        - name: STAREXEC_URL_PREFIX
+          value: "http"
+        - name: STAREXEC_WEB_ADDRESS
+          value: "localhost:7827"
+      volumeMounts:
+        - name: data
+          mountPath: /app/data
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 500m
+          memory: 512Mi
+
+    - name: mysql
+      image: "docker.io/library/mysql:8.0"
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 3306
+          hostPort: 3306
+      command:
+        - /bin/sh
+        - -c
+        - |
+          exec docker-entrypoint.sh mysqld \
+            --log-bin-trust-function-creators=1 \
+            --default-authentication-plugin=mysql_native_password
+      env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+        - name: MYSQL_DATABASE
+          value: "${STAREXEC_DB_NAME:-starexec}"
+        - name: MYSQL_USER
+          value: "${STAREXEC_DB_USER:-starexec}"
+        - name: MYSQL_PASSWORD
+          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+      volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 500m
+          memory: 512Mi

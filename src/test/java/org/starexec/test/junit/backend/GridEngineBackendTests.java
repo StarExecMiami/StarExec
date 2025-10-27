@@ -1,11 +1,9 @@
 package org.starexec.test.junit.backend;
 
 import org.junit.Test;
-import org.junit.runner.RunWith;
 import org.mockito.BDDMockito;
-import org.powermock.api.mockito.PowerMockito;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.GridEngineBackend;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.util.Util;
@@ -14,8 +12,6 @@ import org.testng.Assert;
 import java.io.IOException;
 import java.util.Set;
 /*
-@RunWith(PowerMockRunner.class)
-@PrepareForTest({Util.class})
 public class GridEngineBackendTests {
 	final GridEngineBackend backend = new GridEngineBackend();
 	private static final String testSGEOutputString = "job-ID  prior   name       user         state submit/start at     queue                          slots ja-task-ID \n"+
