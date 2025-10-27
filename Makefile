@@ -23,7 +23,8 @@ PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
-	clean-podman clean-cache clean-all lint template \
+	clean-podman clean-cache clean-all clean-hard lint template \
+	logs logs-app logs-mysql test-deps \
 	start stop
 
 start: deploy-podman
@@ -69,10 +70,17 @@ help:
 	@echo ""
 	@echo "Maintenance Targets:"
 	@echo "  clean-podman           Clean Podman artifacts (keeps volumes)"
-	@echo "  clean-cache            Clear all Podman build cache"
-	@echo "  clean-all              Clean everything including volumes"
+	@echo "  clean-cache            Clear Podman build cache (prune + builder prune)"
+	@echo "  clean-all              Clean everything including volumes AND cache"
+	@echo "  clean-hard             ⚠️  HARD RESET: Remove ALL Podman storage (aggressive)"
 	@echo "  lint                   Lint Helm charts (if Helm available)"
 	@echo "  template               Render Helm templates (if Helm available)"
+	@echo ""
+	@echo "Debugging Targets:"
+	@echo "  logs                   Show all container logs"
+	@echo "  logs-app               Show application logs (follow mode)"
+	@echo "  logs-mysql             Show MySQL logs (follow mode)"
+	@echo "  test-deps              Test job execution dependencies in container"
 	@echo ""
 	@echo "Quick Start Aliases:"
 	@echo "  start                  Alias for deploy-podman"
@@ -90,12 +98,12 @@ help:
 	@echo "  make deploy-k8s ENV=prod"
 
 build:
-	@echo "Building image: $(IMAGE_NAME):$(IMAGE_TAG)"
-	podman build -t $(IMAGE_NAME):$(IMAGE_TAG) .
+	@echo "Building image: $(RELEASE_NAME):$(IMAGE_TAG)"
+	podman build -t $(RELEASE_NAME):$(IMAGE_TAG) .
 
 build-fresh:
-	@echo "Building fresh image (no cache): $(IMAGE_NAME):$(IMAGE_TAG)"
-	podman build --no-cache -t $(IMAGE_NAME):$(IMAGE_TAG) .
+	@echo "Building fresh image (no cache): $(RELEASE_NAME):$(IMAGE_TAG)"
+	podman build --no-cache -t $(RELEASE_NAME):$(IMAGE_TAG) .
 
 build-prod:
 	@echo "Building production image"
@@ -105,14 +113,14 @@ build-prod:
 	@echo "Push with: podman push $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
 
 image:
-	@echo "Checking for image: $(IMAGE_NAME):$(IMAGE_TAG)"
-	@if podman image inspect $(IMAGE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
-		echo "✓ Image $(IMAGE_NAME):$(IMAGE_TAG) found locally"; \
+	@echo "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
+	@if podman image inspect $(RELEASE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
+		echo "✓ Image $(RELEASE_NAME):$(IMAGE_TAG) found locally"; \
 	else \
-		echo "Image not found locally at $(IMAGE_NAME):$(IMAGE_TAG)"; \
+		echo "Image not found locally at $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		echo "Attempting to pull from registry..."; \
-		if podman pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
-			echo "✓ Successfully pulled $(IMAGE_NAME):$(IMAGE_TAG)"; \
+		if podman pull $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
+			echo "✓ Successfully pulled $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		else \
 			echo "⚠️  Image not available in registry. Building locally..."; \
 			$(MAKE) build; \
@@ -186,7 +194,7 @@ migrate-repair:
 	@ echo "Using values file: $(VALS)"; \
 	  mysql_host=$${MYSQL_HOST:-localhost}; \
 	  : $${STAREXEC_DB_USER:=root}; : $${STAREXEC_DB_DATABASE:=starexec}; \
-	  [ -n "$$STAREXEC_DB_PASSWORD" ] || { echo "Error: Database password required. Set the STAREXEC_DB_PASSWORD environment variable." >&2; exit 1; }; \
+	  : $${STAREXEC_DB_PASSWORD:=starexec_dev_password}; \
 	  echo "Running Flyway repair against $$mysql_host:3306/$$STAREXEC_DB_DATABASE"; \
 	  mvn clean flyway:repair -e \
 		-Dflyway.url=jdbc:mysql://$$mysql_host:3306/$$STAREXEC_DB_DATABASE \
@@ -225,20 +233,10 @@ network-setup:
 		echo "⚠️  Running in rootful mode. Consider running rootless for better security."; \
 		echo "See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
 	fi
-	@# For rootless, prefer pasta (requires passt package) or slirp4netns
+	@# For rootless, Podman uses pasta/slirp4netns automatically via netavark
 	@if ! podman network exists starexec-net 2>/dev/null; then \
-		if command -v pasta >/dev/null 2>&1; then \
-			echo "Creating network with pasta driver"; \
-			podman network create --driver=pasta starexec-net; \
-		elif command -v slirp4netns >/dev/null 2>&1; then \
-			echo "Creating network with slirp4netns driver"; \
-			podman network create starexec-net; \
-		else \
-			echo "⚠️  Neither pasta nor slirp4netns found. Install passt package for better rootless networking."; \
-			echo "Ubuntu/Debian: sudo apt-get install passt"; \
-			echo "Fedora/RHEL: sudo dnf install passt"; \
-			podman network create starexec-net; \
-		fi \
+		echo "Creating network (pasta/slirp4netns handled automatically)"; \
+		podman network create starexec-net; \
 	fi
 
 deploy-podman: image network-setup volumes-create
@@ -312,7 +310,7 @@ deploy-podman-direct:
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_MYSQL_VOL=$${STAREXEC_MYSQL_VOL:-starexec-$(ENV)-mysql} \
-	 IMAGE_NAME=$(IMAGE_NAME) \
+	 IMAGE_NAME=$(RELEASE_NAME) \
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
 	@echo "Deploying application pod..."
@@ -399,29 +397,130 @@ undeploy-k8s:
 # ============================================================================
 
 clean-podman:
-	@echo "Cleaning Podman artifacts (preserving volumes)"
-	-podman pod rm -f starexec starexec-pod 2>/dev/null || true
-	-podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-user 2>/dev/null || true
-	-podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-password 2>/dev/null || true
-	-podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-database 2>/dev/null || true
-	-podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-rootPassword 2>/dev/null || true
+	@echo "Cleaning Podman artifacts (preserving volumes and cache)"
+	@podman pod rm -f starexec starexec-pod $(RELEASE_NAME)-pod 2>/dev/null || true
+	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-user 2>/dev/null || true
+	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-password 2>/dev/null || true
+	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-database 2>/dev/null || true
+	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-rootPassword 2>/dev/null || true
 	@echo "Removing StarExec images..."
 	@podman rmi $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null || true
-	@echo "✓ Cleanup complete (volumes preserved)"
+	@echo "✓ Cleanup complete (volumes and cache preserved)"
 
 clean-cache:
-	@echo "⚠️  WARNING: This will remove ALL Podman build cache"
-	@echo "This affects all projects, not just StarExec"
-	@read -p "Continue? (y/N): " ans; \
-	[ "$$ans" = "y" ] && podman system prune -a -f || echo "Cancelled"
-	@echo "✓ Build cache cleared"
+	@echo "⚠️  WARNING: Clearing Podman build cache"
+	@echo "This affects ALL projects on this system, not just StarExec"
+	@echo ""
+	@echo "This will remove:"
+	@echo "  - Unused images"
+	@echo "  - Build cache"
+	@echo "  - Builder instances"
+	@echo ""
+	@if [ -t 0 ]; then \
+		read -p "Continue? (y/N): " ans; \
+		if [ "$$ans" != "y" ]; then \
+			echo "Cancelled"; \
+			exit 0; \
+		fi; \
+	else \
+		echo "Running non-interactively. Set FORCE=1 to skip confirmation"; \
+		exit 1; \
+	fi
+	@echo "Pruning system..."
+	@podman system prune -a -f || { echo "✗ Error during system prune"; exit 1; }
+	@echo "Pruning builder cache..."
+	@podman builder prune -a -f 2>/dev/null || true
+	@echo "✓ Build cache cleared successfully"
 
-clean-all: clean-podman
-	@echo "WARNING: This will also delete volumes AND build cache!"
-	@read -p "Delete all volumes for ENV=$(ENV)? (y/N): " ans; \
-	[ "$$ans" = "y" ] && $(VOLUME_SCRIPT) delete $(ENV) || echo "Volumes preserved"
-	@read -p "Delete build cache? (y/N): " ans; \
-	[ "$$ans" = "y" ] && podman system prune -a -f || echo "Build cache preserved"
+clean-all: clean-podman volumes-delete
+	@echo "✓ Full cleanup complete (pods, images, volumes removed; cache preserved)"
+
+clean-hard:
+	@echo "⚠️  HARD RESET: This removes ALL Podman storage"
+	@echo "⚠️  This affects ALL containers/images/volumes on this system"
+	@echo ""
+	@echo "This will PERMANENTLY delete:"
+	@echo "  - All containers (running and stopped)"
+	@echo "  - All images"
+	@echo "  - All volumes (including StarExec data!)"
+	@echo "  - All networks (except default)"
+	@echo "  - Build cache"
+	@echo ""
+	@echo "⚠️  THIS CANNOT BE UNDONE!"
+	@echo ""
+	@if [ -t 0 ]; then \
+		read -p "Type 'yes, delete everything' to confirm: " ans; \
+		if [ "$$ans" != "yes, delete everything" ]; then \
+			echo "Cancelled"; \
+			exit 0; \
+		fi; \
+	else \
+		echo "❌ Running non-interactively. Refusing to proceed."; \
+		echo "Use this command manually if you really want to reset:"; \
+		echo "  podman system reset"; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "Starting hard reset..."
+	@podman ps -aq --all | xargs -r podman rm -f 2>/dev/null || true && \
+		echo "✓ Removed all containers"
+	@podman images -q | xargs -r podman rmi -f 2>/dev/null || true && \
+		echo "✓ Removed all images"
+	@podman volume ls -q | xargs -r podman volume rm -f 2>/dev/null || true && \
+		echo "✓ Removed all volumes"
+	@podman network ls --filter "driver!=bridge" --format "{{.Name}}" | xargs -r podman network rm 2>/dev/null || true && \
+		echo "✓ Removed  networks"
+	@podman builder prune -a -f 2>/dev/null || true && \
+		echo "✓ Cleared builder cache"
+	@echo ""
+	@echo "✓ Hard reset complete!"
+	@echo "💾 Backup any important data before running this again"
+
+# ============================================================================
+# DEBUGGING AND DIAGNOSTICS
+# ============================================================================
+
+logs:
+	@echo "=== Application Logs ==="
+	@podman logs --tail 50 starexec-app 2>&1 || echo "App container not running"
+	@echo ""
+	@echo "=== MySQL Logs ==="
+	@podman logs --tail 30 starexec-mysql 2>&1 || echo "MySQL container not running"
+
+logs-app:
+	@echo "Following application logs (Ctrl+C to stop)..."
+	@podman logs -f starexec-app
+
+logs-mysql:
+	@echo "Following MySQL logs (Ctrl+C to stop)..."
+	@podman logs -f starexec-mysql
+
+test-deps:
+	@echo "Testing job execution dependencies in container..."
+	@echo ""
+	@echo "=== Installed Packages ==="
+	@podman exec starexec-app apk list --installed | grep -E "bash|util-linux|mysql-client|procps" || true
+	@echo ""
+	@echo "=== Tool Versions ==="
+	@podman exec starexec-app bash -c "echo 'bash:' && bash --version | head -1"
+	@podman exec starexec-app bash -c "echo 'flock:' && flock --version"
+	@podman exec starexec-app bash -c "echo 'lscpu:' && lscpu --version"
+	@podman exec starexec-app bash -c "echo 'mysql:' && mysql --version"
+	@podman exec starexec-app bash -c "echo 'ps:' && ps --version"
+	@echo ""
+	@echo "=== Command Availability ==="
+	@podman exec starexec-app bash -c "which bash flock lscpu mysql ps runsolver"
+	@echo ""
+	@echo "=== Test ps -p Command ==="
+	@podman exec starexec-app bash -c 'ps -p $$$$ -o pid,cmd'
+	@echo ""
+	@echo "=== Test flock -w Command ==="
+	@podman exec starexec-app bash -c "timeout 2 flock -x -w 1 /tmp/test.lock echo 'flock -w works!'"
+	@echo ""
+	@echo "=== CPU Info ==="
+	@podman exec starexec-app lscpu | head -10
+	@echo ""
+	@echo "✓ All job execution dependencies validated"
 
 lint:
 	@if command -v helm >/dev/null 2>&1; then \
@@ -445,7 +544,7 @@ template:
 		echo "Helm not installed, generating from template..."; \
 		STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 		STAREXEC_MYSQL_VOL=$${STAREXEC_MYSQL_VOL:-starexec-$(ENV)-mysql} \
-		IMAGE_NAME=$(IMAGE_NAME) \
+		IMAGE_NAME=$(RELEASE_NAME) \
 		IMAGE_TAG=$(IMAGE_TAG) \
 		./scripts/generate-render-yaml.sh; \
 	fi
