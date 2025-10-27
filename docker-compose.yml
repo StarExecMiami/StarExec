@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   starexec:
-    container_name: starexec_container
+    container_name: starexec-app
     build:
       context: .
       dockerfile: Dockerfile
@@ -12,8 +12,9 @@ services:
       # Database Configuration
       STAREXEC_DB_HOST: mysql
       STAREXEC_DB_USER: starexec
-      STAREXEC_DB_PASSWORD: starexec_password
+      STAREXEC_DB_PASSWORD: starexec_dev_password
       STAREXEC_DB_NAME: starexec
+      STAREXEC_REPORT_HOST: mysql
       
       # Email Configuration (configure as needed)
       STAREXEC_EMAIL_SMTP: localhost
@@ -52,22 +53,21 @@ services:
       - starexec_network
 
   mysql:
-    container_name: starexec_mysql
+    container_name: starexec-mysql
     image: docker.io/library/mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_ROOT_PASSWORD: starexec_dev_password
       MYSQL_DATABASE: starexec
       MYSQL_USER: starexec
-      MYSQL_PASSWORD: starexec_password
+      MYSQL_PASSWORD: starexec_dev_password
     ports:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     command: ["docker-entrypoint.sh", "mysqld", 
-              "--log-bin-trust-function-creators=1",
-              "--default-authentication-plugin=mysql_native_password"]
+              "--log-bin-trust-function-creators=1"]
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u starexec -pstarexec_password"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u starexec -pstarexec_dev_password"]
       interval: 10s
       timeout: 5s
       retries: 30
