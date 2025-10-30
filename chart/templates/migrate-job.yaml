@@ -13,9 +13,9 @@ spec:
         command: ["sh","-c","mvn -DskipTests -Dflyway.url=$FLYWAY_URL -Dflyway.user=$FLYWAY_USER -Dflyway.password=$FLYWAY_PASSWORD flyway:migrate"]
         env:
         - name: FLYWAY_URL
-          value: "jdbc:postgresql://{{ .Values.postgresql.host }}:{{ default 5432 .Values.postgresql.port }}/{{ .Values.postgresql.database }}"
+          value: "jdbc:postgresql://{{ .Values.postgres.host }}:{{ default 5432 .Values.postgres.port }}/{{ .Values.postgres.database }}"
         - name: FLYWAY_USER
-          value: {{ .Values.postgresql.user | quote }}
+          value: {{ .Values.postgres.user | quote }}
         - name: FLYWAY_PASSWORD
-          value: {{ .Values.postgresql.password | quote }}
+          value: {{ .Values.postgres.password | quote }}
       restartPolicy: OnFailure
