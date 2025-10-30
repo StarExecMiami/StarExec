@@ -5,6 +5,9 @@ import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Mail;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 
 public class Notifications {
@@ -19,13 +22,24 @@ public class Notifications {
 	 * @return True if user is subscribed to job, false otherwise
 	 */
 	public static boolean isUserSubscribedToJob(int user, int job) throws SQLException {
-		return Common.query("{CALL UserSubscribedToJob(?,?)}", procedure -> {
-			procedure.setInt(1, user);
-			procedure.setInt(2, job);
-		}, results -> {
-			results.next();
-			return results.getBoolean(1);
-		});
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.UserSubscribedToJob(?,?)");
+			ps.setInt(1, user);
+			ps.setInt(2, job);
+			results = ps.executeQuery();
+			if (results.next()) {
+				return results.getBoolean(1);
+			}
+			return false;
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -35,10 +49,18 @@ public class Notifications {
 	 * @param job ID of Job
 	 */
 	public static void subscribeUserToJob(int user, int job) throws SQLException {
-		Common.update("{CALL SubscribeUserToJob(?,?)}", procedure -> {
-			procedure.setInt(1, user);
-			procedure.setInt(2, job);
-		});
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.SubscribeUserToJob(?,?)");
+			ps.setInt(1, user);
+			ps.setInt(2, job);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -48,10 +70,18 @@ public class Notifications {
 	 * @param job ID of Job
 	 */
 	public static void unsubscribeUserToJob(int user, int job) throws SQLException {
-		Common.update("{CALL UnsubscribeUserFromJob(?,?)}", procedure -> {
-			procedure.setInt(1, user);
-			procedure.setInt(2, job);
-		});
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserFromJob(?,?)");
+			ps.setInt(1, user);
+			ps.setInt(2, job);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -67,11 +97,19 @@ public class Notifications {
 				"updateNotificationJobStatus",
 				"user: " + userId + "    job: " + job + "   status " + status.toString()
 		);
-		Common.update("{CALL UpdateNotificationJobStatus(?,?,?)}", procedure -> {
-			procedure.setInt(1, userId);
-			procedure.setInt(2, job);
-			procedure.setString(3, status.name());
-		});
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UpdateNotificationJobStatus(?,?,?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, job);
+			ps.setString(3, status.name());
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -82,7 +120,13 @@ public class Notifications {
 	public static void sendEmailNotifications() {
 		final String method = "sendEmailNotifications";
 		try {
-			Common.query("CALL NotifyUsersOfJobs();", procedure -> {}, results -> {
+			Connection con = null;
+			PreparedStatement ps = null;
+			ResultSet results = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT * FROM starexec.NotifyUsersOfJobs()");
+				results = ps.executeQuery();
 				User user = new User();
 				JobStatus status;
 				int job;
@@ -98,8 +142,11 @@ public class Notifications {
 					Mail.notifyUserOfJobStatus(user, job, status);
 					updateNotificationJobStatus(userId, job, status);
 				}
-				return null;
-			});
+			} finally {
+				Common.safeClose(results);
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (SQLException e) {
 			log.error(method, e);
 		}

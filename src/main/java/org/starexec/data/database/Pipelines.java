@@ -8,6 +8,7 @@ import org.starexec.logger.StarLogger;
 
 import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -30,12 +31,12 @@ public class Pipelines {
 	 * @return A list of all the dependencies for the given stage
 	 */
 	public static List<PipelineDependency> getDependenciesForStage(int stageId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetDependenciesForPipelineStage(?)}");
-			procedure.setInt(1, stageId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDependenciesForPipelineStage(?)");
+			ps.setInt(1, stageId);
+			results = ps.executeQuery();
 			List<PipelineDependency> answers = new ArrayList<>();
 			while (results.next()) {
 				PipelineDependency dep = new PipelineDependency();
@@ -49,7 +50,7 @@ public class Pipelines {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -65,13 +66,13 @@ public class Pipelines {
 	 * @return A HashMap that maps stage numbers to lists of pipeline dependencies.
 	 */
 	public static HashMap<Integer, List<PipelineDependency>> getDependenciesForJobPair(int pairId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetDependenciesForJobPair(?)}");
-			procedure.setInt(1, pairId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDependenciesForJobPair(?)");
+			ps.setInt(1, pairId);
+			results = ps.executeQuery();
 			HashMap<Integer, List<PipelineDependency>> answers = new HashMap<>();
 			while (results.next()) {
 				PipelineDependency dep = new PipelineDependency();
@@ -90,7 +91,7 @@ public class Pipelines {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -104,12 +105,12 @@ public class Pipelines {
 	 * @return The list of pipeline stages
 	 */
 	public static List<PipelineStage> getStagesForPipeline(int pipeId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetStagesByPipelineId(?)}");
-			procedure.setInt(1, pipeId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetStagesByPipelineId(?)");
+			ps.setInt(1, pipeId);
+			results = ps.executeQuery();
 			List<PipelineStage> stages = new ArrayList<>();
 			while (results.next()) {
 				PipelineStage stage = new PipelineStage();
@@ -124,7 +125,7 @@ public class Pipelines {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -138,13 +139,13 @@ public class Pipelines {
 	 */
 	public static SolverPipeline getFullPipeline(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPipelineById(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPipelineById(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			if (results.next()) {
 				SolverPipeline pipe = new SolverPipeline();
 				pipe.setId(id);
@@ -159,7 +160,7 @@ public class Pipelines {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -172,19 +173,19 @@ public class Pipelines {
 	 * @param con An open SQL connection to make the call on
 	 */
 	public static void addDependencyToDatabase(PipelineDependency dep, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL AddPipelineDependency(?,?,?,?)}");
-			procedure.setInt(1, dep.getStageId());
-			procedure.setInt(2, dep.getDependencyId());
+			ps = con.prepareStatement("SELECT starexec.AddPipelineDependency(?,?,?,?)");
+			ps.setInt(1, dep.getStageId());
+			ps.setInt(2, dep.getDependencyId());
 			log.debug("adding dependency with type " + dep.getType());
-			procedure.setInt(3, dep.getType().getVal());
-			procedure.setInt(4, dep.getInputNumber());
-			procedure.executeUpdate();
+			ps.setInt(3, dep.getType().getVal());
+			ps.setInt(4, dep.getInputNumber());
+			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -195,21 +196,22 @@ public class Pipelines {
 	 * @param con An open SQL connection to make this call on
 	 */
 	public static void addPipelineStageToDatabase(PipelineStage stage, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
-			procedure = con.prepareCall("{CALL AddPipelineStage(?,?,?,?,?)}");
-			procedure.setInt(1, stage.getPipelineId());
+			stmt = con.prepareStatement("SELECT AddPipelineStage(?,?,?,?)");
+			stmt.setInt(1, stage.getPipelineId());
 			if (stage.isNoOp()) {
-				procedure.setNull(2, java.sql.Types.INTEGER);
+				stmt.setNull(2, java.sql.Types.INTEGER);
 			} else {
-				procedure.setInt(2, stage.getConfigId());
+				stmt.setInt(2, stage.getConfigId());
 			}
-			procedure.setBoolean(3, stage.isPrimary());
-			procedure.setBoolean(4, stage.isNoOp());
-			procedure.registerOutParameter(5, java.sql.Types.INTEGER);
+			stmt.setBoolean(3, stage.isPrimary());
+			stmt.setBoolean(4, stage.isNoOp());
 			log.debug("trying to use the config id = " + stage.getConfigId());
-			procedure.executeUpdate();
-			int id = procedure.getInt(5);
+			rs = stmt.executeQuery();
+			rs.next();
+			int id = rs.getInt(1);
 			stage.setId(id);
 
 			for (PipelineDependency dep : stage.getDependencies()) {
@@ -219,7 +221,8 @@ public class Pipelines {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 	}
 
@@ -232,15 +235,16 @@ public class Pipelines {
 	 */
 	public static int addPipelineToDatabase(SolverPipeline pipe) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL AddPipeline(?,?,?)}");
-			procedure.setInt(1, pipe.getUserId());
-			procedure.setString(2, pipe.getName());
-			procedure.registerOutParameter(3, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-			int id = procedure.getInt(3);
+			stmt = con.prepareStatement("SELECT AddPipeline(?,?)");
+			stmt.setInt(1, pipe.getUserId());
+			stmt.setString(2, pipe.getName());
+			rs = stmt.executeQuery();
+			rs.next();
+			int id = rs.getInt(1);
 			pipe.setId(id);
 
 			int number = 1;
@@ -261,7 +265,8 @@ public class Pipelines {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 
 		return -1;
@@ -275,15 +280,15 @@ public class Pipelines {
 	 */
 	public static List<SolverPipeline> getPipelinesByJob(int jobId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		List<Integer> pipeIds = new ArrayList<>();
 		List<SolverPipeline> pipes = new ArrayList<>();
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL GetPipelineIdsByJob(?)");
-			procedure.setInt(1, jobId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPipelineIdsByJob(?)");
+			ps.setInt(1, jobId);
+			results = ps.executeQuery();
 			while (results.next()) {
 				pipeIds.add(results.getInt("id"));
 			}
@@ -292,7 +297,7 @@ public class Pipelines {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		for (Integer i : pipeIds) {
@@ -309,17 +314,17 @@ public class Pipelines {
 	 */
 	public static void deletePipelineFromDatabase(int pipelineId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DeletePipeline(?)}");
-			procedure.setInt(1, pipelineId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.DeletePipeline(?)");
+			ps.setInt(1, pipelineId);
+			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 }

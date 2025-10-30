@@ -37,6 +37,6 @@ public class PaginationQueryBuilder {
 	public String getSQL() {
 
 		return baseSQL + "\n" + "ORDER BY " + orderColumn + " " + getOrderDirectionString() + "\n" + "LIMIT " +
-		            query.getStartingRecord() + ", " + query.getNumRecords() + ";";
+		            query.getNumRecords() + " OFFSET " + query.getStartingRecord() + ";";
 	}
 }

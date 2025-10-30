@@ -1,7 +1,6 @@
 package org.starexec.data.to;
 
 import org.starexec.data.database.Analytics;
-import org.starexec.data.database.Common;
 import org.starexec.logger.StarLogger;
 
 import java.sql.Date;
@@ -34,7 +33,7 @@ public class AnalyticsResults {
 	 * @param results ResultSet containing
 	 * @return list of AnalyticsResults
 	 */
-	private static List<AnalyticsResults> listFromResults(ResultSet results) throws SQLException {
+	public static List<AnalyticsResults> listFromResults(ResultSet results) throws SQLException {
 		LinkedList<AnalyticsResults> list = new LinkedList<>();
 		while (results.next()) {
 			list.add(
@@ -56,14 +55,7 @@ public class AnalyticsResults {
 	 */
 	public static Iterable<AnalyticsResults> getAllEvents(Date start, Date end) {
 		try {
-			return Common.query(
-					"{CALL GetAnalyticsForDateRange(?,?)}",
-					procedure -> {
-						procedure.setDate(1, start);
-						procedure.setDate(2, end);
-					},
-					AnalyticsResults::listFromResults
-			);
+			return org.starexec.data.database.SystemFunctions.getAnalyticsForDateRange(start, end);
 		} catch (SQLException e) {
 			log.error("GetAnalyticsForDateRange");
 			return Collections.emptyList();

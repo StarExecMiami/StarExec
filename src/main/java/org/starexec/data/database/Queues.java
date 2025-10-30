@@ -11,8 +11,8 @@ import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.LinkedList;
@@ -155,17 +155,18 @@ public class Queues {
 	 * @author Tyler Jensen
 	 */
 	protected static int add(Connection con, String queueName, int cpuTimeout, int wallTimeout) {
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 
 			//Add the queue first
-			procedure = con.prepareCall("{CALL AddQueue(?,?,?,?)}");
-			procedure.setString(1, queueName);
-			procedure.setInt(2, wallTimeout);
-			procedure.setInt(3, cpuTimeout);
-			procedure.registerOutParameter(4, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-			int newQueueId = procedure.getInt(4);
+			stmt = con.prepareStatement("SELECT AddQueue(?, ?, ?)");
+			stmt.setString(1, queueName);
+			stmt.setInt(2, wallTimeout);
+			stmt.setInt(3, cpuTimeout);
+			rs = stmt.executeQuery();
+			rs.next();
+			int newQueueId = rs.getInt(1);
 
 			if (newQueueId == 0) {
 				return -1;
@@ -177,7 +178,8 @@ public class Queues {
 		} catch (Exception e) {
 			log.debug("add", "queueName:\t" + queueName, e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 		return -1;
 	}
@@ -217,14 +219,14 @@ public class Queues {
 	 */
 	public static boolean associate(String queueName, String nodeName) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL AssociateQueue(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.AssociateQueue(?, ?)");
 			procedure.setString(1, queueName);
 			procedure.setString(2, nodeName);
 
-			procedure.executeUpdate();
+			procedure.execute();
 			// association change can affect queue/node mapping; clear cache
 			invalidateQueueCache();
 			return true;
@@ -245,11 +247,11 @@ public class Queues {
 	 */
 	public static void clearQueueAssociations() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL clearQueueAssociations()}");
-			procedure.executeUpdate();
+			procedure = con.prepareStatement("SELECT starexec.clearQueueAssociations()");
+			procedure.execute();
 			invalidateQueueCache();
 		} catch (Exception e) {
 			log.error("clearQueueAssociations", e);
@@ -270,7 +272,7 @@ public class Queues {
 	protected static Queue get(Connection con, int qid) {
 		final String methodName = "get";
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 
 		// Try cache first for positive ids
 		try {
@@ -286,7 +288,7 @@ public class Queues {
 		}
 
 		try {
-			procedure = con.prepareCall("{CALL GetQueue(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetQueue(?)");
 			procedure.setInt(1, qid);
 			results = procedure.executeQuery();
 			if (results.next()) {
@@ -356,11 +358,11 @@ public class Queues {
 	}
 
 	protected static int getCountOfEnqueuedPairsByQueue(Connection con, int qId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetCountOfEnqueuedJobPairsByQueue(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetCountOfEnqueuedJobPairsByQueue(?)");
 			procedure.setInt(1, qId);
 			results = procedure.executeQuery();
 
@@ -410,12 +412,12 @@ public class Queues {
 	 */
 	public static int getIdByName(String queueName) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetIdByName(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetIdByName(?)");
 			procedure.setString(1, queueName);
 
 
@@ -528,11 +530,11 @@ public class Queues {
 	 */
 	public static List<JobPair> getPairsRunningOnNode(int nodeId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL GetPairsRunningOnNode(?)");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetPairsRunningOnNode(?)");
 			procedure.setInt(1, nodeId);
 			results = procedure.executeQuery();
 			List<JobPair> result = resultSetToClusterPagePairs(results);
@@ -629,16 +631,16 @@ public class Queues {
 	 */
 	private static List<Job> getPendingJobsHelper(int queueId, Boolean developerOnly) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 			Queue queue = Queues.get(con, queueId);
 			if (developerOnly) {
-				procedure = con.prepareCall("{CALL GetPendingDeveloperJobs(?)}");
+				procedure = con.prepareStatement("SELECT * FROM starexec.GetPendingDeveloperJobs(?)");
 			} else {
-				procedure = con.prepareCall("{CALL GetPendingJobs(?)}");
+				procedure = con.prepareStatement("SELECT * FROM starexec.GetPendingJobs(?)");
 			}
 			procedure.setInt(1, queueId);
 			results = procedure.executeQuery();
@@ -673,11 +675,11 @@ public class Queues {
 		for (Queue q : queues) {
 			int queueId = q.getId();
 			Connection con = null;
-			CallableStatement procedure = null;
+			PreparedStatement procedure = null;
 			ResultSet results = null;
 			try {
 				con = Common.getConnection();
-				procedure = con.prepareCall("{CALL GetPendingDeveloperJobs(?)}");
+				procedure = con.prepareStatement("SELECT * FROM starexec.GetPendingDeveloperJobs(?)");
 				procedure.setInt(1, queueId);
 				results = procedure.executeQuery();
 				if (results.next()) {
@@ -714,21 +716,23 @@ public class Queues {
 	 */
 	protected static List<Queue> getQueues(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			switch (userId) {
 			case 0:
 				//only gets the queues that have status "ACTIVE"
-				procedure = con.prepareCall("{CALL GetAllQueues}");
+				// qualify the function with the schema to avoid depending on the search_path
+				procedure = con.prepareStatement("SELECT id, name, status, global_access, cputimeout as cpuTimeout, clocktimeout as clockTimeout FROM starexec.GetAllQueues()");
 				break;
 			case -2:
 				//includes inactive queues
-				procedure = con.prepareCall("{CALL GetAllQueuesAdmin}");
+				// qualify the function with the schema to avoid depending on the search_path
+				procedure = con.prepareStatement("SELECT id, name, status, global_access, cputimeout as cpuTimeout, clocktimeout as clockTimeout FROM starexec.GetAllQueuesAdmin()");
 				break;
 			default:
-				procedure = con.prepareCall("{CALL GetQueuesForUser(?)}");
+				procedure = con.prepareStatement("SELECT * FROM starexec.GetQueuesForUser(?)");
 				procedure.setInt(1, userId);
 				break;
 			}
@@ -762,11 +766,11 @@ public class Queues {
 
 	public static Long getUserLoadOnQueue(int queueId, int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserLoadOnQueue(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserLoadOnQueue(?,?)");
 			procedure.setInt(1, queueId);
 			procedure.setInt(2, userId);
 			results = procedure.executeQuery();
@@ -795,11 +799,11 @@ public class Queues {
 
 	public static Integer getSizeOfQueue(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetNumEnqueuedJobs(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetNumEnqueuedJobs(?)");
 			procedure.setInt(1, queueId);
 			results = procedure.executeQuery();
 
@@ -852,21 +856,21 @@ public class Queues {
 	 */
 	public static boolean setStatus(String name, String status) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 
 			if (name == null) {
 				// If no name was supplied, apply to all queues
-				procedure = con.prepareCall("{CALL UpdateAllQueueStatus(?)}");
+				procedure = con.prepareStatement("SELECT starexec.UpdateAllQueueStatus(?)");
 				procedure.setString(1, status);
 			} else {
-				procedure = con.prepareCall("{CALL UpdateQueueStatus(?, ?)}");
+				procedure = con.prepareStatement("SELECT starexec.UpdateQueueStatus(?, ?)");
 				procedure.setString(1, name);
 				procedure.setString(2, status);
 			}
 
-			procedure.executeUpdate();
+			procedure.execute();
 			// updates change queue data -> invalidate cache
 			invalidateQueueCache();
 			return true;
@@ -903,12 +907,12 @@ public class Queues {
 
 	public static String getNameById(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetNameById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetNameById(?)");
 			procedure.setInt(1, queueId);
 
 			results = procedure.executeQuery();
@@ -936,13 +940,13 @@ public class Queues {
 	 */
 	public static boolean updateQueueCpuTimeout(int queueId, int timeout) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateQueueCpuTimeout(?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateQueueCpuTimeout(?,?)");
 			procedure.setInt(1, queueId);
 			procedure.setInt(2, timeout);
-			procedure.executeUpdate();
+			procedure.execute();
 			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
@@ -963,13 +967,13 @@ public class Queues {
 	 */
 	public static boolean updateQueueWallclockTimeout(int queueId, int timeout) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateQueueClockTimeout(?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateQueueClockTimeout(?,?)");
 			procedure.setInt(1, queueId);
 			procedure.setInt(2, timeout);
-			procedure.executeUpdate();
+			procedure.execute();
 			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
@@ -990,12 +994,11 @@ public class Queues {
 
 	public static boolean isQueueGlobal(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-
-			procedure = con.prepareCall("{CALL IsQueueGlobal(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsQueueGlobal(?)");
 			procedure.setInt(1, queueId);
 
 			results = procedure.executeQuery();
@@ -1022,13 +1025,13 @@ public class Queues {
 
 	public static boolean delete(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL RemoveQueue(?)}");
+			procedure = con.prepareStatement("SELECT starexec.RemoveQueue(?)");
 			procedure.setInt(1, queueId);
-			procedure.executeUpdate();
+			procedure.execute();
 			invalidateQueueCache();
 			return true;
 		} catch (Exception e) {
@@ -1049,12 +1052,12 @@ public class Queues {
 	 */
 	public static boolean makeGlobal(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL MakeQueueGlobal(?)}");
+			procedure = con.prepareStatement("SELECT starexec.MakeQueueGlobal(?)");
 			procedure.setInt(1, queueId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			invalidateQueueCache();
 			return true;
@@ -1075,12 +1078,13 @@ public class Queues {
 	 */
 	public static boolean removeGlobal(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL RemoveQueueGlobal(?)}");
+
+			procedure = con.prepareStatement("SELECT starexec.RemoveQueueGlobal(?)");
 			procedure.setInt(1, queueId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			invalidateQueueCache();
 			return true;
@@ -1101,12 +1105,13 @@ public class Queues {
 	 */
 	public static boolean setTestQueue(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetTestQueue(?)}");
+
+			procedure = con.prepareStatement("SELECT starexec.SetTestQueue(?)");
 			procedure.setInt(1, queueId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			invalidateQueueCache();
 			return true;
@@ -1137,11 +1142,11 @@ public class Queues {
 	 */
 	public static int getTestQueue() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetTestQueue()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetTestQueue()");
 			results = procedure.executeQuery();
 			if (results.next()) {
 				int id = results.getInt("test_queue");
@@ -1170,7 +1175,7 @@ public class Queues {
 	 */
 	public static boolean setQueueCommunityAccess(List<Integer> community_ids, int queue_id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
@@ -1178,11 +1183,11 @@ public class Queues {
 
 			if (community_ids != null) {
 				for (int id : community_ids) {
-					procedure = con.prepareCall("{CALL SetQueueCommunityAccess(?, ?)}");
+					procedure = con.prepareStatement("SELECT starexec.SetQueueCommunityAccess(?, ?)");
 					procedure.setInt(1, id);
 					procedure.setInt(2, queue_id);
 
-					procedure.executeUpdate();
+					procedure.execute();
 				}
 			}
 
@@ -1208,11 +1213,11 @@ public class Queues {
 	 */
 	public static String getDescForQueue(int qid) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetDescForQueue(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetDescForQueue(?)");
 			procedure.setInt(1, qid);
 			results = procedure.executeQuery();
 			String result = "";
@@ -1237,13 +1242,13 @@ public class Queues {
 
 	public static Boolean updateQueueDesc(int qid, String desc) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetDescForQueue(?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.SetDescForQueue(?,?)");
 			procedure.setInt(1, qid);
 			procedure.setString(2, desc);
-			procedure.executeUpdate();
+			procedure.execute();
 			// A description change affects queue metadata -> clear cache
 			invalidateQueueCache();
 			return true;

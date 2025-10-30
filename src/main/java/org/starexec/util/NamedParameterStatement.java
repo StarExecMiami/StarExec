@@ -12,7 +12,6 @@ import java.util.Map;
 public class NamedParameterStatement {
     /** The statement this object is wrapping. */
     private final PreparedStatement statement;
-    private static final char parameterDelimiter = ':';
     /** Maps parameter names to arrays of ints which are the parameter indices. 
 */
     private final Map<String, List<Integer>> indexMap;
@@ -45,47 +44,35 @@ method is non-private so JUnit code can
      * @return the parsed query
      */
     static String parse(String query, Map<String,List<Integer>> paramMap) {
-        
-        int length=query.length();
-        StringBuilder parsedQuery=new StringBuilder(length);
+        // Use a regex-based parser to find named parameters of the form :name
+        // but avoid matching Postgres type casts like ::text. We look for a single
+        // colon not preceded by another colon, followed by a Java identifier.
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("(?<!:):([A-Za-z][A-Za-z0-9_]*)");
+        java.util.regex.Matcher m = p.matcher(query);
 
-        int index=1;
+        StringBuilder parsed = new StringBuilder();
+        int lastEnd = 0;
+        int index = 1;
 
-        for(int i=0;i<length;i++) {
-            char c=query.charAt(i);
-            	if(c==parameterDelimiter && 
-                        Character.isJavaIdentifierStart(query.charAt(i+1))) {
-                    int j=i+2;
-                    while(j<length && Character.isJavaIdentifierPart(query.charAt(j))) {
-                        j++;
-                    }
-                    String name=query.substring(i+1,j);
-                    c='?'; // replace the parameter with a question mark
-                    i+=name.length(); // skip past the end if the parameter
+        while (m.find()) {
+            // Append text before the match
+            parsed.append(query, lastEnd, m.start());
 
-                    List<Integer> indexList = paramMap.computeIfAbsent(name, k -> new LinkedList<>());
-                    indexList.add(index);
+            // Replace the named parameter with a '?'
+            parsed.append('?');
 
-                    index++;
-                }
-            
-            parsedQuery.append(c);
+            String name = m.group(1);
+            List<Integer> indexList = paramMap.computeIfAbsent(name, k -> new LinkedList<>());
+            indexList.add(index);
+            index++;
+
+            lastEnd = m.end();
         }
 
-        // replace the lists of Integer objects with arrays of ints
-        /*for(Iterator itr=paramMap.entrySet().iterator(); itr.hasNext();) {
-            Map.Entry entry=(Map.Entry)itr.next();
-            List list=(List)entry.getValue();
-            int[] indexes=new int[list.size()];
-            int i=0;
-            for(Iterator itr2=list.iterator(); itr2.hasNext();) {
-                Integer x=(Integer)itr2.next();
-                indexes[i++]=x.intValue();
-            }
-            entry.setValue(indexes);
-        }*/
+        // Append the remainder of the query
+        parsed.append(query.substring(lastEnd));
 
-        return parsedQuery.toString();
+        return parsed.toString();
     }
 
 

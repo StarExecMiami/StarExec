@@ -38,8 +38,8 @@ import org.starexec.data.to.QueueGraphData;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
 import java.util.List;
@@ -140,13 +140,13 @@ public class Statistics {
  	 */
 	public static List<Date> getPairTimes(int jobId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPairTimes(?)}");
-			procedure.setInt(1, jobId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPairTimes(?)");
+			ps.setInt(1, jobId);
+			results = ps.executeQuery();
 			List<Date> list = new ArrayList<>();
 			while(results.next()) {
 				list.add(results.getTimestamp("end_time"));
@@ -156,7 +156,7 @@ public class Statistics {
 			log.error("getPairTimes", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -169,12 +169,12 @@ public class Statistics {
 	 * pendingPairs, errorPairs, totalPairs and runtime)
 	 */
 	protected static HashMap<String, String> getJobPairOverview(Connection con, int jobId) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetJobPairOverview(?)}");
-			procedure.setInt(1, jobId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairOverview(?)");
+			ps.setInt(1, jobId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return Statistics.getMapFromResult(results);
@@ -185,7 +185,7 @@ public class Statistics {
 			log.error("getJobPairOverview", e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return null;
 	}

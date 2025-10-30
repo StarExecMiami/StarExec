@@ -26,13 +26,13 @@ spec:
         path: /tmp/starexec-data
         type: DirectoryOrCreate
       {{- end }}
-    - name: mysql-data
-      {{- if and .Values.mysql.persistence.enabled .Values.persistence.usePodmanVolumes }}
+    - name: postgres-data
+      {{- if and .Values.postgres.persistence.enabled .Values.persistence.usePodmanVolumes }}
       persistentVolumeClaim:
-        claimName: {{ .Values.persistence.podmanVolumes.mysql.name | default "starexec-mysql" }}
+        claimName: {{ .Values.persistence.podmanVolumes.postgres.name | default "starexec-postgres" }}
       {{- else if .Values.persistence.useHostPathForPodman }}
       hostPath:
-        path: /tmp/mysql-data
+        path: /tmp/postgres-data
         type: DirectoryOrCreate
       {{- else }}
       emptyDir: {}
@@ -46,19 +46,19 @@ spec:
           hostPort: 7827
       env:
         - name: STAREXEC_DB_HOST
-          value: "mysql"
+          value: {{ .Values.postgres.host | quote }}
         - name: STAREXEC_DB_USER
-          value: {{ .Values.mysql.user | quote }}
+          value: {{ .Values.postgres.user | quote }}
         - name: STAREXEC_DB_PASSWORD
-          value: {{ .Values.mysql.password | quote }}
+          value: {{ .Values.postgres.password | quote }}
         - name: STAREXEC_DB_NAME
-          value: {{ .Values.mysql.database | quote }}
+          value: {{ .Values.postgres.database | quote }}
         - name: STAREXEC_CLUSTER_DB_USER
-          value: {{ .Values.mysql.user | quote }}
+          value: {{ .Values.postgres.user | quote }}
         - name: STAREXEC_CLUSTER_DB_PASSWORD
-          value: {{ .Values.mysql.password | quote }}
+          value: {{ .Values.postgres.password | quote }}
         - name: STAREXEC_REPORT_HOST
-          value: "mysql"
+          value: {{ .Values.postgres.host | quote }}
         - name: STAREXEC_BACKEND_TYPE
           value: {{ .Values.backend.type | quote }}
         - name: STAREXEC_BACKEND_ROOT
@@ -79,33 +79,28 @@ spec:
       resources:
         {{- toYaml .Values.resources.app | nindent 8 }}
 
-    - name: mysql
-      image: "{{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}"
-      imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+    - name: postgres
+      image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+      imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
       ports:
-        - containerPort: 3306
-          hostPort: 3306
-      command:
-        - /bin/sh
-        - -c
-        - |
-          exec docker-entrypoint.sh mysqld \
-            --log-bin-trust-function-creators=1 \
-            --default-authentication-plugin=mysql_native_password
+        - containerPort: 5432
+          hostPort: 5432
       env:
-        - name: MYSQL_ROOT_PASSWORD
-          value: {{ .Values.mysql.rootPassword | quote }}
-        - name: MYSQL_DATABASE
-          value: {{ .Values.mysql.database | quote }}
-        - name: MYSQL_USER
-          value: {{ .Values.mysql.user | quote }}
-        - name: MYSQL_PASSWORD
-          value: {{ .Values.mysql.password | quote }}
+        - name: POSTGRES_DB
+          value: {{ .Values.postgres.database | quote }}
+        - name: POSTGRES_USER
+          value: {{ .Values.postgres.user | quote }}
+        - name: POSTGRES_PASSWORD
+          value: {{ .Values.postgres.password | quote }}
+        - name: LC_COLLATE
+          value: "en_US.UTF-8"
+        - name: LC_CTYPE
+          value: "en_US.UTF-8"
       volumeMounts:
-        - name: mysql-data
-          mountPath: /var/lib/mysql
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
       resources:
-        {{- toYaml .Values.resources.mysql | nindent 8 }}
+        {{- toYaml .Values.resources.postgres | nindent 8 }}
 
 {{- else }}
 ---
@@ -138,21 +133,21 @@ spec:
             - containerPort: 7827
           env:
             - name: STAREXEC_DB_HOST
-              value: {{ .Values.mysql.host | quote }}
+              value: {{ .Values.postgres.host | quote }}
             - name: STAREXEC_DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-mysql
+                  name: {{ include "chart.name" . }}-secret-postgres
                   key: user
             - name: STAREXEC_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-mysql
+                  name: {{ include "chart.name" . }}-secret-postgres
                   key: password
             - name: STAREXEC_DB_NAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-mysql
+                  name: {{ include "chart.name" . }}-secret-postgres
                   key: database
             - name: STAREXEC_BACKEND_TYPE
               value: {{ .Values.backend.type | quote }}
@@ -171,29 +166,28 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /app/data
-        - name: mysql
-          image: "{{ .Values.mysql.image.repository }}:{{ .Values.mysql.image.tag }}"
-          imagePullPolicy: {{ .Values.mysql.image.pullPolicy }}
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
           ports:
-            - containerPort: 3306
+            - containerPort: 5432
           env:
-            - name: MYSQL_ROOT_PASSWORD
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-mysql
-                  key: rootPassword
-            - name: MYSQL_DATABASE
-              value: {{ .Values.mysql.database | quote }}
-            - name: MYSQL_USER
-              value: {{ .Values.mysql.user | quote }}
-            - name: MYSQL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-mysql
+                  name: {{ include "chart.name" . }}-secret-postgres
                   key: password
+            - name: LC_COLLATE
+              value: "en_US.UTF-8"
+            - name: LC_CTYPE
+              value: "en_US.UTF-8"
           volumeMounts:
-            - name: mysql-data
-              mountPath: /var/lib/mysql
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}
@@ -202,10 +196,10 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
-        - name: mysql-data
-          {{- if .Values.mysql.persistence.enabled }}
+        - name: postgres-data
+          {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "chart.name" . }}-mysql-pvc
+            claimName: {{ include "chart.name" . }}-postgres-pvc
           {{- else }}
           emptyDir: {}
           {{- end }}

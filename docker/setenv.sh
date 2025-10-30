@@ -8,10 +8,14 @@
 export STAREXEC_BUILD_VERSION STAREXEC_BUILD_USER STAREXEC_BUILD_DATE
 
 # Default config
-: "${STAREXEC_DB_HOST:=mysql}"
-: "${STAREXEC_DB_PORT:=3306}"
+: "${STAREXEC_DB_HOST:=postgres}"
+: "${STAREXEC_DB_PORT:=5432}"
 : "${STAREXEC_DB_USER:=starexec}"
 : "${STAREXEC_DB_NAME:=starexec}"
+# Optional: allow explicit DB type / driver hints
+: "${STAREXEC_DB_TYPE:=postgresql}"
+: "${STAREXEC_DB_SSLMODE:=disable}"
+export STAREXEC_DB_TYPE STAREXEC_DB_SSLMODE
 
 # Prefer reading password from a mounted secret file (if present), then fallback to env var.
 # Common mount locations: /run/secrets/starexec_db_password or /etc/secrets/starexec/db_password
@@ -24,7 +28,7 @@ fi
 : "${STAREXEC_DB_PASSWORD:=${STAREXEC_DB_PASSWORD:-}}"
 
 # Build JVM properties string (avoid exposing password in logs; but -D will appear in process list)
-JVM_PROPS="-DSTAREXEC_DB_HOST=${STAREXEC_DB_HOST} -DSTAREXEC_DB_PORT=${STAREXEC_DB_PORT} -DSTAREXEC_DB_USER=${STAREXEC_DB_USER} -DSTAREXEC_DB_NAME=${STAREXEC_DB_NAME}"
+JVM_PROPS="-DSTAREXEC_DB_HOST=${STAREXEC_DB_HOST} -DSTAREXEC_DB_PORT=${STAREXEC_DB_PORT} -DSTAREXEC_DB_USER=${STAREXEC_DB_USER} -DSTAREXEC_DB_NAME=${STAREXEC_DB_NAME} -DSTAREXEC_DB_TYPE=${STAREXEC_DB_TYPE} -DSTAREXEC_DB_SSLMODE=${STAREXEC_DB_SSLMODE}"
 # Only append password property if non-empty
 [ -n "${STAREXEC_DB_PASSWORD}" ] && JVM_PROPS="${JVM_PROPS} -DSTAREXEC_DB_PASSWORD=${STAREXEC_DB_PASSWORD}"
 

@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Flyway version for DB migrations -->
         <flyway.version>11.13.1</flyway.version>
-        <mysql.connector.version>8.4.0</mysql.connector.version>
+        <postgresql.connector.version>42.7.4</postgresql.connector.version>
         <STAREXEC_LOG>/usr/local/tomcat/logs/starexec.log</STAREXEC_LOG>
         <LOGGING_LEVEL>INFO</LOGGING_LEVEL>
     </properties>
@@ -137,9 +137,9 @@
 
         <!-- Database -->
         <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <version>${mysql.connector.version}</version>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.connector.version}</version>
         </dependency>
         
         <!-- Flyway for database migrations -->
@@ -150,7 +150,7 @@
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-mysql</artifactId>
+            <artifactId>flyway-database-postgresql</artifactId>
             <version>${flyway.version}</version>
         </dependency>
 
@@ -376,40 +376,37 @@
                     </nonFilteredFileExtensions>
                 </configuration>
             </plugin>
-            <!-- Flyway DB migrations (run with: mvn -DskipTests flyway:migrate) -->
+            <!-- Flyway DB migrations (PostgreSQL) -->
             <plugin>
                 <groupId>org.flywaydb</groupId>
                 <artifactId>flyway-maven-plugin</artifactId>
                 <version>${flyway.version}</version>
                 <configuration>
-                    <!-- Connection URL built from Maven properties (override with -Dstarexec.db.*) -->
-                    <url>jdbc:mysql://${starexec.db.host}:3306/${starexec.db.name}?useSSL=false&amp;serverTimezone=UTC</url>
+                    <url>jdbc:postgresql://${starexec.db.host}:5432/${starexec.db.name}</url>
                     <user>${starexec.db.user}</user>
                     <password>${starexec.db.password}</password>
                     <schemas>
                         <schema>${starexec.db.name}</schema>
                     </schemas>
-                    <!-- Primary location under classpath; optional filesystem path to ease transition -->
                     <locations>
                         <location>classpath:db/migration</location>
                         <location>filesystem:${project.basedir}/src/main/resources/db/migration</location>
                     </locations>
-                    <!-- For existing DBs, set a baseline tag and migrate forward -->
                     <baselineOnMigrate>true</baselineOnMigrate>
                     <connectRetries>10</connectRetries>
                 </configuration>
                 <dependencies>
-                    <!-- Database support module for MySQL (required since Flyway 9) -->
+                    <!-- Flyway PostgreSQL support -->
                     <dependency>
                         <groupId>org.flywaydb</groupId>
-                        <artifactId>flyway-mysql</artifactId>
+                        <artifactId>flyway-database-postgresql</artifactId>
                         <version>${flyway.version}</version>
                     </dependency>
-                    <!-- Ensure MySQL JDBC driver is available to the plugin at runtime -->
+                    <!-- PostgreSQL JDBC driver -->
                     <dependency>
-                        <groupId>com.mysql</groupId>
-                        <artifactId>mysql-connector-j</artifactId>
-                        <version>8.0.33</version>
+                        <groupId>org.postgresql</groupId>
+                        <artifactId>postgresql</artifactId>
+                        <version>42.7.3</version>
                     </dependency>
                 </dependencies>
             </plugin>

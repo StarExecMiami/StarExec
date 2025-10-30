@@ -14,8 +14,8 @@ import org.starexec.exceptions.StarExecSecurityException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -57,19 +57,19 @@ public class Users {
 	 * @author Tyler Jensen
 	 */
 	private static void associate(Connection con, int userId, int spaceId) {
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL AddUserToSpace(?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setInt(2, spaceId);
+			ps = con.prepareStatement("SELECT starexec.AddUserToSpace(?, ?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, spaceId);
+			// Function returns VOID; execute and ignore any result
+			ps.execute();
 
-
-			procedure.executeUpdate();
 			log.info("User [" + userId + "] added to space [" + spaceId + "]");
 		} catch (Exception e) {
 			log.error("associate", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -95,14 +95,14 @@ public class Users {
 	 */
 	public static boolean setDefaultPageSize(int userId, int newSize) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement procedure = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetDefaultPageSize(?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.SetDefaultPageSize(?,?)");
 			procedure.setInt(1, userId);
 			procedure.setInt(2, newSize);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -121,12 +121,12 @@ public class Users {
 	 */
 	public static int getDefaultPageSize(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetDefaultPageSize(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetDefaultPageSize(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 			if (results.next()) {
@@ -312,10 +312,10 @@ public class Users {
 	}
 
 	public static User get(Connection con, int id) {
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetUserById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserById(?)");
 			procedure.setInt(1, id);
 			results = procedure.executeQuery();
 
@@ -342,11 +342,12 @@ public class Users {
 	 */
 	public static User get(String email) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserByEmail(?)}");
+			// qualify the function with the schema to avoid depending on the search_path
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserByEmail(?)");
 			procedure.setString(1, email);
 			results = procedure.executeQuery();
 
@@ -369,14 +370,14 @@ public class Users {
 	 * @return A list of all users that will receive the Starexec report email
 	 */
 	public static List<User> getAllUsersSubscribedToReports() {
-		return getUserListFromQuery("{CALL GetAllUsersSubscribedToReports()}");
+		return getUserListFromQuery("{SELECT * FROM starexec.GetAllUsersSubscribedToReports()}");
 	}
 
 	/**
 	 * @return A list of all the admins in the system
 	 */
 	public static List<User> getAdmins() {
-		return getUserListFromQuery("{CALL GetAdmins()}");
+		return getUserListFromQuery("{SELECT * FROM starexec.GetAdmins()}");
 	}
 
 	/**
@@ -389,11 +390,16 @@ public class Users {
 	 */
 	private static List<User> getUserListFromQuery(String sql) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall(sql);
+			// strip surrounding braces if present (some callers pass strings like "{SELECT ...}")
+			String cleaned = sql;
+			if (cleaned.startsWith("{") && cleaned.endsWith("}")) {
+				cleaned = cleaned.substring(1, cleaned.length() - 1);
+			}
+			procedure = con.prepareStatement(cleaned);
 			results = procedure.executeQuery();
 
 			return resultsToUsers(results);
@@ -416,11 +422,11 @@ public class Users {
 
 	public static int getCount() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserCount()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserCount()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {
@@ -457,11 +463,11 @@ public class Users {
 	 */
 	public static int getCountInSpace(int spaceId, String query) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserCountInSpaceWithQuery(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserCountInSpaceWithQuery(?, ?)");
 			procedure.setInt(1, spaceId);
 			procedure.setString(2, query);
 			results = procedure.executeQuery();
@@ -491,22 +497,29 @@ public class Users {
 	 */
 	public static boolean updateAllUserDiskSizes() {
 		Connection con = null;
-		CallableStatement procedure = null;
+
 		try {
 			con = Common.getConnection();
 			for (User u : Users.getUsersForNextPageAdmin(new DataTablesQuery(0, Integer.MAX_VALUE, 0, false, ""))) {
-				procedure = con.prepareCall("{CALL UpdateUserDiskUsage(?,?)}");
-				procedure.setInt(1, u.getId());
-				procedure.registerOutParameter(2, java.sql.Types.BIGINT);
-				procedure.executeUpdate();
-				long difference = procedure.getLong(2);
-				Common.safeClose(procedure);
+				java.sql.PreparedStatement ps = null;
+				ResultSet rs = null;
+				try {
+					ps = con.prepareStatement("SELECT starexec.UpdateUserDiskUsage(?)");
+					ps.setInt(1, u.getId());
+					rs = ps.executeQuery();
+					long difference = 0;
+					if (rs.next()) {
+						difference = rs.getLong(1);
+					}
 
-				if (difference != 0) {
-					log.info(
-							"Disk usage did not match between users table " + "and other tables for user " + u.getId
-									() +
-									". Difference was " + difference);
+					if (difference != 0) {
+						log.info(
+								"Disk usage did not match between users table " + "and other tables for user " + u.getId()
+										+ ". Difference was " + difference);
+					}
+				} finally {
+					Common.safeClose(rs);
+					Common.safeClose(ps);
 				}
 			}
 			return true;
@@ -514,7 +527,6 @@ public class Users {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
 		}
 		return false;
 	}
@@ -527,11 +539,11 @@ public class Users {
 	 */
 	public static long getDiskUsage(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserDiskUsage(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserDiskUsage(?)");
 			procedure.setInt(1, userId);
 
 			results = procedure.executeQuery();
@@ -558,11 +570,11 @@ public class Users {
 	 */
 	public static String getPassword(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPasswordById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetPasswordById(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
@@ -590,11 +602,11 @@ public class Users {
 	 */
 	public static User getUnregistered(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUnregisteredUserById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUnregisteredUserById(?)");
 			procedure.setInt(1, id);
 			results = procedure.executeQuery();
 
@@ -620,7 +632,17 @@ public class Users {
 	 * @throws SQLException on database error.
 	 */
 	public static void subscribeToErrorLogs(int userId) throws SQLException {
-		Common.update("{CALL SubscribeUserToErrorLogs(?)}", procedure -> procedure.setInt(1, userId));
+		Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.SubscribeUserToErrorLogs(?)");
+			ps.setInt(1, userId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -630,12 +652,33 @@ public class Users {
 	 * @throws SQLException on database error.
 	 */
 	public static void unsubscribeUserFromErrorLogs(int userId) throws SQLException {
-		Common.update("{CALL UnsubscribeUserFromErrorLogs(?)}", procedure -> procedure.setInt(1, userId));
+		Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserFromErrorLogs(?)");
+			ps.setInt(1, userId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static List<User> getUsersSubscribedToErrorLogs() throws SQLException {
-		return Common.query("{CALL GetAllUsersSubscribedToErrorLogs()}", procedure -> {} // no parameters to set
-				, Users::resultsToUsers);
+		Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllUsersSubscribedToErrorLogs()");
+			results = ps.executeQuery();
+			return resultsToUsers(results);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -649,11 +692,11 @@ public class Users {
 	public static boolean getUserByEmail(String email) {
 		log.debug("email = " + email);
 		Connection con = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserByEmail(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserByEmail(?)");
 			procedure.setString(1, email);
 			results = procedure.executeQuery();
 
@@ -804,10 +847,10 @@ public class Users {
 	}
 
 	protected static boolean isMemberOfCommunity(Connection con, int userId, int communityId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL IsMemberOfCommunity(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsMemberOfCommunity(?,?)");
 			procedure.setInt(1, userId);
 			procedure.setInt(2, communityId);
 			results = procedure.executeQuery();
@@ -833,15 +876,17 @@ public class Users {
 	 */
 	public static boolean isMemberOfSpace(int userId, int spaceId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL IsMemberOfSpace(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsMemberOfSpace(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setInt(2, spaceId);
 			results = procedure.executeQuery();
-			return results.next();
+			if (results.next()) {
+				return results.getInt("isMember") > 0;
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -867,29 +912,26 @@ public class Users {
 	public static boolean register(User user, int communityId, String code, String message) {
 		log.debug("begin register..");
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
 			String hashedPass = Hash.hashPassword(user.getPassword());
 
-			procedure = con.prepareCall("{CALL AddUser(?, ?, ?, ?, ?, ?, ?)}");
-			procedure.setString(1, user.getFirstName());
-			procedure.setString(2, user.getLastName());
-			procedure.setString(3, user.getEmail());
-			procedure.setString(4, user.getInstitution());
-			procedure.setString(5, hashedPass);
-			procedure.setLong(6, R.DEFAULT_DISK_QUOTA);
+			stmt = con.prepareStatement("SELECT AddUser(?, ?, ?, ?, ?, ?)");
+			stmt.setString(1, user.getFirstName());
+			stmt.setString(2, user.getLastName());
+			stmt.setString(3, user.getEmail());
+			stmt.setString(4, user.getInstitution());
+			stmt.setString(5, hashedPass);
+			stmt.setLong(6, R.DEFAULT_DISK_QUOTA);
 
-			// Register output of ID the user is inserted under
-			procedure.registerOutParameter(7, java.sql.Types.INTEGER);
-
-			// Add user to the users table and check to be sure 1 row was modified
-			procedure.executeUpdate();
-
-			// Extract id from OUT parameter
-			user.setId(procedure.getInt(7));
+			// Execute query and get the returned user ID
+			rs = stmt.executeQuery();
+			rs.next();
+			user.setId(rs.getInt(1));
 
 			boolean successfulRegistration = false;
 
@@ -913,7 +955,8 @@ public class Users {
 			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 
 		return false;
@@ -929,14 +972,14 @@ public class Users {
 	public static boolean setPairQuota(int userId, int newPairQuota) {
 		log.debug("in set pairquotas");
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateUserPairQuota(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateUserPairQuota(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setInt(2, newPairQuota);
 
-			procedure.executeUpdate();
+			procedure.execute();
 
 			return true;
 		} catch (Exception e) {
@@ -958,14 +1001,14 @@ public class Users {
 	 */
 	public static boolean setDiskQuota(int userId, long newDiskQuota) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateUserDiskQuota(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateUserDiskQuota(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setLong(2, newDiskQuota);
 
-			procedure.executeUpdate();
+			procedure.execute();
 
 			log.info("Disk quota changed to [" +
 					FileUtils.byteCountToDisplaySize(newDiskQuota) +
@@ -999,14 +1042,14 @@ public class Users {
 	 */
 	public static void updateEmail(int userId, String newValue) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateEmail(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateEmail(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, newValue);
 
-			procedure.executeUpdate();
+			procedure.execute();
 			log.info("User [" + userId + "] updated e-mail address to [" + newValue + "]");
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -1026,14 +1069,14 @@ public class Users {
 	 */
 	public static boolean updateFirstName(int userId, String newValue) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateFirstName(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateFirstName(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, newValue);
 
-			procedure.executeUpdate();
+			procedure.execute();
 			log.info("User [" + userId + "] updated first name to [" + newValue + "]");
 			return true;
 		} catch (Exception e) {
@@ -1056,14 +1099,14 @@ public class Users {
 	 */
 	public static boolean updateInstitution(int userId, String newValue) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateInstitution(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateInstitution(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, newValue);
 
-			procedure.executeUpdate();
+			procedure.execute();
 			log.info("User [" + userId + "] updated institution to [" + newValue + "]");
 			return true;
 		} catch (Exception e) {
@@ -1086,14 +1129,14 @@ public class Users {
 	 */
 	public static boolean updateLastName(int userId, String newValue) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateLastName(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateLastName(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, newValue);
 
-			procedure.executeUpdate();
+			procedure.execute();
 			log.info("User [" + userId + "] updated last name to [" + newValue + "]");
 			return true;
 		} catch (Exception e) {
@@ -1117,15 +1160,15 @@ public class Users {
 	 */
 	public static boolean updatePassword(int userId, String newValue) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdatePassword(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdatePassword(?, ?)");
 			procedure.setInt(1, userId);
 			String hashedPassword = Hash.hashPassword(newValue);
 			procedure.setString(2, hashedPassword);
 
-			procedure.executeUpdate();
+			procedure.execute();
 			log.info("User [" + userId + "] updated password");
 			return true;
 		} catch (Exception e) {
@@ -1147,8 +1190,8 @@ public class Users {
 	 */
 	public static boolean deleteUser(int userToDeleteId) {
 		log.debug("User with id=" + userToDeleteId + " is about to be deleted");
-		Connection con = null;
-		CallableStatement procedure = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
 		try {
 
 			// Delete the users primitive directories. This must occur before we delete the user
@@ -1170,9 +1213,9 @@ public class Users {
 			// Delete the user from the database, this should delete all benchmarks and solvers and jobs
 			// from the database using cascading deletes.
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DeleteUser(?)}");
+			procedure = con.prepareStatement("SELECT starexec.DeleteUser(?)");
 			procedure.setInt(1, userToDeleteId);
-			procedure.executeQuery();
+			procedure.execute();
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId);
 			return true;
@@ -1555,28 +1598,29 @@ public class Users {
 		log.debug("beginning to add user...");
 		log.debug("pass = " + user.getPassword());
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 
 			String hashedPass = Hash.hashPassword(user.getPassword());
 			log.debug("hashedPass = " + hashedPass);
-			procedure = con.prepareCall("{CALL AddUserAuthorized(?, ?, ?, ?, ?, ?, ?,?,?)}");
-			procedure.setString(1, user.getFirstName());
-			procedure.setString(2, user.getLastName());
-			procedure.setString(3, user.getEmail());
-			procedure.setString(4, user.getInstitution());
-			procedure.setString(5, hashedPass);
-			procedure.setLong(6, user.getDiskQuota());
-			procedure.setString(7, user.getRole());
-			procedure.setInt(8, user.getPairQuota());
-			// Register output of ID the user is inserted under
-			procedure.registerOutParameter(9, java.sql.Types.INTEGER);
+			stmt = con.prepareStatement("SELECT AddUserAuthorized(?, ?, ?, ?, ?, ?, ?, ?)");
+			stmt.setString(1, user.getFirstName());
+			stmt.setString(2, user.getLastName());
+			stmt.setString(3, user.getEmail());
+			stmt.setString(4, user.getInstitution());
+			stmt.setString(5, hashedPass);
+			stmt.setLong(6, user.getDiskQuota());
+			stmt.setString(7, user.getRole());
+			stmt.setInt(8, user.getPairQuota());
 
 			// Add user to the users table and check to be sure 1 row was modified
-			procedure.executeUpdate();
-			// Extract id from OUT parameter
-			user.setId(procedure.getInt(9));
+			rs = stmt.executeQuery();
+			rs.next();
+			int newId = rs.getInt(1);
+			// Extract id from result
+			user.setId(newId);
 			log.debug("newid = " + user.getId());
 			return user.getId();
 		} catch (Exception e) {
@@ -1584,7 +1628,8 @@ public class Users {
 			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 
 		return -1;
@@ -1599,14 +1644,14 @@ public class Users {
 	 */
 	public static boolean changeUserRole(int userId, String role) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL ChangeUserRole(?,?)}");
-			procedure.setInt(1, userId);
-			procedure.setString(2, role);
-			procedure.executeUpdate();
+			stmt = con.prepareStatement("SELECT starexec.ChangeUserRole(?,?)");
+			stmt.setInt(1, userId);
+			stmt.setString(2, role);
+			stmt.execute();
 			
 			// Invalidate cache after role change
 			invalidateIsAdminCache(userId);
@@ -1617,7 +1662,7 @@ public class Users {
 			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(stmt);
 		}
 		return false;
 	}
@@ -1631,21 +1676,21 @@ public class Users {
 	 */
 	private static boolean setUserReportSubscription(int userId, Boolean willBeSubscribed) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL SetUserReportSubscription(?,?)}");
-			procedure.setInt(1, userId);
-			procedure.setBoolean(2, willBeSubscribed);
-			procedure.executeUpdate();
+			stmt = con.prepareStatement("SELECT starexec.SetUserReportSubscription(?,?)");
+			stmt.setInt(1, userId);
+			stmt.setBoolean(2, willBeSubscribed);
+			stmt.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(stmt);
 		}
 		return false;
 	}

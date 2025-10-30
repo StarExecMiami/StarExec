@@ -11,11 +11,15 @@ import org.starexec.util.functionalInterfaces.ThrowingConsumer;
 import org.starexec.util.functionalInterfaces.ThrowingFunction;
 
 import java.sql.*;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.sql.SQLFeatureNotSupportedException;
 
 /**
  * The common database class which provides common methods used by other database accessors such
  * as transaction management and rollback support. Also provides connections and maintains an active
- * data pool of available connections to the MySql database.
+ * data pool of available connections to the PostgreSQL database.
  */
 public class Common {
 	// We have to use the non saving star logger here because this class is used by the ErrorLogs class. If ErrorLogs
@@ -27,8 +31,83 @@ public class Common {
 	private static int connectionsOpened = 0;
 	private static int connectionsDrift  = 0;
 
-	//args to append to the mysql URL.
-	private static final String MYSQL_URL_ARGUMENTS = "?noAccessToProcedureBodies=true&autoReconnect=true&zeroDateTimeBehavior=convertToNull&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&connectionCollation=utf8mb4_unicode_ci&characterEncoding=UTF-8&sessionVariables=collation_connection=utf8mb4_unicode_ci";
+	// args to append to the database URL
+	private static final String POSTGRES_URL_ARGUMENTS = "?sslmode=disable&stringtype=unspecified&currentSchema=starexec,public&ApplicationName=StarExec&socketTimeout=30&connectTimeout=10&tcpKeepAlive=true";
+
+	/**
+	 * Removes surrounding JDBC ODBC escape braces if present. Callers historically pass strings like
+	 * "{SELECT * FROM starexec.SomeFunc(?)}" using the ODBC escape syntax. PostgreSQL JDBC chokes on
+	 * the braces, so normalize the SQL before preparing the call.
+	 */
+	private static String stripBraces(String sql) {
+		if (sql == null) return null;
+		String s = sql.trim();
+		if (s.startsWith("{") && s.endsWith("}")) {
+			return s.substring(1, s.length() - 1).trim();
+		}
+		return s;
+	}
+
+	/**
+	 * Create a CallableStatement when possible. If the SQL looks like a regular SELECT/INSERT/UPDATE/DELETE
+	 * or a CTE (WITH ...), use a PreparedStatement for efficiency and compatibility with Postgres. Because
+	 * callers expect a CallableStatement, we return a dynamic proxy that implements CallableStatement but
+	 * delegates supported methods to the underlying PreparedStatement. Methods that are specific to
+	 * CallableStatement (like registerOutParameter/getXXX for OUT params) will throw SQLFeatureNotSupportedException.
+	 */
+	private static CallableStatement prepareCallable(Connection con, String sql) throws SQLException {
+		String normalized = stripBraces(sql);
+		if (normalized == null) return con.prepareCall(normalized);
+		String up = normalized.trim().toUpperCase();
+		boolean usePrepared = up.startsWith("SELECT") || up.startsWith("INSERT") || up.startsWith("UPDATE") || up.startsWith("DELETE") || up.startsWith("WITH");
+		if (!usePrepared) {
+			return con.prepareCall(normalized);
+		}
+		final PreparedStatement ps = con.prepareStatement(normalized);
+		return callableFromPrepared(ps);
+	}
+
+	/**
+	 * Returns a dynamic proxy implementing CallableStatement which delegates to the provided PreparedStatement
+	 * for common methods. Callable-specific methods will throw SQLFeatureNotSupportedException.
+	 */
+	private static CallableStatement callableFromPrepared(final PreparedStatement ps) {
+		InvocationHandler handler = new InvocationHandler() {
+			@Override
+			public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+				String name = method.getName();
+				try {
+					// Try to find the same method on PreparedStatement and invoke it
+					Method m = null;
+					try {
+						m = ps.getClass().getMethod(name, method.getParameterTypes());
+					} catch (NoSuchMethodException e) {
+						// Not found on PreparedStatement
+					}
+					if (m != null) {
+						return m.invoke(ps, args);
+					}
+					// Handle a few common cases explicitly
+					if ("close".equals(name)) {
+						ps.close();
+						return null;
+					}
+					if (name.startsWith("get") || name.startsWith("registerOutParameter") || name.startsWith("wasNull") || name.startsWith("getObject")) {
+						throw new SQLFeatureNotSupportedException("CallableStatement OUT parameters are not supported on PreparedStatement-backed proxy");
+					}
+					throw new SQLFeatureNotSupportedException("Method '" + name + "' is not supported on PreparedStatement-backed CallableStatement proxy");
+				} catch (Throwable t) {
+					// Unwrap invocation target exceptions
+					if (t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null) {
+						throw t.getCause();
+					}
+					throw t;
+				}
+			}
+		};
+		Object proxy = Proxy.newProxyInstance(CallableStatement.class.getClassLoader(), new Class[] { CallableStatement.class }, handler);
+		return (CallableStatement) proxy;
+	}
 
 	/**
 	 * Creates a new historical record in the logins table which keeps track of all user logins.
@@ -38,18 +117,26 @@ public class Common {
 	 */
 	public static void addLoginRecord(int userId, String ipAddress, String browser) {
 		Connection con = null;
-		CallableStatement procedure= null;
+		CallableStatement procedure = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL LoginRecord(?, ?, ?)}");
+			String callSql = stripBraces("{SELECT starexec.LoginRecord(?, ?, ?)}");
+			procedure = prepareCallable(con, callSql);
 			procedure.setInt(1, userId);
 			procedure.setString(2, ipAddress);
 			procedure.setString(3, browser);
-			procedure.executeUpdate();
+			// Use execute() to handle functions that may return a result. If a ResultSet is returned, close it.
+			procedure.execute();
+			rs = procedure.getResultSet();
+			if (rs != null) {
+				Common.safeClose(rs);
+			}
 		} catch (SQLException e) {
 			log.error("addLoginRecord", e);
 		} finally {
 			Common.safeClose(con);
+			Common.safeClose(rs);
 			Common.safeClose(procedure);
 		}
 	}
@@ -93,6 +180,12 @@ public class Common {
 	 * Logs the total number of connections idle and active at the time this is called
 	 */
 	public static void logConnectionsOpen() {
+		if (dataPool == null) {
+			// Data pool not initialized (tests or early startup). Nothing to log.
+			log.info("logConnectionsOpen", "dataPool is null");
+			return;
+		}
+
 		log.info("logConnectionsOpen",
 				"idle=" + dataPool.getIdle()
 				+ "\tactive=" + dataPool.getActive()
@@ -129,6 +222,11 @@ public class Common {
 	}
 
 	private synchronized static void checkConnectionsCount() {
+		if (dataPool == null) {
+			// No pool initialized (unit tests or early startup). Skip checks.
+			return;
+		}
+
 		if (connectionsOpened-dataPool.getActive() != connectionsDrift) {
 			log.info("logConnectionsOpen",
 			         "Number of active connections reported by dataPool differs from internal count." +
@@ -144,52 +242,63 @@ public class Common {
 	 * @return Returns true if not nearing max active connections
 	 */
 	public static Boolean getDataPoolData() {
+		if (dataPool == null) {
+			// Not initialized — treat as "not nearing max" for callers in test environments.
+			log.info("getDataPoolData", "dataPool is null");
+			return true;
+		}
+
 		log.info("Data Pool has " + dataPool.getActive() + " active connections.  ");
 		if (dataPool.getWaitCount() > 0) {
 			log.info("# of threads waiting for a connection = " + dataPool.getWaitCount());
 		}
-		return dataPool.getActive() <= .5 * R.MYSQL_POOL_MAX_SIZE;
+		return dataPool.getActive() <= .5 * R.POSTGRES_POOL_MAX_SIZE;
 	}
 
 	/**
-	 * Configures and sets up the Tomcat JDBC connection pool. This method can only be called once in the
-	 * lifetime of the application.
-	 * @author Tyler Jensen
+	 * Configures and sets up the Tomcat JDBC connection pool for PostgreSQL.
+	 * This method can only be called once in the lifetime of the application.
+	 * @author Tyler Jensen (adapted for Postgres)
 	 */
 	public static void initialize() {
 		try {
-			if (Util.isNullOrEmpty(R.MYSQL_USERNAME)) {
-				log.warn("Attempted to initialize datapool without MYSQL properties being set");
+			if (Util.isNullOrEmpty(R.POSTGRES_USERNAME)) {
+				log.warn("Attempted to initialize datapool without POSTGRES properties being set");
 				return;
 			} else if (dataPool != null) {
 				log.warn("Attempted to initialize datapool when it was already initialized");
 				return;
 			}
 
-			log.debug("Setting up data connection pool properties");
+			log.debug("Setting up data connection pool properties (Postgres)");
 			PoolProperties poolProp = new PoolProperties();				// Set up the Tomcat JDBC connection pool with the following properties
 			log.info("Setting up data connection pool with these properties:");
-			log.info(R.MYSQL_URL);
-			log.info(R.MYSQL_DRIVER);
-			log.info(R.MYSQL_USERNAME);
+			log.info(R.POSTGRES_URL);
+			log.info(R.POSTGRES_DRIVER);
+			log.info(R.POSTGRES_USERNAME);
 
-			poolProp.setUrl(R.MYSQL_URL+MYSQL_URL_ARGUMENTS); // URL to the database we want to use
-			poolProp.setDriverClassName(R.MYSQL_DRIVER);      // We're using the JDBC driver
-			poolProp.setUsername(R.MYSQL_USERNAME);           // Database username
-			poolProp.setPassword(R.MYSQL_PASSWORD);           // Database password for the given username
-			poolProp.setTestOnBorrow(true);                   // True to check if a connection is live every time we take one from the pool
-			poolProp.setValidationQuery("SELECT 1");          // The query to execute to check if a connection is live
-			poolProp.setValidationInterval(20000);            // Only check live connection every so often when borrowing (milliseconds)
-			poolProp.setMaxActive(R.MYSQL_POOL_MAX_SIZE);     // How many active connections can we have in the pool
-			poolProp.setInitialSize(R.MYSQL_POOL_MIN_SIZE);   // How many connections the pool will start out with
-			poolProp.setMinIdle(R.MYSQL_POOL_MIN_SIZE);       // The minimum number of connections to keep "ready to go"
-			poolProp.setDefaultAutoCommit(true);              // Turn autocommit on (turn transactions off by default)
-			poolProp.setJmxEnabled(false);                    // Turn JMX off (we don't use it so we don't need it)
-                        poolProp.setRemoveAbandonedTimeout(18000);         // How long to wait (seconds) before reclaiming an open connection (should be the time of longest query)
-                        poolProp.setRemoveAbandoned(true);                // Enable removing connections that are open too long
-                        poolProp.setLogAbandoned(true);                   // supposed to log stack traces (where?) when an abandoned connection is removed
+			// URL to the database we want to use (append Postgres-specific args)
+			poolProp.setUrl(R.POSTGRES_URL + POSTGRES_URL_ARGUMENTS);
+			poolProp.setDriverClassName(R.POSTGRES_DRIVER);      // JDBC driver for Postgres
+			poolProp.setUsername(R.POSTGRES_USERNAME);           // Database username
+			poolProp.setPassword(R.POSTGRES_PASSWORD);           // Database password for the given username
+			poolProp.setTestOnBorrow(true);                      // Check if a connection is live every time we take one from the pool
+			poolProp.setValidationQuery("SELECT 1");             // Query to check if a connection is live
+			poolProp.setValidationInterval(30000);               // Only check live connection every 30 seconds when borrowing (milliseconds)
+			poolProp.setMaxActive(R.POSTGRES_POOL_MAX_SIZE);     // Max active connections in the pool
+			poolProp.setInitialSize(R.POSTGRES_POOL_MIN_SIZE);   // How many connections the pool will start out with
+			poolProp.setMinIdle(R.POSTGRES_POOL_MIN_SIZE);       // Minimum number of connections to keep ready
+			poolProp.setDefaultAutoCommit(true);                 // Turn autocommit on (transactions disabled by default)
+			poolProp.setJmxEnabled(false);                       // Turn JMX off
+			// Abandoned connection handling (seconds)
+			poolProp.setRemoveAbandonedTimeout(18000);
+			poolProp.setRemoveAbandoned(true);
+			poolProp.setLogAbandoned(true);
+			// PostgreSQL-specific optimizations
+			poolProp.setDefaultTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+			poolProp.setMaxWait(10000);                          // Max wait time for a connection (10 seconds)
 
-			log.debug("Creating new datapool with supplied properties");
+			log.debug("Creating new datapool with supplied properties (Postgres)");
 			dataPool = new DataSource(poolProp);              // Create the connection pool with the supplied properties
 
 			log.debug("Datapool successfully created!");
@@ -262,7 +371,7 @@ public class Common {
 			// Setup the stored procedure.
 			con = Common.getConnection();
 			Common.beginTransaction(con);
-			procedure = con.prepareCall(callPreparationSql);
+			procedure = prepareCallable(con, callPreparationSql);
 
 			// Apply the parameter setting function.
 			setParameters.accept(procedure);
@@ -325,7 +434,7 @@ public class Common {
 		CallableStatement procedure = null;
 
 		try {
-			procedure = con.prepareCall(callPreparationSql);
+			procedure = prepareCallable(con, callPreparationSql);
 			setParameters.accept(procedure);
 			procedure.executeUpdate();
 		} finally {
@@ -371,7 +480,7 @@ public class Common {
 		CallableStatement procedure=null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall(callPreparationSql);
+			procedure = prepareCallable(con, callPreparationSql);
 			setParameters.accept(procedure);
 			results = procedure.executeQuery();
 			return resultsConsumer.query(results);
@@ -390,7 +499,7 @@ public class Common {
 		CallableStatement procedure=null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall(callPreparationSql);
+			procedure = prepareCallable(con, callPreparationSql);
 			setParameters.accept(procedure);
 			results = procedure.executeQuery();
 			return connectionResultsFunction.accept(con, results);

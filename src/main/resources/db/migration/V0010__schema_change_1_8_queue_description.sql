@@ -4,21 +4,16 @@
 -- Author: aguo2
 -- Made idempotent: skips ALTER if column already exists.
 
--- Conditionally add 'description' column (works on MySQL versions without ADD COLUMN IF NOT EXISTS)
-SET @stmt := (
-  SELECT IF(
-	EXISTS(
-	  SELECT 1
-	  FROM INFORMATION_SCHEMA.COLUMNS
-	  WHERE TABLE_SCHEMA = DATABASE()
-		AND TABLE_NAME = 'queues'
-		AND COLUMN_NAME = 'description'
-	),
-	'SELECT 1',  -- no-op if column exists
-	'ALTER TABLE queues ADD COLUMN description VARCHAR(200)'
-  )
-);
-
-PREPARE add_col FROM @stmt;
-EXECUTE add_col;
-DEALLOCATE PREPARE add_col;
+-- Add 'description' column if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+            AND table_name = 'queues'
+            AND column_name = 'description'
+    ) THEN
+        ALTER TABLE queues ADD COLUMN description VARCHAR(200);
+    END IF;
+END $$;

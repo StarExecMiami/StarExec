@@ -24,7 +24,7 @@
 #   STAREXEC_DB_PASSWORD            (default: starexec_dev_password)
 #   STAREXEC_DB_NAME                (default: starexec)
 #   STAREXEC_DATA_VOL               (default: starexec-dev-data)
-#   STAREXEC_MYSQL_VOL              (default: starexec-dev-mysql)
+#   STAREXEC_POSTGRES_VOL           (default: starexec-dev-postgres)
 #   IMAGE_NAME                      (default: localhost/local/starexec)
 #   IMAGE_TAG                       (default: dev)
 #
@@ -43,9 +43,9 @@ spec:
     - name: data
       persistentVolumeClaim:
         claimName: ${STAREXEC_DATA_VOL:-starexec-dev-data}
-    - name: mysql-data
+    - name: postgres-data
       persistentVolumeClaim:
-        claimName: ${STAREXEC_MYSQL_VOL:-starexec-dev-mysql}
+        claimName: ${STAREXEC_POSTGRES_VOL:-starexec-dev-postgres}
   containers:
     - name: app
       image: "${IMAGE_NAME:-localhost/local/starexec}:${IMAGE_TAG:-dev}"
@@ -55,7 +55,7 @@ spec:
           hostPort: 7827
       env:
         - name: STAREXEC_DB_HOST
-          value: "mysql"
+          value: "localhost"
         - name: STAREXEC_DB_USER
           value: "${STAREXEC_DB_USER:-starexec}"
         - name: STAREXEC_DB_PASSWORD
@@ -67,7 +67,7 @@ spec:
         - name: STAREXEC_CLUSTER_DB_PASSWORD
           value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
         - name: STAREXEC_REPORT_HOST
-          value: "mysql"
+          value: "localhost"
         - name: STAREXEC_BACKEND_TYPE
           value: "local"
         - name: STAREXEC_BACKEND_ROOT
@@ -97,31 +97,27 @@ spec:
           cpu: 500m
           memory: 512Mi
 
-    - name: mysql
-      image: "docker.io/library/mysql:8.0"
+    - name: postgres
+      image: "docker.io/library/postgres:15"
       imagePullPolicy: IfNotPresent
       ports:
-        - containerPort: 3306
-          hostPort: 3306
-      command:
-        - /bin/sh
-        - -c
-        - |
-          exec docker-entrypoint.sh mysqld \
-            --log-bin-trust-function-creators=1 \
-            --default-authentication-plugin=mysql_native_password
+        - containerPort: 5432
+          hostPort: 5432
       env:
-        - name: MYSQL_ROOT_PASSWORD
+        - name: POSTGRES_PASSWORD
           value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
-        - name: MYSQL_DATABASE
-          value: "${STAREXEC_DB_NAME:-starexec}"
-        - name: MYSQL_USER
+        - name: POSTGRES_USER
           value: "${STAREXEC_DB_USER:-starexec}"
-        - name: MYSQL_PASSWORD
-          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+        - name: POSTGRES_DB
+          value: "${STAREXEC_DB_NAME:-starexec}"
+        # Ensure UTF-8 collation/ctype so PostgreSQL behaves like typical UTF-8 installs
+        - name: LC_COLLATE
+          value: "en_US.UTF-8"
+        - name: LC_CTYPE
+          value: "en_US.UTF-8"
       volumeMounts:
-        - name: mysql-data
-          mountPath: /var/lib/mysql
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
       resources:
         limits:
           cpu: 1000m

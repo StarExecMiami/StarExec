@@ -6,10 +6,10 @@
 UPDATE system_flags SET minor_version=2;
 
 CREATE TABLE runscript_errors (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	node_id INT NOT NULL,
 	job_pair_id INT NOT NULL,
-	time TIMESTAMP NOT NULL DEFAULT NOW(),
+	time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (id),
 	CONSTRAINT runscript_errors_node_id FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE,
 	CONSTRAINT runscript_errors_job_pair_id FOREIGN KEY (job_pair_id) REFERENCES job_pairs(id)

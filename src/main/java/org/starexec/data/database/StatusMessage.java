@@ -12,66 +12,80 @@ public class StatusMessage {
 	private StatusMessage() {} // Class is not instantiable
 
 	public static void set(boolean enabled, String message, String url) throws SQLException {
-		Common.update(
-				"{CALL SetStatusMessage(?,?,?)}",
-				procedure -> {
-					procedure.setBoolean(1, enabled);
-					procedure.setString(2, message.trim());
-					procedure.setString(3, url.trim());
-				}
-		);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.SetStatusMessage(?, ?, ?)");
+			ps.setBoolean(1, enabled);
+			ps.setString(2, message.trim());
+			ps.setString(3, url.trim());
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static String getAsHtml() {
 		final String html;
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
 		try {
-			html = Common.query(
-					"{CALL GetStatusMessage()}",
-					procedure -> {},
-					results -> {
-						results.next();
-						if (results.getBoolean("enabled")) {
-							final String message = results.getString("message");
-							final String url = results.getString("url");
-							return "<div class='status-message'><p>"
-							     + message
-							     + (
-							        url.isEmpty() ? "" :
-							        "<a href='" + url + "'>More Information</a>"
-							       )
-							     + "</p></div>"
-							;
-						} else {
-							return "";
-						}
-					}
-			);
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetStatusMessage()");
+			results = ps.executeQuery();
+			if (results.next()) {
+				if (results.getBoolean("enabled")) {
+					final String message = results.getString("message");
+					final String url = results.getString("url");
+					html = "<div class='status-message'><p>" + message
+							+ (url.isEmpty() ? "" : "<a href='" + url + "'>More Information</a>")
+							+ "</p></div>";
+				} else {
+					html = "";
+				}
+			} else {
+				html = "";
+			}
 		} catch (SQLException e) {
 			log.error("getAsHtml", e);
 			return "";
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return html;
 	}
 
 	public static String getAsJson() {
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
 		try {
-			return Common.query(
-					"{CALL GetStatusMessage()}",
-					procedure -> {},
-					results -> {
-						results.next();
-						JsonObject json = new JsonObject();
-						json.addProperty("enabled", results.getBoolean("enabled"));
-						if (results.getBoolean("enabled")) {
-							json.addProperty("message", results.getString("message"));
-							json.addProperty("url",     results.getString("url"));
-						}
-						return gson.toJson(json);
-					}
-			);
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetStatusMessage()");
+			results = ps.executeQuery();
+			JsonObject json = new JsonObject();
+			if (results.next()) {
+				json.addProperty("enabled", results.getBoolean("enabled"));
+				if (results.getBoolean("enabled")) {
+					json.addProperty("message", results.getString("message"));
+					json.addProperty("url", results.getString("url"));
+				}
+			} else {
+				json.addProperty("enabled", false);
+			}
+			return gson.toJson(json);
 		} catch (SQLException e) {
 			log.error("getAsHtml", e);
 			return "{}";
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 	}
 }

@@ -69,7 +69,7 @@ public enum Analytics {
 		int id = -1;
 		try {
 			id = Common.query(
-					"{CALL GetEventId(?)}",
+					"{SELECT * FROM starexec.GetEventId(?)}",
 					procedure -> procedure.setString(1, this.name()),
 					results -> {
 						results.next();
@@ -135,7 +135,7 @@ public enum Analytics {
 
 	private void saveToDB(Date date, int count) throws SQLException {
 		Common.update(
-			"{CALL RecordEvent(?,?,?)}",
+			"{SELECT starexec.RecordEvent(?,?,?)}",
 			procedure -> {
 				procedure.setInt(1, id);
 				procedure.setDate(2, date);
@@ -146,7 +146,7 @@ public enum Analytics {
 
 	private void saveUserToDB(Date date, int userId) throws SQLException {
 		Common.update(
-			"{CALL RecordEventUser(?,?,?)}",
+			"{SELECT starexec.RecordEventUser(?,?,?)}",
 			procedure -> {
 				procedure.setInt(1, id);
 				procedure.setDate(2, date);
