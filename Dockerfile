@@ -158,10 +158,12 @@ RUN cd /tmp && \
     mkdir -p ${STAREXEC_DATA_DIR} ${STAREXEC_LOG_DIR} && \
     mkdir -p /app/backend /app/work /app/data /app/sandbox && \
     mkdir -p /app/data/jobin /app/data/jobout /app/data/pictures && \
-    mkdir -p /starexec/clustergraphs /starexec/jobgraphs && \
+    # Create jobgraphs under the expanded webapp (will be created during WAR expansion)
+    # Avoid creating a top-level /starexec directory here so we can create a top-level
+    # symlink to the webapp at /starexec later during WAR expansion.
     # Set permissions
     chown -R starexec:starexec ${CATALINA_HOME} ${STAREXEC_DATA_DIR} ${STAREXEC_LOG_DIR} \
-                               /app/backend /app/work /app/data /app/sandbox /starexec
+                               /app/backend /app/work /app/data /app/sandbox
 
 # Copy runsolver binary from builder stage
 COPY --from=runsolver-builder /tmp/runsolver-output/runsolver /usr/local/bin/runsolver
@@ -184,10 +186,14 @@ RUN cd ${CATALINA_HOME}/webapps && \
     cd starexec && \
     unzip -q ../starexec.war && \
     rm ../starexec.war && \
+    # Create clustergraphs directory for chart images
+    mkdir -p secure/clustergraphs && \
+    # Create symlink for STAREXEC_ROOT
+    ln -sf ${CATALINA_HOME}/webapps/starexec /starexec && \
     # Use the template file with placeholders for runtime substitution
     cd META-INF && \
     cp context.xml.template context.xml && \
-    chown -R starexec:starexec ${CATALINA_HOME}/webapps/starexec
+    chown -R starexec:starexec ${CATALINA_HOME}/webapps/starexec /starexec
 
 # Copy default pictures (only the files needed)
 COPY --from=builder /build/src/main/resources/static/default-pics/* /app/data/pictures/

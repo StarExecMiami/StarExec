@@ -202,7 +202,7 @@ public class EnvironmentConfig {
     }
     
     public static String getClusterGraphDir() {
-        return getEnv("STAREXEC_CLUSTER_GRAPH_DIR", "secure/clustergraphs");
+        return getEnv("STAREXEC_CLUSTER_GRAPH_DIR", "/secure/clustergraphs");
     }
     
     public static String getJobSolverCacheClearLogDirectory() {
