@@ -1,106 +1,115 @@
--- Description: This file contains all stored functions for the starexec database
--- The procedures are stored by which table they're related to and roughly alphabetic order. Please try to keep this organized!
--- Author: Todd Elvers
+-- Migration: Convert MySQL stored functions to PostgreSQL (plpgsql)
+-- File: R__functions_postgres.sql
+-- Note: PostgreSQL folds unquoted identifiers to lower-case. Calls like starexec.GetCompletePairs(...) (unquoted)
+-- will resolve to starexec.getcompletepairs(...).
 
--- SQL Functions Migration
--- Uses CREATE so they are created if missing (or refreshed if changed)
--- Requires MySQL 8.0.29+ for CREATE OR REPLACE FUNCTION
-
-DELIMITER //
-
--- Gets the number of completed job pairs for a given job id
--- Author: Todd Elvers
-DROP FUNCTION IF EXISTS starexec.GetCompletePairs //
-CREATE FUNCTION starexec.GetCompletePairs(_jobId INT)
-RETURNS INT
-DETERMINISTIC
-READS SQL DATA
-SQL SECURITY INVOKER
+-- GetCompletePairs
+DROP FUNCTION IF EXISTS starexec.getcompletepairs(integer);
+CREATE OR REPLACE FUNCTION starexec.getcompletepairs(_jobid integer)
+RETURNS integer
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+AS $$
+DECLARE
+	completepairs integer;
 BEGIN
-	DECLARE completePairs INT;
-	SELECT COUNT(*) INTO completePairs
+	SELECT COUNT(*) INTO completepairs
 	FROM job_pairs
-	WHERE job_id=_jobId
-	AND status_code=7;
-	RETURN completePairs;
-END //
+	WHERE job_id = _jobid
+	  AND status_code = 7;
+	RETURN completepairs;
+END;
+$$;
 
-DROP FUNCTION IF EXISTS starexec.GetErrorPairs //
-CREATE FUNCTION starexec.GetErrorPairs(_jobId INT)
-RETURNS INT
-DETERMINISTIC
-READS SQL DATA
-SQL SECURITY INVOKER
+-- GetErrorPairs
+DROP FUNCTION IF EXISTS starexec.geterrorpairs(integer);
+CREATE OR REPLACE FUNCTION starexec.geterrorpairs(_jobid integer)
+RETURNS integer
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+AS $$
+DECLARE
+	errorpairs integer;
 BEGIN
-	DECLARE errorPairs INT;
-	SELECT COUNT(*) INTO errorPairs
+	SELECT COUNT(*) INTO errorpairs
 	FROM job_pairs
-	WHERE job_id=_jobId
-	AND (status_code BETWEEN 8 AND 17 OR status_code=0 OR status_code BETWEEN 24 AND 26);
-	RETURN errorPairs;
-END //
+	WHERE job_id = _jobid
+	  AND (status_code BETWEEN 8 AND 17 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
+	RETURN errorpairs;
+END;
+$$;
 
-DROP FUNCTION IF EXISTS starexec.GetJobStatusDetail //
-CREATE FUNCTION starexec.GetJobStatusDetail(_jobId INT)
-RETURNS INT
-DETERMINISTIC
-READS SQL DATA
-SQL SECURITY INVOKER
+-- GetJobStatusDetail (keeps same behavior as GetErrorPairs)
+DROP FUNCTION IF EXISTS starexec.getjobstatusdetail(integer);
+CREATE OR REPLACE FUNCTION starexec.getjobstatusdetail(_jobid integer)
+RETURNS integer
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+AS $$
+DECLARE
+	statusdetail integer;
 BEGIN
-	DECLARE statusDetail INT;
-	SELECT COUNT(*) INTO statusDetail
+	SELECT COUNT(*) INTO statusdetail
 	FROM job_pairs
-	WHERE job_id=_jobId
-		AND (status_code BETWEEN 8 AND 17 OR status_code=0 OR status_code BETWEEN 24 AND 26);
-	RETURN statusDetail;
-END //
+	WHERE job_id = _jobid
+	  AND (status_code BETWEEN 8 AND 17 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
+	RETURN statusdetail;
+END;
+$$;
 
-DROP FUNCTION IF EXISTS starexec.GetJobStatus //
-CREATE FUNCTION starexec.GetJobStatus(_jobId INT)
-RETURNS VARCHAR(10)
-DETERMINISTIC
-READS SQL DATA
-SQL SECURITY INVOKER
-RETURN (
-	SELECT IF (
-		EXISTS (SELECT 1 FROM job_pairs WHERE job_id=_jobId AND status_code BETWEEN 1 AND 6),
-		'incomplete',
-		'complete'
-	)
-); //
-
--- Gets the number of pending job pairs for a given job id
--- Author: Todd Elvers
-DROP FUNCTION IF EXISTS starexec.GetPendingPairs //
-CREATE FUNCTION starexec.GetPendingPairs(_jobId INT)
-RETURNS INT
-DETERMINISTIC
-READS SQL DATA
-SQL SECURITY INVOKER
+-- GetJobStatus
+DROP FUNCTION IF EXISTS starexec.getjobstatus(integer);
+CREATE OR REPLACE FUNCTION starexec.getjobstatus(_jobid integer)
+RETURNS varchar(10)
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+AS $$
 BEGIN
-	DECLARE pendingPairs INT;
-	SELECT COUNT(*) INTO pendingPairs
+	RETURN CASE
+		WHEN EXISTS (SELECT 1 FROM job_pairs WHERE job_id = _jobid AND status_code BETWEEN 1 AND 6)
+		THEN 'incomplete'
+		ELSE 'complete'
+	END;
+END;
+$$;
+
+-- GetPendingPairs
+DROP FUNCTION IF EXISTS starexec.getpendingpairs(integer);
+CREATE OR REPLACE FUNCTION starexec.getpendingpairs(_jobid integer)
+RETURNS integer
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+AS $$
+DECLARE
+	pendingpairs integer;
+BEGIN
+	SELECT COUNT(*) INTO pendingpairs
 	FROM job_pairs
-	WHERE job_id=_jobId
-	AND (status_code BETWEEN 1 AND 6);
-	RETURN pendingPairs;
-END //
+	WHERE job_id = _jobid
+	  AND status_code BETWEEN 1 AND 6;
+	RETURN pendingpairs;
+END;
+$$;
 
-DELIMITER ;
-
--- Additional functions appended by migration automation (IsPublic for space visibility)
-DELIMITER //
-DROP FUNCTION IF EXISTS starexec.IsPublic //
-CREATE FUNCTION starexec.IsPublic(_spaceId INT)
-RETURNS BOOLEAN
-DETERMINISTIC
-READS SQL DATA
-SQL SECURITY INVOKER
+-- IsPublic (space visibility)
+DROP FUNCTION IF EXISTS starexec.ispublic(integer);
+CREATE OR REPLACE FUNCTION starexec.ispublic(_spaceid integer)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+AS $$
+DECLARE
+	spacepublic boolean;
 BEGIN
-	DECLARE spacePublic BOOLEAN;
-	SELECT public_access INTO spacePublic
+	SELECT public_access INTO spacepublic
 	FROM spaces
-	WHERE id=_spaceId;
-	RETURN spacePublic;
-END //
-DELIMITER ;
+	WHERE id = _spaceid;
+	RETURN spacepublic;
+END;
+$$;

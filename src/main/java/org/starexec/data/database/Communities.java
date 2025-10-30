@@ -10,6 +10,7 @@ import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
 
 import java.sql.CallableStatement;
+import java.sql.PreparedStatement;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -44,16 +45,16 @@ public class Communities {
 	}
 
 	protected static List<Space> getAll(Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetSubSpacesOfRoot}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSubSpacesOfRoot()");
+			results = ps.executeQuery();
 			return Spaces.resultsToSpaces(results);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -137,7 +138,7 @@ public class Communities {
 	 */
 	public static void updateCommunityMap() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			List<Space> communities = Communities.getAll();
@@ -151,8 +152,8 @@ public class Communities {
 			}
 
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetCommunityStatsUsers()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityStatsUsers()");
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				commId = results.getInt("comm_id");
@@ -165,10 +166,10 @@ public class Communities {
 			}
 
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 
-			procedure = con.prepareCall("{CALL GetCommunityStatsSolvers()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityStatsSolvers()");
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				commId = results.getInt("comm_id");
@@ -183,10 +184,10 @@ public class Communities {
 			}
 
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 
-			procedure = con.prepareCall("{CALL GetCommunityStatsBenches()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityStatsBenches()");
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				commId = results.getInt("comm_id");
@@ -201,10 +202,10 @@ public class Communities {
 			}
 
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 
-			procedure = con.prepareCall("{CALL GetCommunityStatsJobs()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityStatsJobs()");
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				commId = results.getInt("comm_id");
@@ -225,7 +226,7 @@ public class Communities {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -282,14 +283,20 @@ public class Communities {
 		}
 		try {
 			//first, find the ID of the community this space is a part of
-			Integer community = Common.queryUsingConnection(con, "{CALL GetCommunityOfSpace(?)}", procedure -> {
-				procedure.setInt(1, id);
-			}, results -> {
+			Integer community = null;
+			PreparedStatement ps = null;
+			ResultSet results = null;
+			try {
+				ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityOfSpace(?)");
+				ps.setInt(1, id);
+				results = ps.executeQuery();
 				if (results.next()) {
-					return results.getInt("community");
+					community = results.getInt("community");
 				}
-				return null;
-			});
+			} finally {
+				Common.safeClose(results);
+				Common.safeClose(ps);
+			}
 
 			//this means the community was NULL, which occurs when this is called on the root space.
 			if (community == null || community <= 0) {
@@ -339,13 +346,13 @@ public class Communities {
 	 */
 	public static Space getDetails(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetCommunityById(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityById(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				Space s = new Space();
@@ -361,7 +368,7 @@ public class Communities {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
@@ -377,21 +384,21 @@ public class Communities {
 	 */
 	public static boolean isCommunity(int spaceId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL IsCommunity(?)}");
-			procedure.setInt(1, spaceId);
+			ps = con.prepareStatement("SELECT * FROM starexec.IsCommunity(?)");
+			ps.setInt(1, spaceId);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 
 			return results.next();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -449,17 +456,26 @@ public class Communities {
 	 * @return ID of Users subspace, or communityId if no subspace exists
 	 */
 	private static int getUsersSpace(int communityId) {
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet r = null;
 		try {
-			return Common.query("{CALL GetUsersSpace(?)}", p -> p.setInt(1, communityId), r -> {
-				if (r.next()) {
-					return r.getInt("id"); // The "Users" Space for this Community
-				} else {
-					return communityId; // The root Space for this Community
-				}
-			});
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetUsersSpace(?)");
+			ps.setInt(1, communityId);
+			r = ps.executeQuery();
+			if (r.next()) {
+				return r.getInt("id");
+			} else {
+				return communityId;
+			}
 		} catch (SQLException e) {
 			log.error("getUsersSpace", e);
 			return communityId;
+		} finally {
+			Common.safeClose(r);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 	}
 
@@ -472,6 +488,18 @@ public class Communities {
 		if (getUsersSpace(communityId) != communityId) {
 			return;
 		}
-		Common.update("{CALL CreateUsersSpace(?)}", p -> p.setInt(1, communityId) );
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.CreateUsersSpace(?)");
+			ps.setInt(1, communityId);
+			ps.execute();
+		} catch (SQLException e) {
+			throw e;
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 }

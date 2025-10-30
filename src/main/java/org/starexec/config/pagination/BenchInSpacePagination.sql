@@ -1,8 +1,3 @@
--- Gets the fewest necessary Benchmarks in order to service a client's
--- request for the next page of Benchmarks in their DataTable object.  
--- This services the DataTable object by supporting filtering by a query, 
--- ordering results by a column, and sorting results in ASC or DESC order.  
--- Author: Todd Elvers
 
 				SELECT 	benchmarks.id AS id,
 						benchmarks.name AS name,
@@ -20,6 +15,6 @@
 
 				
 				-- Query Filtering
-				WHERE 	(benchmarks.name 									LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR		(processors.name	LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%') 
-				OR (processors.name is null AND 'none' LIKE CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))))
+				WHERE 	(benchmarks.name 									LIKE	CONCAT('%', :query, '%')
+				OR		(processors.name	LIKE 	CONCAT('%', :query, '%') 
+				OR (processors.name is null AND 'none' LIKE CONCAT('%', :query, '%'))))

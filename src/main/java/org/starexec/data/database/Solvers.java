@@ -43,27 +43,30 @@ public class Solvers {
 	public static int add(Solver s, int spaceId) throws SQLException {
 		// final String methodName = "add";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			long diskUsage = FileUtils.sizeOf(new File(s.getPath()));
 			s.setDiskSize(diskUsage);
 			// Add the solver
-			procedure = con.prepareCall("{CALL AddSolver(?, ?, ?, ?, ?, ?, ?, ?,?)}");
+			procedure = con.prepareStatement("SELECT AddSolver(?, ?, ?, ?, ?, ?, ?, ?)");
 			procedure.setInt(1, s.getUserId());
 			procedure.setString(2, s.getName());
 			procedure.setBoolean(3, s.isDownloadable());
 			procedure.setString(4, s.getPath());
 			procedure.setString(5, s.getDescription());
-			procedure.registerOutParameter(6, java.sql.Types.INTEGER);
-			procedure.setLong(7, diskUsage);
-			procedure.setInt(8, s.getType().getVal());
-			procedure.setInt(9, s.buildStatus().getCode().getVal());
+			procedure.setLong(6, diskUsage);
+			procedure.setInt(7, s.getType().getVal());
+			procedure.setInt(8, s.buildStatus().getCode().getVal());
+			results = procedure.executeQuery();
 
-			procedure.executeUpdate();
+			int solverId = -1;
+			if (results.next()) {
+				solverId = results.getInt(1);
+			}
 
 			// Associate the solver with the given space
-			int solverId = procedure.getInt(6);
 			Solvers.associate(con, spaceId, solverId);
 
 			// Add solver configurations
@@ -76,6 +79,7 @@ public class Solvers {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
+			Common.safeClose(results);
 		}
 	}
 
@@ -89,22 +93,26 @@ public class Solvers {
 	 */
 	protected static int addConfiguration(Connection con, Configuration c) throws SQLException {
 		final String methodName = "addConfiguration";
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL AddConfiguration(?, ?, ?, ?, ?)}");
+			procedure = con.prepareStatement("SELECT AddConfiguration(?, ?, ?, ?)");
 			procedure.setInt(1, c.getSolverId());
 			procedure.setString(2, c.getName());
 			procedure.setString(3, c.getDescription());
 			procedure.setTimestamp(4, new Timestamp(System.currentTimeMillis()));
-			procedure.registerOutParameter(5, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-			c.setId(procedure.getInt(5));
-			return c.getId();
+			results = procedure.executeQuery();
+			if (results.next()) {
+				c.setId(results.getInt(1));
+				return c.getId();
+			}
+			return -1;
 		} catch (SQLException e) {
 			log.error(methodName, e.getMessage(), e);
 			throw e;
 		} finally {
 			Common.safeClose(procedure);
+			Common.safeClose(results);
 		}
 	}
 
@@ -152,18 +160,18 @@ public class Solvers {
 	 */
 	protected static void associate(Connection con, int spaceId, int solverId) throws SQLException {
 		final String methodName = "associate";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL AddSolverAssociation(?, ?)}");
-			procedure.setInt(1, spaceId);
-			procedure.setInt(2, solverId);
+			ps = con.prepareStatement("SELECT starexec.AddSolverAssociation(?, ?)");
+			ps.setInt(1, spaceId);
+			ps.setInt(2, solverId);
 
-			procedure.executeUpdate();
+			ps.execute();
 		} catch (SQLException e) {
 			log.error(methodName, e.getMessage(), e);
 			throw e;
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -318,17 +326,17 @@ public class Solvers {
 	private static boolean removeSolverFromDatabase(int solverId, Connection con) {
 		final String methodName = "removeSolverFromDatabase";
 		log.trace("got request permanently remove this solver from the database " + solverId);
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("CALL RemoveSolverFromDatabase(?)");
-			procedure.setInt(1, solverId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.RemoveSolverFromDatabase(?)");
+			ps.setInt(1, solverId);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 			return false;
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -340,32 +348,34 @@ public class Solvers {
 	public static boolean cleanOrphanedDeletedSolvers() {
 		final String methodName = "cleanOrphanedDeletedSolvers";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
+		PreparedStatement stmt = null;
 		ResultSet results = null;
 
 		//will contain the id of every solver that is associated with either a space or a pair
 		HashSet<Integer> parentedSolvers = new HashSet<>();
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolversAssociatedWithSpaces()}");
-			results = procedure.executeQuery();
+			// call the function with parentheses to ensure Postgres treats it as a function call
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversAssociatedWithSpaces()");
+			results = ps.executeQuery();
 			while (results.next()) {
 				parentedSolvers.add(results.getInt("id"));
 			}
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 
-			procedure = con.prepareCall("{CALL GetSolversAssociatedWithPairs()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversAssociatedWithPairs()");
+			results = ps.executeQuery();
 			while (results.next()) {
 				parentedSolvers.add(results.getInt("id"));
 			}
 
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 
-			procedure = con.prepareCall("CALL GetDeletedSolvers()");
-			results = procedure.executeQuery();
+			stmt = con.prepareStatement("SELECT * FROM GetDeletedSolvers()");
+			results = stmt.executeQuery();
 			while (results.next()) {
 				Solver s = resultSetToSolver(results);
 				if (new File(s.getPath()).exists()) {
@@ -385,7 +395,8 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
+			Common.safeClose(stmt);
 			Common.safeClose(results);
 		}
 		return false;
@@ -502,7 +513,8 @@ public class Solvers {
 		final String methodName = "delete";
 		log.trace("Solvers.delete() called on solver with id = " + id);
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 			File buildOutput = Solvers.getSolverBuildOutput(id);
 			if (buildOutput.exists()) {
@@ -510,12 +522,12 @@ public class Solvers {
 			}
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL SetSolverToDeletedById(?, ?)}");
-			procedure.setInt(1, id);
-			procedure.registerOutParameter(2, java.sql.Types.LONGNVARCHAR);
-			procedure.executeUpdate();
+			stmt = con.prepareStatement("SELECT SetSolverToDeletedById(?)");
+			stmt.setInt(1, id);
+			rs = stmt.executeQuery();
+			rs.next();
 
-			String sourcePath = procedure.getString(2) + "_src";
+			String sourcePath = rs.getString(1) + "_src";
 			log.trace("Deleting solver source from disk, path: " + sourcePath);
 			Util.safeDeleteDirectory(sourcePath);
 			File srcFile = new File(sourcePath);
@@ -524,8 +536,8 @@ public class Solvers {
 			}
 
 			// Delete solver file from disk, and the parent directory if it's empty
-			Util.safeDeleteDirectory(procedure.getString(2));
-			File file = new File(procedure.getString(2));
+			Util.safeDeleteDirectory(rs.getString(1));
+			File file = new File(rs.getString(1));
 			if (file.getParentFile().exists()) {
 				file.getParentFile().delete();
 			}
@@ -537,7 +549,8 @@ public class Solvers {
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 	}
 
@@ -550,14 +563,14 @@ public class Solvers {
 	 */
 	public static boolean deleteConfiguration(int configId) {
 		final String methodName = "deleteConfiguration";
-		Connection con = null;
-		CallableStatement procedure = null;
+	Connection con = null;
+	PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DeleteConfigurationById(?)}");
-			procedure.setInt(1, configId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.DeleteConfigurationById(?)");
+			ps.setInt(1, configId);
+			ps.execute();
 
 			log.info(String.format("Configuration %d has been successfully deleted from the database.", configId));
 
@@ -568,7 +581,7 @@ public class Solvers {
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -646,17 +659,17 @@ public class Solvers {
 	 */
 	public static Solver get(Connection con, int solverId, boolean includeDeleted) {
 		final String methodName = "get";
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	PreparedStatement ps = null;
+	ResultSet results = null;
 
 		try {
 			if (includeDeleted) {
-				procedure = con.prepareCall("{CALL GetSolverByIdIncludeDeleted(?)}");
+				ps = con.prepareStatement("SELECT * FROM starexec.GetSolverByIdIncludeDeleted(?)");
 			} else {
-				procedure = con.prepareCall("{CALL GetSolverById(?)}");
+				ps = con.prepareStatement("SELECT * FROM starexec.GetSolverById(?)");
 			}
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				Solver s = resultSetToSolver(results, null);
 				Common.safeClose(results);
@@ -666,7 +679,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return null;
 	}
@@ -737,13 +750,13 @@ public class Solvers {
 	public static List<Integer> getAssociatedSpaceIds(int solverId) {
 		final String methodName = "getAssociatedSpaceIds";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAssociatedSpaceIdsBySolver(?)}");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAssociatedSpaceIdsBySolver(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			List<Integer> ids = new ArrayList<>();
 			while (results.next()) {
 				ids.add(results.getInt("space_id"));
@@ -755,7 +768,7 @@ public class Solvers {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -770,12 +783,12 @@ public class Solvers {
 		final String methodName = "getByConfigId";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolverIdByConfigId(?)}");
-			procedure.setInt(1, configId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolverIdByConfigId(?)");
+			ps.setInt(1, configId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				int sid = results.getInt("id");
@@ -795,7 +808,7 @@ public class Solvers {
 		} finally {
 			Common.safeClose(results);
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -808,14 +821,14 @@ public class Solvers {
 	public static List<Solver> getSolversInSharedSpaces(int userId) {
 		final String methodName = "getSolversInSharedSpaces";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolversInSharedSpaces(?)}");
-			procedure.setInt(1, userId);
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversInSharedSpaces(?)");
+			ps.setInt(1, userId);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			List<Solver> solvers = new ArrayList<>();
 			while (results.next()) {
 				solvers.add(resultSetToSolver(results));
@@ -826,7 +839,7 @@ public class Solvers {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -902,12 +915,12 @@ public class Solvers {
 		final String methodName = "getByOwner";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolversByOwner(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolversByOwner(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 			List<Solver> solvers = new LinkedList<>();
 
 			while (results.next()) {
@@ -927,7 +940,7 @@ public class Solvers {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -940,13 +953,13 @@ public class Solvers {
 	public static List<Solver> getBySpace(int spaceId) {
 		final String methodName = "getBySpace";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSpaceSolversById(?)}");
-			procedure.setInt(1, spaceId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSpaceSolversById(?)");
+			ps.setInt(1, spaceId);
+			results = ps.executeQuery();
 			List<Solver> solvers = new LinkedList<>();
 
 			while (results.next()) {
@@ -959,7 +972,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -976,15 +989,15 @@ public class Solvers {
 	public static List<Solver> getByJobSimpleWithConfigs(int jobId) throws SQLException {
 		final String methodName = "getByJobSimpleWithConfigs";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAllSolversInJob(?)}");
-			procedure.setInt(1, jobId);
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllSolversInJob(?)");
+			ps.setInt(1, jobId);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			List<Solver> solvers = new ArrayList<>();
 			while (results.next()) {
 				Solver s = new Solver();
@@ -1003,7 +1016,7 @@ public class Solvers {
 			throw e;
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
 	}
@@ -1038,15 +1051,15 @@ public class Solvers {
 	private static List<Configuration> getConfigsByJobSimple(int jobId) throws SQLException {
 		final String methodName = "getConfigsByJob";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAllConfigsInJob(?)}");
-			procedure.setInt(1, jobId);
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllConfigsInJob(?)");
+			ps.setInt(1, jobId);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			List<Configuration> configs = new ArrayList<>();
 			while (results.next()) {
 				Configuration c = new Configuration();
@@ -1060,7 +1073,7 @@ public class Solvers {
 			throw e;
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
 	}
@@ -1163,12 +1176,12 @@ public class Solvers {
 		final String methodName = "getConfigsForSolver";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetConfigsForSolver(?)}");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetConfigsForSolver(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			List<Configuration> configs = new LinkedList<>();
 
 			while (results.next()) {
@@ -1186,7 +1199,7 @@ public class Solvers {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -1201,13 +1214,13 @@ public class Solvers {
 	 */
 	protected static Configuration getConfiguration(Connection con, int configId) {
 		final String methodName = "getConfiguration";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetConfiguration(?)}");
-			procedure.setInt(1, configId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetConfiguration(?)");
+			ps.setInt(1, configId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				Configuration c = new Configuration();
 				c.setId(results.getInt("id"));
@@ -1221,7 +1234,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return null;
 	}
@@ -1236,13 +1249,13 @@ public class Solvers {
 	 */
 	protected static Configuration getConfigurationIncludeDeleted(Connection con, int configId) {
 		final String methodName = "getConfigurationIncludeDeleted";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetConfigurationIncludeDeleted(?)}");
-			procedure.setInt(1, configId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetConfigurationIncludeDeleted(?)");
+			ps.setInt(1, configId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				Configuration c = new Configuration();
 				c.setId(results.getInt("id"));
@@ -1257,7 +1270,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return null;
 	}
@@ -1270,31 +1283,63 @@ public class Solvers {
 	 */
 	public static List<Benchmark> getConflictingBenchmarksInJobForStage(int jobId, int configId, int stageId)
 			throws SQLException {
-		return Common.query("{CALL GetConflictingBenchmarksForConfigInJob(?,?,?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, configId);
-			procedure.setInt(3, stageId);
-		}, results -> {
+		final String methodName = "getConflictingBenchmarksInJobForStage";
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetConflictingBenchmarksForConfigInJob(?, ?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, configId);
+			ps.setInt(3, stageId);
+			results = ps.executeQuery();
+
 			List<Benchmark> benchmarks = new ArrayList<>();
 			while (results.next()) {
 				benchmarks.add(Benchmarks.resultToBenchmark(results));
 			}
 			return benchmarks;
-		});
+		} catch (SQLException e) {
+			throw e;
+		} catch (Exception e) {
+			log.error(methodName, e.getMessage(), e);
+			throw new SQLException(e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static Integer getConflictsForConfigInJobWithStage(int jobId, int configId, int stageId)
 			throws SQLException {
-		return Common.query("{CALL GetConflictsForConfigInJob(?, ?, ?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, configId);
-			procedure.setInt(3, stageId);
-		}, results -> {
+		final String methodName = "getConflictsForConfigInJobWithStage";
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetConflictsForConfigInJob(?, ?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, configId);
+			ps.setInt(3, stageId);
+			results = ps.executeQuery();
+
 			if (results.next()) {
 				return results.getInt("conflicting_benchmarks");
 			}
 			throw new SQLException("The database did not return a row for procedure GetConflictsForConfigInJob");
-		});
+		} catch (SQLException e) {
+			throw e;
+		} catch (Exception e) {
+			log.error(methodName, e.getMessage(), e);
+			throw new SQLException(e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -1362,13 +1407,13 @@ public class Solvers {
 		final String methodName = "getCountInSpace";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolverCountInSpaceWithQuery(?, ?)}");
-			procedure.setInt(1, spaceId);
-			procedure.setString(2, query);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolverCountInSpaceWithQuery(?, ?)");
+			ps.setInt(1, spaceId);
+			ps.setString(2, query);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return results.getInt("solverCount");
@@ -1377,7 +1422,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return 0;
@@ -1413,12 +1458,12 @@ public class Solvers {
 	public static List<Solver> getPublicSolvers() {
 		final String methodName = "getPublicSolvers";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPublicSolvers()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPublicSolvers()");
+			results = ps.executeQuery();
 			List<Solver> solvers = new LinkedList<>();
 
 			while (results.next()) {
@@ -1431,7 +1476,7 @@ public class Solvers {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -1456,13 +1501,13 @@ public class Solvers {
 		final String methodName = "getRecycledSolverCountByUser";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL GetRecycledSolverCountByUser(?,?)");
-			procedure.setInt(1, userId);
-			procedure.setString(2, query);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetRecycledSolverCountByUser(?, ?)");
+			ps.setInt(1, userId);
+			ps.setString(2, query);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return results.getInt("solverCount");
 			}
@@ -1471,7 +1516,7 @@ public class Solvers {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return -1;
 	}
@@ -1538,12 +1583,12 @@ public class Solvers {
 		final String methodName = "getSolverCountByUser";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolverCountByUser(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolverCountByUser(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return results.getInt("solverCount");
@@ -1552,7 +1597,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -1571,13 +1616,13 @@ public class Solvers {
 		final String methodName = "getSolverCountByUser";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSolverCountByUserWithQuery(?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setString(2, query);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolverCountByUserWithQuery(?, ?)");
+			ps.setInt(1, userId);
+			ps.setString(2, query);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return results.getInt("solverCount");
@@ -1586,7 +1631,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return 0;
@@ -1774,11 +1819,11 @@ public class Solvers {
 	public static boolean isPublic(Connection con, int solverId) {
 		final String methodName = "isPublic";
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL IsSolverPublic(?)}");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.IsSolverPublic(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 
 			boolean publicSpace = false;
 			if (results.next()) {
@@ -1789,12 +1834,11 @@ public class Solvers {
 			}
 
 			Common.safeClose(results);
-
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			//if the solver is in no public spaces, check to see if it is the default solver for some community
-			procedure = con.prepareCall("CALL IsSolverACommunityDefault(?)");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.IsSolverACommunityDefault(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return (results.getInt("solverDefault") > 0);
 			}
@@ -1802,7 +1846,7 @@ public class Solvers {
 			log.error(methodName, "Caught Exception.", e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -1836,12 +1880,12 @@ public class Solvers {
 	 */
 	protected static boolean isSolverDeleted(Connection con, int solverId) {
 		final String methodName = "isSolverDeleted";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL IsSolverDeleted(?)}");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.IsSolverDeleted(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			boolean deleted = false;
 			if (results.next()) {
 				deleted = results.getBoolean("solverDeleted");
@@ -1851,7 +1895,8 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 			return false;
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
+			Common.safeClose(results);
 		}
 	}
 
@@ -1884,13 +1929,13 @@ public class Solvers {
 	 */
 	protected static boolean isSolverRecycled(Connection con, int solverId) {
 		final String methodName = "isSolverRecycled";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL IsSolverRecycled(?)}");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.IsSolverRecycled(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			boolean deleted = false;
 			if (results.next()) {
 				deleted = results.getBoolean("recycled");
@@ -1900,7 +1945,7 @@ public class Solvers {
 			log.error(methodName, e.getMessage(), e);
 			return false;
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -1977,15 +2022,15 @@ public class Solvers {
 	public static boolean restoreRecycledSolvers(int userId) {
 		final String methodName = "restoreRecycledSolvers";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			Common.safeClose(procedure);
-			procedure = con.prepareCall("CALL GetRecycledSolverIds(?)");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			Common.safeClose(ps);
+			ps = con.prepareStatement("SELECT * FROM starexec.GetRecycledSolverIds(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 			while (results.next()) {
 				Solvers.restore(results.getInt("id"));
 			}
@@ -1995,7 +2040,7 @@ public class Solvers {
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -2003,12 +2048,18 @@ public class Solvers {
 	public static List<Triple<Solver, Configuration, String>> getSolverConfigResultsForBenchmarkInJob(
 			int jobId, int benchId, int stageNum
 	) throws SQLException {
-		// final String methodName = "getSolverConfigResultsForBenchmarkInJob";
-		return Common.query("{CALL GetSolverConfigResultsForBenchmarkInJob(?,?,?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, benchId);
-			procedure.setInt(3, stageNum);
-		}, results -> {
+		final String methodName = "getSolverConfigResultsForBenchmarkInJob";
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSolverConfigResultsForBenchmarkInJob(?, ?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, benchId);
+			ps.setInt(3, stageNum);
+			results = ps.executeQuery();
+
 			List<Triple<Solver, Configuration, String>> solverConfigResult = new ArrayList<>();
 			while (results.next()) {
 				Solver solver = resultSetToSolver(results, "s");
@@ -2017,7 +2068,16 @@ public class Solvers {
 				solverConfigResult.add(new ImmutableTriple<>(solver, configuration, starexecResult));
 			}
 			return solverConfigResult;
-		});
+		} catch (SQLException e) {
+			throw e;
+		} catch (Exception e) {
+			log.error(methodName, e.getMessage(), e);
+			throw new SQLException(e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	private static String transformPrefix(String prefix) {
@@ -2096,13 +2156,13 @@ public class Solvers {
 	public static boolean setRecycledSolversToDeleted(int userId) {
 		final String methodName = "setRecycledSolversToDeleted";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL GetRecycledSolverPaths(?)");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetRecycledSolverPaths(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				Util.safeDeleteDirectory(results.getString("path"));
@@ -2112,10 +2172,10 @@ public class Solvers {
 					Util.safeDeleteDirectory(buildOutput.getParent());
 				}
 			}
-			Common.safeClose(procedure);
-			procedure = con.prepareCall("CALL SetRecycledSolversToDeleted(?)");
-			procedure.setInt(1, userId);
-			procedure.executeUpdate();
+			Common.safeClose(ps);
+			ps = con.prepareStatement("SELECT starexec.SetRecycledSolversToDeleted(?)");
+			ps.setInt(1, userId);
+			ps.executeUpdate();
 
 			return true;
 		} catch (Exception e) {
@@ -2123,7 +2183,7 @@ public class Solvers {
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -2139,21 +2199,21 @@ public class Solvers {
 	public static boolean setRecycledState(int id, boolean state) {
 		final String methodName = "setRecycledState";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetSolverRecycledValue(?, ?)}");
-			procedure.setInt(1, id);
-			procedure.setBoolean(2, state);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.SetSolverRecycledValue(?, ?)");
+			ps.setInt(1, id);
+			ps.setBoolean(2, state);
+			ps.executeUpdate();
 			return true;
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -2169,7 +2229,7 @@ public class Solvers {
 	public static boolean updateConfigDetails(int configId, String name, String description) {
 		final String methodName = "updateConfigDetails";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 
 			// Try and update the configuration file's name and/or contents
@@ -2177,12 +2237,12 @@ public class Solvers {
 
 				// If the physical configuration file was successfully renamed, update the database too
 				con = Common.getConnection();
-				procedure = con.prepareCall("{CALL UpdateConfigurationDetails(?, ?, ?, ?)}");
-				procedure.setInt(1, configId);
-				procedure.setString(2, name);
-				procedure.setString(3, description);
-				procedure.setTimestamp(4, new Timestamp(System.currentTimeMillis()));
-				procedure.executeUpdate();
+				ps = con.prepareStatement("SELECT starexec.UpdateConfigurationDetails(?, ?, ?, ?)");
+				ps.setInt(1, configId);
+				ps.setString(2, name);
+				ps.setString(3, description);
+				ps.setTimestamp(4, new Timestamp(System.currentTimeMillis()));
+				ps.executeUpdate();
 
 				log.info(String.format("Configuration [%s] has been successfully updated.", name));
 				return true;
@@ -2192,7 +2252,7 @@ public class Solvers {
 			log.error(methodName, message, e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -2256,16 +2316,16 @@ public class Solvers {
 	public static boolean updateDetails(int id, String name, String description, boolean isDownloadable) {
 		final String methodName = "updateDetails";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateSolverDetails(?, ?, ?, ?)}");
-			procedure.setInt(1, id);
-			procedure.setString(2, name);
-			procedure.setString(3, description);
-			procedure.setBoolean(4, isDownloadable);
+			ps = con.prepareStatement("SELECT starexec.UpdateSolverDetails(?, ?, ?, ?)");
+			ps.setInt(1, id);
+			ps.setString(2, name);
+			ps.setString(3, description);
+			ps.setBoolean(4, isDownloadable);
 
-			procedure.executeUpdate();
+			ps.executeUpdate();
 			log.debug(String.format("Solver [id=%d] was successfully updated.", id));
 
 			return true;
@@ -2275,7 +2335,7 @@ public class Solvers {
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -2288,22 +2348,22 @@ public class Solvers {
 	 */
 	private static void updateSolverDiskSize(Connection con, Solver s) {
 		final String methodName = "updateSolverDiskSize";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			// Get the size of the solver's directory
 			File solverDir = new File(s.getPath());
 			s.setDiskSize(FileUtils.sizeOfDirectory(solverDir));
 
 			// Update the database to reflect the solver's directory size
-			procedure = con.prepareCall("{CALL UpdateSolverDiskSize(?, ?)}");
-			procedure.setInt(1, s.getId());
-			procedure.setLong(2, s.getDiskSize());
+			ps = con.prepareStatement("SELECT starexec.UpdateSolverDiskSize(?, ?)");
+			ps.setInt(1, s.getId());
+			ps.setLong(2, s.getDiskSize());
 
-			procedure.executeUpdate();
+			ps.executeUpdate();
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -2346,12 +2406,12 @@ public class Solvers {
 	 */
 	public static String getMostRecentTimestamp(Connection con, int solverId) {
 		final String methodName = "getMostRecentTimestamp";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetMaxConfigTimestamp(?)}");
-			procedure.setInt(1, solverId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetMaxConfigTimestamp(?)");
+			ps.setInt(1, solverId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				Timestamp t = (results.getTimestamp("recent"));
 				//timestamp doesn't like SQL's default string of zeroes, so if that is present
@@ -2364,7 +2424,7 @@ public class Solvers {
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -2411,14 +2471,14 @@ public class Solvers {
 	public static List<Integer> getOrphanedSolvers(int userId) {
 		final String methodName = "getOrphanedSolvers";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		List<Integer> ids = new ArrayList<>();
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetOrphanedSolverIds(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetOrphanedSolverIds(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 			while (results.next()) {
 				ids.add(results.getInt("id"));
 			}
@@ -2428,7 +2488,7 @@ public class Solvers {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -2551,17 +2611,18 @@ public class Solvers {
 	public static void setSolverBuildStatus(Solver s, int status) {
 		final String methodName = "setSolverBuildStatus";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetSolverBuildStatus(?, ?)}");
-			procedure.setInt(1, s.getId());
-			procedure.setInt(2, status);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.SetSolverBuildStatus(?, ?)");
+			ps.setInt(1, s.getId());
+			ps.setInt(2, status);
+			ps.executeUpdate();
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
+			Common.safeClose(ps);
 		}
 	}
 }

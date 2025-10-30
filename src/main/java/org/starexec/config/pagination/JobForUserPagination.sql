@@ -16,8 +16,8 @@
 				FROM	jobs
 						
 				-- Exclude Jobs whose name and status don't contain the query string
-				WHERE 	(name				LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR		GetJobStatus(id)	LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))
+				WHERE 	(name				LIKE	CONCAT('%', :query, '%')
+				OR		GetJobStatus(id)	LIKE	CONCAT('%', :query, '%'))
 											
 				-- Exclude Jobs that aren't in the specified space
 				AND jobs.user_id= :userId AND deleted=false

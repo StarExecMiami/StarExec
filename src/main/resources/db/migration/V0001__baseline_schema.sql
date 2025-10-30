@@ -8,7 +8,7 @@
 
 -- The table of all users in the system
 CREATE TABLE users (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	email VARCHAR(64) NOT NULL,
 	first_name VARCHAR(32) NOT NULL,
 	last_name VARCHAR(32) NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE users (
 	PRIMARY KEY (id),
 	-- the following foreign key is used, but it is added at the end because you can't declare a foreign key before declaring the table
 	-- CONSTRAINT users_default_settings_profile FOREIGN KEY (default_settings_profile) REFERENCES default_settings(id) ON DELETE SET NULL,
-	UNIQUE KEY (email)
+	UNIQUE (email)
 );
 
 -- An associative table that maps a user to a role.
@@ -39,10 +39,10 @@ CREATE TABLE user_roles (
 
 -- A history record of all logins to the system
 CREATE TABLE logins (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	user_id INT NOT NULL,
 	login_date TIMESTAMP NOT NULL,
-	ip_address VARCHAR(15) DEFAULT "0.0.0.0",
+	ip_address VARCHAR(15) DEFAULT '0.0.0.0',
 	browser_agent TEXT,
 	PRIMARY KEY (id),
 	CONSTRAINT logins_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE NO ACTION
@@ -53,35 +53,35 @@ CREATE TABLE logins (
 -- the default of a space so when a new user is ed, they take on
 -- these permissions)
 CREATE TABLE permissions (
-	id INT NOT NULL AUTO_INCREMENT,
-	add_solver BOOLEAN DEFAULT 0,
-	add_bench BOOLEAN DEFAULT 0,
-	add_user BOOLEAN DEFAULT 0,
-	add_space BOOLEAN DEFAULT 0,
-	add_job BOOLEAN DEFAULT 0,
-	remove_solver BOOLEAN DEFAULT 0,
-	remove_bench BOOLEAN DEFAULT 0,
-	remove_user BOOLEAN DEFAULT 0,
-	remove_space BOOLEAN DEFAULT 0,
-	remove_job BOOLEAN DEFAULT 0,
-	is_leader BOOLEAN DEFAULT 0,
+	id SERIAL NOT NULL,
+	add_solver BOOLEAN DEFAULT FALSE,
+	add_bench BOOLEAN DEFAULT FALSE,
+	add_user BOOLEAN DEFAULT FALSE,
+	add_space BOOLEAN DEFAULT FALSE,
+	add_job BOOLEAN DEFAULT FALSE,
+	remove_solver BOOLEAN DEFAULT FALSE,
+	remove_bench BOOLEAN DEFAULT FALSE,
+	remove_user BOOLEAN DEFAULT FALSE,
+	remove_space BOOLEAN DEFAULT FALSE,
+	remove_job BOOLEAN DEFAULT FALSE,
+	is_leader BOOLEAN DEFAULT FALSE,
 	PRIMARY KEY(id)
 );
 
 -- Default permission for the root space
-INSERT INTO permissions VALUES (1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+INSERT INTO permissions VALUES (1, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE);
 
 -- All of the spaces in starexec. A space is simply a set where
 -- solvers, benchmarks, users and jobs exist (think of it as a folder)
 CREATE TABLE spaces (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	name VARCHAR(255) NOT NULL,
 	created TIMESTAMP NULL DEFAULT NULL,
 	description TEXT,
-	locked BOOLEAN DEFAULT 0,
+	locked BOOLEAN DEFAULT FALSE,
 	default_permission INT,
-	public_access BOOLEAN DEFAULT 0,
-	sticky_leaders BOOLEAN DEFAULT 0,
+	public_access BOOLEAN DEFAULT FALSE,
+	sticky_leaders BOOLEAN DEFAULT FALSE,
 	PRIMARY KEY (id),
 	CONSTRAINT spaces_default_permission FOREIGN KEY (default_permission) REFERENCES permissions(id) ON DELETE SET NULL
 );
@@ -91,14 +91,14 @@ CREATE TABLE spaces (
 CREATE TABLE closure (
 	ancestor INT NOT NULL,
 	descendant INT NOT NULL,
-	UNIQUE KEY (ancestor, descendant),
+	UNIQUE (ancestor, descendant),
 	CONSTRAINT closure_ancestor FOREIGN KEY (ancestor) REFERENCES spaces(id) ON DELETE CASCADE,
 	CONSTRAINT closure_descendant FOREIGN KEY (descendant) REFERENCES spaces(id) ON DELETE CASCADE
 );
 
 -- The root space
 INSERT INTO spaces (name, created, description, locked, default_permission, public_access) VALUES
-('root', SYSDATE(), 'this is the starexec container space which holds all communities.', 1, 1, 1);
+('root', CURRENT_TIMESTAMP, 'this is the starexec container space which holds all communities.', TRUE, 1, TRUE);
 INSERT INTO closure VALUES(1,1);
 
 -- A table where we can keep track of the different syntax highlighters we
@@ -107,12 +107,12 @@ INSERT INTO closure VALUES(1,1);
 --   class: Class name that will be used in the HTML to denote this syntax
 --   js:    Relative path to JavaScript lexer for this syntax
 CREATE TABLE syntax (
-	id    INT      NOT NULL AUTO_INCREMENT,
-	name  CHAR(32) NOT NULL,
+	id SERIAL NOT NULL,
+	name CHAR(32) NOT NULL,
 	class CHAR(32) NOT NULL,
-	js    CHAR(32),
+	js CHAR(32),
 	PRIMARY KEY (id),
-	UNIQUE KEY (name)
+	UNIQUE (name)
 );
 
 -- Here we add the supported lexers to the DB
@@ -128,16 +128,16 @@ INSERT INTO syntax (id, name, class, js) VALUES
 
 -- All pre, post and bench processors in the system
 CREATE TABLE processors (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	name VARCHAR(64) NOT NULL,
 	description TEXT,
 	path TEXT NOT NULL,
 	community INT NOT NULL,
-	processor_type TINYINT DEFAULT 0,
+	processor_type SMALLINT DEFAULT 0,
 	disk_size BIGINT NOT NULL,
 	preserve_input BOOLEAN DEFAULT TRUE,
 	syntax_id INT DEFAULT 1,
-	time_limit TINYINT DEFAULT 15,
+	time_limit SMALLINT DEFAULT 15,
 	PRIMARY KEY (id),
 	CONSTRAINT processors_community FOREIGN KEY (community) REFERENCES spaces(id) ON DELETE CASCADE,
 	CONSTRAINT processors_syntax FOREIGN KEY (syntax_id) REFERENCES syntax(id)
@@ -145,14 +145,14 @@ CREATE TABLE processors (
 
 -- The record for an individual benchmark
 CREATE TABLE benchmarks (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	user_id INT NOT NULL,
 	name VARCHAR(256) NOT NULL,
 	bench_type INT,
 	uploaded TIMESTAMP NOT NULL,
 	path TEXT NOT NULL,
 	description TEXT,
-	downloadable BOOLEAN DEFAULT 1,
+	downloadable BOOLEAN DEFAULT TRUE,
 	disk_size BIGINT NOT NULL,
 	deleted BOOLEAN DEFAULT FALSE,
 	recycled BOOLEAN DEFAULT FALSE,
@@ -178,17 +178,17 @@ CREATE TABLE executable_types (
 	PRIMARY KEY (type_id)
 );
 
-INSERT INTO executable_types (type_id, type_name) VALUES (1,"solver"), (2,"transformer"),(3,"result checker"),(4,"other");
+INSERT INTO executable_types (type_id, type_name) VALUES (1,'solver'), (2,'transformer'),(3,'result checker'),(4,'other');
 
 -- The record for an individual solver
 CREATE TABLE solvers (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	user_id INT NOT NULL,
 	name VARCHAR(128) NOT NULL,
 	uploaded TIMESTAMP NOT NULL,
 	path TEXT NOT NULL,
 	description TEXT,
-	downloadable BOOLEAN DEFAULT 0,
+	downloadable BOOLEAN DEFAULT FALSE,
 	disk_size BIGINT NOT NULL,
 	deleted BOOLEAN DEFAULT FALSE,
 	recycled BOOLEAN DEFAULT FALSE,
@@ -204,7 +204,7 @@ CREATE TABLE solvers (
 -- so they provide one or more configuration that tells us how they want
 -- us to run their solver.
 CREATE TABLE configurations (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	solver_id INT,
 	name VARCHAR(128) NOT NULL,
 	description TEXT,
@@ -215,25 +215,25 @@ CREATE TABLE configurations (
 
 -- All the SGE node queues on the system
 CREATE TABLE queues (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	name VARCHAR(64) NOT NULL,
 	status VARCHAR(32),
 	global_access BOOLEAN DEFAULT FALSE,
 	cpuTimeout INT DEFAULT 259200,
 	clockTimeout INT DEFAULT 259200, -- timeouts are maxes for any jobs created on the queue
-	description VARCHAR(200) DEFAULT "",
+	description VARCHAR(200) DEFAULT '',
 	PRIMARY KEY (id),
-	UNIQUE KEY (name)
+	UNIQUE (name)
 );
 
 -- All the SGE worker nodes that jobs can be executed on in the cluster.
 -- This just maintains hardware information manually to be viewed by
 CREATE TABLE nodes (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	name VARCHAR(128) NOT NULL,
 	status VARCHAR(32),
 	PRIMARY KEY (id),
-	UNIQUE KEY (name)
+	UNIQUE (name)
 );
 
 -- All the SGE node queues on the system
@@ -255,7 +255,7 @@ CREATE TABLE comm_queue (
 -- table for storing the top level of solver pipelines. These should generally not be deleted
 -- if there are jobs making use of them.
 CREATE TABLE solver_pipelines (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	name VARCHAR(128),
 	user_id INT NOT NULL,
 	uploaded TIMESTAMP NOT NULL,
@@ -265,7 +265,7 @@ CREATE TABLE solver_pipelines (
 
 -- Stages for solver pipelines. Stages are ordered by their stage_id primary key
 CREATE TABLE pipeline_stages (
-	stage_id INT NOT NULL AUTO_INCREMENT, -- orders the stages of this pipeline
+	stage_id SERIAL NOT NULL, -- orders the stages of this pipeline
 	pipeline_id INT NOT NULL,
 	config_id INT,
 	is_noop BOOLEAN NOT NULL DEFAULT FALSE, -- note that we cannot say that this is a noop if config_id is null, because the config
@@ -278,7 +278,7 @@ CREATE TABLE pipeline_stages (
 -- Stores any dependencies that a particular stage has.
 CREATE TABLE pipeline_dependencies (
 	stage_id INT NOT NULL, -- ID of the stage that must receive output from a previous stage
-	input_type TINYINT NOT NULL, -- ID of the stage that produces the output
+	input_type SMALLINT NOT NULL, -- ID of the stage that produces the output
 	input_id SMALLINT NOT NULL, -- if the type is an artifact, this is the the 1-indexed number of the stage that is needed
 					   -- if the type is a benchmark, this is the the 1-indexed number of the benchmark that is needed
 	input_number SMALLINT NOT NULL, -- which input to the stage is this? First input, second input, and so on
@@ -289,7 +289,7 @@ CREATE TABLE pipeline_dependencies (
 -- All of the jobs within the system, this is the overarching entity
 -- that contains individual job pairs (solver/config -> benchmark)
 CREATE TABLE jobs (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	user_id INT NOT NULL,
 	name VARCHAR(64),
 	queue_id INT,
@@ -312,7 +312,7 @@ CREATE TABLE jobs (
 	total_pairs INT NOT NULL, -- How many pairs are in this job? Used to avoid needing to count from pairs table for efficiency
 	disk_size BIGINT NOT NULL,
 	is_high_priority BOOLEAN NOT NULL DEFAULT FALSE,
-	benchmarking_framework ENUM('RUNSOLVER', 'BENCHEXEC') NOT NULL DEFAULT 'RUNSOLVER',
+	benchmarking_framework VARCHAR(20) NOT NULL DEFAULT 'RUNSOLVER' CHECK (benchmarking_framework IN ('RUNSOLVER', 'BENCHEXEC')),
 	output_benchmarks_directory_path TEXT DEFAULT NULL, -- directory for benchmarks created by this job
 	PRIMARY KEY (id),
 	CONSTRAINT jobs_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -346,12 +346,12 @@ CREATE TABLE job_stage_params (
 -- note: while some data is redundant in this table (solver_name, config_name, and so on),
 -- it is essential for speeding up queries.
 CREATE TABLE job_pairs (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	job_id INT NOT NULL,
 	sge_id INT,
 	bench_id INT,
 	bench_name VARCHAR(255),
-	status_code TINYINT DEFAULT 0,
+	status_code SMALLINT DEFAULT 0,
 	node_id INT,
 	queuesub_time TIMESTAMP(3) NULL DEFAULT NULL,
 	start_time TIMESTAMP NULL DEFAULT NULL,
@@ -361,41 +361,92 @@ CREATE TABLE job_pairs (
 	sandbox_num INT,
 	primary_jobpair_data INT, -- which of this pairs stages is the primary one? references jobpair_stage_data.stage_number
 	PRIMARY KEY(id),
-	KEY(sge_id),
-	KEY (job_space_id, bench_name),
-	KEY (node_id, status_code),
-	KEY (status_code),
-	-- Name is what exists on Starexec: easier to use the name here than rename there.
-	KEY job_id_2 (job_id, status_code), -- we very often get all pairs with a particular status code for a job
-	CONSTRAINT job_pairs_job_id FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE, -- not necessary as an index
-	CONSTRAINT job_pairs_node_id FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE NO ACTION -- not used as an index
+	CONSTRAINT job_pairs_job_id FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+	CONSTRAINT job_pairs_node_id FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE NO ACTION
 );
+
+-- Indexes for job_pairs table
+CREATE INDEX idx_job_pairs_sge_id ON job_pairs(sge_id);
+CREATE INDEX idx_job_pairs_job_space_id_bench_name ON job_pairs(job_space_id, bench_name);
+CREATE INDEX idx_job_pairs_node_id_status_code ON job_pairs(node_id, status_code);
+CREATE INDEX idx_job_pairs_status_code ON job_pairs(status_code);
+CREATE INDEX idx_job_pairs_job_id_status_code ON job_pairs(job_id, status_code);
 
 CREATE TABLE jobpair_stage_data (
 	stage_number INT NOT NULL, -- this id orders the stages
 	jobpair_id INT NOT NULL,
 	stage_id INT, -- References pipeline_stages stages are ordered by this ID as well.
-	cpu DOUBLE,
-	wallclock DOUBLE,
-	max_vmem DOUBLE,
-	max_res_set DOUBLE,
-	user_time DOUBLE,
-	system_time DOUBLE,
-	status_code TINYINT DEFAULT 0,
+	cpu DOUBLE PRECISION,
+	wallclock DOUBLE PRECISION,
+	max_vmem DOUBLE PRECISION,
+	max_res_set DOUBLE PRECISION,
+	user_time DOUBLE PRECISION,
+	system_time DOUBLE PRECISION,
+	status_code SMALLINT DEFAULT 0,
 	solver_name VARCHAR(128), -- These columns are redundant, but they allow us to keep stages even with deleted configs
 	config_name VARCHAR(128),
 	solver_id INT,
 	config_id INT,
 	job_space_id INT,
 	disk_size BIGINT NOT NULL,
-	KEY (job_space_id, config_id),
-	KEY (job_space_id, solver_name),
-	KEY (job_space_id, config_name),
-	KEY (status_code),
 	PRIMARY KEY (jobpair_id,stage_number),
 	CONSTRAINT jobpair_stage_data_jobpair_id FOREIGN KEY (jobpair_id) REFERENCES job_pairs(id) ON DELETE CASCADE,
 	CONSTRAINT jobpair_stage_data_stage_id FOREIGN KEY (stage_id) REFERENCES pipeline_stages(stage_id) ON DELETE SET NULL
 );
+
+-- Indexes for jobpair_stage_data table
+CREATE INDEX idx_jobpair_stage_data_job_space_id_config_id ON jobpair_stage_data(job_space_id, config_id);
+CREATE INDEX idx_jobpair_stage_data_job_space_id_solver_name ON jobpair_stage_data(job_space_id, solver_name);
+CREATE INDEX idx_jobpair_stage_data_job_space_id_config_name ON jobpair_stage_data(job_space_id, config_name);
+
+-- ================================================================================
+-- Post-deploy compatibility fixes for PostgreSQL
+-- These ALTER statements add columns that older baseline imports from MySQL
+-- may have omitted and adjust text column collations to a PostgreSQL-compatible
+-- collation. These are guarded with IF NOT EXISTS so they are safe to re-run.
+-- NOTE: Changing collations requires the database to support the target locale
+-- (e.g. en_US.UTF-8). If the locale does not exist on the host, adjust as needed.
+-- ================================================================================
+
+-- Add missing columns referenced by procedures and legacy application code
+ALTER TABLE job_pairs
+	ADD COLUMN IF NOT EXISTS solver_name VARCHAR(255);
+
+ALTER TABLE solvers
+	ADD COLUMN IF NOT EXISTS recycled_original_name VARCHAR(255);
+
+-- Track whether a solver's configurations were removed when the solver was recycled
+ALTER TABLE solvers
+	ADD COLUMN IF NOT EXISTS config_deleted BOOLEAN DEFAULT FALSE;
+
+-- Ensure common user-facing text columns use a UTF-8 collation (PostgreSQL style)
+-- Adjust these ALTERs if your database cluster was initialized with a different
+-- collation or if the target locale is not available on the host.
+-- These operations only change the column type/collation and are guarded
+-- by TRY/CATCH in case the collation is not present at runtime.
+DO $$
+BEGIN
+	BEGIN
+		ALTER TABLE users ALTER COLUMN first_name TYPE VARCHAR(255) COLLATE "en_US.UTF-8";
+	EXCEPTION WHEN undefined_object THEN
+		-- Collation not present; leave column unchanged
+		RAISE NOTICE 'Collation en_US.UTF-8 not available; skipping ALTER on users.first_name';
+	END;
+
+	BEGIN
+		ALTER TABLE users ALTER COLUMN last_name TYPE VARCHAR(255) COLLATE "en_US.UTF-8";
+	EXCEPTION WHEN undefined_object THEN
+		RAISE NOTICE 'Collation en_US.UTF-8 not available; skipping ALTER on users.last_name';
+	END;
+
+	BEGIN
+		ALTER TABLE solvers ALTER COLUMN name TYPE VARCHAR(255) COLLATE "en_US.UTF-8";
+	EXCEPTION WHEN undefined_object THEN
+		RAISE NOTICE 'Collation en_US.UTF-8 not available; skipping ALTER on solvers.name';
+	END;
+END;
+$$;
+CREATE INDEX idx_jobpair_stage_data_status_code ON jobpair_stage_data(status_code);
 
 -- this table stores, for every user, the difference in time
 -- between that user's job pair wallclock timeouts and actual
@@ -427,9 +478,9 @@ CREATE TABLE jobpair_inputs (
 -- We cannot use job_pairs.end_time to simulate this table, as it is possible to have job pairs finish at the same time
 CREATE TABLE job_pair_completion (
 	pair_id INT NOT NULL,
-	completion_id INT NOT NULL AUTO_INCREMENT,
+	completion_id SERIAL NOT NULL,
 	PRIMARY KEY (completion_id),
-	UNIQUE KEY (pair_id),
+	UNIQUE (pair_id),
 	CONSTRAINT job_pair_completion_pair_id FOREIGN KEY (pair_id) REFERENCES job_pairs(id) ON DELETE CASCADE
 );
 
@@ -441,9 +492,11 @@ CREATE TABLE job_attributes (
 	job_id INT NOT NULL,
 	stage_number INT NOT NULL,
     PRIMARY KEY (pair_id,stage_number, attr_key),
-    KEY (job_id),
 	CONSTRAINT job_attributes_pair_id FOREIGN KEY (pair_id) REFERENCES job_pairs(id) ON DELETE CASCADE
 );
+
+-- Indexes for job_attributes table
+CREATE INDEX idx_job_attributes_job_id ON job_attributes(job_id);
 
 -- The table that keeps track of verification codes that should
 -- be redeemed when the user verifies their e-mail address
@@ -452,8 +505,8 @@ CREATE TABLE verify (
 	code VARCHAR(36) NOT NULL,
 	created TIMESTAMP NOT NULL,
 	PRIMARY KEY (user_id, code),
-	UNIQUE KEY (user_id),
-	UNIQUE KEY (code),
+	UNIQUE (user_id),
+	UNIQUE (code),
 	CONSTRAINT verify_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -462,7 +515,7 @@ CREATE TABLE verify (
 -- they're all included for convenience though so we don't have to
 -- have 3 redundant tables
 CREATE TABLE website (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	space_id INT,
 	user_id INT,
 	solver_id INT,
@@ -498,7 +551,7 @@ CREATE TABLE set_assoc (
 CREATE TABLE bench_assoc (
 	space_id INT NOT NULL,
 	bench_id INT NOT NULL,
-	order_id INT NOT NULL AUTO_INCREMENT UNIQUE KEY,
+	order_id SERIAL UNIQUE,
 	PRIMARY KEY (space_id, bench_id),
 	CONSTRAINT bench_assoc_space_id FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE,
 	CONSTRAINT bench_assoc_bench_id FOREIGN KEY (bench_id) REFERENCES benchmarks(id) ON DELETE CASCADE
@@ -531,7 +584,7 @@ CREATE TABLE community_requests (
 	message TEXT NOT NULL,
 	created TIMESTAMP NOT NULL,
 	PRIMARY KEY (user_id, community),
-	UNIQUE KEY (code),
+	UNIQUE (code),
 	CONSTRAINT community_requests_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 	CONSTRAINT community_requests_community FOREIGN KEY (community) REFERENCES spaces(id) ON DELETE CASCADE
 );
@@ -539,18 +592,18 @@ CREATE TABLE community_requests (
 CREATE TABLE anonymous_links (
 	unique_id VARCHAR(36) NOT NULL,
 	primitive_id INT NOT NULL,
-	primitive_type ENUM('solver', 'job', 'bench') NOT NULL,
-	primitives_to_anonymize ENUM('all', 'allButBench', 'none') NOT NULL,
+	primitive_type VARCHAR(10) NOT NULL CHECK (primitive_type IN ('solver', 'job', 'bench')),
+	primitives_to_anonymize VARCHAR(12) NOT NULL CHECK (primitives_to_anonymize IN ('all', 'allButBench', 'none')),
 	date_created DATE NOT NULL,
 
 	PRIMARY KEY (unique_id),
-	UNIQUE KEY (primitive_id, primitive_type, primitives_to_anonymize)
+	UNIQUE (primitive_id, primitive_type, primitives_to_anonymize)
 );
 
 CREATE TABLE anonymous_primitive_names (
 	anonymous_name VARCHAR(36) NOT NULL,
 	primitive_id INT NOT NULL,
-	primitive_type ENUM('solver', 'job', 'bench', 'config') NOT NULL,
+	primitive_type VARCHAR(10) NOT NULL CHECK (primitive_type IN ('solver', 'job', 'bench', 'config')),
 	job_id INT NOT NULL,
 
 	PRIMARY KEY (primitive_id, primitive_type, job_id),
@@ -562,7 +615,7 @@ CREATE TABLE change_email_requests (
 	new_email VARCHAR(64) NOT NULL,
 	code VARCHAR(36) NOT NULL,
 	PRIMARY KEY (user_id),
-	UNIQUE KEY (code),
+	UNIQUE (code),
 	CONSTRAINT change_email_request_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -573,18 +626,18 @@ CREATE TABLE pass_reset_request (
 	code VARCHAR(36) NOT NULL,
 	created TIMESTAMP NOT NULL,
 	PRIMARY KEY (user_id, code),
-	UNIQUE KEY (user_id),
-	UNIQUE KEY (code),
+	UNIQUE (user_id),
+	UNIQUE (code),
 	CONSTRAINT pass_reset_request_user_id FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- Benchmark dependencies - e.g. a benchmark may reference other benchmarks such as axioms
 -- Author: Benton McCune
 CREATE TABLE bench_dependency (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	primary_bench_id INT NOT NULL,
 	secondary_bench_id INT NOT NULL,
-	include_path TEXT not NULL,
+	include_path TEXT NOT NULL,
 	PRIMARY KEY (id),
 	CONSTRAINT bench_dependency_primary_bench_id FOREIGN KEY (primary_bench_id) REFERENCES benchmarks(id) ON DELETE CASCADE,
 	CONSTRAINT bench_dependency_secondary_bench_id FOREIGN KEY (secondary_bench_id) REFERENCES benchmarks(id) ON DELETE CASCADE
@@ -594,7 +647,7 @@ CREATE TABLE bench_dependency (
 -- Default settings for a community space.
 -- Author: Ruoyu Zhang + Eric Burns
 CREATE TABLE default_settings (
-	id INT NOT NULL AUTO_INCREMENT, -- unique ID
+	id SERIAL NOT NULL, -- unique ID
 	prim_id INT, -- either a user ID or community ID depending on what the setting_type is
 	post_processor INT,
 	pre_processor INT,
@@ -604,10 +657,10 @@ CREATE TABLE default_settings (
 	maximum_memory BIGINT DEFAULT 1073741824,
 	default_benchmark INT DEFAULT NULL,
 	default_solver INT DEFAULT NULL,
-	benchmarking_framework ENUM('RUNSOLVER', 'BENCHEXEC') NOT NULL DEFAULT 'RUNSOLVER',
+	benchmarking_framework VARCHAR(20) NOT NULL DEFAULT 'RUNSOLVER' CHECK (benchmarking_framework IN ('RUNSOLVER', 'BENCHEXEC')),
 	bench_processor INT,
 	setting_type INT DEFAULT 1,
-	name VARCHAR(32) DEFAULT "settings",
+	name VARCHAR(32) DEFAULT 'settings',
 	PRIMARY KEY (id),
 	CONSTRAINT default_settings_post_processor FOREIGN KEY (post_processor) REFERENCES processors(id) ON DELETE SET NULL,
 	CONSTRAINT default_settings_default_benchmark FOREIGN KEY (default_benchmark) REFERENCES benchmarks(id) ON DELETE SET NULL,
@@ -627,11 +680,11 @@ CREATE TABLE default_bench_assoc(
 -- For Status Updates on a space XML upload
 -- Author: Eric Burns
 CREATE TABLE space_xml_uploads (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	user_id INT NOT NULL,
 	upload_time TIMESTAMP NOT NULL,
-	file_upload_complete BOOLEAN DEFAULT 0,
-	everything_complete BOOLEAN DEFAULT 0,
+	file_upload_complete BOOLEAN DEFAULT FALSE,
+	everything_complete BOOLEAN DEFAULT FALSE,
 	total_spaces INT DEFAULT 0,
 	completed_spaces INT DEFAULT 0,
 	total_benchmarks INT DEFAULT 0,
@@ -648,14 +701,14 @@ CREATE TABLE space_xml_uploads (
 -- For Status Updates on a Benchmark upload
 -- Author: Benton McCune
 CREATE TABLE benchmark_uploads (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	space_id INT NOT NULL,
 	user_id INT NOT NULL,
 	upload_time TIMESTAMP NOT NULL,
-	file_upload_complete BOOLEAN DEFAULT 0,
-	file_extraction_complete BOOLEAN DEFAULT 0,
-	processing_begun BOOLEAN DEFAULT 0,
-	everything_complete BOOLEAN DEFAULT 0,
+	file_upload_complete BOOLEAN DEFAULT FALSE,
+	file_extraction_complete BOOLEAN DEFAULT FALSE,
+	processing_begun BOOLEAN DEFAULT FALSE,
+	everything_complete BOOLEAN DEFAULT FALSE,
 	total_spaces INT DEFAULT 0,
 	total_benchmarks INT DEFAULT 0,
 	validated_benchmarks INT DEFAULT 0,
@@ -671,7 +724,7 @@ CREATE TABLE benchmark_uploads (
 -- For benchmarks that fail validation
 -- Author: Benton McCune
 CREATE TABLE unvalidated_benchmarks (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	status_id INT REFERENCES benchmark_uploads(id) ON DELETE CASCADE,
 	bench_name VARCHAR(256) NOT NULL,
 	error_message TEXT,
@@ -681,7 +734,7 @@ CREATE TABLE unvalidated_benchmarks (
 -- Saves all job space information
 -- Author: Eric Burns
 CREATE TABLE job_spaces (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	job_id INT,
 	name VARCHAR(255),
 	max_stages INT DEFAULT 1, -- This columns stores the maximum number of stages any job pair has
@@ -695,7 +748,7 @@ CREATE TABLE job_space_closure (
 	ancestor INT NOT NULL,
 	descendant INT NOT NULL,
 	last_used TIMESTAMP NOT NULL,
-	UNIQUE KEY (ancestor, descendant),
+	UNIQUE (ancestor, descendant),
 	CONSTRAINT job_space_ancestor FOREIGN KEY (ancestor) REFERENCES job_spaces(id) ON DELETE CASCADE,
 	CONSTRAINT job_space_descendant FOREIGN KEY (descendant) REFERENCES job_spaces(id) ON DELETE CASCADE
 );
@@ -722,14 +775,16 @@ CREATE TABLE job_stats (
 	incomplete INT NOT NULL,
 	conflicts INT NOT NULL,
 	failed INT NOT NULL,
-	wallclock DOUBLE,
-	cpu DOUBLE,
+	wallclock DOUBLE PRECISION,
+	cpu DOUBLE PRECISION,
 	resource_out INT NOT NULL,
 	stage_number INT NOT NULL DEFAULT 0, -- what stage is this? from 1...n, with 0 meaning the primary stage
 	PRIMARY KEY (job_space_id,config_id,stage_number),
-	CONSTRAINT job_stats_job_space_id FOREIGN KEY (job_space_id) REFERENCES job_spaces(id) ON DELETE CASCADE,
-	KEY (config_id)
+	CONSTRAINT job_stats_job_space_id FOREIGN KEY (job_space_id) REFERENCES job_spaces(id) ON DELETE CASCADE
 );
+
+-- Indexes for job_stats table
+CREATE INDEX idx_job_stats_config_id ON job_stats(config_id);
 
 -- Table that contains some global flags
 --  * Minor version is incremented on each change
@@ -737,11 +792,11 @@ CREATE TABLE job_stats (
 --      intervention and cannot be applied automatically
 -- Author: Wyatt Kaiser
 CREATE TABLE system_flags (
-	integrity_keeper ENUM('') NOT NULL,
+	integrity_keeper VARCHAR(1) NOT NULL CHECK (integrity_keeper = ''),
 	paused BOOLEAN DEFAULT FALSE,
 	test_queue INT,
-	major_version INT UNSIGNED,
-	minor_version INT UNSIGNED,
+	major_version BIGINT,
+	minor_version BIGINT,
 	read_only BOOLEAN NOT NULL DEFAULT FALSE,
 	PRIMARY KEY (integrity_keeper),
 	CONSTRAINT system_flags_test_queue FOREIGN KEY (test_queue) REFERENCES queues(id) ON DELETE SET NULL
@@ -749,12 +804,12 @@ CREATE TABLE system_flags (
 
 -- table for storing statistics for the weekly report
 CREATE TABLE report_data (
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	event_name VARCHAR(64),
 	queue_name VARCHAR(64), -- NULL if data is not associated with a queue
 	occurrences INT NOT NULL,
 	PRIMARY KEY(id),
-	UNIQUE KEY event_name_queue_name (event_name, queue_name)
+	UNIQUE (event_name, queue_name)
 );
 
 -- Pairs that have been rerun after job script failure.
@@ -765,18 +820,18 @@ CREATE TABLE pairs_rerun (
 );
 
 CREATE TABLE log_levels(
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	name VARCHAR(32) NOT NULL,
 	PRIMARY KEY(id),
-	UNIQUE KEY(name)
+	UNIQUE(name)
 );
 
 INSERT INTO log_levels (name) VALUES ('OFF'),('FATAL'),('ERROR'),('WARN'),('INFO'),('DEBUG'),('TRACE'),('ALL');
 
 CREATE TABLE error_logs(
-	id INT NOT NULL AUTO_INCREMENT,
+	id SERIAL NOT NULL,
 	message TEXT NOT NULL,
-	time TIMESTAMP NOT NULL DEFAULT NOW(),
+	time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	log_level_id INT,
 
 	PRIMARY KEY(id),
@@ -799,14 +854,14 @@ INSERT INTO report_data (event_name, queue_name, occurrences) VALUES ('unique lo
 -- insert no_type processor, which the system does not expect actually exists on disk. This is mandatory for
 -- the system to function.
 INSERT INTO processors (id,name,description,path,community,processor_type,disk_size)
-VALUES (1,"no_type", "this is the default benchmark type for rejected benchmarks and benchmarks that are not associated with a type n=no_type","no path",1,3,0);
+VALUES (1,'no_type', 'this is the default benchmark type for rejected benchmarks and benchmarks that are not associated with a type n=no_type','no path',1,3,0);
 
 -- Contains all events that can be logged as analytics
 CREATE TABLE analytics_events (
-	event_id INT NOT NULL AUTO_INCREMENT,
+	event_id SERIAL NOT NULL,
 	name CHAR(32) NOT NULL,
 	PRIMARY KEY (event_id),
-	UNIQUE KEY (name)
+	UNIQUE (name)
 );
 
 -- A list of all events
@@ -849,8 +904,7 @@ CREATE TABLE notifications_jobs_users (
 	job_id  INT NOT NULL,
 	user_id INT NOT NULL,
 	last_seen_status
-		ENUM("RUNNING", "PROCESSING", "COMPLETE", "DELETED", "KILLED", "PAUSED", "GLOBAL_PAUSE")
-		NOT NULL,
+		VARCHAR(20) NOT NULL CHECK (last_seen_status IN ('RUNNING', 'PROCESSING', 'COMPLETE', 'DELETED', 'KILLED', 'PAUSED', 'GLOBAL_PAUSE')),
 	PRIMARY KEY (job_id, user_id),
 	CONSTRAINT notifications_jobs_users_to_jobs  FOREIGN KEY (job_id)   REFERENCES jobs(id)  ON DELETE CASCADE,
 	CONSTRAINT notifications_jobs_users_to_users FOREIGN KEY (user_id)  REFERENCES users(id) ON DELETE CASCADE

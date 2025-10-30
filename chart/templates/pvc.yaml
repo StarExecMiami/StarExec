@@ -18,22 +18,22 @@ spec:
       storage: {{ .Values.persistence.size }}
 {{- end }}
 
-{{- if and .Values.mysql.persistence.enabled (not .Values.persistence.usePodmanVolumes) (not .Values.persistence.useHostPathForPodman) }}
+{{- if and .Values.postgres.persistence.enabled (not .Values.persistence.usePodmanVolumes) (not .Values.persistence.useHostPathForPodman) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "chart.name" . }}-mysql-pvc
+  name: {{ include "chart.name" . }}-postgres-pvc
   labels:
     app: {{ include "chart.name" . }}
-    component: mysql-data
+    component: postgres-data
 spec:
   accessModes:
     - ReadWriteOnce
-  {{- if .Values.mysql.persistence.storageClass }}
-  storageClassName: {{ .Values.mysql.persistence.storageClass | default .Values.persistence.storageClass | quote }}
+  {{- if or .Values.postgres.persistence.storageClass .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.postgres.persistence.storageClass | default .Values.persistence.storageClass | quote }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.mysql.persistence.size | default "20Gi" }}
+      storage: {{ .Values.postgres.persistence.size | default "20Gi" }}
 {{- end }}

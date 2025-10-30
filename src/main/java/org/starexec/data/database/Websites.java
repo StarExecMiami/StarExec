@@ -5,9 +5,10 @@ import org.starexec.data.to.Website;
 import org.starexec.data.to.Website.WebsiteType;
 import org.starexec.logger.StarLogger;
 
-import java.sql.CallableStatement;
+import java.sql.PreparedStatement;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -30,31 +31,30 @@ public class Websites {
 	 */
 	public static boolean add(int id, String url, String name, WebsiteType type) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = null;
-
 			switch (type) {
 				case USER:
-					procedure = con.prepareCall("{CALL AddUserWebsite(?, ?, ?)}");
+					ps = con.prepareStatement("SELECT starexec.AddUserWebsite(?, ?, ?)");
 					break;
 				case SPACE:
-					procedure = con.prepareCall("{CALL AddSpaceWebsite(?, ?, ?)}");
+					ps = con.prepareStatement("SELECT starexec.AddSpaceWebsite(?, ?, ?)");
 					break;
 				case SOLVER:
-					procedure = con.prepareCall("{CALL AddSolverWebsite(?, ?, ?)}");
+					ps = con.prepareStatement("SELECT starexec.AddSolverWebsite(?, ?, ?)");
 					break;
 				default:
 					throw new Exception("Unhandled value for WebsiteType");
 			}
 
-			procedure.setInt(1, id);
-			procedure.setString(2, url);
-			procedure.setString(3, name);
+			ps.setInt(1, id);
+			ps.setString(2, url);
+			ps.setString(3, name);
 
-			procedure.executeUpdate();
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 			log.info(
 					String.format("Added new website of with [%s] id [%d] with name [%s] and url [%s]", type
 							              .toString(), id, name, url
@@ -64,7 +64,7 @@ public class Websites {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;
@@ -110,21 +110,22 @@ public class Websites {
 	 */
 	public static boolean delete(int websiteId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DeleteWebsite(?)}");
+			ps = con.prepareStatement("SELECT starexec.DeleteWebsite(?)");
 
 
-			procedure.setInt(1, websiteId);
+			ps.setInt(1, websiteId);
 
-			procedure.executeUpdate();
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;
@@ -175,13 +176,13 @@ public class Websites {
 	 */
 	public static Website getWebsite(int websiteId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetWebsiteById(?)}");
-			procedure.setInt(1, websiteId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetWebsiteById(?)");
+			ps.setInt(1, websiteId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return resultToWebsite(results);
 			}
@@ -189,7 +190,7 @@ public class Websites {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -229,28 +230,27 @@ public class Websites {
 	 */
 	public static List<Website> getAll(int id, WebsiteType webType) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-
 			switch (webType) {
 				case USER:
-					procedure = con.prepareCall("{CALL GetWebsitesByUserId(?)}");
+					ps = con.prepareStatement("SELECT * FROM starexec.GetWebsitesByUserId(?)");
 					break;
 				case SPACE:
-					procedure = con.prepareCall("{CALL GetWebsitesBySpaceId(?)}");
+					ps = con.prepareStatement("SELECT * FROM starexec.GetWebsitesBySpaceId(?)");
 					break;
 				case SOLVER:
-					procedure = con.prepareCall("{CALL GetWebsitesBySolverId(?)}");
+					ps = con.prepareStatement("SELECT * FROM starexec.GetWebsitesBySolverId(?)");
 					break;
 				default:
 					throw new Exception("Unhandled value for WebsiteType");
 			}
 
-			procedure.setInt(1, id);
+			ps.setInt(1, id);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			List<Website> websites = new LinkedList<>();
 
 			while (results.next()) {
@@ -264,7 +264,7 @@ public class Websites {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 

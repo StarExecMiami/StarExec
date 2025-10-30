@@ -1,18 +1,22 @@
 # StarExec DevOps Build System
 
-IMAGE_REGISTRY?=ghcr.io/andrescdo
-IMAGE_NAME?=starexec
+# IMAGE_REGISTRY?=ghcr.io/andrescdo
+# IMAGE_NAME?=starexec
+IMAGE_REGISTRY?=ghcr.io/starexecmiami
+IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
 IMAGE_TAG?=latest
 CHART_DIR=./chart
 RELEASE_NAME?=starexec
 HELM_VALUES?=values.yaml
-SECRET_NAME=secret-mysql
+SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
 ENV?=dev
 ENV_VALUES=$(CHART_DIR)/values-$(ENV).yaml
 VOLUME_SCRIPT=./scripts/podman-volumes.sh
 VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
+
+FORCE?=0
 
 # Network configuration
 PODMAN_NETWORK?=pasta
@@ -24,7 +28,7 @@ PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
 	clean-podman clean-cache clean-all clean-hard lint template \
-	logs logs-app logs-mysql test-deps \
+	logs logs-app logs-postgres test-deps \
 	start stop
 
 start: deploy-podman
@@ -63,8 +67,8 @@ help:
 	@echo "Database Management:"
 	@echo "  migrate-podman         Run Flyway migrations against Podman DB"
 	@echo "  migrate-repair         Repair Flyway schema history"
-	@echo "  db-shell               Open MySQL shell (Podman)"
-	@echo "  db-dump                Create MySQL logical dump"
+	@echo "  db-shell               Open PostgreSQL shell (Podman)"
+	@echo "  db-dump                Create PostgreSQL logical dump"
 	@echo "  db-migrate             Run Flyway migrations (direct)"
 	@echo "  db-status              Check Flyway migration status"
 	@echo ""
@@ -79,7 +83,7 @@ help:
 	@echo "Debugging Targets:"
 	@echo "  logs                   Show all container logs"
 	@echo "  logs-app               Show application logs (follow mode)"
-	@echo "  logs-mysql             Show MySQL logs (follow mode)"
+	@echo "  logs-postgres          Show PostgreSQL logs (follow mode)"
 	@echo "  test-deps              Test job execution dependencies in container"
 	@echo ""
 	@echo "Quick Start Aliases:"
@@ -107,7 +111,7 @@ build-fresh:
 
 build-prod:
 	@echo "Building production image"
-	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/andrescdo}; \
+	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-1.0.0}; \
 	podman build -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "Push with: podman push $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
@@ -159,23 +163,27 @@ volumes-help:
 	$(VOLUME_SCRIPT) help
 
 # ============================================================================
-# DATABASE MANAGEMENT
+# DATABASE MANAGEMENT (PostgreSQL)
 # ============================================================================
 
 db-shell:
-	@echo "Opening MySQL shell (container must be running)"
+	@echo "Opening PostgreSQL shell (container must be running)"
 	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
-	podman exec -it starexec-mysql mysql -uroot -p$$DB_PASS starexec
+	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
+	DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
+	PGPASSWORD=$$DB_PASS podman exec -it starexec-postgres psql -U $$DB_USER -d $$DB_NAME
 
 db-dump:
-	$(VOLUME_SCRIPT) dump-mysql $(ENV)
+	@echo "Creating PostgreSQL dump (uses volume script if available)"
+	$(VOLUME_SCRIPT) dump-postgres $(ENV)
 
 db-migrate:
 	@echo "Running Flyway migrations (this may take 30-60 seconds)..."
 	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
+	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	mvn -q -DskipTests \
-		-Dflyway.url=jdbc:mysql://localhost:3306/starexec \
-		-Dflyway.user=root \
+		-Dflyway.url=jdbc:postgresql://localhost:5432/starexec \
+		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		flyway:migrate
 	@echo "✓ Migrations completed successfully"
@@ -183,43 +191,44 @@ db-migrate:
 db-status:
 	@echo "Checking Flyway migration status..."
 	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
+	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	mvn -q -DskipTests \
-		-Dflyway.url=jdbc:mysql://localhost:3306/starexec \
-		-Dflyway.user=root \
+		-Dflyway.url=jdbc:postgresql://localhost:5432/starexec \
+		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		flyway:info
 
 migrate-repair:
 	@echo "Running Flyway repair..."
 	@ echo "Using values file: $(VALS)"; \
-	  mysql_host=$${MYSQL_HOST:-localhost}; \
-	  : $${STAREXEC_DB_USER:=root}; : $${STAREXEC_DB_DATABASE:=starexec}; \
+	  db_host=$${DB_HOST:-localhost}; \
+	  : $${STAREXEC_DB_USER:=starexec}; : $${STAREXEC_DB_DATABASE:=starexec}; \
 	  : $${STAREXEC_DB_PASSWORD:=starexec_dev_password}; \
-	  echo "Running Flyway repair against $$mysql_host:3306/$$STAREXEC_DB_DATABASE"; \
+	  echo "Running Flyway repair against $$db_host:5432/$$STAREXEC_DB_DATABASE"; \
 	  mvn clean flyway:repair -e \
-		-Dflyway.url=jdbc:mysql://$$mysql_host:3306/$$STAREXEC_DB_DATABASE \
+		-Dflyway.url=jdbc:postgresql://$$db_host:5432/$$STAREXEC_DB_DATABASE \
 		-Dflyway.user=$$STAREXEC_DB_USER \
 		-Dflyway.password=$$STAREXEC_DB_PASSWORD \
 		-Dflyway.schemas=$$STAREXEC_DB_DATABASE
 
 migrate-podman:
-	@echo "Running Flyway migration against Podman MySQL"
-	@echo "Waiting for MySQL to be ready..."
+	@echo "Running Flyway migration against Podman PostgreSQL"
+	@echo "Waiting for PostgreSQL to be ready..."
 	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
-	DB_USER=$${STAREXEC_DB_USER:-root}; \
+	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
-	MYSQL_HOST=$${MYSQL_HOST:-localhost}; \
+	DB_HOST=$${DB_HOST:-localhost}; \
 	for i in 1 2 3 4 5; do \
-		if podman exec starexec-mysql mysqladmin ping -h localhost -u$$DB_USER -p$$DB_PASS 2>/dev/null; then \
-			echo "MySQL is ready"; \
+		if podman exec starexec-postgres pg_isready -h localhost -p 5432 -U$$DB_USER >/dev/null 2>&1; then \
+			echo "PostgreSQL is ready"; \
 			break; \
 		fi; \
-		echo "Waiting for MySQL... ($$i/5)"; \
+		echo "Waiting for PostgreSQL... ($$i/5)"; \
 		sleep 2; \
 	done; \
-	echo "Running Flyway migration against $$MYSQL_HOST:3306/$$DB_NAME"; \
+	echo "Running Flyway migration against $$DB_HOST:5432/$$DB_NAME"; \
 	mvn clean flyway:migrate -e \
-		-Dflyway.url=jdbc:mysql://$$MYSQL_HOST:3306/$$DB_NAME \
+		-Dflyway.url=jdbc:postgresql://$$DB_HOST:5432/$$DB_NAME \
 		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		-Dflyway.schemas=$$DB_NAME
@@ -257,7 +266,7 @@ deploy-podman-helm:
 			podman pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
-	@for container in starexec-app starexec-mysql; do \
+	@for container in starexec-app starexec-postgres; do \
 		if podman container exists $$container 2>/dev/null; then \
 			echo "  Removing orphaned container: $$container"; \
 			podman rm -f $$container 2>/dev/null || true; \
@@ -274,7 +283,7 @@ deploy-podman-helm:
 		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
 	done
 	@echo "Deploying application pod..."
-	@IMAGE_REPO=$$(echo "$(IMAGE_NAME)" | cut -d: -f1); \
+	@IMAGE_REPO="$(RELEASE_NAME)"; \
 	IMAGE_VER="$(IMAGE_TAG)"; \
 	helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set image.repository=$$IMAGE_REPO \
@@ -288,10 +297,10 @@ deploy-podman-helm:
 	@echo "  Access: http://localhost:7827/starexec"
 	@echo ""
 	@echo "Useful commands:"
-	@echo "  make db-shell              - MySQL shell"
+	@echo "  make db-shell              - PostgreSQL shell"
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
 	@echo "  podman logs starexec-app   - Application logs"
-	@echo "  podman logs starexec-mysql - Database logs"
+	@echo "  podman logs starexec-postgres - Database logs"
 
 deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
@@ -301,7 +310,7 @@ deploy-podman-direct:
 			podman pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
-	@for container in starexec-app starexec-mysql; do \
+	@for container in starexec-app starexec-postgres; do \
 		if podman container exists $$container 2>/dev/null; then \
 			echo "  Removing orphaned container: $$container"; \
 			podman rm -f $$container 2>/dev/null || true; \
@@ -309,7 +318,7 @@ deploy-podman-direct:
 	done
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
-	 STAREXEC_MYSQL_VOL=$${STAREXEC_MYSQL_VOL:-starexec-$(ENV)-mysql} \
+	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
 	 IMAGE_NAME=$(RELEASE_NAME) \
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
@@ -321,10 +330,10 @@ deploy-podman-direct:
 	@echo "  Access: http://localhost:7827/starexec"
 	@echo ""
 	@echo "Useful commands:"
-	@echo "  make db-shell              - MySQL shell"
+	@echo "  make db-shell              - PostgreSQL shell"
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
 	@echo "  podman logs starexec-app   - Application logs"
-	@echo "  podman logs starexec-mysql - Database logs"
+	@echo "  podman logs starexec-postgres - Database logs"
 
 deploy-podman-cached: image
 	@if [ ! -f render.yaml ]; then \
@@ -339,7 +348,7 @@ deploy-podman-cached: image
 			podman pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
-	@for container in starexec-app starexec-mysql; do \
+	@for container in starexec-app starexec-postgres; do \
 		if podman container exists $$container 2>/dev/null; then \
 			echo "  Removing orphaned container: $$container"; \
 			podman rm -f $$container 2>/dev/null || true; \
@@ -360,7 +369,7 @@ undeploy-podman:
 			podman pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
-	@for container in starexec-app starexec-mysql; do \
+	@for container in starexec-app starexec-postgres; do \
 		if podman container exists $$container 2>/dev/null; then \
 			echo "Removing orphaned container: $$container"; \
 			podman rm -f $$container 2>/dev/null || true; \
@@ -404,7 +413,7 @@ clean-podman:
 	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-database 2>/dev/null || true
 	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-rootPassword 2>/dev/null || true
 	@echo "Removing StarExec images..."
-	@podman rmi $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null || true
+	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
 	@echo "✓ Cleanup complete (volumes and cache preserved)"
 
 clean-cache:
@@ -449,10 +458,14 @@ clean-hard:
 	@echo "⚠️  THIS CANNOT BE UNDONE!"
 	@echo ""
 	@if [ -t 0 ]; then \
-		read -p "Type 'yes, delete everything' to confirm: " ans; \
-		if [ "$$ans" != "yes, delete everything" ]; then \
-			echo "Cancelled"; \
-			exit 0; \
+		if [ "$(FORCE)" != "1" ]; then \
+			read -p "Type 'yes, delete everything' to confirm: " ans; \
+			if [ "$$ans" != "yes, delete everything" ]; then \
+				echo "Cancelled"; \
+				exit 0; \
+			fi; \
+		else \
+			echo "FORCE=1 set, skipping confirmation"; \
 		fi; \
 	else \
 		echo "❌ Running non-interactively. Refusing to proceed."; \
@@ -484,32 +497,32 @@ logs:
 	@echo "=== Application Logs ==="
 	@podman logs --tail 50 starexec-app 2>&1 || echo "App container not running"
 	@echo ""
-	@echo "=== MySQL Logs ==="
-	@podman logs --tail 30 starexec-mysql 2>&1 || echo "MySQL container not running"
+	@echo "=== PostgreSQL Logs ==="
+	@podman logs --tail 30 starexec-postgres 2>&1 || echo "Postgres container not running"
 
 logs-app:
 	@echo "Following application logs (Ctrl+C to stop)..."
 	@podman logs -f starexec-app
 
-logs-mysql:
-	@echo "Following MySQL logs (Ctrl+C to stop)..."
-	@podman logs -f starexec-mysql
+logs-postgres:
+	@echo "Following PostgreSQL logs (Ctrl+C to stop)..."
+	@podman logs -f starexec-postgres
 
 test-deps:
 	@echo "Testing job execution dependencies in container..."
 	@echo ""
 	@echo "=== Installed Packages ==="
-	@podman exec starexec-app apk list --installed | grep -E "bash|util-linux|mysql-client|procps" || true
+	@podman exec starexec-app apk list --installed | grep -E "bash|util-linux|postgresql-client|procps" || true
 	@echo ""
 	@echo "=== Tool Versions ==="
 	@podman exec starexec-app bash -c "echo 'bash:' && bash --version | head -1"
 	@podman exec starexec-app bash -c "echo 'flock:' && flock --version"
 	@podman exec starexec-app bash -c "echo 'lscpu:' && lscpu --version"
-	@podman exec starexec-app bash -c "echo 'mysql:' && mysql --version"
+	@podman exec starexec-app bash -c "echo 'psql:' && psql --version"
 	@podman exec starexec-app bash -c "echo 'ps:' && ps --version"
 	@echo ""
 	@echo "=== Command Availability ==="
-	@podman exec starexec-app bash -c "which bash flock lscpu mysql ps runsolver"
+	@podman exec starexec-app bash -c "which bash flock lscpu psql ps runsolver"
 	@echo ""
 	@echo "=== Test ps -p Command ==="
 	@podman exec starexec-app bash -c 'ps -p $$$$ -o pid,cmd'
@@ -543,7 +556,7 @@ template:
 	else \
 		echo "Helm not installed, generating from template..."; \
 		STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
-		STAREXEC_MYSQL_VOL=$${STAREXEC_MYSQL_VOL:-starexec-$(ENV)-mysql} \
+		STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
 		IMAGE_NAME=$(RELEASE_NAME) \
 		IMAGE_TAG=$(IMAGE_TAG) \
 		./scripts/generate-render-yaml.sh; \

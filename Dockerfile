@@ -62,8 +62,8 @@ ENV MAVEN_OPTS="-XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Xmx3g"
 # Copy POM and NPM files first for dependency caching
 COPY pom.xml package.json package-lock.json* ./
 
-# Download dependencies (cached layer if pom.xml unchanged)
-RUN mvn dependency:go-offline dependency:resolve-plugins -B || true
+# Download dependencies 
+RUN mvn dependency:go-offline -B
 
 # Copy source code
 COPY src ./src
@@ -106,7 +106,7 @@ LABEL maintainer="StarExec Team" \
 # - tcsh: Alternative shell (solver requirements)
 # - unzip: WAR/archive extraction
 # - util-linux: Provides flock (with -w option) and lscpu for job scripts
-# - mysql-client: MariaDB client for basic compatibility (primary)
+# - postgresql-client: PostgreSQL client for database connectivity
 # - procps: Provides ps command with -p option for process monitoring
 # - sudo: Required by job execution scripts to switch to sandbox users
 RUN apk add --no-cache \
@@ -118,22 +118,16 @@ RUN apk add --no-cache \
     tcsh \
     unzip \
     util-linux \
-    mysql-client \
+    postgresql-client \
     procps \
     sudo && \
     rm -rf /var/cache/apk/*
 
-# Install official MySQL client for MySQL 8+ caching_sha2_password support
-# This is required for connecting to modern MySQL servers from job execution scripts
-RUN apk add --no-cache mysql-client-openssl=8.0.* || \
-    (echo "Note: Official MySQL 8.0 client not available; using MariaDB client" && \
-     echo "Job scripts will use mysql command from MariaDB client")
-
 # Verify critical tools for job execution
-RUN which flock lscpu mysql ps sudo && \
+RUN which flock lscpu psql ps sudo && \
     flock --version && \
     lscpu --version && \
-    mysql --version && \
+    psql --version && \
     ps --version && \
     sudo --version
 
@@ -203,11 +197,6 @@ RUN chmod -R a+r /app/data/pictures && \
 # Copy external configuration assets
 COPY --from=builder /build/src/main/java/org/starexec/config /config
 RUN chown -R starexec:starexec /config
-
-# Patch SGE scripts for container compatibility
-# Add --skip-ssl for MariaDB client (Alpine's mysql command)
-# This disables SSL for container-internal MySQL connections
-RUN sed -i 's/mysql -u/mysql --skip-ssl -u/g' /config/sge/functions.bash
 
 # Copy build metadata
 COPY --from=builder --chown=starexec:starexec /build/build-metadata/build-info.properties /tmp/build-info.properties

@@ -191,17 +191,17 @@ public class R {
 	public static final String EMAIL_USER   = EnvironmentConfig.getEmailUser();
 	public static final String EMAIL_PWD    = EnvironmentConfig.getEmailPassword();
 
-	// MySQL properties
-	public static final String MYSQL_DATABASE              = EnvironmentConfig.getDbName();         // Name of the MySQL database
-	public static final String MYSQL_URL                   = EnvironmentConfig.getDbUrl();          // MySQL connection string for JDBC
-	public static final String MYSQL_USERNAME              = EnvironmentConfig.getDbUser();         // Starexec's username for the database
-	public static final String MYSQL_PASSWORD              = EnvironmentConfig.getDbPassword();     // Starexec database password
-	public static final int MYSQL_POOL_MAX_SIZE            = EnvironmentConfig.getDbPoolMax();      // The maximum number of connections in the database pool
-	public static final int MYSQL_POOL_MIN_SIZE            = EnvironmentConfig.getDbPoolMin();      // The minimum number of connections to keep open to the database
-	public static final String COMPUTE_NODE_MYSQL_USERNAME = EnvironmentConfig.getClusterDbUser();  // username for database to use from compute nodes
-	public static final String COMPUTE_NODE_MYSQL_PASSWORD = EnvironmentConfig.getClusterDbPassword(); // DB password for COMPUTE_NODE_MYSQL_USERNAME
-	public static final String REPORT_HOST                 = EnvironmentConfig.getReportHost();     // where to report job status updates during jobs
-	public static final String MYSQL_DRIVER = "com.mysql.cj.jdbc.Driver"; // MySQL java driver class (we use JDBC)
+	// PostgreSQL properties
+	public static final String POSTGRES_DATABASE               = EnvironmentConfig.getDbName();         // Name of the PostgreSQL database
+	public static final String POSTGRES_URL                    = EnvironmentConfig.getDbUrl();          // PostgreSQL connection string for JDBC
+	public static final String POSTGRES_USERNAME               = EnvironmentConfig.getDbUser();         // StarExec's username for the database
+	public static final String POSTGRES_PASSWORD               = EnvironmentConfig.getDbPassword();     // StarExec database password
+	public static final int POSTGRES_POOL_MAX_SIZE             = EnvironmentConfig.getDbPoolMax();      // The maximum number of connections in the database pool
+	public static final int POSTGRES_POOL_MIN_SIZE             = EnvironmentConfig.getDbPoolMin();      // The minimum number of connections to keep open to the database
+	public static final String COMPUTE_NODE_POSTGRES_USERNAME  = EnvironmentConfig.getClusterDbUser();  // username for database to use from compute nodes
+	public static final String COMPUTE_NODE_POSTGRES_PASSWORD  = EnvironmentConfig.getClusterDbPassword(); // DB password for COMPUTE_NODE_POSTGRES_USERNAME
+	public static final String REPORT_HOST                     = EnvironmentConfig.getReportHost();     // where to report job status updates during jobs
+	public static final String POSTGRES_DRIVER                 = "org.postgresql.Driver";               // PostgreSQL JDBC driver class
 
 	// Global path information
 	public static final String SOLVER_BUILD_OUTPUT = "starexec_build_log";           // The name of the file in which we're storing build output

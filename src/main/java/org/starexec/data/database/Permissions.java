@@ -7,8 +7,8 @@ import org.starexec.data.to.*;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Util;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collection;
@@ -30,28 +30,29 @@ public class Permissions {
 	 * @author Tyler Jensen
 	 */
 	protected static int add(Permission p, Connection con) {
-		CallableStatement procDefaultPerm = null;
+		PreparedStatement stmtDefaultPerm = null;
+		ResultSet rs = null;
 		try {
-			procDefaultPerm = con.prepareCall("{CALL AddPermissions(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)}");
-			procDefaultPerm.setBoolean(1, p.canAddSolver());
-			procDefaultPerm.setBoolean(2, p.canAddBenchmark());
-			procDefaultPerm.setBoolean(3, p.canAddUser());
-			procDefaultPerm.setBoolean(4, p.canAddSpace());
-			procDefaultPerm.setBoolean(5, p.canAddJob());
-			procDefaultPerm.setBoolean(6, p.canRemoveSolver());
-			procDefaultPerm.setBoolean(7, p.canRemoveBench());
-			procDefaultPerm.setBoolean(8, p.canRemoveSpace());
-			procDefaultPerm.setBoolean(9, p.canRemoveUser());
-			procDefaultPerm.setBoolean(10, p.canRemoveJob());
-			procDefaultPerm.setBoolean(11, p.isLeader());
-			procDefaultPerm.registerOutParameter(12, java.sql.Types.INTEGER);
-
-			procDefaultPerm.execute();
-			return procDefaultPerm.getInt(12);
+			stmtDefaultPerm = con.prepareStatement("SELECT AddPermissions(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+			stmtDefaultPerm.setBoolean(1, p.canAddSolver());
+			stmtDefaultPerm.setBoolean(2, p.canAddBenchmark());
+			stmtDefaultPerm.setBoolean(3, p.canAddUser());
+			stmtDefaultPerm.setBoolean(4, p.canAddSpace());
+			stmtDefaultPerm.setBoolean(5, p.canAddJob());
+			stmtDefaultPerm.setBoolean(6, p.canRemoveSolver());
+			stmtDefaultPerm.setBoolean(7, p.canRemoveBench());
+			stmtDefaultPerm.setBoolean(8, p.canRemoveSpace());
+			stmtDefaultPerm.setBoolean(9, p.canRemoveUser());
+			stmtDefaultPerm.setBoolean(10, p.canRemoveJob());
+			stmtDefaultPerm.setBoolean(11, p.isLeader());
+			rs = stmtDefaultPerm.executeQuery();
+			rs.next();
+			return rs.getInt(1);
 		} catch (Exception e) {
 			log.error("add", e);
 		} finally {
-			Common.safeClose(procDefaultPerm);
+			Common.safeClose(rs);
+			Common.safeClose(stmtDefaultPerm);
 		}
 		return -1;
 	}
@@ -84,13 +85,13 @@ public class Permissions {
 			return true;
 		}
 
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL CanViewBenchmark(?, ?)}");
-			procedure.setInt(1, benchId);
-			procedure.setInt(2, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.CanViewBenchmark(?, ?)");
+			ps.setInt(1, benchId);
+			ps.setInt(2, userId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return results.getBoolean(1);
@@ -98,7 +99,7 @@ public class Permissions {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -177,7 +178,7 @@ public class Permissions {
 
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			Job j = Jobs.get(jobId);
 			// job does not exist or has been deleted.
@@ -197,10 +198,10 @@ public class Permissions {
 
 			//if there was no special case, check to see if the user shares a space with the job or owns the job
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CanViewJob(?, ?)}");
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.CanViewJob(?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, userId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				boolean userCanSeeJob = results.getBoolean(1);
@@ -222,7 +223,7 @@ public class Permissions {
 		} finally {
 			Common.safeClose(results);
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			log.exit(methodName);
 		}
 	}
@@ -252,13 +253,13 @@ public class Permissions {
 			return true;
 		}
 
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL CanViewSolver(?, ?)}");
-			procedure.setInt(1, solverId);
-			procedure.setInt(2, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.CanViewSolver(?, ?)");
+			ps.setInt(1, solverId);
+			ps.setInt(2, userId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return results.getBoolean(1);
@@ -266,7 +267,7 @@ public class Permissions {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -351,14 +352,14 @@ public class Permissions {
 			return true;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CanViewSpace(?, ?)}");
-			procedure.setInt(1, spaceId);
-			procedure.setInt(2, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.CanViewSpace(?, ?)");
+			ps.setInt(1, spaceId);
+			ps.setInt(2, userId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return results.getBoolean(1);
@@ -367,7 +368,7 @@ public class Permissions {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -385,9 +386,9 @@ public class Permissions {
 	 */
 	public static Permission get(int userId, int spaceId) {
 		log.debug("getting permissions for user id = " + userId + " and space id  = " + spaceId);
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement ps = null;
+	ResultSet results = null;
 
 		Space s = Spaces.get(spaceId);
 		if (s == null) {
@@ -409,10 +410,10 @@ public class Permissions {
 		try {
 
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserPermissions(?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setInt(2, spaceId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetUserPermissions(?, ?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, spaceId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				Permission p = resultsToPermissionWithId(userId, results);
@@ -436,7 +437,7 @@ public class Permissions {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -502,13 +503,13 @@ public class Permissions {
 	 */
 	public static Permission getSpaceDefault(int spaceId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSpacePermissions(?)}");
-			procedure.setInt(1, spaceId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSpacePermissions(?)");
+			ps.setInt(1, spaceId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return resultsToPermissionWithId(results.getInt("id"), results);
@@ -517,7 +518,7 @@ public class Permissions {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -578,22 +579,22 @@ public class Permissions {
 	 * @author Todd Elvers
 	 */
 	protected static boolean set(int userId, int spaceId, Permission newPerm, Connection con) {
-		CallableStatement procedure = null;
+	PreparedStatement ps = null;
 		int permissionId = add(newPerm, con);
 
 		try {
-			procedure = con.prepareCall("{CALL SetUserPermissions2(?, ?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setInt(2, spaceId);
-			procedure.setInt(3, permissionId);
+			ps = con.prepareStatement("SELECT starexec.SetUserPermissions2(?, ?, ?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, spaceId);
+			ps.setInt(3, permissionId);
 
-			procedure.executeUpdate();
+			ps.execute();
 			log.debug(String.format("Permissions successfully changed for user [%d] in space [%d]", userId, spaceId));
 			return true;
 		} catch (Exception e) {
 			log.error("set", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -609,29 +610,29 @@ public class Permissions {
 	 * @author Skylar Stark
 	 */
 	protected static void updatePermission(int permId, Permission perm, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
-			procedure = con.prepareCall("{CALL UpdatePermissions(?,?,?,?,?,?,?,?,?,?,?)}");
+			ps = con.prepareStatement("SELECT starexec.UpdatePermissions(?,?,?,?,?,?,?,?,?,?,?)");
 
-			procedure.setInt(1, permId);
-			procedure.setBoolean(2, perm.canAddSolver());
-			procedure.setBoolean(3, perm.canAddBenchmark());
-			procedure.setBoolean(4, perm.canAddUser());
-			procedure.setBoolean(5, perm.canAddSpace());
-			procedure.setBoolean(6, perm.canAddJob());
-			procedure.setBoolean(7, perm.canRemoveSolver());
-			procedure.setBoolean(8, perm.canRemoveBench());
-			procedure.setBoolean(9, perm.canRemoveSpace());
-			procedure.setBoolean(10, perm.canRemoveUser());
-			procedure.setBoolean(11, perm.canRemoveJob());
+			ps.setInt(1, permId);
+			ps.setBoolean(2, perm.canAddSolver());
+			ps.setBoolean(3, perm.canAddBenchmark());
+			ps.setBoolean(4, perm.canAddUser());
+			ps.setBoolean(5, perm.canAddSpace());
+			ps.setBoolean(6, perm.canAddJob());
+			ps.setBoolean(7, perm.canRemoveSolver());
+			ps.setBoolean(8, perm.canRemoveBench());
+			ps.setBoolean(9, perm.canRemoveSpace());
+			ps.setBoolean(10, perm.canRemoveUser());
+			ps.setBoolean(11, perm.canRemoveJob());
 
-			procedure.executeUpdate();
+			ps.execute();
 			log.info(String.format("Permission [%d] successfully updated.", permId));
 		} catch (Exception e) {
 			log.error("updatePermission", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 }

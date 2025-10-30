@@ -77,6 +77,9 @@ public class RESTHelpers {
 	 */
 	protected static List<JSTreeItem> toSpaceTree(List<Space> spaceList, int userID) {
 		List<JSTreeItem> list = new LinkedList<>();
+		if (spaceList == null) {
+			return list;
+		}
 		for (Space space : spaceList) {
 			String isOpen = Spaces.getCountInSpace(space.getId(), userID, true) > 0 ? "closed" : "leaf";
 			list.add(new JSTreeItem(space.getName(), space.getId(), isOpen, R.SPACE));
@@ -2318,14 +2321,7 @@ public class RESTHelpers {
 	}
 
 	public static boolean freezePrimitives() throws SQLException {
-		return Common.query(
-				"{CALL GetFreezePrimitives()}",
-				procedure -> {},
-				results -> {
-					results.next();
-					return results.getBoolean("freeze_primitives");
-				}
-		);
+		return SystemFunctions.freezePrimitives();
 	}
 
 	
@@ -2334,24 +2330,11 @@ public class RESTHelpers {
 			readOnly ? "READ ONLY IS ENABLED, no new jobs can be ran" 
 			: "READ ONLY IS DISABLED, jobs can be ran normally"
 		);
-			Common.update(
-				"{CALL SetReadOnly(?)}",
-				procedure -> {
-				procedure.setBoolean(1, readOnly);
-				});
-		
+		SystemFunctions.setReadOnly(readOnly);
 	}
 
 	public static boolean getReadOnly() throws SQLException {
-		return Common.query(
-				"{CALL GetReadOnly()}",
-				procedure -> {},
-				results -> {
-					results.next();
-					return results.getBoolean("read_only");
-				}
-		);
-
+		return SystemFunctions.getReadOnly();
 	}
 
 	public static void setFreezePrimitives(boolean frozen) throws SQLException {
@@ -2360,12 +2343,7 @@ public class RESTHelpers {
 			? "!!! Freezing Primitives !!!\n\tUploading Benchmarks and Solvers will be disabled"
 			: "!!! Unfreezing Primitives !!!\n\tUploading Benchmarks and Solvers will be allowed"
 		);
-		Common.update(
-				"{CALL SetFreezePrimitives(?)}",
-				procedure -> {
-					procedure.setBoolean(1, frozen);
-				}
-		);
+		SystemFunctions.setFreezePrimitives(frozen);
 	}
 
 	/**

@@ -5,6 +5,8 @@ import org.starexec.logger.NonSavingStarLogger;
 import org.starexec.logger.StarLevel;
 
 import java.sql.ResultSet;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -28,18 +30,29 @@ public class ErrorLogs {
 	 * @return the id of the new log.
 	 */
 	public static Optional<Integer> add(String message, StarLevel level) {
+		Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet rs = null;
 		try {
-			return Common.updateWithOutput("{CALL AddErrorLog(?, ?, ?)}", procedure -> {
-				procedure.setString(1, message);
-				procedure.setString(2, level.toString());
-				procedure.registerOutParameter(3, java.sql.Types.INTEGER);
-			}, procedure -> Optional.of(procedure.getInt(3)));
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.AddErrorLog(?, ?)");
+			ps.setString(1, message);
+			ps.setString(2, level.toString());
+			rs = ps.executeQuery();
+			if (rs.next()) {
+				return Optional.of(rs.getInt(1));
+			}
+			return Optional.empty();
 		} catch (Exception e) {
 			// Must catch all exceptions since we don't want another method to catch them and indirectly call this
 			// method again to add error to the database.
 			log.error("Caught exception while trying to add message to database.");
 
 			return Optional.empty();
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 	}
 
@@ -51,7 +64,20 @@ public class ErrorLogs {
 	 * @throws SQLException on database error.
 	 */
 	public static Optional<ErrorLog> getById(final int id) throws SQLException {
-		return Common.query("{CALL GetErrorLogById(?)}", procedure -> procedure.setInt(1, id), ErrorLogs::getFirst);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetErrorLogById(?)");
+			ps.setInt(1, id);
+			rs = ps.executeQuery();
+			return ErrorLogs.getFirst(rs);
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -61,7 +87,17 @@ public class ErrorLogs {
 	 * @throws SQLException on database error.
 	 */
 	public static void deleteWithId(final int id) throws SQLException {
-		Common.update("{CALL DeleteErrorLogWithId(?)}", procedure -> procedure.setInt(1, id));
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.DeleteErrorLogWithId(?)");
+			ps.setInt(1, id);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -71,16 +107,50 @@ public class ErrorLogs {
 	 * @throws SQLException on database error.
 	 */
 	public static void deleteBefore(Timestamp time) throws SQLException {
-		Common.update("{CALL DeleteErrorLogsBefore(?)}", procedure -> procedure.setTimestamp(1, time));
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.DeleteErrorLogsBefore(?)");
+			ps.setTimestamp(1, time);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static boolean existBefore(Timestamp time) throws SQLException {
-		return Common.query("{CALL GetErrorLogsBefore(?)}", procedure -> procedure.setTimestamp(1, time),
-		                    results -> getFirst(results).isPresent());
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetErrorLogsBefore(?)");
+			ps.setTimestamp(1, time);
+			rs = ps.executeQuery();
+			return getFirst(rs).isPresent();
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static List<ErrorLog> getAll() throws SQLException {
-		return Common.query("{CALL GetAllErrorLogs()}", procedure -> {}, ErrorLogs::resultsToErrorLogs);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllErrorLogs()");
+			rs = ps.executeQuery();
+			return ErrorLogs.resultsToErrorLogs(rs);
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static void deleteAll() throws SQLException {
@@ -95,8 +165,20 @@ public class ErrorLogs {
 	 * @throws SQLException on database error.
 	 */
 	public static List<ErrorLog> getSince(Timestamp time) throws SQLException {
-		return Common.query("{CALL GetErrorLogsSince(?)}", procedure -> procedure.setTimestamp(1, time),
-		                    ErrorLogs::resultsToErrorLogs);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetErrorLogsSince(?)");
+			ps.setTimestamp(1, time);
+			rs = ps.executeQuery();
+			return ErrorLogs.resultsToErrorLogs(rs);
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**

@@ -3,8 +3,8 @@ package org.starexec.data.database;
 import org.starexec.data.to.Report;
 import org.starexec.logger.StarLogger;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
@@ -62,13 +62,13 @@ public class Reports {
 	public static List<Report> getAllReportsNotRelatedToQueues() {
 		List<Report> reports = new LinkedList<>();
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAllEventsAndOccurrencesNotRelatedToQueues()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllEventsAndOccurrencesNotRelatedToQueues()");
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				String event = results.getString("event_name");
@@ -81,7 +81,7 @@ public class Reports {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -97,13 +97,13 @@ public class Reports {
 	public static List<List<Report>> getAllReportsForAllQueues() throws SQLException {
 		LinkedList<Report> reportsForAllQueues = new LinkedList<>();
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAllEventsAndOccurrencesForAllQueues()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllEventsAndOccurrencesForAllQueues()");
+			results = ps.executeQuery();
 
 			while (results.next()) {
 				String event = results.getString("event_name");
@@ -118,7 +118,7 @@ public class Reports {
 			return separateReportsByQueue(reportsForAllQueues);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -130,16 +130,16 @@ public class Reports {
 	 */
 	public static void resetReports() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL ResetReports()}");
-			procedure.executeQuery();
+			ps = con.prepareStatement("SELECT starexec.ResetReports()");
+			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -155,25 +155,25 @@ public class Reports {
 	 */
 	private static boolean setEventOccurrences(String eventName, int occurrences, String queueName) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
 			if (queueName == null) {
-				procedure = con.prepareCall("{CALL SetEventOccurrencesNotRelatedToQueue(?, ?)}");
+				ps = con.prepareStatement("SELECT starexec.SetEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
-				procedure = con.prepareCall("{CALL SetEventOccurrencesForQueue(?, ?, ?)}");
-				procedure.setString(3, queueName);
+				ps = con.prepareStatement("SELECT starexec.SetEventOccurrencesForQueue(?, ?, ?)");
+				ps.setString(3, queueName);
 			}
-			procedure.setString(1, eventName);
-			procedure.setInt(2, occurrences);
-			procedure.executeQuery();
+			ps.setString(1, eventName);
+			ps.setInt(2, occurrences);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -190,28 +190,28 @@ public class Reports {
 	 */
 	private static boolean addToEventOccurrences(String eventName, int occurrences, String queueName) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-
+			
 			if (queueName == null) {
-				procedure = con.prepareCall("{CALL AddToEventOccurrencesNotRelatedToQueue(?, ?)}");
+				ps = con.prepareStatement("SELECT starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
-				procedure = con.prepareCall("{CALL AddToEventOccurrencesForQueue(?, ?, ?)}");
-				procedure.setString(3, queueName);
+				ps = con.prepareStatement("SELECT starexec.AddToEventOccurrencesForQueue(?, ?, ?)");
+				ps.setString(3, queueName);
 			}
-			procedure.setString(1, eventName);
-			procedure.setInt(2, occurrences);
+			ps.setString(1, eventName);
+			ps.setInt(2, occurrences);
 
-			procedure.executeQuery();
+			ps.execute();
 			log.debug("Added " + occurrences + " occurrences to " + eventName +
-					          (queueName == null ? "" : " for queue " + queueName) + ".");
+					  (queueName == null ? "" : " for queue " + queueName) + ".");
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}

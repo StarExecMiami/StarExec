@@ -8,8 +8,8 @@ import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.LinkedList;
@@ -32,15 +32,15 @@ public class Requests {
 	 * @author Todd Elvers
 	 */
 	protected static boolean addActivationCode(Connection con, User user, String code) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			// Add a new entry to the VERIFY table
-			procedure = con.prepareCall("{CALL AddCode(?, ?)}");
-			procedure.setInt(1, user.getId());
-			procedure.setString(2, code);
+			ps = con.prepareStatement("SELECT starexec.AddCode(?, ?)");
+			ps.setInt(1, user.getId());
+			ps.setString(2, code);
 
-			// Apply update to database and check to be sure at least 1 row was modified
-			procedure.executeUpdate();
+			// Apply update to database (function returns void/scalar) and ignore any result
+			ps.execute();
 			log.info(String.format("New email activation code [%s] added to VERIFY for user [%s]", code,
 			                       user.getFullName()
 			));
@@ -48,7 +48,7 @@ public class Requests {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		log.debug(String.format("Adding activation record failed for [%s]", user.getFullName()));
@@ -69,22 +69,22 @@ public class Requests {
 	protected static boolean addCommunityRequest(
 			Connection con, User user, int communityId, String code, String message
 	) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			// Add a new entry to the community_request table
-			procedure = con.prepareCall("{CALL AddCommunityRequest(?, ?, ?, ?)}");
-			procedure.setInt(1, user.getId());
-			procedure.setInt(2, communityId);
-			procedure.setString(3, code);
-			procedure.setString(4, message);
+			ps = con.prepareStatement("SELECT starexec.AddCommunityRequest(?, ?, ?, ?)");
+			ps.setInt(1, user.getId());
+			ps.setInt(2, communityId);
+			ps.setString(3, code);
+			ps.setString(4, message);
 
-			procedure.executeUpdate();
+			ps.execute();
 			log.debug(String.format("Added invitation record for user [%s] on community %d", user, communityId));
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		log.debug(String.format("Add invitation record failed for user [%s] on community %d", user, communityId));
@@ -127,20 +127,20 @@ public class Requests {
 	 */
 	public static boolean addPassResetRequest(int userId, String code) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL AddPassResetRequest(?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setString(2, code);
+			ps = con.prepareStatement("SELECT starexec.AddPassResetRequest(?, ?)");
+			ps.setInt(1, userId);
+			ps.setString(2, code);
 
-			procedure.executeUpdate();
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;
@@ -156,21 +156,20 @@ public class Requests {
 	 */
 	public static boolean approveCommunityRequest(int userId, int communityId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.ApproveCommunityRequest(?, ?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, communityId);
 
-			procedure = con.prepareCall("{CALL ApproveCommunityRequest(?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setInt(2, communityId);
-
-			procedure.executeUpdate();
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;
@@ -187,21 +186,20 @@ public class Requests {
 	 */
 	public static boolean declineCommunityRequest(int userId, int communityId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.DeclineCommunityRequest(?, ?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, communityId);
 
-			procedure = con.prepareCall("{CALL DeclineCommunityRequest(?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setInt(2, communityId);
-
-			procedure.executeUpdate();
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;
@@ -217,19 +215,19 @@ public class Requests {
 	public static CommunityRequest getCommunityRequest(int userId) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetCommunityRequestById(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityRequestById(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 
 			return resultsToCommunityRequest(results);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -244,10 +242,21 @@ public class Requests {
 	 * @author Todd Elvers
 	 */
 	public static boolean communityRequestExistsForUser(int userId, int community) throws SQLException {
-		return Common.query("{CALL GetCommunityRequestForUser(?,?)}", procedure -> {
-			procedure.setInt(1, userId);
-			procedure.setInt(2, community);
-		}, ResultSet::next);
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityRequestForUser(?,?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, community);
+			rs = ps.executeQuery();
+			return rs.next();
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -260,12 +269,12 @@ public class Requests {
 	public static CommunityRequest getCommunityRequest(String code) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetCommunityRequestByCode(?)}");
-			procedure.setString(1, code);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityRequestByCode(?)");
+			ps.setString(1, code);
+			results = ps.executeQuery();
 
 			return resultsToCommunityRequest(results);
 		} catch (Exception e) {
@@ -273,7 +282,7 @@ public class Requests {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
@@ -287,13 +296,13 @@ public class Requests {
 	 */
 	public static int getCommunityRequestCountForCommunity(int communityId) throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetCommunityRequestCountForCommunity(?)}");
-			procedure.setInt(1, communityId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityRequestCountForCommunity(?)");
+			ps.setInt(1, communityId);
+			results = ps.executeQuery();
 			return processRequestCountResults(results);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -302,7 +311,7 @@ public class Requests {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -313,12 +322,12 @@ public class Requests {
 	 */
 	public static int getCommunityRequestCount() throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetCommunityRequestCount()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetCommunityRequestCount()");
+			results = ps.executeQuery();
 			return processRequestCountResults(results);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -326,7 +335,7 @@ public class Requests {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -350,17 +359,17 @@ public class Requests {
 			DataTablesQuery query, int communityId
 	) throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetNextPageOfPendingCommunityRequestsForCommunity(?, ?, ?)}");
-			procedure.setInt(1, query.getStartingRecord());
-			procedure.setInt(2, query.getNumRecords());
-			procedure.setInt(3, communityId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNextPageOfPendingCommunityRequestsForCommunity(?, ?, ?)");
+			ps.setInt(1, query.getStartingRecord());
+			ps.setInt(2, query.getNumRecords());
+			ps.setInt(3, communityId);
+			results = ps.executeQuery();
 			return processGetCommunityRequestResults(results);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -368,7 +377,7 @@ public class Requests {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -381,16 +390,16 @@ public class Requests {
 	public static List<CommunityRequest> getPendingCommunityRequests(DataTablesQuery query)
 			throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetNextPageOfPendingCommunityRequests(?, ?)}");
-			procedure.setInt(1, query.getStartingRecord());
-			procedure.setInt(2, query.getNumRecords());
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNextPageOfPendingCommunityRequests(?, ?)");
+			ps.setInt(1, query.getStartingRecord());
+			ps.setInt(2, query.getNumRecords());
+			results = ps.executeQuery();
 			return processGetCommunityRequestResults(results);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -398,7 +407,7 @@ public class Requests {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -439,24 +448,26 @@ public class Requests {
 	 */
 	public static int redeemActivationCode(String codeFromUser) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL RedeemActivationCode(?, ?)}");
-			procedure.setString(1, codeFromUser);
-			procedure.registerOutParameter(2, java.sql.Types.INTEGER);
+			stmt = con.prepareStatement("SELECT RedeemActivationCode(?)");
+			stmt.setString(1, codeFromUser);
 
-			procedure.executeUpdate();
-			int userId = procedure.getInt(2);
+			rs = stmt.executeQuery();
+			rs.next();
+			int userId = rs.getInt(1);
 			log.info(String.format("Activation code %s redeemed by user %d", codeFromUser, userId));
 			return userId;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 
 		return -1;
@@ -472,20 +483,21 @@ public class Requests {
 	 */
 	public static int redeemPassResetRequest(String code) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL RedeemPassResetRequestByCode(?, ?)}");
-			procedure.setString(1, code);
-			procedure.registerOutParameter(2, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-
-			return procedure.getInt(2);
+			stmt = con.prepareStatement("SELECT RedeemPassResetRequestByCode(?)");
+			stmt.setString(1, code);
+			rs = stmt.executeQuery();
+			rs.next();
+			return rs.getInt(1);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 
 		return -1;
@@ -503,22 +515,22 @@ public class Requests {
 	public static void addChangeEmailRequest(int userId, String newEmail, String code)
 			throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL AddChangeEmailRequest(?, ?, ?)}");
-			procedure.setInt(1, userId);
-			procedure.setString(2, newEmail);
-			procedure.setString(3, code);
-			procedure.executeQuery();
+			ps = con.prepareStatement("SELECT starexec.AddChangeEmailRequest(?, ?, ?)");
+			ps.setInt(1, userId);
+			ps.setString(2, newEmail);
+			ps.setString(3, code);
+			ps.execute();
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to add a change email request for user with id=" + userId +
 							" newEmail=" + newEmail + " and code=" + code, e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -531,15 +543,15 @@ public class Requests {
 	 */
 	public static Pair<String, String> getChangeEmailRequest(int userId) throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		String newEmail = null;
 		String emailChangeCodeAssociatedWithUser = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetChangeEmailRequest(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetChangeEmailRequest(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 
 			// There should only be 1 result since the user id is the primary
 			// key.
@@ -558,7 +570,7 @@ public class Requests {
 			);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return new ImmutablePair<>(newEmail, emailChangeCodeAssociatedWithUser);
@@ -573,19 +585,19 @@ public class Requests {
 	 */
 	public static void deleteChangeEmailRequest(int userId) throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DeleteChangeEmailRequest(?)}");
-			procedure.setInt(1, userId);
-			procedure.executeQuery();
+			ps = con.prepareStatement("SELECT starexec.DeleteChangeEmailRequest(?)");
+			ps.setInt(1, userId);
+			ps.execute();
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to delete a change email requests for user with id=" + userId +
 							".", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -598,14 +610,14 @@ public class Requests {
 	 */
 	public static boolean changeEmailRequestExists(int userId) throws StarExecDatabaseException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		boolean changeEmailRequestExists = false;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetChangeEmailRequest(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetChangeEmailRequest(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 			// results.next() will be true if there is at least one result
 			if (results.next()) {
 				changeEmailRequestExists = true;
@@ -620,7 +632,7 @@ public class Requests {
 			);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
