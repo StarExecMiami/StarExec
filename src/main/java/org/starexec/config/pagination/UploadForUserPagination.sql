@@ -8,4 +8,4 @@ Author: Archie Kipp
                                 where user_id = :userId 
 
                                 -- Exclude uploads whose upload times doesn't contain the query string                                                                                                           
-                                AND     (upload_time        LIKE    CONCAT('%', :query, '%'))
+                                AND     (CAST(upload_time AS TEXT)        LIKE    CONCAT('%', :query, '%'))
