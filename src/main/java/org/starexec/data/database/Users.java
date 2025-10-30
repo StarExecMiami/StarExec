@@ -1190,37 +1190,40 @@ public class Users {
 	 */
 	public static boolean deleteUser(int userToDeleteId) {
 		log.debug("User with id=" + userToDeleteId + " is about to be deleted");
-	Connection con = null;
-	PreparedStatement procedure = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
 		try {
-
-			// Delete the users primitive directories. This must occur before we delete the user
-			// so we can still get the users job id's from the database.
-			deleteUsersPrimitiveDirectories(userToDeleteId);
-
-			// Delete the user's personal space if it exists
+			// First, get information needed for cleanup
 			Space personalSpace = Spaces.getPersonalSpace(userToDeleteId);
+
+			// Delete the user's personal space first to avoid orphan subspaces
 			if (personalSpace != null) {
 				log.info("Deleting personal space for user " + userToDeleteId + " with space id " + personalSpace.getId());
 				if (!Spaces.removeSubspace(personalSpace.getId())) {
-					log.warn("Failed to delete personal space for user " + userToDeleteId);
-					// Continue anyway - we don't want to fail user deletion because of this
+					log.error("Failed to delete personal space for user " + userToDeleteId + " - aborting user deletion to avoid orphan subspaces");
+					return false;
 				}
 			} else {
 				log.debug("No personal space found for user " + userToDeleteId);
 			}
 
-			// Delete the user from the database, this should delete all benchmarks and solvers and jobs
+			// Delete the user from the database - this should delete all benchmarks and solvers and jobs
 			// from the database using cascading deletes.
 			con = Common.getConnection();
 			procedure = con.prepareStatement("SELECT starexec.DeleteUser(?)");
 			procedure.setInt(1, userToDeleteId);
 			procedure.execute();
 
-			log.debug("Successfully deleted user with id=" + userToDeleteId);
+			log.debug("Database deletion successful for user with id=" + userToDeleteId);
+
+			// Only delete the users primitive directories if both personal space and database deletion succeeded
+			// This ensures we don't leave orphan directories if any part of the deletion fails
+			deleteUsersPrimitiveDirectories(userToDeleteId);
+
+			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
 		} catch (Exception e) {
-			log.error("deleteUse", e);
+			log.error("deleteUser", e);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
