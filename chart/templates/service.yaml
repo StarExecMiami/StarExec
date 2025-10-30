@@ -18,14 +18,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "chart.fullname" . }}-mysql
+  name: {{ include "chart.fullname" . }}-postgres
   labels:
-    app: {{ include "chart.name" . }}-mysql
+    app: {{ include "chart.name" . }}-postgres
 spec:
   type: ClusterIP
   ports:
     - protocol: TCP
-      port: 3306
-      targetPort: 3306
+      port: 5432
+      targetPort: 5432
   selector:
-    app: {{ include "chart.name" . }}-mysql
+    app: {{ include "chart.name" . }}-postgres

@@ -15,19 +15,19 @@ persistence:
   useHostPathForPodman: false
   usePodmanVolumes: false
 
-mysql:
+postgresql:
   image:
-    repository: docker.io/library/mysql
+    repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
-    tag: "8.0"
-  
+    tag: "16"
+
   host: localhost
-  port: 3306
+  port: 5432
   user: starexec_ci
   password: test_password_ci_only
   database: starexec_test
   rootPassword: root_ci_only
-  
+
   persistence:
     enabled: false  # Ephemeral for CI tests
 
@@ -47,7 +47,7 @@ resources:
     limits:
       memory: "512Mi"
       cpu: "500m"
-  mysql:
+  postgresql:
     requests:
       memory: "256Mi"
       cpu: "250m"

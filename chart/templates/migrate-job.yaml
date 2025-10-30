@@ -10,12 +10,12 @@ spec:
       containers:
       - name: flyway
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        command: ["sh","-c","mvn -DskipTests -Dflyway.* flyway:migrate"]
+        command: ["sh","-c","mvn -DskipTests -Dflyway.url=$FLYWAY_URL -Dflyway.user=$FLYWAY_USER -Dflyway.password=$FLYWAY_PASSWORD flyway:migrate"]
         env:
         - name: FLYWAY_URL
-          value: jdbc:mysql://{{ .Values.mysql.host }}:3306/{{ .Values.mysql.database }}
+          value: "jdbc:postgresql://{{ .Values.postgresql.host }}:{{ default 5432 .Values.postgresql.port }}/{{ .Values.postgresql.database }}"
         - name: FLYWAY_USER
-          value: {{ .Values.mysql.user | quote }}
+          value: {{ .Values.postgresql.user | quote }}
         - name: FLYWAY_PASSWORD
-          value: {{ .Values.mysql.password | quote }}
-        restartPolicy: OnFailure
+          value: {{ .Values.postgresql.password | quote }}
+      restartPolicy: OnFailure

@@ -21,17 +21,17 @@ persistence:
   podmanVolumes:
     data:
       name: starexec-dev-data
-    mysql:
-      name: starexec-dev-mysql
+    postgres:
+      name: starexec-dev-postgres
 
-mysql:
+postgres:
   image:
-    repository: docker.io/library/mysql
+    repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
-    tag: "8.0"
+    tag: "16"
   
   host: localhost  # Within pod, containers share localhost
-  port: 3306
+  port: 5432
   user: starexec
   password: starexec_dev_password  # Dev-only; use env override for local testing
   database: starexec
@@ -56,7 +56,7 @@ resources:
     limits:
       memory: "1Gi"
       cpu: "1000m"
-  mysql:
+  postgres:
     requests:
       memory: "512Mi"
       cpu: "500m"

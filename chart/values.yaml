@@ -21,16 +21,16 @@ persistence:
   podmanVolumes:
     data:
       name: starexec-data
-    mysql:
-      name: starexec-mysql
+    postgres:
+      name: starexec-postgres
 
-mysql: # For production, use an external database
+postgres: # For production, use an external database
   image:
-    repository: docker.io/library/mysql
+    repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
-    tag: 8.0
+    tag: 16
   host: localhost
-  port: 3306
+  port: 5432
   user: starexec
   password: starexec_password
   database: starexec  # Fixed: moved from metadata.database to database
@@ -44,7 +44,7 @@ mysql: # For production, use an external database
     size: 20Gi
 
   # COMMENT OUT OR REMOVE existingSecret to let Helm create the secret
-  # existingSecret: "{{ include \"chart.fullname\" . }}-secret-mysql"
+  # existingSecret: "{{ include \"chart.fullname\" . }}-secret-postgres"
   # existingSecretKeys:
   #   user: user
   #   password: password
@@ -70,7 +70,7 @@ resources:
     limits:
       memory: "512Mi"
       cpu: "500m"
-  mysql:
+  postgres:
     requests:
       memory: "256Mi"
       cpu: "250m"
