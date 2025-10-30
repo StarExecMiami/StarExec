@@ -43,11 +43,11 @@ public class EnvironmentConfig {
     
     public static String getDbUrl() {
         String host = getEnv("STAREXEC_DB_HOST", "localhost");
-        String port = getEnv("STAREXEC_DB_PORT", "3306");
+        String port = getEnv("STAREXEC_DB_PORT", "5432");
         String dbName = getDbName();
-        return getEnv("STAREXEC_DB_URL", "jdbc:mysql://" + host + ":" + port + "/" + dbName);
+        // Allow full override via STAREXEC_DB_URL, otherwise construct a PostgreSQL JDBC URL.
+        return getEnv("STAREXEC_DB_URL", "jdbc:postgresql://" + host + ":" + port + "/" + dbName);
     }
-    
     public static String getDbUser() {
         return getEnv("STAREXEC_DB_USER", "se_admin");
     }
