@@ -16,8 +16,8 @@
 				where user_id = :userId and deleted=false AND recycled= :recycled
 
 				-- Exclude Solvers whose name doesn't contain the query string
-				AND 	(name				LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR		description			LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR 		type_name			LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))										
+				AND 	(name				LIKE	CONCAT('%', :query, '%')
+				OR		description		LIKE 	CONCAT('%', :query, '%')
+				OR 		type_name			LIKE	CONCAT('%', :query, '%'))
 						
 			

@@ -25,14 +25,14 @@
 				LEFT JOIN job_pair_completion ON job_pairs.id=job_pair_completion.pair_id
 				JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id = job_pairs.id
 
-				LEFT JOIN job_attributes on (job_attributes.pair_id=job_pairs.id and job_attributes.stage_number=jobpair_stage_data.stage_number AND job_attributes.attr_key="starexec-result")
+				LEFT JOIN job_attributes on (job_attributes.pair_id=job_pairs.id and job_attributes.stage_number=jobpair_stage_data.stage_number AND job_attributes.attr_key='starexec-result')
 
 				LEFT JOIN anonymous_primitive_names AS anonymous_solver_names ON 
-					jobpair_stage_data.solver_id=anonymous_solver_names.primitive_id AND anonymous_solver_names.primitive_type="solver"
+					jobpair_stage_data.solver_id=anonymous_solver_names.primitive_id AND anonymous_solver_names.primitive_type='solver'
 				LEFT JOIN anonymous_primitive_names AS anonymous_bench_names ON
-					bench_id=anonymous_bench_names.primitive_id AND anonymous_bench_names.primitive_type="bench"
+					bench_id=anonymous_bench_names.primitive_id AND anonymous_bench_names.primitive_type='bench'
 				LEFT JOIN anonymous_primitive_names AS anonymous_config_names ON
-					jobpair_stage_data.config_id=anonymous_config_names.primitive_id AND anonymous_config_names.primitive_type="config"
+					jobpair_stage_data.config_id=anonymous_config_names.primitive_id AND anonymous_config_names.primitive_type='config'
                 JOIN configurations ON jobpair_stage_data.config_id=configurations.id
 
 
@@ -41,11 +41,11 @@
 				
 				-- Exclude JobPairs whose benchmark name, configuration name, solver name, status and wallclock
 				-- don't include the query
-				AND		(bench_name 		LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci , '%')
-				OR		jobpair_stage_data.config_name		LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci , '%')
-				OR		jobpair_stage_data.solver_name		LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci , '%')
-				OR		jobpair_stage_data.status_code 	LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR		jobpair_stage_data.wallclock				LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR		cpu				LIKE	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%')
-				OR      job_attributes.attr_value 			LIKE 	CONCAT('%', :query COLLATE utf8mb4_unicode_ci, '%'))
+				AND		(bench_name 		LIKE 	CONCAT('%', :query , '%')
+				OR		jobpair_stage_data.config_name		LIKE	CONCAT('%', :query , '%')
+				OR		jobpair_stage_data.solver_name		LIKE	CONCAT('%', :query , '%')
+				OR		jobpair_stage_data.status_code 	LIKE 	CONCAT('%', :query, '%')
+				OR		jobpair_stage_data.wallclock			LIKE	CONCAT('%', :query, '%')
+				OR		cpu				LIKE	CONCAT('%', :query, '%')
+				OR      job_attributes.attr_value 		LIKE 	CONCAT('%', :query, '%'))
 
