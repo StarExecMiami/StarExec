@@ -8,10 +8,11 @@ import org.starexec.logger.StarLogger;
 import org.starexec.util.Util;
 
 import java.io.File;
-import java.lang.NumberFormatException;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.lang.NumberFormatException;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -76,22 +77,36 @@ public class Processors {
 	 * @author Tyler Jensen
 	 */
 	public static int add(Processor processor) {
+		Connection con = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
-			int procId = Common.updateWithOutput("{CALL AddProcessor(?,?,?,?,?,?,?,?)}", procedure -> {
-				procedure.setString(1, processor.getName());
-				procedure.setString(2, processor.getDescription());
-				procedure.setString(3, processor.getFilePath());
-				procedure.setInt(4, processor.getCommunityId());
-				procedure.setInt(5, processor.getType().getVal());
-				procedure.setLong(6, FileUtils.sizeOf(new File(processor.getFilePath())));
-				procedure.setInt(7, processor.getTimeLimit());
-				procedure.registerOutParameter(8, java.sql.Types.INTEGER);
-			}, procedure -> procedure.getInt(8));
-			log.debug("the new processor has the ID = " + procId + " and community id = " + processor.getCommunityId
-					());
+			con = Common.getConnection();
+			Common.beginTransaction(con);
+			
+			stmt = con.prepareStatement("SELECT AddProcessor(?, ?, ?, ?, ?, ?, ?)");
+			stmt.setString(1, processor.getName());
+			stmt.setString(2, processor.getDescription());
+			stmt.setString(3, processor.getFilePath());
+			stmt.setInt(4, processor.getCommunityId());
+			stmt.setInt(5, processor.getType().getVal());
+			stmt.setLong(6, FileUtils.sizeOf(new File(processor.getFilePath())));
+			stmt.setInt(7, processor.getTimeLimit());
+			
+			rs = stmt.executeQuery();
+			rs.next();
+			int procId = rs.getInt(1);
+			
+			Common.endTransaction(con);
+			log.debug("the new processor has the ID = " + procId + " and community id = " + processor.getCommunityId());
 			return procId;
 		} catch (SQLException e) {
 			log.error(e.getMessage(), e);
+			Common.doRollback(con);
+		} finally {
+			Common.safeClose(con);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 		return -1;
 	}
@@ -116,11 +131,26 @@ public class Processors {
 			return true;
 		}
 		try {
-			// Get processor_path of processor
-			final File processorFile = Common.updateWithOutput("{CALL DeleteProcessor(?,?)}", procedure -> {
-				procedure.setInt(1, processorId);
-				procedure.registerOutParameter(2, java.sql.Types.LONGNVARCHAR);
-			}, procedure -> new File(procedure.getString(2)));
+			// Get processor_path of processor via PostgreSQL function that returns TEXT
+			Connection con = null;
+			PreparedStatement ps = null;
+			ResultSet rs = null;
+			File processorFile = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.DeleteProcessor(?)");
+				ps.setInt(1, processorId);
+				rs = ps.executeQuery();
+				String path = null;
+				if (rs.next()) {
+					path = rs.getString(1);
+				}
+				processorFile = new File(path == null ? "" : path);
+			} finally {
+				Common.safeClose(rs);
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 			message = String.format("Removal of processor [id=%d] was successful.", processorId);
 			log.debug(method, message);
 
@@ -176,7 +206,17 @@ public class Processors {
 		if (processorId == 0) {
 			return null;
 		}
-		return Common.queryUsingConnection(con, "{CALL GetProcessorById(?)}", procedure -> procedure.setInt(1, processorId), Processors::resultSetToProcessor);
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			ps = con.prepareStatement("SELECT * FROM starexec.GetProcessorById(?)");
+			ps.setInt(1, processorId);
+			results = ps.executeQuery();
+			return Processors.resultSetToProcessor(results);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+		}
 	}
 
 	/**
@@ -187,10 +227,21 @@ public class Processors {
 	 * @author Todd Elvers
 	 */
 	public static List<Processor> getAll(ProcessorType type) {
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
 		try {
-			return Common.query("{CALL GetAllProcessors(?)}", procedure -> procedure.setInt(1, type.getVal()), Processors::resultSetToProcessors);
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllProcessors(?)");
+			ps.setInt(1, type.getVal());
+			results = ps.executeQuery();
+			return Processors.resultSetToProcessors(results);
 		} catch (SQLException e) {
 			log.error("getAll", e.getMessage(), e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return null;
 	}
@@ -209,13 +260,22 @@ public class Processors {
 	 * @author Tyler Jensen
 	 */
 	public static List<Processor> getByCommunity(int communityId, ProcessorType type) {
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
 		try {
-			return Common.query("{CALL GetProcessorsByCommunity(?,?)}", procedure -> {
-				procedure.setInt(1, communityId);
-				procedure.setInt(2, type.getVal());
-			}, Processors::resultSetToProcessors);
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetProcessorsByCommunity(?,?)");
+			ps.setInt(1, communityId);
+			ps.setInt(2, type.getVal());
+			results = ps.executeQuery();
+			return Processors.resultSetToProcessors(results);
 		} catch (SQLException e) {
 			log.error("getByCommunity", e.getMessage(), e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return null;
 	}
@@ -229,13 +289,22 @@ public class Processors {
 	 * @author Eric Burns
 	 */
 	public static List<Processor> getByUser(int userId, ProcessorType type) {
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
 		try {
-			return Common.query("{CALL GetProcessorsByUser(?,?)}", procedure -> {
-				procedure.setInt(1, userId);
-				procedure.setInt(2, type.getVal());
-			}, Processors::resultSetToProcessors);
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetProcessorsByUser(?,?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, type.getVal());
+			results = ps.executeQuery();
+			return Processors.resultSetToProcessors(results);
 		} catch (SQLException e) {
 			log.error("getByUser", e.getMessage(), e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return null;
 	}
@@ -249,14 +318,20 @@ public class Processors {
 	 * @author Tyler Jensen
 	 */
 	public static boolean updateDescription(int processorId, String newDesc) {
+		Connection con = null;
+		PreparedStatement ps = null;
 		try {
-			Common.update("{CALL UpdateProcessorDescription(?,?)}", procedure -> {
-				procedure.setInt(1, processorId);
-				procedure.setString(2, newDesc);
-			});
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UpdateProcessorDescription(?,?)");
+			ps.setInt(1, processorId);
+			ps.setString(2, newDesc);
+			ps.execute();
 			return true;
 		} catch (SQLException e) {
 			log.error("updateDescription", e.getMessage(), e);
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return false;
 	}
@@ -282,14 +357,20 @@ public class Processors {
 	 * @author Eric Burns
 	 */
 	public static boolean updateFilePath(int processorId, String newPath) {
+		Connection con = null;
+		PreparedStatement ps = null;
 		try {
-			Common.update("{CALL UpdateProcessorFilePath(?,?)}", procedure -> {
-				procedure.setInt(1, processorId);
-				procedure.setString(2, newPath);
-			});
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UpdateProcessorFilePath(?,?)");
+			ps.setInt(1, processorId);
+			ps.setString(2, newPath);
+			ps.execute();
 			return true;
 		} catch (SQLException e) {
 			log.error("updateFilePath", e.getMessage(), e);
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return false;
 	}
@@ -303,38 +384,55 @@ public class Processors {
 	 * @author Tyler Jensen
 	 */
 	public static boolean updateName(int processorId, String newName) {
+		Connection con = null;
+		PreparedStatement ps = null;
 		try {
-			Common.update("{CALL UpdateProcessorName(?,?)}", procedure -> {
-				procedure.setInt(1, processorId);
-				procedure.setString(2, newName);
-			});
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UpdateProcessorName(?,?)");
+			ps.setInt(1, processorId);
+			ps.setString(2, newName);
+			ps.execute();
 			return true;
 		} catch (SQLException e) {
 			log.error("updateName", e.getMessage(), e);
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return false;
 	}
 
 	public static boolean updateTimeLimit(int processorId, int timeLimit) {
+		Connection con = null;
+		PreparedStatement ps = null;
 		try {
-			Common.update("{CALL UpdateProcessorTimeLimit(?,?)}", procedure -> {
-				procedure.setInt(1, processorId);
-				procedure.setInt(2, timeLimit);
-			});
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UpdateProcessorTimeLimit(?,?)");
+			ps.setInt(1, processorId);
+			ps.setInt(2, timeLimit);
+			ps.execute();
 			return true;
 		} catch (SQLException e) {
 			log.error("updateTimeLimit", e.getMessage(), e);
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return false;
 	}
 
 	public static void updateSyntax(int processorId, int syntaxId) throws SQLException {
-		Common.update(
-			"{CALL UpdateProcessorSyntax(?,?)}",
-			procedure -> {
-				procedure.setInt(1, processorId);
-				procedure.setInt(2, syntaxId);
-			}
-		);
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UpdateProcessorSyntax(?,?)");
+			ps.setInt(1, processorId);
+			ps.setInt(2, syntaxId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 }

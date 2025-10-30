@@ -1,6 +1,6 @@
 package org.starexec.servlets;
 
-import org.starexec.data.database.Common;
+import org.starexec.data.database.SystemFunctions;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Solver;
@@ -91,9 +91,7 @@ public class RebuildSolver extends HttpServlet {
 		log.info(method, "Rebuilding solver: " + solverId);
 
 		try {
-			Common.update("{CALL RebuildSolver(?)}", p -> {
-				p.setInt(1, solverId);
-			});
+			SystemFunctions.rebuildSolver(solverId);
 		} catch (SQLException e) {
 			log.error(method, e);
 			response.setStatus(500);

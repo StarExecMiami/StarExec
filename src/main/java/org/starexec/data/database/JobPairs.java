@@ -32,20 +32,20 @@ public class JobPairs {
 
 	private static void addJobPairInputs(List<JobPair> pairs, Connection con) {
 		final String methodName = "addJobPairInputs";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		int batchCounter = 0;
 		int totalPairsSubmitted = 0;
 		try {
-			procedure = con.prepareCall("{CALL AddJobPairInput(?,?,?)}");
+			ps = con.prepareStatement("SELECT starexec.AddJobPairInput(?, ?, ?)");
 
 			for (JobPair pair : pairs) {
 				for (int i = 0; i < pair.getBenchInputs().size(); i++) {
 
-					procedure.setInt(1, pair.getId());
-					procedure.setInt(2, i + 1);
-					procedure.setInt(3, pair.getBenchInputs().get(i));
+					ps.setInt(1, pair.getId());
+					ps.setInt(2, i + 1);
+					ps.setInt(3, pair.getBenchInputs().get(i));
 
-					procedure.addBatch();
+					ps.addBatch();
 					batchCounter++;
 					final int batchSize = 1000;
 					if (batchCounter > batchSize) {
@@ -54,7 +54,7 @@ public class JobPairs {
 								methodName,
 								"Submitting batch of " + batchSize + " inputs. Total pairs submitted: " + totalPairsSubmitted
 						);
-						procedure.executeBatch();
+						ps.executeBatch();
 						batchCounter = 0;
 					}
 				}
@@ -65,12 +65,12 @@ public class JobPairs {
 						methodName,
 						"Submitting final batch of " + batchCounter + " inputs. Total pairs submitted: " + totalPairsSubmitted
 				);
-				procedure.executeBatch();
+				ps.executeBatch();
 			}
 		} catch (Exception e) {
 			log.error(methodName, "Exception occurred while adding job pair inputs.", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -205,12 +205,12 @@ public class JobPairs {
 	 * @return A list of strings pointing to the inputs for this pair, or null on error.
 	 */
 	public static List<String> getJobPairInputPaths(int pairId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("CALL GetJobPairInputPaths(?)");
-			procedure.setInt(1, pairId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairInputPaths(?)");
+			ps.setInt(1, pairId);
+			results = ps.executeQuery();
 			List<String> benchmarkPaths = new ArrayList<>();
 			while (results.next()) {
 				benchmarkPaths.add(results.getString("path"));
@@ -219,7 +219,7 @@ public class JobPairs {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -233,11 +233,11 @@ public class JobPairs {
 	 */
 	private static void addJobPairStages(List<JobPair> pairs, Connection con) {
 		final String methodName = "addJobPairStages";
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		int totalPairsSubmitted = 0;
 		try {
 			int batchCounter = 0;
-			procedure = con.prepareCall("{CALL AddJobPairStage(?,?,?,?,?,?,?,?,?)}");
+			ps = con.prepareStatement("SELECT starexec.AddJobPairStage(?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
 			for (JobPair pair : pairs) {
 				for (JoblineStage stage : pair.getStages()) {
@@ -245,21 +245,21 @@ public class JobPairs {
 						continue;
 					}
 
-					procedure.setInt(1, pair.getId());
+					ps.setInt(1, pair.getId());
 					if (stage.getStageId() != null) {
-						procedure.setInt(2, stage.getStageId());
+						ps.setInt(2, stage.getStageId());
 					} else {
-						procedure.setNull(2, java.sql.Types.INTEGER);
+						ps.setNull(2, java.sql.Types.INTEGER);
 					}
-					procedure.setInt(3, stage.getStageNumber());
-					procedure.setBoolean(4, Objects.equals(pair.getPrimaryStageNumber(), stage.getStageNumber()));
-					procedure.setInt(5, stage.getSolver().getId());
-					procedure.setString(6, stage.getSolver().getName());
-					procedure.setInt(7, stage.getConfiguration().getId());
-					procedure.setString(8, stage.getConfiguration().getName());
-					procedure.setInt(9, pair.getJobSpaceId());
+					ps.setInt(3, stage.getStageNumber());
+					ps.setBoolean(4, Objects.equals(pair.getPrimaryStageNumber(), stage.getStageNumber()));
+					ps.setInt(5, stage.getSolver().getId());
+					ps.setString(6, stage.getSolver().getName());
+					ps.setInt(7, stage.getConfiguration().getId());
+					ps.setString(8, stage.getConfiguration().getName());
+					ps.setInt(9, pair.getJobSpaceId());
 					// Update the pair's ID so it can be used outside this method
-					procedure.addBatch();
+					ps.addBatch();
 
 					batchCounter++;
 					final int batchSize = 1000;
@@ -269,7 +269,7 @@ public class JobPairs {
 								methodName,
 								"Submitting batch of " + batchSize + ", total pairs submitted: " + totalPairsSubmitted
 						);
-						procedure.executeBatch();
+						ps.executeBatch();
 						batchCounter = 0;
 					}
 				}
@@ -280,12 +280,12 @@ public class JobPairs {
 						methodName,
 						"Submitting batch of " + batchCounter + ", total pairs submitted: " + totalPairsSubmitted
 				);
-				procedure.executeBatch();
+					ps.executeBatch();
 			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -323,27 +323,28 @@ public class JobPairs {
 	protected static boolean addJobPairs(Connection con, int jobId, List<JobPair> pairs) {
 		final String methodName = "addJobPairs";
 		log.entry(methodName);
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
-			procedure = con.prepareCall("{CALL AddJobPair(?, ?, ?, ?, ?, ?, ?, ?)}");
+			stmt = con.prepareStatement("SELECT AddJobPair(?, ?, ?, ?, ?, ?, ?)");
 			int pairsProcessed = 0;
 			for (JobPair pair : pairs) {
 				pair.setJobId(jobId);
-				procedure.setInt(1, jobId);
-				procedure.setInt(2, pair.getBench().getId());
-				procedure.setInt(3, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+				stmt.setInt(1, jobId);
+				stmt.setInt(2, pair.getBench().getId());
+				stmt.setInt(3, StatusCode.STATUS_PENDING_SUBMIT.getVal());
 
-				procedure.setString(4, pair.getPath());
-				procedure.setInt(5, pair.getJobSpaceId());
+				stmt.setString(4, pair.getPath());
+				stmt.setInt(5, pair.getJobSpaceId());
 
-				procedure.setString(6, pair.getBench().getName());
-				// The procedure will return the pair's new ID in this parameter
-				procedure.setInt(7, pair.getPrimaryStageNumber());
-				procedure.registerOutParameter(8, java.sql.Types.INTEGER);
-				procedure.executeUpdate();
+				stmt.setString(6, pair.getBench().getName());
+				// The function will return the pair's new ID
+				stmt.setInt(7, pair.getPrimaryStageNumber());
+				rs = stmt.executeQuery();
+				rs.next();
 
 				// Update the pair's ID so it can be used outside this method
-				int newPairId = procedure.getInt(8);
+				int newPairId = rs.getInt(1);
 				pair.setId(newPairId);
 				pairsProcessed += 1;
 				if (pairsProcessed % 1000 == 0) {
@@ -360,7 +361,8 @@ public class JobPairs {
 		} catch (Exception e) {
 			log.error(methodName, "Exception occurred while adding job pairs to the database.", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 		return false;
 	}
@@ -387,13 +389,13 @@ public class JobPairs {
 	 */
 	public static List<PairStageProcessorTriple> getAllPairsForProcessing() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPairsToBeProcessed(?)}");
-			procedure.setInt(1, StatusCode.STATUS_PROCESSING.getVal());
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPairsToBeProcessed(?)");
+			ps.setInt(1, StatusCode.STATUS_PROCESSING.getVal());
+			results = ps.executeQuery();
 			List<PairStageProcessorTriple> list = new ArrayList<>();
 			while (results.next()) {
 				PairStageProcessorTriple next = new PairStageProcessorTriple();
@@ -407,7 +409,7 @@ public class JobPairs {
 			log.error("getAllPairsForProcessing", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -423,17 +425,17 @@ public class JobPairs {
 	 * @return true on success and false otherwise
 	 */
 	public static boolean incrementTotalJobPairsForJob(int jobId, int increment, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL IncrementTotalJobPairsForJob(?,?)}");
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, increment);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.IncrementTotalJobPairsForJob(?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, increment);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -472,13 +474,13 @@ public class JobPairs {
 			throw new NullPointerException("Input JobPair was null.");
 		}
 
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL DeleteJobPair(?)}");
-			procedure.setInt(1, pairToDelete.getId());
-			procedure.executeQuery();
+			ps = con.prepareStatement("SELECT starexec.DeleteJobPair(?)");
+			ps.setInt(1, pairToDelete.getId());
+			ps.execute();
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -562,19 +564,19 @@ public class JobPairs {
 	 * @author Tyler Jensen
 	 */
 	protected static void addJobPairAttr(Connection con, int pairId, int stageId, String key, String val) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL AddJobAttr(?, ?, ?,?)}");
-			procedure.setInt(1, pairId);
+			ps = con.prepareStatement("SELECT starexec.AddJobAttr(?, ?, ?, ?)");
+			ps.setInt(1, pairId);
 
-			procedure.setString(2, key);
-			procedure.setString(3, val);
-			procedure.setInt(4, stageId);
-			procedure.executeUpdate();
+			ps.setString(2, key);
+			ps.setString(3, val);
+			ps.setInt(4, stageId);
+			ps.execute();
 		} catch (Exception e) {
 			log.error("addJobPairAttr", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -817,13 +819,13 @@ public class JobPairs {
 	 * @author Tyler Jensen
 	 */
 	protected static HashMap<Integer, Properties> getAttributes(Connection con, int pairId) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			HashMap<Integer, Properties> props = new HashMap<>();
-			procedure = con.prepareCall("{CALL GetPairAttrs(?)}");
-			procedure.setInt(1, pairId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPairAttrs(?)");
+			ps.setInt(1, pairId);
+			results = ps.executeQuery();
 
 
 			while (results.next()) {
@@ -840,7 +842,7 @@ public class JobPairs {
 			log.error("getAttributes", e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return null;
 	}
@@ -888,13 +890,13 @@ public class JobPairs {
 	 */
 	private static JobPair getFilePathInfo(int pairId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL getJobPairFilePathInfo(?)}");
-			procedure.setInt(1, pairId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.getJobPairFilePathInfo(?)");
+			ps.setInt(1, pairId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				JobPair pair = new JobPair();
 
@@ -919,7 +921,7 @@ public class JobPairs {
 			log.debug("getFilePathInfo", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -1007,18 +1009,18 @@ public class JobPairs {
 
 	public static void removePairFromCompletedTable(int pairId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL RemovePairFromCompletedTable(?)");
-			procedure.setInt(1, pairId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.RemovePairFromCompletedTable(?)");
+			ps.setInt(1, pairId);
+			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -1146,13 +1148,13 @@ public class JobPairs {
 	 */
 	public static JobPair getPair(int pairId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobPairById(?)}");
-			procedure.setInt(1, pairId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairById(?)");
+			ps.setInt(1, pairId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				JobPair jp = JobPairs.resultToPair(results);
@@ -1177,7 +1179,7 @@ public class JobPairs {
 			log.error("getPair", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -1193,12 +1195,12 @@ public class JobPairs {
 	 * @author Tyler Jensen
 	 */
 	protected static JobPair getPairDetailed(Connection con, int pairId) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetJobPairById(?)}");
-			procedure.setInt(1, pairId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairById(?)");
+			ps.setInt(1, pairId);
+			results = ps.executeQuery();
 
 			JobPair jp = null;
 			// first, we get the top level info from the job_pairs table
@@ -1224,20 +1226,20 @@ public class JobPairs {
 			log.error("getPairDetailed", e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
 	}
 
 	private static void populateJobPairStagesDetailed(JobPair jp, Connection con) throws SQLException {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetJobPairStagesById(?)}");
-			procedure.setInt(1, jp.getId());
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairStagesById(?)");
+			ps.setInt(1, jp.getId());
+			results = ps.executeQuery();
 			//next, we get data at the stage level
 			while (results.next()) {
 				JoblineStage stage = resultToStage(results);
@@ -1279,7 +1281,7 @@ public class JobPairs {
 				}
 			}
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -1307,11 +1309,15 @@ public class JobPairs {
 	}
 
 	public static List<JobPair> getPairsInJobContainingBenchmark(int jobId, int benchmarkId) throws SQLException {
-
-		return Common.queryKeepConnection("{CALL GetJobPairsInJobContainingBenchmark(?, ?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, benchmarkId);
-		}, (con, results) -> {
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairsInJobContainingBenchmark(?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, benchmarkId);
+			results = ps.executeQuery();
 			List<JobPair> jobPairs = new ArrayList<>();
 			while (results.next()) {
 				JobPair pair = resultToPair(results);
@@ -1319,14 +1325,23 @@ public class JobPairs {
 				jobPairs.add(pair);
 			}
 			return jobPairs;
-		});
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static List<JobPair> getPairsInJobContainingSolver(int jobId, int solverId) throws SQLException {
-		return Common.queryKeepConnection("{CALL GetJobPairsInJobContainingSolver(?, ?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, solverId);
-		}, (con, results) -> {
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairsInJobContainingSolver(?, ?)");
+			ps.setInt(1, jobId);
+			ps.setInt(2, solverId);
+			results = ps.executeQuery();
 			List<JobPair> jobPairs = new ArrayList<>();
 			while (results.next()) {
 				JobPair pairFromResults = resultToPair(results);
@@ -1334,7 +1349,11 @@ public class JobPairs {
 				jobPairs.add(pairFromResults);
 			}
 			return jobPairs;
-		});
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -1347,15 +1366,15 @@ public class JobPairs {
 	protected static JoblineStage resultToStage(ResultSet result) throws SQLException {
 		JoblineStage stage = new JoblineStage();
 
-		stage.setStageNumber(result.getInt("jobpair_stage_data.stage_number"));
-		stage.setWallclockTime(result.getDouble("jobpair_stage_data.wallclock"));
-		stage.setCpuUsage(result.getDouble("jobpair_stage_data.cpu"));
-		stage.setUserTime(result.getDouble("jobpair_stage_data.user_time"));
-		stage.setSystemTime(result.getDouble("jobpair_stage_data.system_time"));
-		stage.setMaxVirtualMemory(result.getDouble("jobpair_stage_data.max_vmem"));
-		stage.setMaxResidenceSetSize(result.getDouble("jobpair_stage_data.max_res_set"));
-		stage.setStageId(result.getInt("jobpair_stage_data.stage_id"));
-		stage.getStatus().setCode(result.getInt("jobpair_stage_data.status_code"));
+		stage.setStageNumber(getIntSafe(result, "jobpair_stage_data.stage_number", "stage_number"));
+		stage.setWallclockTime(getDoubleSafe(result, "jobpair_stage_data.wallclock", "wallclock"));
+		stage.setCpuUsage(getDoubleSafe(result, "jobpair_stage_data.cpu", "cpu"));
+		stage.setUserTime(getDoubleSafe(result, "jobpair_stage_data.user_time", "user_time"));
+		stage.setSystemTime(getDoubleSafe(result, "jobpair_stage_data.system_time", "system_time"));
+		stage.setMaxVirtualMemory(getDoubleSafe(result, "jobpair_stage_data.max_vmem", "max_vmem"));
+		stage.setMaxResidenceSetSize(getDoubleSafe(result, "jobpair_stage_data.max_res_set", "max_res_set"));
+		stage.setStageId(getIntSafe(result, "jobpair_stage_data.stage_id", "stage_id"));
+		stage.getStatus().setCode(getIntSafe(result, "jobpair_stage_data.status_code", "status_code"));
 		return stage;
 	}
 
@@ -1369,25 +1388,78 @@ public class JobPairs {
 
 		JobPair jp = new JobPair();
 
-		jp.setId(result.getInt("job_pairs.id"));
-		jp.setJobId(result.getInt("job_pairs.job_id"));
-		jp.setBackendExecId(result.getInt("job_pairs.sge_id"));
-		jp.setQueueSubmitTime(result.getTimestamp("job_pairs.queuesub_time"));
-		jp.setStartTime(result.getTimestamp("job_pairs.start_time"));
-		jp.setEndTime(result.getTimestamp("job_pairs.end_time"));
+		jp.setId(getIntSafe(result, "job_pairs.id", "id"));
+		jp.setJobId(getIntSafe(result, "job_pairs.job_id", "job_id"));
+		jp.setBackendExecId(getIntSafe(result, "job_pairs.sge_id", "sge_id"));
+		jp.setQueueSubmitTime(getTimestampSafe(result, "job_pairs.queuesub_time", "queuesub_time"));
+		jp.setStartTime(getTimestampSafe(result, "job_pairs.start_time", "start_time"));
+		jp.setEndTime(getTimestampSafe(result, "job_pairs.end_time", "end_time"));
 		// Populate basic benchmark info.
-		jp.getBench().setId(result.getInt("bench_id"));
-		jp.getBench().setName(result.getString("bench_name"));
+		jp.getBench().setId(getIntSafe(result, "bench_id", "bench_id"));
+		jp.getBench().setName(getStringSafe(result, "bench_name", "bench_name"));
 
-		jp.getNode().setId(result.getInt("job_pairs.node_id"));
-		jp.getStatus().setCode(result.getInt("job_pairs.status_code"));
+		jp.getNode().setId(getIntSafe(result, "job_pairs.node_id", "node_id"));
+		jp.getStatus().setCode(getIntSafe(result, "job_pairs.status_code", "status_code"));
 
-		jp.setPath(result.getString("job_pairs.path"));
-		jp.setJobSpaceId(result.getInt("job_pairs.job_space_id"));
-		jp.setPrimaryStageNumber(result.getInt("job_pairs.primary_jobpair_data"));
-		jp.setSandboxNum(result.getInt("job_pairs.sandbox_num"));
+		jp.setPath(getStringSafe(result, "job_pairs.path", "path"));
+		jp.setJobSpaceId(getIntSafe(result, "job_pairs.job_space_id", "job_space_id"));
+		jp.setPrimaryStageNumber(getIntSafe(result, "job_pairs.primary_jobpair_data", "primary_jobpair_data"));
+		jp.setSandboxNum(getIntSafe(result, "job_pairs.sandbox_num", "sandbox_num"));
 		//log.debug("getting job pair from result set for id " + jp.getId());
 		return jp;
+	}
+
+	/** Helper getters that try multiple column labels (prefixed and unprefixed) and do safe conversions. */
+	private static boolean columnExists(ResultSet rs, String col) throws SQLException {
+		ResultSetMetaData md = rs.getMetaData();
+		int cols = md.getColumnCount();
+		for (int i = 1; i <= cols; i++) {
+			if (col.equalsIgnoreCase(md.getColumnLabel(i)) || col.equalsIgnoreCase(md.getColumnName(i))) return true;
+		}
+		return false;
+	}
+
+	private static int getIntSafe(ResultSet rs, String... cols) throws SQLException {
+		for (String c : cols) {
+			if (columnExists(rs, c)) return rs.getInt(c);
+		}
+		throw new SQLException("None of the columns found: " + Arrays.toString(cols));
+	}
+
+	private static long getLongSafe(ResultSet rs, String... cols) throws SQLException {
+		for (String c : cols) {
+			if (columnExists(rs, c)) return rs.getLong(c);
+		}
+		throw new SQLException("None of the columns found: " + Arrays.toString(cols));
+	}
+
+	private static String getStringSafe(ResultSet rs, String... cols) throws SQLException {
+		for (String c : cols) {
+			if (columnExists(rs, c)) return rs.getString(c);
+		}
+		return null;
+	}
+
+	private static Timestamp getTimestampSafe(ResultSet rs, String... cols) throws SQLException {
+		for (String c : cols) {
+			if (columnExists(rs, c)) return rs.getTimestamp(c);
+		}
+		return null;
+	}
+
+	private static double getDoubleSafe(ResultSet rs, String... cols) throws SQLException {
+		for (String c : cols) {
+			if (columnExists(rs, c)) {
+				try {
+					return rs.getDouble(c);
+				} catch (SQLException e) {
+					Object o = rs.getObject(c);
+					if (o instanceof Number) return ((Number) o).doubleValue();
+					throw e;
+				}
+			}
+		}
+		throw new SQLException("None of the columns found: " + Arrays.toString(cols));
 	}
 
 	/**
@@ -1400,20 +1472,21 @@ public class JobPairs {
 	 * @return True on success and false on error
 	 */
 	public static boolean setPairStageStatus(int pairId, int statusCode, int stageNumber, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL UpdatePairStageStatus(?, ?,?)}");
-			procedure.setInt(1, pairId);
-			procedure.setInt(2, stageNumber);
-			procedure.setInt(3, statusCode);
+			ps = con.prepareStatement("SELECT starexec.UpdatePairStageStatus(?, ?, ?)");
+			ps.setInt(1, pairId);
+			ps.setInt(2, stageNumber);
+			ps.setInt(3, statusCode);
 
-			procedure.executeUpdate();
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 
 			return true;
 		} catch (Exception e) {
 			log.debug("setPairStageStatus", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -1428,20 +1501,21 @@ public class JobPairs {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean setLaterPairStageStatus(int pairId, int statusCode, int stageNumber, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL UpdateLaterStageStatuses(?, ?,?)}");
-			procedure.setInt(1, pairId);
-			procedure.setInt(2, stageNumber);
-			procedure.setInt(3, statusCode);
+			ps = con.prepareStatement("SELECT starexec.UpdateLaterStageStatuses(?, ?, ?)");
+			ps.setInt(1, pairId);
+			ps.setInt(2, stageNumber);
+			ps.setInt(3, statusCode);
 
-			procedure.executeUpdate();
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 
 			return true;
 		} catch (Exception e) {
 			log.debug(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -1519,17 +1593,18 @@ public class JobPairs {
 	 */
 	public static void setJobPairDiskSizeToZero(int jobPairId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL RemoveJobPairDiskSize(?)}");
-			procedure.setInt(1, jobPairId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.RemoveJobPairDiskSize(?)");
+			ps.setInt(1, jobPairId);
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -1543,14 +1618,24 @@ public class JobPairs {
 	 * @throws SQLException if something goes wrong in the database.
 	 */
 	public static ImmutableSet<PairIdJobId> getPairsEnqueuedLongerThan(int minutes) throws SQLException {
-		return Common
-				.query("{CALL GetPairsEnqueuedLongerThan(?)}", procedure -> procedure.setInt(1, minutes), results -> {
-					Set<PairIdJobId> brokenPairs = new HashSet<>();
-					while (results.next()) {
-						brokenPairs.add(new PairIdJobId(results.getInt("pair_id"), results.getInt("job_id")));
-					}
-					return ImmutableSet.copyOf(brokenPairs);
-				});
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPairsEnqueuedLongerThan(?)");
+			ps.setInt(1, minutes);
+			results = ps.executeQuery();
+			Set<PairIdJobId> brokenPairs = new HashSet<>();
+			while (results.next()) {
+				brokenPairs.add(new PairIdJobId(results.getInt("pair_id"), results.getInt("job_id")));
+			}
+			return ImmutableSet.copyOf(brokenPairs);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -1563,15 +1648,24 @@ public class JobPairs {
 	 * @throws SQLException if there is a database error.
 	 */
 	public static ImmutableSet<Integer> getNodesThatMayHavePairsEnqueuedLongerThan(int minutes) throws SQLException {
-		return Common.query("{CALL GetNodesThatMayHavePairsEnqueuedLongerThan(?)}",
-							procedure -> procedure.setInt(1, minutes), results -> {
-					Set<Integer> potentiallyBrokenNodes = new HashSet<>();
-					while (results.next()) {
-						potentiallyBrokenNodes.add(results.getInt("node_id"));
-					}
-					return ImmutableSet.copyOf(potentiallyBrokenNodes);
-				}
-		);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNodesThatMayHavePairsEnqueuedLongerThan(?)");
+			ps.setInt(1, minutes);
+			results = ps.executeQuery();
+			Set<Integer> potentiallyBrokenNodes = new HashSet<>();
+			while (results.next()) {
+				potentiallyBrokenNodes.add(results.getInt("node_id"));
+			}
+			return ImmutableSet.copyOf(potentiallyBrokenNodes);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -1583,19 +1677,19 @@ public class JobPairs {
 	 * @return True on success and false on error
 	 */
 	public static boolean setPairStatus(int pairId, int statusCode, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL UpdatePairStatus(?, ?)}");
-			procedure.setInt(1, pairId);
-			procedure.setInt(2, statusCode);
+			ps = con.prepareStatement("SELECT starexec.UpdatePairStatus(?, ?)");
+			ps.setInt(1, pairId);
+			ps.setInt(2, statusCode);
 
-			procedure.executeUpdate();
+			ps.executeUpdate();
 
 			return true;
 		} catch (Exception e) {
 			log.debug("setPairStatus", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -1657,24 +1751,24 @@ public class JobPairs {
 
 	public static HashMap<Integer, Integer> getAndClearTimeDeltas(int queueID) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
+		PreparedStatement psClear = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-			procedure = con.prepareCall("CALL GetJobpairTimeDeltaData(?)");
-			procedure.setInt(1, queueID);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobpairTimeDeltaData(?)");
+			ps.setInt(1, queueID);
+			results = ps.executeQuery();
 			HashMap<Integer, Integer> data = new HashMap<>();
 			while (results.next()) {
 				data.put(results.getInt("user_id"), results.getInt("time_delta"));
 			}
-			Common.safeClose(procedure);
-			procedure = con.prepareCall("CALL ClearJobpairTimeDeltaData(?)");
-			procedure.setInt(1, queueID);
-			procedure.executeUpdate();
-
+			Common.safeClose(ps);
+			psClear = con.prepareStatement("SELECT starexec.ClearJobpairTimeDeltaData(?)");
+			psClear.setInt(1, queueID);
+			psClear.executeUpdate();
 
 			Common.endTransaction(con);
 			return data;
@@ -1684,7 +1778,8 @@ public class JobPairs {
 			return null;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
+			Common.safeClose(psClear);
 			Common.safeClose(results);
 		}
 	}
@@ -1698,21 +1793,21 @@ public class JobPairs {
 	 */
 	public static boolean updateBackendExecId(int pairId, int execId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetBackendExecId(?, ?)}");
+			ps = con.prepareStatement("SELECT starexec.SetBackendExecId(?, ?)");
 
-			procedure.setInt(1, pairId);
-			procedure.setInt(2, execId);
-			procedure.executeUpdate();
+			ps.setInt(1, pairId);
+			ps.setInt(2, execId);
+			ps.executeUpdate();
 
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;
@@ -1729,16 +1824,16 @@ public class JobPairs {
 	 */
 
 	public static void UpdateJobSpaces(int jobPairId, int jobSpaceId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
-			procedure = con.prepareCall("{CALL UpdateJobSpaceId(?, ?)}");
-			procedure.setInt(1, jobPairId);
-			procedure.setInt(2, jobSpaceId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.UpdateJobSpaceId(?, ?)");
+			ps.setInt(1, jobPairId);
+			ps.setInt(2, jobSpaceId);
+			ps.executeUpdate();
 		} catch (Exception e) {
 			log.error("UpdateJobSpaces", e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -1838,18 +1933,18 @@ public class JobPairs {
 	 */
 	public static void UpdateStatus(int jobPairId, int status_code) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateJobPairStatus(?, ?)}");
-			procedure.setInt(1, jobPairId);
-			procedure.setInt(2, status_code);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.UpdateJobPairStatus(?, ?)");
+			ps.setInt(1, jobPairId);
+			ps.setInt(2, status_code);
+			ps.executeUpdate();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -1862,14 +1957,14 @@ public class JobPairs {
 	 */
 	public static List<JobPair> getPairsByStatus(int statusCode) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			List<JobPair> pairs = new ArrayList<>();
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobPairsWithStatus(?)}");
-			procedure.setInt(1, statusCode);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairsWithStatus(?)");
+			ps.setInt(1, statusCode);
+			results = ps.executeQuery();
 			if (results.next()) {
 				JobPair p = JobPairs.resultToPair(results);
 				p.getStatus().setCode(statusCode);
@@ -1880,7 +1975,7 @@ public class JobPairs {
 			log.error("getPairsByStatus", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -1896,17 +1991,32 @@ public class JobPairs {
 	 */
 	public static List<Integer> getPairIdsByStatusNotRerunAfterDate(StatusCode statusCode, Timestamp timestamp)
 			throws SQLException {
-		return Common.query("{CALL GetJobPairIdsWithStatusNotRerunAfterDate(?, ?)}", procedure -> {
-			procedure.setInt(1, statusCode.getVal());
-			procedure.setObject(2, timestamp);
-		}, results -> {
-			List<Integer> pairIds = new ArrayList<>();
+		final String methodName = "getPairIdsByStatusNotRerunAfterDate";
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairIdsWithStatusNotRerunAfterDate(?, ?)");
+			ps.setInt(1, statusCode.getVal());
+			ps.setObject(2, timestamp);
+			results = ps.executeQuery();
 
+			List<Integer> pairIds = new ArrayList<>();
 			while (results.next()) {
 				pairIds.add(results.getInt("id"));
 			}
 			return pairIds;
-		});
+		} catch (SQLException e) {
+			throw e;
+		} catch (Exception e) {
+			log.error(methodName, e.getMessage(), e);
+			throw new SQLException(e);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -1920,21 +2030,19 @@ public class JobPairs {
 	 */
 	public static void setBrokenPairStatus(JobPair p) {
 		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetBrokenPairStatus(?, ?, ?)}");
-			procedure.setInt(1, p.getId());
-			procedure.setInt(2, p.getStatus().getCode().getVal());
-			procedure.setInt(3, Status.StatusCode.ERROR_SUBMIT_FAIL.getVal());
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.SetBrokenPairStatus(?, ?, ?)");
+			ps.setInt(1, p.getId());
+			ps.setInt(2, p.getStatus().getCode().getVal());
+			ps.setInt(3, Status.StatusCode.ERROR_SUBMIT_FAIL.getVal());
+			ps.executeUpdate();
 		} catch (Exception e) {
 			log.error("setBrokenPairStatus", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
-			Common.safeClose(results);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -1960,19 +2068,19 @@ public class JobPairs {
 	 */
 	public static boolean updatePairExecutionHost(int pairId, int nodeId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdatePairNodeId(?,?)}");
-			procedure.setInt(1, pairId);
-			procedure.setInt(2, nodeId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.UpdatePairNodeId(?, ?)");
+			ps.setInt(1, pairId);
+			ps.setInt(2, nodeId);
+			ps.executeUpdate();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}

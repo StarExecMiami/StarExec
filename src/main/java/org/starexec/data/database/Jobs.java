@@ -558,14 +558,15 @@ public class Jobs {
 	 * @param job The job to add
 	 */
 	private static void addJob(Connection con, Job job) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 
 		if (job.getBenchmarkingFramework() == null) {
 			job.setBenchmarkingFramework(R.DEFAULT_BENCHMARKING_FRAMEWORK);
 		}
 
 		try {
-			procedure = con.prepareCall("{CALL AddJob(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)}");
+			procedure = con.prepareStatement("SELECT AddJob(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
 			procedure.setInt(1, job.getUserId());
 			procedure.setString(2, job.getName());
 			procedure.setString(3, job.getDescription());
@@ -582,11 +583,12 @@ public class Jobs {
 			procedure.setBoolean(14, job.isBuildJob());
 			procedure.setInt(15, job.getJobPairs().size());
 			procedure.setString(16, job.getBenchmarkingFramework().toString());
-			procedure.registerOutParameter(17, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
+			results = procedure.executeQuery();
 
-			// Update the job's ID so it can be used outside this method
-			job.setId(procedure.getInt(17));
+			if (results.next()) {
+				// Update the job's ID so it can be used outside this method
+				job.setId(results.getInt(1));
+			}
 		} catch (Exception e) {
 			log.error("addJob", e);
 		} finally {
@@ -604,12 +606,12 @@ public class Jobs {
 	 */
 	protected static void associate(Connection con, int jobId, int spaceId) {
 
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL AssociateJob(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.AssociateJob(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, spaceId);
-			procedure.executeUpdate();
+			procedure.execute();
 		} catch (Exception e) {
 			log.error("associate", e);
 		} finally {
@@ -655,13 +657,13 @@ public class Jobs {
 	 */
 	public static boolean cleanOrphanedDeletedJobs() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			//will contain the id of every job that is associated with a space
 			HashSet<Integer> parentedJobs = new HashSet<>();
-			procedure = con.prepareCall("{CALL GetJobsAssociatedWithSpaces()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobsAssociatedWithSpaces()");
 			results = procedure.executeQuery();
 			while (results.next()) {
 				parentedJobs.add(results.getInt("id"));
@@ -669,8 +671,7 @@ public class Jobs {
 			Common.safeClose(procedure);
 			Common.safeClose(results);
 
-			procedure = con.prepareCall("CALL GetDeletedJobs()");
-			results = procedure.executeQuery();
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetDeletedJobs()");
 
 			while (results.next()) {
 				Job j = resultsToJob(results);
@@ -714,23 +715,23 @@ public class Jobs {
 	 */
 	public static int countOlderPairs(int jobId, int since) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CountOlderPairs(?,?)}");
-			procedure.setInt(1, jobId);
-			procedure.setInt(2, since);
-			results = procedure.executeQuery();
+			stmt = con.prepareStatement("SELECT CountOlderPairs(?,?)");
+			stmt.setInt(1, jobId);
+			stmt.setInt(2, since);
+			results = stmt.executeQuery();
 			if (results.next()) {
-				return results.getInt("count");
+				return results.getInt(1);
 			}
 		} catch (Exception e) {
 			log.error("countOlderPairs", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(stmt);
 			Common.safeClose(results);
 		}
 		return -1;
@@ -782,13 +783,13 @@ public class Jobs {
 	 */
 	public static boolean setDeletedColumn(int jobId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL DeleteJob(?)}");
+			procedure = con.prepareStatement("SELECT starexec.DeleteJob(?)");
 			procedure.setInt(1, jobId);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("setDeletedColumn", e);
@@ -807,7 +808,7 @@ public class Jobs {
 	 */
 	public static boolean delete(int jobId) throws SQLException {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 
 		if (Jobs.isReadOnly(jobId)) return false;
 
@@ -822,9 +823,9 @@ public class Jobs {
 			// Remove the jobs stats from the database.
 			Jobs.removeCachedJobStats(jobId, con);
 
-			procedure = con.prepareCall("{CALL DeleteAllJobPairsInJob(?)}");
+			procedure = con.prepareStatement("SELECT starexec.DeleteAllJobPairsInJob(?)");
 			procedure.setInt(1, jobId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			// we should delete on disk second. This takes a long time, and
 			// we want users to quickly see that a job has been deleted
@@ -850,12 +851,12 @@ public class Jobs {
 
 	private static boolean removeJobFromDatabase(int jobId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL RemoveJobFromDatabase(?)");
+			procedure = con.prepareStatement("SELECT starexec.RemoveJobFromDatabase(?)");
 			procedure.setInt(1, jobId);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("removeJobFromDatabase", e);
@@ -913,9 +914,9 @@ public class Jobs {
 	 */
 
 	public static boolean addJobStageAttributes(StageAttributes attrs, Connection con) {
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL SetJobStageParams(?,?,?,?,?,?,?,?,?,?,?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.SetJobStageParams(?,?,?,?,?,?,?,?,?,?,?,?)");
 			procedure.setInt(1, attrs.getJobId());
 			procedure.setInt(2, attrs.getStageNumber());
 			procedure.setInt(3, attrs.getCpuTimeout());
@@ -983,10 +984,18 @@ public class Jobs {
 	 */
 	public static void setOutputBenchmarksPath(final int jobId, final String outputBenchmarksDirectory)
 			throws SQLException {
-		Common.update("{CALL SetOutputBenchmarksPath(?, ?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setString(2, outputBenchmarksDirectory);
-		});
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.SetOutputBenchmarksPath(?, ?)");
+			ps.setInt(1, jobId);
+			ps.setString(2, outputBenchmarksDirectory);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -997,10 +1006,10 @@ public class Jobs {
 	 * @throws SQLException on database error.
 	 */
 	public static Optional<String> getOutputBenchmarksPath(int jobId) throws SQLException {
-		return Common.query("{CALL GetOutputBenchmarksPath(?)}", procedure -> procedure.setInt(1, jobId), results -> {
+		return Common.query("SELECT GetOutputBenchmarksPath(?)", procedure -> procedure.setInt(1, jobId), results -> {
 			String path = null;
 			if (results.next()) {
-				path = results.getString("output_benchmarks_directory_path");
+				path = results.getString(1);
 			}
 			return Optional.ofNullable(path);
 		});
@@ -1017,7 +1026,7 @@ public class Jobs {
 
 	public static Job resultsToJob(ResultSet results) throws SQLException {
 		Job j = new Job();
-		j.setId(results.getInt("jobs.id"));
+		j.setId(results.getInt("id"));
 		j.setUserId(results.getInt("user_id"));
 		j.setName(results.getString("name"));
 		j.setPrimarySpace(results.getInt("primary_space"));
@@ -1057,13 +1066,13 @@ public class Jobs {
 	 */
 	public static int countPairsByUser(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CountPairsbyUser(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.CountPairsByUser(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return results.getInt("total_pairs");
 			}
@@ -1071,8 +1080,8 @@ public class Jobs {
 			log.error("countPairsByUser", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
 			Common.safeClose(results);
+			Common.safeClose(ps);
 		}
 		return -1;
 	}
@@ -1081,17 +1090,17 @@ public class Jobs {
 		final String methodName = "get";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		java.sql.PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 			if (includeDeleted) {
-				procedure = con.prepareCall("{CALL GetJobByIdIncludeDeleted(?)}");
+				ps = con.prepareStatement("SELECT * FROM starexec.GetJobByIdIncludeDeleted(?)");
 			} else {
-				procedure = con.prepareCall("{CALL GetJobById(?)}");
+				ps = con.prepareStatement("SELECT * FROM starexec.GetJobById(?)");
 			}
 
-			procedure.setInt(1, jobId);
-			results = procedure.executeQuery();
+			ps.setInt(1, jobId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				Job j = resultsToJob(results);
 				if (getSimplePairs) {
@@ -1105,8 +1114,8 @@ public class Jobs {
 			log.error("get", e);
 		} finally {
 			Common.safeClose(results);
+			Common.safeClose(ps);
 			Common.safeClose(con);
-			Common.safeClose(procedure);
 		}
 		log.debug(methodName, "Could not find job with id: " + jobId);
 		return null;
@@ -1231,11 +1240,11 @@ public class Jobs {
 	 */
 	public static List<Job> getBySpace(int spaceId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSpaceJobsById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetSpaceJobsById(?)");
 			procedure.setInt(1, spaceId);
 			results = procedure.executeQuery();
 			List<Job> jobs = new LinkedList<>();
@@ -1263,9 +1272,9 @@ public class Jobs {
 	 */
 	public static List<Job> getByQueueId(int queueId) throws SQLException {
             log.debug("getByQueueId begins " + queueId);
-            List<Job> r = Common.query("{CALL GetQueueJobsById(?)}", procedure -> procedure.setInt(1, queueId),
-                                       Jobs::getJobsForNextPage
-                                       );
+			List<Job> r = Common.query("SELECT * FROM starexec.GetQueueJobsById(?)", procedure -> procedure.setInt(1, queueId),
+									   Jobs::getJobsForNextPage
+									   );
             log.debug("getByQueueId ends ");
             return r;
 	}
@@ -1278,11 +1287,11 @@ public class Jobs {
 	 */
 	public static List<Job> getByUserId(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUserJobsById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserJobsById(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 			List<Job> jobs = new LinkedList<>();
@@ -1324,24 +1333,24 @@ public class Jobs {
 	 */
 	public static int getCountInSpace(int spaceId, String query) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobCountBySpaceWithQuery(?, ?)}");
-			procedure.setInt(1, spaceId);
-			procedure.setString(2, query);
-			results = procedure.executeQuery();
+			stmt = con.prepareStatement("SELECT GetJobCountBySpaceWithQuery(?, ?)");
+			stmt.setInt(1, spaceId);
+			stmt.setString(2, query);
+			results = stmt.executeQuery();
 			int jobCount = 0;
 			if (results.next()) {
-				jobCount = results.getInt("jobCount");
+				jobCount = results.getInt(1);
 			}
 			return jobCount;
 		} catch (Exception e) {
 			log.error("getCountInSpace", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(stmt);
 			Common.safeClose(results);
 		}
 
@@ -1366,10 +1375,10 @@ public class Jobs {
 		log.info("getting detailed info for job " + jobId);
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobById(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 
@@ -1495,7 +1504,7 @@ public class Jobs {
 	 */
 	protected static List<JobPair> getEnqueuedPairs(Connection con, int jobId) throws SQLException {
 		log.debug("getEnqueuePairs2 beginning...");
-		return getPairsHelper(con, "{CALL GetEnqueuedJobPairsByJob(?)}", jobId);
+	return getPairsHelper(con, "SELECT * FROM starexec.GetEnqueuedJobPairsByJob(?)", jobId);
 	}
 
 	/**
@@ -1540,11 +1549,11 @@ public class Jobs {
 	 * @author Eric Burns
 	 */
 	protected static HashMap<Integer, HashMap<Integer, Properties>> getJobAttributes(Connection con, int jobId) {
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		log.debug("Getting all attributes for job with ID = " + jobId);
 		try {
-			procedure = con.prepareCall("{CALL GetJobAttrs(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobAttrs(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			return processAttrResults(results);
@@ -1587,11 +1596,11 @@ public class Jobs {
 
 	public static int getJobCount() {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobCount()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobCount()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {
@@ -1616,11 +1625,11 @@ public class Jobs {
 	 */
 	public static int getJobCountByUser(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobCountByUser(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobCountByUser(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
@@ -1648,11 +1657,11 @@ public class Jobs {
 	 */
 	public static int getJobCountByUser(int userId, String query) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobCountByUserWithQuery(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobCountByUserWithQuery(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, query);
 			results = procedure.executeQuery();
@@ -1682,12 +1691,12 @@ public class Jobs {
 	public static int getJobPairCountInJobSpaceByStage(int jobSpaceId, int stageNumber) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetJobPairCountInJobSpace(?,?)}");
-
+			procedure = con.prepareStatement("SELECT starexec.GetJobPairCountInJobSpace(?,?) AS jobPairCount");
+            
 			procedure.setInt(1, jobSpaceId);
 			procedure.setInt(2, stageNumber);
 			results = procedure.executeQuery();
@@ -1717,11 +1726,11 @@ public class Jobs {
 	public static int getJobPairCountInJobSpaceByStage(int jobSpaceId, String query, int stageNumber) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		int jobPairCount = 0;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobPairCountByJobInJobSpaceWithQuery(?, ?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.GetJobPairCountByJobInJobSpaceWithQuery(?, ?,?) AS jobPairCount");
 			procedure.setInt(1, jobSpaceId);
 			procedure.setString(2, query);
 			procedure.setInt(3, stageNumber);
@@ -1861,25 +1870,25 @@ public class Jobs {
 			int jobSpaceId, int configId, String type, String query, int stageNumber
 	) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CountJobPairsInJobSpaceHierarchyByType(?,?,?,?,?)}");
-			procedure.setInt(1, jobSpaceId);
-			procedure.setInt(2, configId);
-			procedure.setString(3, type);
-			procedure.setString(4, query);
-			procedure.setInt(5, stageNumber);
-			results = procedure.executeQuery();
+			stmt = con.prepareStatement("SELECT CountJobPairsInJobSpaceHierarchyByType(?,?,?,?,?)");
+			stmt.setInt(1, jobSpaceId);
+			stmt.setInt(2, configId);
+			stmt.setString(3, type);
+			stmt.setString(4, query);
+			stmt.setInt(5, stageNumber);
+			results = stmt.executeQuery();
 			if (results.next()) {
-				return results.getInt("count");
+				return results.getInt(1);
 			}
 		} catch (Exception e) {
 			log.error("getCountOfJobPairsByConfigInJobSpaceHierarchy", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(stmt);
 			Common.safeClose(results);
 		}
 		return -1;
@@ -2082,11 +2091,11 @@ public class Jobs {
 	 */
 	public static HashMap<Integer, String> getAllAttrsOfNameForJob(int jobId, String attrKey) {
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAttrsOfNameForJob(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetAttrsOfNameForJob(?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setString(2, attrKey);
 			results = procedure.executeQuery();
@@ -2227,13 +2236,13 @@ public class Jobs {
 
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		log.debug("called getJobPairsInJobSpace with jobSpaceId = " + jobSpaceId);
 		try {
 			int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
 			long a = System.currentTimeMillis();
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobPairsInJobSpace(?,?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobPairsInJobSpace(?,?,?)");
 
 			procedure.setInt(1, jobSpaceId);
 			procedure.setInt(2, jobId);
@@ -2304,7 +2313,7 @@ public class Jobs {
 		log.entry(methodName);
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		log.debug("called with jobSpaceId = " + jobSpaceId);
 		log.debug(
 				methodName,
@@ -2314,7 +2323,7 @@ public class Jobs {
 			Spaces.updateJobSpaceClosureTable(jobSpaceId);
 
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobPairsInJobSpaceHierarchy(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobPairsInJobSpaceHierarchy(?,?)");
 
 			procedure.setInt(1, jobSpaceId);
 			if (since == null) {
@@ -2329,7 +2338,7 @@ public class Jobs {
 
 			Common.safeClose(procedure);
 			Common.safeClose(results);
-			procedure = con.prepareCall("{CALL GetJobPairStagesInJobSpaceHierarchy(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobPairStagesInJobSpaceHierarchy(?,?)");
 			procedure.setInt(1, jobSpaceId);
 			if (since == null) {
 				procedure.setNull(2, java.sql.Types.INTEGER);
@@ -2368,7 +2377,7 @@ public class Jobs {
 		log.entry(methodName);
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		log.debug("called with jobSpaceId = " + jobSpaceId);
 		log.debug(
 				methodName,
@@ -2378,7 +2387,7 @@ public class Jobs {
 			Spaces.updateJobSpaceClosureTable(jobSpaceId);
 
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSuccessfullyCompletedJobPairsInJobSpaceHierarchy(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetSuccessfullyCompletedJobPairsInJobSpaceHierarchy(?,?)");
 
 			procedure.setInt(1, jobSpaceId);
 			if (since == null) {
@@ -2393,7 +2402,7 @@ public class Jobs {
 
 			Common.safeClose(procedure);
 			Common.safeClose(results);
-			procedure = con.prepareCall("{CALL GetSuccessfullyCompletedJobPairStagesInJobSpaceHierarchy(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetSuccessfullyCompletedJobPairStagesInJobSpaceHierarchy(?,?)");
 			procedure.setInt(1, jobSpaceId);
 			if (since == null) {
 				procedure.setNull(2, java.sql.Types.INTEGER);
@@ -2621,22 +2630,22 @@ public class Jobs {
 	public static int getPairCount(int jobId) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL countPairsForJob(?)}");
-			procedure.setInt(1, jobId);
-			results = procedure.executeQuery();
+			stmt = con.prepareStatement("SELECT countPairsForJob(?)");
+			stmt.setInt(1, jobId);
+			results = stmt.executeQuery();
 
 			if (results.next()) {
-				return results.getInt("count");
+				return results.getInt(1);
 			}
 		} catch (Exception e) {
 			log.error("getPairCount", e);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(stmt);
 		}
 		return -1;
 	}
@@ -2809,7 +2818,19 @@ public class Jobs {
 	 * @return a List of incomplete Jobs
 	 **/
 	public static List<Job> getIncompleteJobs() throws SQLException {
-		return Common.query("{CALL GetIncompleteJobs()}", procedure -> {}, Jobs::getJobsForNextPage);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetIncompleteJobs()");
+			rs = ps.executeQuery();
+			return Jobs.getJobsForNextPage(rs);
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -2829,12 +2850,12 @@ public class Jobs {
 		log.debug("calling GetJobStatsInJobSpace with jobspace = " + jobSpaceId + " and stage = " + stageNumber);
 		int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobStatsInJobSpace(?,?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobStatsInJobSpace(?,?,?)");
 			procedure.setInt(1, jobSpaceId);
 			procedure.setInt(2, jobId);
 			procedure.setInt(3, stageNumber);
@@ -2902,12 +2923,12 @@ public class Jobs {
 		log.debug("calling GetJobStatsInJobSpace with jobspace = " + jobSpaceId + " and stage = " + stageNumber);
 		int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
 		Connection con = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobStatsInJobSpaceIncludeDeletedConfigs(?,?,?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobStatsInJobSpaceIncludeDeletedConfigs(?,?,?,?)");
 			procedure.setInt(1, jobSpaceId);
 			procedure.setInt(2, jobId);
 			procedure.setInt(3, stageNumber);
@@ -2972,14 +2993,14 @@ public class Jobs {
 		final String methodName = "getAllPairs";
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 
 		try {
 			con = Common.getConnection();
 
 			log.debug(methodName, "Getting all detailed pairs for job " + jobId);
 
-			procedure = con.prepareCall("{CALL GetAllJobPairsByJob(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetAllJobPairsByJob(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			return getPairsDetailed(jobId, results, false);
@@ -3007,13 +3028,13 @@ public class Jobs {
 		Connection con = null;
 
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 
 			log.info("getting detailed pairs for job " + jobId);
 
-			procedure = con.prepareCall("{CALL GetNewCompletedJobPairsByJob(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetNewCompletedJobPairsByJob(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, since);
 			results = procedure.executeQuery();
@@ -3064,12 +3085,12 @@ public class Jobs {
 		Connection con = null;
 
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 			log.debug("getting shallow pairs for job " + jobId);
 			//otherwise, just get the completed ones that were completed later than lastSeen
-			procedure = con.prepareCall("{CALL GetNewJobPairFilePathInfoByJob(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetNewJobPairFilePathInfoByJob(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, since);
 			results = procedure.executeQuery();
@@ -3115,11 +3136,11 @@ public class Jobs {
 	protected static HashMap<Integer, HashMap<Integer, Properties>> getNewJobAttributes(
 			Connection con, int jobId, Integer completionId
 	) {
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		log.debug("Getting all new attributes for job with ID = " + jobId);
 		try {
-			procedure = con.prepareCall("{CALL GetNewJobAttrs(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetNewJobAttrs(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, completionId);
 			results = procedure.executeQuery();
@@ -3165,11 +3186,11 @@ public class Jobs {
 	 * @author Julio Cervantes
 	 */
 	protected static List<JobPair> getPairsSimple(Connection con, int jobId) {
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetJobPairsByJobSimple(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobPairsByJobSimple(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			List<JobPair> returnList = new LinkedList<>();
@@ -3254,13 +3275,13 @@ public class Jobs {
 	public static List<JobPair> getPairsPrimaryStageDetailed(int jobId) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 
 			log.info("getting detailed pairs for job " + jobId);
 
-			procedure = con.prepareCall("{CALL GetJobPairsPrimaryStageByJob(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobPairsPrimaryStageByJob(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			List<JobPair> pairs = getPairsDetailed(jobId, results, false);
@@ -3351,9 +3372,9 @@ public class Jobs {
 				stage.getSolver().addConfiguration(discoveredConfigs.get(curConfig));
 				if (!discoveredNodes.containsKey(curNode)) {
 					WorkerNode node = new WorkerNode();
-					node.setName(results.getString("node.name"));
-					node.setId(results.getInt("node.id"));
-					node.setStatus(results.getString("node.status"));
+					node.setName(results.getString("node_name"));
+					node.setId(results.getInt("node_id"));
+					node.setStatus(results.getString("node_status"));
 					discoveredNodes.put(curNode, node);
 				}
 				jp.addStage(stage);
@@ -3491,11 +3512,11 @@ public class Jobs {
 	public static List<Integer> getTimelessPairsByStatus(int jobId, int statusCode) {
 		Connection con = null;
 
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetTimelessJobPairsByStatus(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetTimelessJobPairsByStatus(?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, statusCode);
 			results = procedure.executeQuery();
@@ -3523,13 +3544,13 @@ public class Jobs {
 	 * @return A list of job pair IDs, or null on error
 	 */
 	public static List<Integer> getPairsByStatus(int jobId, int statusCode) {
-		Connection con = null;
+	Connection con = null;
 
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobPairsByStatus(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobPairsByStatus(?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, statusCode);
 			results = procedure.executeQuery();
@@ -3584,10 +3605,10 @@ public class Jobs {
 	 */
 	protected static List<JobPair> getPendingPairsDetailed(Connection con, Job j, int limit) {
 
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetPendingJobPairsByJob(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetPendingJobPairsByJob(?,?)");
 			procedure.setInt(1, j.getId());
 			procedure.setInt(2, limit);
 			results = procedure.executeQuery();
@@ -3688,10 +3709,10 @@ public class Jobs {
 	 * their input order for the job pairs
 	 */
 	public static HashMap<Integer, List<Integer>> getAllBenchmarkInputsForJob(int jobId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetAllJobPairBenchmarkInputsByJob(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetAllJobPairBenchmarkInputsByJob(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			HashMap<Integer, List<Integer>> inputs = new HashMap<>();
@@ -3769,7 +3790,7 @@ public class Jobs {
 	 * @author Wyatt Kaiser
 	 */
 	protected static List<JobPair> getRunningPairs(Connection con, int jobId) throws Exception {
-		return getPairsHelper(con, "{CALL GetRunningJobPairsByJob(?)}", jobId);
+		return getPairsHelper(con, "SELECT * FROM starexec.GetRunningJobPairsByJob(?)", jobId);
 	}
 
 	/**
@@ -3802,12 +3823,12 @@ public class Jobs {
 	 * @return The count or -1 on failure
 	 */
 	private static int countTimelessPairsByStatus(int jobId, int statusCode) {
-		Connection con = null;
-		CallableStatement procedure = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CountTimelessPairsByStatusByJob(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.CountTimelessPairsByStatusByJob(?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, statusCode);
 			results = procedure.executeQuery();
@@ -3833,12 +3854,12 @@ public class Jobs {
 	 * @return The count or -1 on failure
 	 */
 	public static int countPairsByStatus(int jobId, int statusCode) {
-		Connection con = null;
-		CallableStatement procedure = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CountPairsByStatusByJob(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.CountPairsByStatusByJob(?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, statusCode);
 			results = procedure.executeQuery();
@@ -3956,11 +3977,11 @@ public class Jobs {
 	 */
 
 	public static boolean isJobDeleted(Connection con, int jobId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL IsJobDeleted(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsJobDeleted(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			boolean deleted = false;
@@ -4034,10 +4055,10 @@ public class Jobs {
 	 * @author Eric Burns
 	 */
 	public static int isJobPausedOrKilled(Connection con, int jobId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL IsJobPausedOrKilled(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsJobPausedOrKilled(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			boolean paused = false;
@@ -4092,11 +4113,11 @@ public class Jobs {
 	 */
 	public static List<Integer> getAllJobIds() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAllJobIds()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetAllJobIds()");
 			results = procedure.executeQuery();
 			List<Integer> ids = new ArrayList<>();
 			while (results.next()) {
@@ -4132,12 +4153,12 @@ public class Jobs {
 			log.debug("Public User for Job Id" + jobId);
 			return true;
 		}
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL JobInPublicSpace(?)}");
+			procedure = con.prepareStatement("SELECT starexec.JobInPublicSpace(?) AS spaceCount");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			int count = 0;
@@ -4186,11 +4207,11 @@ public class Jobs {
 	 * @author Wyatt Kaiser
 	 */
 	protected static boolean kill(int jobId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL KillJob(?)}");
+			procedure = con.prepareStatement("SELECT starexec.KillJob(?)");
 			procedure.setInt(1, jobId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			log.debug("Killing of job id = " + jobId + " was successful");
 
@@ -4267,16 +4288,16 @@ public class Jobs {
 	 */
 
 	protected static boolean pause(int jobId, Connection con) {
-		log.info("Pausing job " + jobId);
-		CallableStatement procedure = null;
+	log.info("Pausing job " + jobId);
+	PreparedStatement procedure = null;
 		try {
 			int numPairs = 0;
 			final StopWatch timer = new StopWatch();
 			timer.start();
 
-			procedure = con.prepareCall("{CALL PauseJob(?)}");
+			procedure = con.prepareStatement("SELECT starexec.PauseJob(?)");
 			procedure.setInt(1, jobId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			log.debug("Pausing of job with id = " + jobId + " was successful");
 
@@ -4336,12 +4357,12 @@ public class Jobs {
 
 	public static boolean pauseAll() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		log.info("Pausing all jobs");
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL PauseAll()}");
-			procedure.executeUpdate();
+			procedure = con.prepareStatement("SELECT starexec.PauseAll()");
+			procedure.execute();
 			log.debug("Pause of system was successful");
 			R.BACKEND.killAll();
 			List<Integer> jobs = Jobs.getRunningJobs();
@@ -4391,13 +4412,13 @@ public class Jobs {
 	public static boolean changeQueue(int jobId, int queueId) {
 		if (Jobs.isReadOnly(jobId)) return false;
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL ChangeQueue(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.ChangeQueue(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, queueId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			return true;
 		} catch (Exception e) {
@@ -4420,13 +4441,13 @@ public class Jobs {
 		final String method = "setJobName";
 		log.entry(method);
 		Connection connection = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			connection = Common.getConnection();
-			procedure = connection.prepareCall("{CALL SetJobName(?, ?)}");
+			procedure = connection.prepareStatement("SELECT starexec.SetJobName(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setString(2, newName);
-			procedure.executeUpdate();
+			procedure.execute();
 		} catch (Exception e) {
 			log.error("Caught exception.", e);
 			throw new StarExecDatabaseException("Could not save job name to database.", e);
@@ -4448,13 +4469,13 @@ public class Jobs {
 		final String method = "setJobDescription";
 		log.entry(method);
 		Connection connection = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			connection = Common.getConnection();
-			procedure = connection.prepareCall("{CALL SetJobDescription(?, ?)}");
+			procedure = connection.prepareStatement("SELECT starexec.SetJobDescription(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setString(2, newDescription);
-			procedure.executeUpdate();
+			procedure.execute();
 		} catch (Exception e) {
 			log.error("Caught exception.", e);
 			throw new StarExecDatabaseException("Could not save job description to database.", e);
@@ -4859,11 +4880,11 @@ public class Jobs {
 			log.info("resume", "Cannot resume Read Only job: " + jobId);
 			return false;
 		}
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL ResumeJob(?)}");
+			procedure = con.prepareStatement("SELECT starexec.ResumeJob(?)");
 			procedure.setInt(1, jobId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			log.debug("Resume of job id = " + jobId + " was successful");
 			Analytics.JOB_RESUME.record();
@@ -4884,11 +4905,11 @@ public class Jobs {
 	 */
 	public static boolean resumeAll() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL ResumeAll()}");
-			procedure.executeUpdate();
+			procedure = con.prepareStatement("SELECT starexec.ResumeAll()");
+			procedure.execute();
 
 			return true;
 		} catch (Exception e) {
@@ -4915,7 +4936,7 @@ public class Jobs {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
@@ -4923,13 +4944,13 @@ public class Jobs {
 				throw new Exception("Couldn't clear out the cache of job stats");
 			}
 
-			procedure = con.prepareCall("{CALL PrepareJobForPostProcessing(?,?,?,?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.PrepareJobForPostProcessing(?,?,?,?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, processorId);
 			procedure.setInt(3, StatusCode.STATUS_COMPLETE.getVal());
 			procedure.setInt(4, StatusCode.STATUS_PROCESSING.getVal());
 			procedure.setInt(5, stageNumber);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			Common.doRollback(con);
@@ -4986,9 +5007,9 @@ public class Jobs {
 	 */
 
 	private static boolean saveStats(SolverStats stats, Connection con, boolean includeUnknown) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL AddJobStats(?,?,?,?,?,?,?,?,?,?,?,?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.AddJobStats(?,?,?,?,?,?,?,?,?,?,?,?,?)");
 			procedure.setInt(1, stats.getJobSpaceId());
 			procedure.setInt(2, stats.getConfiguration().getId());
 			procedure.setInt(3, stats.getCompleteJobPairs());
@@ -5002,7 +5023,7 @@ public class Jobs {
 			procedure.setInt(11, stats.getIncompleteJobPairs());
 			procedure.setInt(12, stats.getStageNumber());
 			procedure.setBoolean(13, includeUnknown);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("caught an exception while trying to save a single stat: " + e.getMessage());
@@ -5023,12 +5044,12 @@ public class Jobs {
 	 * @author Eric Burns
 	 */
 	private static void updatePrimarySpace(int jobId, int jobSpaceId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL UpdatePrimarySpace(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdatePrimarySpace(?, ?)");
 			procedure.setInt(1, jobId);
 			procedure.setInt(2, jobSpaceId);
-			procedure.executeUpdate();
+			procedure.execute();
 		} catch (Exception e) {
 			log.error("updatePrimarySpace", e);
 		} finally {
@@ -5068,12 +5089,12 @@ public class Jobs {
 
 	private static void removeCachedJobStatsForConfigAndJobSpace(Connection con, int jobSpaceId, int configId)
 			throws SQLException {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL RemoveJobStatsInJobSpaceForConfig(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.RemoveJobStatsInJobSpaceForConfig(?, ?)");
 			procedure.setInt(1, jobSpaceId);
 			procedure.setInt(2, configId);
-			procedure.executeUpdate();
+			procedure.execute();
 		} finally {
 			Common.safeClose(procedure);
 		}
@@ -5087,7 +5108,7 @@ public class Jobs {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean removeCachedJobStats(int jobId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			Job j = Jobs.get(jobId);
 			if (j == null) {
@@ -5097,9 +5118,9 @@ public class Jobs {
 			jobSpaces.add(Spaces.getJobSpace(j.getPrimarySpace()));
 
 			for (JobSpace s : jobSpaces) {
-				procedure = con.prepareCall("{CALL RemoveJobStatsInJobSpace(?)}");
+				procedure = con.prepareStatement("SELECT starexec.RemoveJobStatsInJobSpace(?)");
 				procedure.setInt(1, s.getId());
-				procedure.executeUpdate();
+				procedure.execute();
 				Common.safeClose(procedure);
 			}
 			return true;
@@ -5119,10 +5140,10 @@ public class Jobs {
 	 */
 
 	public static boolean removeAllCachedJobStats(Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL RemoveAllJobStats()}");
-			procedure.executeUpdate();
+			procedure = con.prepareStatement("SELECT starexec.RemoveAllJobStats()");
+			procedure.execute();
 			Common.safeClose(procedure);
 
 			return true;
@@ -5180,11 +5201,11 @@ public class Jobs {
 	 */
 	public static int getPausedJobCount() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPausedJobCount()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetPausedJobCount()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {
@@ -5209,11 +5230,11 @@ public class Jobs {
 
 	public static int getRunningJobCount() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetRunningJobCount()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRunningJobCount()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {
@@ -5237,11 +5258,11 @@ public class Jobs {
 	 */
 	public static List<Integer> getRunningJobs(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetRunningJobsByUser(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRunningJobsByUser(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
@@ -5268,11 +5289,11 @@ public class Jobs {
 	 */
 	public static List<Integer> getRunningJobs() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetRunningJobs()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRunningJobs()");
 			results = procedure.executeQuery();
 
 			List<Integer> jobs = new LinkedList<>();
@@ -5297,11 +5318,11 @@ public class Jobs {
 	 */
 	public static boolean isSystemPaused() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL IsSystemPaused()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsSystemPaused()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {
@@ -5327,12 +5348,12 @@ public class Jobs {
 	 */
 	public static List<Integer> getOrphanedJobs(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		List<Integer> ids = new ArrayList<>();
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetOrphanedJobIds(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetOrphanedJobIds(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 			while (results.next()) {
@@ -5410,9 +5431,9 @@ public class Jobs {
 	 */
 	public static List<StageAttributes> getStageAttrsForJob(int jobId, Connection con) {
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL getStageParamsByJob(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.getStageParamsByJob(?)");
 			procedure.setInt(1, jobId);
 			results = procedure.executeQuery();
 			List<StageAttributes> attrs = new ArrayList<>();
@@ -5469,13 +5490,13 @@ public class Jobs {
 	@SuppressWarnings("unused")
 	private static boolean setJobDiskSize(int jobId, long diskSize) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateJobDiskSize(?,?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateJobDiskSize(?,?)");
 			procedure.setInt(1, jobId);
 			procedure.setLong(2, diskSize);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("setJobDiskSize", e);
@@ -5488,16 +5509,17 @@ public class Jobs {
 
 	public static boolean doesJobCopyBackIncrementally(int jobId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		Boolean jobCopiesBackResultsIncrementally = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DoesJobCopyBackIncrementally(?,?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.DoesJobCopyBackIncrementally(?)");
 			procedure.setInt(1, jobId);
-			procedure.registerOutParameter(2, java.sql.Types.BOOLEAN);
 			results = procedure.executeQuery();
-			jobCopiesBackResultsIncrementally = procedure.getBoolean(2);
+			if (results.next()) {
+				jobCopiesBackResultsIncrementally = results.getBoolean("jobCopiesBackIncrementally");
+			}
 		} catch (Exception e) {
 			log.error("doesJobCopyBackIncrementally", e);
 		} finally {
@@ -5509,15 +5531,24 @@ public class Jobs {
 	}
 
 	public static List<String> getJobAttributeValues(int jobSpaceId) throws SQLException {
-		return Common.query("{CALL GetJobAttributesTableHeaders(?)}", procedure -> procedure.setInt(1, jobSpaceId),
-		                    results -> {
-			                    List<String> headers = new ArrayList<>();
-			                    while (results.next()) {
-				                    headers.add(results.getString("attr_value"));
-			                    }
-			                    return headers;
-		                    }
-		);
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobAttributesTableHeaders(?)");
+			ps.setInt(1, jobSpaceId);
+			results = ps.executeQuery();
+			List<String> headers = new ArrayList<>();
+			while (results.next()) {
+				headers.add(results.getString("attr_value"));
+			}
+			return headers;
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	public static List<String> getJobAttributesTableHeader(int jobSpaceId) throws SQLException {
@@ -5530,10 +5561,18 @@ public class Jobs {
 	 * @param jobId the job to set as low priority.
 	 */
 	public static void setAsLowPriority(final int jobId) throws SQLException {
-		Common.update("{CALL SetHighPriority(?,?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setBoolean(2, false);
-		});
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.SetHighPriority(?,?)");
+			ps.setInt(1, jobId);
+			ps.setBoolean(2, false);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -5542,10 +5581,18 @@ public class Jobs {
 	 * @param jobId the job to make high priority.
 	 */
 	public static void setAsHighPriority(final int jobId) throws SQLException {
-		Common.update("{CALL SetHighPriority(?,?)}", procedure -> {
-			procedure.setInt(1, jobId);
-			procedure.setBoolean(2, true);
-		});
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.SetHighPriority(?,?)");
+			ps.setInt(1, jobId);
+			ps.setBoolean(2, true);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -5561,12 +5608,8 @@ public class Jobs {
 			try {
 				Integer slots = backend.getSlotsInQueue(job.getQueue().getName());
 				return slots.toString();
-			} catch (IOException e) {
-				log.error(methodName, "Caught IOException while trying to get number of slots in queue.", e);
-			} catch (StarExecException e) {
-				log.error(
-						methodName, "Could not get number of slots from backend.getSlotsInQueue. " +
-								"SGE may not have returned an integer when queried.", e);
+			} catch (Exception e) {
+				log.error(methodName, "SGE may not have returned an integer when queried.", e);
 			}
 		}
 		return R.DEFAULT_QUEUE_SLOTS;
@@ -5574,12 +5617,12 @@ public class Jobs {
 
 	public static List<AttributesTableData> getJobAttributesTable(int jobSpaceId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		List<AttributesTableData> tableEntries = new ArrayList<>();
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetJobAttributesTable(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetJobAttributesTable(?)");
 			procedure.setInt(1, jobSpaceId);
 			results = procedure.executeQuery();
 			while (results.next()) {
@@ -5613,18 +5656,28 @@ public class Jobs {
 	 * @throws SQLException
 	 */
 	public static List<Triple<String, Integer, TimePair>> getJobAttributeTotals(int jobspaceId) throws SQLException {
-		return Common
-				.query("{CALL GetSumOfJobAttributes(?)}", procedure -> procedure.setInt(1, jobspaceId), results -> {
-					List<Triple<String, Integer, TimePair>> valueCounts = new ArrayList<>();
-					while (results.next()) {
-						valueCounts.add(new ImmutableTriple<>(results.getString("attr_value"),
-						                                      results.getInt("attr_count"), new TimePair(
-								String.format("%.4f", results.getDouble("wallclock")),
-								String.format("%.4f", results.getDouble("cpu"))
-						)
-						));
-					}
-					return valueCounts;
-				});
+		java.sql.Connection con = null;
+		java.sql.PreparedStatement ps = null;
+		java.sql.ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSumOfJobAttributes(?)");
+			ps.setInt(1, jobspaceId);
+			results = ps.executeQuery();
+			List<Triple<String, Integer, TimePair>> valueCounts = new ArrayList<>();
+			while (results.next()) {
+				valueCounts.add(new ImmutableTriple<>(results.getString("attr_value"),
+						results.getInt("attr_count"), new TimePair(
+						String.format("%.4f", results.getDouble("wallclock")),
+						String.format("%.4f", results.getDouble("cpu"))
+					)
+				));
+			}
+			return valueCounts;
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 }

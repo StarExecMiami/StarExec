@@ -9,8 +9,8 @@ import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.LinkedList;
@@ -35,14 +35,20 @@ public class Uploads {
 			return false;
 		}
 		try {
-			Common.update("{CALL AddUnvalidatedBenchmark(?,?, ?)}",
-					procedure -> {
-						procedure.setInt(1, statusId);
-						procedure.setString(2, name);
-						procedure.setString(3, errorMessage);
-					}
-			);
-			return true;
+			java.sql.Connection con = null;
+			java.sql.PreparedStatement ps = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.AddUnvalidatedBenchmark(?, ?, ?)");
+				ps.setInt(1, statusId);
+				ps.setString(2, name);
+				ps.setString(3, errorMessage);
+				ps.execute();
+				return true;
+			} finally {
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (Exception e) {
 			log.error("addFailedBenchmark", e);
 		}
@@ -60,24 +66,26 @@ public class Uploads {
 	public static Integer createBenchmarkUploadStatus(Integer spaceId, Integer userId) {
 
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL CreateBenchmarkUploadStatus(?, ?, ?)}");
+			ps = con.prepareStatement("SELECT starexec.CreateBenchmarkUploadStatus(?, ?)");
 
-			procedure.setInt(1, spaceId);
-			procedure.setInt(2, userId);
-			procedure.registerOutParameter(3, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-			return procedure.getInt(3);
+			ps.setInt(1, spaceId);
+			ps.setInt(2, userId);
+			ResultSet rs = ps.executeQuery();
+			if (rs.next()) {
+				return rs.getInt(1);
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return -1;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
+		return -1;
 	}
 
 	/**
@@ -90,22 +98,24 @@ public class Uploads {
 	public static int createSpaceXMLUploadStatus(Integer userId) {
 
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement stmt = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL CreateSpaceXMLUploadStatus(?, ?)}");
+			stmt = con.prepareStatement("SELECT CreateSpaceXMLUploadStatus(?)");
 
-			procedure.setInt(1, userId);
-			procedure.registerOutParameter(2, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-			return procedure.getInt(2);
+			stmt.setInt(1, userId);
+			rs = stmt.executeQuery();
+			rs.next();
+			return rs.getInt(1);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return -1;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(rs);
+			Common.safeClose(stmt);
 		}
 	}
 
@@ -120,12 +130,18 @@ public class Uploads {
 			return false;
 		}
 		try {
-			Common.update("{CALL XMLEverythingComplete(?)}",
-					procedure -> {
-						procedure.setInt(1, statusId);
-					}
-			);
-			return true;
+			java.sql.Connection con = null;
+			java.sql.PreparedStatement ps = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.XMLEverythingComplete(? )");
+				ps.setInt(1, statusId);
+				ps.execute();
+				return true;
+			} finally {
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (Exception e) {
 			log.error("XMLEverythingComplete", e);
 		}
@@ -144,12 +160,18 @@ public class Uploads {
 			return false;
 		}
 		try {
-			Common.update("{CALL BenchmarkEverythingComplete(?)}",
-					procedure -> {
-						procedure.setInt(1, statusId);
-					}
-			);
-			return true;
+			java.sql.Connection con = null;
+			java.sql.PreparedStatement ps = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.BenchmarkEverythingComplete(?)");
+				ps.setInt(1, statusId);
+				ps.execute();
+				return true;
+			} finally {
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (Exception e) {
 			log.error("benchmarkEverythingComplete", e);
 		}
@@ -167,12 +189,18 @@ public class Uploads {
 			return false;
 		}
 		try {
-			Common.update("{CALL FileExtractComplete(?)}",
-					procedure -> {
-						procedure.setInt(1, statusId);
-					}
-			);
-			return true;
+			java.sql.Connection con = null;
+			java.sql.PreparedStatement ps = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.FileExtractComplete(?)");
+				ps.setInt(1, statusId);
+				ps.execute();
+				return true;
+			} finally {
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (Exception e) {
 			log.error("fileExtractComplete", e);
 		}
@@ -190,12 +218,18 @@ public class Uploads {
 			return false;
 		}
 		try {
-			Common.update("{CALL XMLFileUploadComplete(?)}",
-					procedure -> {
-						procedure.setInt(1, statusId);
-					}
-			);
-			return true;
+			java.sql.Connection con = null;
+			java.sql.PreparedStatement ps = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.XMLFileUploadComplete(?)");
+				ps.setInt(1, statusId);
+				ps.execute();
+				return true;
+			} finally {
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (Exception e) {
 			log.error("XMLFileUploadComplete", e);
 		}
@@ -213,12 +247,18 @@ public class Uploads {
 			return false;
 		}
 		try {
-			Common.update("{CALL BenchmarkFileUploadComplete(?)}",
-					procedure -> {
-						procedure.setInt(1, statusId);
-					}
-			);
-			return true;
+			java.sql.Connection con = null;
+			java.sql.PreparedStatement ps = null;
+			try {
+				con = Common.getConnection();
+				ps = con.prepareStatement("SELECT starexec.BenchmarkFileUploadComplete(?)");
+				ps.setInt(1, statusId);
+				ps.execute();
+				return true;
+			} finally {
+				Common.safeClose(ps);
+				Common.safeClose(con);
+			}
 		} catch (Exception e) {
 			log.error("benchmarkFileUploadComplete", e);
 		}
@@ -266,13 +306,13 @@ public class Uploads {
 	 */
 	public static SpaceXMLUploadStatus getSpaceXMLStatus(int statusId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetXMLUploadStatusById(?)}");
-			procedure.setInt(1, statusId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetXMLUploadStatusById(?)");
+			ps.setInt(1, statusId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				SpaceXMLUploadStatus s = new SpaceXMLUploadStatus();
@@ -301,7 +341,7 @@ public class Uploads {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -344,13 +384,13 @@ public class Uploads {
 	 */
 	public static BenchmarkUploadStatus getBenchmarkStatus(int statusId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchmarkUploadStatusById(?)}");
-			procedure.setInt(1, statusId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkUploadStatusById(?)");
+			ps.setInt(1, statusId);
+			results = ps.executeQuery();
 
 			if (results.next()) {
 				return resultsToBenchmarkUploadStatus(results);
@@ -359,7 +399,7 @@ public class Uploads {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -376,13 +416,13 @@ public class Uploads {
 	public static List<Benchmark> getFailedBenches(int statusId) {
 
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUnvalidatedBenchmarks(?)}");
-			procedure.setInt(1, statusId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetUnvalidatedBenchmarks(?)");
+			ps.setInt(1, statusId);
+			results = ps.executeQuery();
 			List<Benchmark> badBenches = new LinkedList<>();
 			while (results.next()) {
 				Benchmark b = new Benchmark();
@@ -396,7 +436,7 @@ public class Uploads {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
@@ -410,13 +450,13 @@ public class Uploads {
 	 */
 	public static String getInvalidBenchmarkErrorMessage(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetInvalidBenchmarkMessage(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetInvalidBenchmarkMessage(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return results.getString("error_message");
 			}
@@ -425,7 +465,7 @@ public class Uploads {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
@@ -439,13 +479,13 @@ public class Uploads {
 	 */
 	public static BenchmarkUploadStatus getUploadStatusForInvalidBenchmarkId(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetUploadStatusForInvalidBenchmarkId(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetUploadStatusForInvalidBenchmarkId(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return resultsToBenchmarkUploadStatus(results);
 			}
@@ -454,7 +494,7 @@ public class Uploads {
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
@@ -472,22 +512,22 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementCompletedBenchmarks(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.IncrementCompletedBenchmarks(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, incrementCount);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setInt(2, incrementCount);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -503,22 +543,22 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementCompletedSpaces(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.IncrementCompletedSpaces(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, incrementCount);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setInt(2, incrementCount);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -534,22 +574,22 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementFailedBenchmarks(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.IncrementFailedBenchmarks(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, incrementCounter);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setInt(2, incrementCounter);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -558,21 +598,21 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementXMLCompleted" + type + "s(?,?)}");
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, num);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.IncrementXMLCompleted" + type + "s(?,?)");
+			ps.setInt(1, statusId);
+			ps.setInt(2, num);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -597,21 +637,21 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL SetXMLTotal" + type + "s(?,?)}");
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, num);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.SetXMLTotal" + type + "s(?,?)");
+			ps.setInt(1, statusId);
+			ps.setInt(2, num);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -645,21 +685,21 @@ public class Uploads {
 			return true;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementTotalBenchmarks(?,?)}");
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, incrementCounter);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.IncrementTotalBenchmarks(?,?)");
+			ps.setInt(1, statusId);
+			ps.setInt(2, incrementCounter);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -678,22 +718,22 @@ public class Uploads {
 			return true;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementTotalSpaces(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.IncrementTotalSpaces(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, incrementCounter);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setInt(2, incrementCounter);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -711,22 +751,22 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL IncrementValidatedBenchmarks(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.IncrementValidatedBenchmarks(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setInt(2, incrementCounter);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setInt(2, incrementCounter);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -742,21 +782,21 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL processingBegun(?)}");
+			ps = con.prepareStatement("SELECT starexec.processingBegun(?)");
 
-			procedure.setInt(1, statusId);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -770,23 +810,23 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL SetXMLErrorMessage(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.SetXMLErrorMessage(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setString(2, message);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setString(2, message);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -856,24 +896,24 @@ public class Uploads {
 
 
 
-    public static int getUploadCountByUser(int userId) {
+	public static int getUploadCountByUser(int userId) {
 	Connection con = null;
-	CallableStatement procedure = null;
+	PreparedStatement ps = null;
 	ResultSet results = null;
 	try {
-	    con = Common.getConnection();
-	    procedure = con.prepareCall("{CALL GetUploadCountByUser(?)}");
-	    procedure.setInt(1, userId);
-	    results = procedure.executeQuery();
+	con = Common.getConnection();
+	ps = con.prepareStatement("SELECT * FROM starexec.GetUploadCountByUser(?)");
+	    ps.setInt(1, userId);
+	    results = ps.executeQuery();
 
 	    if(results.next()) {
-		return results.getInt("uploadCount");
+		return results.getInt(1);
 	    }
 	} catch (Exception e) {
 	    log.error("getUploadCountByUser", e);
 	} finally {
 	    Common.safeClose(con);
-	    Common.safeClose(procedure);
+	    Common.safeClose(ps);
 	    Common.safeClose(results);
 	}
 	return 0;
@@ -882,23 +922,23 @@ public class Uploads {
 
     public static int getUploadCountByUser(int userId, String query) {
 	Connection con = null;
-	CallableStatement procedure = null;
+	PreparedStatement ps = null;
 	ResultSet results = null;
 	try {
-	    con = Common.getConnection();
-	    procedure = con.prepareCall("{CALL GetUploadCountByUserWithQuery(?, ?)}");
-	    procedure.setInt(1, userId);
-	    procedure.setString(2, query);
-	    results = procedure.executeQuery();
+	con = Common.getConnection();
+	ps = con.prepareStatement("SELECT * FROM starexec.GetUploadCountByUserWithQuery(?, ?)");
+	    ps.setInt(1, userId);
+	    ps.setString(2, query);
+	    results = ps.executeQuery();
 
 	    if (results.next()) {
-		return results.getInt("uploadCount");
+		return results.getInt(1);
 	    }
 	} catch (Exception e) {
 		log.error("getUploadCountByUser", e);
 	} finally {
 	    Common.safeClose(con);
-	    Common.safeClose(procedure);
+	    Common.safeClose(ps);
 	    Common.safeClose(results);
 	}
 	    return 0;
@@ -920,23 +960,23 @@ public class Uploads {
 			return false;
 		}
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL SetBenchmarkErrorMessage(?,?)}");
+			ps = con.prepareStatement("SELECT starexec.SetBenchmarkErrorMessage(?,?)");
 
-			procedure.setInt(1, statusId);
-			procedure.setString(2, message);
-			procedure.executeUpdate();
+			ps.setInt(1, statusId);
+			ps.setString(2, message);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			return false;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 }

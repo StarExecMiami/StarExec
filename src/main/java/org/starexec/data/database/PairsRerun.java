@@ -1,6 +1,7 @@
 package org.starexec.data.database;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
@@ -16,7 +17,20 @@ public class PairsRerun {
 	 * @throws SQLException on database error.
 	 */
 	public static boolean hasPairBeenRerun(int pairId) throws SQLException {
-		return Common.query("{CALL HasPairBeenRerun(?)}", procedure -> procedure.setInt(1, pairId), ResultSet::next);
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.HasPairBeenRerun(?)");
+			ps.setInt(1, pairId);
+			rs = ps.executeQuery();
+			return rs.next();
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -28,8 +42,17 @@ public class PairsRerun {
 	 * @throws SQLException on database error.
 	 */
 	public static boolean pairHasBeenRerun(Connection con, int pairId) throws SQLException {
-		return Common.queryUsingConnection(con, "{CALL HasPairBeenRerun(?)}", procedure -> procedure.setInt(1, pairId),
-		                                   ResultSet::next);
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		try {
+			ps = con.prepareStatement("SELECT * FROM starexec.HasPairBeenRerun(?)");
+			ps.setInt(1, pairId);
+			rs = ps.executeQuery();
+			return rs.next();
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+		}
 	}
 
 	/**
@@ -39,7 +62,17 @@ public class PairsRerun {
 	 * @throws SQLException on database error.
 	 */
 	public static void markPairAsRerun(int pairId) throws SQLException {
-		Common.update("{CALL MarkPairAsRerun(?)}", procedure -> procedure.setInt(1, pairId));
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.MarkPairAsRerun(?)");
+			ps.setInt(1, pairId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -50,11 +83,28 @@ public class PairsRerun {
 	 * @throws SQLException on database error.
 	 */
 	public static void markPairAsRerun(Connection con, int pairId) throws SQLException {
-		Common.updateUsingConnection(con, "{CALL MarkPairAsRerun(?)}", procedure -> procedure.setInt(1, pairId));
+		PreparedStatement ps = null;
+		try {
+			ps = con.prepareStatement("SELECT starexec.MarkPairAsRerun(?)");
+			ps.setInt(1, pairId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+		}
 	}
 
 	// Currently only used for tests.
 	public static void unmarkPairAsRerun(int pairId) throws SQLException {
-		Common.update("{CALL UnmarkPairAsRerun(?)}", procedure -> procedure.setInt(1, pairId));
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.UnmarkPairAsRerun(?)");
+			ps.setInt(1, pairId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 }

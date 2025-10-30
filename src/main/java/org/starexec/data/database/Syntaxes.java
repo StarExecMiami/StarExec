@@ -4,6 +4,8 @@ import org.starexec.data.to.Syntax;
 import org.starexec.logger.StarLogger;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.Collections;
 import java.util.Collection;
 import java.util.HashMap;
@@ -58,17 +60,22 @@ public class Syntaxes {
 		if (all == null) {
 			all = new HashMap<>();
 			try {
-				Common.query(
-					"{CALL GetAllSyntaxes()}",
-					p -> {},
-					results -> {
-						while (results.next()) {
-							Syntax s = resultSetToSyntax(results);
-							all.put(s.getId(), s);
-						}
-						return null;
+				Connection con = null;
+				PreparedStatement ps = null;
+				ResultSet results = null;
+				try {
+					con = Common.getConnection();
+					ps = con.prepareStatement("SELECT * FROM starexec.GetAllSyntaxes()");
+					results = ps.executeQuery();
+					while (results.next()) {
+						Syntax s = resultSetToSyntax(results);
+						all.put(s.getId(), s);
 					}
-				);
+				} finally {
+					Common.safeClose(results);
+					Common.safeClose(ps);
+					Common.safeClose(con);
+				}
 			} catch (SQLException e) {
 				log.error("setAll", "Error loading syntaxes", e);
 				all = Collections.emptyMap();

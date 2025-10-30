@@ -8,8 +8,8 @@ import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Util;
 
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
@@ -143,23 +143,23 @@ public class AnonymousLinks {
 
 		log.debug("Adding anonymous link for " + primitiveType + " with id=" + primitiveId);
 
-		Connection con = null;
-		CallableStatement procedure = null;
+	Connection con = null;
+	PreparedStatement ps = null;
 
 		try {
-			// Setup the AddAnonymousLink procedure.
+			// Setup the AddAnonymousLink function call.
 			con = Common.getConnection();
 			Common.beginTransaction(con);
-			procedure = con.prepareCall("{CALL AddAnonymousLink(?, ?, ?, ?)}");
+			ps = con.prepareStatement("SELECT starexec.AddAnonymousLink(?, ?, ?, ?)");
 
 			// Set the parameters
-			procedure.setString(1, universallyUniqueId);
-			procedure.setString(2, primitiveType);
-			procedure.setInt(3, primitiveId);
-			procedure.setString(4, getPrimitivesToAnonymizeName(primitivesToAnonymize));
+			ps.setString(1, universallyUniqueId);
+			ps.setString(2, primitiveType);
+			ps.setInt(3, primitiveId);
+			ps.setString(4, getPrimitivesToAnonymizeName(primitivesToAnonymize));
 
-			// Do update and commit the changes.
-			procedure.executeUpdate();
+			// Execute and commit the changes.
+			ps.execute();
 			Common.endTransaction(con);
 
 			return universallyUniqueId;
@@ -171,7 +171,7 @@ public class AnonymousLinks {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -193,21 +193,21 @@ public class AnonymousLinks {
 		log.entry(methodName);
 
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-			// Setup the GetAnonymousLink procedure.
-			procedure = con.prepareCall("{CALL GetAnonymousLink(?, ?, ?)}");
-			procedure.setString(1, primitiveType);
-			procedure.setInt(2, primitiveId);
-			procedure.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));
-
-			results = procedure.executeQuery();
-			Common.endTransaction(con);
+			// Setup the GetAnonymousLink function call.
+					// Setup the GetAnonymousLink function call.
+					ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousLink(?, ?, ?)");
+					ps.setString(1, primitiveType);
+					ps.setInt(2, primitiveId);
+					ps.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));
+			results = ps.executeQuery();
+					results = ps.executeQuery();
 			// If the code is in the database return it otherwise return an empty Optional.
 			if (results.next()) {
 				return Optional.of(results.getString("unique_id"));
@@ -220,7 +220,7 @@ public class AnonymousLinks {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -286,19 +286,19 @@ public class AnonymousLinks {
 		}
 
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-			// Setup the GetAnonymousLink procedure.
-			procedure = con.prepareCall("{CALL GetIdOfPrimitiveAssociatedWithLink(?, ?)}");
-			procedure.setString(1, universallyUniqueId);
-			procedure.setString(2, primitiveType);
+			// Setup the GetIdOfPrimitiveAssociatedWithLink function call.
+			ps = con.prepareStatement("SELECT * FROM starexec.GetIdOfPrimitiveAssociatedWithLink(?, ?)");
+			ps.setString(1, universallyUniqueId);
+			ps.setString(2, primitiveType);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			Common.endTransaction(con);
 			// If the code is in the database return it otherwise return an empty Optional.
 			if (results.next()) {
@@ -312,7 +312,7 @@ public class AnonymousLinks {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -369,18 +369,18 @@ public class AnonymousLinks {
 		}
 
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 
-			// Setup the GetPrimitivesToAnonymize procedure.
-			procedure = con.prepareCall("{CALL GetPrimitivesToAnonymize(?, ?)}");
-			procedure.setString(1, linkUuid);
-			procedure.setString(2, primitiveType);
+			// Setup the GetPrimitivesToAnonymize function call.
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPrimitivesToAnonymize(?, ?)");
+			ps.setString(1, linkUuid);
+			ps.setString(2, primitiveType);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			// If the code is in the database return it otherwise return an empty Optional.
 			if (results.next()) {
 				return Optional.of(createPrimitivesToAnonymize(results.getString("primitives_to_anonymize")));
@@ -392,7 +392,7 @@ public class AnonymousLinks {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -406,16 +406,16 @@ public class AnonymousLinks {
 	public static void deleteOldLinks(int ageThresholdInDays) throws SQLException {
 		final String methodName = "deleteOldLinks";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-			procedure = con.prepareCall("{CALL DeleteOldLinks(?)}");
-			procedure.setInt(1, ageThresholdInDays);
+			ps = con.prepareStatement("SELECT starexec.DeleteOldLinks(?)");
+			ps.setInt(1, ageThresholdInDays);
 
-			procedure.executeUpdate();
+			ps.execute();
 
 			Common.endTransaction(con);
 		} catch (SQLException e) {
@@ -424,7 +424,7 @@ public class AnonymousLinks {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -478,14 +478,14 @@ public class AnonymousLinks {
 	private static void delete(String uuid, Connection con) throws SQLException {
 		// final String methodName = "delete(String, Connection)";
 
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
-			procedure = con.prepareCall("{CALL DeleteAnonymousLink(?)}");
-			procedure.setString(1, uuid);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.DeleteAnonymousLink(?)");
+			ps.setString(1, uuid);
+			ps.execute();
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -493,25 +493,24 @@ public class AnonymousLinks {
 		final String methodName = "hasJobBeenAnonymized";
 		log.entry(methodName);
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAnonymousNamesForJob(?)}");
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousNamesForJob(?)");
 
 			// Set the parameters
-			procedure.setInt(1, jobId);
+			ps.setInt(1, jobId);
 
-			// Do update and commit the changes.
-			results = procedure.executeQuery();
-			// return true/false depending on if there are any results.
+			// Execute query and return whether there are any results.
+			results = ps.executeQuery();
 			return results.next();
 		} catch (SQLException e) {
 			log.error(methodName, "Caught SQLException: " + e.getMessage(), e);
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -602,14 +601,14 @@ public class AnonymousLinks {
 	public static List<Triple<String, String, Integer>> getAnonymousSolverNamesKey(int jobId) throws SQLException {
 		final String methodName = "getAnonymizedSolverNamesKey";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAnonymousSolverNamesAndIds(?)}");
-			procedure.setInt(1, jobId);
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAnonymousSolverNamesAndIds(?)");
+			ps.setInt(1, jobId);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 
 			List<Triple<String, String, Integer>> anonymizedSolverNamesKey = new ArrayList<>();
 			while (results.next()) {
@@ -625,7 +624,7 @@ public class AnonymousLinks {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 	}
@@ -638,21 +637,21 @@ public class AnonymousLinks {
 		final String methodName = "addAnonymousPrimitiveName";
 		log.entry(methodName);
 
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 
 		try {
-			procedure = con.prepareCall("{CALL AddAnonymousPrimitiveName(?, ?, ?, ?)}");
-			procedure.setString(1, anonymousName);
-			procedure.setInt(2, primitiveId);
-			procedure.setString(3, primitiveType);
-			procedure.setInt(4, jobId);
+			ps = con.prepareStatement("SELECT starexec.AddAnonymousPrimitiveName(?, ?, ?, ?)");
+			ps.setString(1, anonymousName);
+			ps.setInt(2, primitiveId);
+			ps.setString(3, primitiveType);
+			ps.setInt(4, jobId);
 
-			procedure.executeUpdate();
+			ps.execute();
 		} catch (SQLException e) {
 			log.error(methodName, "Caught SQLException: " + e.getMessage(), e);
 			throw e;
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 

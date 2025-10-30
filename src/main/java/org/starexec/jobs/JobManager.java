@@ -154,9 +154,9 @@ public abstract class JobManager {
 			} catch (IOException e) {
 				log.error("Error reading the jobscript at " + f, e);
 			}
-			mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.MYSQL_DATABASE);
-			mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_MYSQL_USERNAME);
-			mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_MYSQL_PASSWORD);
+			mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
+			mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
+			mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_POSTGRES_PASSWORD);
 			mainTemplate = mainTemplate.replace("$$REPORT_HOST$$", R.REPORT_HOST);
 			mainTemplate = mainTemplate.replace("$$STAREXEC_DATA_DIR$$", R.STAREXEC_DATA_DIR);
 			// Impose resource limits

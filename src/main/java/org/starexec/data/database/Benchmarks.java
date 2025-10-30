@@ -16,8 +16,8 @@ import org.starexec.util.Timer;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
-import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
@@ -29,15 +29,6 @@ import java.nio.charset.StandardCharsets;
  */
 public class Benchmarks {
 	private static final StarLogger log = StarLogger.getLogger(Benchmarks.class);
-
-	/**
-	 * Deletes a benchmark and permanently removes it from the database. This is NOT the normal procedure for
-	 * deleting a
-	 * benchmark. It is used for testing. Calling "delete" is typically what is desired
-	 *
-	 * @param id The ID of the benchmark
-	 * @return True on success and false otherwise
-	 */
 	public static boolean deleteAndRemoveBenchmark(int id) {
 		Benchmark b = Benchmarks.getIncludeDeletedAndRecycled(id, false);
 		if (b == null) {
@@ -171,7 +162,7 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	private static boolean addBenchAttr(Connection con, int benchId, String key, String val) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		Supplier<String> trace = ()->
 			  "\n\tbenchId :" + benchId
 			+ "\n\tkey:     " + key
@@ -184,11 +175,11 @@ public class Benchmarks {
 			if (val.length() > 128) {
 				log.warn("addBenchAttr", "val exceeds max length" + trace.get());
 			}
-			procedure = con.prepareCall("{CALL AddBenchAttr(?, ?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.AddBenchAttr(?, ?, ?)");
 			procedure.setInt(1, benchId);
 			procedure.setString(2, key);
 			procedure.setString(3, val);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("addBenchAttr", e);
@@ -211,16 +202,16 @@ public class Benchmarks {
 	private static Boolean addBenchDependency(
 			int primaryBenchId, Integer secondaryBenchId, String includePath, Connection con
 	) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			// Setup normal information for the benchmark dependency
-			procedure = con.prepareCall("{CALL AddBenchDependency(?, ?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.AddBenchDependency(?, ?, ?)");
 			procedure.setInt(1, primaryBenchId);
 			procedure.setInt(2, secondaryBenchId);
 			procedure.setString(3, includePath);
 
 			// Execute procedure and get back the benchmark's id
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("addBenchDependency",
@@ -288,14 +279,15 @@ public class Benchmarks {
 	 * @author Benton McCune
 	 */
 	protected static Benchmark add(Benchmark benchmark, Integer statusId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 
 		try {
 			Common.beginTransaction(con);
 
 			Map<String, String> attrs = benchmark.getAttributes();
 			// Setup normal information for the benchmark
-			procedure = con.prepareCall("{CALL AddBenchmark(?, ?, ?, ?, ?, ?, ?, ?)}");
+			procedure = con.prepareStatement("SELECT AddBenchmark(?, ?, ?, ?, ?, ?, ?)");
 			procedure.setString(1, benchmark.getName());
 			procedure.setString(2, benchmark.getPath());
 			procedure.setBoolean(3, benchmark.isDownloadable());
@@ -303,11 +295,11 @@ public class Benchmarks {
 			procedure.setInt(5, Benchmarks.isBenchValid(attrs) ? benchmark.getType().getId() : R.NO_TYPE_PROC_ID);
 			procedure.setLong(6, FileUtils.sizeOf(new File(benchmark.getPath())));
 			procedure.setString(7, benchmark.getDescription());
-			procedure.registerOutParameter(8, java.sql.Types.INTEGER);
+			results = procedure.executeQuery();
 
-			// Execute procedure and get back the benchmark's id
-			procedure.executeUpdate();
-			benchmark.setId(procedure.getInt(8));
+			if (results.next()) {
+				benchmark.setId(results.getInt(1));
+			}
 
 			// If the benchmark is valid according to its processor...
 
@@ -538,13 +530,13 @@ public class Benchmarks {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean associate(int benchId, int spaceId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 
 		try {
-			procedure = con.prepareCall("{CALL AssociateBench(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.AssociateBench(?, ?)");
 			procedure.setInt(1, benchId);
 			procedure.setInt(2, spaceId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			return true;
 		} catch (Exception e) {
@@ -701,11 +693,11 @@ public class Benchmarks {
 	 */
 	private static boolean removeBenchmarkFromDatabase(int benchId, Connection con) {
 		log.debug("got request permanently remove this benchmark from the database " + benchId);
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("CALL RemoveBenchmarkFromDatabase(?)");
+			procedure = con.prepareStatement("SELECT starexec.RemoveBenchmarkFromDatabase(?)");
 			procedure.setInt(1, benchId);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("removeBenchmarkFromDatabaseremoveBenchmarkFromDatabase", e);
@@ -722,7 +714,7 @@ public class Benchmarks {
 	 */
 	public static boolean cleanOrphanedDeletedBenchmarks() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		//will contain the id of every benchmark that is associated with either a space or a pair
@@ -730,7 +722,7 @@ public class Benchmarks {
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetBenchmarksAssociatedWithSpaces()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksAssociatedWithSpaces()");
 			results = procedure.executeQuery();
 			while (results.next()) {
 				parentedBenchmarks.add(results.getInt("id"));
@@ -738,15 +730,14 @@ public class Benchmarks {
 			Common.safeClose(procedure);
 			Common.safeClose(results);
 
-			procedure = con.prepareCall("{CALL GetBenchmarksAssociatedWithPairs()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksAssociatedWithPairs()");
 			results = procedure.executeQuery();
 			while (results.next()) {
 				parentedBenchmarks.add(results.getInt("id"));
 			}
 			Common.safeClose(procedure);
 			Common.safeClose(results);
-
-			procedure = con.prepareCall("CALL GetDeletedBenchmarks()");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetDeletedBenchmarks()");
 			results = procedure.executeQuery();
 			while (results.next()) {
 				Benchmark b = resultToBenchmark(results);
@@ -857,21 +848,26 @@ public class Benchmarks {
 	 */
 	public static boolean delete(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL SetBenchmarkToDeletedById(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.SetBenchmarkToDeletedById(?) AS removed_path");
 			procedure.setInt(1, id);
-			procedure.registerOutParameter(2, java.sql.Types.LONGNVARCHAR);
-			procedure.executeUpdate();
+			results = procedure.executeQuery();
 
-			return Util.safeDeleteFileAndEmptyParents(procedure.getString(2), R.getBenchmarkPath());
+			if (results.next()) {
+				String removed = results.getString("removed_path");
+				return Util.safeDeleteFileAndEmptyParents(removed, R.getBenchmarkPath());
+			}
+			return false;
 		} catch (Exception e) {
 			log.error("delete", e);
 		} finally {
 			Common.safeClose(con);
+			Common.safeClose(results);
 			Common.safeClose(procedure);
 		}
 		log.debug(String.format("Deletion of benchmark [id=%d] failed.", id));
@@ -1050,15 +1046,15 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	protected static Benchmark get(Connection con, int benchId, boolean includeDeleted) {
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-			if (includeDeleted) {
-				procedure = con.prepareCall("{CALL GetBenchmarkByIdIncludeDeletedAndRecycled(?)}");
-			} else {
-				procedure = con.prepareCall("{CALL GetBenchmarkById(?)}");
-			}
+				if (includeDeleted) {
+					procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(?)");
+				} else {
+					procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkById(?)");
+				}
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 
@@ -1087,11 +1083,11 @@ public class Benchmarks {
      * @author Aaron Stump
      */
 	protected static Benchmark getSkeletal(Connection con, int benchId) {
-		CallableStatement procedure = null;
+	PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-		    procedure = con.prepareCall("{CALL GetBenchmarkPathById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkPathById(?)");
 		    procedure.setInt(1, benchId);
 		    results = procedure.executeQuery();
 
@@ -1210,10 +1206,10 @@ public class Benchmarks {
 	public static List<Benchmark> getByOwner(int userId) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchmarksByOwner(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksByOwner(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 			return resultsToBenchmarkWithType(results);
@@ -1238,7 +1234,7 @@ public class Benchmarks {
 	 */
 	public static List<Benchmark> getByJob(int jobId) throws SQLException {
 		log.debug("Inside benchmarks.getByJob");
-		return Common.query("{CALL GetBenchmarksByJob(?)}", procedure -> {
+	return Common.query("SELECT * FROM starexec.GetBenchmarksByJob(?)", procedure -> {
 			log.debug("Setting GetBenchmarksByJob parameter.");
 			procedure.setInt(1, jobId);
 		}, results -> {
@@ -1260,12 +1256,12 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	public static List<Integer> getAssociatedSpaceIds(int benchId) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetAssociatedSpaceIdsByBenchmark(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetAssociatedSpaceIdsByBenchmark(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			List<Integer> ids = new ArrayList<>();
@@ -1293,11 +1289,11 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	protected static Map<String, String> getAttributes(Connection con, int benchId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetBenchAttrs(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchAttrs(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 
@@ -1343,13 +1339,13 @@ public class Benchmarks {
 	 * @author Benton McCune
 	 */
 	public static List<BenchmarkDependency> getBenchDependencies(int benchmarkId) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL getPathsForBenchmarkDependencies(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.getPathsForBenchmarkDependencies(?)");
 			procedure.setInt(1, benchmarkId);
 			results = procedure.executeQuery();
 			List<BenchmarkDependency> dependencies = new LinkedList<>();
@@ -1401,7 +1397,7 @@ public class Benchmarks {
 		log.debug("getBenchIdByName", "Looking for Benchmark " + benchName + " in Space " + spaceId);
 		
 		try (Connection con = Common.getConnection();
-			CallableStatement procedure = con.prepareCall("{CALL GetBenchByName(?,?)}")) {
+			PreparedStatement procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchByName(?,?)")) {
 			
 			procedure.setInt(1, spaceId);
 			procedure.setString(2, benchName);
@@ -1439,12 +1435,12 @@ public class Benchmarks {
 	 * @author Wyatt Kaiser
 	 */
 	public static int getBenchmarkCountByUser(int userId) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchmarkCountByUser(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkCountByUser(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
@@ -1470,12 +1466,12 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	public static int getBenchmarkCountByUser(int userId, String query) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchmarkCountByUserWithQuery(?, ?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkCountByUserWithQuery(?, ?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, query);
 			results = procedure.executeQuery();
@@ -1627,13 +1623,13 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	public static List<Benchmark> getBySpace(int spaceId) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetSpaceBenchmarksById(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetSpaceBenchmarksById(?)");
 			procedure.setInt(1, spaceId);
 			results = procedure.executeQuery();
 			List<Benchmark> benchmarks = new LinkedList<>();
@@ -1700,11 +1696,12 @@ public class Benchmarks {
 	 */
 	public static int getCountInSpace(int spaceId, String query) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchmarkCountInSpaceWithQuery(?, ?)}");
+			// function returns a result-set/table; call it as a table to match the authoritative signature
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkCountInSpaceWithQuery(?, ?)");
 			procedure.setInt(1, spaceId);
 			procedure.setString(2, query);
 			results = procedure.executeQuery();
@@ -1759,10 +1756,11 @@ public class Benchmarks {
 	public static int getRecycledBenchmarkCountByUser(int userId, String query) {
 		Connection con = null;
 		ResultSet results = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL GetRecycledBenchmarkCountByUser(?,?)");
+			// function returns a result-set/table; call it as a table to match the authoritative signature
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRecycledBenchmarkCountByUser(?,?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, query);
 			results = procedure.executeQuery();
@@ -1789,11 +1787,11 @@ public class Benchmarks {
 	 * @author Wyatt Kaiser
 	 */
 	protected static TreeMap<String, String> getSortedAttributes(Connection con, int benchId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-			procedure = con.prepareCall("{CALL GetBenchAttrs(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchAttrs(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 
@@ -1840,10 +1838,10 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	protected static boolean isBenchmarkDeleted(Connection con, int benchId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL IsBenchmarkDeleted(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsBenchmarkDeleted(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			boolean deleted = false;
@@ -1889,10 +1887,10 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	protected static boolean isBenchmarkRecycled(Connection con, int benchId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL IsBenchmarkRecycled(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsBenchmarkRecycled(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			boolean deleted = false;
@@ -1973,25 +1971,25 @@ public class Benchmarks {
 	}
 
 	protected static boolean isPublic(Connection con, int benchId) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL IsBenchPublic(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsBenchPublic(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			boolean publicSpace = false;
 			if (results.next()) {
 				publicSpace = (results.getInt("benchPublic") > 0);
 			}
-
+		
 			if (publicSpace) {
 				return true;
 			}
-
+		
 			Common.safeClose(results);
 			Common.safeClose(procedure);
 			//if the benchmark is in no public spaces, check to see if it is the default benchmark for some community
-			procedure = con.prepareCall("CALL IsBenchACommunityDefault(?)");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsBenchACommunityDefault(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			if (results.next()) {
@@ -2039,13 +2037,13 @@ public class Benchmarks {
 	 */
 	public static boolean restoreRecycledBenchmarks(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
 			Common.safeClose(procedure);
-			procedure = con.prepareCall("CALL GetRecycledBenchmarkIds(?)");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRecycledBenchmarkIds(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
@@ -2113,11 +2111,11 @@ public class Benchmarks {
 	 */
 	public static boolean setRecycledBenchmarksToDeleted(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("CALL GetRecycledBenchmarkPaths(?)");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetRecycledBenchmarkPaths(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 
@@ -2125,9 +2123,9 @@ public class Benchmarks {
 				Util.safeDeleteDirectory(results.getString("path"));
 			}
 			Common.safeClose(procedure);
-			procedure = con.prepareCall("CALL SetRecycledBenchmarksToDeleted(?)");
+			procedure = con.prepareStatement("SELECT starexec.SetRecycledBenchmarksToDeleted(?)");
 			procedure.setInt(1, userId);
-			procedure.executeUpdate();
+			procedure.execute();
 
 			return true;
 		} catch (Exception e) {
@@ -2150,14 +2148,14 @@ public class Benchmarks {
 	 */
 	private static boolean setRecycledState(int id, boolean state) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetBenchmarkRecycledValue(?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.SetBenchmarkRecycledValue(?, ?)");
 			procedure.setInt(1, id);
 			procedure.setBoolean(2, state);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("setRecycledState", e);
@@ -2184,16 +2182,16 @@ public class Benchmarks {
 			int id, String name, String description, boolean isDownloadable, int benchTypeId
 	) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateBenchmarkDetails(?, ?, ?, ?, ?)}");
+			procedure = con.prepareStatement("SELECT starexec.UpdateBenchmarkDetails(?, ?, ?, ?, ?)");
 			procedure.setInt(1, id);
 			procedure.setString(2, name);
 			procedure.setString(3, description);
 			procedure.setBoolean(4, isDownloadable);
 			procedure.setInt(5, benchTypeId);
-			procedure.executeUpdate();
+			procedure.execute();
 			log.debug(String.format("Benchmark [id=%d] was successfully updated.", id));
 			return true;
 		} catch (Exception e) {
@@ -2310,11 +2308,11 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	private static boolean clearAttributes(int benchId, Connection con) {
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareCall("{CALL ClearBenchAttributes(?)}");
+			procedure = con.prepareStatement("SELECT starexec.ClearBenchAttributes(?)");
 			procedure.setInt(1, benchId);
-			procedure.executeUpdate();
+			procedure.execute();
 			return true;
 		} catch (Exception e) {
 			log.error("clearAttributes", e);
@@ -2454,14 +2452,14 @@ public class Benchmarks {
 	 * @return A list of orphaned benchmark IDs owned by the given user, or null on error.
 	 */
 	public static List<Integer> getOrphanedBenchmarks(int userId) {
-		Connection con = null;
-		CallableStatement procedure = null;
-		ResultSet results = null;
+	Connection con = null;
+	PreparedStatement procedure = null;
+	ResultSet results = null;
 		List<Integer> ids = new ArrayList<>();
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetOrphanedBenchmarkIds(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetOrphanedBenchmarkIds(?)");
 			procedure.setInt(1, userId);
 			results = procedure.executeQuery();
 			while (results.next()) {
@@ -2511,11 +2509,11 @@ public class Benchmarks {
 	 */
 	public static List<Benchmark> getBenchmarksInSharedSpaces(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBenchmarksInSharedSpaces(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarksInSharedSpaces(?)");
 			procedure.setInt(1, userId);
 
 			results = procedure.executeQuery();
@@ -2536,11 +2534,11 @@ public class Benchmarks {
 	 */
 	public static List<Benchmark> getPublicBenchmarks() {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetPublicBenchmarks()}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetPublicBenchmarks()");
 			results = procedure.executeQuery();
 			return resultsToBenchmarkWithType(results);
 		} catch (Exception e) {
@@ -2658,11 +2656,11 @@ public class Benchmarks {
 
 	public static List<Benchmark> getBrokenBenchDependencies(int benchId) throws SQLException {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBrokenBenchDependencies(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBrokenBenchDependencies(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			List<Benchmark> Benchmarks = new LinkedList<>();
@@ -2684,11 +2682,11 @@ public class Benchmarks {
 
 	public static Boolean benchHasBrokenDependencies(int benchId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetBrokenBenchDependencies(?)}");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetBrokenBenchDependencies(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 			List<Benchmark> Benchmarks = new LinkedList<>();

@@ -7,7 +7,7 @@ import org.starexec.data.to.Space;
 import org.starexec.data.to.enums.BenchmarkingFramework;
 import org.starexec.logger.StarLogger;
 
-import java.sql.CallableStatement;
+import java.sql.PreparedStatement;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -19,38 +19,37 @@ public class Settings {
 
 	public static int addNewSettingsProfile(DefaultSettings settings) {
 		Connection con = null;
-		CallableStatement procedure = null;
+			PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL CreateDefaultSettings(?, ?, ?, ?, ?, ?,?,?,?,?,?,?,?)}");
-			procedure.setInt(1, settings.getPrimId());
-			procedure.setObject(2, settings.getPostProcessorId());
-			procedure.setInt(3, settings.getCpuTimeout());
-			procedure.setInt(4, settings.getWallclockTimeout());
-			procedure.setBoolean(5, settings.isDependenciesEnabled());
-			procedure.setLong(6, settings.getMaxMemory()); //memory initialized to 1 gigabyte
-			procedure.setObject(7, settings.getSolverId());
-			procedure.setObject(8, settings.getBenchProcessorId());
-			procedure.setObject(9, settings.getPreProcessorId());
-			procedure.setInt(10, settings.getType().getValue());
-			procedure.setString(11, settings.getName());
-			procedure.setString(12, settings.getBenchmarkingFramework().toString());
-			procedure.registerOutParameter(13, java.sql.Types.INTEGER);
-			procedure.executeUpdate();
-
-			// Update the job's ID so it can be used outside this method
-			settings.setId(procedure.getInt(13));
+				ps = con.prepareStatement("SELECT starexec.CreateDefaultSettings(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+				ps.setInt(1, settings.getPrimId());
+				ps.setObject(2, settings.getPostProcessorId());
+				ps.setInt(3, settings.getCpuTimeout());
+				ps.setInt(4, settings.getWallclockTimeout());
+				ps.setBoolean(5, settings.isDependenciesEnabled());
+				ps.setLong(6, settings.getMaxMemory()); //memory initialized to 1 gigabyte
+				ps.setObject(7, settings.getSolverId());
+				ps.setObject(8, settings.getBenchProcessorId());
+				ps.setObject(9, settings.getPreProcessorId());
+				ps.setInt(10, settings.getType().getValue());
+				ps.setString(11, settings.getName());
+				ps.setString(12, settings.getBenchmarkingFramework().toString());
+				ResultSet rs = ps.executeQuery();
+				if (rs.next()) {
+					settings.setId(rs.getInt(1));
+				}
 
 			for (Integer benchId : settings.getBenchIds()) {
 				addDefaultBenchmark(settings.getId(), benchId);
 			}
 
 			return settings.getId();
-		} catch (Exception e) {
+			} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
+				Common.safeClose(con);
+				Common.safeClose(ps);
 		}
 		return -1;
 	}
@@ -63,10 +62,18 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	public static void addDefaultBenchmark(final int settingId, final int benchId) throws SQLException {
-		Common.update("{CALL AddDefaultBenchmark(?, ?)}", procedure -> {
-			procedure.setInt(1, settingId);
-			procedure.setInt(2, benchId);
-		});
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.AddDefaultBenchmark(?, ?)");
+			ps.setInt(1, settingId);
+			ps.setInt(2, benchId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -77,10 +84,18 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	public static void deleteDefaultBenchmark(final int settingId, final int benchId) throws SQLException {
-		Common.update("{CALL DeleteDefaultBenchmark(?, ?)}", procedure -> {
-			procedure.setInt(1, settingId);
-			procedure.setInt(2, benchId);
-		});
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.DeleteDefaultBenchmark(?, ?)");
+			ps.setInt(1, settingId);
+			ps.setInt(2, benchId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -90,7 +105,17 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	protected static void deleteAllDefaultBenchmarks(final int settingId) throws SQLException {
-		Common.update("{CALL DeleteAllDefaultBenchmarks(?)}", procedure -> procedure.setInt(1, settingId));
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.DeleteAllDefaultBenchmarks(?)");
+			ps.setInt(1, settingId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -101,9 +126,14 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	protected static void deleteAllDefaultBenchmarks(final Connection con, final int settingId) throws SQLException {
-		Common.updateUsingConnection(con, "{CALL DeleteAllDefaultBenchmarks(?)}",
-		                             procedure -> procedure.setInt(1, settingId)
-		);
+		PreparedStatement ps = null;
+		try {
+			ps = con.prepareStatement("SELECT starexec.DeleteAllDefaultBenchmarks(?)");
+			ps.setInt(1, settingId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+		}
 	}
 
 	/**
@@ -117,11 +147,15 @@ public class Settings {
 	protected static void addDefaultBenchmark(
 			final Connection con, final int settingId, final int benchId
 	) throws SQLException {
-
-		Common.updateUsingConnection(con, "{CALL AddDefaultBenchmark(?, ?)}", procedure -> {
-			procedure.setInt(1, settingId);
-			procedure.setInt(2, benchId);
-		});
+		PreparedStatement ps = null;
+		try {
+			ps = con.prepareStatement("SELECT starexec.AddDefaultBenchmark(?, ?)");
+			ps.setInt(1, settingId);
+			ps.setInt(2, benchId);
+			ps.execute();
+		} finally {
+			Common.safeClose(ps);
+		}
 	}
 
 	/**
@@ -132,9 +166,20 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	public static List<Benchmark> getDefaultBenchmarks(final int settingId) throws SQLException {
-		return Common.query("{CALL GetDefaultBenchmarksForSetting(?)}", procedure -> procedure.setInt(1, settingId),
-		                    Settings::resultsToBenchmarks
-		);
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDefaultBenchmarksForSetting(?)");
+			ps.setInt(1, settingId);
+			results = ps.executeQuery();
+			return Settings.resultsToBenchmarks(results);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -146,9 +191,17 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	protected static List<Benchmark> getDefaultBenchmarks(Connection con, final int settingId) throws SQLException {
-		return Common.queryUsingConnection(con, "{CALL GetDefaultBenchmarksForSetting(?)}",
-		                                   procedure -> procedure.setInt(1, settingId), Settings::resultsToBenchmarks
-		);
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDefaultBenchmarksForSetting(?)");
+			ps.setInt(1, settingId);
+			results = ps.executeQuery();
+			return Settings.resultsToBenchmarks(results);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+		}
 	}
 
 	private static List<Benchmark> resultsToBenchmarks(ResultSet results) throws SQLException {
@@ -169,9 +222,20 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	public static List<Integer> getDefaultBenchmarkIds(final int settingId) throws SQLException {
-		return Common.query("{CALL GetDefaultBenchmarkIdsForSetting(?)}", procedure -> procedure.setInt(1, settingId),
-		                    Settings::resultsToBenchmarkIds
-		);
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDefaultBenchmarkIdsForSetting(?)");
+			ps.setInt(1, settingId);
+			results = ps.executeQuery();
+			return Settings.resultsToBenchmarkIds(results);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
 	}
 
 	/**
@@ -182,9 +246,17 @@ public class Settings {
 	 * @throws SQLException on database error.
 	 */
 	public static List<Integer> getDefaultBenchmarkIds(Connection con, final int settingId) throws SQLException {
-		return Common.query("{CALL GetDefaultBenchmarkIdsForSetting(?)}", procedure -> procedure.setInt(1, settingId),
-		                    Settings::resultsToBenchmarkIds
-		);
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDefaultBenchmarkIdsForSetting(?)");
+			ps.setInt(1, settingId);
+			results = ps.executeQuery();
+			return Settings.resultsToBenchmarkIds(results);
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+		}
 	}
 
 	private static List<Integer> resultsToBenchmarkIds(ResultSet results) throws SQLException {
@@ -204,24 +276,23 @@ public class Settings {
 	 */
 	public static boolean updateDefaultSettings(DefaultSettings settings) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-
-			procedure = con.prepareCall("{CALL UpdateDefaultSettings(?, ?, ?, ?, ?, ?,?,?,?,?)}");
-			procedure.setObject(1, settings.getPostProcessorId());
-			procedure.setInt(2, settings.getCpuTimeout());
-			procedure.setInt(3, settings.getWallclockTimeout());
-			procedure.setBoolean(4, settings.isDependenciesEnabled());
-			procedure.setLong(5, settings.getMaxMemory()); //memory initialized to 1 gigabyte
-			procedure.setObject(6, settings.getSolverId());
-			procedure.setObject(7, settings.getBenchProcessorId());
-			procedure.setObject(8, settings.getPreProcessorId());
-			procedure.setString(9, settings.getBenchmarkingFramework().toString());
-			procedure.setInt(10, settings.getId());
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.UpdateDefaultSettings(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+			ps.setObject(1, settings.getPostProcessorId());
+			ps.setInt(2, settings.getCpuTimeout());
+			ps.setInt(3, settings.getWallclockTimeout());
+			ps.setBoolean(4, settings.isDependenciesEnabled());
+			ps.setLong(5, settings.getMaxMemory()); //memory initialized to 1 gigabyte
+			ps.setObject(6, settings.getSolverId());
+			ps.setObject(7, settings.getBenchProcessorId());
+			ps.setObject(8, settings.getPreProcessorId());
+			ps.setString(9, settings.getBenchmarkingFramework().toString());
+			ps.setInt(10, settings.getId());
+			ps.execute();
 
 			Settings.deleteAllDefaultBenchmarks(con, settings.getId());
 			for (Integer bid : settings.getBenchIds()) {
@@ -235,7 +306,7 @@ public class Settings {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -309,15 +380,15 @@ public class Settings {
 	protected static List<DefaultSettings> getDefaultSettingsByPrimIdAndType(Connection con, int id, SettingType
 			type) {
 
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 
 		try {
 			List<DefaultSettings> settings = new ArrayList<>();
-			procedure = con.prepareCall("{CALL GetDefaultSettingsByIdAndType(?,?)}");
-			procedure.setInt(1, id);
-			procedure.setInt(2, type.getValue());
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDefaultSettingsByIdAndType(?,?)");
+			ps.setInt(1, id);
+			ps.setInt(2, type.getValue());
+			results = ps.executeQuery();
 			while (results.next()) {
 				DefaultSettings setting = resultsToSettings(results);
 				setting.setBenchIds(Settings.getDefaultBenchmarkIds(con, setting.getId()));
@@ -327,7 +398,7 @@ public class Settings {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null; //error;
@@ -464,18 +535,18 @@ public class Settings {
 	 */
 	public static boolean deleteProfile(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL DeleteDefaultSettings(?)}");
-			procedure.setInt(1, id);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.DeleteDefaultSettings(?)");
+			ps.setInt(1, id);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false; //error;
 	}
@@ -489,13 +560,13 @@ public class Settings {
 	public static DefaultSettings getProfileById(int id) throws SQLException {
 		final String methodName = "getProfileById";
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL getProfileById(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.getProfileById(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			if (results.next()) {
 				DefaultSettings settings = resultsToSettings(results);
 				settings.setBenchIds(Settings.getDefaultBenchmarkIds(con, settings.getId()));
@@ -506,7 +577,7 @@ public class Settings {
 			throw e;
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -521,18 +592,18 @@ public class Settings {
 	 */
 	public static boolean setDefaultMaxMemory(int id, long bytes) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetMaximumMemorySetting(?, ?)}");
-			procedure.setInt(1, id);
-			procedure.setLong(2, bytes);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.SetMaximumMemorySetting(?, ?)");
+			ps.setInt(1, id);
+			ps.setLong(2, bytes);
+			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return true;
@@ -548,19 +619,19 @@ public class Settings {
 	 */
 	public static boolean setDefaultProfileForUser(int userId, int settingId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetDefaultProfileForUser(?,?)}");
-			procedure.setInt(1, userId);
-			procedure.setInt(2, settingId);
-			procedure.executeUpdate();
+			ps = con.prepareStatement("SELECT starexec.SetDefaultProfileForUser(?,?)");
+			ps.setInt(1, userId);
+			ps.setInt(2, settingId);
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 		return false;
 	}
@@ -575,13 +646,13 @@ public class Settings {
 	 */
 	public static Integer getDefaultProfileForUser(int userId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetDefaultProfileForUser(?)}");
-			procedure.setInt(1, userId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetDefaultProfileForUser(?)");
+			ps.setInt(1, userId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				int result = results.getInt("default_settings_profile");
 				//a value of 0 means the field is null in SQL
@@ -594,7 +665,7 @@ public class Settings {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return -1;
@@ -613,27 +684,27 @@ public class Settings {
 	 */
 	public static boolean updateSettingsProfile(int id, int num, long setting) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL SetDefaultSettingsById(?, ?, ?)}");
-			procedure.setInt(1, id);
-			procedure.setInt(2, num);
+			ps = con.prepareStatement("SELECT starexec.SetDefaultSettingsById(?, ?, ?)");
+			ps.setInt(1, id);
+			ps.setInt(2, num);
 			//if we are setting one of the IDs and it is -1, this means there is no setting
 			//and we should use null
 			if ((num == 1 || num == 5 || num == 6 || num == 7 || num == 8) && setting == -1) {
-				procedure.setObject(3, null);
+				ps.setObject(3, null);
 			} else {
-				procedure.setInt(3, (int) setting);
+				ps.setInt(3, (int) setting);
 			}
 
-			procedure.executeUpdate();
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return false;

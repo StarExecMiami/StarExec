@@ -6,7 +6,8 @@ import org.starexec.data.to.Queue;
 import org.starexec.data.to.WorkerNode;
 import org.starexec.logger.StarLogger;
 
-import java.sql.CallableStatement;
+import java.sql.SQLException;
+import java.sql.PreparedStatement;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.util.LinkedList;
@@ -98,12 +99,12 @@ public class Cluster {
 	 * @author Tyler Jensen
 	 */
 	protected static WorkerNode getNodeDetails(Connection con, int id) {
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			procedure = con.prepareCall("{CALL GetNodeDetails(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNodeDetails(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			WorkerNode node = new WorkerNode();
 			if (results.next()) {
 				node.setName(results.getString("name"));
@@ -116,7 +117,7 @@ public class Cluster {
 			log.error("getNodeDetails", e);
 		} finally {
 			Common.safeClose(results);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		return null;
@@ -153,20 +154,20 @@ public class Cluster {
 	 */
 	public static List<WorkerNode> getNodesForQueue(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetNodesForQueue(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNodesForQueue(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			List<WorkerNode> nodes = new LinkedList<>();
 
 			while (results.next()) {
 				WorkerNode n = new WorkerNode();
-				n.setName(results.getString("node.name"));
-				n.setId(results.getInt("node.id"));
-				n.setStatus(results.getString("node.status"));
+				n.setName(results.getString("name"));
+				n.setId(results.getInt("id"));
+				n.setStatus(results.getString("status"));
 				nodes.add(n);
 			}
 
@@ -175,7 +176,7 @@ public class Cluster {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 
@@ -201,26 +202,27 @@ public class Cluster {
 	 */
 	public static boolean setNodeStatus(String name, String status) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
 			if (name == null) {
 				// If no name was supplied, apply to all nodes
-				procedure = con.prepareCall("{CALL UpdateAllNodeStatus(?)}");
-				procedure.setString(1, status);
+				ps = con.prepareStatement("SELECT starexec.UpdateAllNodeStatus(?)");
+				ps.setString(1, status);
 			} else {
-				procedure = con.prepareCall("{CALL UpdateNodeStatus(?, ?)}");
-				procedure.setString(1, name);
-				procedure.setString(2, status);
+				ps = con.prepareStatement("SELECT starexec.UpdateNodeStatus(?, ?)");
+				ps.setString(1, name);
+				ps.setString(2, status);
 			}
-			procedure.executeUpdate();
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		log.debug(String.format("Status for node [%s] failed to be updated.", (name == null) ? "ALL" : name));
@@ -234,22 +236,23 @@ public class Cluster {
 	 */
 	public static void deleteNode(int nodeId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL DeleteNode(?)}");
+			ps = con.prepareStatement("SELECT starexec.DeleteNode(?)");
 
-			// First, add the node (MySQL will ignore this if it already exists)
-			procedure.setInt(1, nodeId);
-			procedure.executeUpdate();
+			// First, add the node (PostgreSQL will ignore this if it already exists)
+			ps.setInt(1, nodeId);
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 
 			// Done, commit the changes
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 	}
 
@@ -261,15 +264,16 @@ public class Cluster {
 	 */
 	public static void addNodeIfNotExists(String name) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL AddNode(?)}");
+			ps = con.prepareStatement("SELECT starexec.AddNode(?)");
 
-			// First, add the node (MySQL will ignore this if it already exists)
-			procedure.setString(1, name);
-			procedure.executeUpdate();
+			// First, add the node (PostgreSQL will ignore this if it already exists)
+			ps.setString(1, name);
+			ps.execute();
+			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
 
 			// Done, commit the changes
 			return;
@@ -277,7 +281,7 @@ public class Cluster {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 		}
 
 		log.debug(String.format("Node [%s] failed to be updated.", name));
@@ -291,15 +295,15 @@ public class Cluster {
 	 */
 	public static List<Job> getJobsRunningOnQueue(int queueId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetJobsRunningOnQueue(?)}");
-			procedure.setInt(1, queueId);
+			ps = con.prepareStatement("SELECT * FROM starexec.GetJobsRunningOnQueue(?)");
+			ps.setInt(1, queueId);
 
-			results = procedure.executeQuery();
+			results = ps.executeQuery();
 			List<Job> jobs = new LinkedList<>();
 
 			while (results.next()) {
@@ -318,7 +322,7 @@ public class Cluster {
 			log.error("getJobsRunningOnQueue", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -332,13 +336,13 @@ public class Cluster {
 	public static List<WorkerNode> getAllNodes() {
 		log.debug("Starting getAllNodes...");
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetAllNodes()}");
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetAllNodes()");
+			results = ps.executeQuery();
 			List<WorkerNode> nodes = new LinkedList<>();
 			while (results.next()) {
 				WorkerNode n = new WorkerNode();
@@ -352,7 +356,7 @@ public class Cluster {
 			log.error("getAllNodes", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -367,14 +371,14 @@ public class Cluster {
 	public static List<WorkerNode> getNonAttachedNodes(int queueId) {
 		log.debug("Starting getNonAttachedNodes...");
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetNonAttachedNodes(?)}");
-			procedure.setInt(1, queueId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNonAttachedNodes(?)");
+			ps.setInt(1, queueId);
+			results = ps.executeQuery();
 			List<WorkerNode> nodes = new LinkedList<>();
 			while (results.next()) {
 				WorkerNode n = new WorkerNode();
@@ -397,7 +401,7 @@ public class Cluster {
 			log.error("getNonAttachedNodes", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -411,14 +415,14 @@ public class Cluster {
 	 */
 	public static Queue getQueueForNode(int nodeId) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 
-			procedure = con.prepareCall("{CALL GetQueueForNode(?)}");
-			procedure.setInt(1, nodeId);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetQueueForNode(?)");
+			ps.setInt(1, nodeId);
+			results = ps.executeQuery();
 			if (results.next()) {
 				Queue q = new Queue();
 				q.setId(results.getInt("id"));
@@ -430,7 +434,7 @@ public class Cluster {
 			log.error("getQueueForNode", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
@@ -444,13 +448,13 @@ public class Cluster {
 	 */
 	public static int getNodeIdByName(String nodeName) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetNodeIdByName(?)}");
-			procedure.setString(1, nodeName);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNodeIdByName(?)");
+			ps.setString(1, nodeName);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return results.getInt("id");
 			}
@@ -458,7 +462,7 @@ public class Cluster {
 			log.error("getNodeIdByName", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return -1;
@@ -472,13 +476,13 @@ public class Cluster {
 	 */
 	public static String getNodeNameById(int id) {
 		Connection con = null;
-		CallableStatement procedure = null;
+		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL GetNodeNameById(?)}");
-			procedure.setInt(1, id);
-			results = procedure.executeQuery();
+			ps = con.prepareStatement("SELECT * FROM starexec.GetNodeNameById(?)");
+			ps.setInt(1, id);
+			results = ps.executeQuery();
 			if (results.next()) {
 				return results.getString("name");
 			}
@@ -486,7 +490,7 @@ public class Cluster {
 			log.error("getNodeNameById", e);
 		} finally {
 			Common.safeClose(con);
-			Common.safeClose(procedure);
+			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
 		return null;
