@@ -3017,14 +3017,14 @@ public class Spaces {
 			results = ps.executeQuery();
 
 			while (results.next()) {
-				String spaceName = results.getString("space.name");
+				String spaceName = results.getString("name");
 				if (expectedName.equals(spaceName)) {
 					Space s = new Space();
-					s.setId(results.getInt("space.id"));
+					s.setId(results.getInt("id"));
 					s.setName(spaceName);
-					s.setDescription(results.getString("space.description"));
-					s.setLocked(results.getBoolean("space.locked"));
-					s.setStickyLeaders(results.getBoolean("space.sticky_leaders"));
+					s.setDescription(results.getString("description"));
+					s.setLocked(results.getBoolean("locked"));
+					s.setStickyLeaders(results.getBoolean("sticky_leaders"));
 					return s;
 				}
 			}
