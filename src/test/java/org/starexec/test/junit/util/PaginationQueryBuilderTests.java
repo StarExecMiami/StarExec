@@ -23,7 +23,7 @@ public class PaginationQueryBuilderTests {
 	@Test
 	public void testGetSQLDESC() {
 		PaginationQueryBuilder b = new PaginationQueryBuilder(baseSQL, "first_name", query);
-		String expected = "select * from users\nORDER BY first_name DESC\nLIMIT 3, 5;";
+		String expected = "select * from users\nORDER BY first_name DESC\nLIMIT 5 OFFSET 3;";
 		Assert.assertEquals(expected, b.getSQL());
 	}
 	
@@ -31,7 +31,7 @@ public class PaginationQueryBuilderTests {
 	public void testGetSQLASC() {
 		query.setSortASC(true);
 		PaginationQueryBuilder b = new PaginationQueryBuilder(baseSQL, "first_name", query);
-		String expected = "select * from users\nORDER BY first_name ASC\nLIMIT 3, 5;";
+		String expected = "select * from users\nORDER BY first_name ASC\nLIMIT 5 OFFSET 3;";
 		Assert.assertEquals(expected, b.getSQL());
 		
 	}
