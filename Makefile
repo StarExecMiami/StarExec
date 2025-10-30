@@ -1,7 +1,7 @@
 # StarExec DevOps Build System
 
 IMAGE_REGISTRY?=ghcr.io/andrescdo
-IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
+IMAGE_NAME?=starexec
 IMAGE_TAG?=latest
 CHART_DIR=./chart
 RELEASE_NAME?=starexec
