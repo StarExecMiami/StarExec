@@ -29,7 +29,7 @@ list_volumes() {
 create_volumes() {
     local env="${1:-dev}"
     local data_vol="${VOLUME_PREFIX}-${env}-data"
-    local mysql_vol="${VOLUME_PREFIX}-${env}-mysql"
+    local pg_vol="${VOLUME_PREFIX}-${env}-postgres"
     
     log_info "Creating volumes for environment: ${env}"
     
@@ -40,11 +40,11 @@ create_volumes() {
         log_info "Created $data_vol"
     fi
     
-    if podman volume exists "$mysql_vol" 2>/dev/null; then
-        log_warn "Volume $mysql_vol already exists"
+    if podman volume exists "$pg_vol" 2>/dev/null; then
+        log_warn "Volume $pg_vol already exists"
     else
-        podman volume create "$mysql_vol"
-        log_info "Created $mysql_vol"
+        podman volume create "$pg_vol"
+        log_info "Created $pg_vol"
     fi
 }
 
@@ -113,7 +113,7 @@ backup_all() {
     log_info "Backing up all volumes for environment: $env"
     
     export_volume "${VOLUME_PREFIX}-${env}-data" "${BACKUP_DIR}/${backup_name}-data.tar.gz"
-    export_volume "${VOLUME_PREFIX}-${env}-mysql" "${BACKUP_DIR}/${backup_name}-mysql.tar.gz"
+    export_volume "${VOLUME_PREFIX}-${env}-postgres" "${BACKUP_DIR}/${backup_name}-postgres.tar.gz"
     
     log_info "Full backup complete. Archive contents:"
     ls -lh "${BACKUP_DIR}/${backup_name}"*.tar.gz
@@ -132,10 +132,10 @@ restore_all() {
     fi
     
     local data_archive="${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}-data.tar.gz"
-    local mysql_archive="${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}-mysql.tar.gz"
+    local pg_archive="${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}-postgres.tar.gz"
     
     import_volume "$data_archive" "${VOLUME_PREFIX}-${env}-data"
-    import_volume "$mysql_archive" "${VOLUME_PREFIX}-${env}-mysql"
+    import_volume "$pg_archive" "${VOLUME_PREFIX}-${env}-postgres"
     
     log_info "Full restore complete for environment: $env"
 }
@@ -152,11 +152,11 @@ clone_env() {
     
     # Export source
     export_volume "${VOLUME_PREFIX}-${source_env}-data" "${temp_dir}/data.tar.gz"
-    export_volume "${VOLUME_PREFIX}-${source_env}-mysql" "${temp_dir}/mysql.tar.gz"
+    export_volume "${VOLUME_PREFIX}-${source_env}-postgres" "${temp_dir}/postgres.tar.gz"
     
     # Import to target
     import_volume "${temp_dir}/data.tar.gz" "${VOLUME_PREFIX}-${target_env}-data"
-    import_volume "${temp_dir}/mysql.tar.gz" "${VOLUME_PREFIX}-${target_env}-mysql"
+    import_volume "${temp_dir}/postgres.tar.gz" "${VOLUME_PREFIX}-${target_env}-postgres"
     
     rm -rf "$temp_dir"
     log_info "Clone complete"
@@ -176,7 +176,7 @@ delete_volumes() {
     fi
     
     podman volume rm "${VOLUME_PREFIX}-${env}-data" 2>/dev/null || log_warn "Data volume not found"
-    podman volume rm "${VOLUME_PREFIX}-${env}-mysql" 2>/dev/null || log_warn "MySQL volume not found"
+    podman volume rm "${VOLUME_PREFIX}-${env}-postgres" 2>/dev/null || log_warn "Postgres volume not found"
     
     log_info "Volumes deleted for environment: $env"
 }
@@ -195,32 +195,33 @@ inspect_volume() {
     podman run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest ls -lah /data
 }
 
-# MySQL database dump (logical backup)
-dump_mysql() {
+# PostgreSQL logical dump (logical backup)
+dump_postgres() {
     local env="${1:-dev}"
-    local output="${BACKUP_DIR}/mysql-dump-${env}-${DATE_STAMP}.sql.gz"
+    local output="${BACKUP_DIR}/postgres-dump-${env}-${DATE_STAMP}.sql.gz"
     
     mkdir -p "$BACKUP_DIR"
     
-    log_info "Creating MySQL logical dump for environment: $env"
+    log_info "Creating PostgreSQL logical dump for environment: $env"
     
-    # This assumes MySQL container is running
-    local container_name="starexec-mysql"
-    local db_name="starexec"
-    local db_user="root"
+    # This assumes PostgreSQL container is running
+    local container_name="starexec-postgres"
+    local db_name="${STAREXEC_DB_NAME:-starexec}"
+    local db_user="${STAREXEC_DB_USER:-postgres}"
     local db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
     
-    podman exec "$container_name" \
-        mysqldump -u"$db_user" -p"$db_pass" "$db_name" | gzip > "$output"
+    # Export using pg_dump inside the running container; pass password via env
+    podman exec -e PGPASSWORD="$db_pass" "$container_name" \
+        pg_dump -U "$db_user" -d "$db_name" | gzip > "$output"
     
-    log_info "MySQL dump complete: $output"
+    log_info "Postgres dump complete: $output"
     log_info "Size: $(du -h "$output" | cut -f1)"
 }
 
 # Show help
 show_help() {
     cat <<EOF
-Podman Volume Management for StarExec
+Podman Volume Management for StarExec (PostgreSQL)
 
 Usage: $0 <command> [arguments]
 
@@ -234,7 +235,7 @@ Commands:
   clone <source-env> <target>   Clone one environment to another
   delete <env>                  Delete all volumes for environment
   inspect <volume>              Show volume details and contents
-  dump-mysql <env>              Create MySQL logical dump
+  dump-postgres <env>           Create PostgreSQL logical dump
   help                          Show this help message
 
 Examples:
@@ -258,7 +259,9 @@ Examples:
 Environment Variables:
   VOLUME_PREFIX    Volume name prefix (default: starexec)
   BACKUP_DIR       Backup directory (default: ./backups)
-  STAREXEC_DB_PASSWORD  MySQL password for dumps
+  STAREXEC_DB_USER PostgreSQL user for dumps (default: postgres)
+  STAREXEC_DB_NAME Database name to dump (default: starexec)
+  STAREXEC_DB_PASSWORD  PostgreSQL password for dumps
 
 EOF
 }
@@ -278,7 +281,7 @@ main() {
         clone) clone_env "$@" ;;
         delete) delete_volumes "$@" ;;
         inspect) inspect_volume "$@" ;;
-        dump-mysql) dump_mysql "$@" ;;
+        dump-postgres) dump_postgres "$@" ;;
         help|--help|-h) show_help ;;
         *) 
             log_error "Unknown command: $cmd"
