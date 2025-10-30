@@ -10,64 +10,66 @@ services:
       - "8080:8080"
     environment:
       # Database Configuration
-      STAREXEC_DB_HOST: mysql
+      STAREXEC_DB_HOST: postgres
       STAREXEC_DB_USER: starexec
       STAREXEC_DB_PASSWORD: starexec_dev_password
       STAREXEC_DB_NAME: starexec
-      STAREXEC_REPORT_HOST: mysql
-      
-      # Email Configuration (configure as needed)
+      STAREXEC_REPORT_HOST: postgres
+
+      # Email Configuration
       STAREXEC_EMAIL_SMTP: localhost
       STAREXEC_EMAIL_PORT: 25
       STAREXEC_EMAIL_USER: noreply@starexec.local
       STAREXEC_CONTACT_EMAIL: admin@starexec.local
-      
+
       # Web Configuration
       STAREXEC_WEB_ADDRESS: localhost
       STAREXEC_APP_NAME: ""
       STAREXEC_PROXY_SCHEME: http://
       STAREXEC_PROXY_PORT: 8080
-      
+
       # Data directories
       STAREXEC_DATA_DIR: /app/data
       STAREXEC_SANDBOX_DIR: /app/sandbox
-      
+
       # Backend Configuration
       STAREXEC_BACKEND_TYPE: local
       STAREXEC_BACKEND_ROOT: /app/backend
       STAREXEC_BACKEND_WORKING_DIR: /app/work
-      
+
       # Testing
       STAREXEC_ALLOW_TESTING: "True"
       STAREXEC_TEST_COMMUNITY_ID: 1
-      
+
     volumes:
       - starexec_data:/app/data
       - starexec_sandbox:/app/sandbox
       - starexec_backend:/app/backend
       - starexec_work:/app/work
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
     networks:
       - starexec_network
 
-  mysql:
-    container_name: starexec-mysql
-    image: docker.io/library/mysql:8.4
+  postgres:
+    container_name: starexec-postgres
+    image: postgres:16
     environment:
-      MYSQL_ROOT_PASSWORD: starexec_dev_password
-      MYSQL_DATABASE: starexec
-      MYSQL_USER: starexec
-      MYSQL_PASSWORD: starexec_dev_password
+      POSTGRES_DB: starexec
+      POSTGRES_USER: starexec
+      POSTGRES_PASSWORD: starexec_dev_password
+      # Ensure UTF-8 collation/ctype so PostgreSQL behaves like typical UTF-8 installs
+      # Note: these take effect when the DB cluster is initialized; if the volume
+      # already contains an initialized database, re-init or remove the volume.
+      LC_COLLATE: en_US.UTF-8
+      LC_CTYPE: en_US.UTF-8
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
-    command: ["docker-entrypoint.sh", "mysqld", 
-              "--log-bin-trust-function-creators=1"]
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u starexec -pstarexec_dev_password"]
+      test: ["CMD-SHELL", "pg_isready -U starexec"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -79,7 +81,7 @@ volumes:
   starexec_sandbox:
   starexec_backend:
   starexec_work:
-  mysql_data:
+  postgres_data:
 
 networks:
   starexec_network:
