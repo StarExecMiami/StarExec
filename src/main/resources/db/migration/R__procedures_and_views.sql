@@ -2723,9 +2723,10 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.jobs
-    WHERE user_id = _userId AND deleted = false
-    ORDER BY created DESC;
+    SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.created, jobs.seed, jobs.cputimeout, jobs.clocktimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildjob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.deleted, jobs.benchmarking_framework
+    FROM starexec.jobs
+    WHERE jobs.user_id = _userId AND jobs.deleted = false
+    ORDER BY jobs.created DESC;
 END;
 $$ LANGUAGE plpgsql;
 
