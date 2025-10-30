@@ -9,7 +9,27 @@
 -- case of deleted configurations
 -- Author: Alexander Brown
 
+-- Update the minor version flag
 UPDATE system_flags SET minor_version=6;
 
-ALTER TABLE configurations ADD COLUMN deleted INT DEFAULT 0;
-ALTER TABLE solvers ADD COLUMN config_deleted INT DEFAULT 0;
+-- Add columns only if they don't already exist (make migration idempotent / safe for DBs
+-- where earlier edits already added these columns).
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'configurations'
+		  AND column_name = 'deleted'
+	) THEN
+		ALTER TABLE configurations ADD COLUMN deleted INT DEFAULT 0;
+	END IF;
+	IF NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name = 'solvers'
+		  AND column_name = 'config_deleted'
+	) THEN
+		ALTER TABLE solvers ADD COLUMN config_deleted INT DEFAULT 0;
+	END IF;
+END$$;

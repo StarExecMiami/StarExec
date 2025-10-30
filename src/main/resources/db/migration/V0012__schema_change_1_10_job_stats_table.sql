@@ -21,12 +21,14 @@ CREATE TABLE job_stats (
 	incomplete INT NOT NULL,
 	conflicts INT NOT NULL,
 	failed INT NOT NULL,
-	wallclock DOUBLE,
-	cpu DOUBLE,
+	wallclock DOUBLE PRECISION,
+	cpu DOUBLE PRECISION,
 	resource_out INT NOT NULL,
 	stage_number INT NOT NULL DEFAULT 0, -- what stage is this? from 1...n, with 0 meaning the primary stage
     include_unknowns BOOLEAN NOT NULL DEFAULT FALSE,
 	PRIMARY KEY (job_space_id,config_id,stage_number, include_unknowns),
-	CONSTRAINT job_stats_job_space_id FOREIGN KEY (job_space_id) REFERENCES job_spaces(id) ON DELETE CASCADE,
-	KEY (config_id)
+	CONSTRAINT job_stats_job_space_id FOREIGN KEY (job_space_id) REFERENCES job_spaces(id) ON DELETE CASCADE
 );
+
+-- Indexes for job_stats table
+CREATE INDEX idx_job_stats_config_id ON job_stats(config_id);

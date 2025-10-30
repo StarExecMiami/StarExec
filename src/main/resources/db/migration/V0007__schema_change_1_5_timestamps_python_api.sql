@@ -4,15 +4,15 @@
 
 UPDATE system_flags SET minor_version=5;
 
-ALTER TABLE users              CHANGE COLUMN created     created     TIMESTAMP DEFAULT NOW();
-ALTER TABLE spaces             CHANGE COLUMN created     created     TIMESTAMP DEFAULT NOW();
-ALTER TABLE benchmarks         CHANGE COLUMN uploaded    uploaded    TIMESTAMP DEFAULT NOW();
-ALTER TABLE solvers            CHANGE COLUMN uploaded    uploaded    TIMESTAMP DEFAULT NOW();
-ALTER TABLE solver_pipelines   CHANGE COLUMN uploaded    uploaded    TIMESTAMP DEFAULT NOW();
--- ALTER TABLE jobs               CHANGE COLUMN completed   completed   TIMESTAMP DEFAULT NOW();
-ALTER TABLE verify             CHANGE COLUMN created     created     TIMESTAMP DEFAULT NOW();
-ALTER TABLE community_requests CHANGE COLUMN created     created     TIMESTAMP DEFAULT NOW();
-ALTER TABLE pass_reset_request CHANGE COLUMN created     created     TIMESTAMP DEFAULT NOW();
-ALTER TABLE benchmark_uploads  CHANGE COLUMN upload_time upload_time TIMESTAMP DEFAULT NOW();
+ALTER TABLE users              ALTER COLUMN created     SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE spaces             ALTER COLUMN created     SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE benchmarks         ALTER COLUMN uploaded    SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE solvers            ALTER COLUMN uploaded    SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE solver_pipelines   ALTER COLUMN uploaded    SET DEFAULT CURRENT_TIMESTAMP;
+-- ALTER TABLE jobs               ALTER COLUMN completed   SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE verify             ALTER COLUMN created     SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE community_requests ALTER COLUMN created     SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE pass_reset_request ALTER COLUMN created     SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE benchmark_uploads  ALTER COLUMN upload_time SET DEFAULT CURRENT_TIMESTAMP;
 
 INSERT INTO analytics_events (name) VALUES ('PYTHON_API_LOGIN');

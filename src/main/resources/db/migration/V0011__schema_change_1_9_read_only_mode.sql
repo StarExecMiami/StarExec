@@ -3,20 +3,16 @@
 -- the requirements as specified in ticket 353
 -- Author: aguo2
 
-SET @stmt := (
-    SELECT IF(
-        EXISTS(
-            SELECT 1
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-                AND TABLE_NAME = 'system_flags'
-                AND COLUMN_NAME = 'read_only'
-        ),
-        'SELECT 1',  -- no-op if column exists
-        'ALTER TABLE system_flags ADD COLUMN read_only VARCHAR(200) NOT NULL DEFAULT \'false\''
-    )
-);
-
-PREPARE add_col FROM @stmt;
-EXECUTE add_col;
-DEALLOCATE PREPARE add_col;
+-- Add 'read_only' column if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+            AND table_name = 'system_flags'
+            AND column_name = 'read_only'
+    ) THEN
+        ALTER TABLE system_flags ADD COLUMN read_only BOOLEAN NOT NULL DEFAULT FALSE;
+    END IF;
+END $$;
