@@ -77,6 +77,9 @@ public class RESTHelpers {
 	 */
 	protected static List<JSTreeItem> toSpaceTree(List<Space> spaceList, int userID) {
 		List<JSTreeItem> list = new LinkedList<>();
+		if (spaceList == null) {
+			return list;
+		}
 		for (Space space : spaceList) {
 			String isOpen = Spaces.getCountInSpace(space.getId(), userID, true) > 0 ? "closed" : "leaf";
 			list.add(new JSTreeItem(space.getName(), space.getId(), isOpen, R.SPACE));
