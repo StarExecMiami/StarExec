@@ -727,7 +727,7 @@ BEGIN
 	JOIN bench_assoc ba ON ba.bench_id = b.id
 	JOIN spaces s ON s.id = ba.space_id
 	LEFT OUTER JOIN processors p ON b.bench_type = p.id
-	WHERE s.public_access = 1 AND b.deleted = false AND b.recycled = false;
+	WHERE s.public_access = true AND b.deleted = false AND b.recycled = false;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1812,7 +1812,7 @@ DECLARE
 BEGIN
 	SELECT COUNT(*) INTO space_count FROM starexec.job_assoc
 	INNER JOIN spaces ON spaces.id=job_assoc.space_id
-	WHERE job_id=_jobId AND spaces.public_access=1;
+	WHERE job_id=_jobId AND spaces.public_access=true;
 	RETURN space_count;
 END;
 $$ LANGUAGE plpgsql;
@@ -4071,10 +4071,10 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetAllSyntaxes CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetAllSyntaxes()
-RETURNS TABLE(id INT, name CHAR(32), extension VARCHAR(8)) AS $$
+RETURNS TABLE(id INT, name CHAR(32), class CHAR(32), js CHAR(32)) AS $$
 BEGIN
     RETURN QUERY
-    SELECT s.id, s.name, s.extension FROM starexec.syntax s;
+    SELECT s.id, s.name, s.class, s.js FROM starexec.syntax s;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5102,7 +5102,7 @@ BEGIN
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     JOIN spaces sp ON sp.id = sa.space_id
-    WHERE sp.public_access = 1 AND s.deleted = false AND s.recycled = false;
+    WHERE sp.public_access = true AND s.deleted = false AND s.recycled = false;
 END;
 $$ LANGUAGE plpgsql;
 
