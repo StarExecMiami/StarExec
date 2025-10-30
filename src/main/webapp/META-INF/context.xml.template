@@ -7,27 +7,27 @@
             auth="Container"
             type="javax.sql.DataSource"
             factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
-            driverClassName="com.mysql.cj.jdbc.Driver"
-            url="jdbc:mysql://${STAREXEC_DB_HOST}:${STAREXEC_DB_PORT}/${STAREXEC_DB_NAME}?useSSL=false&amp;serverTimezone=UTC&amp;allowPublicKeyRetrieval=true"
+            driverClassName="org.postgresql.Driver"
+            url="jdbc:postgresql://${STAREXEC_DB_HOST}:${STAREXEC_DB_PORT}/${STAREXEC_DB_NAME}?ssl=false&amp;currentSchema=starexec"
             username="${STAREXEC_DB_USER}"
             password="${STAREXEC_DB_PASSWORD}"
             maxActive="20"
             maxIdle="10"
-            maxWait="10000"/>
+            maxWait="10000"
+            validationQuery="SELECT 1"/>
 
-  <!-- Use MySQL users/roles for container-managed auth (FORM j_security_check) -->
+  <!-- Use PostgreSQL users/roles for container-managed auth (FORM j_security_check) -->
   <Realm className="org.apache.catalina.realm.LockOutRealm">
     <Realm className="org.apache.catalina.realm.DataSourceRealm"
-            dataSourceName="jdbc/StarExecDB"
-            localDataSource="true"
-            userTable="users"
-            userNameCol="email"
-            userCredCol="password"
-            userRoleTable="user_roles"
-            roleNameCol="role">
-            <CredentialHandler className="org.apache.catalina.realm.MessageDigestCredentialHandler"
-                          algorithm="SHA-512"
-                          iterations="1"/>
+           dataSourceName="jdbc/StarExecDB"
+           localDataSource="true"
+           userTable="users"
+           userNameCol="email"
+           userCredCol="password"
+           userRoleTable="user_roles"
+           roleNameCol="role">
+      <CredentialHandler className="org.apache.catalina.realm.MessageDigestCredentialHandler"
+                         algorithm="SHA-512"/>
     </Realm>
   </Realm>
 
