@@ -428,8 +428,8 @@ function cleanWorkspace {
 function dbExec {
 	local ATTEMPT=2
 	while
-		((ATTEMPT != 0)) &amp;&amp;
-		! (mysql -u"$DB_USER" -p"$DB_PASS" -h "$REPORT_HOST" "$DB_NAME" -e "$1")
+		((ATTEMPT != 0)) &&
+		! (PGPASSWORD="$DB_PASS" psql -h "$REPORT_HOST" -U "$DB_USER" -d "$DB_NAME" -c "$1")
 	do
 		log "Unable to connect to database."
 		sleep 20
@@ -655,7 +655,7 @@ function saveFileAsBenchmark {
 # sets the variable REMAINING_DISK_QUOTA with the number of bytes the user should be allowed
 # to write. This includes a 1G buffer for going over their quota
 function setRemainingDiskQuota {
-	DISK_USAGE=$(mysql -u"$DB_USER" -p"$DB_PASS" -h $REPORT_HOST $DB_NAME -N -e "CALL GetUserDiskUsage($((USER_ID)))")
+	DISK_USAGE=$(PGPASSWORD="$DB_PASS" psql -h "$REPORT_HOST" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT GetUserDiskUsage($((USER_ID)))")
 	log "user disk usage is $DISK_USAGE"
 	((REMAINING_DISK_QUOTA = DISK_QUOTA - DISK_USAGE + 1073741824))
 	log "remaining user disk quota: $REMAINING_DISK_QUOTA"

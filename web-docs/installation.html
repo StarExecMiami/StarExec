@@ -18,29 +18,23 @@ $ yum list installed | grep "openjdk=devel"
 $ javac -version
 $ java -version
      </PRE>
-<LI> Installing MariaDB v5.5.56
+<LI> Installing PostgreSQL v13 (or latest compatible version)
      <PRE>
-$ sudo yum install mariadb-client mariadb-server
-$ sudo systemctl start mariadb
-$ sudo systemctl enable mariadb
-$ sudo mysql_secure_installation
-Created symlink from /etc/systemd/system/multi-user.target.wants/mariadb.service to /usr/lib/systemd/system/mariadb.service.
-[root@starexec-dev ~]# sudo mysql_secure_installation
-...
-Set root password? [Y/n] y
-New password: [PASSWORD]
-Re-enter new password: [PASSWORD]
-Password updated successfully!
-Remove anonymous users? [Y/n] y
-Disallow root login remotely? [Y/n] y
-Remove test database and access to it? [Y/n] y
-Reload privilege tables now? [Y/n] y
-$ sudo vim /root/.my.cnf 
-$ sudo cat /root/.my.cnf 
-[client]
-password=THE_SECURE_PASSWORD_YOU_USED
-[root@starexec-dev ~]# mysql -u root --version
-mysql  Ver 15.1 Distrib 5.5.60-MariaDB, for Linux (x86_64) using readline 5.1
+$ sudo yum install postgresql-server postgresql-contrib
+$ sudo postgresql-setup initdb
+$ sudo systemctl start postgresql
+$ sudo systemctl enable postgresql
+$ sudo -u postgres psql --version
+psql (PostgreSQL) 13.x.x
+     </PRE>
+     <P>
+     Set up a password for the postgres user if needed:
+     <PRE>
+$ sudo -u postgres psql
+postgres=# \password postgres
+Enter new password: [PASSWORD]
+Enter it again: [PASSWORD]
+postgres=# \q
      </PRE>
 <LI> Installing and verifying Ant
      <PRE>
@@ -60,13 +54,13 @@ $ sass -v
      </PRE>
 <LI> StarExec database
      <PRE>
-$ mysql -u root -p
-   >> CREATE DATABASE starexec;
-   >> GRANT ALL PRIVILEGES ON starexec.* TO 'se_admin'@'localhost' IDENTIFIED BY 'dfsdf34RFerfg3TFGRfrF3edFVg12few2';
-   >> FLUSH PRIVILEGES;
-$ exit
+$ sudo -u postgres psql
+postgres=# CREATE DATABASE starexec;
+postgres=# CREATE USER se_admin WITH PASSWORD 'dfsdf34RFerfg3TFGRfrF3edFVg12few2';
+postgres=# GRANT ALL PRIVILEGES ON DATABASE starexec TO se_admin;
+postgres=# \q
      </PRE>
-<LI> Installing wordpress (and LAMP: Linux Apache MariaDB PHP)
+<LI> Installing wordpress (and LAMP: Linux Apache PostgreSQL PHP)
      <UL>
      <LI> Install Apache
           <PRE>
@@ -76,29 +70,23 @@ $ curl ipinfo.io/ip (to find out what public ip address is)
 $ http://204.68.92.141/ (check on browser)
 $ sudo systemctl enable httpd.service
           </PRE>
-     <LI> Start MariaDB
+     <LI> Start PostgreSQL
           <PRE>
-$ sudo systemctl start mariadb
-$ sudo mysql_secure_installation
+$ sudo systemctl start postgresql
           </PRE>
-          (Go through the process, added root password and entered for the rest)
-          <PRE>
-$ sudo systemctl enable mariadb.service
-$ sudo rm /var/www/html/info.php
-          </PRE>
+          (No secure installation equivalent for PostgreSQL; password set above)
      <LI> Installing PHP
           <PRE>
-$ sudo yum install php php-mysql
+$ sudo yum install php php-pgsql
 $ sudo systemctl restart httpd.service
           </PRE>
-     <LI> Create a MySQL Database and User for WordPress (no longer needed now this is HTML)
+     <LI> Create a PostgreSQL Database and User for WordPress (no longer needed now this is HTML)
           <PRE>
-$ mysql -u root -p
-$ CREATE DATABASE wordpress;
-$ CREATE USER rkd38@localhost IDENTIFIED BY 'starexec';
-$ GRANT ALL PRIVILEGES ON wordpress.* TO rkd38@localhost IDENTIFIED BY 'starexec';
-$ FLUSH PRIVILEGES;
-$ exit
+$ sudo -u postgres psql
+postgres=# CREATE DATABASE wordpress;
+postgres=# CREATE USER rkd38 WITH PASSWORD 'starexec';
+postgres=# GRANT ALL PRIVILEGES ON DATABASE wordpress TO rkd38;
+postgres=# \q
           </PRE>
      <LI> Install WordPress
           <PRE>
@@ -144,12 +132,12 @@ $ eclipse
 <LI> Install and Configure tomcat
      A full release of Tomcat is included in the starexec package under the
      `distribution/` directory. This is identical to a release that you can download
-     from Apache, with the exception that the `mysql-connector-java-5.1.22-bin.jar`
-     and `drmaa.jar` files are included in the `lib/` directory. These `.jar` files
+     from Apache, with the exception that the `postgresql-42.2.18.jar`
+     (or latest PostgreSQL JDBC driver) file is included in the `lib/` directory. These `.jar` files
      are required for StarExec to connect to its database and backend, and as such we
      recommend that you install Tomcat using the provided archive. If you would like
-     to install a clean copy of Tomcat, you will need to copy the MySQL connector and
-     DRMAA files to the new lib directory.
+     to install a clean copy of Tomcat, you will need to copy the PostgreSQL JDBC driver
+     to the new lib directory.
      <P>
      If you install Tomcat using the provided archive, you may need to update
      permissions on the install directory to make Tomcat’s scripts executable. This
@@ -172,8 +160,7 @@ $ sudo chown -R tomcat:tomcat /project/apache-tomcat-7.0.64
 $ wget https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.94/bin/apache-tomcat-7.0.94.tar.gz
 $ cd /project
 $ sudo tar -xzvf apache-tomcat-7.0.94.tar.gz
-$ sudo cp /project/apache-tomcat-7.0.64/lib/drmaa.jar /project/apache-tomcat-7.0.94/lib/
-$ sudo cp /project/apache-tomcat-7.0.64/lib/mysql-connector-java-5.1.22-bin.jar /project/apache-tomcat-7.0.94/lib/
+$ sudo cp /project/apache-tomcat-7.0.64/lib/postgresql-42.2.18.jar /project/apache-tomcat-7.0.94/lib/
 $ sudo chown -R tomcat:tomcat /project/apache-tomcat-7.0.94
 $ ln -s /project/apache-tomcat-7.0.94 /project/apache-tomcat-7
 $ chmod 744 /project/apache-tomcat-7/bin/*.sh 
@@ -267,7 +254,6 @@ An empty configuration file is provided as <TT>example.properties</TT>.
 This file also explains the properties that must be set for a particular StarExec instance.
 Our build/overrides.properties file
 <PRE>
-$ sudo cat ~starexec/StarExec-deploy/build/overrides.properties
 # the name of your copy of Starexec. This name will be used for
 # the database to be created.  Also, users will access the web
 # interface to StarExec at ${Web.Address}/${STAREXEC_APPNAME}$
@@ -306,7 +292,7 @@ Cluster.MachineSpecs: build/Cluster.MachineSpecs.txt
 DB.Name: ${STAREXEC_APPNAME}
 DB.User: se_admin
 DB.Pass: dfsdf34RFerfg3TFGRfrF3edFVg12few2
-DB.Url: jdbc:mysql://localhost/${STAREXEC_APPNAME}
+DB.Url: jdbc:postgresql://localhost/${STAREXEC_APPNAME}
 DB.Pool.Max: 125
 DB.Pool.Min: 20
 
@@ -361,7 +347,7 @@ sandbox_dir: /local/sandbox
 
 <H3>Database</H3>
 
-DB.User must be set to the username of a MariaDB user that has full permissions for the database. 
+DB.User must be set to the username of a PostgreSQL user that has full permissions for the database. 
 DB.Pass must be set to the password for that user. 
 This user requires _all_ permissions in the StarExec database, excluding server administration 
 permissions.
@@ -371,15 +357,14 @@ This user _only_ needs EXECUTE permission, and is configured via Cluster.DB.User
 Cluster.DB.Pass. 
 If unspecified, these will default to the values of DB.User and DB.Pass.
 <P>
-Create StarExec database and MariaDB user with full permissions for the database.
+Create StarExec database and PostgreSQL user with full permissions for the database.
 <PRE>
-$ mysql -u root -p
-   DROP DATABASE starexec;
-   CREATE DATABASE starexec;
-   GRANT ALL PRIVILEGES ON starexec.* TO 'se_admin'@'localhost' IDENTIFIED BY 'dfsdf34RFerfg3TFGRfrF3edFVg12few2';
-   FLUSH PRIVILEGES;
-   exit
-   # exit
+$ sudo -u postgres psql
+postgres=# DROP DATABASE IF EXISTS starexec;
+postgres=# CREATE DATABASE starexec;
+postgres=# CREATE USER se_admin WITH PASSWORD 'dfsdf34RFerfg3TFGRfrF3edFVg12few2';
+postgres=# GRANT ALL PRIVILEGES ON DATABASE starexec TO se_admin;
+postgres=# \q
 </PRE>
 
 <H3>Email</H3>
@@ -714,16 +699,16 @@ $ cat /project/apache-tomcat-7/conf/tomcat-users.xml | grep username
   username="tomcat" password="TA-passwd" roles="manager-gui"...
 
 2. Drop and recreate the database
-[root@se-m1 ~]# mysql -u root
- mysql > DROP DATABASE starexec;
-         CREATE DATABASE starexec;
-         GRANT ALL PRIVILEGES ON starexec.* TO 'se_admin'@'localhost' IDENTIFIED BY 'dfsdf34RFerfg3TFGRfrF3edFVg12few2';
-         FLUSH PRIVILEGES;
-         exit
+[root@se-m1 ~]# sudo -u postgres psql
+postgres=# DROP DATABASE IF EXISTS starexec;
+postgres=# CREATE DATABASE starexec;
+postgres=# CREATE USER se_admin WITH PASSWORD 'dfsdf34RFerfg3TFGRfrF3edFVg12few2';
+postgres=# GRANT ALL PRIVILEGES ON DATABASE starexec TO se_admin;
+postgres=# \q
 
 [root@se-m1 ~]# 
   cd ~tomcat/StarExec-deploy/sql
-  mysql -u root starexec < NewInstall.sql
+  sudo -u postgres psql -d starexec -f NewInstall.sql
 
    su - tomcat -s /bin/bash
 [tomcat@se-m1 ~]$ cd StarExec-deploy/
