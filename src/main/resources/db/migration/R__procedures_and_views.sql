@@ -6051,7 +6051,7 @@ BEGIN
         RETURN QUERY
         SELECT s.name, s.description, s.locked, s.id
         FROM starexec.spaces s
-        WHERE s.id = (SELECT MIN(id) FROM starexec.spaces);
+        WHERE s.id = (SELECT MIN(sp.id) FROM starexec.spaces sp);
     ELSE
         -- Else find all children spaces that are an ancestor of a space the user is apart of
         RETURN QUERY
