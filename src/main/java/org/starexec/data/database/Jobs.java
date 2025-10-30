@@ -672,6 +672,7 @@ public class Jobs {
 			Common.safeClose(results);
 
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetDeletedJobs()");
+			results = procedure.executeQuery();
 
 			while (results.next()) {
 				Job j = resultsToJob(results);
