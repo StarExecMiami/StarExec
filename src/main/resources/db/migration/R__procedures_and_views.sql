@@ -3641,17 +3641,17 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT MAX(p.add_solver)::SMALLINT AS add_solver,
-        MAX(p.add_bench)::SMALLINT AS add_bench,
-        MAX(p.add_user)::SMALLINT AS add_user,
-        MAX(p.add_space)::SMALLINT AS add_space,
-        MAX(p.add_job)::SMALLINT AS add_job,
-        MAX(p.remove_solver)::SMALLINT AS remove_solver,
-        MAX(p.remove_bench)::SMALLINT AS remove_bench,
-        MAX(p.remove_space)::SMALLINT AS remove_space,
-        MAX(p.remove_user)::SMALLINT AS remove_user,
-        MAX(p.remove_job)::SMALLINT AS remove_job,
-        MAX(p.is_leader)::SMALLINT AS is_leader
+    SELECT (bool_or(p.add_solver)::int)::SMALLINT AS add_solver,
+        (bool_or(p.add_bench)::int)::SMALLINT AS add_bench,
+        (bool_or(p.add_user)::int)::SMALLINT AS add_user,
+        (bool_or(p.add_space)::int)::SMALLINT AS add_space,
+        (bool_or(p.add_job)::int)::SMALLINT AS add_job,
+        (bool_or(p.remove_solver)::int)::SMALLINT AS remove_solver,
+        (bool_or(p.remove_bench)::int)::SMALLINT AS remove_bench,
+        (bool_or(p.remove_space)::int)::SMALLINT AS remove_space,
+        (bool_or(p.remove_user)::int)::SMALLINT AS remove_user,
+        (bool_or(p.remove_job)::int)::SMALLINT AS remove_job,
+        (bool_or(p.is_leader)::int)::SMALLINT AS is_leader
     FROM starexec.permissions p
     JOIN user_assoc ua ON ua.permission = p.id
     WHERE ua.user_id = _userId AND ua.space_id = _spaceId;
@@ -4070,7 +4070,7 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetAllSyntaxes CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetAllSyntaxes()
-RETURNS TABLE(id INT, name VARCHAR(32), extension VARCHAR(8)) AS $$
+RETURNS TABLE(id INT, name CHAR(32), extension VARCHAR(8)) AS $$
 BEGIN
     RETURN QUERY
     SELECT s.id, s.name, s.extension FROM starexec.syntax s;
