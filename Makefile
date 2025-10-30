@@ -270,12 +270,12 @@ deploy-podman-helm:
 			podman rm -f $$container 2>/dev/null || true; \
 		fi \
 	done
-	@for key in user password database postgresPassword; do \
+	@for key in user password database rootPassword; do \
 		podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-$$key 2>/dev/null || true; \
 	done
 	@echo "Rendering secrets..."
 	@helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" > secret-render.yaml
-	@for key in user password database postgresPassword; do \
+	@for key in user password database rootPassword; do \
 		b64=$$(grep "$$key:" secret-render.yaml | sed 's/.*: //' | sed 's/^"//' | sed 's/"$$//'); \
 		[ -z "$$b64" ] && echo "ERROR: No base64 data for $$key" && cat secret-render.yaml && exit 1; \
 		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
@@ -373,7 +373,7 @@ undeploy-podman:
 			podman rm -f $$container 2>/dev/null || true; \
 		fi \
 	done
-	@for key in user password database postgresPassword; do \
+	@for key in user password database rootPassword; do \
 		podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-$$key 2>/dev/null || true; \
 	done
 	@echo ""
@@ -409,7 +409,7 @@ clean-podman:
 	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-user 2>/dev/null || true
 	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-password 2>/dev/null || true
 	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-database 2>/dev/null || true
-	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-postgresPassword 2>/dev/null || true
+	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-rootPassword 2>/dev/null || true
 	@echo "Removing StarExec images..."
 	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
 	@echo "✓ Cleanup complete (volumes and cache preserved)"
