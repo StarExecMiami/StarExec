@@ -77,7 +77,13 @@ public class SessionFilter implements Filter {
 				log.debug(method, "isFromCommand: true");
 			}
 
-			HttpSession session = httpRequest.getSession();
+			// Do not create a session eagerly for every request. Creating a session
+			// before the container's FormAuthenticator has a chance to save the
+			// original request can lead to a session-id mismatch during FORM
+			// authentication (observed as HTTP 408 "login timeout"). Use
+			// getSession(false) and only create a session when we need to bridge
+			// container-managed authentication into the application's session.
+			HttpSession session = httpRequest.getSession(false);
 
 			// Allow access to public resources
 			if (httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/public/") ||
