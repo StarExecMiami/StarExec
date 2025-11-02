@@ -1,12 +1,104 @@
 # StarExec
 
-StarExec is a cross community logic solving service developed at the University.
-of Iowa under the direction of principal investigators Aaron Stump (Iowa), Geoff
-Sutcliffe (University of Miami), and Cesare Tinelli (Iowa).
+## Deployment Workflow
+
+### System Requirements
+
+### Container Runtime (Choose One)
+
+#### Minimum Installation
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install podman
+
+# Fedora/RHEL
+sudo dnf install podman
+```
+
+#### Full Rootless Setup (Recommended)
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install podman catatonit passt fuse-overlayfs
+
+# Fedora/RHEL
+sudo dnf install podman crun passt fuse-overlayfs
+
+# Post-install rootless configuration
+loginctl enable-linger $USER  # Keeps containers running after logout
+```
+
+#### Verify Rootless
+
+```bash
+podman system info | grep rootless
+# Should show: rootless: true
+
+# Test rootless network
+make deploy-podman  # Should work WITHOUT sudo
+```
+
+### Docker (Alternative)
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install docker.io docker-compose
+
+# Add user to docker group (logout/login required)
+sudo usermod -aG docker $USER
+```
+
+## Build Dependencies (Optional)
+
+### Maven Local Build
+
+```bash
+# Java 17+
+sudo apt-get install openjdk-17-jdk maven
+
+# Node.js 20+ (for SCSS compilation)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Verify
+java --version   # Should be 17+
+mvn --version    # Should be 3.8+
+node --version   # Should be 20+
+```
+
+### Container Build Only
+
+No additional host dependencies — builds run inside containers.
+
+## Database Client (Optional)
+
+```bash
+# PostgreSQL client for database access
+sudo apt-get install postgresql-client
+```
+
+## Troubleshooting
+
+- "permission denied" errors with Podman:
+        - Install passt for rootless networking
+        - Run `podman system migrate` after installing new packages
+        - Check: `podman system info | grep rootless`
+
+- "network namespace not found":
+
+```bash
+sudo apt-get install passt
+podman system reset  # Warning: deletes all containers/images
+```
+
+- Slow Maven builds:
+        - Use `make build-cached` to mount local `~/.m2` cache
+        - Or pull a prebuilt image: `podman pull ghcr.io/andrescdo/starexec:latest`
 
 ## Quick Start
 
-### Option 1: Podman/Makefile (Recommended for Development)
+### Option 1: Podman / Makefile (Recommended for Development)
 
 ```bash
 # First-time deployment (auto-builds and configures everything)
@@ -35,9 +127,9 @@ make stop
     ```
 
     This command will:
-    * Build the StarExec Docker image, which includes compiling SCSS, building the `.war` file with Maven, and setting up a Tomcat 9 server.
-    * Start the StarExec application container and a MySQL 8 database container.
-    * Apply database migrations using Flyway on startup.
+    - Build the StarExec Docker image, which includes compiling SCSS, building the `.war` file with Maven, and setting up a Tomcat 9 server.
+    - Start the StarExec application container and a PostgreSQL database container.
+    - Apply database migrations using Flyway on startup.
 
 2. **Accessing the Application:**
     Once the containers are running, you can access StarExec at:
@@ -60,23 +152,22 @@ podman network create starexec-net
 
 # Persistent volumes
 podman volume create starexec-app-data
-podman volume create starexec-mysql-data
+podman volume create starexec-postgres-data
 
 # Database container (start first)
-podman run -d --name starexec-mysql \
+podman run -d --name starexec-postgres \
   --network starexec-net \
-  -e MYSQL_ROOT_PASSWORD=admin \
-  -e MYSQL_DATABASE=starexec \
-  -e MYSQL_USER=starexec \
-  -e MYSQL_PASSWORD=admin \
-  -v starexec-mysql-data:/var/lib/mysql \
-  -p 3306:3306 \
-  docker.io/library/mysql:8.0
+  -e POSTGRES_PASSWORD=admin \
+  -e POSTGRES_DB=starexec \
+  -e POSTGRES_USER=starexec \
+  -v starexec-postgres-data:/var/lib/postgresql/data \
+  -p 5432:5432 \
+  docker.io/library/postgres:15
 
 # Application container
 podman run -d --name starexec-app \
   --network starexec-net \
-  -e STAREXEC_DB_HOST=starexec-mysql \
+  -e STAREXEC_DB_HOST=starexec-postgres \
   -e STAREXEC_DB_PASSWORD=admin \
   -e STAREXEC_DB_USER=starexec \
   -e STAREXEC_DB_DATABASE=starexec \
@@ -85,13 +176,13 @@ podman run -d --name starexec-app \
   localhost/local/starexec:dev
 ```
 
-**Mandatory flags:** database host/password, volume mounts (`/app/data`, `/var/lib/mysql`), and port `8080`.
+**Mandatory flags:** database host/password, volume mounts (`/app/data`, `/var/lib/postgresql/data`), and port `8080`.
 
 **Optional overrides (defaults shown):**
 
-* `STAREXEC_DB_USER=starexec`, `STAREXEC_DB_DATABASE=starexec`
-* `STAREXEC_BACKEND_TYPE=local`, `STAREXEC_DATA_DIR=/app/data`, `STAREXEC_BACKEND_WORKING_DIR=/app/work`, `STAREXEC_SANDBOX_DIR=/app/sandbox`
-* Swap `podman` for `docker` if preferred; all flags are identical.
+- `STAREXEC_DB_USER=starexec`, `STAREXEC_DB_DATABASE=starexec`
+- `STAREXEC_BACKEND_TYPE=local`, `STAREXEC_DATA_DIR=/app/data`, `STAREXEC_BACKEND_WORKING_DIR=/app/work`, `STAREXEC_SANDBOX_DIR=/app/sandbox`
+- Swap `podman` for `docker` if preferred; all flags are identical.
 
 Access via `http://localhost:8080/starexec`. Seed credentials: `admin/admin`, `public/public` (change for production use).
 
@@ -103,11 +194,11 @@ While Docker is recommended, you can still build and run StarExec manually.
 
 ### Dependencies
 
-* **Java 17+**: Required for building and running the application.
-* **Maven 3.8+**: Used for dependency management and building the project.
-* **Node.js 20+**: Required for compiling SCSS stylesheets with Dart Sass.
-* **MySQL 8.0+**: The database backend.
-* **Tomcat 9.0+**: The application server.
+- **Java 17+**: Required for building and running the application.
+- **Maven 3.8+**: Used for dependency management and building the project.
+- **Node.js 20+**: Required for compiling SCSS stylesheets with Dart Sass.
+- **PostgreSQL 15+**: The database backend.
+- **Tomcat 9.0+**: The application server.
 
 ### Building the WAR file
 
@@ -174,11 +265,11 @@ changes for StarExec, so using a different version of Tomcat is not recommended.
 
 A full release of Tomcat is included in the starexec package under the
 `distribution/` directory. This is identical to a release that you can download
-from Apache, with the exception that the `mysql-connector-java-5.1.22-bin.jar`
+from Apache, with the exception that the `postgresql-jdbc.jar`
 and file is included in the `lib/` directory. This `.jar` file
 is required for StarExec to connect to its database, and as such we
 recommend that you install Tomcat using the provided archive. If you would like
-to install a clean copy of Tomcat, you will need to copy MySQL connector to the new lib directory.
+to install a clean copy of Tomcat, you will need to copy PostgreSQL connector to the new lib directory.
 
 PLEASE NOTE: We recently migrated our servers from centOS to Rocky8. Due to this, DRMAA is no longer a required dependency. Instead, we will be using qsub. For more information about this command, please see [https://www.jlab.org/hpc/PBS/qsub.html](https://www.jlab.org/hpc/PBS/qsub.html)
 
@@ -186,11 +277,11 @@ If you install Tomcat using the provided archive, you may need to update
 permissions on the install directory to make Tomcat's scripts executable. This
 can be done, for example, by using `chmod 700 -R tomcat_directory`
 
-#### MySQL and MariaDB
+#### PostgreSQL
 
-StarExec depends on MariaDB 5.5.56.
+StarExec depends on PostgreSQL 15.
 
-<https://downloads.mariadb.org/>
+<https://www.postgresql.org/download/>
 
 ### Legacy Configuration
 
@@ -217,7 +308,7 @@ StarExec instance.
 
 #### Database
 
-`DB.User` must be set to the username of a MariaDB user that has full
+`DB.User` must be set to the username of a PostgreSQL user that has full
 permissions for the database. `DB.Pass` must be set to the password for that
 user. This user will require _all_ permissions in the StarExec database,
 excluding server administration permissions.
