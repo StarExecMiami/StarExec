@@ -504,7 +504,7 @@ function dbExec {
 	local ATTEMPT=2
 	while
 		((ATTEMPT != 0)) &&
-		! (mysql -u"$DB_USER" -p"$DB_PASS" -h "$REPORT_HOST" "$DB_NAME" -e "$1")
+		! (PGPASSWORD="$DB_PASS" psql -h "$REPORT_HOST" -U "$DB_USER" -d "$DB_NAME" -q -v ON_ERROR_STOP=1 -c "$1")
 	do
 		log "Unable to connect to database."
 		sleep 20
@@ -1073,8 +1073,14 @@ function saveFileAsBenchmark {
 # sets the variable REMAINING_DISK_QUOTA with the number of bytes the user should be allowed
 # to write. This includes a 1G buffer for going over their quota
 function setRemainingDiskQuota {
-	DISK_USAGE=$(mysql -u"$DB_USER" -p"$DB_PASS" -h $REPORT_HOST $DB_NAME -N -e "CALL GetUserDiskUsage($((USER_ID)))")
+	# Query PostgreSQL for the user's disk usage. Use -t -A to return only the value.
+	DISK_USAGE=$(PGPASSWORD="$DB_PASS" psql -h "$REPORT_HOST" -U "$DB_USER" -d "$DB_NAME" -t -A -c "SELECT GetUserDiskUsage($((USER_ID)));")
+	# sanitize empty/null results
+	if [[ -z "$DISK_USAGE" || "$DISK_USAGE" == "NULL" ]]; then
+		DISK_USAGE=0
+	fi
 	log "user disk usage is $DISK_USAGE"
+	# include a 1 GiB buffer
 	((REMAINING_DISK_QUOTA = DISK_QUOTA - DISK_USAGE + 1073741824))
 	log "remaining user disk quota: $REMAINING_DISK_QUOTA"
 	if ((REMAINING_DISK_QUOTA < 0)); then
