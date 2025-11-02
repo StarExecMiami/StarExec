@@ -1,12 +1,31 @@
+# StarExec - Git ignore file
+
 ####################################
-# Build artifacts (Maven output)
+# Project build artifacts
 ####################################
 /target/
-
-# Compiled files
-*.class
+build/
+bin/
+dist/
+junittestoutput/
+data_dir/
+deployed-upload-test/
+WEB-INF/classes/
+WEB-INF/lib/
+META-INF/maven/
 *.war
 *.ear
+*.jar
+*.class
+
+####################################
+# Node / front-end
+####################################
+node/
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
 
 ####################################
 # Logs & temporary files
@@ -14,15 +33,18 @@
 *.log
 *.tmp
 output.log
+logs/
+*.swp
+*.swo
+*~
+.tmp
+.cache
 
 ####################################
 # OS & Editor junk
 ####################################
 .DS_Store
 Thumbs.db
-*~
-*.swp
-*.swo
 
 ####################################
 # IDE & Project files
@@ -33,6 +55,8 @@ Thumbs.db
 .idea/
 *.iml
 .vscode/
+.vscode/*
+/.history/
 
 ####################################
 # Sass cache
@@ -40,40 +64,69 @@ Thumbs.db
 .sass-cache/
 
 ####################################
-# Legacy/Ant output (if still used)
+# Legacy/Ant / Maven wrapper
 ####################################
-bin/
-build/
-junittestoutput/
-data_dir/
-deployed-upload-test/
+.mvn/
+.mvn/wrapper/
+.mvn/wrapper/maven-wrapper.jar
 
 ####################################
-# Web runtime artifacts
-####################################
-WEB-INF/classes/
-WEB-INF/lib/
-META-INF/maven/
-
-####################################
-# Python cache
+# Python / test caches
 ####################################
 __pycache__/
+*.pyc
+.pytest_cache/
+pip-wheel-metadata/
 
 ####################################
-# Archives
+# Archives, backups & DB dumps
 ####################################
 distribution/*.zip
+backups/
+*.tar.gz
+*.zip
+*.sql
+*.sql.gz
 
 ####################################
-# Node
+# Docker / Podman / Container
 ####################################
-node/
-node_modules/
+.buildah/
+.podman/
+docker-compose.override.yml
+.docker/
+.dockerignore
+.env
+.env.*
+pvc-render.yaml
 
 ####################################
-# Configuration files
+# Render / deployment configs (ignore local secrets/overrides)
 ####################################
 render.yaml
 secret-render.yaml
+secret-*.yaml
 backups/
+values-podman.yaml
+values-local.yaml
+*-local.yaml
+
+####################################
+# Keys, credentials, sensitive files
+####################################
+*.jks
+*.keystore
+*.pem
+*.key
+*.crt
+secrets/
+credentials/
+*.env
+
+####################################
+# Misc
+####################################
+output/
+coverage/
+coverage-report/
+reports/
