@@ -116,7 +116,7 @@ backup_all() {
     export_volume "${VOLUME_PREFIX}-${env}-postgres" "${BACKUP_DIR}/${backup_name}-postgres.tar.gz"
     
     log_info "Full backup complete. Archive contents:"
-    ls -lh "${BACKUP_DIR}/${backup_name}"*.tar.gz
+    ls -lh "${BACKUP_DIR}/${backup_name}"*.tar.gz || true
 }
 
 # Restore all volumes from backup
@@ -176,7 +176,7 @@ delete_volumes() {
     fi
     
     podman volume rm "${VOLUME_PREFIX}-${env}-data" 2>/dev/null || log_warn "Data volume not found"
-    podman volume rm "${VOLUME_PREFIX}-${env}-postgres" 2>/dev/null || log_warn "Postgres volume not found"
+    podman volume rm "${VOLUME_PREFIX}-${env}-postgres" 2>/dev/null || log_warn "PostgreSQL volume not found"
     
     log_info "Volumes deleted for environment: $env"
 }
@@ -189,13 +189,13 @@ inspect_volume() {
     podman volume inspect "$volume_name"
     
     log_info "Disk usage:"
-    podman run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest du -sh /data
+    podman run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest du -sh /data || true
     
     log_info "Top-level contents:"
-    podman run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest ls -lah /data
+    podman run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest ls -lah /data || true
 }
 
-# PostgreSQL logical dump (logical backup)
+# PostgreSQL logical dump
 dump_postgres() {
     local env="${1:-dev}"
     local output="${BACKUP_DIR}/postgres-dump-${env}-${DATE_STAMP}.sql.gz"
@@ -209,8 +209,9 @@ dump_postgres() {
     local db_name="${STAREXEC_DB_NAME:-starexec}"
     local db_user="${STAREXEC_DB_USER:-postgres}"
     local db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
+    # If the PostgreSQL server is running in the container with the standard socket,
+    # pass PGPASSWORD to the container process for non-interactive authentication.
     
-    # Export using pg_dump inside the running container; pass password via env
     podman exec -e PGPASSWORD="$db_pass" "$container_name" \
         pg_dump -U "$db_user" -d "$db_name" | gzip > "$output"
     
@@ -257,11 +258,11 @@ Examples:
   $0 restore-all dev 20250102-143022
 
 Environment Variables:
-  VOLUME_PREFIX    Volume name prefix (default: starexec)
-  BACKUP_DIR       Backup directory (default: ./backups)
-  STAREXEC_DB_USER PostgreSQL user for dumps (default: postgres)
-  STAREXEC_DB_NAME Database name to dump (default: starexec)
-  STAREXEC_DB_PASSWORD  PostgreSQL password for dumps
+  VOLUME_PREFIX        Volume name prefix (default: starexec)
+  BACKUP_DIR           Backup directory (default: ./backups)
+  STAREXEC_DB_USER     PostgreSQL user (default: postgres)
+  STAREXEC_DB_PASSWORD PostgreSQL password (default: starexec_password)
+  STAREXEC_DB_NAME     Database name (default: starexec)
 
 EOF
 }
