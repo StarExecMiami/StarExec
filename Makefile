@@ -123,7 +123,7 @@ image:
 	else \
 		echo "Image not found locally at $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		echo "Attempting to pull from registry..."; \
-		if podman pull $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
+		if podman pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
 			echo "✓ Successfully pulled $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		else \
 			echo "⚠️  Image not available in registry. Building locally..."; \
