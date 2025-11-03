@@ -13,6 +13,9 @@ public class ProcessingManager {
      */
     public synchronized static void checkProcessingPairs(){
     	List<PairStageProcessorTriple> triples=JobPairs.getAllPairsForProcessing();
+    	if (triples == null) {
+    		return;
+    	}
     	int num_processed = 0;
     	
     	for (PairStageProcessorTriple triple : triples) {

@@ -1693,11 +1693,17 @@ function getSolverTableInitializer() {
 	];
 
 	var formatConfig = function(row, type, val) {
-	    if ( val[CONFIG_DELETED] == 1 ) {
-	        configTemplate[1] = "configDeleted.jsp";
-	    } else {
-            configTemplate[1] = "configuration.jsp";
-	    }
+		var rawDeleted = val[CONFIG_DELETED];
+		var isConfigDeleted = rawDeleted === true || rawDeleted === 1;
+		if (typeof rawDeleted === "string") {
+			var normalized = rawDeleted.toLowerCase();
+			isConfigDeleted = isConfigDeleted || normalized === "1" || normalized === "true";
+		}
+		if (isConfigDeleted) {
+			configTemplate[1] = "configDeleted.jsp";
+		} else {
+			configTemplate[1] = "configuration.jsp";
+		}
 		configTemplate[3] = val[CONFIG_ID];
 		configTemplate[5] = val[CONFIG_ID];
 		configTemplate[7] = val[CONFIG_NAME];

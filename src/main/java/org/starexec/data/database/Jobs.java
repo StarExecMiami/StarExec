@@ -23,7 +23,6 @@ import org.starexec.data.to.pipelines.StageAttributes.SaveResultsOption;
 import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.TimePair;
 import org.starexec.exceptions.StarExecDatabaseException;
-import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -1027,30 +1026,72 @@ public class Jobs {
 
 	public static Job resultsToJob(ResultSet results) throws SQLException {
 		Job j = new Job();
-		j.setId(results.getInt("id"));
-		j.setUserId(results.getInt("user_id"));
-		j.setName(results.getString("name"));
-		j.setPrimarySpace(results.getInt("primary_space"));
-		j.setPaused(results.getBoolean("paused"));
-		j.setCreateTime(results.getTimestamp("created"));
-		j.setCompleteTime(results.getTimestamp("completed"));
-		j.setCpuTimeout(results.getInt("cpuTimeout"));
-		j.setWallclockTimeout(results.getInt("clockTimeout"));
-		j.setMaxMemory(results.getLong("maximum_memory"));
-		j.setKillDelay(results.getInt("kill_delay"));
-		j.setSoftTimeLimit(results.getInt("soft_time_limit"));
-		j.setBuildJob(results.getBoolean("buildJob"));
-		j.setDescription(results.getString("description"));
-		j.setSeed(results.getLong("seed"));
-		j.setTotalPairs(results.getInt("total_pairs"));
-		j.setDiskSize(results.getLong("disk_size"));
-		j.setSuppressTimestamp(results.getBoolean("suppress_timestamp"));
-		j.setUsingDependencies(results.getBoolean("using_dependencies"));
-		j.setBenchmarkingFramework(BenchmarkingFramework.valueOf(results.getString("benchmarking_framework")));
-		j.setOutputBenchmarksPath(results.getString("output_benchmarks_directory_path"));
+		
+		Integer id = ResultSetUtils.getInt(results, "id");
+		if (id == null) {
+			throw new SQLException("Job id column is null in result set");
+		}
+		j.setId(id);
+		
+		Integer userId = ResultSetUtils.getInt(results, "user_id");
+		if (userId == null) {
+			throw new SQLException("Job user_id column is null in result set");
+		}
+		j.setUserId(userId);
+		
+		j.setName(ResultSetUtils.getString(results, "name"));
+		
+		Integer primarySpace = ResultSetUtils.getInt(results, "primary_space");
+		j.setPrimarySpace(primarySpace == null ? 0 : primarySpace);
+		
+		Boolean paused = ResultSetUtils.getBoolean(results, "paused");
+		j.setPaused(Boolean.TRUE.equals(paused));
+		
+		j.setCreateTime(ResultSetUtils.getTimestamp(results, "created"));
+		j.setCompleteTime(ResultSetUtils.getTimestamp(results, "completed"));
+		
+		Integer cpuTimeout = ResultSetUtils.getInt(results, "cpuTimeout", "cpu_timeout");
+		j.setCpuTimeout(cpuTimeout == null ? 0 : cpuTimeout);
+		
+		Integer clockTimeout = ResultSetUtils.getInt(results, "clockTimeout", "clock_timeout");
+		j.setWallclockTimeout(clockTimeout == null ? 0 : clockTimeout);
+		
+		Long maxMemory = ResultSetUtils.getLong(results, "maximum_memory", "max_memory");
+		j.setMaxMemory(maxMemory == null ? 0L : maxMemory);
+		
+		Integer killDelay = ResultSetUtils.getInt(results, "kill_delay");
+		j.setKillDelay(killDelay == null ? 0 : killDelay);
+		
+		Integer softTimeLimit = ResultSetUtils.getInt(results, "soft_time_limit");
+		j.setSoftTimeLimit(softTimeLimit == null ? 0 : softTimeLimit);
+		
+		Boolean buildJob = ResultSetUtils.getBoolean(results, "buildJob", "build_job");
+		j.setBuildJob(Boolean.TRUE.equals(buildJob));
+		
+		j.setDescription(ResultSetUtils.getString(results, "description"));
+		
+		Long seed = ResultSetUtils.getLong(results, "seed");
+		j.setSeed(seed == null ? 0L : seed);
+		
+		Integer totalPairs = ResultSetUtils.getInt(results, "total_pairs");
+		j.setTotalPairs(totalPairs == null ? 0 : totalPairs);
+		
+		Long diskSize = ResultSetUtils.getLong(results, "disk_size");
+		j.setDiskSize(diskSize == null ? 0L : diskSize);
+		
+		Boolean suppressTimestamp = ResultSetUtils.getBoolean(results, "suppress_timestamp");
+		j.setSuppressTimestamp(Boolean.TRUE.equals(suppressTimestamp));
+		
+		Boolean usingDependencies = ResultSetUtils.getBoolean(results, "using_dependencies");
+		j.setUsingDependencies(Boolean.TRUE.equals(usingDependencies));
+		
+		String framework = ResultSetUtils.getString(results, "benchmarking_framework");
+		j.setBenchmarkingFramework(BenchmarkingFramework.valueOf(framework));
+		
+		j.setOutputBenchmarksPath(ResultSetUtils.getString(results, "output_benchmarks_directory_path"));
 
-		final boolean isHighPriority = results.getBoolean("is_high_priority");
-		if (isHighPriority) {
+		Boolean isHighPriority = ResultSetUtils.getBoolean(results, "is_high_priority");
+		if (Boolean.TRUE.equals(isHighPriority)) {
 			j.setHighPriority();
 		} else {
 			j.setLowPriority();
@@ -1075,7 +1116,8 @@ public class Jobs {
 			ps.setInt(1, userId);
 			results = ps.executeQuery();
 			if (results.next()) {
-				return results.getInt("total_pairs");
+				Integer totalPairs = ResultSetUtils.getInt(results, "total_pairs");
+				return totalPairs == null ? -1 : totalPairs;
 			}
 		} catch (Exception e) {
 			log.error("countPairsByUser", e);
@@ -1107,7 +1149,10 @@ public class Jobs {
 				if (getSimplePairs) {
 					j.setJobPairs(getPairsSimple(jobId));
 				}
-				j.setQueue(Queues.get(con, results.getInt("queue_id")));
+				Integer queueId = ResultSetUtils.getInt(results, "queue_id");
+				if (queueId != null) {
+					j.setQueue(Queues.get(con, queueId));
+				}
 				j.setStageAttributes(Jobs.getStageAttrsForJob(jobId, con));
 				return j;
 			}
@@ -1487,8 +1532,14 @@ public class Jobs {
 			List<JobPair> returnList = new LinkedList<>();
 			while (results.next()) {
 				JobPair jp = new JobPair();
-				jp.setId(results.getInt("id"));
-				jp.setBackendExecId(results.getInt("sge_id"));
+				Integer id = ResultSetUtils.getInt(results, "id");
+				if (id != null) {
+					jp.setId(id);
+				}
+				Integer sgeId = ResultSetUtils.getInt(results, "sge_id");
+				if (sgeId != null) {
+					jp.setBackendExecId(sgeId);
+				}
 				returnList.add(jp);
 			}
 			return returnList;
@@ -2103,7 +2154,7 @@ public class Jobs {
 			HashMap<Integer, String> idsToValues = new HashMap<>();
 
 			while (results.next()) {
-				idsToValues.put(results.getInt("job_pairs.bench_id"), results.getString("attr_value"));
+				idsToValues.put(results.getInt("bench_id"), results.getString("attr_value"));
 			}
 			log.debug("found this number of attrs = " + idsToValues.size());
 			return idsToValues;
@@ -2146,21 +2197,21 @@ public class Jobs {
 			//every row in this resultset is a single stage
 			while (results.next()) {
 
-				JobPair jp = idsToPairs.get(results.getInt("job_pairs.id"));
+				JobPair jp = idsToPairs.get(results.getInt("pair_id"));
 				if (jp == null) {
-					log.error("could not get a pair for id = " + results.getInt("job_pairs.id"));
-					log.error("id found in mapping = " + idsToPairs.containsKey(results.getInt("job_pairs.id")));
+					log.error("could not get a pair for id = " + results.getInt("pair_id"));
+					log.error("id found in mapping = " + idsToPairs.containsKey(results.getInt("pair_id")));
 					continue;
 				}
 				JoblineStage stage = new JoblineStage();
 				stage.setStageNumber(results.getInt("stage_number"));
-				stage.setCpuUsage(results.getDouble("jobpair_stage_data.cpu"));
-				stage.setWallclockTime(results.getDouble("jobpair_stage_data.wallclock"));
-				stage.setStageId(results.getInt("jobpair_stage_data.stage_id"));
-				stage.getStatus().setCode(results.getInt("jobpair_stage_data.status_code"));
+				stage.setCpuUsage(results.getDouble("cpu"));
+				stage.setWallclockTime(results.getDouble("wallclock"));
+				stage.setStageId(results.getInt("stage_id"));
+				stage.getStatus().setCode(results.getInt("status_code"));
 				stage.setMaxVirtualMemory(results.getDouble("max_vmem"));
 				//everything below this line is in a stage
-				id = results.getInt("jobpair_stage_data.solver_id");
+				id = results.getInt("solver_id");
 				//means it was null in SQL
 				if (id == 0) {
 					stage.setNoOp(true);
@@ -2172,14 +2223,14 @@ public class Jobs {
 						if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 							solve.setName(results.getString("anon_solver_name"));
 						} else {
-							solve.setName(results.getString("jobpair_stage_data.solver_name"));
+							solve.setName(results.getString("solver_name"));
 						}
 						solvers.put(id, solve);
 					}
 					stage.setSolver(solvers.get(id));
 
 
-					id = results.getInt("jobpair_stage_data.config_id");
+					id = results.getInt("config_id");
 
 					if (!configs.containsKey(id)) {
 						config = new Configuration();
@@ -2187,7 +2238,7 @@ public class Jobs {
 						if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 							config.setName(results.getString("anon_config_name"));
 						} else {
-							config.setName(results.getString("jobpair_stage_data.config_name"));
+							config.setName(results.getString("config_name"));
 						}
 						configs.put(id, config);
 					}
@@ -2444,9 +2495,9 @@ public class Jobs {
 				jp.setJobId(jobId);
 				jp.setId(results.getInt("id"));
 				JoblineStage stage = new JoblineStage();
-				stage.setWallclockTime(results.getDouble("jobpair_stage_data.wallclock"));
-				stage.setCpuUsage(results.getDouble("jobpair_stage_data.cpu"));
-				stage.setStageNumber(results.getInt("jobpair_stage_data.stage_number"));
+				stage.setWallclockTime(results.getDouble("wallclock"));
+				stage.setCpuUsage(results.getDouble("cpu"));
+				stage.setStageNumber(results.getInt("stage_number"));
 				jp.addStage(stage);
 				Benchmark bench = jp.getBench();
 				bench.setId(results.getInt("bench_id"));
@@ -2457,22 +2508,22 @@ public class Jobs {
 					bench.setName(results.getString("bench_name"));
 				}
 
-				jp.getPrimarySolver().setId(results.getInt("jobpair_stage_data.solver_id"));
-				jp.getPrimaryConfiguration().setId(results.getInt("jobpair_stage_data.config_id"));
+				jp.getPrimarySolver().setId(results.getInt("solver_id"));
+				jp.getPrimaryConfiguration().setId(results.getInt("config_id"));
 
 				if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 					jp.getPrimarySolver().setName(results.getString("anon_solver_name"));
 					jp.getPrimaryConfiguration().setName(results.getString("anon_config_name"));
 				} else {
-					jp.getPrimarySolver().setName(results.getString("jobpair_stage_data.solver_name"));
-					jp.getPrimaryConfiguration().setName(results.getString("jobpair_stage_data.config_name"));
+					jp.getPrimarySolver().setName(results.getString("solver_name"));
+					jp.getPrimaryConfiguration().setName(results.getString("config_name"));
 				}
 
 
 				jp.getPrimarySolver().addConfiguration(jp.getPrimaryConfiguration());
 
 				Status status = stage.getStatus();
-				status.setCode(results.getInt("jobpair_stage_data.status_code"));
+				status.setCode(results.getInt("status_code"));
 
 
 				Properties attributes = jp.getPrimaryStage().getAttributes();
@@ -2877,15 +2928,21 @@ public class Jobs {
 				Solver solver = new Solver();
 				Configuration c = new Configuration();
 				if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
-					solver.setName(results.getString("anonymous_solver_names.anonymous_name"));
-					c.setName(results.getString("anonymous_config_names.anonymous_name"));
+					solver.setName(ResultSetUtils.getString(results,
+						"anonymous_solver_names.anonymous_name",
+						"anonymous_solver_names_anonymous_name",
+						"anonymous_name"));
+					c.setName(ResultSetUtils.getString(results,
+						"anonymous_config_names.anonymous_name",
+						"anonymous_config_names_anonymous_name",
+						"anonymous_name"));
 				} else {
-					solver.setName(results.getString("solver.name"));
-					c.setName(results.getString("config.name"));
+					solver.setName(ResultSetUtils.getString(results, "solver.name", "solver_name", "name"));
+					c.setName(ResultSetUtils.getString(results, "config.name", "config_name", "name"));
 				}
-				solver.setId(results.getInt("solver.id"));
-				c.setId(results.getInt("config.id"));
-				c.setDeleted(results.getInt("config_deleted")); // Alexander Brown, 9/7/2020
+				solver.setId(ResultSetUtils.getInt(results, "solver.id", "solver_id", "id"));
+				c.setId(ResultSetUtils.getInt(results, "config.id", "config_id", "id"));
+				c.setDeleted(results.getBoolean("config_deleted")); // Alexander Brown, 9/7/2020
 				solver.addConfiguration(c);
 				s.setSolver(solver);
 				s.setConfiguration(c);
@@ -2951,15 +3008,21 @@ public class Jobs {
 				Solver solver = new Solver();
 				Configuration c = new Configuration();
 				if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
-					solver.setName(results.getString("anonymous_solver_names.anonymous_name"));
-					c.setName(results.getString("anonymous_config_names.anonymous_name"));
+					solver.setName(ResultSetUtils.getString(results,
+						"anonymous_solver_names.anonymous_name",
+						"anonymous_solver_names_anonymous_name",
+						"anonymous_name"));
+					c.setName(ResultSetUtils.getString(results,
+						"anonymous_config_names.anonymous_name",
+						"anonymous_config_names_anonymous_name",
+						"anonymous_name"));
 				} else {
-					solver.setName(results.getString("solver.name"));
-					c.setName(results.getString("config.name"));
+					solver.setName(ResultSetUtils.getString(results, "solver.name", "solver_name", "name"));
+					c.setName(ResultSetUtils.getString(results, "config.name", "config_name", "name"));
 				}
-				solver.setId(results.getInt("solver.id"));
-				c.setId(results.getInt("config.id"));
-				c.setDeleted(results.getInt("config.deleted")); // Alexander Brown, 9/20
+				solver.setId(ResultSetUtils.getInt(results, "solver.id", "solver_id", "id"));
+				c.setId(ResultSetUtils.getInt(results, "config.id", "config_id", "id"));
+				c.setDeleted(ResultSetUtils.getBoolean(results, "config.deleted", "config_deleted", "deleted")); // Alexander Brown, 9/20
 				solver.addConfiguration(c);
 				s.setSolver(solver);
 				s.setConfiguration(c);
@@ -2967,8 +3030,8 @@ public class Jobs {
 
 				// print status
 				log.debug( "in Jobs.getCachedJobStatsInJobSpaceHierarchyIncludeDeletedConfigs:\n" +
-						"config.deleted: " + results.getInt( "config.deleted" ) + "\n" +
-						"c.getDeleted(): " + c.getDeleted() + "\n" +
+					"config.deleted: " + ResultSetUtils.getBoolean(results, "config.deleted", "config_deleted", "deleted") + "\n" +
+						"c.isDeleted(): " + c.isDeleted() + "\n" +
 						"s.getConfigDeleted(): " + s.getConfigDeleted() );
 			}
 			return stats;
@@ -3109,7 +3172,7 @@ public class Jobs {
 				pair.getBench().setName(results.getString("bench_name"));
 				pair.setCompletionId(results.getInt("completion_id"));
 				pair.addStage(stage);
-				pair.getStatus().setCode(results.getInt("job_pairs.status_code"));
+				pair.getStatus().setCode(ResultSetUtils.getInt(results, "job_pairs.status_code", "job_pairs_status_code", "status_code"));
 
 				pairs.add(pair);
 			}
@@ -3209,21 +3272,21 @@ public class Jobs {
 				stage.setSolver(s);
 				jp.addStage(stage);
 				jp.setId(results.getInt("id"));
-				jp.setJobSpaceId(results.getInt("job_pairs.job_space_id"));
-				jp.getStatus().setCode(results.getInt("job_pairs.status_code"));
-				jp.getBench().setId(results.getInt("job_pairs.bench_id"));
-				jp.getBench().setName(results.getString("job_pairs.bench_name"));
-				c.setId(results.getInt("jobpair_stage_data.config_id"));
-				c.setName(results.getString("jobpair_stage_data.config_name"));
-				s.setId(results.getInt("jobpair_stage_data.solver_id"));
-				s.setName(results.getString("jobpair_stage_data.solver_name"));
+				jp.setJobSpaceId(ResultSetUtils.getInt(results, "job_pairs.job_space_id", "job_pairs_job_space_id", "job_space_id"));
+				jp.getStatus().setCode(ResultSetUtils.getInt(results, "job_pairs.status_code", "job_pairs_status_code", "status_code"));
+				jp.getBench().setId(ResultSetUtils.getInt(results, "job_pairs.bench_id", "job_pairs_bench_id", "bench_id"));
+				jp.getBench().setName(ResultSetUtils.getString(results, "job_pairs.bench_name", "job_pairs_bench_name", "bench_name"));
+				c.setId(ResultSetUtils.getInt(results, "jobpair_stage_data.config_id", "jobpair_stage_data_config_id", "config_id"));
+				c.setName(ResultSetUtils.getString(results, "jobpair_stage_data.config_name", "jobpair_stage_data_config_name", "config_name"));
+				s.setId(ResultSetUtils.getInt(results, "jobpair_stage_data.solver_id", "jobpair_stage_data_solver_id", "solver_id"));
+				s.setName(ResultSetUtils.getString(results, "jobpair_stage_data.solver_name", "jobpair_stage_data_solver_name", "solver_name"));
 				jp.getSpace().setName(results.getString("name"));
-				jp.getSpace().setId(results.getInt("job_spaces.id"));
+				jp.getSpace().setId(ResultSetUtils.getInt(results, "job_spaces.id", "job_spaces_id", "id"));
 				jp.setPath(results.getString("path"));
 				int pipeId = results.getInt("pipeline_id");
 				if (pipeId > 0) {
 					SolverPipeline pipe = new SolverPipeline();
-					pipe.setName(results.getString("solver_pipelines.name"));
+					pipe.setName(ResultSetUtils.getString(results, "solver_pipelines.name", "solver_pipelines_name", "name"));
 					jp.setPipeline(pipe);
 				} else {
 					jp.setPipeline(null);
@@ -3332,20 +3395,20 @@ public class Jobs {
 				JobPair jp = JobPairs.resultToPair(results);
 
 				Status s = new Status();
-				s.setCode(results.getInt("status_code"));
+				s.setCode(ResultSetUtils.getInt(results, "status_code"));
 
 				jp.setStatus(s);
 
 				//set the completion ID if it exists-- it only exists if we are getting new job pairs
 				if (getCompletionId) {
-					jp.setCompletionId(results.getInt("complete.completion_id"));
+					jp.setCompletionId(ResultSetUtils.getInt(results, "complete.completion_id", "complete_completion_id", "completion_id"));
 				}
-				jp.setJobSpaceName(results.getString("jobSpace.name"));
+				jp.setJobSpaceName(ResultSetUtils.getString(results, "jobSpace.name", "jobspace_name", "job_space_name", "name"));
 				returnList.add(jp);
-				curNode = results.getInt("node_id");
-				curBench = results.getInt("bench_id");
-				curConfig = results.getInt("config_id");
-				curSolver = results.getInt("config.solver_id");
+				curNode = ResultSetUtils.getInt(results, "node_id");
+				curBench = ResultSetUtils.getInt(results, "bench_id");
+				curConfig = ResultSetUtils.getInt(results, "config_id");
+				curSolver = ResultSetUtils.getInt(results, "config.solver_id", "config_solver_id", "solver_id");
 				JoblineStage stage = JobPairs.resultToStage(results);
 				if (!discoveredSolvers.containsKey(curSolver)) {
 					Solver solver = Solvers.resultSetToSolver(results, R.SOLVER);
@@ -3363,19 +3426,19 @@ public class Jobs {
 
 				if (!discoveredConfigs.containsKey(curConfig)) {
 					Configuration c = new Configuration();
-					c.setId(results.getInt("config.id"));
-					c.setName(results.getString("config.name"));
-					c.setSolverId(results.getInt("config.solver_id"));
-					c.setDescription(results.getString("config.description"));
+					c.setId(ResultSetUtils.getInt(results, "config.id", "config_id", "id"));
+					c.setName(ResultSetUtils.getString(results, "config.name", "config_name", "name"));
+					c.setSolverId(ResultSetUtils.getInt(results, "config.solver_id", "config_solver_id", "solver_id"));
+					c.setDescription(ResultSetUtils.getString(results, "config.description", "config_description", "description"));
 					discoveredConfigs.put(curConfig, c);
 				}
 				stage.setConfiguration(discoveredConfigs.get(curConfig));
 				stage.getSolver().addConfiguration(discoveredConfigs.get(curConfig));
 				if (!discoveredNodes.containsKey(curNode)) {
 					WorkerNode node = new WorkerNode();
-					node.setName(results.getString("node_name"));
-					node.setId(results.getInt("node_id"));
-					node.setStatus(results.getString("node_status"));
+					node.setName(ResultSetUtils.getString(results, "node_name", "worker_node_name", "name"));
+					node.setId(ResultSetUtils.getInt(results, "node_id", "worker_node_id", "id"));
+					node.setStatus(ResultSetUtils.getString(results, "node_status", "worker_node_status", "status"));
 					discoveredNodes.put(curNode, node);
 				}
 				jp.addStage(stage);
@@ -3619,7 +3682,7 @@ public class Jobs {
 			while (results.next()) {
 
 				try {
-					int currentJobPairId = results.getInt("job_pairs.id");
+					int currentJobPairId = ResultSetUtils.getInt(results, "job_pairs.id", "job_pairs_id", "id");
 
 					JobPair jp = null;
 					// we have already seen this pair and are getting another stage
@@ -3629,10 +3692,11 @@ public class Jobs {
 						//we have never seen this pair and are getting it for the first time
 						jp = JobPairs.resultToPair(results);
 						Status s = new Status();
-						s.setCode(results.getInt("job_pairs.status_code"));
+						s.setCode(ResultSetUtils.getInt(results, "job_pairs.status_code", "job_pairs_status_code", "status_code"));
 						jp.setStatus(s);
 						Benchmark b = Benchmarks.resultToBenchmarkWithPrefix(results, "benchmarks");
-						b.setUsesDependencies(results.getInt("dependency_count") > 0);
+						Integer dependencyCount = ResultSetUtils.getInt(results, "dependency_count", "benchmarks_dependency_count", "count");
+						b.setUsesDependencies(dependencyCount != null && dependencyCount > 0);
 						jp.setBench(b);
 
 						if (j.isUsingDependencies()) {
@@ -3644,14 +3708,14 @@ public class Jobs {
 					}
 
 					JoblineStage stage = new JoblineStage();
-					stage.setStageNumber(results.getInt("stage_number"));
-					stage.setStageId(results.getInt("stage_id"));
+					stage.setStageNumber(ResultSetUtils.getInt(results, "stage_number"));
+					stage.setStageId(ResultSetUtils.getInt(results, "stage_id"));
 					jp.addStage(stage);
 					//we need to check to see if the benchId and configId are null, since they might
 					//have been deleted while the the job is still pending
 
-					int configId = results.getInt("jobpair_stage_data.config_id");
-					String configName = results.getString("jobpair_stage_data.config_name");
+					int configId = ResultSetUtils.getInt(results, "jobpair_stage_data.config_id", "jobpair_stage_data_config_id", "config_id");
+					String configName = ResultSetUtils.getString(results, "jobpair_stage_data.config_name", "jobpair_stage_data_config_name", "config_name");
 					Configuration c = new Configuration();
 					c.setId(configId);
 					c.setName(configName);
@@ -4744,7 +4808,6 @@ public class Jobs {
 
 			HashMap<Integer, Solver> solvers = new HashMap<>();
 			HashMap<Integer, Configuration> configs = new HashMap<>();
-			Integer id;
 
 
 			Benchmark bench = null;
@@ -4757,10 +4820,10 @@ public class Jobs {
 
 				Status s = new Status();
 
-				s.setCode(results.getInt("status_code"));
+				s.setCode(ResultSetUtils.getInt(results, "status_code"));
 				jp.setStatus(s);
-				jp.setId(results.getInt("job_pairs.id"));
-				jp.setPath(results.getString("job_pairs.path"));
+				jp.setId(ResultSetUtils.getInt(results, "job_pairs.id", "job_pairs_id", "id"));
+				jp.setPath(ResultSetUtils.getString(results, "job_pairs.path", "job_pairs_path", "path"));
 				bench = new Benchmark();
 				bench.setId(results.getInt("bench_id"));
 				if (AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize)) {
@@ -4770,7 +4833,7 @@ public class Jobs {
 				}
 				jp.setBench(bench);
 
-				jp.setCompletionId(results.getInt("completion_id"));
+				jp.setCompletionId(ResultSetUtils.getInt(results, "completion_id"));
 
 
 				if (includeSingleStage) {
@@ -4779,46 +4842,56 @@ public class Jobs {
 					jp.setPrimaryStageNumber(1);
 					JoblineStage stage = new JoblineStage();
 					stage.setStageNumber(1);
-					stage.setCpuUsage(results.getDouble("jobpair_stage_data.cpu"));
-					stage.setWallclockTime(results.getDouble("jobpair_stage_data.wallclock"));
-					stage.setStageId(results.getInt("jobpair_stage_data.stage_id"));
-					stage.getStatus().setCode(results.getInt("jobpair_stage_data.status_code"));
+					Double cpu = ResultSetUtils.getDouble(results, "jobpair_stage_data.cpu", "jobpair_stage_data_cpu", "cpu");
+					if (cpu != null) {
+						stage.setCpuUsage(cpu);
+					}
+					Double wallclock = ResultSetUtils.getDouble(results, "jobpair_stage_data.wallclock", "jobpair_stage_data_wallclock", "wallclock");
+					if (wallclock != null) {
+						stage.setWallclockTime(wallclock);
+					}
+					stage.setStageId(ResultSetUtils.getInt(results, "jobpair_stage_data.stage_id", "jobpair_stage_data_stage_id", "stage_id"));
+					Integer statusCode = ResultSetUtils.getInt(results, "jobpair_stage_data.status_code", "jobpair_stage_data_status_code", "status_code");
+					if (statusCode != null) {
+						stage.getStatus().setCode(statusCode);
+					}
 					//everything below this line is in a stage
-					id = results.getInt("jobpair_stage_data.solver_id");
+					Integer solverId = ResultSetUtils.getInt(results, "jobpair_stage_data.solver_id", "jobpair_stage_data_solver_id", "solver_id");
 					//means it was null in SQL
-					if (id == 0) {
+					if (solverId == null || solverId == 0) {
 						stage.setNoOp(true);
 						stage.setSolver(null);
 						stage.setConfiguration(null);
 					} else {
-						if (!solvers.containsKey(id)) {
+						if (!solvers.containsKey(solverId)) {
 
 							Solver solve = new Solver();
-							solve.setId(id);
+							solve.setId(solverId);
 							if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 								solve.setName(results.getString("anon_solver_name"));
 							} else {
-								solve.setName(results.getString("jobpair_stage_data.solver_name"));
+								solve.setName(ResultSetUtils.getString(results, "jobpair_stage_data.solver_name", "jobpair_stage_data_solver_name", "solver_name"));
 							}
-							solvers.put(id, solve);
+							solvers.put(solverId, solve);
 						}
-						stage.setSolver(solvers.get(id));
+						stage.setSolver(solvers.get(solverId));
 
-						id = results.getInt("jobpair_stage_data.config_id");
+						Integer configId = ResultSetUtils.getInt(results, "jobpair_stage_data.config_id", "jobpair_stage_data_config_id", "config_id");
+						Integer effectiveConfigId = configId == null ? 0 : configId;
 
 
-						if (!configs.containsKey(id)) {
+						if (!configs.containsKey(effectiveConfigId)) {
 							Configuration config = new Configuration();
-							config.setId(id);
+							config.setId(effectiveConfigId);
 							if (AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 								config.setName(results.getString("anon_config_name"));
 							} else {
-								config.setName(results.getString("jobpair_stage_data.config_name"));
+								config.setName(ResultSetUtils.getString(results, "jobpair_stage_data.config_name", "jobpair_stage_data_config_name", "config_name"));
 							}
-							configs.put(id, config);
+							configs.put(effectiveConfigId, config);
 						}
-						stage.getSolver().addConfiguration(configs.get(id));
-						stage.setConfiguration(configs.get(id));
+						stage.getSolver().addConfiguration(configs.get(effectiveConfigId));
+						stage.setConfiguration(configs.get(effectiveConfigId));
 					}
 
 
@@ -5323,7 +5396,7 @@ public class Jobs {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareStatement("SELECT * FROM starexec.IsSystemPaused()");
+			procedure = con.prepareStatement("SELECT * FROM starexec.issystempaused()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {

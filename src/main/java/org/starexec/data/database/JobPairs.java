@@ -332,7 +332,7 @@ public class JobPairs {
 				pair.setJobId(jobId);
 				stmt.setInt(1, jobId);
 				stmt.setInt(2, pair.getBench().getId());
-				stmt.setInt(3, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+				stmt.setShort(3, (short) StatusCode.STATUS_PENDING_SUBMIT.getVal());
 
 				stmt.setString(4, pair.getPath());
 				stmt.setInt(5, pair.getJobSpaceId());
@@ -393,13 +393,13 @@ public class JobPairs {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT * FROM starexec.GetPairsToBeProcessed(?)");
+			ps = con.prepareStatement("SELECT * FROM starexec.getpairstobeprocessed(?)");
 			ps.setInt(1, StatusCode.STATUS_PROCESSING.getVal());
 			results = ps.executeQuery();
 			List<PairStageProcessorTriple> list = new ArrayList<>();
 			while (results.next()) {
 				PairStageProcessorTriple next = new PairStageProcessorTriple();
-				next.setPairId(results.getInt("job_pairs.id"));
+				next.setPairId(results.getInt("id"));
 				next.setStageNumber(results.getInt("stageNumber"));
 				next.setProcessorId(results.getInt("post_processor"));
 				list.add(next);
@@ -1213,7 +1213,7 @@ public class JobPairs {
 				Status s = new Status();
 				s.setCode(results.getInt("status_code"));
 				jp.setStatus(s);
-				jp.setJobSpaceName(results.getString("jobSpace.name"));
+				jp.setJobSpaceName(results.getString("job_space_name"));
 			} else {
 				//couldn't find the pair for some reason
 				return null;
@@ -1477,7 +1477,7 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT starexec.UpdatePairStageStatus(?, ?, ?)");
 			ps.setInt(1, pairId);
 			ps.setInt(2, stageNumber);
-			ps.setInt(3, statusCode);
+			ps.setShort(3, (short) statusCode);
 
 			ps.execute();
 			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
@@ -1506,7 +1506,7 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT starexec.UpdateLaterStageStatuses(?, ?, ?)");
 			ps.setInt(1, pairId);
 			ps.setInt(2, stageNumber);
-			ps.setInt(3, statusCode);
+			ps.setShort(3, (short) statusCode);
 
 			ps.execute();
 			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
@@ -1681,7 +1681,7 @@ public class JobPairs {
 		try {
 			ps = con.prepareStatement("SELECT starexec.UpdatePairStatus(?, ?)");
 			ps.setInt(1, pairId);
-			ps.setInt(2, statusCode);
+			ps.setShort(2, (short) statusCode);
 
 			ps.executeUpdate();
 
@@ -2054,8 +2054,14 @@ public class JobPairs {
 	 */
 	public static List<JobPair> getPairsInBackend() {
 		List<JobPair> pairs = new ArrayList<>();
-		pairs.addAll(getPairsByStatus(Status.StatusCode.STATUS_ENQUEUED.getVal()));
-		pairs.addAll(getPairsByStatus(Status.StatusCode.STATUS_RUNNING.getVal()));
+		List<JobPair> enqueuedPairs = getPairsByStatus(Status.StatusCode.STATUS_ENQUEUED.getVal());
+		if (enqueuedPairs != null) {
+			pairs.addAll(enqueuedPairs);
+		}
+		List<JobPair> runningPairs = getPairsByStatus(Status.StatusCode.STATUS_RUNNING.getVal());
+		if (runningPairs != null) {
+			pairs.addAll(runningPairs);
+		}
 		return pairs;
 	}
 

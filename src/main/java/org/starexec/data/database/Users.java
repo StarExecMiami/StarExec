@@ -273,18 +273,27 @@ public class Users {
 		List<User> users = new ArrayList<>();
 		while (results.next()) {
 			User u = new User();
-			u.setId(results.getInt("id"));
-			u.setEmail(results.getString("email"));
-			u.setFirstName(results.getString("first_name"));
-			u.setLastName(results.getString("last_name"));
-			u.setInstitution(results.getString("institution"));
-			u.setCreateDate(results.getTimestamp("created"));
-			u.setDiskQuota(results.getLong("disk_quota"));
-			u.setSubscribedToReports(results.getBoolean("subscribed_to_reports"));
-			u.setRole(results.getString("role"));
-			u.setPairQuota(results.getInt("job_pair_quota"));
-			u.setDiskUsage(results.getLong("disk_size"));
-			u.setSubscribedToErrorLogs(results.getBoolean("subscribed_to_error_logs"));
+			Integer id = ResultSetUtils.getInt(results, "id");
+			if (id == null) {
+				throw new SQLException("User id column is null in result set");
+			}
+			u.setId(id);
+			u.setEmail(ResultSetUtils.getString(results, "email"));
+			u.setFirstName(ResultSetUtils.getString(results, "first_name"));
+			u.setLastName(ResultSetUtils.getString(results, "last_name"));
+			u.setInstitution(ResultSetUtils.getString(results, "institution"));
+			u.setCreateDate(ResultSetUtils.getTimestamp(results, "created"));
+			Long diskQuota = ResultSetUtils.getLong(results, "disk_quota");
+			u.setDiskQuota(diskQuota == null ? 0L : diskQuota);
+			Boolean subscribedToReports = ResultSetUtils.getBoolean(results, "subscribed_to_reports");
+			u.setSubscribedToReports(Boolean.TRUE.equals(subscribedToReports));
+			u.setRole(ResultSetUtils.getString(results, "role"));
+			Integer pairQuota = ResultSetUtils.getInt(results, "job_pair_quota");
+			u.setPairQuota(pairQuota == null ? 0 : pairQuota);
+			Long diskUsage = ResultSetUtils.getLong(results, "disk_size");
+			u.setDiskUsage(diskUsage == null ? 0L : diskUsage);
+			Boolean subscribedToErrorLogs = ResultSetUtils.getBoolean(results, "subscribed_to_error_logs");
+			u.setSubscribedToErrorLogs(Boolean.TRUE.equals(subscribedToErrorLogs));
 			users.add(u);
 		}
 		return users;

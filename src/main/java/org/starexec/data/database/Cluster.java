@@ -382,12 +382,12 @@ public class Cluster {
 			List<WorkerNode> nodes = new LinkedList<>();
 			while (results.next()) {
 				WorkerNode n = new WorkerNode();
-				n.setId(results.getInt("nodes.id"));
-				n.setName(results.getString("nodes.name"));
-				n.setStatus(results.getString("nodes.status"));
+				n.setId(results.getInt("node_id"));
+				n.setName(results.getString("node_name"));
+				n.setStatus(results.getString("node_status"));
 				Queue q = new Queue();
-				q.setName(results.getString("queues.name"));
-				q.setId(results.getInt("queues.id"));
+				q.setName(results.getString("queue_name"));
+				q.setId(results.getInt("queue_id"));
 
 				//we are displaying this data in a table, so we don't want a null name
 				if (q.getName() == null) {

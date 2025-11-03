@@ -4428,7 +4428,7 @@ public class RESTServices {
 	public String getUserBenchmarksPaginated(@PathParam("id") int usrId, @Context HttpServletRequest request) {
 		int requestUserId=SessionUtil.getUserId(request);
 		ValidatorStatusCode status=UserSecurity.canViewUserPrimitives(usrId, requestUserId);
-		log.error("made it to getUserBenchmarksPaginated");
+		log.debug("getUserBenchmarksPaginated invoked for user " + usrId + " by requester " + requestUserId);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}		// Query for the next page of solver pairs and return them to the user

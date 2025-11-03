@@ -71,9 +71,8 @@ public class Mail {
 					email.setStartTLSEnabled(true);
 				}
 
-				if (!R.EMAIL_USER.isEmpty()) {
-					email.setFrom(R.EMAIL_USER);
-				}
+				String fromAddress = !R.EMAIL_USER.isEmpty() ? R.EMAIL_USER : R.EMAIL_FROM;
+				email.setFrom(fromAddress);
 
 				for (String s : to) {
 					email.addTo(s);

@@ -13,6 +13,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.lang.NumberFormatException;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -31,25 +32,41 @@ public class Processors {
 	 * @throws SQLException If the ResultSet does not contain a required processor attribute
 	 */
 	public static Processor resultSetToProcessor(ResultSet results, String prefix) throws SQLException {
-		if (Util.isNullOrEmpty(prefix)) {
-			prefix = "";
-		} else {
-			prefix = prefix + ".";
-		}
-
 		Processor t = new Processor();
-		//if the ID is null, 0 is returned here
-		t.setId(results.getInt(prefix + "id"));
-		t.setCommunityId(results.getInt(prefix + "community"));
-		t.setDescription(results.getString(prefix + "description"));
-		t.setName(results.getString(prefix + "name"));
-		t.setFilePath(results.getString(prefix + "path"));
-		t.setDiskSize(results.getLong(prefix + "disk_size"));
-		t.setType(ProcessorType.valueOf(results.getInt("processor_type")));
-		t.setTimeLimit(results.getInt("time_limit"));
-		t.setSyntax(results.getInt("syntax_id"));
+		t.setId(readRequiredInt(results, prefix, "id"));
+		t.setCommunityId(readRequiredInt(results, prefix, "community"));
+		t.setDescription(ResultSetUtils.getString(results, columnCandidates(prefix, "description")));
+		t.setName(ResultSetUtils.getString(results, columnCandidates(prefix, "name")));
+		t.setFilePath(ResultSetUtils.getString(results, columnCandidates(prefix, "path")));
+		Long diskSize = ResultSetUtils.getLong(results, columnCandidates(prefix, "disk_size"));
+		t.setDiskSize(diskSize == null ? 0L : diskSize);
+		t.setType(ProcessorType.valueOf(readRequiredInt(results, prefix, "processor_type")));
+		Integer timeLimit = ResultSetUtils.getInt(results, columnCandidates(prefix, "time_limit"));
+		t.setTimeLimit(timeLimit == null ? 0 : timeLimit);
+		Integer syntaxId = ResultSetUtils.getInt(results, columnCandidates(prefix, "syntax_id"));
+		t.setSyntax(syntaxId == null ? 0 : syntaxId);
 
 		return t;
+	}
+
+	private static int readRequiredInt(ResultSet results, String prefix, String column) throws SQLException {
+		Integer value = ResultSetUtils.getInt(results, columnCandidates(prefix, column));
+		if (value == null) {
+			throw new SQLException("Column " + column + " is null in result set");
+		}
+		return value;
+	}
+
+	private static String[] columnCandidates(String prefix, String column) {
+		List<String> names = new ArrayList<>();
+		if (!Util.isNullOrEmpty(prefix)) {
+			names.add(prefix + "." + column);
+			names.add(prefix + "_" + column);
+			names.add(prefix + column);
+		}
+		names.add(column);
+		names.add(column.replace('.', '_'));
+		return names.toArray(new String[0]);
 	}
 
 	private static Processor resultSetToProcessor(ResultSet results) throws SQLException {
@@ -89,9 +106,9 @@ public class Processors {
 			stmt.setString(2, processor.getDescription());
 			stmt.setString(3, processor.getFilePath());
 			stmt.setInt(4, processor.getCommunityId());
-			stmt.setInt(5, processor.getType().getVal());
+			stmt.setShort(5, (short) processor.getType().getVal());
 			stmt.setLong(6, FileUtils.sizeOf(new File(processor.getFilePath())));
-			stmt.setInt(7, processor.getTimeLimit());
+			stmt.setShort(7, (short) processor.getTimeLimit());
 			
 			rs = stmt.executeQuery();
 			rs.next();
@@ -233,7 +250,7 @@ public class Processors {
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT * FROM starexec.GetAllProcessors(?)");
-			ps.setInt(1, type.getVal());
+			ps.setShort(1, (short) type.getVal());
 			results = ps.executeQuery();
 			return Processors.resultSetToProcessors(results);
 		} catch (SQLException e) {
@@ -267,7 +284,7 @@ public class Processors {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT * FROM starexec.GetProcessorsByCommunity(?,?)");
 			ps.setInt(1, communityId);
-			ps.setInt(2, type.getVal());
+			ps.setShort(2, (short) type.getVal());
 			results = ps.executeQuery();
 			return Processors.resultSetToProcessors(results);
 		} catch (SQLException e) {
@@ -296,7 +313,7 @@ public class Processors {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT * FROM starexec.GetProcessorsByUser(?,?)");
 			ps.setInt(1, userId);
-			ps.setInt(2, type.getVal());
+			ps.setShort(2, (short) type.getVal());
 			results = ps.executeQuery();
 			return Processors.resultSetToProcessors(results);
 		} catch (SQLException e) {
@@ -409,7 +426,7 @@ public class Processors {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.UpdateProcessorTimeLimit(?,?)");
 			ps.setInt(1, processorId);
-			ps.setInt(2, timeLimit);
+			ps.setShort(2, (short) timeLimit);
 			ps.execute();
 			return true;
 		} catch (SQLException e) {

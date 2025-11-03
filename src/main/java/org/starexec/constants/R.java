@@ -190,6 +190,7 @@ public class R {
 	public static final int EMAIL_SMTP_PORT = EnvironmentConfig.getEmailPort();
 	public static final String EMAIL_USER   = EnvironmentConfig.getEmailUser();
 	public static final String EMAIL_PWD    = EnvironmentConfig.getEmailPassword();
+	public static final String EMAIL_FROM   = EnvironmentConfig.getEmailFrom();
 
 	// PostgreSQL properties
 	public static final String POSTGRES_DATABASE               = EnvironmentConfig.getDbName();         // Name of the PostgreSQL database

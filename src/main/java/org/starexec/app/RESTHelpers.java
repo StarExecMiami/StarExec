@@ -1253,7 +1253,7 @@ public class RESTHelpers {
 			// If the config has been marked as delted, use the link for the delted config page instead
 			try {
 				Configuration configuration = Solvers.getConfigurationIncludeDeleted( configId );
-				if ( configuration.getDeleted() == 1 ) {
+				if ( configuration.isDeleted() ) {
 					sb.append( " href=\"" ).append( Util.docRoot( "secure/details/configDeleted.jsp?id=" ) );
 					sb.append(configId).append("\" target=\"_blank\"");
 				} else {

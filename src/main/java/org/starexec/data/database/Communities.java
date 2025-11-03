@@ -142,6 +142,9 @@ public class Communities {
 		ResultSet results = null;
 		try {
 			List<Space> communities = Communities.getAll();
+			if (communities == null) {
+				return;
+			}
 			HashMap<Integer, HashMap<String, Long>> commInfo = new HashMap<>();
 			HashMap<String, Long> community;
 			Integer commId;
@@ -356,11 +359,11 @@ public class Communities {
 
 			if (results.next()) {
 				Space s = new Space();
-				s.setName(results.getString("space.name"));
-				s.setId(results.getInt("space.id"));
-				s.setDescription(results.getString("space.description"));
-				s.setLocked(results.getBoolean("space.locked"));
-				s.setCreated(results.getTimestamp("space.created"));
+				s.setName(ResultSetUtils.getString(results, "space.name", "space_name", "name"));
+				s.setId(ResultSetUtils.getInt(results, "space.id", "space_id", "id"));
+				s.setDescription(ResultSetUtils.getString(results, "space.description", "space_description", "description"));
+				s.setLocked(ResultSetUtils.getBoolean(results, "space.locked", "space_locked", "locked"));
+				s.setCreated(ResultSetUtils.getTimestamp(results, "space.created", "space_created", "created"));
 				return s;
 			}
 		} catch (Exception e) {

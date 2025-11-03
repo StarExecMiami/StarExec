@@ -572,6 +572,15 @@ public class Spaces {
 			try {
 				s.setLocked(getBooleanByNames(results, "locked", "is_locked", "locked_flag"));
 			} catch (SQLException e) {}
+			if (columnExists(results, "sticky_leaders") || columnExists(results, "stickyleaders") ||
+			    columnExists(results, "sticky_leaders_flag")) {
+				try {
+					s.setStickyLeaders(getBooleanByNames(results,
+					                                    "sticky_leaders",
+					                                    "stickyleaders",
+					                                    "sticky_leaders_flag"));
+				} catch (SQLException e) {}
+			}
 			try {
 				s.setParentSpace(getIntByNames(results, "parent", "parent_space", "parentid", "parent_id"));
 			} catch (SQLException e) {}
@@ -1439,18 +1448,7 @@ public class Spaces {
 			ps = con.prepareStatement("SELECT * FROM starexec.GetSpacesByUser(?)");
 			ps.setInt(1, userId);
 			results = ps.executeQuery();
-			List<Space> spaces = new LinkedList<>();
-
-			while (results.next()) {
-				Space s = new Space();
-				s.setName(results.getString("space.name"));
-				s.setId(results.getInt("space.id"));
-				s.setDescription(results.getString("space.description"));
-				s.setLocked(results.getBoolean("space.locked"));
-				s.setStickyLeaders(results.getBoolean("space.sticky_leaders"));
-				spaces.add(s);
-			}
-			return spaces;
+			return resultsToSpaces(results);
 		} catch (Exception e) {
 			log.error("getSpacesByUser", e);
 		} finally {

@@ -412,7 +412,7 @@ public class AnonymousLinks {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-			ps = con.prepareStatement("SELECT starexec.DeleteOldLinks(?)");
+			ps = con.prepareStatement("SELECT starexec.deleteoldlinks(?)");
 			ps.setInt(1, ageThresholdInDays);
 
 			ps.execute();

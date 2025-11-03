@@ -370,9 +370,21 @@ DROP FUNCTION IF EXISTS starexec.GetBenchmarkById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarkById(_id INT)
 RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
-		   p.id as type_id, p.name as type_name, p.description as type_description
+    RETURN QUERY
+    SELECT b.id AS bench_id,
+           b.user_id AS bench_user_id,
+           b.name AS bench_name,
+           b.bench_type AS bench_bench_type,
+           b.uploaded AS bench_uploaded,
+           b.path AS bench_path,
+           b.downloadable AS bench_downloadable,
+           b.disk_size AS bench_disk_size,
+           b.description AS bench_description,
+           b.deleted AS bench_deleted,
+           b.recycled AS bench_recycled,
+           p.id AS types_id,
+           p.name AS types_name,
+           p.description AS types_description
 	FROM starexec.benchmarks b
 	LEFT OUTER JOIN processors p ON b.bench_type = p.id
 	WHERE b.id = _id AND b.deleted = false AND b.recycled = false;
@@ -396,9 +408,21 @@ DROP FUNCTION IF EXISTS starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(INT) 
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(_id INT)
 RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
-		   p.id as type_id, p.name as type_name, p.description as type_description
+    RETURN QUERY
+    SELECT b.id AS bench_id,
+           b.user_id AS bench_user_id,
+           b.name AS bench_name,
+           b.bench_type AS bench_bench_type,
+           b.uploaded AS bench_uploaded,
+           b.path AS bench_path,
+           b.downloadable AS bench_downloadable,
+           b.disk_size AS bench_disk_size,
+           b.description AS bench_description,
+           b.deleted AS bench_deleted,
+           b.recycled AS bench_recycled,
+           p.id AS types_id,
+           p.name AS types_name,
+           p.description AS types_description
 	FROM starexec.benchmarks b
 	LEFT OUTER JOIN processors p ON b.bench_type = p.id
 	WHERE b.id = _id;
@@ -440,9 +464,23 @@ DROP FUNCTION IF EXISTS starexec.GetSpaceBenchmarksById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpaceBenchmarksById(_id INT)
 RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, space_id INT, order_id INT, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
-		   ba.space_id, ba.order_id, p.id as type_id, p.name as type_name, p.description as type_description
+    RETURN QUERY
+    SELECT b.id AS bench_id,
+           b.user_id AS bench_user_id,
+           b.name AS bench_name,
+           b.bench_type AS bench_bench_type,
+           b.uploaded AS bench_uploaded,
+           b.path AS bench_path,
+           b.downloadable AS bench_downloadable,
+           b.disk_size AS bench_disk_size,
+           b.description AS bench_description,
+           b.deleted AS bench_deleted,
+           b.recycled AS bench_recycled,
+           ba.space_id AS bench_assoc_space_id,
+           ba.order_id AS bench_assoc_order_id,
+           p.id AS types_id,
+           p.name AS types_name,
+           p.description AS types_description
 	FROM starexec.bench_assoc ba
 	JOIN benchmarks b ON b.id = ba.bench_id
 	LEFT OUTER JOIN processors p ON b.bench_type = p.id
@@ -1980,7 +2018,7 @@ $$ LANGUAGE plpgsql;
 -- Alexander Brown, 9/20
 DROP FUNCTION IF EXISTS starexec.GetJobStatsInJobSpaceIncludeDeletedConfigs(INT, INT, INT, BOOLEAN) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobStatsInJobSpaceIncludeDeletedConfigs(_jobSpaceId INT, _jobId INT, _stageNumber INT, _includeUnknown BOOLEAN)
-RETURNS TABLE(job_space_id INT, config_id INT, complete INT, correct INT, incorrect INT, failed INT, conflicts INT, wallclock DOUBLE PRECISION, cpu DOUBLE PRECISION, resource_out INT, incomplete INT, stage_number INT, include_unknowns BOOLEAN, solver_id INT, solver_name VARCHAR, solver_description TEXT, solver_downloadable BOOLEAN, solver_deleted BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, config_name VARCHAR, config_description TEXT, config_contents TEXT, config_deleted INT, config_upload_date TIMESTAMP, config_user_id INT, anonymous_solver_name VARCHAR, anonymous_config_name VARCHAR) AS $$
+RETURNS TABLE(job_space_id INT, config_id INT, complete INT, correct INT, incorrect INT, failed INT, conflicts INT, wallclock DOUBLE PRECISION, cpu DOUBLE PRECISION, resource_out INT, incomplete INT, stage_number INT, include_unknowns BOOLEAN, solver_id INT, solver_name VARCHAR, solver_description TEXT, solver_downloadable BOOLEAN, solver_deleted BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, config_name VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, anonymous_solver_name VARCHAR, anonymous_config_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT job_stats.job_space_id, job_stats.config_id, job_stats.complete, job_stats.correct, job_stats.incorrect, job_stats.failed, job_stats.conflicts, job_stats.wallclock, job_stats.cpu, job_stats.resource_out, job_stats.incomplete, job_stats.stage_number, job_stats.include_unknowns, solver.id, solver.name, solver.description, solver.downloadable, solver.deleted, solver.upload_date, solver.user_id, solver.build_status, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, anonymous_solver_names.anonymous_name, anonymous_config_names.anonymous_name
@@ -2157,7 +2195,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetJobPairsPrimaryStageByJob(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobPairsPrimaryStageByJob(_id INT)
-RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted INT, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
+RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, jobpair_stage_data.max_res_set, jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, config.id, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, bench.id, bench.name, bench.description, bench.deleted, bench.downloadable, bench.upload_date, bench.user_id, solver.id, solver.name, solver.description, solver.deleted, solver.downloadable, solver.upload_date, solver.user_id, solver.build_status, node.name, node.status, jobSpace.name
@@ -2168,8 +2206,8 @@ BEGIN
 	JOIN solvers AS solver ON config.solver_id = solver.id
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON jobSpace.id=job_pairs.job_space_id
-	WHERE job_pairs.job_id=_id AND jobpair_stage_data.stage_number=job_pairs.primary_jobpair_data
-	AND config.deleted = false
+    WHERE job_pairs.job_id=_id AND jobpair_stage_data.stage_number=job_pairs.primary_jobpair_data
+    AND config.deleted = false
 	ORDER BY job_pairs.end_time DESC;
 END;
 $$ LANGUAGE plpgsql;
@@ -2343,7 +2381,7 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetAllJobPairsByJob(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetAllJobPairsByJob(_id INT)
-RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, stage_number INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted INT, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
+RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, stage_number INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, jobpair_stage_data.max_res_set, jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, jobpair_stage_data.stage_number, config.id, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, bench.id, bench.name, bench.description, bench.deleted, bench.downloadable, bench.upload_date, bench.user_id, solver.id, solver.name, solver.description, solver.deleted, solver.downloadable, solver.upload_date, solver.user_id, solver.build_status, node.name, node.status, jobSpace.name
@@ -2354,8 +2392,8 @@ BEGIN
 	JOIN solvers AS solver ON config.solver_id = solver.id
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON job_pairs.job_space_id=jobSpace.id
-	WHERE job_pairs.job_id=_id AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
-	AND config.deleted = false;
+    WHERE job_pairs.job_id=_id AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
+    AND config.deleted = false;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2363,7 +2401,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetNewCompletedJobPairsByJob(INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetNewCompletedJobPairsByJob(_id INT, _completionId INT)
-RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, completion_id INT, stage_number INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted INT, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
+RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, completion_id INT, stage_number INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, jobpair_stage_data.max_res_set, jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, complete.completion_id, jobpair_stage_data.stage_number, config.id, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, bench.id, bench.name, bench.description, bench.deleted, bench.downloadable, bench.upload_date, bench.user_id, solver.id, solver.name, solver.description, solver.deleted, solver.downloadable, solver.upload_date, solver.user_id, solver.build_status, node.name, node.status, jobSpace.name
@@ -2375,8 +2413,8 @@ BEGIN
 	JOIN solvers AS solver ON config.solver_id = solver.id
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON job_pairs.job_space_id=jobSpace.id
-	WHERE job_pairs.job_id=_id AND complete.completion_id>_completionId AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
-	AND config.deleted = false
+    WHERE job_pairs.job_id=_id AND complete.completion_id>_completionId AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
+    AND config.deleted = false
 	ORDER BY job_pairs.end_time DESC;
 END;
 $$ LANGUAGE plpgsql;
@@ -5095,10 +5133,23 @@ $$ LANGUAGE plpgsql;
 -- Author: Benton McCune
 DROP FUNCTION IF EXISTS starexec.GetPublicSolvers CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPublicSolvers()
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT DISTINCT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT DISTINCT s.id AS solver_id,
+                   s.user_id AS solver_user_id,
+                   s.name AS solver_name,
+                   s.uploaded AS solver_uploaded,
+                   s.path AS solver_path,
+                   s.description AS solver_description,
+                   s.downloadable AS solver_downloadable,
+                   s.disk_size AS solver_disk_size,
+                   s.deleted AS solver_deleted,
+                   s.recycled AS solver_recycled,
+                   s.recycled_original_name AS solver_recycled_original_name,
+                   s.executable_type AS solver_executable_type,
+                   s.build_status AS solver_build_status,
+                   s.config_deleted AS solver_config_deleted
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     JOIN spaces sp ON sp.id = sa.space_id
@@ -5221,20 +5272,23 @@ DROP FUNCTION IF EXISTS starexec.DeleteConfigurationById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.DeleteConfigurationById(_configId INT)
 RETURNS VOID AS $$
 BEGIN
-    UPDATE configurations SET deleted = 1
+    UPDATE configurations SET deleted = true
     WHERE id = _configId;
-    PERFORM UpdateConfigDeletedInSolvers(_configId, 1);
+    PERFORM UpdateConfigDeletedInSolvers(_configId, true);
 END;
 $$ LANGUAGE plpgsql;
 
 -- Updates the solvers table to properly reflect that the corresponding configuration has been deleted
 -- Author: Alexander Brown
 DROP FUNCTION IF EXISTS starexec.UpdateConfigDeletedInSolvers CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdateConfigDeletedInSolvers(_configId INT, _configDeleted INT)
+CREATE OR REPLACE FUNCTION starexec.UpdateConfigDeletedInSolvers(_configId INT, _configDeleted BOOLEAN)
 RETURNS VOID AS $$
 BEGIN
-    UPDATE solvers SET config_deleted = (_configDeleted = 1)
-    WHERE id = _configId;
+    UPDATE solvers
+    SET config_deleted = _configDeleted
+    WHERE id IN (
+        SELECT solver_id FROM starexec.configurations WHERE id = _configId
+    );
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5355,10 +5409,23 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetSpaceSolversById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpaceSolversById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT s.id AS solver_id,
+           s.user_id AS solver_user_id,
+           s.name AS solver_name,
+           s.uploaded AS solver_uploaded,
+           s.path AS solver_path,
+           s.description AS solver_description,
+           s.downloadable AS solver_downloadable,
+           s.disk_size AS solver_disk_size,
+           s.deleted AS solver_deleted,
+           s.recycled AS solver_recycled,
+           s.recycled_original_name AS solver_recycled_original_name,
+           s.executable_type AS solver_executable_type,
+           s.build_status AS solver_build_status,
+           s.config_deleted AS solver_config_deleted
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     WHERE s.deleted = false AND s.recycled = false AND sa.space_id = _id;
@@ -5382,10 +5449,23 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetSolverById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolverById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT s.id AS solver_id,
+           s.user_id AS solver_user_id,
+           s.name AS solver_name,
+           s.uploaded AS solver_uploaded,
+           s.path AS solver_path,
+           s.description AS solver_description,
+           s.downloadable AS solver_downloadable,
+           s.disk_size AS solver_disk_size,
+           s.deleted AS solver_deleted,
+           s.recycled AS solver_recycled,
+           s.recycled_original_name AS solver_recycled_original_name,
+           s.executable_type AS solver_executable_type,
+           s.build_status AS solver_build_status,
+           s.config_deleted AS solver_config_deleted
     FROM starexec.solvers s
     WHERE s.id = _id AND s.deleted = false AND s.recycled = false;
 END;
@@ -5395,10 +5475,23 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetSolverByIdIncludeDeleted CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolverByIdIncludeDeleted(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT s.id AS solver_id,
+           s.user_id AS solver_user_id,
+           s.name AS solver_name,
+           s.uploaded AS solver_uploaded,
+           s.path AS solver_path,
+           s.description AS solver_description,
+           s.downloadable AS solver_downloadable,
+           s.disk_size AS solver_disk_size,
+           s.deleted AS solver_deleted,
+           s.recycled AS solver_recycled,
+           s.recycled_original_name AS solver_recycled_original_name,
+           s.executable_type AS solver_executable_type,
+           s.build_status AS solver_build_status,
+           s.config_deleted AS solver_config_deleted
     FROM starexec.solvers s
     WHERE s.id = _id;
 END;
@@ -5424,10 +5517,23 @@ $$ LANGUAGE plpgsql;
 -- Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetSolversByOwner CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolversByOwner(_userId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT s.id AS solver_id,
+           s.user_id AS solver_user_id,
+           s.name AS solver_name,
+           s.uploaded AS solver_uploaded,
+           s.path AS solver_path,
+           s.description AS solver_description,
+           s.downloadable AS solver_downloadable,
+           s.disk_size AS solver_disk_size,
+           s.deleted AS solver_deleted,
+           s.recycled AS solver_recycled,
+           s.recycled_original_name AS solver_recycled_original_name,
+           s.executable_type AS solver_executable_type,
+           s.build_status AS solver_build_status,
+           s.config_deleted AS solver_config_deleted
     FROM starexec.solvers s
     WHERE s.user_id = _userId AND s.deleted = false AND s.recycled = false;
 END;
@@ -5661,7 +5767,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetDeletedSolvers CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetDeletedSolvers()
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
     SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
@@ -5711,7 +5817,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetSolversInSharedSpaces CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolversInSharedSpaces(_userId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
     SELECT DISTINCT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
@@ -6569,13 +6675,61 @@ CREATE OR REPLACE FUNCTION starexec.CreateUsersSpace(_communityId INT)
 RETURNS VOID AS $$
 DECLARE
     _name VARCHAR(255) DEFAULT 'Users';
-    _permission INT DEFAULT 1; -- default for root space
-    _locked INT DEFAULT 0;
-    _sticky INT DEFAULT 0;
+    _permission INT;
+    _locked BOOLEAN DEFAULT FALSE;
+    _sticky BOOLEAN DEFAULT FALSE;
     _description TEXT DEFAULT 'Holding personal spaces for users';
     _newSpaceId INT;
 BEGIN
-    SELECT AddSpace(_name, _description, _locked::BOOLEAN, _permission, _communityId, _sticky::BOOLEAN) INTO _newSpaceId;
+    -- Prefer the parent community's default permission when available
+    SELECT default_permission INTO _permission
+    FROM spaces
+    WHERE id = _communityId
+    LIMIT 1;
+
+    -- Fall back to the root space default if parent does not define one
+    IF _permission IS NULL THEN
+        SELECT default_permission INTO _permission
+        FROM spaces
+        WHERE name = 'root'
+        ORDER BY id
+        LIMIT 1;
+    END IF;
+
+    -- Fall back to a fully privileged non-leader permission if still null
+    IF _permission IS NULL THEN
+        SELECT id INTO _permission
+        FROM permissions
+        WHERE add_solver = TRUE
+          AND add_bench = TRUE
+          AND add_user = TRUE
+          AND add_space = TRUE
+          AND add_job = TRUE
+          AND remove_solver = TRUE
+          AND remove_bench = TRUE
+          AND remove_user = TRUE
+          AND remove_space = TRUE
+          AND remove_job = TRUE
+          AND is_leader = FALSE
+        ORDER BY id
+        LIMIT 1;
+    END IF;
+
+    -- Final safety: fall back to the oldest permission record if no match above
+    IF _permission IS NULL THEN
+        SELECT id INTO _permission
+        FROM permissions
+        ORDER BY id
+        LIMIT 1;
+    END IF;
+
+    -- Ensure the derived permission exists before inserting the space
+    PERFORM 1 FROM permissions WHERE id = _permission;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Unable to determine a valid default permission for Users subspace (communityId=%)', _communityId;
+    END IF;
+
+    SELECT AddSpace(_name, _description, _locked, _permission, _communityId, _sticky) INTO _newSpaceId;
     PERFORM AssociateSpaces(_communityId, _newSpaceId);
 END;
 $$ LANGUAGE plpgsql;
@@ -6622,7 +6776,7 @@ CREATE OR REPLACE FUNCTION starexec.XMLFileUploadComplete(_id INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE space_xml_uploads
-    SET file_upload_complete = 1
+    SET file_upload_complete = TRUE
     WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -6634,7 +6788,7 @@ CREATE OR REPLACE FUNCTION starexec.BenchmarkFileUploadComplete(_id INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE benchmark_uploads
-    SET file_upload_complete = 1
+    SET file_upload_complete = TRUE
     WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -6646,7 +6800,7 @@ CREATE OR REPLACE FUNCTION starexec.FileExtractComplete(_id INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE benchmark_uploads
-    SET file_extraction_complete = 1
+    SET file_extraction_complete = TRUE
     WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -6658,7 +6812,7 @@ CREATE OR REPLACE FUNCTION starexec.ProcessingBegun(_id INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE benchmark_uploads
-    SET processing_begun = 1
+    SET processing_begun = TRUE
     WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -6670,7 +6824,7 @@ CREATE OR REPLACE FUNCTION starexec.XMLEverythingComplete(_id INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE space_xml_uploads
-    SET everything_complete = 1
+    SET everything_complete = TRUE
     WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -6680,7 +6834,7 @@ CREATE OR REPLACE FUNCTION starexec.BenchmarkEverythingComplete(_id INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE benchmark_uploads
-    SET everything_complete = 1
+    SET everything_complete = TRUE
     WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;

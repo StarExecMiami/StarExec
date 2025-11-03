@@ -101,6 +101,10 @@ public class EnvironmentConfig {
     public static String getEmailPassword() {
         return getEnv("STAREXEC_EMAIL_PASSWORD", "");
     }
+
+    public static String getEmailFrom() {
+        return getEnv("STAREXEC_EMAIL_FROM", "starexec@localhost");
+    }
     
     // Backend Configuration
     public static String getBackendType() {

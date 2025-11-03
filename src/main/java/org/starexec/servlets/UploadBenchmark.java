@@ -392,7 +392,15 @@ public class UploadBenchmark extends HttpServlet {
 		final boolean downloadable = Boolean.parseBoolean((String) form.get(BENCH_DOWNLOADABLE));
 		final boolean hasDependencies = Boolean.parseBoolean((String) form.get(HAS_DEPENDENCIES));
 		final boolean linked = Boolean.parseBoolean((String) form.get(LINKED));
-		final int depRootSpaceId = Integer.parseInt((String) form.get(DEP_ROOT_SPACE_ID));
+		final String depRootRaw = (String) form.get(DEP_ROOT_SPACE_ID);
+		final int depRootSpaceId;
+		if (Validator.isValidPosInteger(depRootRaw)) {
+			depRootSpaceId = Integer.parseInt(depRootRaw);
+		} else {
+			log.debug("handleUploadRequest",
+			          "depRoot missing or invalid; defaulting dependency root to space " + spaceId);
+			depRootSpaceId = spaceId;
+		}
 		final Permission perm = this.extractPermissions(form);
 		final Integer statusId = sId;
 		final String localOrUrlOrGit = (String) form.get(FILE_LOC);

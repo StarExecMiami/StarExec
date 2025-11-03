@@ -151,8 +151,11 @@ class PeriodicTasks {
 //		    Statistics.addQueuePlotPoint(num_enqueued);
 
             // loop through the SGE cluster queues, calling the function to create the queue graph for each one
-            for ( Queue q : Queues.getAllActive() ) {
-                Statistics.addQueuePlotPoint( q.getId() );
+            List<Queue> activeQueues = Queues.getAllActive();
+            if (activeQueues != null) {
+                for ( Queue q : activeQueues ) {
+                    Statistics.addQueuePlotPoint( q.getId() );
+                }
             }
 
 	    } catch(Exception e) {
@@ -346,14 +349,14 @@ class PeriodicTasks {
 
             List<User> subscribedUsers = Users.getAllUsersSubscribedToReports();
             try {
-                if (subscribedUsers.size() > Users.getCount()) {
+                if (subscribedUsers != null && subscribedUsers.size() > Users.getCount()) {
                     // make sure that we're not sending unnecessary emails
                     throw new StarExecException("There are more users subscribed to reports than users in the system!");
                 }
 
                 Calendar today = Calendar.getInstance();
                 // check if it's the day to email reports and check if reports were already sent today
-                if (today.get(Calendar.DAY_OF_WEEK) == R.EMAIL_REPORTS_DAY && !Mail.reportsEmailedToday()) {
+                if (subscribedUsers != null && today.get(Calendar.DAY_OF_WEEK) == R.EMAIL_REPORTS_DAY && !Mail.reportsEmailedToday()) {
                     String reportsEmail = Mail.generateGenericReportsEmail();
                     log.info("Storing reports and sending reports to subscribed users.");
                     Mail.storeReportsEmail(reportsEmail);

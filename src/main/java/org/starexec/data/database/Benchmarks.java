@@ -1409,7 +1409,7 @@ public class Benchmarks {
 				while (results.next()) {
 					count++;
 					if (count == 1) {
-						benchId = results.getInt("bench.id");
+						benchId = results.getInt("id");
 						log.debug("Bench Id = " + benchId);
 					} else {
 						log.debug("Multiple benchmarks found with name: " + benchName);
@@ -1518,21 +1518,24 @@ public class Benchmarks {
 			List<Benchmark> benchmarks = new LinkedList<>();
 
 			while (results.next()) {
-				//don't include deleted benchmarks in the results if getDeleted is false
 				Benchmark b = new Benchmark();
-				b.setId(results.getInt("id"));
-				b.setName(results.getString("name"));
-				b.setUserId(results.getInt("user_id"));
-				if (results.getBoolean("deleted")) {
+				b.setId(readRequiredInt(results, null, "id"));
+				b.setUserId(readRequiredInt(results, null, "user_id"));
+				String name = ResultSetUtils.getString(results, columnCandidates(null, "name"));
+				b.setName(name);
+				String description = ResultSetUtils.getString(results, columnCandidates(null, "description"));
+				b.setDescription(description);
+				Boolean deleted = ResultSetUtils.getBoolean(results, columnCandidates(null, "deleted"));
+				b.setDeleted(Boolean.TRUE.equals(deleted));
+				Boolean recycledFlag = ResultSetUtils.getBoolean(results, columnCandidates(null, "recycled"));
+				b.setRecycled(Boolean.TRUE.equals(recycledFlag));
+				if (b.isDeleted() && b.getName() != null) {
 					b.setName(b.getName() + " (deleted)");
 				}
 
-				b.setDescription(results.getString("description"));
-				b.setDeleted(results.getBoolean("deleted"));
-				b.setRecycled(results.getBoolean("recycled"));
 				Processor t = new Processor();
-				t.setDescription(results.getString("benchTypeDescription"));
-				t.setName(results.getString("benchTypeName"));
+				t.setDescription(ResultSetUtils.getString(results, "benchTypeDescription", "bench_type_description"));
+				t.setName(ResultSetUtils.getString(results, "benchTypeName", "bench_type_name"));
 				b.setType(t);
 				benchmarks.add(b);
 			}
@@ -1588,21 +1591,25 @@ public class Benchmarks {
 
 			while (results.next()) {
 				Benchmark b = new Benchmark();
-				b.setId(results.getInt("id"));
-				b.setName(results.getString("name"));
-				b.setUserId(results.getInt("user_id"));
-				if (results.getBoolean("deleted")) {
+				b.setId(readRequiredInt(results, null, "id"));
+				b.setUserId(readRequiredInt(results, null, "user_id"));
+				String name = ResultSetUtils.getString(results, columnCandidates(null, "name"));
+				b.setName(name);
+				String description = ResultSetUtils.getString(results, columnCandidates(null, "description"));
+				b.setDescription(description);
+				Boolean deleted = ResultSetUtils.getBoolean(results, columnCandidates(null, "deleted"));
+				b.setDeleted(Boolean.TRUE.equals(deleted));
+				Boolean recycledFlag = ResultSetUtils.getBoolean(results, columnCandidates(null, "recycled"));
+				b.setRecycled(Boolean.TRUE.equals(recycledFlag));
+				if (b.isDeleted() && b.getName() != null) {
 					b.setName(b.getName() + " (deleted)");
-				} else if (results.getBoolean("recycled")) {
+				} else if (b.isRecycled() && b.getName() != null) {
 					b.setName(b.getName() + " (in trash)");
 				}
-				b.setDeleted(results.getBoolean("deleted"));
-				b.setRecycled(results.getBoolean("recycled"));
-				b.setDescription(results.getString("description"));
 
 				Processor t = new Processor();
-				t.setDescription(results.getString("benchTypeDescription"));
-				t.setName(results.getString("benchTypeName"));
+				t.setDescription(ResultSetUtils.getString(results, "benchTypeDescription", "bench_type_description"));
+				t.setName(ResultSetUtils.getString(results, "benchTypeName", "bench_type_name"));
 				b.setType(t);
 				benchmarks.add(b);
 			}
@@ -2069,37 +2076,49 @@ public class Benchmarks {
 	 * Creates a Benchmark object from a SQL resultset
 	 *
 	 * @param results The resultset pointed at the row containing benchmark data
-	 * @param prefix If the sql procedure used to create "results" used an "AS <name>" clause when getting benchmark
-	 * data (as in SELECT * FROM benchmarks AS bench), then prefix should be <name>
+	 * @param prefix Optional table alias to consider when resolving column names
 	 * @return A Benchmark object
-	 * @throws SQLException
+	 * @throws SQLException when required columns are not present
 	 */
 	public static Benchmark resultToBenchmarkWithPrefix(ResultSet results, String prefix) throws SQLException {
 		Benchmark b = new Benchmark();
-		if (Util.isNullOrEmpty(prefix)) {
-			b.setId(results.getInt("id"));
-			b.setUserId(results.getInt("user_id"));
-			b.setName(results.getString("name"));
-			b.setUploadDate(results.getTimestamp("uploaded"));
-			b.setPath(results.getString("path"));
-			b.setDescription(results.getString("description"));
-			b.setDownloadable(results.getBoolean("downloadable"));
-			b.setDiskSize(results.getLong("disk_size"));
-			b.setRecycled(results.getBoolean("recycled"));
-			b.setDeleted(results.getBoolean("deleted"));
-		} else {
-			b.setId(results.getInt(prefix + ".id"));
-			b.setUserId(results.getInt(prefix + ".user_id"));
-			b.setName(results.getString(prefix + ".name"));
-			b.setUploadDate(results.getTimestamp(prefix + ".uploaded"));
-			b.setPath(results.getString(prefix + ".path"));
-			b.setDescription(results.getString(prefix + ".description"));
-			b.setDownloadable(results.getBoolean(prefix + ".downloadable"));
-			b.setDiskSize(results.getLong(prefix + ".disk_size"));
-			b.setRecycled(results.getBoolean(prefix + ".recycled"));
-			b.setDeleted(results.getBoolean(prefix + ".deleted"));
-		}
+		b.setId(readRequiredInt(results, prefix, "id"));
+		b.setUserId(readRequiredInt(results, prefix, "user_id"));
+		b.setName(ResultSetUtils.getString(results, columnCandidates(prefix, "name")));
+		b.setUploadDate(ResultSetUtils.getTimestamp(results, columnCandidates(prefix, "uploaded")));
+		b.setPath(ResultSetUtils.getString(results, columnCandidates(prefix, "path")));
+		b.setDescription(ResultSetUtils.getString(results, columnCandidates(prefix, "description")));
+		Boolean downloadable = ResultSetUtils.getBoolean(results, columnCandidates(prefix, "downloadable"));
+		b.setDownloadable(Boolean.TRUE.equals(downloadable));
+		Long diskSize = ResultSetUtils.getLong(results, columnCandidates(prefix, "disk_size"));
+		b.setDiskSize(diskSize == null ? 0L : diskSize);
+		Boolean recycled = ResultSetUtils.getBoolean(results, columnCandidates(prefix, "recycled"));
+		b.setRecycled(Boolean.TRUE.equals(recycled));
+		Boolean deleted = ResultSetUtils.getBoolean(results, columnCandidates(prefix, "deleted"));
+		b.setDeleted(Boolean.TRUE.equals(deleted));
 		return b;
+	}
+
+	private static int readRequiredInt(ResultSet results, String prefix, String column) throws SQLException {
+		Integer value = ResultSetUtils.getInt(results, columnCandidates(prefix, column));
+		if (value == null) {
+			throw new SQLException("Column " + column + " is null in result set");
+		}
+		return value;
+	}
+
+	private static String[] columnCandidates(String prefix, String column) {
+		List<String> names = new ArrayList<>();
+		if (!Util.isNullOrEmpty(prefix)) {
+			names.add(prefix + "." + column);
+			names.add(prefix + "_" + column);
+			names.add(prefix + column);
+		}
+		names.add(column);
+		if (column.contains(".")) {
+			names.add(column.replace('.', '_'));
+		}
+		return names.toArray(new String[0]);
 	}
 
 	/**
@@ -2663,13 +2682,13 @@ public class Benchmarks {
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetBrokenBenchDependencies(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
-			List<Benchmark> Benchmarks = new LinkedList<>();
+			List<Benchmark> benchmarks = new LinkedList<>();
 
 			while (results.next()) {
 				Benchmark s = get(results.getInt("id"), true, true);
-				Benchmarks.add(s);
+				benchmarks.add(s);
 			}
-			return Benchmarks;
+			return benchmarks;
 		} catch (SQLException e) {
 			log.error("getBrokenBenchDependencies", "rethrowing exception", e);
 			throw e;
@@ -2689,7 +2708,6 @@ public class Benchmarks {
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetBrokenBenchDependencies(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
-			List<Benchmark> Benchmarks = new LinkedList<>();
 			return results.isBeforeFirst();
 		} catch (Exception e) {
 			log.error("benchHasBrokenDependencies", e);

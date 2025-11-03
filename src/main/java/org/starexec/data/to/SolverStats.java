@@ -182,7 +182,7 @@ public class SolverStats extends Identifiable {
 		return getCorrectJobPairs() + "/" + getCompleteJobPairs();
 	}
 
-	public int getConfigDeleted() { return configuration.getDeleted(); }
+	public boolean getConfigDeleted() { return configuration.isDeleted(); }
 
 	/* 
 	 * One of the users wanted us to include a button that adds the feature

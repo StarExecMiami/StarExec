@@ -37,6 +37,9 @@ WHERE NOT EXISTS (SELECT 1 FROM permissions WHERE id = 4);
 -- Ensure the permissions sequence is correct
 SELECT setval(pg_get_serial_sequence('starexec.permissions','id'), 4, true);
 
+-- Ensure the processors sequence is correct (processor with id=1 is seeded in baseline)
+SELECT setval(pg_get_serial_sequence('starexec.processors','id'), (SELECT MAX(id) FROM starexec.processors), true);
+
 -- Starts at 2 (the root space is defined in the schema)
 INSERT INTO spaces(name, created, description, locked, default_permission)
 SELECT 'Test', CURRENT_TIMESTAMP, 'The Test community', FALSE,

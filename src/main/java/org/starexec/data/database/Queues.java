@@ -160,7 +160,7 @@ public class Queues {
 		try {
 
 			//Add the queue first
-			stmt = con.prepareStatement("SELECT AddQueue(?, ?, ?)");
+			stmt = con.prepareStatement("SELECT starexec.addqueue(?, ?, ?)");
 			stmt.setString(1, queueName);
 			stmt.setInt(2, wallTimeout);
 			stmt.setInt(3, cpuTimeout);
@@ -504,14 +504,14 @@ public class Queues {
 			jp.getPrimarySolver().addConfiguration(c);
 
 			User u = new User();
-			u.setId(results.getInt("users.id"));
-			u.setFirstName(results.getString("users.first_name"));
-			u.setLastName(results.getString("users.last_name"));
+			u.setId(results.getInt("user_id"));
+			u.setFirstName(results.getString("first_name"));
+			u.setLastName(results.getString("last_name"));
 			jp.setOwningUser(u);
 
 			Job j = new Job();
-			j.setId(results.getInt("jobs.id"));
-			j.setName(results.getString("jobs.name"));
+			j.setId(results.getInt("job_id_dup"));
+			j.setName(results.getString("job_name"));
 
 			jp.setOwningJob(j);
 

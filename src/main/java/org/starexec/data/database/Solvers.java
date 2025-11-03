@@ -1262,7 +1262,7 @@ public class Solvers {
 				c.setName(results.getString("name"));
 				c.setSolverId(results.getInt("solver_id"));
 				c.setDescription(results.getString("description"));
-				c.setDeleted( results.getInt( "deleted" ) );
+				c.setDeleted( results.getBoolean( "deleted" ) );
 				Common.safeClose(results);
 				return c;
 			}
@@ -2103,19 +2103,41 @@ public class Solvers {
 
 		prefix = transformPrefix(prefix);
 
-		s.setId(results.getInt(prefix + "id"));
-		s.setUserId(results.getInt(prefix + "user_id"));
-		s.setName(results.getString(prefix + "name"));
-		s.setUploadDate(results.getTimestamp(prefix + "uploaded"));
-		s.setPath(results.getString(prefix + "path"));
-		s.setDescription(results.getString(prefix + "description"));
-		s.setDownloadable(results.getBoolean(prefix + "downloadable"));
-		s.setDiskSize(results.getLong(prefix + "disk_size"));
-		s.setType(ExecutableType.valueOf(results.getInt("executable_type")));
-		s.setRecycled(results.getBoolean("recycled"));
-		s.setDeleted(results.getBoolean("deleted"));
+		Integer id = ResultSetUtils.getInt(results, prefix + "id", "id");
+		if (id == null) {
+			throw new SQLException("Solver id column is null in result set");
+		}
+		s.setId(id);
+		
+		Integer userId = ResultSetUtils.getInt(results, prefix + "user_id", "user_id");
+		if (userId == null) {
+			throw new SQLException("Solver user_id column is null in result set");
+		}
+		s.setUserId(userId);
+		
+		s.setName(ResultSetUtils.getString(results, prefix + "name", "name"));
+		s.setUploadDate(ResultSetUtils.getTimestamp(results, prefix + "uploaded", "uploaded"));
+		s.setPath(ResultSetUtils.getString(results, prefix + "path", "path"));
+		s.setDescription(ResultSetUtils.getString(results, prefix + "description", "description"));
+		
+		Boolean downloadable = ResultSetUtils.getBoolean(results, prefix + "downloadable", "downloadable");
+		s.setDownloadable(Boolean.TRUE.equals(downloadable));
+		
+		Long diskSize = ResultSetUtils.getLong(results, prefix + "disk_size", "disk_size");
+		s.setDiskSize(diskSize == null ? 0L : diskSize);
+		
+		Integer execType = ResultSetUtils.getInt(results, "executable_type");
+		s.setType(ExecutableType.valueOf(execType == null ? 0 : execType));
+		
+		Boolean recycled = ResultSetUtils.getBoolean(results, "recycled");
+		s.setRecycled(Boolean.TRUE.equals(recycled));
+		
+		Boolean deleted = ResultSetUtils.getBoolean(results, "deleted");
+		s.setDeleted(Boolean.TRUE.equals(deleted));
+		
 		SolverBuildStatus status = new SolverBuildStatus();
-		status.setCode(results.getInt(prefix + "build_status"));
+		Integer buildStatus = ResultSetUtils.getInt(results, prefix + "build_status", "build_status");
+		status.setCode(buildStatus == null ? 0 : buildStatus);
 		s.setBuildStatus(status);
 
 		return s;
@@ -2124,10 +2146,22 @@ public class Solvers {
 	public static Configuration resultSetToConfiguration(ResultSet results, String prefix) throws SQLException {
 		prefix = transformPrefix(prefix);
 		Configuration config = new Configuration();
-		config.setId(results.getInt(prefix + "id"));
-		config.setDescription(results.getString(prefix + "description"));
-		config.setName(results.getString(prefix + "name"));
-		config.setSolverId(results.getInt(prefix + "solver_id"));
+		
+		Integer id = ResultSetUtils.getInt(results, prefix + "id", "id");
+		if (id == null) {
+			throw new SQLException("Configuration id column is null in result set");
+		}
+		config.setId(id);
+		
+		config.setDescription(ResultSetUtils.getString(results, prefix + "description", "description"));
+		config.setName(ResultSetUtils.getString(results, prefix + "name", "name"));
+		
+		Integer solverId = ResultSetUtils.getInt(results, prefix + "solver_id", "solver_id");
+		if (solverId == null) {
+			throw new SQLException("Configuration solver_id column is null in result set");
+		}
+		config.setSolverId(solverId);
+		
 		return config;
 	}
 
@@ -2175,7 +2209,7 @@ public class Solvers {
 			Common.safeClose(ps);
 			ps = con.prepareStatement("SELECT starexec.SetRecycledSolversToDeleted(?)");
 			ps.setInt(1, userId);
-			ps.executeUpdate();
+			ps.execute();
 
 			return true;
 		} catch (Exception e) {
@@ -2206,7 +2240,7 @@ public class Solvers {
 			ps = con.prepareStatement("SELECT starexec.SetSolverRecycledValue(?, ?)");
 			ps.setInt(1, id);
 			ps.setBoolean(2, state);
-			ps.executeUpdate();
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
