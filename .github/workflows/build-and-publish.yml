@@ -37,18 +37,27 @@ jobs:
       - name: Build and test with Docker Compose
         env:
           STAREXEC_DB_PASSWORD: ci_test_password
+          STRICT_DB_CONNECTION: true
         run: |
           docker compose up -d --build
           docker compose ps
       
       - name: Wait for application
         run: |
-          timeout 120 bash -c 'until curl -f http://localhost:8080/starexec 2>/dev/null; do sleep 2; done'
+          echo "Waiting for application to start..."
+          timeout 180 bash -c 'until curl -f http://localhost:8080/starexec/ 2>/dev/null; do sleep 5; echo "Still waiting..."; done'
           echo "✓ Application is ready"
+      
+      - name: Check application logs if startup failed
+        if: failure()
+        run: |
+          echo "Application failed to start. Checking logs..."
+          docker compose logs starexec
+          docker compose ps
       
       - name: Run integration tests
         run: |
-          curl -f http://localhost:8080/starexec || exit 1
+          curl -f http://localhost:8080/starexec/ || exit 1
 
       - name: Build and push image
         if: github.event_name == 'push'

@@ -12,7 +12,7 @@ services:
       # Database Configuration
       STAREXEC_DB_HOST: postgres
       STAREXEC_DB_USER: starexec
-      STAREXEC_DB_PASSWORD: starexec_dev_password
+      STAREXEC_DB_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
       STAREXEC_DB_NAME: starexec
       STAREXEC_REPORT_HOST: postgres
 
@@ -58,7 +58,7 @@ services:
     environment:
       POSTGRES_DB: starexec
       POSTGRES_USER: starexec
-      POSTGRES_PASSWORD: starexec_dev_password
+      POSTGRES_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
       # Ensure UTF-8 collation/ctype so PostgreSQL behaves like typical UTF-8 installs
       # Note: these take effect when the DB cluster is initialized; if the volume
       # already contains an initialized database, re-init or remove the volume.
