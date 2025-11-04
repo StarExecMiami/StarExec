@@ -26,7 +26,7 @@
 #   STAREXEC_DATA_VOL               (default: starexec-dev-data)
 #   STAREXEC_POSTGRES_VOL           (default: starexec-dev-postgres)
 #   IMAGE_NAME                      (default: localhost/local/starexec)
-#   IMAGE_TAG                       (default: dev)
+#   IMAGE_TAG                       (default: latest)
 #
 # ============================================================================
 ---

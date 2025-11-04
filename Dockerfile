@@ -190,9 +190,6 @@ RUN cd ${CATALINA_HOME}/webapps && \
     mkdir -p secure/clustergraphs && \
     # Create symlink for STAREXEC_ROOT
     ln -sf ${CATALINA_HOME}/webapps/starexec /starexec && \
-    # Use the template file with placeholders for runtime substitution
-    cd META-INF && \
-    cp context.xml.template context.xml && \
     chown -R starexec:starexec ${CATALINA_HOME}/webapps/starexec /starexec
 
 # Copy default pictures (only the files needed)

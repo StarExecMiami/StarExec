@@ -32,9 +32,9 @@ postgres: # For production, use an external database
   host: localhost
   port: 5432
   user: starexec
-  password: ""  # MUST be overridden via env var or existingSecret
+  # password: MUST be overridden via env var or existingSecret
   database: starexec  # Fixed: moved from metadata.database to database
-  rootPassword: ""  # MUST be overridden via env var or existingSecret
+  # rootPassword: MUST be overridden via env var or existingSecret
   # In production DO NOT define password here
   # The chart only references an external secret
 

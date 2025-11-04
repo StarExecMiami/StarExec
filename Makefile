@@ -541,8 +541,10 @@ lint:
 		helm lint $(CHART_DIR); \
 		echo "Validating all value files..."; \
 		for f in $(CHART_DIR)/values*.yaml; do \
-			echo "  Checking $$f..."; \
-			helm template $(CHART_DIR) -f $$f > /dev/null && echo "    ✓ Valid" || echo "    ✗ Invalid"; \
+			if [ "$$f" != "$(CHART_DIR)/values.yaml" ]; then \
+				echo "  Checking $$f..."; \
+				helm template $(CHART_DIR) -f $$f > /dev/null && echo "    ✓ Valid" || echo "    ✗ Invalid"; \
+			fi; \
 		done; \
 	else \
 		echo "Helm not installed, skipping chart validation"; \
@@ -561,3 +563,47 @@ template:
 		IMAGE_TAG=$(IMAGE_TAG) \
 		./scripts/generate-render-yaml.sh; \
 	fi
+
+config-show:
+	@echo "========================================"
+	@echo "Configuration Report for ENV=$(ENV)"
+	@echo "========================================"
+	@echo ""
+	@echo "=== Source Files ==="
+	@echo "Values file: $(VALS)"
+	@echo "Helm chart: $(CHART_DIR)"
+	@echo ""
+	@echo "=== Database Configuration ==="
+	@if command -v yq >/dev/null 2>&1; then \
+		DB_HOST=$$(yq '.postgres.host // "NOT_SET"' $(VALS)); \
+		DB_USER=$$(yq '.postgres.user // "NOT_SET"' $(VALS)); \
+		DB_NAME=$$(yq '.postgres.database // "NOT_SET"' $(VALS)); \
+		echo "  Host: $$DB_HOST (from values file)"; \
+		echo "  User: $$DB_USER (from values file)"; \
+		echo "  Database: $$DB_NAME (from values file)"; \
+		echo "  Password: ***REDACTED*** (check $(VALS))"; \
+	else \
+		echo "  yq not available - install yq to parse YAML values"; \
+	fi
+	@echo ""
+	@echo "=== Environment Variable Overrides ==="
+	@echo "  STAREXEC_DB_HOST=$${STAREXEC_DB_HOST:-<not set>}"
+	@echo "  STAREXEC_DB_USER=$${STAREXEC_DB_USER:-<not set>}"
+	@echo "  STAREXEC_DB_PASSWORD=$${STAREXEC_DB_PASSWORD:-<not set>}"
+	@echo ""
+	@echo "=== Java Defaults (fallback) ==="
+	@echo "  DB User: starexec (EnvironmentConfig.java)"
+	@echo "  DB Password: empty (EnvironmentConfig.java)"
+	@echo "  DB Host: localhost (EnvironmentConfig.java)"
+	@echo ""
+	@echo "=== Effective Configuration ==="
+	@echo "  (This shows what would actually be used at runtime)"
+	@if [ -f render.yaml ]; then \
+		echo "  From rendered manifest (render.yaml):"; \
+		grep -A 5 "STAREXEC_DB" render.yaml | head -20; \
+	else \
+		echo "  ⚠️  No render.yaml found. Run 'make template' first."; \
+	fi
+	@echo ""
+	@echo "=== Validation ==="
+	@echo "  Run 'make config-validate ENV=$(ENV)' to check for conflicts"

@@ -15,7 +15,7 @@ persistence:
   useHostPathForPodman: false
   usePodmanVolumes: false
 
-postgresql:
+postgres:
   image:
     repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
