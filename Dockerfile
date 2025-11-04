@@ -31,7 +31,8 @@ RUN apk add --no-cache \
     curl \
     build-base \
     tar \
-    bzip2
+    bzip2 \
+    numactl-dev
 
 # Download, patch, and compile runsolver
 RUN curl -L https://www.cril.univ-artois.fr/~roussel/runsolver/runsolver-3.4.1.tar.bz2 -o runsolver.tar.bz2 && \

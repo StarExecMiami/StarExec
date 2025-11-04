@@ -41,7 +41,6 @@ configure_context() {
     echo "  Port: $DB_PORT"
     echo "  Database: $DB_NAME"
     echo "  User: $DB_USER"
-}
 
     # If DB_HOST is localhost (or empty) this may be OK in Podman local mode but
     # is usually wrong in Kubernetes. Use the presence of KUBERNETES_SERVICE_HOST
