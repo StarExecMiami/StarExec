@@ -2,15 +2,15 @@
   <!-- Disable persistent sessions -->
   <Manager className="org.apache.catalina.session.StandardManager" pathname=""/>
 
-  <!-- JNDI DataSource configured for PostgreSQL -->
+  <!-- JNDI DataSource used by DataSourceRealm -->
   <Resource name="jdbc/StarExecDB"
             auth="Container"
             type="javax.sql.DataSource"
             factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
             driverClassName="org.postgresql.Driver"
-            url="jdbc:postgresql://${STAREXEC_DB_HOST:${env.STAREXEC_DB_HOST}}:${STAREXEC_DB_PORT:${env.STAREXEC_DB_PORT}}/${STAREXEC_DB_NAME:${env.STAREXEC_DB_NAME}}?ssl=false"
-            username="${STAREXEC_DB_USER:${env.STAREXEC_DB_USER}}"
-            password="${STAREXEC_DB_PASSWORD:${env.STAREXEC_DB_PASSWORD}}"
+            url="jdbc:postgresql://${env.STAREXEC_DB_HOST}:${env.STAREXEC_DB_PORT}/${env.STAREXEC_DB_NAME}?ssl=false&amp;currentSchema=starexec"
+            username="${env.STAREXEC_DB_USER}"
+            password="${env.STAREXEC_DB_PASSWORD}"
             maxActive="20"
             maxIdle="10"
             maxWait="10000"

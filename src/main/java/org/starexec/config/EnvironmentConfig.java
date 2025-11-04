@@ -49,11 +49,66 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_DB_URL", "jdbc:postgresql://" + host + ":" + port + "/" + dbName);
     }
     public static String getDbUser() {
-        return getEnv("STAREXEC_DB_USER", "se_admin");
+        // Align Java default with Helm/Makefile default which historically used 'starexec'.
+        // Avoid an empty or unexpected user being returned by default in production.
+        return getEnv("STAREXEC_DB_USER", "starexec");
     }
     
     public static String getDbPassword() {
+        // Keep default empty for local/dev but require validation in production via
+        // validateDatabaseConfig() (called when STAREXEC_VALIDATE_AT_STARTUP=true).
         return getEnv("STAREXEC_DB_PASSWORD", "");
+    }
+
+    /**
+     * Validate database-related configuration and fail-fast when required values are
+     * missing in production-like environments. This method intentionally errs on the
+     * side of safety: in k8s / prod we require explicit credentials rather than
+     * silently falling back to defaults.
+     *
+     * Behavior:
+     *  - If running in Kubernetes (KUBERNETES_SERVICE_HOST env var present) or
+     *    STAREXEC_ENV=prod, the method will throw IllegalStateException when the
+     *    DB user or DB password are empty.
+     *  - In other environments (dev/ci) missing password is allowed.
+     *
+     * Control:
+     *  - Set STAREXEC_VALIDATE_AT_STARTUP=true to run this validation automatically
+     *    during class initialization (helpful in container startup flows).
+     */
+    public static void validateDatabaseConfig() {
+        String env = getEnv("STAREXEC_ENV", "dev").toLowerCase();
+        boolean runningInK8s = System.getenv("KUBERNETES_SERVICE_HOST") != null;
+        boolean requireSecrets = runningInK8s || "prod".equals(env);
+
+        String user = getDbUser();
+        String pass = getDbPassword();
+
+        if (requireSecrets) {
+            StringBuilder problems = new StringBuilder();
+            if (user == null || user.trim().isEmpty()) {
+                problems.append("STAREXEC_DB_USER is empty. ");
+            }
+            if (pass == null || pass.trim().isEmpty()) {
+                problems.append("STAREXEC_DB_PASSWORD is empty. ");
+            }
+            if (problems.length() > 0) {
+                throw new IllegalStateException("Database configuration invalid: " + problems.toString() +
+                        "\nProvide credentials via environment variables (recommended) or Kubernetes secrets.");
+            }
+        }
+    }
+
+    // Optional auto-validate when requested by environment (disabled by default)
+    static {
+        if ("true".equalsIgnoreCase(System.getenv("STAREXEC_VALIDATE_AT_STARTUP"))) {
+            try {
+                validateDatabaseConfig();
+            } catch (RuntimeException ex) {
+                // Convert to unchecked and rethrow to fail startup fast
+                throw ex;
+            }
+        }
     }
     
     public static int getDbPoolMax() {

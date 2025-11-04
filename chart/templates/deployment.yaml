@@ -48,15 +48,30 @@ spec:
         - name: STAREXEC_DB_HOST
           value: {{ .Values.postgres.host | quote }}
         - name: STAREXEC_DB_USER
-          value: {{ .Values.postgres.user | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.user | default "user" }}
         - name: STAREXEC_DB_PASSWORD
-          value: {{ .Values.postgres.password | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.password | default "password" }}
         - name: STAREXEC_DB_NAME
-          value: {{ .Values.postgres.database | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.database | default "database" }}
         - name: STAREXEC_CLUSTER_DB_USER
-          value: {{ .Values.postgres.user | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.user | default "user" }}
         - name: STAREXEC_CLUSTER_DB_PASSWORD
-          value: {{ .Values.postgres.password | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.password | default "password" }}
         - name: STAREXEC_REPORT_HOST
           value: {{ .Values.postgres.host | quote }}
         - name: STAREXEC_BACKEND_TYPE
@@ -87,11 +102,20 @@ spec:
           hostPort: 5432
       env:
         - name: POSTGRES_DB
-          value: {{ .Values.postgres.database | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.database | default "database" }}
         - name: POSTGRES_USER
-          value: {{ .Values.postgres.user | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.user | default "user" }}
         - name: POSTGRES_PASSWORD
-          value: {{ .Values.postgres.password | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
+              key: {{ .Values.postgres.existingSecretKeys.rootPassword | default "rootPassword" }}
         - name: LC_COLLATE
           value: "en_US.UTF-8"
         - name: LC_CTYPE

@@ -32,22 +32,24 @@ postgres: # For production, use an external database
   host: localhost
   port: 5432
   user: starexec
-  password: starexec_password
+  password: ""  # MUST be overridden via env var or existingSecret
   database: starexec  # Fixed: moved from metadata.database to database
-  rootPassword: starexec_password  # Added: needed by secret template
+  rootPassword: ""  # MUST be overridden via env var or existingSecret
   # In production DO NOT define password here
   # The chart only references an external secret
+
+  # Support external secrets (recommended for production)
+  existingSecret: ""  # If set, use this secret instead of creating one
+  existingSecretKeys:
+    user: "user"
+    password: "password"
+    database: "database"
+    rootPassword: "rootPassword"
 
   persistence:
     enabled: false
     storageClass: ""
     size: 20Gi
-
-  # COMMENT OUT OR REMOVE existingSecret to let Helm create the secret
-  # existingSecret: "{{ include \"chart.fullname\" . }}-secret-postgres"
-  # existingSecretKeys:
-  #   user: user
-  #   password: password
   #   database: database
   #   rootPassword: rootPassword
 

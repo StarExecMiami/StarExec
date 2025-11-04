@@ -17,54 +17,85 @@ echo ""
 TEMPLATE_FILE="${CATALINA_HOME}/webapps/starexec/META-INF/context.xml.template"
 CONTEXT_FILE="${CATALINA_HOME}/webapps/starexec/META-INF/context.xml"
 
+# Configure context.xml from template if present and do safety checks
 configure_context() {
     # Determine DB values (explicit env or defaults)
     DB_HOST="${STAREXEC_DB_HOST:-localhost}"
     DB_PORT="${STAREXEC_DB_PORT:-5432}"
     DB_NAME="${STAREXEC_DB_NAME:-starexec}"
-    DB_USER="${STAREXEC_DB_USER:-root}"
+    DB_USER="${STAREXEC_DB_USER:-starexec}"
     DB_PASSWORD="${STAREXEC_DB_PASSWORD:-}"
 
-    if [ -f "$TEMPLATE_FILE" ]; then
-        echo "Generating context.xml from template ($TEMPLATE_FILE) ..."
-        cp "$TEMPLATE_FILE" "$CONTEXT_FILE"
-    elif [ ! -f "$CONTEXT_FILE" ]; then
-        echo "⚠️  Warning: neither $TEMPLATE_FILE nor $CONTEXT_FILE exist. Skipping DB substitution."
-        return
-    else
-        echo "Found existing context.xml at $CONTEXT_FILE — will perform safe in-place substitution."
-    fi
+    # Validate required environment variables before starting Tomcat
+    # This ensures fail-fast behavior for misconfigurations
+    for var in STAREXEC_DB_HOST STAREXEC_DB_USER STAREXEC_DB_PASSWORD STAREXEC_DB_NAME; do
+        if [ -z "${!var}" ]; then
+            echo "ERROR: Required environment variable $var is not set"
+            echo "Please provide database configuration via environment variables"
+            exit 1
+        fi
+    done
 
-    # Replace placeholders in the copied or existing context.xml
-    sed -i "s|\${STAREXEC_DB_HOST}|${DB_HOST}|g" "$CONTEXT_FILE" || true
-    sed -i "s|\${STAREXEC_DB_PORT}|${DB_PORT}|g" "$CONTEXT_FILE" || true
-    sed -i "s|\${STAREXEC_DB_NAME}|${DB_NAME}|g" "$CONTEXT_FILE" || true
-    sed -i "s|\${STAREXEC_DB_USER}|${DB_USER}|g" "$CONTEXT_FILE" || true
-    sed -i "s|\${STAREXEC_DB_PASSWORD}|${DB_PASSWORD}|g" "$CONTEXT_FILE" || true
+    echo "Database configuration validated:"
+    echo "  Host: $DB_HOST"
+    echo "  Port: $DB_PORT"
+    echo "  Database: $DB_NAME"
+    echo "  User: $DB_USER"
+}
 
-    # Show the configured JDBC URL for quick debugging
-    echo "Configured JDBC URL in $CONTEXT_FILE:"
-    grep -n "jdbc:postgresql" "$CONTEXT_FILE" || true
-
-    # If DB_HOST is localhost (or empty) warn the operator — common misconfiguration
+    # If DB_HOST is localhost (or empty) this may be OK in Podman local mode but
+    # is usually wrong in Kubernetes. Use the presence of KUBERNETES_SERVICE_HOST
+    # env var to detect k8s. If running in Kubernetes (or STAREXEC_ENV=prod) warn
+    # and optionally exit when STRICT_DB_HOST=true.
     if [ -z "${STAREXEC_DB_HOST+x}" ] || [ "$DB_HOST" = "localhost" ]; then
-        cat <<-WARN
-        ⚠️  Notice: STAREXEC_DB_HOST is set to '${DB_HOST}'.
-        This commonly causes Tomcat to try to connect to a database inside the
-        application container rather than the dedicated Postgres service.
+        if [ -n "${KUBERNETES_SERVICE_HOST:-}" ] || [ "${STAREXEC_ENV:-}" = "prod" ]; then
+            cat <<-WARN
+            ⚠️  Notice: STAREXEC_DB_HOST is set to '${DB_HOST}' while running in a
+            Kubernetes/production environment. This commonly causes Tomcat to try
+            to connect to a database inside the application container rather than
+            the dedicated Postgres service.
 
-        Recommended fixes:
-         - Start the container with STAREXEC_DB_HOST set to your Postgres service name
-           (example: 'postgres' or 'starexec-postgres' when using docker-compose).
-         - Or set environment variable STRICT_DB_HOST=true to make the container exit
-           when the host is 'localhost' to avoid silent misconfiguration.
+            Recommended fixes:
+             - In Kubernetes set STAREXEC_DB_HOST to your Postgres service name
+               (example: 'postgres' or 'starexec-postgres' when using Helm).
+             - Use Kubernetes Secrets for DB credentials instead of embedding them.
 
-        To override and continue anyway, set STAREXEC_DB_HOST explicitly.
+            To override and continue anyway, set STAREXEC_DB_HOST explicitly.
 WARN
 
-        if [ "${STRICT_DB_HOST:-false}" = "true" ]; then
-            echo "STRICT_DB_HOST=true and DB host is '${DB_HOST}' — exiting with error."
-            exit 1
+            if [ "${STRICT_DB_HOST:-false}" = "true" ]; then
+                echo "STRICT_DB_HOST=true and DB host is '${DB_HOST}' — exiting with error."
+                exit 1
+            fi
+        else
+            echo "Note: STAREXEC_DB_HOST='${DB_HOST}' — running in local/podman mode, localhost may be expected."
+        fi
+    fi
+
+    # Optional quick TCP connectivity check to the DB host/port. Will retry a few
+    # times and will fail the container start if STRICT_DB_CONNECTION=true.
+    test_db_connection() {
+        local host="$1"; local port="$2"; local tries=5; local i=0
+        while [ $i -lt $tries ]; do
+            # /dev/tcp is a bash feature; try to open a TCP connection
+            if bash -c "</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+                echo "✓ Database TCP connection to ${host}:${port} successful"
+                return 0
+            fi
+            i=$((i+1))
+            echo "Waiting for DB ${host}:${port} (attempt $i/$tries)..."
+            sleep 1
+        done
+        return 1
+    }
+
+    if [ -n "${STRICT_DB_CONNECTION:-}" ]; then
+        if ! test_db_connection "$DB_HOST" "$DB_PORT"; then
+            echo "ERROR: Could not establish TCP connection to DB ${DB_HOST}:${DB_PORT}"
+            if [ "${STRICT_DB_CONNECTION}" = "true" ]; then
+                echo "STRICT_DB_CONNECTION=true — exiting to avoid silent misconfiguration."
+                exit 1
+            fi
         fi
     fi
 }

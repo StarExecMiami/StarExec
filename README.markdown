@@ -115,6 +115,132 @@ make stop
 
 **Learn more:** See [docs/DEPLOYMENT-WORKFLOW.md](docs/DEPLOYMENT-WORKFLOW.md) for deployment modes, environment variables, and troubleshooting.
 
+## Configuration
+
+StarExec uses a unified, secure, and maintainable configuration system with clear precedence rules and fail-fast validation.
+
+### Layered Configuration Model
+
+Configuration follows this precedence (highest to lowest):
+
+```text
+Layer 1 (Highest): Runtime Environment Variables
+  - Set in container via `docker run -e` or Kubernetes env
+  - Overrides everything
+  - Used for per-deployment customization
+
+Layer 2: Helm Values Files (values-{env}.yaml)
+  - Environment-specific defaults
+  - Rendered at deployment time
+  - Contains non-sensitive configuration
+
+Layer 3: Kubernetes Secrets
+  - External secret management (Vault, sealed secrets, etc.)
+  - Referenced via `secretKeyRef` in Helm templates
+  - Contains passwords, API keys, certificates
+
+Layer 4: Makefile Defaults
+  - Local development convenience
+  - Used when rendering manifests locally
+  - Never used in production deployments
+
+Layer 5 (Lowest): Java Code Fallbacks
+  - Minimal, safe defaults in `EnvironmentConfig.java`
+  - Only used when env vars are missing
+  - Designed to fail safely rather than silently misconfigure
+```
+
+### Environment Variables Reference
+
+#### Database Configuration
+
+| Variable | Default | Description | Required |
+|----------|---------|-------------|----------|
+| `STAREXEC_DB_HOST` | `localhost` | PostgreSQL host | Yes |
+| `STAREXEC_DB_PORT` | `5432` | PostgreSQL port | Yes |
+| `STAREXEC_DB_NAME` | `starexec` | Database name | Yes |
+| `STAREXEC_DB_USER` | `starexec` | Database username | Yes |
+| `STAREXEC_DB_PASSWORD` | *(empty)* | Database password | Yes |
+| `STAREXEC_DB_POOL_MAX` | `125` | Connection pool max size | No |
+| `STAREXEC_DB_POOL_MIN` | `20` | Connection pool min size | No |
+
+#### Cluster/Compute Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_CLUSTER_DB_USER` | `starexec` | Compute node DB user |
+| `STAREXEC_CLUSTER_DB_PASSWORD` | *(empty)* | Compute node DB password |
+| `STAREXEC_CLUSTER_UPDATE_PERIOD` | `1200` | Cluster update interval (seconds) |
+| `STAREXEC_CLUSTER_USER_ONE` | `starexec1` | First compute user |
+| `STAREXEC_CLUSTER_USER_TWO` | `starexec2` | Second compute user |
+
+#### Email Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_EMAIL_SMTP` | `localhost` | SMTP server |
+| `STAREXEC_EMAIL_PORT` | `25` | SMTP port |
+| `STAREXEC_EMAIL_USER` | *(empty)* | SMTP username |
+| `STAREXEC_EMAIL_PASSWORD` | *(empty)* | SMTP password |
+| `STAREXEC_EMAIL_FROM` | `starexec@localhost` | From address |
+| `STAREXEC_CONTACT_EMAIL` | `admin@starexec.org` | Contact email |
+
+#### Backend Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_BACKEND_TYPE` | `local` | Backend type (local/SGE/OAR) |
+| `STAREXEC_BACKEND_ROOT` | `/tmp` | Backend root directory |
+| `STAREXEC_BACKEND_WORKING_DIR` | `/tmp/starexec` | Working directory |
+| `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | Data directory |
+| `STAREXEC_SANDBOX_DIR` | `/tmp/starexec/sandbox` | Sandbox directory |
+
+#### Web Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_WEB_ADDRESS` | `localhost` | Web server address |
+| `STAREXEC_WEB_BASE_DIR` | `/starexec` | Web base path |
+| `STAREXEC_APP_NAME` | `starexec` | Application name |
+| `STAREXEC_URL_PREFIX` | `http` | URL scheme |
+
+#### System Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_CONFIG_PATH` | `/config` | Configuration path |
+| `STAREXEC_RUNSOLVER_PATH` | `/usr/local/bin/runsolver` | Runsolver executable |
+| `STAREXEC_JOB_SUBMISSION_PERIOD` | `20` | Job submission period |
+| `STAREXEC_USER_DEFAULT_DISK_QUOTA` | `10737418240` | Default disk quota (bytes) |
+
+#### Validation & Environment
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_ENV` | `dev` | Environment (dev/prod) |
+| `STAREXEC_VALIDATE_AT_STARTUP` | `false` | Enable startup validation |
+| `STRICT_DB_CONNECTION` | *(empty)* | Enable DB connectivity test |
+
+### Configuration Tools
+
+#### Show Current Configuration
+
+```bash
+# Display resolved configuration for an environment
+make config-show ENV=dev
+
+# Shows effective values, sources, and validation status
+```
+
+#### Validate Configuration
+
+```bash
+# Check for conflicts and security issues
+make config-validate ENV=prod
+
+# Validates no plaintext passwords in production
+```
+
 ---
 
 ### Option 2: Docker Compose (Simple Alternative)
