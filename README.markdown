@@ -1,286 +1,219 @@
 # StarExec
 
-## Deployment Workflow
+> StarExec is an open-source platform for managing and running large-scale solver
+> benchmarks and compute jobs across clusters and compute nodes. It provides a
+> web UI, job submission, scheduling backends (local/SGE/OAR), and integrated
+> data and user management.
 
-### System Requirements
+<!-- Badges -->
+[![Build Status](https://img.shields.io/github/actions/workflow/status/StarExecMiami/StarExec/build-and-publish.yml?branch=containerised)](https://github.com/StarExecMiami/StarExec/actions)
+[![License](https://img.shields.io/github/license/StarExecMiami/StarExec)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/StarExecMiami/StarExec?label=repo%20version)](https://github.com/StarExecMiami/StarExec/releases)
 
-### Container Runtime (Choose One)
+<!-- Table of contents -->
+## Table of Contents
 
-#### Minimum Installation
+- [Overview](#overview)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+  - [Podman / Makefile (recommended)](#podman--makefile-recommended)
+  - [Docker Compose (simple alternative)](#docker-compose-simple-alternative)
+  - [Manual / Raw containers (advanced)](#manual--raw-containers-advanced)
+- [Configuration](#configuration)
+  - [Quick configuration](#quick-configuration)
+  - [Environment variables reference](#environment-variables-reference)
+  - [Advanced configuration](#advanced-configuration)
+- [Security Considerations](#security-considerations)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Support & Changelog](#support--changelog)
+- [License](#license)
+- [Authors & Acknowledgments](#authors--acknowledgments)
+- [Legacy Documentation](#legacy-documentation)
 
-```bash
-# Ubuntu/Debian
-sudo apt-get install podman
+## Overview
 
-# Fedora/RHEL
-sudo dnf install podman
-```
+StarExec runs solver benchmarks and user-submitted compute jobs across a pool
+of compute nodes. The project includes a Java web application, optional
+backend components for job distribution, and tooling to run in containers or
+on a traditional Tomcat/Postgres stack.
 
-#### Full Rootless Setup (Recommended)
+## Features
 
-```bash
-# Ubuntu/Debian
-sudo apt-get install podman catatonit passt fuse-overlayfs
+- Web UI for job submission, user and data management.
+- Multiple backend implementations: local, SGE, and OAR.
+- Container-friendly deployment (Podman/Docker Compose).
+- Flyway-based database migrations and safe, layered configuration.
 
-# Fedora/RHEL
-sudo dnf install podman crun passt fuse-overlayfs
-
-# Post-install rootless configuration
-loginctl enable-linger $USER  # Keeps containers running after logout
-```
-
-#### Verify Rootless
-
-```bash
-podman system info | grep rootless
-# Should show: rootless: true
-
-# Test rootless network
-make deploy-podman  # Should work WITHOUT sudo
-```
-
-### Docker (Alternative)
-
-```bash
-# Ubuntu/Debian
-sudo apt-get install docker.io docker-compose
-
-# Add user to docker group (logout/login required)
-sudo usermod -aG docker $USER
-```
-
-## Build Dependencies (Optional)
-
-### Maven Local Build
-
-```bash
-# Java 17+
-sudo apt-get install openjdk-17-jdk maven
-
-# Node.js 20+ (for SCSS compilation)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# Verify
-java --version   # Should be 17+
-mvn --version    # Should be 3.8+
-node --version   # Should be 20+
-```
-
-### Container Build Only
-
-No additional host dependencies — builds run inside containers.
-
-## Database Client (Optional)
-
-```bash
-# PostgreSQL client for database access
-sudo apt-get install postgresql-client
-```
-
-## Troubleshooting
-
-- "permission denied" errors with Podman:
-        - Install passt for rootless networking
-        - Run `podman system migrate` after installing new packages
-        - Check: `podman system info | grep rootless`
-
-- "network namespace not found":
-
-```bash
-sudo apt-get install passt
-podman system reset  # Warning: deletes all containers/images
-```
-
-- Slow Maven builds:
-        - Use `make build-cached` to mount local `~/.m2` cache
-        - Or pull a prebuilt image: `podman pull ghcr.io/andrescdo/starexec:latest`
-
+<!-- Quick Start -->
 ## Quick Start
 
-### Option 1: Podman / Makefile (Recommended for Development)
+Use Quick Start to get a development instance running locally in ~10-20 minutes.
 
-```bash
-# First-time deployment (auto-builds and configures everything)
-make start
-
-# Fast subsequent deployments (reuses cached manifests)
-make deploy-podman-cached
-
-# Stop deployment
-make stop
-```
-
-**Access:** http://localhost:7827/starexec
-
-**Learn more:** See [docs/DEPLOYMENT-WORKFLOW.md](docs/DEPLOYMENT-WORKFLOW.md) for deployment modes, environment variables, and troubleshooting.
-
-## Configuration
-
-StarExec uses a unified, secure, and maintainable configuration system with clear precedence rules and fail-fast validation.
-
-### Layered Configuration Model
-
-Configuration follows this precedence (highest to lowest):
-
-```text
-Layer 1 (Highest): Runtime Environment Variables
-  - Set in container via `docker run -e` or Kubernetes env
-  - Overrides everything
-  - Used for per-deployment customization
-
-Layer 2: Helm Values Files (values-{env}.yaml)
-  - Environment-specific defaults
-  - Rendered at deployment time
-  - Contains non-sensitive configuration
-
-Layer 3: Kubernetes Secrets
-  - External secret management (Vault, sealed secrets, etc.)
-  - Referenced via `secretKeyRef` in Helm templates
-  - Contains passwords, API keys, certificates
-
-Layer 4: Makefile Defaults
-  - Local development convenience
-  - Used when rendering manifests locally
-  - Never used in production deployments
-
-Layer 5 (Lowest): Java Code Fallbacks
-  - Minimal, safe defaults in `EnvironmentConfig.java`
-  - Only used when env vars are missing
-  - Designed to fail safely rather than silently misconfigure
-```
-
-### Environment Variables Reference
-
-#### Database Configuration
-
-| Variable | Default | Description | Required |
-|----------|---------|-------------|----------|
-| `STAREXEC_DB_HOST` | `localhost` | PostgreSQL host | Yes |
-| `STAREXEC_DB_PORT` | `5432` | PostgreSQL port | Yes |
-| `STAREXEC_DB_NAME` | `starexec` | Database name | Yes |
-| `STAREXEC_DB_USER` | `starexec` | Database username | Yes |
-| `STAREXEC_DB_PASSWORD` | *(empty)* | Database password | Yes |
-| `STAREXEC_DB_POOL_MAX` | `125` | Connection pool max size | No |
-| `STAREXEC_DB_POOL_MIN` | `20` | Connection pool min size | No |
-
-#### Cluster/Compute Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STAREXEC_CLUSTER_DB_USER` | `starexec` | Compute node DB user |
-| `STAREXEC_CLUSTER_DB_PASSWORD` | *(empty)* | Compute node DB password |
-| `STAREXEC_CLUSTER_UPDATE_PERIOD` | `1200` | Cluster update interval (seconds) |
-| `STAREXEC_CLUSTER_USER_ONE` | `starexec1` | First compute user |
-| `STAREXEC_CLUSTER_USER_TWO` | `starexec2` | Second compute user |
-
-#### Email Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STAREXEC_EMAIL_SMTP` | `localhost` | SMTP server |
-| `STAREXEC_EMAIL_PORT` | `25` | SMTP port |
-| `STAREXEC_EMAIL_USER` | *(empty)* | SMTP username |
-| `STAREXEC_EMAIL_PASSWORD` | *(empty)* | SMTP password |
-| `STAREXEC_EMAIL_FROM` | `starexec@localhost` | From address |
-| `STAREXEC_CONTACT_EMAIL` | `admin@starexec.org` | Contact email |
-
-#### Backend Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STAREXEC_BACKEND_TYPE` | `local` | Backend type (local/SGE/OAR) |
-| `STAREXEC_BACKEND_ROOT` | `/tmp` | Backend root directory |
-| `STAREXEC_BACKEND_WORKING_DIR` | `/tmp/starexec` | Working directory |
-| `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | Data directory |
-| `STAREXEC_SANDBOX_DIR` | `/tmp/starexec/sandbox` | Sandbox directory |
-
-#### Web Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STAREXEC_WEB_ADDRESS` | `localhost` | Web server address |
-| `STAREXEC_WEB_BASE_DIR` | `/starexec` | Web base path |
-| `STAREXEC_APP_NAME` | `starexec` | Application name |
-| `STAREXEC_URL_PREFIX` | `http` | URL scheme |
-
-#### System Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STAREXEC_CONFIG_PATH` | `/config` | Configuration path |
-| `STAREXEC_RUNSOLVER_PATH` | `/usr/local/bin/runsolver` | Runsolver executable |
-| `STAREXEC_JOB_SUBMISSION_PERIOD` | `20` | Job submission period |
-| `STAREXEC_USER_DEFAULT_DISK_QUOTA` | `10737418240` | Default disk quota (bytes) |
-
-#### Validation & Environment
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STAREXEC_ENV` | `dev` | Environment (dev/prod) |
-| `STAREXEC_VALIDATE_AT_STARTUP` | `false` | Enable startup validation |
-| `STRICT_DB_CONNECTION` | *(empty)* | Enable DB connectivity test |
-
-### Configuration Tools
-
-#### Show Current Configuration
-
-```bash
-# Display resolved configuration for an environment
-make config-show ENV=dev
-
-# Shows effective values, sources, and validation status
-```
-
-#### Validate Configuration
-
-```bash
-# Check for conflicts and security issues
-make config-validate ENV=prod
-
-# Validates no plaintext passwords in production
-```
-
----
-
-### Option 2: Docker Compose (Simple Alternative)
-
-1. **Build and Run:**
-    From the root of the project, run:
+1. Copy the repo and change to its root:
 
     ```bash
+    # Clone the repository and enter it
+    git clone https://github.com/StarExecMiami/StarExec.git
+    cd StarExec
+    ```
+
+2. Start development stack (recommended):
+
+```bash
+# First-time (builds images and deploys stack)
+make start
+```
+
+Expected outcome: containers built and started. The web UI is usually available
+at `http://localhost:7827/starexec` (see the `make` output for exact address).
+
+Estimated time: 10–20 minutes (depending on network and local build cache).
+
+## Prerequisites
+
+Before installing, ensure the host meets the following requirements.
+
+Required:
+
+- Java 17+ (for local manual builds).
+- Maven 3.8+ (for manual builds and packaging).
+- PostgreSQL 15+ (production DB).
+- Container runtime: Podman (recommended) or Docker.
+
+Optional (for development):
+
+- Node.js 20+ (SCSS compilation), `postgresql-client` for DB access.
+
+Version matrix (high level):
+
+| Component | Recommended version |
+|-----------|---------------------|
+| Java | 17 |
+| Maven | 3.8+ |
+| Node.js | 20+ (dev only) |
+| PostgreSQL | 15 |
+
+Notes:
+
+- Required vs optional dependencies are separated above. When using containers
+  (Makefile or Docker Compose), most host dependencies are optional because
+  builds run inside the container images.
+
+<!-- Installation -->
+## Installation
+
+For each method below: a short note on when to use it, numbered steps, expected
+output, and an estimated time to complete.
+
+### Podman / Makefile (recommended)
+
+When to use: development and CI-friendly deployments on Linux systems where
+`podman` rootless mode is supported. Prefer this if you want reproducible
+container-based builds without Docker daemon.
+
+Estimated time: 10–30 minutes.
+
+Steps:
+
+1. Install required packages (example for Ubuntu/Debian):
+
+    ```bash
+    # Install podman and helper tools (run as root)
+    sudo apt-get update
+    sudo apt-get install -y podman catatonit passt fuse-overlayfs
+    ```
+
+    Expected output: package manager confirms installation; `podman --version`
+    prints the version.
+
+2. Verify rootless operation (recommended):
+
+    ```bash
+    # Show whether podman is running rootless
+    podman system info | grep rootless
+    ```
+
+    Expected output (example):
+
+    ```text
+    rootless: true
+    ```
+
+3. Start the stack using the Makefile:
+
+    ```bash
+    # Build and start the development environment
+    make start
+    ```
+
+Success indicator: `make` completes without error and prints service endpoints.
+
+Notes and common fixes:
+
+- If you see permission issues with rootless networking, install `passt` and
+  run `podman system migrate`. If the error persists, follow the troubleshooting
+  section below.
+
+### Docker Compose (simple alternative)
+
+When to use: quick local testing or if you prefer Docker Compose workflows.
+
+Estimated time: 5–20 minutes.
+
+Steps:
+
+1. Build and run with Docker Compose:
+
+    ```bash
+    # Build images and start containers
     docker-compose up --build
     ```
 
-    This command will:
-    - Build the StarExec Docker image, which includes compiling SCSS, building the `.war` file with Maven, and setting up a Tomcat 9 server.
-    - Start the StarExec application container and a PostgreSQL database container.
-    - Apply database migrations using Flyway on startup.
+    Expected outcome: containers are built and started.
+    Logs show Flyway migrations.
+    The web app is typically available on `http://localhost:8080/`.
 
-2. **Accessing the Application:**
-    Once the containers are running, you can access StarExec at:
-    [http://localhost:8080/](http://localhost:8080/)
-3. **Stopping the Application:**
-    To stop the containers, press `Ctrl+C`. To remove the containers, run:
-
-    ```bash
-    docker-compose down
-    ```
-
-### Option 3: Raw Podman / Docker (Manual Setup)
+2. Stop and remove containers:
 
 ```bash
-# Build image locally (required when source changes)
-podman build -t localhost/local/starexec:dev .
+docker-compose down
+```
 
-# Network so containers can communicate
+Pros/Cons comparison
+
+| Method | Pros | Cons |
+|---|---:|---|
+| Podman + Makefile | Rootless-friendly, works well on CI, reproducible images | Requires podman/tools on host |
+| Docker Compose | Widely used, simple to run | Requires Docker daemon, less rootless-friendly |
+| Manual (Tomcat) | Full control of runtime, good for production Tomcat deployments | More manual steps, more host deps |
+
+### Manual / Raw containers (advanced)
+
+When to use: you need fine-grained control of the runtime and want to run
+containers without the Makefile orchestration.
+
+Estimated time: 10–30 minutes.
+
+Steps (brief):
+
+1. Build image locally:
+
+    ```bash
+    # Build the container image (example using podman)
+    podman build -t localhost/local/starexec:dev .
+    ```
+
+2. Create network and volumes, then start database and app containers (example):
+
+```bash
 podman network create starexec-net
-
-# Persistent volumes
 podman volume create starexec-app-data
 podman volume create starexec-postgres-data
 
-# Database container (start first)
+# Start Postgres
 podman run -d --name starexec-postgres \
   --network starexec-net \
   -e POSTGRES_PASSWORD=admin \
@@ -290,7 +223,7 @@ podman run -d --name starexec-postgres \
   -p 5432:5432 \
   docker.io/library/postgres:15
 
-# Application container
+# Start application (replace env values for production)
 podman run -d --name starexec-app \
   --network starexec-net \
   -e STAREXEC_DB_HOST=starexec-postgres \
@@ -302,243 +235,178 @@ podman run -d --name starexec-app \
   localhost/local/starexec:dev
 ```
 
-**Mandatory flags:** database host/password, volume mounts (`/app/data`, `/var/lib/postgresql/data`), and port `8080`.
+Success indicator: both containers run (check with `podman ps`) and web UI
+reachable at the expected port.
 
-**Optional overrides (defaults shown):**
+<!-- Configuration -->
+## Configuration
 
-- `STAREXEC_DB_USER=starexec`, `STAREXEC_DB_DATABASE=starexec`
-- `STAREXEC_BACKEND_TYPE=local`, `STAREXEC_DATA_DIR=/app/data`, `STAREXEC_BACKEND_WORKING_DIR=/app/work`, `STAREXEC_SANDBOX_DIR=/app/sandbox`
-- Swap `podman` for `docker` if preferred; all flags are identical.
+Configuration is layered and validated at startup. Use the following sections to
+locate specific keys and quick-start the minimal settings required.
 
-Access via `http://localhost:8080/starexec`. Seed credentials: `admin/admin`, `public/public` (change for production use).
+### Quick configuration
 
----
-
-## Manual Build (Without Docker)
-
-While Docker is recommended, you can still build and run StarExec manually.
-
-### Dependencies
-
-- **Java 17+**: Required for building and running the application.
-- **Maven 3.8+**: Used for dependency management and building the project.
-- **Node.js 20+**: Required for compiling SCSS stylesheets with Dart Sass.
-- **PostgreSQL 15+**: The database backend.
-- **Tomcat 9.0+**: The application server.
-
-### Building the WAR file
-
-To compile the source code and package it into a `.war` file, run:
+Minimal environment variables to bring up a local development instance:
 
 ```bash
-mvn clean package
+export STAREXEC_DB_HOST=localhost
+export STAREXEC_DB_PORT=5432
+export STAREXEC_DB_NAME=starexec
+export STAREXEC_DB_USER=starexec
+export STAREXEC_DB_PASSWORD=admin # sensitive
 ```
 
-The resulting `starexec.war` file will be located in the `target/` directory. You can then deploy this file to your Tomcat server.
-
-### Database Setup
-
-Database schema and data migrations are managed by [Flyway](https://flywaydb.org/). The migration scripts are located in `src/main/resources/db/migration`.
-
-To apply migrations, you will need to configure the Flyway Maven plugin in `pom.xml` with your database credentials and run:
+Validate configuration rendering (example):
 
 ```bash
-mvn flyway:migrate
+make config-show ENV=dev
 ```
 
-## Backend Implementations
+### Environment variables reference
 
-StarExec's backend refers to the utility that is responsible for accepting new
-jobs from the web app and distributing them over the available compute nodes.
-StarExec supports 3 different backend implementations:
-[SGE](https://arc.liv.ac.uk/trac/SGE),
-[OAR](https://oar.imag.fr/),
-or a simple local backend implemented in StarExec itself.
+Use the anchors below for direct linking.
 
-When running with Docker Compose, the `local` backend is used by default.
+- [Database configuration](#database-configuration)
+- [Cluster Compute configuration](#cluster-compute-configuration)
+- [Email configuration](#email-configuration)
+- [Backend / System configuration](#backend--system-configuration)
 
-<details>
-<summary>Legacy Documentation</summary>
+<!-- headings below provide the canonical anchors for direct linking -->
 
-The following sections describe the previous Ant-based build process and manual configuration. They are preserved for historical reference but are no longer applicable.
+#### Database configuration
 
----
+| Variable | Default | Example | Notes |
+|---|---:|---|---|
+| `STAREXEC_DB_HOST` | `localhost` | `db.local` | Required |
+| `STAREXEC_DB_PORT` | `5432` | `5432` | Required |
+| `STAREXEC_DB_NAME` | `starexec` | `starexec` | Required |
+| `STAREXEC_DB_USER` | `starexec` | `starexec` | Required |
+| `STAREXEC_DB_PASSWORD` | *(empty)* | `s3cr3t` | Required — sensitive |
 
-### Legacy Dependencies
+Marking sensitive variables: variables that contain credentials or secrets are
+marked as **sensitive** in their Notes column.
 
-#### Java
+#### Cluster Compute configuration
 
-StarExec requires Ant to build, and has been tested with version 1.9.2.
-An installation guide for Ant is below, or you may use any applicable
-package manager.
+| Variable | Default | Example |
+|---|---:|---|
+| `STAREXEC_CLUSTER_DB_USER` | `starexec` | `cluster_user` |
+| `STAREXEC_CLUSTER_DB_PASSWORD` | *(empty)* | `cluster_pass` (sensitive) |
 
-<http://ant.apache.org/manual/install.html>
+#### Email configuration
 
-#### SASS
+| Variable | Default | Example |
+|---|---:|---|
+| `STAREXEC_EMAIL_SMTP` | `localhost` | `smtp.example.org` |
+| `STAREXEC_EMAIL_PORT` | `25` | `587` |
+| `STAREXEC_EMAIL_USER` | *(empty)* | `mailer@example.org` (sensitive) |
+| `STAREXEC_EMAIL_PASSWORD` | *(empty)* | `...` (sensitive) |
 
-StarExec requires [Sass](https://sass-lang.com) at build time to compile `.scss`
-stylesheets to `.css`. Sass depends on [Ruby](https://www.ruby-lang.org/en/).
+#### Backend / System configuration
 
-We are currently using Ruby Sass 3.4.24
+| Variable | Default | Example |
+|---|---:|---|
+| `STAREXEC_BACKEND_TYPE` | `local` | `sge` |
+| `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | `/var/lib/starexec/data` |
 
-<https://sass-lang.com/install>
+### Advanced configuration
 
-#### Apache Tomcat
+Advanced settings live in Helm values files or in the `EnvironmentConfig.java`
+fallbacks. For production deployments, prefer runtime environment variables or
+Kubernetes secrets (never commit secrets to the repo).
 
-StarExec depends on Apache Tomcat 7.0.64. While newer versions may work, we have
-frequently seen that even minor version releases of Tomcat can have breaking
-changes for StarExec, so using a different version of Tomcat is not recommended.
-
-A full release of Tomcat is included in the starexec package under the
-`distribution/` directory. This is identical to a release that you can download
-from Apache, with the exception that the `postgresql-jdbc.jar`
-and file is included in the `lib/` directory. This `.jar` file
-is required for StarExec to connect to its database, and as such we
-recommend that you install Tomcat using the provided archive. If you would like
-to install a clean copy of Tomcat, you will need to copy PostgreSQL connector to the new lib directory.
-
-PLEASE NOTE: We recently migrated our servers from centOS to Rocky8. Due to this, DRMAA is no longer a required dependency. Instead, we will be using qsub. For more information about this command, please see [https://www.jlab.org/hpc/PBS/qsub.html](https://www.jlab.org/hpc/PBS/qsub.html)
-
-If you install Tomcat using the provided archive, you may need to update
-permissions on the install directory to make Tomcat's scripts executable. This
-can be done, for example, by using `chmod 700 -R tomcat_directory`
-
-#### PostgreSQL
-
-StarExec depends on PostgreSQL 15.
-
-<https://www.postgresql.org/download/>
-
-### Legacy Configuration
-
-StarExec is configured by Ant at build time.
-
-StarExec's default configuration is specified by
-[`build/default.properties`](build/default.properties), but several properties
-will need to be overridden for a particular StarExec instance. These properties
-may be overridden in three ways:
-
-1) If `build/overrides.properties` exists, any properties specified in this file
-   will override the defaults
-2) Ant can be passed a `.properties` file if invoked with the `-propertyfile`
-   option. Any properties specified in this file will override the defaults
-   _and_ any properties that exist in `build/overrides.properties`
-3) Individual properties can be set by invoking Ant with the
-   `-D<property>=<value>` option. Any properties set this way will take
-   precidence.
-
-An empty configuration file is provided as
-[`example.properties`](example.properties).
-This file also explains the properties that must be set for a particular
-StarExec instance.
-
-#### Database
-
-`DB.User` must be set to the username of a PostgreSQL user that has full
-permissions for the database. `DB.Pass` must be set to the password for that
-user. This user will require _all_ permissions in the StarExec database,
-excluding server administration permissions.
-If desired, a user with fewer permissions may be used by the compute nodes to
-report results to the database. This user _only_ needs `EXECUTE` permission, and
-is configured via `Cluster.DB.User` and `Cluster.DB.Pass`. If unspecified, these
-will default to the values of `DB.User` and `DB.Pass`.
-
-#### Email
-
-StarExec sends automated emails for several purposes, such as sending
-notifications when new users are registered or sending weekly status updates.
-To do this, StarExec requires an email account that it can send emails from.
-`Email.User` should be set to the username of the account to send from, and
-`Email.Pass`, `Email.Smtp` and `Email.Port` should be set as decribed.
-
-StarExec is also configured to use a `Email.Contact`, which is intended to
-receive emails directed at StarExec admins. This email address will appear
-on the site for users who want to send bug reports or ask questions.
-
-#### Backend
-
-You will need to make sure that you have mapped the StarExec data directory,
-(`data_dir`), to a matching path on each compute node, as your compute nodes
-will need access to the StarExec data directory that exists on the head node.
-
-`Cluster.UserOne` and `Cluster.UserTwo` (by default, `sandbox` and `sandbox2`
-respectively) refer to users that will execute jobs on compute nodes.
-Ensure that these accounts exist on the head node and all compute nodes, and
-have appropriate permissions.
-
-Create the `star-web` group.
-
-Create the user `tomcat` and add this user to the `star-web` group, and change
-the primary group for `tomcat` to `star-web`.
-This is the user that you will need to use when starting up **Tomcat** using
-`startup.sh` in the **Tomcat** `bin/` folder.
-You should also ensure that `tomcat` is the owner of the entire
-**Tomcat** installation directory.
-
-Finally, any users that are going to be administering StarExec should also be
-added to the `star-web` group. Being a member of `star-web` will be necessary
-for correctly executing the StarExec deploy scripts.
-
-Create the `sandbox` group, and add `Cluster.UserOne` to this group.
-Create another group `sandbox2` and add `Cluster.UserTwo` to this group.
-Add the `tomcat` user to both of these groups.
-
-If you are using SGE as a backend, you need to create the user `sgeadmin` and
-ensure this user does have administrator privileges in SGE.
-
-A sandbox directory will need to be created on the StarExec head node.
-This directory is used to execute user-provided scripts in a sandboxed
-environment, preventing them from affecting other parts of the system.
-You should create a directory at the location specified by `sandbox_dir`.
-Make the owner `Cluster.UserOne`, and make the group `sandbox`.
-Use `chmod` on the directory to make permissions `770`.
-Additionally, use `chmod g+s` to set the GID for the directory.
-Finally, use the following command to ensure that new directories in the sandbox
-have `g+rwx` permissions.
+Validation command (development):
 
 ```bash
-    setfacl -d -m g::rwx sandbox
+make config-show ENV=dev
 ```
 
-The directory configured as `Backend.WorkingDir` needs to be created.
-`tomcat` should be the owner and `star-web` should be the group.
-Under this directory, create two directories named `sandbox/` and `sandbox2/`.
-These should also use the `tomcat` user and the `star-web` group.
+<!-- Security -->
+## Security Considerations
 
-Sudo permissions need to be configured.
-StarExec uses `sudo` in several locations to execute commands as other users,
-most often to execute commands using the `Cluster.UserOne` and `Cluster.UserTwo`
-users. The `tomcat` user will need all of the following `sudo` permissions.
+- Change seed/default credentials (e.g., `admin/admin`, `public/public`) on
+  first deployment. **Do not** use default passwords in production.
+- Mark all credentials as sensitive and manage them with a secrets engine
+  (Vault, Kubernetes Secrets, or external secret manager).
+- Recommended permissions: run the application user with least privilege and
+  ensure backend sandbox directories have restricted group permissions.
+- Network security: restrict database access to trusted networks, use TLS for
+  external services, and configure firewalls/security groups.
 
-##### HEAD NODE
+Warning: The examples in this README include simple passwords for demo
+purposes. Replace them in real deployments.
 
-User `tomcat` may run the following commands on this host:
+<!-- Troubleshooting -->
+## Troubleshooting
 
-    (SANDBOX_USER_ONE) NOPASSWD: ALL
-    (SANDBOX_USER_TWO) NOPASSWD: ALL
-    (root) NOPASSWD: /sbin/service tomcat7 restart, /sbin/service tomcat7 stop, /sbin/service tomcat7 start
+Format for entries:
 
-The following entries are needed only if you are using an SGE backend.
-Replace `/cluster/gridengine-8.1.8/bin/lx-amd64/` in each path with your install directory
+**Problem:** symptom
 
-    (sgeadmin) NOPASSWD: /cluster/gridengine-8.1.8/bin/lx-amd64/qconf, /cluster/gridengine-8.1.8/bin/lx-amd64/qmod
+**Cause:** likely reason
 
-##### COMPUTE NODE (or head node if you are using a local backend)
+**Solution:** steps to fix
 
-User `tomcat` may run the following commands on this host:
+- **Problem:** `podman` rootless networking fails with permission denied.
 
-For all of the following, the prefix `/export/starexec` should be replaced with
-your configured value of `Backend.WorkingDir`, and `UserOne` and `UserTwo`
-should be replaced with the values of `Cluster.UserOne` and `Cluster.UserTwo`
-respectively.
+  **Cause:** missing `passt` / network helpers on host.
 
-    (UserOne) NOPASSWD: ALL
-    (root) NOPASSWD: /bin/chown -R UserOne /export/starexec/sandbox, /bin/chown -R tomcat /export/starexec/sandbox, /bin/chown -R tomcat /export/starexec/sandbox/benchmark, /bin/chown tomcat
-    (UserTwo) NOPASSWD: ALL
-    (root) NOPASSWD: /bin/chown -R UserTwo /export/starexec/sandbox2, /bin/chown -R tomcat /export/starexec/sandbox2, /bin/chown -R tomcat /export/starexec/sandbox2/benchmark, /bin/chown tomcat
+  **Solution:**
 
-The same applies as on the head node for the following commands
+  ```bash
+  # Install helper and migrate podman data
+  sudo apt-get install -y passt
+  podman system migrate
+  ```
 
-    (sgeadmin) NOPASSWD: /cluster/gridengine-8.1.8/bin/lx-amd64/qconf, /cluster/gridengine-8.1.8/bin/lx-amd64/qmod
+  Expected result: `podman` commands operate in rootless mode and `podman
+  system info | grep rootless` shows `rootless: true`.
 
-</details>
+- **Problem:** slow Maven builds.
+
+  **Cause:** missing local Maven cache.
+
+  **Solution:** use cached builds:
+
+  ```bash
+  make build-cached
+  ```
+
+  Or pull a prebuilt image:
+
+  ```bash
+  podman pull ghcr.io/starexecmiami/starexec:latest
+  ```
+
+Add links to GitHub issues or documentation for common problems where
+appropriate.
+
+<!-- Contributing -->
+## Contributing
+
+Please read `CONTRIBUTING.md` for guidelines on submitting issues and
+pull requests. Quick notes:
+
+- Open issues for feature requests and bugs.
+- Follow the repository coding style and include tests where possible.
+
+<!-- Support & Changelog -->
+## Support & Changelog
+
+- Report issues at the GitHub issue tracker: [Issues](https://github.com/StarExecMiami/StarExec/issues)
+- Changelog and release notes can be found under the [Releases](https://github.com/StarExecMiami/StarExec/releases) tab.
+
+## License
+
+This project is licensed under the terms in the `LICENSE` file.
+
+## Authors & Acknowledgments
+
+- Maintainers: see the GitHub repository for up-to-date list of maintainers.
+
+## Legacy documentation
+
+Legacy Ant/Tomcat-based documentation has been moved to `LEGACY.md`.
+Refer to that file for historical build instructions and notes.
+
+<!-- End of README -->
