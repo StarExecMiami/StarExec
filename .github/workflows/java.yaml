@@ -3,9 +3,16 @@ name: Java CI
 on:
   push:
     branches: [ UMprod, main, develop, feature/*, containerised ]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
     branches: [ UMprod, main, develop, feature/*, containerised ]
-
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+    
 jobs:
   build:
     runs-on: ubuntu-latest
