@@ -62,10 +62,10 @@ Use Quick Start to get a development instance running locally in ~10-20 minutes.
 
 2. Start development stack (recommended):
 
-```bash
-# First-time (builds images and deploys stack)
-make start
-```
+    ```bash
+    # First-time (builds images and deploys stack)
+    make start
+    ```
 
 Expected outcome: containers built and started. The web UI is usually available
 at `http://localhost:7827/starexec` (see the `make` output for exact address).
@@ -178,9 +178,9 @@ Steps:
 
 2. Stop and remove containers:
 
-```bash
-docker-compose down
-```
+    ```bash
+    docker-compose down
+    ```
 
 Pros/Cons comparison
 
@@ -208,32 +208,32 @@ Steps (brief):
 
 2. Create network and volumes, then start database and app containers (example):
 
-```bash
-podman network create starexec-net
-podman volume create starexec-app-data
-podman volume create starexec-postgres-data
+    ```bash
+    podman network create starexec-net
+    podman volume create starexec-app-data
+    podman volume create starexec-postgres-data
 
-# Start Postgres
-podman run -d --name starexec-postgres \
-  --network starexec-net \
-  -e POSTGRES_PASSWORD=admin \
-  -e POSTGRES_DB=starexec \
-  -e POSTGRES_USER=starexec \
-  -v starexec-postgres-data:/var/lib/postgresql/data \
-  -p 5432:5432 \
-  docker.io/library/postgres:15
+    # Start Postgres
+    podman run -d --name starexec-postgres \
+      --network starexec-net \
+      -e POSTGRES_PASSWORD=admin \
+      -e POSTGRES_DB=starexec \
+      -e POSTGRES_USER=starexec \
+      -v starexec-postgres-data:/var/lib/postgresql/data \
+      -p 5432:5432 \
+      docker.io/library/postgres:15
 
-# Start application (replace env values for production)
-podman run -d --name starexec-app \
-  --network starexec-net \
-  -e STAREXEC_DB_HOST=starexec-postgres \
-  -e STAREXEC_DB_PASSWORD=admin \
-  -e STAREXEC_DB_USER=starexec \
-  -e STAREXEC_DB_DATABASE=starexec \
-  -v starexec-app-data:/app/data \
-  -p 8080:8080 \
-  localhost/local/starexec:dev
-```
+    # Start application (replace env values for production)
+    podman run -d --name starexec-app \
+      --network starexec-net \
+      -e STAREXEC_DB_HOST=starexec-postgres \
+      -e STAREXEC_DB_PASSWORD=admin \
+      -e STAREXEC_DB_USER=starexec \
+      -e STAREXEC_DB_DATABASE=starexec \
+      -v starexec-app-data:/app/data \
+      -p 8080:8080 \
+      localhost/local/starexec:dev
+    ```
 
 Success indicator: both containers run (check with `podman ps`) and web UI
 reachable at the expected port.
