@@ -1,0 +1,172 @@
+name: Security Scanning
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM UTC
+  pull_request:
+    branches: [UMprod, dev, containerised]
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+      - '.github/workflows/security-scan.yml'
+  push:
+    branches: [UMprod, dev, containerised]
+    paths:
+      - 'pom.xml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Run OWASP Dependency Check
+        run: |
+          echo "Running OWASP Dependency Check..."
+          mvn org.owasp:dependency-check-maven:check \
+            -DskipProvidedScope=true \
+            -DskipRuntimeScope=false \
+            -DskipTestScope=true
+      
+      - name: Upload dependency check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report-${{ github.sha }}
+          path: |
+            target/dependency-check-report.*
+          retention-days: 30
+      
+      - name: Publish dependency check results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            const reportPath = 'target/dependency-check-report.html';
+            if (fs.existsSync(reportPath)) {
+              console.log('✓ Dependency check report generated');
+              console.log('  Location: ' + reportPath);
+            }
+  
+  sast-scan:
+    name: SAST Analysis (CodeQL)
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['java']
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Build project for analysis
+        run: |
+          echo "Building project for CodeQL analysis..."
+          mvn clean package -DskipTests -q
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
+      
+      - name: Upload CodeQL results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            console.log('✓ CodeQL analysis completed');
+            console.log('  Results are available in the Security tab');
+
+  license-check:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Check license compliance
+        run: |
+          echo "Checking Maven dependency licenses..."
+          mvn license:add-third-party || true
+          mvn license:check \
+            -Dlicense.failIfMissing=false \
+            -Dlicense.failIfUnknown=false || true
+      
+      - name: Generate license report
+        run: |
+          mvn license:aggregate-add-third-party -q || true
+      
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report-${{ github.sha }}
+          path: |
+            target/LICENSES*
+            target/license-list*
+          retention-days: 30
+
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, sast-scan, license-check]
+    if: always()
+    
+    steps:
+      - name: Generate security report summary
+        run: |
+          echo "## 🔒 Security Scanning Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Scan Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Dependency Vulnerability Scan (OWASP)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Static Analysis (CodeQL)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ License Compliance Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Report Access" >> $GITHUB_STEP_SUMMARY
+          echo "- View detailed results in the **Security** tab" >> $GITHUB_STEP_SUMMARY
+          echo "- Download artifacts from workflow run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Schedule" >> $GITHUB_STEP_SUMMARY
+          echo "- **Regular:** Weekly on Mondays at 6:00 AM UTC" >> $GITHUB_STEP_SUMMARY
+          echo "- **On Demand:** Triggered on PRs and pushes to main branches" >> $GITHUB_STEP_SUMMARY

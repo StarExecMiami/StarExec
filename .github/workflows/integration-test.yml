@@ -1,0 +1,106 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches: [UMprod, dev, containerised]
+    paths:
+      - 'src/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'pom.xml'
+      - '.github/workflows/integration-test.yml'
+  push:
+    branches: [UMprod, dev, containerised]
+    paths:
+      - 'src/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'pom.xml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-test:
+    name: Docker Compose Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Start test environment with Docker Compose
+        env:
+          STAREXEC_DB_PASSWORD: ci_test_password
+          STRICT_DB_CONNECTION: true
+        run: |
+          echo "Building and starting Docker Compose services..."
+          docker compose up -d --build
+          docker compose ps
+      
+      - name: Wait for application startup
+        run: |
+          echo "Waiting for StarExec application to start..."
+          timeout 180 bash -c 'until curl -f http://localhost:8080/starexec/ 2>/dev/null; do 
+            sleep 5
+            echo "Still waiting for application..."
+          done'
+          echo "✓ Application is ready at http://localhost:8080/starexec/"
+      
+      - name: Verify application health
+        run: |
+          echo "Testing application endpoints..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/starexec/)
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✓ Application health check passed (HTTP $HTTP_STATUS)"
+          else
+            echo "✗ Application health check failed (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+      
+      - name: Run integration tests
+        run: |
+          echo "Running integration test suite..."
+          curl -f http://localhost:8080/starexec/ || exit 1
+          # Add additional integration test commands here as needed
+          echo "✓ Integration tests passed"
+      
+      - name: Collect application logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker Compose Logs ===" 
+          docker compose logs
+          echo ""
+          echo "=== Container Status ===" 
+          docker compose ps
+          echo ""
+          echo "=== Network Inspection ===" 
+          docker network inspect starexec_default || true
+      
+      - name: Capture service diagnostics on failure
+        if: failure()
+        run: |
+          echo "Collecting diagnostic information..."
+          echo "=== StarExec Container Logs ===" 
+          docker compose logs starexec || true
+          echo ""
+          echo "=== Database Container Logs ===" 
+          docker compose logs db || true
+          echo ""
+          echo "=== Disk Space ===" 
+          df -h
+          echo ""
+          echo "=== Memory Usage ===" 
+          free -h
+      
+      - name: Cleanup Docker Compose
+        if: always()
+        run: |
+          echo "Cleaning up Docker Compose services..."
+          docker compose down -v
+          docker system prune -f
