@@ -333,20 +333,20 @@ public class Settings {
 				settings.setPostProcessorId(null);
 			}
 			settings.setDependenciesEnabled(results.getBoolean("dependencies_enabled"));
-			settings.setSolverId(results.getInt("default_solver"));
+			settings.setSolverId(results.getInt("defaultSolver"));
 			if (results.wasNull()) {
 				settings.setSolverId(null);
 			}
-			settings.setBenchProcessorId(results.getInt("bench_processor"));
+			settings.setBenchProcessorId(results.getInt("benchProcessor"));
 			if (results.wasNull()) {
 				settings.setBenchProcessorId(null);
 			}
-			settings.setMaxMemory(results.getLong("maximum_memory"));
+			settings.setMaxMemory(results.getLong("maximumMemory"));
 			settings.setName(results.getString("name"));
-			settings.setPrimId(results.getInt("prim_id"));
-			settings.setType(results.getInt("setting_type"));
+			settings.setPrimId(results.getInt("primId"));
+			settings.setType(results.getInt("settingType"));
 			settings.setBenchmarkingFramework(
-					BenchmarkingFramework.valueOf(results.getString("benchmarking_framework")));
+					BenchmarkingFramework.valueOf(results.getString("benchmarkingFramework")));
 			return settings;
 		} catch (SQLException e) {
 			log.error(methodName, "Caught SQL exception while getting results. Throwing...", e);

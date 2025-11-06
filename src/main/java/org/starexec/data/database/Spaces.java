@@ -1695,7 +1695,7 @@ public class Spaces {
 		PreparedStatement ps = null;
 		ResultSet results = null;
 		try {
-			ps = con.prepareStatement("SELECT * FROM starexec.GetSubspaceIds(?)");
+			ps = con.prepareStatement("SELECT * FROM starexec.GetSubSpaceIds(?)");
 			ps.setInt(1, spaceId);
 			results = ps.executeQuery();
 			List<Integer> ids = new ArrayList<>();
@@ -2058,7 +2058,7 @@ public class Spaces {
 			results = ps.executeQuery();
 
 			if (results.next()) {
-				return results.getBoolean("public");
+				return results.getBoolean("public_hierarchy");
 			}
 		} catch (Exception e) {
 			log.error("isPublicHierarchy", e);
@@ -2123,7 +2123,7 @@ public class Spaces {
 				results = ps.executeQuery();
 
 				if (results.next()) {
-					return results.getInt("subCount") != 0;
+					return results.getInt("subspace_count") != 0;
 				}
 		} catch (Exception e) {
 			log.error("notUniquePrimitiveName", e);

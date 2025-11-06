@@ -612,9 +612,9 @@ public class AnonymousLinks {
 
 			List<Triple<String, String, Integer>> anonymizedSolverNamesKey = new ArrayList<>();
 			while (results.next()) {
-				int solverId = results.getInt("primitive_id");
+				int solverId = results.getInt("primitiveId");
 				Solver solver = Solvers.get(con, solverId, false);
-				String anonymizedSolverName = results.getString("anonymous_name");
+				String anonymizedSolverName = results.getString("anonymousName");
 
 				anonymizedSolverNamesKey.add(new ImmutableTriple<>(solver.getName(), anonymizedSolverName, solverId));
 			}

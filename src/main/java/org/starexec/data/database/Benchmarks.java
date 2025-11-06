@@ -1345,7 +1345,7 @@ public class Benchmarks {
 
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareStatement("SELECT * FROM starexec.getPathsForBenchmarkDependencies(?)");
+			procedure = con.prepareStatement("SELECT * FROM starexec.GetPathsForBenchmarkDependencies(?)");
 			procedure.setInt(1, benchmarkId);
 			results = procedure.executeQuery();
 			List<BenchmarkDependency> dependencies = new LinkedList<>();

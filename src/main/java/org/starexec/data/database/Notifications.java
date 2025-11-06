@@ -135,8 +135,8 @@ public class Notifications {
 					userId = results.getInt("user");
 					user.setId(userId);
 					user.setEmail(results.getString("email"));
-					user.setFirstName(results.getString("first_name"));
-					user.setLastName(results.getString("last_name"));
+					user.setFirstName(results.getString("firstName"));
+					user.setLastName(results.getString("lastName"));
 					job = results.getInt("job");
 					status = JobStatus.valueOf(results.getString("status"));
 					Mail.notifyUserOfJobStatus(user, job, status);

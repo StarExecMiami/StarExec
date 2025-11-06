@@ -108,7 +108,6 @@ public class Reports {
 			while (results.next()) {
 				String event = results.getString("event_name");
 				Integer occurrences = results.getInt("occurrences");
-				//Integer queueId = results.getInt("queue_id");
 				String queueName = results.getString("queue_name");
 
 				Report report = new Report(event, occurrences, queueName);

@@ -151,8 +151,8 @@ public class Pipelines {
 				pipe.setId(id);
 				pipe.setName(results.getString("name"));
 				pipe.setUploadDate(results.getTimestamp("uploaded"));
-				pipe.setUserId(results.getInt("user_id"));
-				pipe.setPrimaryStageNumber(results.getInt("primary_stage_id"));
+				pipe.setUserId(results.getInt("userId"));
+				pipe.setPrimaryStageNumber(results.getInt("primaryStageId"));
 				pipe.setStages(getStagesForPipeline(id, con));
 				return pipe;
 			}

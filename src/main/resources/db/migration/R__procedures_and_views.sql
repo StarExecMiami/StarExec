@@ -109,7 +109,7 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetAnonymousNamesForJob(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetAnonymousNamesForJob(_jobId INT)
-RETURNS TABLE(anonymous_name VARCHAR, primitive_id INT, primitive_type VARCHAR, job_id INT) AS $$
+RETURNS TABLE(anonymousName VARCHAR, primitiveId INT, primitiveType VARCHAR, jobId INT) AS $$
 	BEGIN
 		RETURN QUERY SELECT apn.anonymous_name, apn.primitive_id, apn.primitive_type, apn.job_id
 			FROM starexec.anonymous_primitive_names apn WHERE apn.job_id = _jobId;
@@ -118,7 +118,7 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetAnonymousSolverNamesAndIds(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetAnonymousSolverNamesAndIds(_jobId INT)
-RETURNS TABLE(anonymous_name VARCHAR, primitive_id INT) AS $$
+RETURNS TABLE(anonymousName VARCHAR, primitiveId INT) AS $$
 	BEGIN
 		RETURN QUERY SELECT apn.anonymous_name, apn.primitive_id
 			FROM starexec.anonymous_primitive_names apn
@@ -431,10 +431,10 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetXMLUploadStatusById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetXMLUploadStatusById(_id INT)
-RETURNS TABLE(id INT, space_id INT, user_id INT, file_path TEXT, upload_time TIMESTAMP, status VARCHAR) AS $$
+RETURNS TABLE(id INT, user_id INT, upload_time TIMESTAMP, file_upload_complete BOOLEAN, everything_complete BOOLEAN, total_spaces INT, completed_spaces INT, total_benchmarks INT, completed_benchmarks INT, total_solvers INT, completed_solvers INT, total_updates INT, completed_updates INT, error_message TEXT) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT xu.id, xu.space_id, xu.user_id, xu.file_path, xu.upload_time, xu.status
+	SELECT xu.id, xu.user_id, xu.upload_time, xu.file_upload_complete, xu.everything_complete, xu.total_spaces, xu.completed_spaces, xu.total_benchmarks, xu.completed_benchmarks, xu.total_solvers, xu.completed_solvers, xu.total_updates, xu.completed_updates, xu.error_message
 	FROM starexec.space_xml_uploads xu
 	WHERE xu.id = _id;
 END;
@@ -3453,7 +3453,7 @@ $$ LANGUAGE plpgsql;
 -- Returns a list of Job ID and User emails for sending notifications
 DROP FUNCTION IF EXISTS starexec.NotifyUsersOfJobs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.NotifyUsersOfJobs()
-RETURNS TABLE(job INT, "user" INT, first_name VARCHAR(32), last_name VARCHAR(32), email VARCHAR(64), status VARCHAR(16)) AS $$
+RETURNS TABLE(job INT, "user" INT, firstName VARCHAR(32), lastName VARCHAR(32), email VARCHAR(64), status VARCHAR(16)) AS $$
 BEGIN
     RETURN QUERY
     SELECT nju.job_id AS "job", nju.user_id AS "user", u.first_name, u.last_name, u.email AS "email", GetJobStatusDetail(nju.job_id) AS "status"
@@ -3487,13 +3487,13 @@ $$ LANGUAGE plpgsql;
 -- ================================================================================
 DROP FUNCTION IF EXISTS starexec.NotifyUsersOfJobs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.NotifyUsersOfJobs()
-RETURNS TABLE(job INT, "user" INT, first_name VARCHAR(32), last_name VARCHAR(32), email VARCHAR(64), status VARCHAR(20)) AS $$
+RETURNS TABLE(job INT, "user" INT, firstName VARCHAR(32), lastName VARCHAR(32), email VARCHAR(64), status VARCHAR(20)) AS $$
 BEGIN
     RETURN QUERY
     SELECT nju.job_id AS job,
            nju.user_id AS "user",
-           u.first_name,
-           u.last_name,
+           u.first_name AS firstName,
+           u.last_name AS lastName,
            u.email AS email,
            GetJobStatusDetail(nju.job_id)::VARCHAR(20) AS status
     FROM starexec.notifications_jobs_users nju
@@ -3810,15 +3810,16 @@ DROP FUNCTION IF EXISTS starexec.GetPipelineById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPipelineById(_id INT)
 RETURNS TABLE(
     id INT,
-    user_id INT,
+    userId INT,
     name VARCHAR(64),
     uploaded TIMESTAMP,
     description TEXT,
-    primary_stage INT
+    primaryStageId INT
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.solver_pipelines WHERE id = _id;
+    SELECT id, user_id AS userId, name, uploaded, description, primary_stage_id AS primaryStageId 
+    FROM starexec.solver_pipelines WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4178,7 +4179,7 @@ $$ LANGUAGE plpgsql;
 -- Retrieves all pending job pairs for a give queue owned by a developer
 DROP FUNCTION IF EXISTS starexec.GetPendingDeveloperJobs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPendingDeveloperJobs(_queueId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(64), description TEXT, queue_id INT, primary_space INT, created TIMESTAMP, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
+RETURNS TABLE(id INT, userId INT, name VARCHAR(64), description TEXT, queueId INT, primarySpace INT, created TIMESTAMP, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximumMemory BIGINT, paused BOOLEAN, killed BOOLEAN, suppressTimestamp BOOLEAN, usingDependencies BOOLEAN, buildJob BOOLEAN, totalPairs INT, softTimeLimit INT, killDelay INT, diskSize BIGINT, benchmarkingFramework VARCHAR, isHighPriority BOOLEAN, outputBenchmarksDirectoryPath TEXT) AS $$
 BEGIN
     RETURN QUERY
     SELECT DISTINCT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
@@ -4350,7 +4351,7 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetPairsRunningOnNode CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPairsRunningOnNode(_nodeId INT)
-RETURNS TABLE(id INT, path TEXT, primary_jobpair_data INT, job_id INT, bench_id INT, bench_name VARCHAR(256), queuesub_time TIMESTAMP, solver_id INT, solver_name VARCHAR(128), config_id INT, config_name VARCHAR(128), job_id_dup INT, job_name VARCHAR(128), user_id INT, first_name VARCHAR(32), last_name VARCHAR(32)) AS $$
+RETURNS TABLE(id INT, path TEXT, primaryJobpairData INT, jobId INT, benchId INT, benchName VARCHAR(256), queuesubTime TIMESTAMP, solverId INT, solverName VARCHAR(128), configId INT, configName VARCHAR(128), jobIdDup INT, jobName VARCHAR(128), userId INT, firstName VARCHAR(32), lastName VARCHAR(32)) AS $$
 BEGIN
     RETURN QUERY
     SELECT jp.id,
@@ -4905,7 +4906,7 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetDefaultSettingsByIdAndType CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetDefaultSettingsByIdAndType(_prim_id INT, _type INT)
-RETURNS TABLE(id INT, prim_id INT, post_processor INT, cpu_timeout INT, clock_timeout INT, dependencies_enabled BOOLEAN, maximum_memory BIGINT, default_solver INT, bench_processor INT, pre_processor INT, setting_type INT, name VARCHAR(32), benchmarking_framework VARCHAR(16)) AS $$
+RETURNS TABLE(id INT, primId INT, postProcessor INT, cpuTimeout INT, clockTimeout INT, dependenciesEnabled BOOLEAN, maximumMemory BIGINT, defaultSolver INT, benchProcessor INT, preProcessor INT, settingType INT, name VARCHAR(32), benchmarkingFramework VARCHAR(16)) AS $$
 BEGIN
     RETURN QUERY
     SELECT ds.id, ds.prim_id, ds.post_processor, ds.cpu_timeout, ds.clock_timeout, ds.dependencies_enabled, ds.maximum_memory, ds.default_solver, ds.bench_processor, ds.pre_processor, ds.setting_type, ds.name, ds.benchmarking_framework
@@ -7552,10 +7553,10 @@ $$ LANGUAGE plpgsql;
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.IsMemberOfSpace CASCADE;
 CREATE OR REPLACE FUNCTION starexec.IsMemberOfSpace(_userId INT, _spaceId INT)
-RETURNS TABLE(user_id INT, space_id INT, role VARCHAR(32)) AS $$
+RETURNS TABLE(isMember BIGINT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ua.user_id, ua.space_id, ua.role
+    SELECT COUNT(*) as isMember
     FROM starexec.user_assoc ua
     WHERE ua.user_id = _userId AND ua.space_id = _spaceId;
 END;

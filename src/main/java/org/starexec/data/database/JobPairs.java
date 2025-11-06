@@ -393,7 +393,7 @@ public class JobPairs {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT * FROM starexec.getpairstobeprocessed(?)");
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPairsToBeProcessed(?)");
 			ps.setInt(1, StatusCode.STATUS_PROCESSING.getVal());
 			results = ps.executeQuery();
 			List<PairStageProcessorTriple> list = new ArrayList<>();

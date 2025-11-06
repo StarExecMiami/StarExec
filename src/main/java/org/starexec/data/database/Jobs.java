@@ -1079,18 +1079,18 @@ public class Jobs {
 		Long diskSize = ResultSetUtils.getLong(results, "disk_size");
 		j.setDiskSize(diskSize == null ? 0L : diskSize);
 		
-		Boolean suppressTimestamp = ResultSetUtils.getBoolean(results, "suppress_timestamp");
+		Boolean suppressTimestamp = ResultSetUtils.getBoolean(results, "suppressTimestamp", "suppress_timestamp");
 		j.setSuppressTimestamp(Boolean.TRUE.equals(suppressTimestamp));
 		
-		Boolean usingDependencies = ResultSetUtils.getBoolean(results, "using_dependencies");
+		Boolean usingDependencies = ResultSetUtils.getBoolean(results, "usingDependencies", "using_dependencies");
 		j.setUsingDependencies(Boolean.TRUE.equals(usingDependencies));
 		
-		String framework = ResultSetUtils.getString(results, "benchmarking_framework");
+		String framework = ResultSetUtils.getString(results, "benchmarkingFramework", "benchmarking_framework");
 		j.setBenchmarkingFramework(BenchmarkingFramework.valueOf(framework));
 		
-		j.setOutputBenchmarksPath(ResultSetUtils.getString(results, "output_benchmarks_directory_path"));
+		j.setOutputBenchmarksPath(ResultSetUtils.getString(results, "outputBenchmarksDirectoryPath", "output_benchmarks_directory_path"));
 
-		Boolean isHighPriority = ResultSetUtils.getBoolean(results, "is_high_priority");
+		Boolean isHighPriority = ResultSetUtils.getBoolean(results, "isHighPriority", "is_high_priority");
 		if (Boolean.TRUE.equals(isHighPriority)) {
 			j.setHighPriority();
 		} else {
@@ -5396,7 +5396,7 @@ public class Jobs {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareStatement("SELECT * FROM starexec.issystempaused()");
+			procedure = con.prepareStatement("SELECT * FROM starexec.IsSystemPaused()");
 			results = procedure.executeQuery();
 
 			if (results.next()) {

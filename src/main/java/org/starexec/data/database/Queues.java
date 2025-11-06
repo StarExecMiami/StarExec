@@ -471,11 +471,11 @@ public class Queues {
 		while (results.next()) {
 			JobPair jp = new JobPair();
 			// Column labels returned by JDBC omit table qualifiers unless explicitly aliased.
-			jp.setPrimaryStageNumber(results.getInt("primary_jobpair_data"));
+			jp.setPrimaryStageNumber(results.getInt("primaryJobpairData"));
 			jp.setPath(results.getString("path"));
-			jp.setJobId(results.getInt("job_id"));
+			jp.setJobId(results.getInt("jobId"));
 			jp.setId(results.getInt("id"));
-			jp.setQueueSubmitTime(results.getTimestamp("queuesub_time"));
+			jp.setQueueSubmitTime(results.getTimestamp("queuesubTime"));
 			Status stat = new Status();
 			//enqueued by definition, so we don't want to retrieve extra data from the db
 			stat.setCode(StatusCode.STATUS_ENQUEUED);
@@ -488,30 +488,30 @@ public class Queues {
 			jp.addStage(stage);
 
 			Benchmark b = new Benchmark();
-			b.setId(results.getInt("bench_id"));
-			b.setName(results.getString("bench_name"));
+			b.setId(results.getInt("benchId"));
+			b.setName(results.getString("benchName"));
 			jp.setBench(b);
 
 			Solver s = new Solver();
-			s.setId(results.getInt("solver_id"));
-			s.setName(results.getString("solver_name"));
+			s.setId(results.getInt("solverId"));
+			s.setName(results.getString("solverName"));
 			stage.setSolver(s);
 
 			Configuration c = new Configuration();
-			c.setId(results.getInt("config_id"));
-			c.setName(results.getString("config_name"));
+			c.setId(results.getInt("configId"));
+			c.setName(results.getString("configName"));
 			stage.setConfiguration(c);
 			jp.getPrimarySolver().addConfiguration(c);
 
 			User u = new User();
-			u.setId(results.getInt("user_id"));
-			u.setFirstName(results.getString("first_name"));
-			u.setLastName(results.getString("last_name"));
+			u.setId(results.getInt("userId"));
+			u.setFirstName(results.getString("firstName"));
+			u.setLastName(results.getString("lastName"));
 			jp.setOwningUser(u);
 
 			Job j = new Job();
-			j.setId(results.getInt("job_id_dup"));
-			j.setName(results.getString("job_name"));
+			j.setId(results.getInt("jobIdDup"));
+			j.setName(results.getString("jobName"));
 
 			jp.setOwningJob(j);
 
