@@ -47,6 +47,8 @@ spec:
       env:
         - name: STAREXEC_DB_HOST
           value: {{ .Values.postgres.host | quote }}
+        - name: STAREXEC_DB_PORT
+          value: {{ .Values.postgres.port | quote }}
         - name: STAREXEC_DB_USER
           valueFrom:
             secretKeyRef:
@@ -158,6 +160,8 @@ spec:
           env:
             - name: STAREXEC_DB_HOST
               value: {{ .Values.postgres.host | quote }}
+            - name: STAREXEC_DB_PORT
+              value: {{ .Values.postgres.port | quote }}
             - name: STAREXEC_DB_USER
               valueFrom:
                 secretKeyRef:

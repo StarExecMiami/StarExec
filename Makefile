@@ -65,7 +65,7 @@ help:
 	@echo "  volumes-help           Show detailed volume management help"
 	@echo ""
 	@echo "Database Management:"
-	@echo "  migrate-podman         Run Flyway migrations against Podman DB"
+	@echo "  migrate-podman         ⚠️  MANUAL migration (debugging only - automatic on startup)"
 	@echo "  migrate-repair         Repair Flyway schema history"
 	@echo "  db-shell               Open PostgreSQL shell (Podman)"
 	@echo "  db-dump                Create PostgreSQL logical dump"
@@ -211,7 +211,22 @@ migrate-repair:
 		-Dflyway.password=$$STAREXEC_DB_PASSWORD \
 		-Dflyway.schemas=$$STAREXEC_DB_DATABASE
 
+
 migrate-podman:
+	@echo "============================================================================"
+	@echo "⚠️  NOTICE: Migrations now run AUTOMATICALLY on container startup"
+	@echo "============================================================================"
+	@echo ""
+	@echo "This manual command should ONLY be used for:"
+	@echo "  - Debugging migration failures"
+	@echo "  - Applying migrations to external/remote databases"
+	@echo "  - Development testing of migration scripts"
+	@echo ""
+	@read -p "Continue with manual migration? (y/N): " ans; \
+	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
+		echo "Cancelled"; \
+		exit 0; \
+	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
 	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
@@ -294,6 +309,7 @@ deploy-podman-helm:
 	@echo "✓ Deployment complete!"
 	@echo "  Environment: $(ENV)"
 	@echo "  Values: $(VALS)"
+	@echo "  Migrations: Executed automatically during startup"
 	@echo "  Access: http://localhost:7827/starexec"
 	@echo ""
 	@echo "Useful commands:"
@@ -328,6 +344,7 @@ deploy-podman-direct:
 	@echo "✓ Deployment complete!"
 	@echo "  Environment: $(ENV)"
 	@echo "  Access: http://localhost:7827/starexec"
+	@echo "  Migrations: Executed automatically during startup"
 	@echo ""
 	@echo "Useful commands:"
 	@echo "  make db-shell              - PostgreSQL shell"
