@@ -293,7 +293,8 @@ deploy-podman-helm:
 	@echo "Rendering secrets..."
 	@helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" > secret-render.yaml
 	@for key in user password database rootPassword; do \
-		b64=$$(grep "$$key:" secret-render.yaml | awk -F': ' '{print $$2}' | tr -d '"'); \
+		b64=$$(grep "$$key:" secret-render.yaml | python3 -c \
+		"import sys, yaml; data=yaml.safe_load(sys.stdin); print(data.get('$$key', ''))"); \
 		[ -z "$$b64" ] && echo "ERROR: No base64 data for $$key" && cat secret-render.yaml && exit 1; \
 		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
 	done
