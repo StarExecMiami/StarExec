@@ -9,6 +9,7 @@ services:
     environment:
       # Database Configuration
       STAREXEC_DB_HOST: postgres
+      STAREXEC_DB_PORT: 5432
       STAREXEC_DB_USER: starexec
       STAREXEC_DB_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
       STAREXEC_DB_NAME: starexec
