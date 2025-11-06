@@ -295,7 +295,8 @@ deploy-podman-helm:
 	@for key in user password database rootPassword; do \
 		b64=$$(yq -r ".data.$$key" secret-render.yaml); \
 		[ -z "$$b64" ] && echo "ERROR: No base64 data for $$key" && cat secret-render.yaml && exit 1; \
-		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
+		decoded=$$(echo "$$b64" | base64 --decode); \
+		echo "$$decoded" | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
 	done
 	@echo "Deploying application pod..."
 	@IMAGE_REPO="$(RELEASE_NAME)"; \
