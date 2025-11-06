@@ -1,0 +1,37 @@
+name: Reusable Java Setup
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        required: false
+        type: string
+        default: '17'
+        description: 'Java version to setup'
+      cache-key-prefix:
+        required: false
+        type: string
+        default: 'maven'
+        description: 'Cache key prefix for Maven dependencies'
+
+jobs:
+  setup:
+    name: Setup Java Environment
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Verify Java version
+        run: java -version
+      
+      - name: Verify Maven version
+        run: mvn -version
