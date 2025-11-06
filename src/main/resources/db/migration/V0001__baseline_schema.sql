@@ -6,6 +6,9 @@
 -- Author: Tyler Jensen
 -- Description: This file is the schema used to create the starexec database in MySQL
 
+-- Note: Flyway is configured with defaultSchema("starexec") and createSchemas(true),
+-- so the starexec schema is created automatically and all objects go there
+
 -- The table of all users in the system
 CREATE TABLE users (
 	id SERIAL NOT NULL,

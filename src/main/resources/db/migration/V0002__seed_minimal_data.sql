@@ -1,6 +1,8 @@
 -- Minimal seed data to bootstrap StarExec
 -- Generated from sql/new-install/MinimalData.sql
 
+-- Note: Flyway is configured with defaultSchema("starexec"), so all references work correctly
+
 -- Populate the StarExec DB with a minimal set of data to get started.
 
 -- the password for admin is admin -- recommended to change

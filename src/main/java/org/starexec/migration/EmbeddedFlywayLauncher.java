@@ -68,6 +68,8 @@ public class EmbeddedFlywayLauncher {
                     .locations("filesystem:" + migrationsLocation)
                     .baselineOnMigrate(true)
                     .baselineVersion("1")
+                    .defaultSchema("starexec")  // Use starexec schema for all migrations
+                    .createSchemas(true)  // Create schema if it doesn't exist
                     .load();
 
             System.out.println("[EmbeddedFlyway] Running migrations against: " + jdbcUrl);
