@@ -15,9 +15,9 @@
 
 - [Overview](#overview)
 - [Features](#features)
-- [Quick Start](#podman--makefile-recommended)
-- [Docker Compose (simple alternative)](#docker-compose-simple-alternative)
-- [Manual / Raw containers (advanced)](#manual--raw-containers-advanced)
+- [Quick Start](#quick-start-with-the-makefile)
+- [Docker Compose (simple alternative)](#alternative-quick-start-with-docker-compose)
+- [Manual / Raw containers (advanced)](#manual-raw-containers-advanced)
   - [Configuration](#configuration)
   - [Quick configuration](#quick-configuration)
   - [Environment variables reference](#environment-variables-reference)
