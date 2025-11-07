@@ -48,71 +48,9 @@ on a traditional Tomcat/Postgres stack.
 - Flyway-based database migrations and safe, layered configuration.
 
 <!-- Quick Start -->
-## Quick Start
+## Quick Start with the Makefile
 
-Use Quick Start to get a development instance running locally in ~10-20 minutes.
-
-1. Copy the repo and change to its root:
-
-    ```bash
-    # Clone the repository and enter it
-    git clone https://github.com/StarExecMiami/StarExec.git
-    cd StarExec
-    ```
-
-2. Start development stack (recommended):
-
-    ```bash
-    # First-time (builds images and deploys stack)
-    make start
-    ```
-
-Expected outcome: containers built and started. The web UI is usually available
-at `http://localhost:7827/starexec` (see the `make` output for exact address).
-
-Estimated time: 10–20 minutes (depending on network and local build cache).
-
-## Prerequisites
-
-Before installing, ensure the host meets the following requirements.
-
-Required:
-
-- Java 17+ (for local manual builds).
-- Maven 3.8+ (for manual builds and packaging).
-- PostgreSQL 15+ (production DB).
-- Container runtime: Podman (recommended) or Docker.
-
-Optional (for development):
-
-- Node.js 20+ (SCSS compilation), `postgresql-client` for DB access.
-
-Version matrix (high level):
-
-| Component | Recommended version |
-|-----------|---------------------|
-| Java | 17 |
-| Maven | 3.8+ |
-| Node.js | 20+ (dev only) |
-| PostgreSQL | 15 |
-
-Notes:
-
-- Required vs optional dependencies are separated above. When using containers
-  (Makefile or Docker Compose), most host dependencies are optional because
-  builds run inside the container images.
-
-<!-- Installation -->
-## Installation
-
-For each method below: a short note on when to use it, numbered steps, expected
-output, and an estimated time to complete.
-
-### Podman / Makefile (recommended)
-
-When to use: development and CI-friendly deployments on Linux systems where
-`podman` rootless mode is supported. Prefer this if you want reproducible
-container-based builds without Docker daemon.
+When to use:  Linux systems where `podman` rootless mode is supported. Use this if you want reproducible container-based builds without a Docker daemon (see the Alternative Quick Start below).
 
 Estimated time: 10–30 minutes.
 
@@ -142,24 +80,30 @@ Steps:
     rootless: true
     ```
 
-3. Start the stack using the Makefile:
+3. Clone the repository and change to its root:
 
     ```bash
-    # Build and start the development environment
+    # Clone the repository and enter it
+    git clone https://github.com/StarExecMiami/StarExec.git
+    cd StarExec
+    ```
+
+4. Start StarExec using the Makefile:
+
+    ```bash
     make start
     ```
 
-Success indicator: `make` completes without error and prints service endpoints.
+   If you see permission issues with rootless networking, install,
+   run `podman system migrate`. If the error persists, follow the troubleshooting section below.
 
-Notes and common fixes:
+5. The web UI should be available at `http://localhost:7827/starexec` (see the `make start` output for the exact address). Open you browser and you will reach the StarExec login page. The default credentials are `admin`:`admin`. For information on using StarExec see `https://starexec.ccs.miami.edu/starexec/public/help.jsp`.
 
-- If you see permission issues with rootless networking, install `passt` and
-  run `podman system migrate`. If the error persists, follow the troubleshooting
-  section below.
+---
+<!-- Alternative -->
+## Alternative Quick Start with Docker Compose
 
-### Docker Compose (simple alternative)
-
-When to use: quick local testing or if you prefer Docker Compose workflows.
+When to use: Quick local testing, or if you prefer Docker Compose workflows.
 
 Estimated time: 5–20 minutes.
 
@@ -181,16 +125,8 @@ Steps:
     ```bash
     docker-compose down
     ```
-
-Pros/Cons comparison
-
-| Method | Pros | Cons |
-|---|---:|---|
-| Podman + Makefile | Rootless-friendly, works well on CI, reproducible images | Requires podman/tools on host |
-| Docker Compose | Widely used, simple to run | Requires Docker daemon, less rootless-friendly |
-| Manual (Tomcat) | Full control of runtime, good for production Tomcat deployments | More manual steps, more host deps |
-
-### Manual / Raw containers (advanced)
+---
+## Manual / Raw containers (advanced)
 
 When to use: you need fine-grained control of the runtime and want to run
 containers without the Makefile orchestration.
@@ -239,12 +175,12 @@ Success indicator: both containers run (check with `podman ps`) and web UI
 reachable at the expected port.
 
 <!-- Configuration -->
-## Configuration
+### Configuration
 
 Configuration is layered and validated at startup. Use the following sections to
 locate specific keys and quick-start the minimal settings required.
 
-### Quick configuration
+#### Quick configuration
 
 Minimal environment variables to bring up a local development instance:
 
@@ -262,7 +198,7 @@ Validate configuration rendering (example):
 make config-show ENV=dev
 ```
 
-### Environment variables reference
+#### Environment variables reference
 
 Use the anchors below for direct linking.
 
@@ -270,8 +206,6 @@ Use the anchors below for direct linking.
 - [Cluster Compute configuration](#cluster-compute-configuration)
 - [Email configuration](#email-configuration)
 - [Backend / System configuration](#backend--system-configuration)
-
-<!-- headings below provide the canonical anchors for direct linking -->
 
 #### Database configuration
 
@@ -320,12 +254,20 @@ Validation command (development):
 ```bash
 make config-show ENV=dev
 ```
+---
+## Pros/Cons Comparison of the Three Deployment Methods
+
+| Method | Pros | Cons |
+|---|---:|---|
+| Podman + Makefile | Rootless-friendly, works well on CI, reproducible images | Requires podman/tools on host |
+| Docker Compose | Widely used, simple to run | Requires Docker daemon, less rootless-friendly |
+| Manual (Tomcat) | Full control of runtime, good for production Tomcat deployments | More manual steps, more host deps |
+---
 
 <!-- Security -->
 ## Security Considerations
 
-- Change seed/default credentials (e.g., `admin/admin`, `public/public`) on
-  first deployment. **Do not** use default passwords in production.
+- The examples in this README include simple passwords for demonstration purposes, e.g., `admin/admin`, `public/public`). **Do not** use default passwords in production - change them in real deployments.
 - Mark all credentials as sensitive and manage them with a secrets engine
   (Vault, Kubernetes Secrets, or external secret manager).
 - Recommended permissions: run the application user with least privilege and
@@ -333,9 +275,7 @@ make config-show ENV=dev
 - Network security: restrict database access to trusted networks, use TLS for
   external services, and configure firewalls/security groups.
 
-Warning: The examples in this README include simple passwords for demo
-purposes. Replace them in real deployments.
-
+---
 <!-- Troubleshooting -->
 ## Troubleshooting
 
