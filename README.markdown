@@ -19,9 +19,9 @@
 - [Docker Compose (simple alternative)](#docker-compose-simple-alternative)
 - [Manual / Raw containers (advanced)](#manual--raw-containers-advanced)
   - [Configuration](#configuration)
-    - [Quick configuration](#quick-configuration)
-    - [Environment variables reference](#environment-variables-reference)
-    - [Advanced configuration](#advanced-configuration)
+  - [Quick configuration](#quick-configuration)
+  - [Environment variables reference](#environment-variables-reference)
+  - [Advanced configuration](#advanced-configuration)
 - [Security Considerations](#security-considerations)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
@@ -177,7 +177,7 @@ reachable at the expected port.
 Configuration is layered and validated at startup. Use the following sections to
 locate specific keys and quick-start the minimal settings required.
 
-#### Quick configuration
+### Quick configuration
 
 Minimal environment variables to bring up a local development instance:
 
@@ -195,7 +195,7 @@ Validate configuration rendering (example):
 make config-show ENV=dev
 ```
 
-#### Environment variables reference
+### Environment variables reference
 
 Use the anchors below for direct linking.
 
@@ -204,7 +204,7 @@ Use the anchors below for direct linking.
 - [Email configuration](#email-configuration)
 - [Backend / System configuration](#backend--system-configuration)
 
-#### Database configuration
+### Database configuration
 
 | Variable | Default | Example | Notes |
 |---|---:|---|---|
@@ -217,14 +217,14 @@ Use the anchors below for direct linking.
 Marking sensitive variables: variables that contain credentials or secrets are
 marked as **sensitive** in their Notes column.
 
-#### Cluster Compute configuration
+### Cluster Compute configuration
 
 | Variable | Default | Example |
 |---|---:|---|
 | `STAREXEC_CLUSTER_DB_USER` | `starexec` | `cluster_user` |
 | `STAREXEC_CLUSTER_DB_PASSWORD` | *(empty)* | `cluster_pass` (sensitive) |
 
-#### Email configuration
+### Email configuration
 
 | Variable | Default | Example |
 |---|---:|---|
@@ -233,7 +233,7 @@ marked as **sensitive** in their Notes column.
 | `STAREXEC_EMAIL_USER` | *(empty)* | `mailer@example.org` (sensitive) |
 | `STAREXEC_EMAIL_PASSWORD` | *(empty)* | `...` (sensitive) |
 
-#### Backend / System configuration
+### Backend / System configuration
 
 | Variable | Default | Example |
 |---|---:|---|
