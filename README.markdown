@@ -123,7 +123,7 @@ Steps:
     ```bash
     # Install podman and helper tools (run as root)
     sudo apt-get update
-    sudo apt-get install -y podman catatonit passt fuse-overlayfs
+    sudo apt-get install -y podman catatonit passt fuse-overlayfs yq
     ```
 
     Expected output: package manager confirms installation; `podman --version`
