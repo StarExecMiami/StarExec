@@ -3748,7 +3748,21 @@ CREATE OR REPLACE FUNCTION starexec.SetUserPermissions(_userId INT, _spaceId INT
 _addSpace SMALLINT, _addJob SMALLINT, _removeSolver SMALLINT, _removeBench SMALLINT, _removeSpace SMALLINT,
 _removeUser SMALLINT, _removeJob SMALLINT, _isLeader SMALLINT)
 RETURNS VOID AS $$
+DECLARE
+    _permissionId INT;
 BEGIN
+    -- First, ensure the user_assoc entry exists
+    IF NOT EXISTS(SELECT 1 FROM starexec.user_assoc WHERE user_id = _userId AND space_id = _spaceId) THEN
+        -- User is not yet associated with this space - this is an error condition
+        RAISE EXCEPTION 'User % is not associated with space %', _userId, _spaceId;
+    END IF;
+    
+    -- Get the permission ID for this user-space combination
+    SELECT ua.permission INTO _permissionId
+    FROM starexec.user_assoc ua
+    WHERE ua.user_id = _userId AND ua.space_id = _spaceId;
+    
+    -- Update the permission record
     UPDATE permissions p
     SET add_user = _addUser,
         add_solver = _addSolver,
@@ -3761,8 +3775,7 @@ BEGIN
         remove_job = _removeJob,
         remove_space = _removeSpace,
         is_leader = _isLeader
-    FROM starexec.user_assoc ua
-    WHERE p.id = ua.permission AND ua.user_id = _userId AND ua.space_id = _spaceId;
+    WHERE p.id = _permissionId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3795,9 +3808,11 @@ DROP FUNCTION IF EXISTS starexec.SetUserPermissions2 CASCADE;
 CREATE OR REPLACE FUNCTION starexec.SetUserPermissions2(_userId INT, _spaceId INT, _permissionId INT)
 RETURNS VOID AS $$
 BEGIN
-    UPDATE user_assoc
-    SET permission = _permissionId
-    WHERE user_id = _userId AND space_id = _spaceId;
+    -- Use INSERT...ON CONFLICT to handle both update and insert cases
+    INSERT INTO user_assoc (user_id, space_id, permission)
+    VALUES (_userId, _spaceId, _permissionId)
+    ON CONFLICT (user_id, space_id) DO UPDATE
+    SET permission = _permissionId;
 END;
 $$ LANGUAGE plpgsql;
 

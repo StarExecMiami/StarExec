@@ -3984,7 +3984,12 @@ public class RESTServices {
 	    // Update database with new permissions
 	    for(Integer permittedSpaceId : permittedSpaces){
 			if(permittedSpaceId != null){
-			    Permissions.set(userId, permittedSpaceId, newPerm);
+			    if (!Permissions.set(userId, permittedSpaceId, newPerm)) {
+			        log.error("Failed to update permissions for user " + userId + " in space " + permittedSpaceId);
+			        return gson.toJson(new ValidatorStatusCode(false, "Failed to update permissions in one or more spaces"));
+			    }
+			    // Invalidate permission cache for the updated space
+			    SessionUtil.removeCachePermission(request, permittedSpaceId);
 			}
 	    }
 	    return gson.toJson(new ValidatorStatusCode(true,"Permissions edited successfully"));
@@ -4015,7 +4020,12 @@ public class RESTServices {
 		Permission newPerm = createPermissionFromRequest(request);
 
 		// Update database with new permissions
-		return Permissions.set(userId, spaceId, newPerm) ? gson.toJson(new ValidatorStatusCode(true,"Permissions edited successfully")) : gson.toJson(ERROR_DATABASE);
+		if (Permissions.set(userId, spaceId, newPerm)) {
+			// Invalidate permission cache for the updated space
+			SessionUtil.removeCachePermission(request, spaceId);
+			return gson.toJson(new ValidatorStatusCode(true,"Permissions edited successfully"));
+		}
+		return gson.toJson(ERROR_DATABASE);
 	}
 
 	/**
@@ -4131,6 +4141,9 @@ public class RESTServices {
 				log.error("makeLeader: Failed to set permissions for user " + userId + " in space " + spaceId);
 				return gson.toJson(new ValidatorStatusCode(false, "Failed to update user permissions"));
 			}
+			
+			// Invalidate permission cache for the promoted user
+			SessionUtil.removeCachePermission(request, spaceId);
 
 			//update quotas
 			if (!Users.setDiskQuota(userId, R.CL_DEFAULT_DISK_QUOTA)) {
@@ -4167,6 +4180,10 @@ public class RESTServices {
 		Permission p = Permissions.getFullPermission();
 		p.setLeader(false);
 		boolean success = Permissions.set(userIdBeingDemoted, spaceId, p);
+		if (success) {
+			// Invalidate permission cache for the demoted user
+			SessionUtil.removeCachePermission(request, spaceId);
+		}
 		//note that the desired behavior for quotas when a user is being demoted is to not reduce their quotas
 		//The analogy I was given: "Think of former leaders as retired emperors..."
 		return success ? gson.toJson(new ValidatorStatusCode(true,"User demoted successfully")) : gson.toJson(ERROR_DATABASE);
