@@ -16,6 +16,8 @@ on:
 permissions:
   contents: read
   checks: write
+  pull-requests: write
+  issues: write
 
 jobs:
   test:
@@ -68,7 +70,7 @@ jobs:
         uses: EnricoMi/publish-unit-test-result-action@v2
         with:
           files: |
-            target/surefire-reports/**/*.xml
+            target/surefire-reports/TEST-*.xml
           check_name: Unit Test Results
           compare_to_earlier_commit: true
       
