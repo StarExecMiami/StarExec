@@ -6,6 +6,7 @@ import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.to.*;
 import org.starexec.data.to.enums.CopyPrimitivesOption;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 import org.starexec.test.TestUtil;
@@ -274,7 +275,7 @@ public class SpaceTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void SpacePathCreateTest() {
+	private void SpacePathCreateTest() throws StarExecDatabaseException {
 		Space space1=loader.loadSpaceIntoDatabase(leader.getId(), community.getId());
 		String space1Path=community.getName()+R.JOB_PAIR_PATH_DELIMITER+space1.getName();
 		Space space2=loader.loadSpaceIntoDatabase(leader.getId(), space1.getId());
@@ -341,7 +342,7 @@ public class SpaceTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void nameUpdateTest() {
+	private void nameUpdateTest() throws StarExecDatabaseException {
 		String currentName=community.getName();
 		Assert.assertEquals(currentName,Spaces.getName(community.getId()));
 		addMessage("Space name consistent before update");
@@ -352,7 +353,7 @@ public class SpaceTests extends TestSequence {
 		community.setName(newName);
 	}
 	@StarexecTest
-	private void descriptionUpdateTest() {
+	private void descriptionUpdateTest() throws StarExecDatabaseException {
 		String currentDesc=community.getDescription();
 		Assert.assertEquals(currentDesc,Spaces.get(community.getId()).getDescription());
 		String newDesc=TestUtil.getRandomSpaceName(); //any somewhat long, random string will work

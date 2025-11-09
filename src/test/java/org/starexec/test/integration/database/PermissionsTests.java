@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.to.*;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
@@ -112,7 +113,7 @@ public class PermissionsTests extends TestSequence {
 	
 	
 	@StarexecTest
-	private void GetSpaceDefaultTest() {
+	private void GetSpaceDefaultTest() throws StarExecDatabaseException {
 		space.getPermission().setAddSolver(true);
 		space.getPermission().setAddSpace(false);
 		Spaces.updateDetails(owner.getId(), space);

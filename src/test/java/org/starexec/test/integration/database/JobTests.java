@@ -6,6 +6,7 @@ import org.starexec.data.database.*;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.data.to.enums.ProcessorType;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.jobs.JobManager;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
@@ -305,7 +306,7 @@ public class JobTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void associateJobsTest() {
+	private void associateJobsTest() throws StarExecDatabaseException {
 		List<Integer> jobIds = new ArrayList<>();
 		jobIds.add(job.getId());
 		jobIds.add(job2.getId());

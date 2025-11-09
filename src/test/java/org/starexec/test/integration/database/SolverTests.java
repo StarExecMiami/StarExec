@@ -5,6 +5,7 @@ import org.starexec.data.database.Communities;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.to.*;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecSecurityException;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
@@ -73,7 +74,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void changeNameTest() {
+	private void changeNameTest() throws StarExecDatabaseException {
 		String curName=solver.getName();
 		Solver cs=Solvers.get(solver.getId());
 		Assert.assertEquals(curName, cs.getName());
@@ -117,7 +118,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest 
-	private void updateConfigName() {
+	private void updateConfigName() throws StarExecDatabaseException {
 		String oldName=config.getName();
 		Assert.assertEquals(Solvers.getConfiguration(config.getId()).getName(),oldName);
 		String newName=TestUtil.getRandomSolverName();
@@ -127,7 +128,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void updateConfigDescription() {
+	private void updateConfigDescription() throws StarExecDatabaseException {
 		String oldDesc=config.getDescription();
 		Assert.assertEquals(Solvers.getConfiguration(config.getId()).getDescription(),oldDesc);
 		String newDesc=TestUtil.getRandomSolverName();
@@ -136,7 +137,7 @@ public class SolverTests extends TestSequence {
 		config.setDescription(newDesc);
 	}
 	@StarexecTest 
-	private void deleteConfigTest() {
+	private void deleteConfigTest() throws StarExecDatabaseException {
 		Configuration c=loader.loadConfigurationFileIntoDatabase("CVC4Config.txt", solver.getId());
 		Assert.assertNotNull(c);
 		Assert.assertNotNull(Solvers.getConfiguration(c.getId()));
@@ -145,7 +146,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void changeDescTest() {
+	private void changeDescTest() throws StarExecDatabaseException {
 		String curDesc=solver.getDescription();
 		Solver cs=Solvers.get(solver.getId());
 		Assert.assertEquals(curDesc, cs.getDescription());
@@ -157,7 +158,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void changeDownloadableTest() {
+	private void changeDownloadableTest() throws StarExecDatabaseException {
 		Solver cs=Solvers.get(solver.getId());
 		Assert.assertEquals(solver.isDownloadable(), cs.isDownloadable());
 		Assert.assertTrue(Solvers.updateDetails(solver.getId(),solver.getName(),solver.getDescription(),!solver.isDownloadable()));
@@ -195,7 +196,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void copySolverTest() {
+	private void copySolverTest() throws StarExecDatabaseException {
 		int id = Solvers.copySolver(Solvers.get(solver.getId()), testUser.getId(), space2.getId());
 		Assert.assertTrue(id>0);
 		Solver newSolver = Solvers.get(id);
@@ -206,7 +207,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void copySolversTest() {
+	private void copySolversTest() throws StarExecDatabaseException {
 		List<Solver> sols = new ArrayList<>();
 		sols.add(Solvers.get(solver.getId()));
 		List<Integer> ids = Solvers.copySolvers(sols, testUser.getId(), space2.getId());
@@ -234,7 +235,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void deleteSolverTest() {
+	private void deleteSolverTest() throws StarExecDatabaseException {
 		Solver s = loader.loadSolverIntoDatabase(space1.getId(), testUser.getId());
 		Assert.assertTrue(Solvers.delete(s.getId()));
 		s = Solvers.getIncludeDeleted(s.getId());
@@ -292,7 +293,7 @@ public class SolverTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void getBySpaceHierarchyTest() {
+	private void getBySpaceHierarchyTest() throws StarExecDatabaseException {
 		Solver newSolver = loader.loadSolverIntoDatabase(space2.getId(), testUser.getId());
 		Solvers.associate(newSolver.getId(), space2.getId());
 		List<Solver> solvers = Solvers.getBySpaceHierarchy(space1.getId(), testUser.getId());
