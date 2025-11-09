@@ -4,6 +4,7 @@ import org.starexec.data.database.Communities;
 import org.starexec.data.database.Requests;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
+import org.starexec.exceptions.StarExecException;
 import org.starexec.util.Mail;
 import org.starexec.logger.StarLogger;
 
@@ -122,14 +123,13 @@ public class CommunityRequest {
 		);
 	}
 
-	public void approve() {
+	public void approve() throws StarExecException {
 		// Add them to the community & remove the request from the database
 		boolean successfullyApproved =
 				Requests.approveCommunityRequest(getUserId(), getCommunityId());
 		if (!successfullyApproved) {
-			log.error("Did not successfully approve user community request for user with id=" +
-			          getUserId() + " even though an admin or community leader approved them.");
-			return;
+			throw new StarExecException("Did not successfully approve user community request for user with id=" +
+			                            getUserId() + " even though an admin or community leader approved them.");
 		}
 
 		final String communityName = Spaces.getName(getCommunityId());

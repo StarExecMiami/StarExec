@@ -168,8 +168,12 @@ public class Reports {
 			ps.setInt(2, occurrences);
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Event '" + eventName + "' not found in reports");
+			} else {
+				log.error("setEventOccurrences", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);

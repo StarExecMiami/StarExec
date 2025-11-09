@@ -2062,24 +2062,42 @@ public class RESTServices {
 		// Finally, update the current session data
 		switch (attribute) {
 		case "firstname":
-			success = Users.updateFirstName(userId, newValue);
-			if (success) {
-				SessionUtil.getUser(request).setFirstName(newValue);
-				messageToUser = "Edit successful.";
+			try {
+				success = Users.updateFirstName(userId, newValue);
+				if (success) {
+					SessionUtil.getUser(request).setFirstName(newValue);
+					messageToUser = "Edit successful.";
+				}
+			} catch (StarExecDatabaseException e) {
+				log.error("Failed to update first name for user " + userId, e);
+				messageToUser = "User not found.";
+				success = false;
 			}
 			break;
 		case "lastname":
-			success = Users.updateLastName(userId, newValue);
-			if (success) {
-				SessionUtil.getUser(request).setLastName(newValue);
-				messageToUser = "Edit successful.";
+			try {
+				success = Users.updateLastName(userId, newValue);
+				if (success) {
+					SessionUtil.getUser(request).setLastName(newValue);
+					messageToUser = "Edit successful.";
+				}
+			} catch (StarExecDatabaseException e) {
+				log.error("Failed to update last name for user " + userId, e);
+				messageToUser = "User not found.";
+				success = false;
 			}
 			break;
 		case "institution":
-			success = Users.updateInstitution(userId, newValue);
-			if (success) {
-				SessionUtil.getUser(request).setInstitution(newValue);
-				messageToUser = "Edit successful.";
+			try {
+				success = Users.updateInstitution(userId, newValue);
+				if (success) {
+					SessionUtil.getUser(request).setInstitution(newValue);
+					messageToUser = "Edit successful.";
+				}
+			} catch (StarExecDatabaseException e) {
+				log.error("Failed to update institution for user " + userId, e);
+				messageToUser = "User not found.";
+				success = false;
 			}
 			break;
 		case "email":
@@ -2125,10 +2143,20 @@ public class RESTServices {
 			}
 			break;
 		case "pagesize":
-
-			success = Users.setDefaultPageSize(userId, Integer.parseInt(newValue));
-			if (success) {
-				messageToUser = "Edit successful.";
+			try {
+				int pageSize = Integer.parseInt(newValue);
+				success = Users.setDefaultPageSize(userId, pageSize);
+				if (success) {
+					messageToUser = "Edit successful.";
+				}
+			} catch (NumberFormatException e) {
+				log.error("Invalid number format for page size for user " + userId + ": " + newValue, e);
+				messageToUser = "Invalid number entered for page size.";
+				success = false;
+			} catch (StarExecDatabaseException e) {
+				log.error("Failed to update page size for user " + userId, e);
+				messageToUser = "User not found.";
+				success = false;
 			}
 			break;
 		}
@@ -2371,6 +2399,9 @@ public class RESTServices {
 
 			// Passed validation AND Database update successful
 			return success ? gson.toJson(new ValidatorStatusCode(true,"Community edit successful")) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(new ValidatorStatusCode(false, "Space not found"));
 		} catch (Exception e) {
 			log.error(e.getMessage(),e);
 			return gson.toJson(ERROR_DATABASE);
@@ -2431,7 +2462,15 @@ public class RESTServices {
 		s.setPermission(p);
 
 		// Perform the update and return information according to success/failure
-		return Spaces.updateDetails(userId, s) ? gson.toJson(new ValidatorStatusCode(true,"Space edit successful")) : gson.toJson(ERROR_DATABASE);
+		try {
+			return Spaces.updateDetails(userId, s) ? gson.toJson(new ValidatorStatusCode(true,"Space edit successful")) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(new ValidatorStatusCode(false, "Space not found"));
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(ERROR_DATABASE);
+		}
 	}
 
 	/**
@@ -2803,9 +2842,14 @@ public class RESTServices {
 				return gson.toJson(status);
 			}
 			for (int id : selectedBenches) {
-				boolean success=Benchmarks.delete(id);
-				if (!success) {
-					return gson.toJson(ERROR_DATABASE);
+				try {
+					boolean success=Benchmarks.delete(id);
+					if (!success) {
+						return gson.toJson(ERROR_DATABASE);
+					}
+				} catch (StarExecDatabaseException e) {
+					log.error("Failed to delete benchmark " + id, e);
+					return gson.toJson(new ValidatorStatusCode(false, "Benchmark not found: " + id));
 				}
 			}
 		} catch (Exception e) {
@@ -3264,11 +3308,16 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 
-		success = Users.deleteUser(userToDeleteId);
-		if (success) {
-			return gson.toJson(new ValidatorStatusCode(true, "The user has been successfully deleted."));
-		} else {
-			return gson.toJson(new ValidatorStatusCode(false, "An internal error occurred while attempting to delete the user."));
+		try {
+			success = Users.deleteUser(userToDeleteId);
+			if (success) {
+				return gson.toJson(new ValidatorStatusCode(true, "The user has been successfully deleted."));
+			} else {
+				return gson.toJson(new ValidatorStatusCode(false, "An internal error occurred while attempting to delete the user."));
+			}
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to delete user " + userToDeleteId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
 		}
 	}
 
@@ -3744,7 +3793,15 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 		// Apply new solver details to database
-		return Solvers.updateDetails(solverId, name, description, isDownloadable) ? gson.toJson(new ValidatorStatusCode(true,"Solver edited successfully")) : gson.toJson(ERROR_DATABASE);
+		try {
+			return Solvers.updateDetails(solverId, name, description, isDownloadable) ? gson.toJson(new ValidatorStatusCode(true,"Solver edited successfully")) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(new ValidatorStatusCode(false, "Solver not found"));
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(ERROR_DATABASE);
+		}
 	}
 
 	/**
@@ -3895,7 +3952,12 @@ public class RESTServices {
 			processorString=". Benchmark is being processed with the new processor";
 		}
 		// Apply new benchmark details to database
-		return Benchmarks.updateDetails(benchId, name, description, isDownloadable, type) ? gson.toJson(new ValidatorStatusCode(true,"Benchmark edited successfully"+processorString)) : gson.toJson(ERROR_DATABASE);
+		try {
+			return Benchmarks.updateDetails(benchId, name, description, isDownloadable, type) ? gson.toJson(new ValidatorStatusCode(true,"Benchmark edited successfully"+processorString)) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to update benchmark details for benchmark " + benchId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "Benchmark not found."));
+		}
 	}
 
 	/**
@@ -3932,10 +3994,15 @@ public class RESTServices {
 		}
 
 		//updatePassword requires the plaintext password
-		if (Users.updatePassword(userId, newPass)) {
-			return gson.toJson(new ValidatorStatusCode(true,"Password edited successfully"));
-		} else {
-			return gson.toJson(ERROR_DATABASE); //Database operation returned false
+		try {
+			if (Users.updatePassword(userId, newPass)) {
+				return gson.toJson(new ValidatorStatusCode(true,"Password edited successfully"));
+			} else {
+				return gson.toJson(ERROR_DATABASE); //Database operation returned false
+			}
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to update password for user " + userId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
 		}
 	}
 
@@ -3984,7 +4051,12 @@ public class RESTServices {
 	    // Update database with new permissions
 	    for(Integer permittedSpaceId : permittedSpaces){
 			if(permittedSpaceId != null){
-			    Permissions.set(userId, permittedSpaceId, newPerm);
+			    if (!Permissions.set(userId, permittedSpaceId, newPerm)) {
+			        log.error("Failed to update permissions for user " + userId + " in space " + permittedSpaceId);
+			        return gson.toJson(new ValidatorStatusCode(false, "Failed to update permissions in one or more spaces"));
+			    }
+			    // Invalidate permission cache for the updated space
+			    SessionUtil.removeCachePermission(request, permittedSpaceId);
 			}
 	    }
 	    return gson.toJson(new ValidatorStatusCode(true,"Permissions edited successfully"));
@@ -4015,7 +4087,12 @@ public class RESTServices {
 		Permission newPerm = createPermissionFromRequest(request);
 
 		// Update database with new permissions
-		return Permissions.set(userId, spaceId, newPerm) ? gson.toJson(new ValidatorStatusCode(true,"Permissions edited successfully")) : gson.toJson(ERROR_DATABASE);
+		if (Permissions.set(userId, spaceId, newPerm)) {
+			// Invalidate permission cache for the updated space
+			SessionUtil.removeCachePermission(request, spaceId);
+			return gson.toJson(new ValidatorStatusCode(true,"Permissions edited successfully"));
+		}
+		return gson.toJson(ERROR_DATABASE);
 	}
 
 	/**
@@ -4055,7 +4132,15 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 		// Apply new solver details to database
-		return Solvers.updateConfigDetails(configId, name, description) ? gson.toJson(new ValidatorStatusCode(true,"Configuration edited successfully")) : gson.toJson(ERROR_DATABASE);
+		try {
+			return Solvers.updateConfigDetails(configId, name, description) ? gson.toJson(new ValidatorStatusCode(true,"Configuration edited successfully")) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(new ValidatorStatusCode(false, "Configuration not found"));
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			return gson.toJson(ERROR_DATABASE);
+		}
 	}
 
 	/**
@@ -4131,6 +4216,9 @@ public class RESTServices {
 				log.error("makeLeader: Failed to set permissions for user " + userId + " in space " + spaceId);
 				return gson.toJson(new ValidatorStatusCode(false, "Failed to update user permissions"));
 			}
+			
+			// Invalidate permission cache for the promoted user
+			SessionUtil.removeCachePermission(request, spaceId);
 
 			//update quotas
 			if (!Users.setDiskQuota(userId, R.CL_DEFAULT_DISK_QUOTA)) {
@@ -4167,6 +4255,10 @@ public class RESTServices {
 		Permission p = Permissions.getFullPermission();
 		p.setLeader(false);
 		boolean success = Permissions.set(userIdBeingDemoted, spaceId, p);
+		if (success) {
+			// Invalidate permission cache for the demoted user
+			SessionUtil.removeCachePermission(request, spaceId);
+		}
 		//note that the desired behavior for quotas when a user is being demoted is to not reduce their quotas
 		//The analogy I was given: "Think of former leaders as retired emperors..."
 		return success ? gson.toJson(new ValidatorStatusCode(true,"User demoted successfully")) : gson.toJson(ERROR_DATABASE);
@@ -4924,6 +5016,9 @@ public class RESTServices {
 		try {
 			Users.subscribeToErrorLogs(userId);
 			return gson.toJson(ERROR_LOG_SUBSCRIPTION_SUCCESS);
+		} catch (StarExecDatabaseException e) {
+			log.error("User not found when subscribing to error logs: " + userId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
 		} catch (SQLException e) {
 			log.error("Caught SQLException while trying to subscribe user to error logs.", e);
 			return gson.toJson(ERROR_DATABASE);
@@ -4950,6 +5045,9 @@ public class RESTServices {
 		try {
 			Users.unsubscribeUserFromErrorLogs(userId);
 			return gson.toJson(new ValidatorStatusCode(true, "User unsubscribed successfully."));
+		} catch (StarExecDatabaseException e) {
+			log.error("User not found when unsubscribing from error logs: " + userId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
 		} catch (SQLException e) {
 			log.error("Caught SQLException while trying to unsubscribe user from error logs.", e);
 			return gson.toJson(ERROR_DATABASE);
@@ -5014,8 +5112,13 @@ public class RESTServices {
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
-		boolean success = Users.changeUserRole(userId, R.DEVELOPER_ROLE_NAME);
-		return success ? gson.toJson(new ValidatorStatusCode(true, "Developer status granted. ")) : gson.toJson(ERROR_DATABASE);
+		try {
+			boolean success = Users.changeUserRole(userId, R.DEVELOPER_ROLE_NAME);
+			return success ? gson.toJson(new ValidatorStatusCode(true, "Developer status granted. ")) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to grant developer status to user " + userId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
+		}
 	}
 
 	/**
@@ -5033,8 +5136,13 @@ public class RESTServices {
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
-		boolean success = Users.changeUserRole(userId, R.DEFAULT_USER_ROLE_NAME);
-		return success ? gson.toJson(new ValidatorStatusCode(true, "Developer status suspended.")) : gson.toJson(ERROR_DATABASE);
+		try {
+			boolean success = Users.changeUserRole(userId, R.DEFAULT_USER_ROLE_NAME);
+			return success ? gson.toJson(new ValidatorStatusCode(true, "Developer status suspended.")) : gson.toJson(ERROR_DATABASE);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to suspend developer status for user " + userId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
+		}
 	}
 
 	/**

@@ -7,6 +7,7 @@ import org.starexec.data.security.SolverSecurity;
 import org.starexec.data.to.*;
 import org.starexec.data.to.enums.CopyPrimitivesOption;
 import org.starexec.exceptions.StarExecException;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -15,6 +16,7 @@ import org.starexec.util.dataStructures.TreeNode;
 
 import java.io.IOException;
 import java.sql.*;
+import org.postgresql.util.PSQLException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -2416,7 +2418,7 @@ public class Spaces {
 	 * @param subspaceId The space to remove
 	 * @return True on success and false otherwise
 	 */
-	public static boolean removeSubspace(int subspaceId) {
+	public static boolean removeSubspace(int subspaceId) throws StarExecDatabaseException {
 		List<Integer> spaceId = new ArrayList<>();
 		spaceId.add(subspaceId);
 		return removeSubspaces(spaceId);
@@ -2431,7 +2433,7 @@ public class Spaces {
 	 * otherwise
 	 * @author Todd Elvers
 	 */
-	public static boolean removeSubspaces(List<Integer> subspaceIds) {
+	public static boolean removeSubspaces(List<Integer> subspaceIds) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
@@ -2458,6 +2460,12 @@ public class Spaces {
 			// Commit changes to database
 			Common.endTransaction(con);
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Space not found: " + subspaceIds, e);
+			}
+			log.error("removeSubspaces", e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error("removeSubspaces", e);
 			Common.doRollback(con);
@@ -2746,7 +2754,7 @@ public class Spaces {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Tyler Jensen
 	 */
-	public static boolean updateDescription(int spaceId, String newDesc) {
+	public static boolean updateDescription(int spaceId, String newDesc) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
@@ -2757,8 +2765,15 @@ public class Spaces {
 			ps.execute();
 			log.info(String.format("Space [%d] updated description to [%s]", spaceId, newDesc));
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Space not found: " + spaceId, e);
+			}
+			log.error("updateDescription", e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error("updateDescription", e);
+			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -2775,7 +2790,7 @@ public class Spaces {
 	 * @return true iff the update is successful
 	 * @author Skylar Stark
 	 */
-	public static boolean updateDetails(int userId, Space s) {
+	public static boolean updateDetails(int userId, Space s) throws StarExecDatabaseException {
 		Connection con = null;
 		boolean success = false;
 		try {
@@ -2803,7 +2818,7 @@ public class Spaces {
 	 * @return true iff the space update is successful
 	 * @author Skylar Stark
 	 */
-	protected static boolean updateDetails(Space s, Connection con) {
+	protected static boolean updateDetails(Space s, Connection con) throws StarExecDatabaseException {
 			PreparedStatement ps = null;
 			ResultSet rs = null;
 			try {
@@ -2822,6 +2837,11 @@ public class Spaces {
 					Permissions.updatePermission(permId, s.getPermission(), con);
 					return true;
 				}
+			} catch (PSQLException e) {
+				if ("P0002".equals(e.getSQLState())) {
+					throw new StarExecDatabaseException("Space not found: " + s.getId(), e);
+				}
+				log.error("updateDetails", e);
 			} catch (Exception e) {
 				log.error("updateDetails", e);
 			} finally {
@@ -2839,7 +2859,7 @@ public class Spaces {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Tyler Jensen
 	 */
-	public static boolean updateName(int spaceId, String newName) {
+	public static boolean updateName(int spaceId, String newName) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
@@ -2850,8 +2870,15 @@ public class Spaces {
 			ps.execute();
 			log.info(String.format("Space [%d] updated name to [%s]", spaceId, newName));
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Space not found: " + spaceId, e);
+			}
+			log.error("updateName", e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error("updateName", e);
+			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);

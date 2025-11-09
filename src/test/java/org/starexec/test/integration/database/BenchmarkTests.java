@@ -7,6 +7,7 @@ import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.to.*;
 import org.starexec.data.to.enums.ProcessorType;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.servlets.UploadBenchmark;
 import org.starexec.test.TestUtil;
@@ -140,7 +141,7 @@ public class BenchmarkTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void AssociateBenchmarksTest() {
+	private void AssociateBenchmarksTest() throws StarExecDatabaseException {
 		Space subspace=loader.loadSpaceIntoDatabase(user.getId(), space.getId());
 		List<Integer> ids= new ArrayList<>();
 		for (Benchmark b : benchmarks) {
@@ -212,7 +213,7 @@ public class BenchmarkTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void updateDetailsTest() {
+	private void updateDetailsTest() throws StarExecDatabaseException {
 		Benchmark b=benchmarks.get(0);
 		String newName=TestUtil.getRandomSolverName();
 		String newDesc=TestUtil.getRandomSolverName();
@@ -230,7 +231,7 @@ public class BenchmarkTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void deleteBenchTest() {
+	private void deleteBenchTest() throws StarExecDatabaseException {
 		List<Integer> ids=loader.loadBenchmarksIntoDatabase("benchmarks.zip", scratchSpace.getId(), user.getId());
 		for (Integer id : ids) {
 			Assert.assertNotNull(Benchmarks.get(id));
@@ -365,7 +366,7 @@ public class BenchmarkTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void cleanDeletedOrphanedBenchmarksTest() {
+	private void cleanDeletedOrphanedBenchmarksTest() throws StarExecDatabaseException {
 		List<Integer> benchIds = loader.loadBenchmarksIntoDatabase(space.getId(), user.getId());
 		for (int id : benchIds) {
 			Benchmarks.delete(id);
@@ -474,7 +475,7 @@ public class BenchmarkTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void isPublicInPublicSpaceTest() {
+	private void isPublicInPublicSpaceTest() throws StarExecDatabaseException {
 		Space newSpace = loader.loadSpaceIntoDatabase(user.getId(), space.getId());
 		Spaces.setPublicSpace(newSpace.getId(), user.getId(), true, false);
 		int id = benchmarks.get(0).getId();

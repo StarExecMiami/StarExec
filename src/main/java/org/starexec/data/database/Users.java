@@ -10,6 +10,7 @@ import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.Benchmark;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecSecurityException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.*;
@@ -18,6 +19,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import org.postgresql.util.PSQLException;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -93,7 +95,7 @@ public class Users {
 	 * @param newSize the number of elements in a default table page
 	 * @return True on success and false otherwise
 	 */
-	public static boolean setDefaultPageSize(int userId, int newSize) {
+	public static boolean setDefaultPageSize(int userId, int newSize) throws StarExecDatabaseException {
 		Connection con = null;
 		java.sql.PreparedStatement procedure = null;
 
@@ -104,6 +106,11 @@ public class Users {
 			procedure.setInt(2, newSize);
 			procedure.execute();
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -640,7 +647,7 @@ public class Users {
 	 * @param userId the user to subscribe.
 	 * @throws SQLException on database error.
 	 */
-	public static void subscribeToErrorLogs(int userId) throws SQLException {
+	public static void subscribeToErrorLogs(int userId) throws SQLException, StarExecDatabaseException {
 		Connection con = null;
 		java.sql.PreparedStatement ps = null;
 		try {
@@ -648,6 +655,11 @@ public class Users {
 			ps = con.prepareStatement("SELECT starexec.SubscribeUserToErrorLogs(?)");
 			ps.setInt(1, userId);
 			ps.execute();
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			throw e;
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -660,7 +672,7 @@ public class Users {
 	 * @param userId the user to unsubscribe.
 	 * @throws SQLException on database error.
 	 */
-	public static void unsubscribeUserFromErrorLogs(int userId) throws SQLException {
+	public static void unsubscribeUserFromErrorLogs(int userId) throws SQLException, StarExecDatabaseException {
 		Connection con = null;
 		java.sql.PreparedStatement ps = null;
 		try {
@@ -668,6 +680,11 @@ public class Users {
 			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserFromErrorLogs(?)");
 			ps.setInt(1, userId);
 			ps.execute();
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			throw e;
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -991,8 +1008,12 @@ public class Users {
 			procedure.execute();
 
 			return true;
-		} catch (Exception e) {
-			log.error("there was a problem setting pair quota" + e.getMessage());
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("User " + userId + " not found");
+			} else {
+				log.error("setPairQuota", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1025,8 +1046,12 @@ public class Users {
 			);
 
 			return true;
-		} catch (Exception e) {
-			log.error("setDiskQuota", e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("User " + userId + " not found");
+			} else {
+				log.error("setDiskQuota", e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1049,7 +1074,7 @@ public class Users {
 	 * @param newValue what the email address will be updated to
 	 * @author Skylar Stark
 	 */
-	public static void updateEmail(int userId, String newValue) {
+	public static void updateEmail(int userId, String newValue) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -1060,6 +1085,11 @@ public class Users {
 
 			procedure.execute();
 			log.info("User [" + userId + "] updated e-mail address to [" + newValue + "]");
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -1076,7 +1106,7 @@ public class Users {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Skylar Stark
 	 */
-	public static boolean updateFirstName(int userId, String newValue) {
+	public static boolean updateFirstName(int userId, String newValue) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -1088,6 +1118,11 @@ public class Users {
 			procedure.execute();
 			log.info("User [" + userId + "] updated first name to [" + newValue + "]");
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -1106,7 +1141,7 @@ public class Users {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Skylar Stark
 	 */
-	public static boolean updateInstitution(int userId, String newValue) {
+	public static boolean updateInstitution(int userId, String newValue) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -1118,6 +1153,11 @@ public class Users {
 			procedure.execute();
 			log.info("User [" + userId + "] updated institution to [" + newValue + "]");
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -1136,7 +1176,7 @@ public class Users {
 	 * @return true iff the update succeeds on exactly one entry
 	 * @author Skylar Stark
 	 */
-	public static boolean updateLastName(int userId, String newValue) {
+	public static boolean updateLastName(int userId, String newValue) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -1148,6 +1188,11 @@ public class Users {
 			procedure.execute();
 			log.info("User [" + userId + "] updated last name to [" + newValue + "]");
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -1167,7 +1212,7 @@ public class Users {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Skylar Stark
 	 */
-	public static boolean updatePassword(int userId, String newValue) {
+	public static boolean updatePassword(int userId, String newValue) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -1180,6 +1225,11 @@ public class Users {
 			procedure.execute();
 			log.info("User [" + userId + "] updated password");
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -1197,7 +1247,7 @@ public class Users {
 	 * @return True on success, false on error
 	 * @throws StarExecSecurityException if user making request cannot delete user.
 	 */
-	public static boolean deleteUser(int userToDeleteId) {
+	public static boolean deleteUser(int userToDeleteId) throws StarExecDatabaseException {
 		log.debug("User with id=" + userToDeleteId + " is about to be deleted");
 		Connection con = null;
 		PreparedStatement procedure = null;
@@ -1231,6 +1281,11 @@ public class Users {
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userToDeleteId, e);
+			}
+			log.error("deleteUser", e);
 		} catch (Exception e) {
 			log.error("deleteUser", e);
 		} finally {
@@ -1654,7 +1709,7 @@ public class Users {
 	 * @param role The role to give the user
 	 * @return True on success and false otherwise
 	 */
-	public static boolean changeUserRole(int userId, String role) {
+	public static boolean changeUserRole(int userId, String role) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement stmt = null;
 		try {
@@ -1669,6 +1724,12 @@ public class Users {
 			invalidateIsAdminCache(userId);
 
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			Common.doRollback(con);
@@ -1686,7 +1747,7 @@ public class Users {
 	 * @param willBeSubscribed True to subscribe and false to unsubscribe
 	 * @return True on success and false otherwise
 	 */
-	private static boolean setUserReportSubscription(int userId, Boolean willBeSubscribed) {
+	private static boolean setUserReportSubscription(int userId, Boolean willBeSubscribed) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement stmt = null;
 		try {
@@ -1697,6 +1758,12 @@ public class Users {
 			stmt.setBoolean(2, willBeSubscribed);
 			stmt.execute();
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("User not found: " + userId, e);
+			}
+			log.error(e.getMessage(), e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			Common.doRollback(con);
@@ -1716,7 +1783,12 @@ public class Users {
 	 * @return True on success or false otherwise
 	 */
 	public static boolean suspend(int userId) {
-		return changeUserRole(userId, R.SUSPENDED_ROLE_NAME);
+		try {
+			return changeUserRole(userId, R.SUSPENDED_ROLE_NAME);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to suspend user: " + userId, e);
+			return false;
+		}
 	}
 
 	/**
@@ -1726,7 +1798,12 @@ public class Users {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean reinstate(int userId) {
-		return changeUserRole(userId, R.DEFAULT_USER_ROLE_NAME);
+		try {
+			return changeUserRole(userId, R.DEFAULT_USER_ROLE_NAME);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to reinstate user: " + userId, e);
+			return false;
+		}
 	}
 
 	/**
@@ -1736,7 +1813,12 @@ public class Users {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean subscribeToReports(int userId) {
-		return setUserReportSubscription(userId, true);
+		try {
+			return setUserReportSubscription(userId, true);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to subscribe user to reports: " + userId, e);
+			return false;
+		}
 	}
 
 	/**
@@ -1746,7 +1828,12 @@ public class Users {
 	 * @return True on success and false otherwise
 	 */
 	public static boolean unsubscribeFromReports(int userId) {
-		return setUserReportSubscription(userId, false);
+		try {
+			return setUserReportSubscription(userId, false);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to unsubscribe user from reports: " + userId, e);
+			return false;
+		}
 	}
 
 	/**

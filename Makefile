@@ -499,7 +499,7 @@ clean-hard:
 		echo "✓ Removed all images"
 	@podman volume ls -q | xargs -r podman volume rm -f 2>/dev/null || true && \
 		echo "✓ Removed all volumes"
-	@podman network ls --filter "driver!=bridge" --format "{{.Name}}" | xargs -r podman network rm 2>/dev/null || true && \
+	@podman network ls --format "{{.Name}}" | grep -v "^bridge$$" | grep -v "^podman$$" | xargs -r podman network rm 2>/dev/null || true && \
 		echo "✓ Removed  networks"
 	@podman builder prune -a -f 2>/dev/null || true && \
 		echo "✓ Cleared builder cache"

@@ -165,8 +165,12 @@ public class Requests {
 
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Community request for user " + userId + " and community " + communityId + " not found");
+			} else {
+				log.error("approveCommunityRequest", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -195,8 +199,12 @@ public class Requests {
 
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Community request for user " + userId + " and community " + communityId + " not found");
+			} else {
+				log.error("declineCommunityRequest", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);

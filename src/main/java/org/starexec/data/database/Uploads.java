@@ -142,8 +142,12 @@ public class Uploads {
 				Common.safeClose(ps);
 				Common.safeClose(con);
 			}
-		} catch (Exception e) {
-			log.error("XMLEverythingComplete", e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Upload status " + statusId + " not found");
+			} else {
+				log.error("XMLEverythingComplete", e);
+			}
 		}
 		return false;
 	}

@@ -20,6 +20,7 @@ import org.starexec.data.to.pipelines.PipelineDependency.PipelineInputType;
 import org.starexec.data.to.pipelines.PipelineStage;
 import org.starexec.data.to.pipelines.SolverPipeline;
 import org.starexec.data.to.pipelines.StageAttributes.SaveResultsOption;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.jobs.JobManager;
 import org.starexec.logger.StarLogger;
 import org.starexec.servlets.UploadBenchmark;
@@ -83,16 +84,28 @@ public class ResourceLoader implements AutoCloseable {
 			Benchmarks.deleteAndRemoveBenchmark(i);
 		}
 		for (Integer i :createdSolverIds) {
-			Solvers.deleteAndRemoveSolver(i);
+			try {
+				Solvers.deleteAndRemoveSolver(i);
+			} catch (StarExecDatabaseException e) {
+				log.warn("Could not delete solver with id: " + i);
+			}
 		}
 		for (Integer i : createdProcessorIds) {
 			Processors.delete(i);
 		}
 		for (Integer i : createdSpaceIds) {
-			Spaces.removeSubspace(i);
+			try {
+				Spaces.removeSubspace(i);
+			} catch (StarExecDatabaseException e) {
+				log.warn("Could not remove subspace with id: " + i);
+			}
 		}
 		for (Integer i : createdUserIds) {
-			Users.deleteUser(i);
+			try {
+				Users.deleteUser(i);
+			} catch (StarExecDatabaseException e) {
+				log.warn("Could not delete user with id: " + i);
+			}
 		}
 		for (Integer i : createdQueueIds) {
 			Queues.removeQueue(i);

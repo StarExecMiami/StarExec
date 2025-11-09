@@ -5,6 +5,7 @@ import org.starexec.data.database.Requests;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.User;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Mail;
 import org.starexec.util.Util;
@@ -45,9 +46,14 @@ public class PasswordReset extends HttpServlet {
 				if (userId > 0) {
 					String tempPass = Util.getTempPassword();
 					request.getSession().setAttribute("pwd", tempPass);
-					if (Users.updatePassword(userId, tempPass)) {
-						log.debug(String.format("Temporary password successfully set for user id [%d]", userId));
-						response.sendRedirect(Util.docRoot("public/temp_pass.jsp"));
+					try {
+						if (Users.updatePassword(userId, tempPass)) {
+							log.debug(String.format("Temporary password successfully set for user id [%d]", userId));
+							response.sendRedirect(Util.docRoot("public/temp_pass.jsp"));
+						}
+					} catch (StarExecDatabaseException e) {
+						log.error("Failed to update password for user " + userId, e);
+						response.sendRedirect(Util.docRoot("public/password_reset.jsp?result=error"));
 					}
 				} else {
 					// Hyperlinks can only be visited once; notify user this hyperlink has expired

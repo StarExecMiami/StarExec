@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.to.*;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
@@ -112,7 +113,7 @@ public class PermissionsTests extends TestSequence {
 	
 	
 	@StarexecTest
-	private void GetSpaceDefaultTest() {
+	private void GetSpaceDefaultTest() throws StarExecDatabaseException {
 		space.getPermission().setAddSolver(true);
 		space.getPermission().setAddSpace(false);
 		Spaces.updateDetails(owner.getId(), space);
@@ -168,6 +169,94 @@ public class PermissionsTests extends TestSequence {
 		Assert.assertFalse(newPerms.canRemoveBench());
 		Assert.assertEquals(2, newPerms.getOffPermissions().size());
 		Assert.assertTrue(Permissions.set(spaceMember.getId(), space.getId(), oldPerms));
+	}
+
+	@StarexecTest
+	private void permissionUpsertBehaviorTest() {
+		// Test that SetUserPermissions2 correctly handles INSERT...ON CONFLICT for both new and existing records
+		User testUser = null;
+		try {
+			testUser = Users.get(owner.getId()); // Use existing user
+			
+			// Set permissions first time (should work with INSERT...ON CONFLICT)
+			Permission perm1 = Permissions.getFullPermission();
+			boolean firstSet = Permissions.set(testUser.getId(), space.getId(), perm1);
+			Assert.assertTrue("First permission set should succeed", firstSet);
+			
+			// Retrieve and verify
+			Permission retrieved1 = Permissions.get(testUser.getId(), space.getId());
+			Assert.assertNotNull("Permission should exist after first set", retrieved1);
+			Assert.assertTrue("Should have leader permission", retrieved1.isLeader());
+			
+			// Update permissions second time (should work with INSERT...ON CONFLICT DO UPDATE)
+			Permission perm2 = Permissions.getFullPermission();
+			perm2.setAddJob(false);
+			boolean secondSet = Permissions.set(testUser.getId(), space.getId(), perm2);
+			Assert.assertTrue("Second permission set should succeed", secondSet);
+			
+			// Retrieve and verify update persisted
+			Permission retrieved2 = Permissions.get(testUser.getId(), space.getId());
+			Assert.assertNotNull("Permission should exist after update", retrieved2);
+			Assert.assertFalse("Updated permission should persist", retrieved2.canAddJob());
+		} catch (Exception e) {
+			Assert.fail("Upsert test failed: " + e.getMessage());
+		}
+	}
+
+	@StarexecTest
+	private void permissionUpdateReturnValueTest() {
+		// Test that permission update return values are properly handled
+		User testUser = null;
+		try {
+			testUser = Users.get(spaceMember.getId());
+			
+			// Update permissions and verify return value
+			Permission newPerm = Permissions.getFullPermission();
+			newPerm.setRemoveSolver(false);
+			
+			boolean updateResult = Permissions.set(testUser.getId(), space.getId(), newPerm);
+			Assert.assertTrue("Permission update should return true on success", updateResult);
+			
+			// Verify the update actually persisted
+			Permission retrieved = Permissions.get(testUser.getId(), space.getId());
+			Assert.assertFalse("Permission modification should persist in database", retrieved.canRemoveSolver());
+		} catch (Exception e) {
+			Assert.fail("Permission update return value test failed: " + e.getMessage());
+		}
+	}
+
+	@StarexecTest
+	private void multiplePermissionUpdatesTest() {
+		// Test that multiple sequential updates to same user/space work correctly
+		try {
+			User testUser = Users.get(spaceMember.getId());
+			
+			// First update
+			Permission perm1 = Permissions.getFullPermission();
+			perm1.setAddJob(true);
+			perm1.setAddSolver(false);
+			Permissions.set(testUser.getId(), space.getId(), perm1);
+			
+			Permission retrieved1 = Permissions.get(testUser.getId(), space.getId());
+			Assert.assertTrue("First update: canAddJob", retrieved1.canAddJob());
+			Assert.assertFalse("First update: !canAddSolver", retrieved1.canAddSolver());
+			
+			// Second update to different state
+			Permission perm2 = Permissions.getFullPermission();
+			perm2.setAddJob(false);
+			perm2.setAddSolver(true);
+			Permissions.set(testUser.getId(), space.getId(), perm2);
+			
+			Permission retrieved2 = Permissions.get(testUser.getId(), space.getId());
+			Assert.assertFalse("Second update: !canAddJob", retrieved2.canAddJob());
+			Assert.assertTrue("Second update: canAddSolver", retrieved2.canAddSolver());
+			
+			// Reset to original state
+			Permission original = Permissions.getFullPermission();
+			Permissions.set(testUser.getId(), space.getId(), original);
+		} catch (Exception e) {
+			Assert.fail("Multiple updates test failed: " + e.getMessage());
+		}
 	}
 
 	@StarexecTest

@@ -12,6 +12,7 @@ import org.starexec.data.to.Benchmark;
 import org.starexec.data.to.BenchmarkUploadStatus;
 import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
@@ -133,7 +134,7 @@ public class BenchmarkSecurityTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void canViewBenchmarkContentsTest() {
+	private void canViewBenchmarkContentsTest() throws StarExecDatabaseException {
 		Benchmark b=Benchmarks.get(benchmarkIds.get(0));
 		//first, do the test with "downloadable" set to false
 		Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), false, b.getType().getId());

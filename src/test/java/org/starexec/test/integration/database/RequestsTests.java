@@ -85,7 +85,7 @@ public class RequestsTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void approveCommunityRequestTest() {
+	private void approveCommunityRequestTest() throws StarExecDatabaseException {
 		User tempUser=loader.loadUserIntoDatabase();
 		CommunityRequest tempRequest=loader.loadCommunityRequestIntoDatabase(tempUser.getId(), comm.getId());
 		Assert.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
@@ -97,7 +97,7 @@ public class RequestsTests extends TestSequence {
 	}
 	
 	@StarexecTest
-	private void declineCommunityRequestTest() {
+	private void declineCommunityRequestTest() throws StarExecDatabaseException {
 		User tempUser=loader.loadUserIntoDatabase();
 		CommunityRequest tempRequest=loader.loadCommunityRequestIntoDatabase(tempUser.getId(), comm.getId());
 		Assert.assertFalse(Users.isMemberOfCommunity(tempUser.getId(), comm.getId()));
