@@ -2144,10 +2144,15 @@ public class RESTServices {
 			break;
 		case "pagesize":
 			try {
-				success = Users.setDefaultPageSize(userId, Integer.parseInt(newValue));
+				int pageSize = Integer.parseInt(newValue);
+				success = Users.setDefaultPageSize(userId, pageSize);
 				if (success) {
 					messageToUser = "Edit successful.";
 				}
+			} catch (NumberFormatException e) {
+				log.error("Invalid number format for page size for user " + userId + ": " + newValue, e);
+				messageToUser = "Invalid number entered for page size.";
+				success = false;
 			} catch (StarExecDatabaseException e) {
 				log.error("Failed to update page size for user " + userId, e);
 				messageToUser = "User not found.";
