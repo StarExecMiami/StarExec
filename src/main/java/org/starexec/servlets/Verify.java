@@ -9,6 +9,7 @@ import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.CommunityRequest;
 import org.starexec.data.to.User;
 import org.starexec.exceptions.StarExecDatabaseException;
+import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.Mail;
 import org.starexec.util.SessionUtil;
@@ -118,8 +119,13 @@ public class Verify extends HttpServlet {
 		String status = "";
 		switch (verdict) {
 		case Web.APPROVE_COMMUNITY_REQUEST:
-			comRequest.approve();
-			status = "The user has been successfully approved.";
+			try {
+				comRequest.approve();
+				status = "The user has been successfully approved.";
+			} catch (StarExecException e) {
+				log.error("Failed to approve community request", e);
+				status = "Failed to approve the user.";
+			}
 			break;
 		case Web.DECLINE_COMMUNITY_REQUEST:
 			comRequest.decline();

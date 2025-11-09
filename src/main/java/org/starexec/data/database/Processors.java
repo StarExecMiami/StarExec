@@ -345,7 +345,11 @@ public class Processors {
 			ps.execute();
 			return true;
 		} catch (SQLException e) {
-			log.error("updateDescription", e.getMessage(), e);
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Processor " + processorId + " not found");
+			} else {
+				log.error("updateDescription", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -384,7 +388,11 @@ public class Processors {
 			ps.execute();
 			return true;
 		} catch (SQLException e) {
-			log.error("updateFilePath", e.getMessage(), e);
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Processor " + processorId + " not found");
+			} else {
+				log.error("updateFilePath", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -411,7 +419,11 @@ public class Processors {
 			ps.execute();
 			return true;
 		} catch (SQLException e) {
-			log.error("updateName", e.getMessage(), e);
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Processor " + processorId + " not found");
+			} else {
+				log.error("updateName", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -430,7 +442,11 @@ public class Processors {
 			ps.execute();
 			return true;
 		} catch (SQLException e) {
-			log.error("updateTimeLimit", e.getMessage(), e);
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Processor " + processorId + " not found");
+			} else {
+				log.error("updateTimeLimit", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);

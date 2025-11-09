@@ -8,6 +8,7 @@ import org.starexec.data.to.*;
 import org.starexec.data.to.compare.BenchmarkComparator;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.exceptions.StarExecValidationException;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.servlets.UploadBenchmark;
 import org.starexec.util.*;
@@ -20,6 +21,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import org.postgresql.util.PSQLException;
 import java.util.*;
 import java.util.function.Supplier;
 import java.nio.charset.StandardCharsets;
@@ -37,7 +39,12 @@ public class Benchmarks {
 
 		boolean success = true;
 		if (!b.isDeleted()) {
-			success = Benchmarks.delete(id);
+			try {
+				success = Benchmarks.delete(id);
+			} catch (StarExecDatabaseException e) {
+				log.error("Failed to delete benchmark " + id, e);
+				return false;
+			}
 		}
 		if (!success) {
 			log.warn("there was an error deleting benchmark with id = " + id);
@@ -47,6 +54,9 @@ public class Benchmarks {
 		try {
 			con = Common.getConnection();
 			return Benchmarks.removeBenchmarkFromDatabase(id, con);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to remove benchmark from database: " + id, e);
+			return false;
 		} catch (Exception e) {
 			log.error("deleteAndRemoveBenchmark", e);
 		} finally {
@@ -691,7 +701,7 @@ public class Benchmarks {
 	 * @param con The open connection to make the SQL call on
 	 * @return True on success and false otherwise
 	 */
-	private static boolean removeBenchmarkFromDatabase(int benchId, Connection con) {
+	private static boolean removeBenchmarkFromDatabase(int benchId, Connection con) throws StarExecDatabaseException {
 		log.debug("got request permanently remove this benchmark from the database " + benchId);
 		PreparedStatement procedure = null;
 		try {
@@ -699,8 +709,13 @@ public class Benchmarks {
 			procedure.setInt(1, benchId);
 			procedure.execute();
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Benchmark not found: " + benchId, e);
+			}
+			log.error("removeBenchmarkFromDatabase", e);
 		} catch (Exception e) {
-			log.error("removeBenchmarkFromDatabaseremoveBenchmarkFromDatabase", e);
+			log.error("removeBenchmarkFromDatabase", e);
 		} finally {
 			Common.safeClose(procedure);
 		}
@@ -750,7 +765,12 @@ public class Benchmarks {
 				}
 				// the benchmark has been deleted AND it is not associated with any spaces or job pairs
 				if (!parentedBenchmarks.contains(b.getId())) {
-					removeBenchmarkFromDatabase(b.getId(), con);
+					try {
+						removeBenchmarkFromDatabase(b.getId(), con);
+					} catch (StarExecDatabaseException e) {
+						log.error("Failed to remove orphaned benchmark from database: " + b.getId(), e);
+						// Continue with other benchmarks
+					}
 				}
 			}
 			return true;
@@ -846,7 +866,7 @@ public class Benchmarks {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Todd Elvers
 	 */
-	public static boolean delete(int id) {
+	public static boolean delete(int id) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		ResultSet results = null;
@@ -863,8 +883,15 @@ public class Benchmarks {
 				return Util.safeDeleteFileAndEmptyParents(removed, R.getBenchmarkPath());
 			}
 			return false;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Benchmark not found: " + id, e);
+			}
+			log.error("delete", e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error("delete", e);
+			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
@@ -2199,7 +2226,7 @@ public class Benchmarks {
 	 */
 	public static boolean updateDetails(
 			int id, String name, String description, boolean isDownloadable, int benchTypeId
-	) {
+	) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -2213,8 +2240,15 @@ public class Benchmarks {
 			procedure.execute();
 			log.debug(String.format("Benchmark [id=%d] was successfully updated.", id));
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Benchmark not found: " + id, e);
+			}
+			log.error("updateDetails", e);
+			Common.doRollback(con);
 		} catch (Exception e) {
 			log.error("updateDetails", e);
+			Common.doRollback(con);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -2434,7 +2468,12 @@ public class Benchmarks {
 					return false;
 				}
 				//updates the type of the benchmark with the new processor
-				Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), b.isDownloadable(), p.getId());
+				try {
+					Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), b.isDownloadable(), p.getId());
+				} catch (StarExecDatabaseException e) {
+					log.error("Failed to update benchmark details for benchmark " + b.getId(), e);
+					return false;
+				}
 
 				incrementCounter++;
 				if (timer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {

@@ -542,8 +542,12 @@ public class Settings {
 			ps.setInt(1, id);
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Settings profile " + id + " not found");
+			} else {
+				log.error("deleteProfile", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -599,8 +603,13 @@ public class Settings {
 			ps.setInt(1, id);
 			ps.setLong(2, bytes);
 			ps.execute();
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Settings profile " + id + " not found");
+			} else {
+				log.error("setDefaultMaxMemory", e.getMessage(), e);
+			}
+			return false;
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -627,8 +636,12 @@ public class Settings {
 			ps.setInt(2, settingId);
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("User " + userId + " or settings profile " + settingId + " not found");
+			} else {
+				log.error("setDefaultProfileForUser", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -700,8 +713,12 @@ public class Settings {
 
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Settings profile " + id + " not found");
+			} else {
+				log.error("updateSettingsProfile", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);

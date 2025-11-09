@@ -432,8 +432,12 @@ public class JobPairs {
 			ps.setInt(2, increment);
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Job " + jobId + " not found");
+			} else {
+				log.error("incrementTotalJobPairsForJob", e.getMessage(), e);
+			}
 		} finally {
 			Common.safeClose(ps);
 		}

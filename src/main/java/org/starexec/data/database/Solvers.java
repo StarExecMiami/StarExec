@@ -8,11 +8,14 @@ import org.starexec.constants.R;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Solver.ExecutableType;
 import org.starexec.data.to.compare.SolverComparator;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 import org.starexec.util.Util;
+
+import org.postgresql.util.PSQLException;
 
 import java.io.File;
 import java.sql.*;
@@ -323,7 +326,7 @@ public class Solvers {
 	 * @param con The open connection to make the SQL call on
 	 * @return True on success and false otherwise
 	 */
-	private static boolean removeSolverFromDatabase(int solverId, Connection con) {
+	private static boolean removeSolverFromDatabase(int solverId, Connection con) throws StarExecDatabaseException {
 		final String methodName = "removeSolverFromDatabase";
 		log.trace("got request permanently remove this solver from the database " + solverId);
 		PreparedStatement ps = null;
@@ -332,6 +335,12 @@ public class Solvers {
 			ps.setInt(1, solverId);
 			ps.execute();
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Solver not found: " + solverId, e);
+			}
+			log.error(methodName, e.getMessage(), e);
+			return false;
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 			return false;
@@ -391,6 +400,8 @@ public class Solvers {
 				}
 			}
 			return true;
+		} catch (StarExecDatabaseException e) {
+			log.error(methodName, e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
@@ -477,7 +488,7 @@ public class Solvers {
 	 * @param id
 	 * @return True on success and false otherwise.
 	 */
-	public static boolean deleteAndRemoveSolver(int id) {
+	public static boolean deleteAndRemoveSolver(int id) throws StarExecDatabaseException {
 		final String methodName = "deleteAndRemoveSolver";
 		Solver s = Solvers.getIncludeDeleted(id);
 		if (s == null) {
@@ -561,7 +572,7 @@ public class Solvers {
 	 * @return true iff the configuration is successfully deleted from the database, false otherwise
 	 * @author Todd Elvers
 	 */
-	public static boolean deleteConfiguration(int configId) {
+	public static boolean deleteConfiguration(int configId) throws StarExecDatabaseException {
 		final String methodName = "deleteConfiguration";
 	Connection con = null;
 	PreparedStatement ps = null;
@@ -575,6 +586,13 @@ public class Solvers {
 			log.info(String.format("Configuration %d has been successfully deleted from the database.", configId));
 
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Configuration not found: " + configId, e);
+			}
+			String message = String.format("Configuration %d has failed to be deleted from the database.", configId);
+			log.error(methodName, message, e);
+			return false;
 		} catch (Exception e) {
 			String message = String.format("Configuration %d has failed to be deleted from the database.", configId);
 			log.error(methodName, message, e);
@@ -2242,8 +2260,12 @@ public class Solvers {
 			ps.setBoolean(2, state);
 			ps.execute();
 			return true;
-		} catch (Exception e) {
-			log.error(methodName, e.getMessage(), e);
+		} catch (SQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				log.warn("Solver " + id + " not found");
+			} else {
+				log.error(methodName, e.getMessage(), e);
+			}
 			return false;
 		} finally {
 			Common.safeClose(con);
@@ -2260,7 +2282,7 @@ public class Solvers {
 	 * @return true iff the configuration file is successfully updated, false otherwise
 	 * @author Todd Elvers
 	 */
-	public static boolean updateConfigDetails(int configId, String name, String description) {
+	public static boolean updateConfigDetails(int configId, String name, String description) throws StarExecDatabaseException {
 		final String methodName = "updateConfigDetails";
 		Connection con = null;
 		PreparedStatement ps = null;
@@ -2281,6 +2303,12 @@ public class Solvers {
 				log.info(String.format("Configuration [%s] has been successfully updated.", name));
 				return true;
 			}
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Configuration not found: " + configId, e);
+			}
+			String message = String.format("Configuration [%s] failed to update properly.", name);
+			log.error(methodName, message, e);
 		} catch (Exception e) {
 			String message = String.format("Configuration [%s] failed to update properly.", name);
 			log.error(methodName, message, e);
@@ -2347,7 +2375,7 @@ public class Solvers {
 	 * @return True if the operation was a success, false otherwise
 	 * @author Todd Elvers
 	 */
-	public static boolean updateDetails(int id, String name, String description, boolean isDownloadable) {
+	public static boolean updateDetails(int id, String name, String description, boolean isDownloadable) throws StarExecDatabaseException {
 		final String methodName = "updateDetails";
 		Connection con = null;
 		PreparedStatement ps = null;
@@ -2363,6 +2391,13 @@ public class Solvers {
 			log.debug(String.format("Solver [id=%d] was successfully updated.", id));
 
 			return true;
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Solver not found: " + id, e);
+			}
+			String message = String.format("Solver [id=%d] failed to be updated.", id);
+			log.error(methodName, message, e);
+			return false;
 		} catch (Exception e) {
 			String message = String.format("Solver [id=%d] failed to be updated.", id);
 			log.error(methodName, message, e);
@@ -2380,7 +2415,7 @@ public class Solvers {
 	 * @param s the solver object containing the new disk size to set
 	 * @author Todd Elvers
 	 */
-	private static void updateSolverDiskSize(Connection con, Solver s) {
+	private static void updateSolverDiskSize(Connection con, Solver s) throws StarExecDatabaseException {
 		final String methodName = "updateSolverDiskSize";
 		PreparedStatement ps = null;
 		try {
@@ -2394,6 +2429,11 @@ public class Solvers {
 			ps.setLong(2, s.getDiskSize());
 
 			ps.executeUpdate();
+		} catch (PSQLException e) {
+			if ("P0002".equals(e.getSQLState())) {
+				throw new StarExecDatabaseException("Solver not found: " + s.getId(), e);
+			}
+			log.error(methodName, e.getMessage(), e);
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
@@ -2408,7 +2448,7 @@ public class Solvers {
 	 * @return true iff the solver's size was successfully updated, false otherwise
 	 * @author Todd Elvers
 	 */
-	public static boolean updateSolverDiskSize(Solver solver) {
+	public static boolean updateSolverDiskSize(Solver solver) throws StarExecDatabaseException {
 		final String methodName = "updateSolverDiskSize";
 		Connection con = null;
 		try {
