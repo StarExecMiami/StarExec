@@ -202,6 +202,11 @@ DECLARE
 	_benchId INT;
 BEGIN
 	UPDATE users SET disk_size = disk_size + _diskSize WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 	INSERT INTO benchmarks (user_id, name, bench_type, uploaded, path, downloadable, disk_size, description)
 	VALUES (_userId, _name, _typeId, CURRENT_TIMESTAMP, _path, _downloadable, _diskSize, _description)
 	RETURNING id INTO _benchId;
@@ -217,6 +222,11 @@ DECLARE
 	_benchId INT;
 BEGIN
 	UPDATE users SET disk_size = disk_size + _diskSize WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 	INSERT INTO benchmarks (user_id, name, bench_type, uploaded, path, downloadable, disk_size)
 	VALUES (_userId, _name, _typeId, CURRENT_TIMESTAMP, _path, _downloadable, _diskSize)
 	RETURNING id INTO _benchId;
@@ -346,6 +356,12 @@ BEGIN
 	UPDATE benchmarks
 	SET deleted = true, disk_size = 0
 	WHERE id = _benchmarkId;
+	
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Benchmark %s not found', _benchmarkId);
+	END IF;
 
 	RETURN _path;
 END;
@@ -539,6 +555,11 @@ BEGIN
 		downloadable = _downloadable,
 		bench_type = _type
 	WHERE id = _benchmarkId;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Benchmark %s not found', _benchmarkId);
+	END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -577,6 +598,11 @@ CREATE OR REPLACE FUNCTION starexec.SetBenchmarkRecycledValue(_benchId INT, _rec
 RETURNS VOID AS $$
 BEGIN
 	UPDATE benchmarks SET recycled = _recycled WHERE id = _benchId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark %s not found', _benchId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -654,6 +680,11 @@ CREATE OR REPLACE FUNCTION starexec.RestoreBenchmark(_benchId INT)
 RETURNS VOID AS $$
 BEGIN
 	UPDATE benchmarks SET recycled = false WHERE id = _benchId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark %s not found', _benchId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -662,8 +693,19 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.ClearBenchAttributes(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.ClearBenchAttributes(_benchId INT)
 RETURNS VOID AS $$
+DECLARE
+    _deleted_count INT := 0;
 BEGIN
 	DELETE FROM starexec.bench_attributes WHERE bench_id = _benchId;
+    GET DIAGNOSTICS _deleted_count = ROW_COUNT;
+    IF _deleted_count = 0 THEN
+        -- Check if benchmark exists
+        IF NOT EXISTS(SELECT 1 FROM starexec.benchmarks WHERE id = _benchId) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Benchmark %s not found', _benchId);
+        END IF;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -701,6 +743,11 @@ CREATE OR REPLACE FUNCTION starexec.RemoveBenchmarkFromDatabase(_id INT)
 RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.benchmarks WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -902,6 +949,11 @@ CREATE OR REPLACE FUNCTION starexec.UpdateQueueStatus(_name VARCHAR(64), _status
 RETURNS VOID AS $$
 BEGIN
 	UPDATE queues SET status = _status WHERE name = _name;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _name);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -922,6 +974,11 @@ CREATE OR REPLACE FUNCTION starexec.UpdateNodeStatus(_name VARCHAR(64), _status 
 RETURNS VOID AS $$
 BEGIN
 	UPDATE nodes SET status = _status WHERE name = _name;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Node %s not found', _name);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1017,6 +1074,11 @@ CREATE OR REPLACE FUNCTION starexec.DeleteNode(_id INT)
 RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.nodes WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Node %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1077,12 +1139,27 @@ BEGIN
 	SELECT ua.permission INTO _perm_id
 	FROM starexec.user_assoc ua
 	WHERE ua.user_id = _userId AND ua.space_id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not associated with space %s', _userId, _spaceId);
+    END IF;
 
 	DELETE FROM starexec.permissions WHERE id = _perm_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Permission %s for user %s in space %s not found', _perm_id, _userId, _spaceId);
+    END IF;
 
 	-- Delete the association
 	DELETE FROM starexec.user_assoc
 	WHERE user_id = _userId AND space_id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not associated with space %s', _userId, _spaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1096,6 +1173,11 @@ BEGIN
 	WHERE user_id = _userId AND space_id IN (
 		SELECT c.descendant FROM starexec.closure c WHERE c.ancestor = _spaceId
 	);
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('No hierarchy membership found for user %s in space %s', _userId, _spaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1195,6 +1277,11 @@ CREATE OR REPLACE FUNCTION starexec.DeleteErrorLogWithId(_id INT)
 RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.error_logs WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Error log %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1259,6 +1346,11 @@ BEGIN
 	UPDATE job_pairs
 	SET status_code = _statusCode
 	WHERE id = _pairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _pairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1269,6 +1361,11 @@ BEGIN
 	UPDATE job_pairs
 	SET job_space_id = _jobSpaceId
 	WHERE id = _pairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _pairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1277,6 +1374,11 @@ CREATE OR REPLACE FUNCTION starexec.UpdatePairNodeId(_jobPairId INT, _nodeId INT
 RETURNS VOID AS $$
 BEGIN
 	UPDATE job_pairs SET node_id=_nodeId WHERE id=_jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1285,20 +1387,66 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT)
 RETURNS VOID AS $$
+DECLARE
+    _nodeId INT;
+    _jobId INT;
+    _userId INT;
 BEGIN
-	UPDATE job_pairs SET node_id=(SELECT id FROM starexec.nodes WHERE name=_nodeName) WHERE id=_jobPairId;
-	UPDATE users SET users.disk_size=users.disk_size+_diskSize
-	WHERE id = (SELECT user_id FROM starexec.job_pairs JOIN jobs ON jobs.id = job_pairs.job_id WHERE job_pairs.id=_jobPairId);
-	UPDATE jobpair_stage_data
-	SET wallclock = _wallClock,
-		cpu=_cpu,
-		user_time=_userTime,
-		system_time=_systemTime,
-		max_vmem=_maxVmem,
-		max_res_set=_maxResSet,
-		disk_size=_diskSize
-	WHERE jobpair_id=_jobPairId AND stage_number=_stageNumber;
-	UPDATE jobs SET disk_size=disk_size+_diskSize WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=_jobPairId);
+    SELECT id INTO _nodeId FROM starexec.nodes WHERE name = _nodeName;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Node %s not found', _nodeName);
+    END IF;
+
+    UPDATE job_pairs SET node_id = _nodeId WHERE id = _jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
+
+    SELECT j.id, j.user_id
+    INTO _jobId, _userId
+    FROM starexec.job_pairs jp
+    JOIN jobs j ON j.id = jp.job_id
+    WHERE jp.id = _jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job for job pair %s not found', _jobPairId);
+    END IF;
+
+    UPDATE users
+    SET disk_size = disk_size + _diskSize
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job pair %s not found', _userId, _jobPairId);
+    END IF;
+
+    UPDATE jobpair_stage_data
+    SET wallclock = _wallClock,
+        cpu = _cpu,
+        user_time = _userTime,
+        system_time = _systemTime,
+        max_vmem = _maxVmem,
+        max_res_set = _maxResSet,
+        disk_size = _diskSize
+    WHERE jobpair_id = _jobPairId AND stage_number = _stageNumber;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
+    END IF;
+
+    UPDATE jobs SET disk_size = disk_size + _diskSize WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1311,9 +1459,24 @@ DECLARE
 	_nodeId INT;
 BEGIN
 	SELECT id FROM starexec.nodes WHERE name=_nodeName INTO _nodeId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Node %s not found', _nodeName);
+    END IF;
 
 	UPDATE job_pairs SET node_id=_nodeId WHERE id = _jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
 	UPDATE job_pairs SET sandbox_num=_sandbox WHERE id=_jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
 
 	-- Next lines finish a pair that is still in the "running" state despite another pair being in the same place now
 	-- First, mark the end time of the pairs
@@ -1329,12 +1492,47 @@ CREATE OR REPLACE FUNCTION starexec.RemoveJobPairDiskSize(_jobPairId INT)
 RETURNS VOID AS $$
 DECLARE
 	_sumDiskSize BIGINT;
+    _jobId INT;
+    _userId INT;
 BEGIN
 	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
-	UPDATE jobs SET jobs.disk_size=jobs.disk_size - (_sumDiskSize) WHERE jobs.id=(SELECT job_id FROM starexec.job_pairs WHERE job_pairs.id=_jobPairId);
-	UPDATE users SET users.disk_size=users.disk_size - (_sumDiskSize)
-	WHERE users.id=(SELECT user_id FROM starexec.jobs JOIN job_pairs ON job_pairs.job_id=jobs.id WHERE job_pairs.id=_jobPairId);
-	UPDATE jobpair_stage_data SET disk_size=0 WHERE jobpair_id=_jobPairId;
+    _sumDiskSize := COALESCE(_sumDiskSize, 0);
+
+    SELECT j.id, j.user_id
+    INTO _jobId, _userId
+    FROM starexec.job_pairs jp
+    JOIN jobs j ON j.id = jp.job_id
+    WHERE jp.id = _jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job for job pair %s not found', _jobPairId);
+    END IF;
+
+    UPDATE jobs
+    SET disk_size = disk_size - _sumDiskSize
+    WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
+    UPDATE users
+    SET disk_size = disk_size - _sumDiskSize
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job pair %s not found', _userId, _jobPairId);
+    END IF;
+
+    UPDATE jobpair_stage_data SET disk_size=0 WHERE jobpair_id=_jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Stage data for job pair %s not found', _jobPairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1387,6 +1585,11 @@ DECLARE
 	_count INT;
 BEGIN
 	UPDATE job_pairs SET status_code=_statusCode WHERE id=_jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
 	IF (_statusCode>6 AND _statusCode<19) THEN
 		INSERT INTO job_pair_completion (pair_id) VALUES (_jobPairId)
 		ON CONFLICT (pair_id) DO NOTHING;
@@ -1394,13 +1597,28 @@ BEGIN
 		-- this checks to see if the job is done and sets its completion id if so.
 		-- It checks by trying to find exactly 1 pair (for efficiency) that is not yet complete
 		SELECT job_id FROM starexec.job_pairs WHERE id=_jobPairId INTO _job_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Job for job pair %s not found', _jobPairId);
+        END IF;
 		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND (status_code<7 OR status_code>18) LIMIT 1) AS subq;
 		IF _count = 0 THEN
 			UPDATE jobs SET completed=CURRENT_TIMESTAMP WHERE id=_job_id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Job %s for job pair %s not found', _job_id, _jobPairId);
+            END IF;
 		END IF;
 	END IF;
 	IF (_statusCode = 2) THEN
 		UPDATE job_pairs SET queuesub_time=NOW() WHERE id=_jobPairId;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Job pair %s not found', _jobPairId);
+        END IF;
 	END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -1411,6 +1629,11 @@ CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatus(_jobPairId INT, _stage
 RETURNS VOID AS $$
 BEGIN
 	UPDATE jobpair_stage_data SET status_code=_statusCode WHERE jobpair_id=_jobPairId AND stage_number=_stageNumber;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1494,6 +1717,11 @@ BEGIN
 	UPDATE job_pairs
 	SET sge_id=_execId
 	WHERE id=_jobPairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1532,6 +1760,11 @@ RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.job_pair_completion
 	WHERE pair_id=_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Completion record for job pair %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1541,6 +1774,11 @@ CREATE OR REPLACE FUNCTION starexec.SetPairStartTime(_id INT)
 RETURNS VOID AS $$
 BEGIN
 	UPDATE job_pairs SET start_time=NOW() WHERE id=_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1552,22 +1790,51 @@ CREATE OR REPLACE FUNCTION starexec.DeleteJobPair(_pairId INT)
 RETURNS VOID AS $$
 DECLARE
 	pair_disk_size BIGINT := 0;
+    _jobId INT;
+    _userId INT;
 BEGIN
-	SELECT COALESCE(sum(jobpair_stage_data.disk_size), 0) INTO pair_disk_size
-	FROM starexec.job_pairs JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id=job_pairs.id
-	WHERE job_pairs.id=_pairId;
+    SELECT jp.job_id, j.user_id
+    INTO _jobId, _userId
+    FROM starexec.job_pairs jp
+    JOIN jobs j ON j.id = jp.job_id
+    WHERE jp.id = _pairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _pairId);
+    END IF;
 
-	UPDATE users
-	SET users.disk_size=users.disk_size-pair_disk_size
-	WHERE id = (SELECT user_id FROM starexec.jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_pairId);
+    SELECT COALESCE(SUM(disk_size), 0)
+    INTO pair_disk_size
+    FROM starexec.jobpair_stage_data
+    WHERE jobpair_id = _pairId;
 
-	UPDATE jobs
-	SET jobs.disk_size=jobs.disk_size-pair_disk_size,
-	total_pairs=total_pairs-1
-	WHERE id=(SELECT job_id FROM starexec.job_pairs WHERE id=_pairId);
+    UPDATE users
+    SET disk_size = disk_size - pair_disk_size
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job pair %s not found', _userId, _pairId);
+    END IF;
 
-	DELETE FROM starexec.job_pairs
-	WHERE job_pairs.id = _pairId;
+    UPDATE jobs
+    SET disk_size = disk_size - pair_disk_size,
+        total_pairs = total_pairs - 1
+    WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _pairId);
+    END IF;
+
+    DELETE FROM starexec.job_pairs
+    WHERE job_pairs.id = _pairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _pairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1603,14 +1870,30 @@ RETURNS VOID AS $$
 DECLARE
 	_user_id INT;
 	_queue_id INT;
+    _job_id INT;
 	_time_delta_val DOUBLE PRECISION;
 BEGIN
-	UPDATE job_pairs SET end_time=NOW() WHERE id=_id;
+    SELECT j.id, j.user_id, j.queue_id
+    INTO _job_id, _user_id, _queue_id
+    FROM starexec.job_pairs jp
+    JOIN jobs j ON j.id = jp.job_id
+    WHERE jp.id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _id);
+    END IF;
+
+    UPDATE job_pairs SET end_time = NOW() WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _id);
+    END IF;
 
 	-- save the diff between this pair's timeout and wallclock time to jobpair_time_delta
 	INSERT INTO jobpair_time_delta(user_id, queue_id, time_delta)
-	VALUES ((SELECT user_id FROM starexec.jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id),
-	(SELECT queue_id FROM starexec.jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id), 0)
+    VALUES (_user_id, _queue_id, 0)
 	ON CONFLICT (user_id, queue_id) DO NOTHING;
 
 	-- Calculate time delta
@@ -1625,8 +1908,13 @@ BEGIN
 
 	UPDATE jobpair_time_delta
 	SET time_delta = _time_delta_val
-	WHERE user_id=(SELECT user_id FROM starexec.jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id)
-	AND queue_id=(SELECT queue_id FROM starexec.jobs JOIN job_pairs ON jobs.id=job_pairs.job_id WHERE job_pairs.id=_id);
+    WHERE user_id = _user_id
+    AND queue_id = _queue_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Jobpair time delta entry for user %s and queue %s not found', _user_id, _queue_id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1684,6 +1972,11 @@ CREATE OR REPLACE FUNCTION starexec.ClearJobpairTimeDeltaData(_qid INT)
 RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.jobpair_time_delta WHERE queue_id=_qid OR _qid=-1;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Jobpair time delta entries for queue %s not found', _qid);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1779,10 +2072,20 @@ BEGIN
         WHERE jobpair_stage_data.jobpair_id = job_pairs.id
             AND jobpair_stage_data.jobpair_id = _pairId
             AND job_pairs.status_code = _current_status;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Stage data for job pair %s with status %s not found', _pairId, _current_status);
+    END IF;
 
 	UPDATE job_pairs
 	SET status_code = _new_status
 	WHERE id = _pairId AND status_code = _current_status;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s with status %s not found', _pairId, _current_status);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2053,6 +2356,11 @@ RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.job_stats
 	WHERE job_stats.job_space_id = _jobSpaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job stats for job space %s not found', _jobSpaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2063,6 +2371,11 @@ BEGIN
 	DELETE FROM starexec.job_stats
 	WHERE job_stats.job_space_id = _jobSpaceId
 		AND job_stats.config_id = _configId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job stats for job space %s and config %s not found', _jobSpaceId, _configId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2134,6 +2447,11 @@ BEGIN
 	UPDATE jobs
 	SET is_high_priority=_isHighPriority
 	WHERE id=_jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2156,6 +2474,11 @@ BEGIN
 	UPDATE jobs
 	SET output_benchmarks_directory_path=_path
 	WHERE id=_jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2226,6 +2549,11 @@ BEGIN
 	UPDATE job_space_closure
 	SET last_used=_time
 	WHERE ancestor=_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job space closure entries for ancestor %s not found', _id);
+    END IF;
 
 	SELECT COUNT(*) INTO count_val
 	FROM starexec.job_space_closure
@@ -2559,24 +2887,70 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.DeleteJob CASCADE;
 CREATE OR REPLACE FUNCTION starexec.DeleteJob(_jobId INT)
 RETURNS VOID AS $$
+DECLARE
+    _userId INT;
+    _diskSize BIGINT;
 BEGIN
-    UPDATE users u SET u.disk_size = u.disk_size - j.disk_size
-    FROM starexec.jobs j WHERE j.user_id = u.id AND j.id = _jobId;
+    SELECT user_id, disk_size INTO _userId, _diskSize
+    FROM starexec.jobs
+    WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    UPDATE users
+    SET disk_size = disk_size - _diskSize
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job %s not found', _userId, _jobId);
+    END IF;
 
     UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
     WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.UpdateJobDiskSize CASCADE;
 CREATE OR REPLACE FUNCTION starexec.UpdateJobDiskSize(_jobId INT, _diskSize BIGINT)
 RETURNS VOID AS $$
+DECLARE
+    _userId INT;
+    _oldDiskSize BIGINT;
 BEGIN
-    UPDATE users u SET u.disk_size = (u.disk_size - j.disk_size) + _diskSize
-    FROM starexec.jobs j WHERE j.user_id = u.id AND j.id = _jobId;
+    SELECT user_id, disk_size INTO _userId, _oldDiskSize
+    FROM starexec.jobs
+    WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    UPDATE users
+    SET disk_size = (disk_size - _oldDiskSize) + _diskSize
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job %s not found', _userId, _jobId);
+    END IF;
 
     UPDATE jobs SET disk_size = _diskSize
     WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2585,6 +2959,13 @@ DROP FUNCTION IF EXISTS starexec.DeleteAllJobPairsInJob CASCADE;
 CREATE OR REPLACE FUNCTION starexec.DeleteAllJobPairsInJob(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
+    PERFORM 1 FROM starexec.jobs WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
     DELETE FROM starexec.job_pairs WHERE job_id = _jobId;
 END;
 $$ LANGUAGE plpgsql;
@@ -2607,7 +2988,17 @@ CREATE OR REPLACE FUNCTION starexec.PauseJob(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET paused = true WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
     UPDATE job_pairs SET status_code = 20 WHERE job_id = _jobId AND status_code = 1;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no pending pairs to pause', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2628,12 +3019,27 @@ CREATE OR REPLACE FUNCTION starexec.ResumeJob(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET paused = false WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
     UPDATE job_pairs jp SET jp.status_code = 1
     FROM starexec.jobpair_stage_data jsd
     WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = 20;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no paused pairs to resume', _jobId);
+    END IF;
     UPDATE jobpair_stage_data jsd SET jsd.status_code = 1
     FROM starexec.job_pairs jp
     WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = 20;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no stage data to resume', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2654,8 +3060,18 @@ CREATE OR REPLACE FUNCTION starexec.KillJob(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET killed = true WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
     UPDATE jobs SET paused = false WHERE id = _jobId;
     UPDATE job_pairs SET status_code = 21 WHERE job_id = _jobId AND (status_code = 1 OR status_code = 20);
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no running or paused pairs to kill', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2666,6 +3082,11 @@ CREATE OR REPLACE FUNCTION starexec.ChangeQueue(_jobId INT, _queueId INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET queue_id = _queueId WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2898,6 +3319,11 @@ CREATE OR REPLACE FUNCTION starexec.UpdatePrimarySpace(_jobId INT, _jobSpaceId I
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET primary_space = _jobSpaceId WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2952,9 +3378,21 @@ DROP FUNCTION IF EXISTS starexec.RemovePairsFromComplete CASCADE;
 CREATE OR REPLACE FUNCTION starexec.RemovePairsFromComplete(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
+    PERFORM 1 FROM starexec.jobs WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
     DELETE FROM starexec.job_pair_completion jpc
     USING job_pairs jp
     WHERE jp.id = jpc.pair_id AND jp.job_id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no completion records to remove', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2964,7 +3402,19 @@ DROP FUNCTION IF EXISTS starexec.SetPairsToStatus CASCADE;
 CREATE OR REPLACE FUNCTION starexec.SetPairsToStatus(_jobId INT, _statusCode INT)
 RETURNS VOID AS $$
 BEGIN
+    PERFORM 1 FROM starexec.jobs WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
     UPDATE job_pairs SET status_code = _statusCode WHERE job_id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no pairs to update', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2974,7 +3424,19 @@ DROP FUNCTION IF EXISTS starexec.SetPairsOfStatusToStatus CASCADE;
 CREATE OR REPLACE FUNCTION starexec.SetPairsOfStatusToStatus(_jobId INT, _newCode INT, _curCode INT)
 RETURNS VOID AS $$
 BEGIN
+    PERFORM 1 FROM starexec.jobs WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
     UPDATE job_pairs SET status_code = _newCode WHERE job_id = _jobId AND status_code = _curCode;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s has no pairs with status %s to update', _jobId, _curCode);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 -- Removes all jobs in the database that are deleted and also orphaned. Runs periodically.
@@ -3052,17 +3514,34 @@ DROP FUNCTION IF EXISTS starexec.PrepareJobForPostProcessing CASCADE;
 CREATE OR REPLACE FUNCTION starexec.PrepareJobForPostProcessing(_jobId INT, _procId INT, _completeStatus INT, _processingStatus INT, _stageNumber INT)
 RETURNS VOID AS $$
 BEGIN
+	PERFORM 1 FROM starexec.jobs WHERE id = _jobId;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Job %s not found', _jobId);
+	END IF;
+
     UPDATE job_pairs jp
     SET jp.status_code = _processingStatus
     FROM starexec.jobpair_stage_data jsd
     WHERE jsd.jobpair_id = jp.id AND jp.job_id = _jobId AND jp.status_code = _completeStatus
     AND jsd.status_code = _completeStatus AND jsd.stage_number = _stageNumber;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('No job pairs in job %s with status %s for stage %s', _jobId, _completeStatus, _stageNumber);
+    END IF;
 
     UPDATE jobpair_stage_data jsd
     SET jsd.status_code = _processingStatus
     FROM starexec.job_pairs jp
     WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = _completeStatus
     AND jsd.status_code = _completeStatus AND jsd.stage_number = _stageNumber;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('No stage data for job %s with status %s at stage %s', _jobId, _completeStatus, _stageNumber);
+    END IF;
 
     -- makes sure there is actually an entry in job_stage_params for this job / stage pair.
     INSERT INTO job_stage_params (job_id, stage_number, cpuTimeout, clockTimeout, maximum_memory, space_id, post_processor, pre_processor)
@@ -3072,6 +3551,11 @@ BEGIN
     ON CONFLICT (job_id, stage_number) DO NOTHING;
 
     UPDATE job_stage_params SET post_processor = _procId WHERE job_id = _jobId AND stage_number = _stageNumber;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job stage params for job %s stage %s not found', _jobId, _stageNumber);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3175,6 +3659,11 @@ CREATE OR REPLACE FUNCTION starexec.SetJobName(_jobId INT, _newName VARCHAR(64))
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET name = _newName WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3183,6 +3672,11 @@ CREATE OR REPLACE FUNCTION starexec.SetJobDescription(_jobId INT, _newDescriptio
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET description = _newDescription WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3203,6 +3697,11 @@ CREATE OR REPLACE FUNCTION starexec.RemoveJobFromDatabase(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.jobs WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3265,6 +3764,11 @@ CREATE OR REPLACE FUNCTION starexec.IncrementTotalJobPairsForJob(_jobId INT, _in
 RETURNS VOID AS $$
 BEGIN
     UPDATE jobs SET total_pairs = total_pairs + _increment WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3366,6 +3870,11 @@ CREATE OR REPLACE FUNCTION starexec.SetReadOnly(readOnly BOOLEAN)
 RETURNS VOID AS $$
 BEGIN
     UPDATE system_flags SET read_only = readOnly;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'System flags not found';
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3383,6 +3892,11 @@ CREATE OR REPLACE FUNCTION starexec.SetFreezePrimitives(frozen BOOLEAN)
 RETURNS VOID AS $$
 BEGIN
     UPDATE system_flags SET freeze_primitives = frozen;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'System flags not found';
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3400,6 +3914,11 @@ CREATE OR REPLACE FUNCTION starexec.SetStatusMessage(_enabled BOOLEAN, _message 
 RETURNS VOID AS $$
 BEGIN
     UPDATE ui_status_message SET enabled = _enabled, message = _message, url = _url;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'UI status message configuration not found';
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3435,6 +3954,11 @@ RETURNS VOID AS $$
 BEGIN
     INSERT INTO notifications_jobs_users (user_id, job_id, last_seen_status)
     VALUES (_userId, _jobId, GetJobStatusDetail(_jobId));
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Failed to subscribe user %s to job %s', _userId, _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 -- Unsubscribe a User from status updates to a Job
@@ -3444,6 +3968,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.notifications_jobs_users
     WHERE user_id = _userId AND job_id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Subscription for user %s to job %s not found', _userId, _jobId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3473,6 +4002,11 @@ BEGIN
     UPDATE notifications_jobs_users
     SET last_seen_status = _status
     WHERE user_id = _userId AND job_id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Subscription for user %s to job %s not found', _userId, _jobId);
+    END IF;
 
     DELETE FROM starexec.notifications_jobs_users
     WHERE last_seen_status = 'COMPLETE' OR last_seen_status = 'DELETED';
@@ -3532,6 +4066,11 @@ RETURNS VOID AS $$
 BEGIN
     INSERT INTO pairs_rerun (pair_id) VALUES (_pairId)
     ON CONFLICT (pair_id) DO NOTHING;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Pair %s already marked as rerun', _pairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3540,6 +4079,11 @@ CREATE OR REPLACE FUNCTION starexec.UnmarkPairAsRerun(_pairId INT)
 RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.pairs_rerun WHERE pair_id = _pairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Pair %s not marked as rerun', _pairId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3737,6 +4281,11 @@ BEGIN
     FROM starexec.permissions
     WHERE id = _permId
     RETURNING id INTO _newId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Permission %s not found', _permId);
+    END IF;
     RETURN _newId;
 END;
 $$ LANGUAGE plpgsql;
@@ -3754,7 +4303,9 @@ BEGIN
     -- First, ensure the user_assoc entry exists
     IF NOT EXISTS(SELECT 1 FROM starexec.user_assoc WHERE user_id = _userId AND space_id = _spaceId) THEN
         -- User is not yet associated with this space - this is an error condition
-        RAISE EXCEPTION 'User % is not associated with space %', _userId, _spaceId;
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s is not associated with space %s', _userId, _spaceId);
     END IF;
     
     -- Get the permission ID for this user-space combination
@@ -3776,6 +4327,11 @@ BEGIN
         remove_space = _removeSpace,
         is_leader = _isLeader
     WHERE p.id = _permissionId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Permission %s for user %s in space %s not found', _permissionId, _userId, _spaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3799,6 +4355,11 @@ BEGIN
         remove_job = _removeJob::SMALLINT,
         remove_space = _removeSpace::SMALLINT
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Permission %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3915,6 +4476,11 @@ BEGIN
 
     IF _primary = 1 THEN
         UPDATE solver_pipelines SET primary_stage_id = _id WHERE id = _pid;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Pipeline %s not found when setting primary stage', _pid);
+        END IF;
     END IF;
 
     RETURN _id;
@@ -3937,6 +4503,11 @@ CREATE OR REPLACE FUNCTION starexec.DeletePipeline(_pid INT)
 RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.solver_pipelines WHERE id = _pid;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Pipeline %s not found', _pid);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3988,8 +4559,18 @@ DECLARE
     _path TEXT;
 BEGIN
     SELECT path INTO _path FROM starexec.processors WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
     DELETE FROM starexec.processors
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
     RETURN _path;
 END;
 $$ LANGUAGE plpgsql;
@@ -4063,6 +4644,12 @@ BEGIN
     UPDATE processors
     SET description = _desc
     WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4075,6 +4662,12 @@ BEGIN
     UPDATE processors
     SET path = _path
     WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4087,6 +4680,12 @@ BEGIN
     UPDATE processors
     SET name = _name
     WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4100,6 +4699,11 @@ BEGIN
     SET path = _path,
         disk_size = _diskSize
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4110,6 +4714,12 @@ BEGIN
     UPDATE processors
     SET time_limit = _timeLimit
     WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4120,6 +4730,12 @@ BEGIN
     UPDATE processors
     SET syntax_id = _syntax
     WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Processor %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4161,6 +4777,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.starexec.queues
     WHERE id = _queueId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _queueId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4266,6 +4887,11 @@ BEGIN
     UPDATE queues
     SET clockTimeout = _timeout
     WHERE id = _queueId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _queueId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4278,6 +4904,11 @@ BEGIN
     UPDATE queues
     SET cpuTimeout = _timeout
     WHERE id = _queueId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _queueId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4302,6 +4933,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.comm_queue
     WHERE queue_id = _queueId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s association not found', _queueId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4314,6 +4950,11 @@ BEGIN
     UPDATE queues
     SET global_access = true
     WHERE id = _queueId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _queueId);
+    END IF;
 
     DELETE FROM starexec.comm_queue
     WHERE queue_id = _queueId;
@@ -4329,6 +4970,11 @@ BEGIN
     UPDATE queues
     SET global_access = false
     WHERE id = _queueId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _queueId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4338,6 +4984,11 @@ CREATE OR REPLACE FUNCTION starexec.SetTestQueue(_qid INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE system_flags SET test_queue = _qid;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = 'System flags row not found when setting test queue';
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4429,6 +5080,11 @@ BEGIN
     UPDATE queues
     SET description = _desc
     WHERE id = _qID;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Queue %s not found', _qID);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4448,6 +5104,11 @@ BEGIN
     UPDATE report_data
     SET occurrences = _eventOccurrences
     WHERE event_name = _eventName AND queue_name IS NULL;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Report event %s not found (no queue)', _eventName);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4462,6 +5123,11 @@ BEGIN
         UPDATE report_data
         SET occurrences = _eventOccurrences
         WHERE event_name = _eventName AND queue_name = _queueName;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Report event %s for queue %s not found', _eventName, _queueName);
+        END IF;
     -- otherwise create the event with the given number of occurrences
     ELSE
         INSERT INTO report_data (event_name, queue_name, occurrences)
@@ -4479,6 +5145,11 @@ BEGIN
     UPDATE report_data
     SET occurrences = occurrences + _eventOccurrences
     WHERE event_name = _eventName AND queue_name IS NULL;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Report event %s not found (no queue)', _eventName);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4494,6 +5165,11 @@ BEGIN
     UPDATE report_data
     SET occurrences = occurrences + _eventOccurrences
     WHERE event_name = _eventName AND queue_name = _queueName;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Report event %s for queue %s not found', _eventName, _queueName);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4510,9 +5186,19 @@ BEGIN
     FROM starexec.job_pairs jp
     INNER JOIN jobs j ON jp.job_id = j.id
     WHERE jp.id = _pairId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found when updating report event %s', _pairId, _eventName);
+    END IF;
 
     IF _queueId IS NOT NULL THEN
         SELECT q.name INTO _queueName FROM starexec.starexec.queues q WHERE q.id = _queueId;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Queue %s for job pair %s not found when updating report event %s', _queueId, _pairId, _eventName);
+        END IF;
 
         INSERT INTO report_data (event_name, occurrences, queue_name) VALUES (_eventName, 0, _queueName)
         ON CONFLICT (event_name, queue_name) DO NOTHING;
@@ -4684,6 +5370,11 @@ BEGIN
     IF EXISTS(SELECT * FROM starexec.pass_reset_request WHERE user_id = _id) THEN
         DELETE FROM starexec.pass_reset_request
         WHERE user_id = _id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Password reset request for user %s not found', _id);
+        END IF;
     END IF;
     INSERT INTO pass_reset_request(user_id, code, created)
     VALUES(_id, _code, NOW());
@@ -4700,6 +5391,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.community_requests
     WHERE user_id = _id AND community = _community;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Community request for user %s in community %s not found', _id, _community);
+    END IF;
 
     DELETE FROM starexec.users
     USING user_roles
@@ -4781,8 +5477,18 @@ BEGIN
     SELECT prr.user_id INTO _id
     FROM starexec.pass_reset_request prr
     WHERE prr.code = _code;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Password reset request with code %s not found', _code);
+    END IF;
     DELETE FROM starexec.pass_reset_request
     WHERE code = _code;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Password reset request with code %s not found', _code);
+    END IF;
     RETURN _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -4847,6 +5553,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.change_email_requests
     WHERE user_id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Change email request for user %s not found', _userId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4909,22 +5620,48 @@ $$ LANGUAGE plpgsql;
 -- This file contains procedures for DefaultSettings functionality
 
 -- Gets a settings profile given its id
+-- NOTE: Column aliases must stay in sync with org.starexec.data.database.Settings.resultsToSettings
 DROP FUNCTION IF EXISTS starexec.getProfileById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.getProfileById(_id INT)
-RETURNS TABLE(id INT, prim_id INT, post_processor INT, cpu_timeout INT, clock_timeout INT, dependencies_enabled BOOLEAN, maximum_memory BIGINT, default_solver INT, bench_processor INT, pre_processor INT, setting_type INT, name VARCHAR(32), benchmarking_framework VARCHAR(16)) AS $$
+RETURNS TABLE(id INT, primId INT, post_processor INT, cpu_timeout INT, clock_timeout INT, dependencies_enabled BOOLEAN, maximumMemory BIGINT, defaultSolver INT, benchProcessor INT, pre_processor INT, settingType INT, name VARCHAR(32), benchmarkingFramework VARCHAR(16)) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ds.id, ds.prim_id, ds.post_processor, ds.cpu_timeout, ds.clock_timeout, ds.dependencies_enabled, ds.maximum_memory, ds.default_solver, ds.bench_processor, ds.pre_processor, ds.setting_type, ds.name, ds.benchmarking_framework
+    SELECT ds.id,
+           ds.prim_id AS primId,
+           ds.post_processor,
+           ds.cpu_timeout,
+           ds.clock_timeout,
+           ds.dependencies_enabled,
+           ds.maximum_memory AS maximumMemory,
+           ds.default_solver AS defaultSolver,
+           ds.bench_processor AS benchProcessor,
+           ds.pre_processor,
+           ds.setting_type AS settingType,
+           ds.name,
+           ds.benchmarking_framework AS benchmarkingFramework
     FROM starexec.default_settings ds WHERE ds.id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
+-- NOTE: Column aliases must stay in sync with org.starexec.data.database.Settings.resultsToSettings
 DROP FUNCTION IF EXISTS starexec.GetDefaultSettingsByIdAndType CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetDefaultSettingsByIdAndType(_prim_id INT, _type INT)
-RETURNS TABLE(id INT, primId INT, postProcessor INT, cpuTimeout INT, clockTimeout INT, dependenciesEnabled BOOLEAN, maximumMemory BIGINT, defaultSolver INT, benchProcessor INT, preProcessor INT, settingType INT, name VARCHAR(32), benchmarkingFramework VARCHAR(16)) AS $$
+RETURNS TABLE(id INT, primId INT, post_processor INT, cpu_timeout INT, clock_timeout INT, dependencies_enabled BOOLEAN, maximumMemory BIGINT, defaultSolver INT, benchProcessor INT, pre_processor INT, settingType INT, name VARCHAR(32), benchmarkingFramework VARCHAR(16)) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ds.id, ds.prim_id, ds.post_processor, ds.cpu_timeout, ds.clock_timeout, ds.dependencies_enabled, ds.maximum_memory, ds.default_solver, ds.bench_processor, ds.pre_processor, ds.setting_type, ds.name, ds.benchmarking_framework
+    SELECT ds.id,
+           ds.prim_id AS primId,
+           ds.post_processor,
+           ds.cpu_timeout,
+           ds.clock_timeout,
+           ds.dependencies_enabled,
+           ds.maximum_memory AS maximumMemory,
+           ds.default_solver AS defaultSolver,
+           ds.bench_processor AS benchProcessor,
+           ds.pre_processor,
+           ds.setting_type AS settingType,
+           ds.name,
+           ds.benchmarking_framework AS benchmarkingFramework
     FROM starexec.default_settings ds WHERE ds.prim_id = _prim_id AND ds.setting_type = _type;
 END;
 $$ LANGUAGE plpgsql;
@@ -4963,6 +5700,12 @@ BEGIN
     UPDATE default_settings
     SET maximum_memory = _bytes
     WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Maximum memory setting for %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4977,34 +5720,74 @@ BEGIN
             UPDATE default_settings
             SET post_processor = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 2 THEN
             UPDATE default_settings
             SET cpu_timeout = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 3 THEN
             UPDATE default_settings
             SET clock_timeout = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 4 THEN
             UPDATE default_settings
             SET dependencies_enabled = (_setting = 1)
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 5 THEN
             UPDATE default_settings
             SET default_benchmark = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 6 THEN
             UPDATE default_settings
             SET pre_processor = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 7 THEN
             UPDATE default_settings
             SET default_solver = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
         WHEN 8 THEN
             UPDATE default_settings
             SET bench_processor = _setting
             WHERE id = _id;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION USING
+                    ERRCODE = 'P0002',
+                    MESSAGE = format('Default settings %s not found', _id);
+            END IF;
     END CASE;
 END;
 $$ LANGUAGE plpgsql;
@@ -5051,6 +5834,12 @@ CREATE OR REPLACE FUNCTION starexec.DeleteDefaultSettings(_id INT)
 RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.default_settings WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Default settings %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5067,6 +5856,12 @@ CREATE OR REPLACE FUNCTION starexec.SetDefaultProfileForUser(_uid INT, _sid INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE users SET default_settings_profile = _sid WHERE id = _uid;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Default profile setting for user %s not found', _uid);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5118,6 +5913,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.default_bench_assoc
     WHERE setting_id = _settingId AND bench_id = _benchId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Default benchmark %s for setting %s not found', _benchId, _settingId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5138,6 +5938,11 @@ DECLARE
     _id INT;
 BEGIN
     UPDATE users SET disk_size = disk_size + _diskSize WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found when adding solver', _userId);
+    END IF;
     INSERT INTO solvers (user_id, name, uploaded, path, description, downloadable, disk_size, executable_type, build_status)
     VALUES (_userId, _name, NOW(), _path, _description, _downloadable, _diskSize, _type, _build_status)
     RETURNING id INTO _id;
@@ -5290,6 +6095,11 @@ RETURNS VOID AS $$
 BEGIN
     UPDATE configurations SET deleted = true
     WHERE id = _configId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Configuration %s not found', _configId);
+    END IF;
     PERFORM UpdateConfigDeletedInSolvers(_configId, true);
 END;
 $$ LANGUAGE plpgsql;
@@ -5305,6 +6115,11 @@ BEGIN
     WHERE id IN (
         SELECT solver_id FROM starexec.configurations WHERE id = _configId
     );
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver for configuration %s not found', _configId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5322,11 +6137,27 @@ BEGIN
         FROM starexec.solvers
         WHERE solvers.user_id = users.id
             AND solvers.id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found when updating owner disk usage', _solverId);
+    END IF;
 
     SELECT s.path INTO _path FROM starexec.solvers s WHERE s.id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
     UPDATE solvers
     SET deleted = true, disk_size = 0
     WHERE id = _solverId;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
     RETURN _path;
 END;
 $$ LANGUAGE plpgsql;
@@ -5590,6 +6421,11 @@ BEGIN
         DELETE FROM starexec.solver_assoc
         WHERE solver_id = _solverId
         AND space_id = _spaceId;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Solver %s association with space %s not found', _solverId, _spaceId);
+        END IF;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -5606,9 +6442,19 @@ BEGIN
         FROM starexec.solvers
         WHERE solvers.user_id = users.id
             AND solvers.id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found when updating owner disk usage', _solverId);
+    END IF;
     UPDATE solvers
     SET disk_size = _newDiskSize
     WHERE id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5623,6 +6469,11 @@ BEGIN
         description = _description,
         updated = _time
     WHERE id = _configId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Configuration %s not found', _configId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5637,6 +6488,11 @@ BEGIN
         description = _description,
         downloadable = _downloadable
     WHERE id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5677,6 +6533,12 @@ BEGIN
     UPDATE solvers
     SET recycled = _recycled
     WHERE id = _solverId;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5754,6 +6616,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.solvers
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5800,6 +6667,11 @@ BEGIN
     UPDATE solvers
     SET recycled = false
     WHERE id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5853,6 +6725,11 @@ BEGIN
     UPDATE solvers
     SET build_status = _build_status
     WHERE id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5865,6 +6742,11 @@ BEGIN
     UPDATE solvers
     SET path = _path
     WHERE id = _solverId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5875,6 +6757,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.configurations -- dummy configs are deleted but not other configs
     WHERE solver_id = _solverId AND name = 'starexec_build';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Build configuration for solver %s not found', _solverId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5966,6 +6853,11 @@ CREATE OR REPLACE FUNCTION starexec.SetJobSpaceMaxStages(_id INT, _max INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE job_spaces SET max_stages=_max WHERE id=_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job space %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6012,7 +6904,17 @@ RETURNS VOID AS $$
 BEGIN
     -- remove all existing closures for this child space
     DELETE FROM starexec.closure WHERE descendant = _childId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Closure entries for space %s not found', _childId);
+    END IF;
     UPDATE set_assoc SET space_id = _parentId WHERE child_id = _childId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space association for child %s not found', _childId);
+    END IF;
     -- insert as ancestors of parent space
     INSERT INTO closure (ancestor, descendant)
         SELECT ancestor, _childId AS descendant -- all ancestors of parent space
@@ -6033,8 +6935,18 @@ DECLARE
     _parentId INT;
 BEGIN
     SELECT space_id INTO _parentId FROM starexec.set_assoc WHERE child_id = _childId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Parent space for child %s not found', _childId);
+    END IF;
     -- remove all existing closures for this child space
     DELETE FROM starexec.closure WHERE descendant = _childId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Closure entries for space %s not found', _childId);
+    END IF;
     -- insert as ancestors of parent space
     INSERT INTO closure (ancestor, descendant)
         SELECT ancestor, _childId AS descendant -- all ancestors of parent space
@@ -6437,10 +7349,25 @@ DECLARE
 BEGIN
     -- Remove that space's default permission
     SELECT s.default_permission INTO _permId FROM starexec.spaces s WHERE s.id = _subspaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _subspaceId);
+    END IF;
     DELETE FROM starexec.permissions WHERE id = _permId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Permission %s not found for subspace %s', _permId, _subspaceId);
+    END IF;
 
     -- Remove the space
     DELETE FROM starexec.spaces WHERE id = _subspaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _subspaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6451,6 +7378,12 @@ CREATE OR REPLACE FUNCTION starexec.UpdateSpaceName(_id INT, _name VARCHAR(255))
 RETURNS VOID AS $$
 BEGIN
     UPDATE spaces SET name = _name WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6461,6 +7394,12 @@ CREATE OR REPLACE FUNCTION starexec.UpdateSpaceDescription(_id INT, _desc TEXT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE spaces SET description = _desc WHERE id = _id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6476,8 +7415,18 @@ BEGIN
     UPDATE spaces
     SET name = _name, description = _desc, locked = _locked, sticky_leaders = _sticky
     WHERE id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _spaceId);
+    END IF;
 
     SELECT s.default_permission INTO _permId FROM starexec.spaces s WHERE s.id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _spaceId);
+    END IF;
     RETURN QUERY SELECT _permId;
 END;
 $$ LANGUAGE plpgsql;
@@ -6542,6 +7491,11 @@ BEGIN
     UPDATE spaces
     SET public_access = _pbc
     WHERE id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _spaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6639,6 +7593,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.job_assoc
     WHERE job_id = _jobId AND space_id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not associated with space %s', _jobId, _spaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6650,6 +7609,11 @@ CREATE OR REPLACE FUNCTION starexec.SetStickyLeader(_spaceID INT, _val BOOLEAN)
 RETURNS VOID AS $$
 BEGIN
     UPDATE spaces SET sticky_leaders = _val WHERE id = _spaceID;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _spaceID);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6742,7 +7706,9 @@ BEGIN
     -- Ensure the derived permission exists before inserting the space
     PERFORM 1 FROM permissions WHERE id = _permission;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'Unable to determine a valid default permission for Users subspace (communityId=%)', _communityId;
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Unable to determine a valid default permission for Users subspace (communityId=%s)', _communityId);
     END IF;
 
     SELECT AddSpace(_name, _description, _locked, _permission, _communityId, _sticky) INTO _newSpaceId;
@@ -6794,6 +7760,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET file_upload_complete = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6806,6 +7777,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET file_upload_complete = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6818,6 +7794,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET file_extraction_complete = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6830,6 +7811,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET processing_begun = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6842,6 +7828,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET everything_complete = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6852,6 +7843,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET everything_complete = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6864,6 +7860,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET total_spaces = total_spaces + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6876,6 +7877,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET total_benchmarks = total_benchmarks + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6888,6 +7894,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET completed_spaces = completed_spaces + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6900,6 +7911,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET completed_benchmarks = completed_benchmarks + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6912,6 +7928,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET validated_benchmarks = validated_benchmarks + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6924,6 +7945,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET failed_benchmarks = failed_benchmarks + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6935,6 +7961,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET error_message = _message
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6947,6 +7978,11 @@ BEGIN
     UPDATE benchmark_uploads
     SET error_message = _message
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Benchmark upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7019,6 +8055,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET total_spaces = _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7029,6 +8070,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET total_solvers = _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7039,6 +8085,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET total_benchmarks = _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7049,6 +8100,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET total_updates = _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7059,6 +8115,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET completed_updates = completed_updates + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7069,6 +8130,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET completed_solvers = completed_solvers + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7079,6 +8145,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET completed_benchmarks = completed_benchmarks + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7089,6 +8160,11 @@ BEGIN
     UPDATE space_xml_uploads
     SET completed_spaces = completed_spaces + _num
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space XML upload %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7181,6 +8257,9 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.RemoveUserFromSpaceHierarchy CASCADE;
 CREATE OR REPLACE FUNCTION starexec.RemoveUserFromSpaceHierarchy(_userId INT, _spaceId INT, _requestUserId INT)
 RETURNS VOID AS $$
+DECLARE
+    _deleted_permissions INT := 0;
+    _deleted_associations INT := 0;
 BEGIN
     -- Remove the permission associated with this user/community
     DELETE FROM starexec.permissions
@@ -7191,6 +8270,7 @@ BEGIN
         JOIN user_assoc ua2 ON (ua2.user_id = _requestUserId OR s.public_access) AND ua2.space_id = c.descendant
         WHERE ua.user_id = _userId
     );
+    GET DIAGNOSTICS _deleted_permissions = ROW_COUNT;
 
     DELETE FROM starexec.user_assoc
     WHERE user_id = _userId AND space_id IN (
@@ -7200,6 +8280,13 @@ BEGIN
         JOIN user_assoc ua ON (ua.user_id = _requestUserId OR s.public_access) AND ua.space_id = c.descendant
         WHERE c.ancestor = _spaceId
     );
+    GET DIAGNOSTICS _deleted_associations = ROW_COUNT;
+
+    IF _deleted_permissions + _deleted_associations = 0 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found in accessible hierarchy rooted at space %s', _userId, _spaceId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7214,7 +8301,18 @@ DECLARE
 BEGIN
     -- Copy the default permission for the community
     SELECT s.default_permission INTO _pid FROM starexec.spaces s WHERE s.id = _spaceId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Space %s not found', _spaceId);
+    END IF;
+
     SELECT CopyPermissions(_pid) INTO _newPermId;
+    IF NOT FOUND OR _newPermId IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Permission %s not found', _pid);
+    END IF;
 
     INSERT INTO user_assoc (user_id, space_id, permission)
     SELECT _userId, c.descendant, _newPermId
@@ -7238,7 +8336,18 @@ BEGIN
     IF NOT EXISTS(SELECT * FROM starexec.user_assoc WHERE user_id = _userId AND space_id = _spaceId) THEN
         -- Copy the default permission for the community
         SELECT s.default_permission INTO _pid FROM starexec.spaces s WHERE s.id = _spaceId;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Space %s not found', _spaceId);
+        END IF;
+
         SELECT CopyPermissions(_pid) INTO _newPermId;
+        IF NOT FOUND OR _newPermId IS NULL THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Permission %s not found', _pid);
+        END IF;
 
         INSERT INTO user_assoc (user_id, space_id, permission)
         VALUES (_userId, _spaceId, _newPermId);
@@ -7339,6 +8448,11 @@ BEGIN
     UPDATE users
     SET subscribed_to_error_logs = FALSE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7349,6 +8463,11 @@ BEGIN
     UPDATE users
     SET subscribed_to_error_logs = TRUE
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7392,6 +8511,11 @@ BEGIN
     UPDATE users
     SET email = _email
     WHERE users.id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7405,6 +8529,11 @@ BEGIN
     UPDATE users
     SET first_name = _firstname
     WHERE users.id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7418,6 +8547,11 @@ BEGIN
     UPDATE users
     SET last_name = _lastname
     WHERE users.id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7431,6 +8565,11 @@ BEGIN
     UPDATE users
     SET institution = _institution
     WHERE users.id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7444,6 +8583,11 @@ BEGIN
     UPDATE users
     SET password = _password
     WHERE users.id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7469,6 +8613,11 @@ BEGIN
     UPDATE users
     SET default_page_size = _size
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7482,6 +8631,11 @@ BEGIN
     UPDATE users
     SET disk_quota = _newQuota
     WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7493,6 +8647,11 @@ BEGIN
     UPDATE users
     SET job_pair_quota = _newQuota
     WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7530,6 +8689,11 @@ BEGIN
     _sizeDelta := _userDiskSize - _sumDiskSize;
 
     UPDATE users SET disk_size = _sumDiskSize WHERE id = _userID;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userID);
+    END IF;
 
     RETURN _sizeDelta;
 END;
@@ -7625,6 +8789,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.logins WHERE user_id = _userId;
     DELETE FROM starexec.users WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7638,6 +8807,11 @@ BEGIN
     SET role = _role
     FROM starexec.users
     WHERE users.email = user_roles.email AND users.id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7649,6 +8823,11 @@ BEGIN
     UPDATE users
     SET subscribed_to_reports = _willBeSubscribed
     WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s not found', _userId);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7701,6 +8880,11 @@ RETURNS VOID AS $$
 BEGIN
     DELETE FROM starexec.website
     WHERE id = _id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Website %s not found', _id);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
