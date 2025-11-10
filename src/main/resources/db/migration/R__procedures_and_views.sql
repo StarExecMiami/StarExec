@@ -5970,7 +5970,7 @@ BEGIN
                    s.recycled_original_name AS solver_recycled_original_name,
                    s.executable_type AS solver_executable_type,
                    s.build_status AS solver_build_status,
-                   s.config_deleted AS solver_config_deleted
+                   s.config_deleted::BOOLEAN AS solver_config_deleted
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     JOIN spaces sp ON sp.id = sa.space_id
@@ -6380,7 +6380,7 @@ BEGIN
            s.recycled_original_name AS solver_recycled_original_name,
            s.executable_type AS solver_executable_type,
            s.build_status AS solver_build_status,
-           s.config_deleted AS solver_config_deleted
+           s.config_deleted::BOOLEAN AS solver_config_deleted
     FROM starexec.solvers s
     WHERE s.user_id = _userId AND s.deleted = false AND s.recycled = false;
 END;
@@ -6708,7 +6708,7 @@ CREATE OR REPLACE FUNCTION starexec.GetSolversInSharedSpaces(_userId INT)
 RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT DISTINCT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT DISTINCT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted::BOOLEAN
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     JOIN user_assoc ua ON ua.space_id = sa.space_id
