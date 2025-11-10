@@ -2757,12 +2757,20 @@ public class Spaces {
 	public static boolean updateDescription(int spaceId, String newDesc) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.UpdateSpaceDescription(?, ?)");
 			ps.setInt(1, spaceId);
 			ps.setString(2, newDesc);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				rs = ps.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs.next()) {
+					// Do nothing, just consume
+				}
+			}
 			log.info(String.format("Space [%d] updated description to [%s]", spaceId, newDesc));
 			return true;
 		} catch (PSQLException e) {
@@ -2775,8 +2783,9 @@ public class Spaces {
 			log.error("updateDescription", e);
 			Common.doRollback(con);
 		} finally {
-			Common.safeClose(con);
+			Common.safeClose(rs);
 			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return false;
 	}
@@ -2862,12 +2871,20 @@ public class Spaces {
 	public static boolean updateName(int spaceId, String newName) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.UpdateSpaceName(?, ?)");
 			ps.setInt(1, spaceId);
 			ps.setString(2, newName);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				rs = ps.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs.next()) {
+					// Do nothing, just consume
+				}
+			}
 			log.info(String.format("Space [%d] updated name to [%s]", spaceId, newName));
 			return true;
 		} catch (PSQLException e) {
@@ -2880,8 +2897,9 @@ public class Spaces {
 			log.error("updateName", e);
 			Common.doRollback(con);
 		} finally {
-			Common.safeClose(con);
+			Common.safeClose(rs);
 			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 		return false;
 	}

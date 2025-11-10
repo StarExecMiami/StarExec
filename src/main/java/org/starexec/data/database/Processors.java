@@ -337,12 +337,20 @@ public class Processors {
 	public static boolean updateDescription(int processorId, String newDesc) {
 		Connection con = null;
 		PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.UpdateProcessorDescription(?,?)");
 			ps.setInt(1, processorId);
 			ps.setString(2, newDesc);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				rs = ps.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs.next()) {
+					// Do nothing, just consume
+				}
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -351,6 +359,7 @@ public class Processors {
 				log.error("updateDescription", e.getMessage(), e);
 			}
 		} finally {
+			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
