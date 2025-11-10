@@ -52,7 +52,14 @@ public class Logins {
 			try {
 				con = Common.getConnection();
 				ps = con.prepareStatement("SELECT starexec.ResetLogins()");
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			} finally {
 				Common.safeClose(ps);
 				Common.safeClose(con);

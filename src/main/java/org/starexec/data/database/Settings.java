@@ -69,7 +69,14 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.AddDefaultBenchmark(?, ?)");
 			ps.setInt(1, settingId);
 			ps.setInt(2, benchId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);

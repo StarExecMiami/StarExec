@@ -588,7 +588,14 @@ public class Permissions {
 			ps.setInt(2, spaceId);
 			ps.setInt(3, permissionId);
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			log.debug(String.format("Permissions successfully changed for user [%d] in space [%d]", userId, spaceId));
 			return true;
 		} catch (Exception e) {
@@ -627,7 +634,14 @@ public class Permissions {
 			ps.setBoolean(10, perm.canRemoveUser());
 			ps.setBoolean(11, perm.canRemoveJob());
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			log.info(String.format("Permission [%d] successfully updated.", permId));
 		} catch (Exception e) {
 			log.error("updatePermission", e);

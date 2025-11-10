@@ -93,7 +93,14 @@ public class ErrorLogs {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteErrorLogWithId(?)");
 			ps.setInt(1, id);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -113,7 +120,14 @@ public class ErrorLogs {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteErrorLogsBefore(?)");
 			ps.setTimestamp(1, time);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);

@@ -986,13 +986,22 @@ public class Jobs {
 			throws SQLException {
 		java.sql.Connection con = null;
 		java.sql.PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.SetOutputBenchmarksPath(?, ?)");
 			ps.setInt(1, jobId);
 			ps.setString(2, outputBenchmarksDirectory);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				rs = ps.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs.next()) {
+					// Do nothing, just consume
+				}
+			}
 		} finally {
+			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
@@ -5637,13 +5646,22 @@ public class Jobs {
 	public static void setAsLowPriority(final int jobId) throws SQLException {
 		java.sql.Connection con = null;
 		java.sql.PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.SetHighPriority(?,?)");
 			ps.setInt(1, jobId);
 			ps.setBoolean(2, false);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				rs = ps.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs.next()) {
+					// Do nothing, just consume
+				}
+			}
 		} finally {
+			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
@@ -5657,13 +5675,22 @@ public class Jobs {
 	public static void setAsHighPriority(final int jobId) throws SQLException {
 		java.sql.Connection con = null;
 		java.sql.PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.SetHighPriority(?,?)");
 			ps.setInt(1, jobId);
 			ps.setBoolean(2, true);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				rs = ps.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs.next()) {
+					// Do nothing, just consume
+				}
+			}
 		} finally {
+			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}

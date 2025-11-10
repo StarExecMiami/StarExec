@@ -64,17 +64,30 @@ public class Spaces {
 			procSubspace = con.prepareStatement("SELECT starexec.AssociateSpaces(?, ?)");
 			procSubspace.setInt(1, s.getParentSpace());
 			procSubspace.setInt(2, newSpaceId);
-			// Use execute() to tolerate functions that may return a result; close any returned ResultSet.
-			procSubspace.execute();
-			try { Common.safeClose(procSubspace.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet1 = procSubspace.execute();
+			if (hasResultSet1) {
+				ResultSet rs1 = procSubspace.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs1.next()) {
+					// Do nothing, just consume
+				}
+				Common.safeClose(rs1);
+			}
 
 			log.trace(method, "Calling AddUserToSpace");
 			// Add the adding user to the space with the maximal permissions
 			procAddUser = con.prepareStatement("SELECT starexec.AddUserToSpace(?, ?)");
 			procAddUser.setInt(1, userId);
 			procAddUser.setInt(2, newSpaceId);
-			procAddUser.execute();
-			try { Common.safeClose(procAddUser.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet2 = procAddUser.execute();
+			if (hasResultSet2) {
+				ResultSet rs2 = procAddUser.getResultSet();
+				// Consume the result set to avoid cursor leaks
+				while (rs2.next()) {
+					// Do nothing, just consume
+				}
+				Common.safeClose(rs2);
+			}
 
 			Permission perm = new Permission(true);
 			perm.setLeader(true);
@@ -960,7 +973,14 @@ public class Spaces {
 				ps = con.prepareStatement("SELECT starexec.MoveSpace(?, ?)");
 				ps.setInt(1, desId);
 				ps.setInt(2, srcId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			} finally {
 				Common.safeClose(ps);
 			}
@@ -979,7 +999,14 @@ public class Spaces {
 			try {
 				ps = con.prepareStatement("SELECT starexec.RebuildSpaceClosures(?)");
 				ps.setInt(1, spaceId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			} finally {
 				Common.safeClose(ps);
 			}
@@ -2186,7 +2213,14 @@ public class Spaces {
 			for (int benchId : benchIds) {
 				ps.setInt(1, benchId);
 				ps.setInt(2, spaceId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			}
 			log.info(benchIds.size() + " benchmark(s) were successfully removed from space " + spaceId);
 		} catch (Exception e) {
@@ -2275,7 +2309,14 @@ public class Spaces {
 			for (int jobId : jobIds) {
 				ps.setInt(1, jobId);
 				ps.setInt(2, spaceId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			}
 			log.info(jobIds.size() + " job(s) were successfully removed from space " + spaceId);
 		} catch (Exception e) {
@@ -2330,7 +2371,14 @@ public class Spaces {
 			for (int solverId : solverIds) {
 				ps.setInt(1, solverId);
 				ps.setInt(2, spaceId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			}
 			log.info(solverIds.size() + " solver(s) were successfully removed from space " + spaceId);
 		} catch (Exception e) {
@@ -2404,7 +2452,14 @@ public class Spaces {
 			// For every subspace of the space to be deleted...
 			for (Space subspace : Spaces.getSubSpaceHierarchy(spaceId)) {
 				ps.setInt(1, subspace.getId());
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 				log.info("Space " + subspace.getId() + " has been deleted.");
 			}
 		} finally {
@@ -2453,7 +2508,14 @@ public class Spaces {
 					ps = con.prepareStatement("SELECT starexec.RemoveSubspace(?)");
 				}
 				ps.setInt(1, subspaceId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 				log.info("Space " + subspaceId + " has been deleted.");
 			}
 
@@ -2491,7 +2553,14 @@ public class Spaces {
 			for (int userId : userIds) {
 				ps.setInt(1, userId);
 				ps.setInt(2, spaceId);
-				ps.execute();
+				boolean hasResultSet = ps.execute();
+				if (hasResultSet) {
+					ResultSet rs = ps.getResultSet();
+					while (rs.next()) {
+						// consume the result set
+					}
+					Common.safeClose(rs);
+				}
 			}
 		} catch (Exception e) {
 			log.error("removeUsers", e);
@@ -2625,7 +2694,14 @@ public class Spaces {
 			ps = con.prepareStatement("SELECT starexec.setPublicSpace(?, ?)");
 			ps.setInt(1, spaceId);
 			ps.setBoolean(2, pbc);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			log.error("setPublicSpace", e);
 			return false;

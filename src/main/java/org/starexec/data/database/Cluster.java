@@ -215,8 +215,14 @@ public class Cluster {
 				ps.setString(1, name);
 				ps.setString(2, status);
 			}
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -244,8 +250,14 @@ public class Cluster {
 
 			// First, add the node (PostgreSQL will ignore this if it already exists)
 			ps.setInt(1, nodeId);
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 
 			// Done, commit the changes
 		} catch (Exception e) {
@@ -272,8 +284,14 @@ public class Cluster {
 
 			// First, add the node (PostgreSQL will ignore this if it already exists)
 			ps.setString(1, name);
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 
 			// Done, commit the changes
 			return;

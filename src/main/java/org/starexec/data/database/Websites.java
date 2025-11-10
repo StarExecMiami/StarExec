@@ -53,8 +53,14 @@ public class Websites {
 			ps.setString(2, url);
 			ps.setString(3, name);
 
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			log.info(
 					String.format("Added new website of with [%s] id [%d] with name [%s] and url [%s]", type
 							              .toString(), id, name, url
@@ -118,8 +124,14 @@ public class Websites {
 
 			ps.setInt(1, websiteId);
 
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);

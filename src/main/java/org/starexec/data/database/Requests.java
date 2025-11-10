@@ -40,7 +40,14 @@ public class Requests {
 			ps.setString(2, code);
 
 			// Apply update to database (function returns void/scalar) and ignore any result
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			log.info(String.format("New email activation code [%s] added to VERIFY for user [%s]", code,
 			                       user.getFullName()
 			));
@@ -78,7 +85,14 @@ public class Requests {
 			ps.setString(3, code);
 			ps.setString(4, message);
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			log.debug(String.format("Added invitation record for user [%s] on community %d", user, communityId));
 			return true;
 		} catch (Exception e) {
@@ -134,7 +148,14 @@ public class Requests {
 			ps.setInt(1, userId);
 			ps.setString(2, code);
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -163,7 +184,14 @@ public class Requests {
 			ps.setInt(1, userId);
 			ps.setInt(2, communityId);
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -197,7 +225,14 @@ public class Requests {
 			ps.setInt(1, userId);
 			ps.setInt(2, communityId);
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -531,7 +566,14 @@ public class Requests {
 			ps.setInt(1, userId);
 			ps.setString(2, newEmail);
 			ps.setString(3, code);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to add a change email request for user with id=" + userId +
@@ -598,7 +640,14 @@ public class Requests {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteChangeEmailRequest(?)");
 			ps.setInt(1, userId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to delete a change email requests for user with id=" + userId +
