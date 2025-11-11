@@ -80,6 +80,10 @@ public class SettingSecurity {
 				return new ValidatorStatusCode(false, "Settings for guests cannot be updated");
 			}
 		} else {
+			// Admin bypass for community/space settings
+			if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+				return new ValidatorStatusCode(true);
+			}
 			Permission perm = Permissions.get(userId, d.getPrimId());
 			if (perm == null || !perm.isLeader()) {
 				return new ValidatorStatusCode(

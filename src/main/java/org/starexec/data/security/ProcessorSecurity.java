@@ -22,6 +22,11 @@ public class ProcessorSecurity {
 	 */
 
 	public static ValidatorStatusCode doesUserOwnProcessor(int procId, int userId) {
+		// Admin bypass - admins can own any processor
+		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			return new ValidatorStatusCode(true);
+		}
+
 		Processor p = Processors.get(procId);
 		Permission perm = Permissions.get(userId, p.getCommunityId());
 		if (perm == null || !perm.isLeader()) {
@@ -59,6 +64,26 @@ public class ProcessorSecurity {
 	 */
 
 	public static ValidatorStatusCode canUserEditProcessor(int procId, int userId, String name, String desc) {
+		// Admin bypass with validation - admins can edit any processor
+		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			if (!Validator.isValidProcessorName(name)) {
+				return new ValidatorStatusCode(
+						false,
+						"The given name is not formatted correctly. Please refer to the help pages to see the proper " +
+								"format"
+				);
+			}
+
+			if (!Validator.isValidPrimDescription(desc)) {
+				return new ValidatorStatusCode(
+						false,
+						"The given description is not formatted correctly. Please refer to the help pages to see the " +
+								"proper format"
+				);
+			}
+			return new ValidatorStatusCode(true);
+		}
+
 		Processor p = Processors.get(procId);
 		Permission perm = Permissions.get(userId, p.getCommunityId());
 		if (perm == null || !perm.isLeader()) {

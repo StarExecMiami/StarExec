@@ -25,6 +25,23 @@ public class SpaceSecurity {
 	 */
 	public static ValidatorStatusCode canUpdateProperties(int spaceId, int userId, String name, boolean
 			stickyLeaders) {
+		// Admin bypass - admins can update any space properties
+		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			// Still validate: communities cannot have sticky leaders
+			if (Communities.isCommunity(spaceId) && stickyLeaders) {
+				return new ValidatorStatusCode(false, "Community spaces may not enable sticky leaders");
+			}
+			// Validate name uniqueness
+			Space os = Spaces.get(spaceId);
+			if (!os.getName().equals(name)) {
+				int parentId = Spaces.getParentSpace(os.getId());
+				if (Spaces.notUniquePrimitiveName(name, parentId)) {
+					return new ValidatorStatusCode(false, "The new name needs to be unique in the space");
+				}
+			}
+			return new ValidatorStatusCode(true);
+		}
+		
 		Permission perm = Permissions.get(userId, spaceId);
 		if (perm == null || !perm.isLeader()) {
 			return new ValidatorStatusCode(false, "You do not have permission to update this space");
@@ -906,6 +923,11 @@ public class SpaceSecurity {
 	 * otherwise
 	 */
 	public static ValidatorStatusCode canSetSpacePublicOrPrivate(int spaceId, int userId) {
+		// Admin bypass - admins can change public/private status of any space
+		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			return new ValidatorStatusCode(true);
+		}
+		
 		Permission perm = Permissions.get(userId, spaceId);
 		//must be a leader to make a space public
 		if (perm == null || !perm.isLeader()) {
@@ -961,7 +983,15 @@ public class SpaceSecurity {
 	 * otherwise
 	 */
 	public static ValidatorStatusCode canUpdatePermissions(int spaceId, int userIdBeingUpdated, int requestUserId) {
-
+		// Admin bypass - admins can update any user's permissions
+		if (GeneralSecurity.hasAdminWritePrivileges(requestUserId)) {
+			// Verify the user being updated exists in the space
+			Permission targetPerm = Permissions.get(userIdBeingUpdated, spaceId);
+			if (targetPerm == null) {
+				return new ValidatorStatusCode(false, "The given user is not a member of the given space");
+			}
+			return new ValidatorStatusCode(true);
+		}
 
 		Permission perm = Permissions.get(requestUserId, spaceId);
 		if (perm == null || !perm.isLeader()) {
@@ -1033,8 +1063,33 @@ public class SpaceSecurity {
 
 	// NOTE: Validation is performed here to keep checks close to the update path.
 	public static ValidatorStatusCode canUpdateSettings(int spaceId, String attribute, String newValue, int userId) {
+		log.debug("canUpdateSettings called: spaceId=" + spaceId + ", userId=" + userId + ", attribute=" + attribute);
+		
+		// Check if user is admin first - admins can update any space
+		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
+			log.debug("User " + userId + " has admin write privileges, allowing update");
+			// Still validate the input even for admins
+			if (attribute.equals("name")) {
+				Space s = Spaces.get(spaceId);
+				if (s != null && !s.getName().equals(newValue)) {
+					if (Spaces.notUniquePrimitiveName(newValue, spaceId)) {
+						return new ValidatorStatusCode(false, "The new name needs to be unique in the space");
+					}
+				}
+			} else if (attribute.equals("description")) {
+				if (!Validator.isValidPrimDescription(newValue)) {
+					return new ValidatorStatusCode(
+							false,
+							"The description is not in a valid format. Please refer to the help pages to see the correct format"
+					);
+				}
+			}
+			return new ValidatorStatusCode(true);
+		}
 
 		Permission perm = Permissions.get(userId, spaceId);
+		log.debug("Permission retrieved for user " + userId + ": " + (perm != null ? "isLeader=" + perm.isLeader() : "null"));
+		
 		if (perm == null || !perm.isLeader()) {
 			return new ValidatorStatusCode(false, "Only leaders can update settings in a space");
 		}
