@@ -4213,7 +4213,7 @@ public class RESTServices {
 				return gson.toJson(new ValidatorStatusCode(false, "User permissions not found"));
 			}
 
-			if (userPermission.isLeader()) {
+			if (userPermission.isLeader() && !GeneralSecurity.hasAdminWritePrivileges(userId)) {
 				return gson.toJson(ERROR_CANT_PROMOTE_LEADER);
 			}
 
