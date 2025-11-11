@@ -2835,35 +2835,44 @@ public class Spaces {
 		PreparedStatement ps = null;
 		ResultSet rs = null;
 		try {
+			log.info(String.format("updateDescription called: spaceId=%d, newDesc=%s", spaceId, newDesc));
 			con = Common.getConnection();
+			log.info("updateDescription: got connection");
 			ps = con.prepareStatement("SELECT starexec.UpdateSpaceDescription(?, ?)");
 			ps.setInt(1, spaceId);
 			ps.setString(2, newDesc);
+			log.info("updateDescription: prepared statement with parameters");
 			boolean hasResultSet = ps.execute();
+			log.info("updateDescription: executed, hasResultSet=" + hasResultSet);
 			if (hasResultSet) {
 				rs = ps.getResultSet();
 				// Consume the result set to avoid cursor leaks
 				while (rs.next()) {
-					// Do nothing, just consume
+					// Intentional no-op: exhaust result set to keep pool stable
 				}
 			}
 			log.info(String.format("Space [%d] updated description to [%s]", spaceId, newDesc));
 			return true;
 		} catch (PSQLException e) {
+			log.error(String.format("updateDescription PSQLException: spaceId=%d, SQLState=%s, message=%s",
+				spaceId, e.getSQLState(), e.getMessage()), e);
+			Common.doRollback(con);
 			if ("P0002".equals(e.getSQLState())) {
 				throw new StarExecDatabaseException("Space not found: " + spaceId, e);
 			}
-			log.error("updateDescription", e);
-			Common.doRollback(con);
+			throw new StarExecDatabaseException(
+				"Database error updating description for space " + spaceId + ": " + e.getMessage(), e);
 		} catch (Exception e) {
-			log.error("updateDescription", e);
+			log.error(String.format("updateDescription Exception: spaceId=%d, class=%s, message=%s",
+				spaceId, e.getClass().getName(), e.getMessage()), e);
 			Common.doRollback(con);
+			throw new StarExecDatabaseException(
+				"Unexpected error updating description for space " + spaceId + ": " + e.getMessage(), e);
 		} finally {
 			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
-		return false;
 	}
 
 	/**
@@ -2907,7 +2916,7 @@ public class Spaces {
 			PreparedStatement ps = null;
 			ResultSet rs = null;
 			try {
-				ps = con.prepareStatement("SELECT * FROM starexec.UpdateSpaceDetails(?, ?, ?, ?, ?, ?)");
+				ps = con.prepareStatement("SELECT * FROM starexec.UpdateSpaceDetails(?, ?, ?, ?, ?)");
 				ps.setInt(1, s.getId());
 				ps.setString(2, s.getName());
 				ps.setString(3, s.getDescription());

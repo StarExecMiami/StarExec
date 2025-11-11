@@ -2374,36 +2374,48 @@ public class RESTServices {
 	public String editCommunityDetails(@PathParam("attr") String attribute, @PathParam("id") int id, @Context HttpServletRequest request) {
 		int userId=SessionUtil.getUserId(request);
 		String newValue=(String)request.getParameter("val");
-		ValidatorStatusCode status=SpaceSecurity.canUpdateSettings(id,attribute,newValue, userId);
+		String normalizedAttribute = attribute;
+		if ("desc".equalsIgnoreCase(attribute)) {
+			normalizedAttribute = "description";
+		}
+		log.info("editCommunityDetails called: attr=" + attribute + " (normalized=" + normalizedAttribute + "), id=" + id + ", userId=" + userId + ", newValue=" + newValue);
+		ValidatorStatusCode status=SpaceSecurity.canUpdateSettings(id,normalizedAttribute,newValue, userId);
 
 		if (!status.isSuccess()) {
+			log.warn("editCommunityDetails permission denied: " + status.getMessage());
 			return gson.toJson(status);
 		}
 		try {
 			if(Util.isNullOrEmpty((String)request.getParameter("val"))){
+				log.warn("editCommunityDetails value is empty");
 				return gson.toJson(ERROR_EDIT_VAL_ABSENT);
 			}
 
 			boolean success = false;
 			// Go through all the cases, depending on what attribute we are changing.
-			if (attribute.equals("name")) {
+			if (normalizedAttribute.equals("name")) {
 				String newName = (String)request.getParameter("val");
 
 				success = Spaces.updateName(id, newName);
 
-			} else if (attribute.equals("description")) {
+			} else if (normalizedAttribute.equals("description")) {
 				String newDesc = (String)request.getParameter("val");
+				log.info("editCommunityDetails calling updateDescription: id=" + id + ", desc=" + newDesc);
 				success = Spaces.updateDescription(id, newDesc);
+				log.info("editCommunityDetails updateDescription returned: " + success);
 
 			}
 
 			// Passed validation AND Database update successful
+			if (!success) {
+				log.error("editCommunityDetails failed: updateDescription returned false for space id=" + id);
+			}
 			return success ? gson.toJson(new ValidatorStatusCode(true,"Community edit successful")) : gson.toJson(ERROR_DATABASE);
 		} catch (StarExecDatabaseException e) {
-			log.error(e.getMessage(), e);
+			log.error("editCommunityDetails StarExecDatabaseException: " + e.getMessage(), e);
 			return gson.toJson(new ValidatorStatusCode(false, "Space not found"));
 		} catch (Exception e) {
-			log.error(e.getMessage(),e);
+			log.error("editCommunityDetails Exception: " + e.getMessage(),e);
 			return gson.toJson(ERROR_DATABASE);
 		}
 
@@ -4190,7 +4202,7 @@ public class RESTServices {
 		// 1 - Ensuring the leader who initiated the promotion of users from a space isn't themselves in the list of users to remove
 		// 2 - Ensuring other leaders of the space aren't in the list of users to promote
 		for(int userId : selectedUsers){
-			if(userId == userIdOfPromotion){
+			if(userId == userIdOfPromotion && !GeneralSecurity.hasAdminWritePrivileges(userIdOfPromotion)){
 				return gson.toJson(ERROR_CANT_PROMOTE_SELF);
 			}
 
