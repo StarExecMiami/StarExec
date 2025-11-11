@@ -430,7 +430,14 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT starexec.IncrementTotalJobPairsForJob(?, ?)");
 			ps.setInt(1, jobId);
 			ps.setInt(2, increment);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -482,7 +489,14 @@ public class JobPairs {
 		try {
 			ps = con.prepareStatement("SELECT starexec.DeleteJobPair(?)");
 			ps.setInt(1, pairToDelete.getId());
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -576,7 +590,14 @@ public class JobPairs {
 			ps.setString(2, key);
 			ps.setString(3, val);
 			ps.setInt(4, stageId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			log.error("addJobPairAttr", e);
 		} finally {
@@ -1019,7 +1040,14 @@ public class JobPairs {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.RemovePairFromCompletedTable(?)");
 			ps.setInt(1, pairId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -1512,9 +1540,14 @@ public class JobPairs {
 			ps.setInt(2, stageNumber);
 			ps.setShort(3, (short) statusCode);
 
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
-
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (Exception e) {
 			log.debug(e.getMessage(), e);
@@ -1602,8 +1635,14 @@ public class JobPairs {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.RemoveJobPairDiskSize(?)");
 			ps.setInt(1, jobPairId);
-			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {

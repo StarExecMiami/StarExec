@@ -181,7 +181,14 @@ public class Pipelines {
 			log.debug("adding dependency with type " + dep.getType());
 			ps.setInt(3, dep.getType().getVal());
 			ps.setInt(4, dep.getInputNumber());
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -319,7 +326,14 @@ public class Pipelines {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeletePipeline(?)");
 			ps.setInt(1, pipelineId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {

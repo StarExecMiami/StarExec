@@ -98,7 +98,14 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.DeleteDefaultBenchmark(?, ?)");
 			ps.setInt(1, settingId);
 			ps.setInt(2, benchId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -118,7 +125,14 @@ public class Settings {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteAllDefaultBenchmarks(?)");
 			ps.setInt(1, settingId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -137,7 +151,14 @@ public class Settings {
 		try {
 			ps = con.prepareStatement("SELECT starexec.DeleteAllDefaultBenchmarks(?)");
 			ps.setInt(1, settingId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -159,7 +180,14 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.AddDefaultBenchmark(?, ?)");
 			ps.setInt(1, settingId);
 			ps.setInt(2, benchId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -299,7 +327,14 @@ public class Settings {
 			ps.setObject(8, settings.getPreProcessorId());
 			ps.setString(9, settings.getBenchmarkingFramework().toString());
 			ps.setInt(10, settings.getId());
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 
 			Settings.deleteAllDefaultBenchmarks(con, settings.getId());
 			for (Integer bid : settings.getBenchIds()) {
@@ -547,7 +582,14 @@ public class Settings {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteDefaultSettings(?)");
 			ps.setInt(1, id);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -609,7 +651,14 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.SetMaximumMemorySetting(?, ?)");
 			ps.setInt(1, id);
 			ps.setLong(2, bytes);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
 				log.warn("Settings profile " + id + " not found");
@@ -641,7 +690,14 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.SetDefaultProfileForUser(?,?)");
 			ps.setInt(1, userId);
 			ps.setInt(2, settingId);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -718,7 +774,14 @@ public class Settings {
 				ps.setInt(3, (int) setting);
 			}
 
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {

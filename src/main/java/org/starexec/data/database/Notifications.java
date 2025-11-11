@@ -56,7 +56,14 @@ public class Notifications {
 			ps = con.prepareStatement("SELECT starexec.SubscribeUserToJob(?,?)");
 			ps.setInt(1, user);
 			ps.setInt(2, job);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -74,10 +81,17 @@ public class Notifications {
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserFromJob(?,?)");
+			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserToJob(?,?)");
 			ps.setInt(1, user);
 			ps.setInt(2, job);
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -105,7 +119,14 @@ public class Notifications {
 			ps.setInt(1, userId);
 			ps.setInt(2, job);
 			ps.setString(3, status.name());
-			ps.execute();
+			boolean hasResultSet = ps.execute();
+			if (hasResultSet) {
+				ResultSet rs = ps.getResultSet();
+				while (rs.next()) {
+					// consume the result set
+				}
+				Common.safeClose(rs);
+			}
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
