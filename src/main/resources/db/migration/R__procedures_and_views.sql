@@ -5954,7 +5954,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Benton McCune
 DROP FUNCTION IF EXISTS starexec.GetPublicSolvers CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPublicSolvers()
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT DISTINCT s.id AS solver_id,
@@ -5969,8 +5969,7 @@ BEGIN
                    s.recycled AS solver_recycled,
                    s.recycled_original_name AS solver_recycled_original_name,
                    s.executable_type AS solver_executable_type,
-                   s.build_status AS solver_build_status,
-                   s.config_deleted::BOOLEAN AS solver_config_deleted
+                   s.build_status AS solver_build_status
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     JOIN spaces sp ON sp.id = sa.space_id
@@ -6256,7 +6255,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetSpaceSolversById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpaceSolversById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT s.id AS solver_id,
@@ -6271,8 +6270,7 @@ BEGIN
            s.recycled AS solver_recycled,
            s.recycled_original_name AS solver_recycled_original_name,
            s.executable_type AS solver_executable_type,
-           s.build_status AS solver_build_status,
-           s.config_deleted AS solver_config_deleted
+           s.build_status AS solver_build_status
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     WHERE s.deleted = false AND s.recycled = false AND sa.space_id = _id;
@@ -6296,7 +6294,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetSolverById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolverById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT s.id AS solver_id,
@@ -6311,8 +6309,7 @@ BEGIN
            s.recycled AS solver_recycled,
            s.recycled_original_name AS solver_recycled_original_name,
            s.executable_type AS solver_executable_type,
-           s.build_status AS solver_build_status,
-           s.config_deleted AS solver_config_deleted
+           s.build_status AS solver_build_status
     FROM starexec.solvers s
     WHERE s.id = _id AND s.deleted = false AND s.recycled = false;
 END;
@@ -6322,7 +6319,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetSolverByIdIncludeDeleted CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolverByIdIncludeDeleted(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT s.id AS solver_id,
@@ -6337,8 +6334,7 @@ BEGIN
            s.recycled AS solver_recycled,
            s.recycled_original_name AS solver_recycled_original_name,
            s.executable_type AS solver_executable_type,
-           s.build_status AS solver_build_status,
-           s.config_deleted AS solver_config_deleted
+           s.build_status AS solver_build_status
     FROM starexec.solvers s
     WHERE s.id = _id;
 END;
@@ -6364,7 +6360,7 @@ $$ LANGUAGE plpgsql;
 -- Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetSolversByOwner CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolversByOwner(_userId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT s.id AS solver_id,
@@ -6379,8 +6375,7 @@ BEGIN
            s.recycled AS solver_recycled,
            s.recycled_original_name AS solver_recycled_original_name,
            s.executable_type AS solver_executable_type,
-           s.build_status AS solver_build_status,
-           s.config_deleted::BOOLEAN AS solver_config_deleted
+           s.build_status AS solver_build_status
     FROM starexec.solvers s
     WHERE s.user_id = _userId AND s.deleted = false AND s.recycled = false;
 END;
@@ -6650,10 +6645,10 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetDeletedSolvers CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetDeletedSolvers()
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted
+    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status
     FROM starexec.solvers s WHERE s.deleted = true;
 END;
 $$ LANGUAGE plpgsql;
@@ -6705,10 +6700,10 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetSolversInSharedSpaces CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolversInSharedSpaces(_userId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT, config_deleted BOOLEAN) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(128), uploaded TIMESTAMP, path TEXT, description TEXT, downloadable BOOLEAN, disk_size BIGINT, deleted BOOLEAN, recycled BOOLEAN, recycled_original_name VARCHAR(256), executable_type INT, build_status INT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT DISTINCT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status, s.config_deleted::BOOLEAN
+    SELECT DISTINCT s.id, s.user_id, s.name, s.uploaded, s.path, s.description, s.downloadable, s.disk_size, s.deleted, s.recycled, s.recycled_original_name, s.executable_type, s.build_status
     FROM starexec.solvers s
     JOIN solver_assoc sa ON sa.solver_id = s.id
     JOIN user_assoc ua ON ua.space_id = sa.space_id
