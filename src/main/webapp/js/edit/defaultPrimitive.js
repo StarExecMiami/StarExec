@@ -18,17 +18,14 @@ function initUI() {
 		"bServerSide": true,
 		"sAjaxSource": starexecRoot + "services/space/",
 		"sServerMethod": "POST",
-		"fnServerData": fnPaginationHandler
-	});
-
-	$("#prims").on("mousedown", "tr", function() {
-		if ($(this).hasClass("row_selected")) {
-			$(this).removeClass("row_selected");
-		} else {
-			unselectAll();
-			$(this).addClass("row_selected");
+		"fnServerData": fnPaginationHandler,
+		// Preserve the special "none" row when DataTables replaces table body
+		"fnDrawCallback": function(oSettings) {
+			attachRowSelectionHandlers();
 		}
 	});
+
+	attachRowSelectionHandlers();
 
 	// Attach icons
 	$('#cancel').button({
@@ -46,6 +43,21 @@ function initUI() {
 		navBack();
 	});
 
+}
+
+/**
+ * Attaches row selection event handlers to all table rows.
+ * This is called both on initial page load and after DataTables pagination.
+ */
+function attachRowSelectionHandlers() {
+	$("#prims").on("mousedown", "tr", function() {
+		if ($(this).hasClass("row_selected")) {
+			$(this).removeClass("row_selected");
+		} else {
+			unselectAll();
+			$(this).addClass("row_selected");
+		}
+	});
 }
 
 function navBack() {
@@ -81,14 +93,16 @@ function isSpaceSetting() {
 }
 
 /**
- * Validates that a user has selected a primitive when update is clicked
+ * Validates that a user has selected a primitive when update is clicked.
+ * Accepts -1 as a valid value to reset/clear the setting to "none".
  */
 function attachFormValidation() {
 
 	$("#update").click(function() {
 		var selectedPrim = primSelected();
 
-		if (selectedPrim >= 0) {
+		// Accept -1 (clear/none) or positive IDs (actual primitives)
+		if (selectedPrim >= -1) {
 			createDialog("Updating default " + primType + ", please wait");
 			$.post(
 				starexecRoot + "services/edit/defaultSettings/" + "default" + primType + "/" + $(
@@ -104,7 +118,7 @@ function attachFormValidation() {
 				"json"
 			);
 		} else {
-			showMessage('error', "Select a " + primType + " to proceed",
+			showMessage('error', "Select a " + primType + " or clear the selection to proceed",
 				"5000");
 		}
 	});

@@ -129,34 +129,52 @@ public class SettingSecurity {
 				return new ValidatorStatusCode(false, "The given processor ID is not valid");
 			}
 			int procId = Integer.parseInt(newValue);
-			if (procId >= 0) {
-				if (!ProcessorSecurity.canUserSeeProcessor(Integer.parseInt(newValue), userId).isSuccess()) {
-					return new ValidatorStatusCode(
-							false,
-							"You do not have permission to see the given processor, or the given solver does not exist"
-					);
-				}
-				Processor p = Processors.get(Integer.parseInt(newValue));
-				if (p.getType() != ProcessorType.POST) {
-					return new ValidatorStatusCode(false, "The given processor is not a preprocessor");
-				}
+			
+			// Allow -1 to mean "no processor selected" (will be converted to NULL in database)
+			if (procId == -1) {
+				return new ValidatorStatusCode(true);
+			}
+			
+			// Validate actual processor selection
+			if (procId < 0) {
+				return new ValidatorStatusCode(false, "The given processor ID is not valid");
+			}
+			
+			if (!ProcessorSecurity.canUserSeeProcessor(procId, userId).isSuccess()) {
+				return new ValidatorStatusCode(
+						false,
+						"You do not have permission to see the given processor, or the given processor does not exist"
+				);
+			}
+			Processor p = Processors.get(procId);
+			if (p.getType() != ProcessorType.POST) {
+				return new ValidatorStatusCode(false, "The given processor is not a post processor");
 			}
 		} else if (attribute == DefaultSettingAttribute.BenchProcess) {
 			if (!isInt) {
 				return new ValidatorStatusCode(false, "The given processor ID is not valid");
 			}
 			int procId = Integer.parseInt(newValue);
-			if (procId >= 0) {
-				if (!ProcessorSecurity.canUserSeeProcessor(Integer.parseInt(newValue), userId).isSuccess()) {
-					return new ValidatorStatusCode(
-							false,
-							"You do not have permission to see the given solver, or the given solver does not exist"
-					);
-				}
-				Processor p = Processors.get(Integer.parseInt(newValue));
-				if (p.getType() != ProcessorType.BENCH) {
-					return new ValidatorStatusCode(false, "The given processor is not a preprocessor");
-				}
+			
+			// Allow -1 to mean "no processor selected" (will be converted to NULL in database)
+			if (procId == -1) {
+				return new ValidatorStatusCode(true);
+			}
+			
+			// Validate actual processor selection
+			if (procId < 0) {
+				return new ValidatorStatusCode(false, "The given processor ID is not valid");
+			}
+			
+			if (!ProcessorSecurity.canUserSeeProcessor(procId, userId).isSuccess()) {
+				return new ValidatorStatusCode(
+						false,
+						"You do not have permission to see the given processor, or the given processor does not exist"
+				);
+			}
+			Processor p = Processors.get(procId);
+			if (p.getType() != ProcessorType.BENCH) {
+				return new ValidatorStatusCode(false, "The given processor is not a bench processor");
 			}
 		} else if (attribute == DefaultSettingAttribute.defaultbenchmark) {
 			if (!isInt) {
@@ -183,17 +201,26 @@ public class SettingSecurity {
 				return new ValidatorStatusCode(false, "The given processor ID is not valid");
 			}
 			int procId = Integer.parseInt(newValue);
-			if (procId >= 0) {
-				if (!ProcessorSecurity.canUserSeeProcessor(Integer.parseInt(newValue), userId).isSuccess()) {
-					return new ValidatorStatusCode(
-							false,
-							"You do not have permission to see the given solver, or the given solver does not exist"
-					);
-				}
-				Processor p = Processors.get(Integer.parseInt(newValue));
-				if (p.getType() != ProcessorType.PRE) {
-					return new ValidatorStatusCode(false, "The given processor is not a preprocessor");
-				}
+			
+			// Allow -1 to mean "no processor selected" (will be converted to NULL in database)
+			if (procId == -1) {
+				return new ValidatorStatusCode(true);
+			}
+			
+			// Validate actual processor selection
+			if (procId < 0) {
+				return new ValidatorStatusCode(false, "The given processor ID is not valid");
+			}
+			
+			if (!ProcessorSecurity.canUserSeeProcessor(procId, userId).isSuccess()) {
+				return new ValidatorStatusCode(
+						false,
+						"You do not have permission to see the given processor, or the given processor does not exist"
+				);
+			}
+			Processor p = Processors.get(procId);
+			if (p.getType() != ProcessorType.PRE) {
+				return new ValidatorStatusCode(false, "The given processor is not a pre processor");
 			}
 		} else if (attribute == DefaultSettingAttribute.BENCHMARKING_FRAMEWORK) {
 			boolean isLegalFrameworkName = EnumSet.allOf(BenchmarkingFramework.class).stream()

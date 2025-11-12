@@ -62,6 +62,14 @@
 						<th>type</th>
 					</tr>
 					</thead>
+					<tbody>
+						<!-- Special row to allow clearing the selection (resetting to "none") -->
+						<tr id="noneRow" class="noneRow">
+							<td style="font-style: italic; color: #999;">[clear - set to none]</td>
+							<td style="font-style: italic; color: #999;">n/a</td>
+							<input type="hidden" value="-1"/>
+						</tr>
+					</tbody>
 				</table>
 			</fieldset>
 			<button type="button" id="cancel">cancel</button>
