@@ -7349,11 +7349,12 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Space %s not found', _subspaceId);
     END IF;
-    DELETE FROM starexec.permissions WHERE id = _permId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Permission %s not found for subspace %s', _permId, _subspaceId);
+    
+    -- Only attempt to delete permission if it's not NULL
+    -- (permissions can be NULL for some spaces)
+    IF _permId IS NOT NULL THEN
+        DELETE FROM starexec.permissions WHERE id = _permId;
+        -- Don't raise on NOT FOUND - permission may already be deleted or cascade-deleted
     END IF;
 
     -- Remove the space
