@@ -112,11 +112,18 @@ function attachFormValidation() {
 					s = parseReturnCode(returnCode);
 					if (s) {
 						navBack();
+					} else {
+						// If update failed, destroy the dialog to allow user to try again
+						destroyDialog();
 					}
 
 				},
 				"json"
-			);
+			).error(function() {
+				// If there was an AJAX error, destroy the dialog
+				destroyDialog();
+				showMessage('error', "Error updating default " + primType, 5000);
+			});
 		} else {
 			showMessage('error', "Select a " + primType + " or clear the selection to proceed",
 				"5000");
