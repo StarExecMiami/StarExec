@@ -4210,31 +4210,31 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.GetUserPermissions CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetUserPermissions(_userId INT, _spaceId INT)
 RETURNS TABLE(
-    add_solver SMALLINT,
-    add_bench SMALLINT,
-    add_user SMALLINT,
-    add_space SMALLINT,
-    add_job SMALLINT,
-    remove_solver SMALLINT,
-    remove_bench SMALLINT,
-    remove_space SMALLINT,
-    remove_user SMALLINT,
-    remove_job SMALLINT,
-    is_leader SMALLINT
+    add_solver BOOLEAN,
+    add_bench BOOLEAN,
+    add_user BOOLEAN,
+    add_space BOOLEAN,
+    add_job BOOLEAN,
+    remove_solver BOOLEAN,
+    remove_bench BOOLEAN,
+    remove_space BOOLEAN,
+    remove_user BOOLEAN,
+    remove_job BOOLEAN,
+    is_leader BOOLEAN
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT (bool_or(p.add_solver)::int)::SMALLINT AS add_solver,
-        (bool_or(p.add_bench)::int)::SMALLINT AS add_bench,
-        (bool_or(p.add_user)::int)::SMALLINT AS add_user,
-        (bool_or(p.add_space)::int)::SMALLINT AS add_space,
-        (bool_or(p.add_job)::int)::SMALLINT AS add_job,
-        (bool_or(p.remove_solver)::int)::SMALLINT AS remove_solver,
-        (bool_or(p.remove_bench)::int)::SMALLINT AS remove_bench,
-        (bool_or(p.remove_space)::int)::SMALLINT AS remove_space,
-        (bool_or(p.remove_user)::int)::SMALLINT AS remove_user,
-        (bool_or(p.remove_job)::int)::SMALLINT AS remove_job,
-        (bool_or(p.is_leader)::int)::SMALLINT AS is_leader
+    SELECT bool_or(p.add_solver) AS add_solver,
+        bool_or(p.add_bench) AS add_bench,
+        bool_or(p.add_user) AS add_user,
+        bool_or(p.add_space) AS add_space,
+        bool_or(p.add_job) AS add_job,
+        bool_or(p.remove_solver) AS remove_solver,
+        bool_or(p.remove_bench) AS remove_bench,
+        bool_or(p.remove_space) AS remove_space,
+        bool_or(p.remove_user) AS remove_user,
+        bool_or(p.remove_job) AS remove_job,
+        bool_or(p.is_leader) AS is_leader
     FROM starexec.permissions p
     JOIN user_assoc ua ON ua.permission = p.id
     WHERE ua.user_id = _userId AND ua.space_id = _spaceId;
@@ -4247,17 +4247,17 @@ DROP FUNCTION IF EXISTS starexec.GetSpacePermissions CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpacePermissions(_spaceId INT)
 RETURNS TABLE(
     id INT,
-    add_solver SMALLINT,
-    add_bench SMALLINT,
-    add_user SMALLINT,
-    add_space SMALLINT,
-    add_job SMALLINT,
-    remove_solver SMALLINT,
-    remove_bench SMALLINT,
-    remove_space SMALLINT,
-    remove_user SMALLINT,
-    remove_job SMALLINT,
-    is_leader SMALLINT
+    add_solver BOOLEAN,
+    add_bench BOOLEAN,
+    add_user BOOLEAN,
+    add_space BOOLEAN,
+    add_job BOOLEAN,
+    remove_solver BOOLEAN,
+    remove_bench BOOLEAN,
+    remove_space BOOLEAN,
+    remove_user BOOLEAN,
+    remove_job BOOLEAN,
+    is_leader BOOLEAN
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -4293,9 +4293,9 @@ $$ LANGUAGE plpgsql;
 -- Sets a user's permissions for a given space
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.SetUserPermissions CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetUserPermissions(_userId INT, _spaceId INT, _addSolver SMALLINT, _addBench SMALLINT, _addUser SMALLINT,
-_addSpace SMALLINT, _addJob SMALLINT, _removeSolver SMALLINT, _removeBench SMALLINT, _removeSpace SMALLINT,
-_removeUser SMALLINT, _removeJob SMALLINT, _isLeader SMALLINT)
+CREATE OR REPLACE FUNCTION starexec.SetUserPermissions(_userId INT, _spaceId INT, _addSolver BOOLEAN, _addBench BOOLEAN, _addUser BOOLEAN,
+_addSpace BOOLEAN, _addJob BOOLEAN, _removeSolver BOOLEAN, _removeBench BOOLEAN, _removeSpace BOOLEAN,
+_removeUser BOOLEAN, _removeJob BOOLEAN, _isLeader BOOLEAN)
 RETURNS VOID AS $$
 DECLARE
     _permissionId INT;
@@ -4344,16 +4344,16 @@ _removeUser BOOLEAN, _removeJob BOOLEAN)
 RETURNS VOID AS $$
 BEGIN
     UPDATE permissions
-    SET add_user = _addUser::SMALLINT,
-        add_solver = _addSolver::SMALLINT,
-        add_bench = _addBench::SMALLINT,
-        add_job = _addJob::SMALLINT,
-        add_space = _addSpace::SMALLINT,
-        remove_user = _removeUser::SMALLINT,
-        remove_solver = _removeSolver::SMALLINT,
-        remove_bench = _removeBench::SMALLINT,
-        remove_job = _removeJob::SMALLINT,
-        remove_space = _removeSpace::SMALLINT
+    SET add_user = _addUser,
+        add_solver = _addSolver,
+        add_bench = _addBench,
+        add_job = _addJob,
+        add_space = _addSpace,
+        remove_user = _removeUser,
+        remove_solver = _removeSolver,
+        remove_bench = _removeBench,
+        remove_job = _removeJob,
+        remove_space = _removeSpace
     WHERE id = _id;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
