@@ -5318,7 +5318,7 @@ $$ LANGUAGE plpgsql;
 -- Adds a request to join a community, provided the user isn't already a part of that community
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.AddCommunityRequest CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddCommunityRequest(_id INT, _community INT, _code VARCHAR(36), _message VARCHAR(512))
+CREATE OR REPLACE FUNCTION starexec.AddCommunityRequest(_id INT, _community INT, _code VARCHAR(36), _message TEXT)
 RETURNS VOID AS $$
 BEGIN
     IF NOT EXISTS(SELECT * FROM starexec.user_assoc WHERE user_id = _id AND space_id = _community) THEN
@@ -5409,7 +5409,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetCommunityRequestById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetCommunityRequestById(_id INT)
-RETURNS TABLE(user_id INT, community INT, code VARCHAR(36), message VARCHAR(512), created TIMESTAMP) AS $$
+RETURNS TABLE(user_id INT, community INT, code VARCHAR(36), message TEXT, created TIMESTAMP) AS $$
 BEGIN
     RETURN QUERY
     SELECT cr.user_id, cr.community, cr.code, cr.message, cr.created
@@ -5435,7 +5435,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetCommunityRequestByCode CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetCommunityRequestByCode(_code VARCHAR(36))
-RETURNS TABLE(user_id INT, community INT, code VARCHAR(36), message VARCHAR(512), created TIMESTAMP) AS $$
+RETURNS TABLE(user_id INT, community INT, code VARCHAR(36), message TEXT, created TIMESTAMP) AS $$
 BEGIN
     RETURN QUERY
     SELECT cr.user_id, cr.community, cr.code, cr.message, cr.created
