@@ -36,7 +36,7 @@
 %>
 
 <star:template title="space xml upload status"
-               js="details/shared, lib/jquery.dataTables.min"
+               js="common/delaySpinner, details/shared, lib/jquery.dataTables.min"
                css="details/shared, common/table">
 	<fieldset>
 		<legend>details</legend>

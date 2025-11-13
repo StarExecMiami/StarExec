@@ -63,7 +63,7 @@
 
 <star:template
 		title="Job Pairs for ${solver.name} in ${jobspace.name} hierarchy"
-		js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, lib/jquery.dataTables.min, details/shared, details/pairsInSpace, lib/jquery.ba-throttle-debounce.min"
+		js="util/sortButtons, util/jobDetailsUtilityFunctions, util/datatablesUtility, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/pairsInSpace, lib/jquery.ba-throttle-debounce.min"
 		css="common/table, details/shared, details/pairsInSpace">
 	<fieldset id="#pairTblField">
 		<legend>job pairs</legend>

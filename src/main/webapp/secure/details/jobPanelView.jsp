@@ -42,7 +42,7 @@
 	}
 %>
 <star:template title="${job.name}"
-               js=" lib/jquery.jstree, util/jobDetailsUtilityFunctions, lib/jquery.dataTables.min, details/shared, details/jobPanelView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
+               js=" lib/jquery.jstree, util/jobDetailsUtilityFunctions, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/jobPanelView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, explore/common, details/shared, details/jobPanelView">
 	<span style="display:none" id="jobId" value="${job.id}"> </span>
 	<span style="display:none" id="spaceId" value="${jobspace.id}"></span>

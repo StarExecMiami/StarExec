@@ -2229,6 +2229,47 @@ public class RESTServices {
 		}
 	}
 
+	/**
+	 * Clears the default settings profile for a user by setting it to NULL.
+	 * This allows users to reset their default without deleting the entire profile.
+	 * 
+	 * @param userIdOfOwner The ID of the user whose default should be cleared
+	 * @param request HTTP request containing authenticated user info
+	 * @return JSON response with success/failure status
+	 */
+	@POST
+	@Path("/clear/defaultSettings/{userIdOfOwner}")
+	@Produces("application/json")
+	public String clearDefaultSettingsForUser(
+			@PathParam("userIdOfOwner") int userIdOfOwner,
+			@Context HttpServletRequest request) {
+		final String methodName = "clearDefaultSettingsForUser";
+		int userIdOfCaller = SessionUtil.getUserId(request);
+		
+		// SECURITY: Only the user themselves or an admin can clear a user's default
+		if (userIdOfCaller != userIdOfOwner && 
+		    !GeneralSecurity.hasAdminWritePrivileges(userIdOfCaller)) {
+			log.warn(methodName + ": User " + userIdOfCaller + 
+					" attempted to clear default for user " + userIdOfOwner);
+			return gson.toJson(new ValidatorStatusCode(false, "Permission denied"));
+		}
+		
+		try {
+			boolean success = Settings.clearDefaultProfileForUser(userIdOfOwner);
+			if (success) {
+				log.debug(methodName + ": Cleared default profile for user " + userIdOfOwner);
+				return gson.toJson(new ValidatorStatusCode(true, "Default profile cleared successfully"));
+			} else {
+				log.warn(methodName + ": Failed to clear default for user " + userIdOfOwner);
+				return gson.toJson(ERROR_DATABASE);
+			}
+		} catch (Exception e) {
+			log.error(methodName, e);
+			return gson.toJson(ERROR_DATABASE);
+		}
+	}
+
+
 	@POST
 	@Path("/delete/defaultBenchmark/{settingId}/{benchId}")
 	@Produces("application/json")

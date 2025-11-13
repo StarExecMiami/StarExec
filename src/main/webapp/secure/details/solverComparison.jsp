@@ -66,7 +66,7 @@
 
 <star:template
 		title="Comparison of ${solver.name} (${config1.name}) and ${solver2.name} (${config2.name}) in ${space.name} hierarchy"
-		js="lib/jquery.dataTables.min, util/jobDetailsUtilityFunctions, util/datatablesUtility, details/shared, details/solverComparison, lib/jquery.ba-throttle-debounce.min"
+		js="lib/jquery.dataTables.min, util/jobDetailsUtilityFunctions, util/datatablesUtility, common/delaySpinner, details/shared, details/solverComparison, lib/jquery.ba-throttle-debounce.min"
 		css="common/table, details/shared, details/pairsInSpace">
 	<span style="display:none" id="jobId" value="${jobId}"> </span>
 	<span style="display:none" id="spaceId" value="${space.id}"> </span>

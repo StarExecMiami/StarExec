@@ -44,7 +44,7 @@
 %>
 
 <star:template title="${job.name}"
-               js="lib/jquery.dataTables.min, details/shared, details/job, lib/jquery.ba-throttle-debounce.min"
+               js="lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/job, lib/jquery.ba-throttle-debounce.min"
                css="common/table, details/shared, details/job">
 	<fieldset>
 		<legend>details</legend>

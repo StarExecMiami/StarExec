@@ -229,6 +229,95 @@ public class DefaultSettingsTests extends TestSequence {
 		}
 	}
 
+	@StarexecTest
+	private void setDefaultProfileForUserTest() {
+		try {
+			// User should have no default initially (or it will be overwritten)
+			
+			// Set a default profile
+			boolean success = Settings.setDefaultProfileForUser(u.getId(), settings.getId());
+			Assert.assertTrue("Failed to set default profile for user", success);
+			
+			// Verify it was set
+			Integer newDefault = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertNotNull("Default profile should not be null after setting", newDefault);
+			Assert.assertEquals("Default profile ID should match", newDefault.intValue(), settings.getId());
+		} catch (Exception e) {
+			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+		}
+	}
+
+	@StarexecTest
+	private void clearDefaultProfileForUserTest() {
+		try {
+			// First set a default profile
+			boolean setSuccess = Settings.setDefaultProfileForUser(u.getId(), settings.getId());
+			Assert.assertTrue("Failed to set default profile", setSuccess);
+			
+			// Verify it was set
+			Integer beforeClear = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertNotNull("Default should be set before clearing", beforeClear);
+			Assert.assertEquals("Default should match what we set", beforeClear.intValue(), settings.getId());
+			
+			// Now clear it
+			boolean clearSuccess = Settings.clearDefaultProfileForUser(u.getId());
+			Assert.assertTrue("Failed to clear default profile for user", clearSuccess);
+			
+			// Verify it was cleared
+			Integer afterClear = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertNull("Default profile should be null after clearing", afterClear);
+		} catch (Exception e) {
+			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+		}
+	}
+
+	@StarexecTest
+	private void clearDefaultProfileWhenAlreadyNullTest() {
+		try {
+			// Ensure user has no default
+			Settings.clearDefaultProfileForUser(u2.getId());
+			Integer beforeClear = Settings.getDefaultProfileForUser(u2.getId());
+			Assert.assertNull("User should have no default", beforeClear);
+			
+			// Clearing again should still succeed (idempotent operation)
+			boolean clearSuccess = Settings.clearDefaultProfileForUser(u2.getId());
+			Assert.assertTrue("Clearing already-null default should succeed", clearSuccess);
+			
+			// Verify still null
+			Integer afterClear = Settings.getDefaultProfileForUser(u2.getId());
+			Assert.assertNull("Default should still be null", afterClear);
+		} catch (Exception e) {
+			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+		}
+	}
+
+	@StarexecTest
+	private void setAndClearMultipleTimesTest() {
+		try {
+			// Set default to settings1
+			Settings.setDefaultProfileForUser(u.getId(), settings.getId());
+			Integer default1 = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertEquals("Should be set to first profile", default1.intValue(), settings.getId());
+			
+			// Clear it
+			Settings.clearDefaultProfileForUser(u.getId());
+			Integer cleared1 = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertNull("Should be null after clear", cleared1);
+			
+			// Set to different profile
+			Settings.setDefaultProfileForUser(u.getId(), settings2.getId());
+			Integer default2 = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertEquals("Should be set to second profile", default2.intValue(), settings2.getId());
+			
+			// Clear again
+			Settings.clearDefaultProfileForUser(u.getId());
+			Integer cleared2 = Settings.getDefaultProfileForUser(u.getId());
+			Assert.assertNull("Should be null after second clear", cleared2);
+		} catch (Exception e) {
+			Assert.fail("Caught exception: " + Util.getStackTrace(e));
+		}
+	}
+
 	@Override
 	protected void setup() throws Exception {
 		u=loader.loadUserIntoDatabase();

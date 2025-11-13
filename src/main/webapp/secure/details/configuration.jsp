@@ -71,7 +71,7 @@
 %>
 <star:template title="${config.name}"
                css="details/configuration, details/shared, prettify/prettify"
-               js="details/shared, lib/prettify, details/configuration">
+               js="common/delaySpinner, details/shared, lib/prettify, details/configuration">
 	<input type="hidden" id="solverId" value="${solver.id}"/>
 	<fieldset>
 		<legend>details</legend>

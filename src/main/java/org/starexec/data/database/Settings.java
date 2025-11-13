@@ -713,6 +713,38 @@ public class Settings {
 	}
 
 	/**
+	 * Clears the default settings profile for a given user by setting it to NULL.
+	 * This allows users to reset their default without deleting the profile.
+	 *
+	 * @param userId The ID of the user whose default profile should be cleared
+	 * @return true if the operation was successful, false otherwise
+	 */
+	public static boolean clearDefaultProfileForUser(int userId) {
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+			// Direct UPDATE to NULL - no procedure call needed
+			ps = con.prepareStatement("UPDATE starexec.users SET default_settings_profile = NULL WHERE id = ?");
+			ps.setInt(1, userId);
+			int rowsUpdated = ps.executeUpdate();
+			if (rowsUpdated > 0) {
+				log.debug("Cleared default profile for user " + userId);
+				return true;
+			} else {
+				log.warn("User " + userId + " not found when clearing default profile");
+				return false;
+			}
+		} catch (SQLException e) {
+			log.error("Error clearing default profile for user " + userId, e);
+			return false;
+		} finally {
+			Common.safeClose(con);
+			Common.safeClose(ps);
+		}
+	}
+
+	/**
 	 * Gets the default settings profile for a given user. This is the profile that will show up initially on job
 	 * creation
 	 *

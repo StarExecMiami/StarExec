@@ -58,12 +58,16 @@
 								t_user.getDiskQuota()));
 				request.setAttribute(
 						"diskUsage", Util.byteCountToDisplaySize(disk_usage));
-				request.setAttribute("sites", Websites.getAllForHTML(userId,
-				                                                     WebsiteType.USER
-				));
-				request.setAttribute("settings", listOfDefaultSettings);
+			request.setAttribute("sites", Websites.getAllForHTML(userId,
+			                                                     WebsiteType.USER
+			));
+			request.setAttribute("settings", listOfDefaultSettings);
+			
+			// Get current default profile for UI state management
+			Integer defaultProfileId = Settings.getDefaultProfileForUser(userId);
+			request.setAttribute("defaultProfileId", defaultProfileId);
 
-				List<Processor> ListOfPostProcessors =
+			List<Processor> ListOfPostProcessors =
 						Processors.getByUser(userId, ProcessorType.POST);
 				List<Processor> ListOfPreProcessors =
 						Processors.getByUser(userId, ProcessorType.PRE);
@@ -281,8 +285,12 @@
 				<option value=""/>
 			</c:if>
 			<c:forEach var="setting" items="${settings}">
+				<c:set var="isDefault" value="${defaultProfileId != null && defaultProfileId == setting.getId()}" />
 				<option class="settingOption" value="${setting.getId()}"
-				        type="${setting.getTypeString()}">${setting.name}</option>
+				        type="${setting.getTypeString()}"
+				        ${isDefault ? 'selected="selected"' : ''}>
+					${setting.name}<c:if test="${isDefault}"> (default)</c:if>
+				</option>
 			</c:forEach>
 		</select>
 		<table id="settings" class="shaded">
@@ -383,13 +391,16 @@
 			<button id="saveProfile">save profile changes</button>
 
 			<button id="createProfile">create new profile</button>
-			<button title="Setting a profile as a default means it will be selected
-			automatically when visiting the job creation page"
-			        id="setDefaultProfile">set profile as default
-			</button>
-			<button id="deleteProfile">delete selected profile</button>
-
-		</fieldset>
+		<button title="Setting a profile as a default means it will be selected
+		automatically when visiting the job creation page"
+		        id="setDefaultProfile">set profile as default
+		</button>
+		<c:set var="hasDefault" value="${defaultProfileId != null && defaultProfileId > 0}" />
+		<button title="Remove your currently selected default profile"
+		        id="clearDefaultProfile"
+		        ${hasDefault ? '' : 'disabled="disabled"'}>clear default profile
+		</button>
+		<button id="deleteProfile">delete selected profile</button>		</fieldset>
 	</fieldset>
 
 	<fieldset>

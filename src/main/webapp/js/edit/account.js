@@ -215,6 +215,21 @@ function initUI() {
 		);
 	});
 
+	//clear the user's default profile
+	$("#clearDefaultProfile").click(function() {
+		$.post(
+			starexecRoot + "services/clear/defaultSettings/" + userId,
+			function(returnData) {
+				s = parseReturnCode(returnData);
+				if (s) {
+					showMessage("success", "Default profile cleared successfully", 3000);
+					$("#clearDefaultProfile").prop("disabled", true);
+				}
+			},
+			"json"
+		);
+	});
+
 	//delete the selected DefaultSettings profile
 	$("#deleteProfile").click(function() {
 		curSettingId = getSelectedSettingId();

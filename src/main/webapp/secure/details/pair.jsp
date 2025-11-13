@@ -83,7 +83,7 @@
 	}
 %>
 <star:template title="${job.name} pair #${pair.id}"
-               js="lib/jquery.dataTables.min, lib/prettify, lib/lang-log, details/pair, details/shared"
+               js="lib/jquery.dataTables.min, lib/prettify, lib/lang-log, common/delaySpinner, details/pair, details/shared"
                css="common/table, details/shared, details/pair, prettify/prettify">
 	<span id="pairId" value="${pair.id}"></span>
 	<fieldset id="fieldDetails">
