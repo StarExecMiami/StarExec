@@ -138,27 +138,9 @@ RUN echo "Verifying PostgreSQL client tools for migrations..." && \
     pg_isready --version && \
     echo "✅ pg_isready verified successfully"
 
-# Download Flyway command-line distribution so the entrypoint can run migrations
-# via org.flywaydb.commandline.Main. We pin the version to match pom.xml's
-# flyway.version (11.13.1). Extract the distribution and keep the lib/ jars
-# in /opt/flyway/lib so the entrypoint classpath can include them.
-RUN mkdir -p /opt/flyway && \
-    curl -fsSL -o /tmp/flyway-commandline-11.13.1.tar.gz \
-        https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/11.13.1/flyway-commandline-11.13.1.tar.gz && \
-    tar -xzf /tmp/flyway-commandline-11.13.1.tar.gz -C /tmp && \
-    # move the extracted lib/ to /opt/flyway/lib; distribution dir name is predictable
-    if [ -d /tmp/flyway-commandline-11.13.1/lib ]; then \
-        mv /tmp/flyway-commandline-11.13.1/lib /opt/flyway/lib; \
-    else \
-        echo "ERROR: Extracted Flyway distribution did not contain expected lib/ directory"; exit 1; \
-    fi && \
-    # preserve optional conf dir for troubleshooting
-    if [ -d /tmp/flyway-commandline-11.13.1/conf ]; then \
-        mv /tmp/flyway-commandline-11.13.1/conf /opt/flyway/conf || true; \
-    fi && \
-    rm -rf /tmp/flyway-commandline-11.13.1* && \
-    chmod -R a+r /opt/flyway/lib || true && \
-    echo "✅ flyway distribution extracted to /opt/flyway/lib"
+# Database migrations are handled by EmbeddedFlywayLauncher (in the application WAR)
+# which uses flyway-core from the Maven dependency (included in WEB-INF/lib).
+# This approach keeps the container image smaller and avoids bundling the Flyway CLI.
 
 # Create non-root user and group
 RUN addgroup -g 1000 starexec && \

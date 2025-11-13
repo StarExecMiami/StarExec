@@ -321,45 +321,21 @@ run_database_migrations() {
     echo "[MIGRATION][INFO]    Migration Location: $MIGRATIONS_DIR"
     echo ""
 
-    # Build classpath for Flyway execution. Include the bundled Flyway CLI
-    # distribution installed in the runtime image at /opt/flyway. The
-    # distribution includes a lib directory with all required jars.
-    local FLYWAY_CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*:/opt/flyway/lib/*"
+    # Run the embedded launcher bundled inside the WAR (uses flyway-core from WEB-INF/lib)
+    # The EmbeddedFlywayLauncher is a lightweight wrapper around Flyway that executes
+    # all versioned migrations using the flyway-core dependency included in the application.
+    # Pass JDBC info via -D properties for clean separation of concerns.
+    local EMBED_CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
 
-    # Temporarily disable immediate exit to capture Flyway exit code
+    # Temporarily disable immediate exit to capture migration exit code
     set +e
 
-    # First try: run embedded launcher bundled inside the WAR (uses flyway-core from WEB-INF/lib)
-    # Pass JDBC info via -D properties as a robust fallback to environment variables.
-    local EMBED_CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
     java -cp "$EMBED_CLASSPATH" \
         -Dflyway.url="$JDBC_URL" \
         -Dflyway.user="$DB_USER" \
         -Dflyway.password="$DB_PASSWORD" \
         org.starexec.migration.EmbeddedFlywayLauncher
     local migration_exit_code=$?
-
-    # If embedded launcher failed and a flyway CLI distribution exists in /opt/flyway/lib,
-    # attempt the CLI as a fallback for environments where the distribution was provided.
-    if [ $migration_exit_code -ne 0 ] && [ -d "/opt/flyway/lib" ]; then
-        echo "[MIGRATION][WARN] Embedded launcher failed (code $migration_exit_code); attempting flyway CLI fallback"
-        java \
-            -cp "$FLYWAY_CLASSPATH" \
-            -Dflyway.url="$JDBC_URL" \
-            -Dflyway.user="$DB_USER" \
-            -Dflyway.password="$DB_PASSWORD" \
-            -Dflyway.locations="filesystem:$MIGRATIONS_DIR" \
-            -Dflyway.baselineOnMigrate=true \
-            -Dflyway.baselineVersion=1 \
-            -Dflyway.schemas="$DB_NAME" \
-            -Dflyway.validateOnMigrate=true \
-            -Dflyway.outOfOrder=false \
-            -Dflyway.connectRetries=10 \
-            -Dflyway.connectRetriesInterval=5 \
-            org.flywaydb.commandline.Main migrate
-
-        migration_exit_code=$?
-    fi
 
     set -e
 
