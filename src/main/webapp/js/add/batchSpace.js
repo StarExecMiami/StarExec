@@ -45,13 +45,13 @@ function attachFormValidation() {
 		rules: {
 			f: {
 				required: true,
-				regex: "(\.tgz$)|(\.zip$)|(\.tar(\.gz)?$)"
+				regexIgnoreCase: "\\.(tgz|zip|tar(\\.gz)?|xml|txt)$"
 			}
 		},
 		messages: {
 			f: {
 				required: "please select a file",
-				regex: ".zip, .tar and .tar.gz only"
+				regexIgnoreCase: ".zip, .tar, .tar.gz, .tgz, .xml, and .txt only"
 			}
 		},
 		submitHandler: function(form) {
