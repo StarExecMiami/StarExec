@@ -40,6 +40,10 @@ function attachFormValidation() {
 				required: "please select a file",
 				regexIgnoreCase: "Please upload an image file (.jpg, .jpeg, .png, .gif, or .bmp)"
 			}
+		},
+		submitHandler: function(form) {
+			createDialog("Uploading picture, please wait...");
+			form.submit();
 		}
 	});
 }
