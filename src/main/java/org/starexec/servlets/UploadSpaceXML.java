@@ -29,7 +29,12 @@ import java.util.List;
  *
  * @author Benton McCune
  */
-@MultipartConfig
+// SECURITY: Limit space XML uploads to 50MB to prevent DoS while allowing moderate-sized hierarchies
+@MultipartConfig(
+	fileSizeThreshold = 1024 * 1024,            // 1MB buffer in memory
+	maxFileSize = 50L * 1024L * 1024L,          // 50MB max per file
+	maxRequestSize = 50L * 1024L * 1024L        // 50MB max per request
+)
 public class UploadSpaceXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadSpaceXML.class);

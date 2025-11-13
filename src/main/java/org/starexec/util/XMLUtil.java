@@ -45,6 +45,19 @@ public class XMLUtil {
 		DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
 		factory.setValidating(false);//This is true for DTD, but not W3C XML Schema that we're using
 		factory.setNamespaceAware(true);
+		
+		// SECURITY: Disable XXE (XML External Entity) attacks
+		try {
+			factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+			factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+			factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+			factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+			factory.setXIncludeAware(false);
+			factory.setExpandEntityReferences(false);
+		} catch (ParserConfigurationException e) {
+			log.error("Failed to configure XXE protection", e);
+			throw e;
+		}
 
 		SchemaFactory schemaFactory = SchemaFactory.newInstance("http://www.w3.org/2001/XMLSchema");
 
@@ -74,6 +87,19 @@ public class XMLUtil {
 	 */
 	public static Document generateNewDocument() throws ParserConfigurationException {
 		DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
+		
+		// SECURITY: Disable XXE (XML External Entity) attacks
+		try {
+			docFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+			docFactory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+			docFactory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+			docFactory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+			docFactory.setXIncludeAware(false);
+			docFactory.setExpandEntityReferences(false);
+		} catch (ParserConfigurationException e) {
+			log.error("Failed to configure XXE protection", e);
+			throw e;
+		}
 
 		DocumentBuilder docBuilder = docFactory.newDocumentBuilder();
 

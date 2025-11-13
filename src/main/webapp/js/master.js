@@ -328,6 +328,12 @@ function addValidators() {
 			return this.optional(element) || re.test(value);
 		});
 	$.validator.addMethod(
+		"regexIgnoreCase",
+		function(value, element, str) {
+			var re = new RegExp(str, "i");
+			return this.optional(element) || re.test(value);
+		});
+	$.validator.addMethod(
 		"jspregex",
 		function(value, element, str) {
 			return !element.validity.patternMismatch;

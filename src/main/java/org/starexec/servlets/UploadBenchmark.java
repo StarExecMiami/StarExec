@@ -27,7 +27,12 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.nio.charset.StandardCharsets;
 
-@MultipartConfig
+// SECURITY: Limit benchmark uploads to 5GB to prevent DoS attacks while allowing large benchmark sets
+@MultipartConfig(
+	fileSizeThreshold = 1024 * 1024,              // 1MB buffer in memory
+	maxFileSize = 5L * 1024L * 1024L * 1024L,     // 5GB max per file
+	maxRequestSize = 5L * 1024L * 1024L * 1024L   // 5GB max per request
+)
 public class UploadBenchmark extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(UploadBenchmark.class);
 

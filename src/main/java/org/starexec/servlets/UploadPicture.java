@@ -31,7 +31,12 @@ import java.util.HashMap;
  *
  * @author Ruoyu Zhang
  */
-@MultipartConfig
+// SECURITY: Limit picture uploads to 10MB to prevent DoS attacks
+@MultipartConfig(
+	fileSizeThreshold = 1024 * 1024,        // 1MB buffer in memory
+	maxFileSize = 10L * 1024L * 1024L,      // 10MB max per file
+	maxRequestSize = 10L * 1024L * 1024L    // 10MB max per request
+)
 public class UploadPicture extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(UploadPicture.class);
 
@@ -75,7 +80,20 @@ public class UploadPicture extends HttpServlet {
 			ValidatorStatusCode status = this.isRequestValid(form);
 			// If the request is valid
 			if (status.isSuccess()) {
-				response.sendRedirect(this.handleUploadRequest(userIdOfCaller, form));
+				try {
+					String redirectUrl = this.handleUploadRequest(userIdOfCaller, form);
+					if (redirectUrl != null) {
+						response.sendRedirect(redirectUrl);
+					} else {
+						log.error("Picture upload failed: handleUploadRequest returned null for user " + userIdOfCaller);
+						response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed. Please check server logs."));
+						response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed");
+					}
+				} catch (Exception e) {
+					log.error("Failed to upload picture for user " + userIdOfCaller + ": " + e.getMessage(), e);
+					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed: " + e.getMessage()));
+					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed: " + e.getMessage());
+				}
 			} else {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
@@ -96,17 +114,18 @@ public class UploadPicture extends HttpServlet {
 	 * @throws Exception
 	 * @author Ruoyu Zhang
 	 */
-	private String handleUploadRequest(int userId, HashMap<String, Object> form) {
-		try {
-			PartWrapper item = (PartWrapper) form.get(UploadPicture.PICTURE_FILE);
-			String fileName = "";
-			String redir = Util.docRoot("secure/edit/account.jsp");
+	private String handleUploadRequest(int userId, HashMap<String, Object> form) throws Exception {
+		PartWrapper item = (PartWrapper) form.get(UploadPicture.PICTURE_FILE);
+		String fileName = "";
+		String redir = Util.docRoot("secure/edit/account.jsp");
 
-			String type = (String) form.get(UploadPicture.TYPE);
-			String id = (String) form.get(UploadPicture.ID);
-			StringBuilder sb = new StringBuilder();
+		String type = (String) form.get(UploadPicture.TYPE);
+		String id = (String) form.get(UploadPicture.ID);
+		StringBuilder sb = new StringBuilder();
 
-			switch (type) {
+		log.info("Starting picture upload for userId=" + userId + " type=" + type + " id=" + id);
+
+		switch (type) {
 			case "user":
 				sb.delete(0, sb.length());
 				sb.append("/users/Pic");
@@ -136,30 +155,45 @@ public class UploadPicture extends HttpServlet {
 				sb.append(id);
 				redir = sb.toString();
 				break;
-			}
-
-			sb.delete(0, sb.length());
-			sb.append(R.getPicturePath());
-			sb.append(File.separator);
-			sb.append(fileName);
-			sb.append("_org.jpg");
-			String filenameupload = sb.toString();
-			File archiveFile = new File(filenameupload);
-			archiveFile.getParentFile().mkdirs();
-			item.write(archiveFile);
-
-			sb.delete(0, sb.length());
-			sb.append(R.getPicturePath());
-			sb.append(File.separator);
-			sb.append(fileName);
-			sb.append("_thn.jpg");
-			String fileNameThumbnail = sb.toString();
-			scale(filenameupload, 320, 320, fileNameThumbnail);
-			return redir;
-		} catch (Exception e) {
-			log.error(e.getMessage(), e);
 		}
-		return null;
+
+		sb.delete(0, sb.length());
+		sb.append(R.getPicturePath());
+		sb.append(File.separator);
+		sb.append(fileName);
+		sb.append("_org.jpg");
+		String filenameupload = sb.toString();
+
+		log.debug("Picture file path: " + filenameupload);
+
+		// Ensure parent directories exist with proper error handling
+		File archiveFile = new File(filenameupload);
+		File parentDir = archiveFile.getParentFile();
+		if (!parentDir.exists()) {
+			log.debug("Creating parent directory: " + parentDir.getAbsolutePath());
+			if (!parentDir.mkdirs()) {
+				throw new IOException("Failed to create directory: " + parentDir.getAbsolutePath());
+			}
+		}
+
+		log.debug("Writing picture file: " + archiveFile.getAbsolutePath());
+		item.write(archiveFile);
+		log.debug("Picture file written successfully");
+
+		sb.delete(0, sb.length());
+		sb.append(R.getPicturePath());
+		sb.append(File.separator);
+		sb.append(fileName);
+		sb.append("_thn.jpg");
+		String fileNameThumbnail = sb.toString();
+
+		log.debug("Thumbnail file path: " + fileNameThumbnail);
+		log.debug("Creating thumbnail with dimensions 320x320");
+		scale(filenameupload, 320, 320, fileNameThumbnail);
+		log.debug("Thumbnail created successfully");
+
+		log.info("Picture upload completed successfully for userId=" + userId);
+		return redir;
 	}
 
 	/**
@@ -203,6 +237,10 @@ public class UploadPicture extends HttpServlet {
 	public static void scale(String srcFile, int destWidth, int destHeight, String destFile) throws IOException {
 
 		BufferedImage src = ImageIO.read(new File(srcFile));
+		if (src == null) {
+			throw new IOException("Uploaded file is not a valid image or is not in a supported format");
+		}
+
 		BufferedImage dest = new BufferedImage(destWidth, destHeight, BufferedImage.TYPE_INT_RGB);
 		Graphics2D g = dest.createGraphics();
 		AffineTransform at = AffineTransform

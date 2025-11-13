@@ -135,6 +135,26 @@ public class ArchiveUtil {
 	public static Boolean extractArchiveAsSandbox(String fileName, String destination) {
 		log.debug("ExtractingArchive for " + fileName);
 		try {
+			// SECURITY: Check for zip bomb / excessive compression ratio BEFORE extraction
+			File archiveFile = new File(fileName);
+			long compressedSize = archiveFile.length();
+			long uncompressedSize = getArchiveSize(fileName);
+			
+			if (uncompressedSize > 0 && compressedSize > 0) {
+				long compressionRatio = uncompressedSize / compressedSize;
+				// Warn if ratio is suspicious (>100:1), but allow up to 1000:1 for text files
+				if (compressionRatio > 1000) {
+					log.error(String.format("Zip bomb detected: compression ratio %d:1 (compressed: %d bytes, uncompressed: %d bytes)",
+						compressionRatio, compressedSize, uncompressedSize));
+					throw new SecurityException("Excessive compression ratio detected - possible zip bomb attack");
+				} else if (compressionRatio > 100) {
+					log.warn(String.format("High compression ratio detected: %d:1 (compressed: %d bytes, uncompressed: %d bytes)",
+						compressionRatio, compressedSize, uncompressedSize));
+				}
+			} else if (uncompressedSize < 0) {
+				log.warn("Could not determine uncompressed size for archive: " + fileName + " - proceeding with caution");
+			}
+			
 			// Check for the appropriate file extension and hand off to the appropriate method
 			if (fileName.endsWith(".zip")) {
 				log.debug("Extracting ZIP using pure Java (Apache Commons Compress)");
@@ -148,10 +168,38 @@ public class ArchiveUtil {
 				
 				// Extract using Apache Commons Compress (pure Java, no external dependencies)
 				try (ZipFile zipFile = new ZipFile(new File(fileName))) {
+					// Get canonical path for security checks (reuse destDir from above)
+					String destCanonicalPath = destDir.getCanonicalPath();
+					
 					Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
 					while (entries.hasMoreElements()) {
 						ZipArchiveEntry entry = entries.nextElement();
-						File outputFile = new File(destination, entry.getName());
+						
+						// SECURITY: Validate entry name for path traversal attempts
+						String entryName = entry.getName();
+						if (entryName.contains("..")) {
+							log.warn("Path traversal attempt detected in archive entry: " + entryName);
+							throw new SecurityException("Archive contains path traversal sequence (..) in entry: " + entryName);
+						}
+						
+						File outputFile = new File(destination, entryName);
+						
+						// SECURITY: Double-check with canonical path resolution
+						// This protects against Unicode tricks, case variations, and symbolic links
+						String outputCanonicalPath = outputFile.getCanonicalPath();
+						if (!outputCanonicalPath.startsWith(destCanonicalPath + File.separator) && 
+						    !outputCanonicalPath.equals(destCanonicalPath)) {
+							log.error("Path traversal attack blocked: Entry '" + entryName + 
+							         "' resolves to '" + outputCanonicalPath + 
+							         "' outside destination '" + destCanonicalPath + "'");
+							throw new SecurityException("Archive entry attempts to write outside destination directory: " + entryName);
+						}
+						
+						// SECURITY: Reject symlinks in archives (they could point outside destination)
+						if (entry.isUnixSymlink()) {
+							log.warn("Symbolic link detected in archive: " + entryName);
+							throw new SecurityException("Archive contains symbolic link, which is not allowed: " + entryName);
+						}
 						
 						if (entry.isDirectory()) {
 							// Create directory
@@ -233,6 +281,26 @@ public class ArchiveUtil {
 	public static Boolean extractArchive(String fileName, String destination) {
 		log.debug("ExtractingArchive for " + fileName);
 		try {
+			// SECURITY: Check for zip bomb / excessive compression ratio BEFORE extraction
+			File archiveFile = new File(fileName);
+			long compressedSize = archiveFile.length();
+			long uncompressedSize = getArchiveSize(fileName);
+			
+			if (uncompressedSize > 0 && compressedSize > 0) {
+				long compressionRatio = uncompressedSize / compressedSize;
+				// Warn if ratio is suspicious (>100:1), but allow up to 1000:1 for text files
+				if (compressionRatio > 1000) {
+					log.error(String.format("Zip bomb detected: compression ratio %d:1 (compressed: %d bytes, uncompressed: %d bytes)",
+						compressionRatio, compressedSize, uncompressedSize));
+					throw new SecurityException("Excessive compression ratio detected - possible zip bomb attack");
+				} else if (compressionRatio > 100) {
+					log.warn(String.format("High compression ratio detected: %d:1 (compressed: %d bytes, uncompressed: %d bytes)",
+						compressionRatio, compressedSize, uncompressedSize));
+				}
+			} else if (uncompressedSize < 0) {
+				log.warn("Could not determine uncompressed size for archive: " + fileName + " - proceeding with caution");
+			}
+			
 			// Check for the appropriate file extension and hand off to the appropriate method
 			if (fileName.endsWith(".zip")) {
 				ArchiveUtil.extractArchiveOfType(fileName, destination, ArchiveType.ZIP);
@@ -323,6 +391,11 @@ public class ArchiveUtil {
 		final String methodName = "extractArchiveOfType";
 		// Use the Apache commons compression library to open up the tar file...
 		log.debug("extracting " + archiveType);
+		
+		// SECURITY: Get canonical path of destination for path traversal protection
+		File destDir = new File(destination);
+		String destCanonicalPath = destDir.getCanonicalPath();
+		
 		InputStream is = new FileInputStream(fileName);
 		BufferedInputStream bis = new BufferedInputStream(is);
 		ArchiveInputStream ais = new ArchiveStreamFactory().createArchiveInputStream(archiveType.type, bis);
@@ -331,8 +404,26 @@ public class ArchiveUtil {
 		// For each 'file' in the tar file...
 		while ((entry = ais.getNextEntry()) != null) {
 			if (!entry.isDirectory()) {
+				// SECURITY: Validate entry name for path traversal attempts
+				String entryName = entry.getName();
+				if (entryName.contains("..")) {
+					log.warn("Path traversal attempt detected in archive entry: " + entryName);
+					throw new SecurityException("Archive contains path traversal sequence (..) in entry: " + entryName);
+				}
+				
 				// If it's not a directory...
-				File fileToCreate = new File(destination, entry.getName());
+				File fileToCreate = new File(destination, entryName);
+				
+				// SECURITY: Double-check with canonical path resolution
+				String outputCanonicalPath = fileToCreate.getCanonicalPath();
+				if (!outputCanonicalPath.startsWith(destCanonicalPath + File.separator) && 
+				    !outputCanonicalPath.equals(destCanonicalPath)) {
+					log.error("Path traversal attack blocked: Entry '" + entryName + 
+					         "' resolves to '" + outputCanonicalPath + 
+					         "' outside destination '" + destCanonicalPath + "'");
+					throw new SecurityException("Archive entry attempts to write outside destination directory: " + entryName);
+				}
+				
 				File dir = new File(fileToCreate.getParent());
 				boolean success = true;
 				if (!dir.exists()) {

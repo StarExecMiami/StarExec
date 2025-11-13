@@ -275,6 +275,20 @@ public class BatchUtil {
 		}
 
 		DocumentBuilderFactory docBuilderFactory = DocumentBuilderFactory.newInstance();
+		
+		// SECURITY: Disable XXE (XML External Entity) attacks
+		try {
+			docBuilderFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+			docBuilderFactory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+			docBuilderFactory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+			docBuilderFactory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+			docBuilderFactory.setXIncludeAware(false);
+			docBuilderFactory.setExpandEntityReferences(false);
+		} catch (ParserConfigurationException e) {
+			log.error("Failed to configure XXE protection", e);
+			throw e;
+		}
+		
 		DocumentBuilder docBuilder = docBuilderFactory.newDocumentBuilder();
 
 		Document doc = docBuilder.parse(file);

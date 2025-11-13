@@ -32,24 +32,14 @@ function attachFormValidation() {
 		rules: {
 			f: {
 				required: true,
-				regex: "(\.jpg$)"
+				regexIgnoreCase: "\\.(jpe?g|png|gif|bmp)$"
 			}
 		},
 		messages: {
 			f: {
 				required: "please select a file",
-				regex: ".jpg only"
+				regexIgnoreCase: "Please upload an image file (.jpg, .jpeg, .png, .gif, or .bmp)"
 			}
-		},
-		// Place the error messages in the tooltip instead of in the DOM
-		errorPlacement: function(error, element) {
-			if ($(error).text().length > 0) {
-				//$(element).qtip('api').updateContent('<b>'+$(error).text()+'</b>', true);
-			}
-		},
-		// Hide the error tooltip when no errors are present
-		success: function(label) {
-			//$('#' + $(label).attr('for')).qtip('api').hide();
 		}
 	});
 }

@@ -33,7 +33,12 @@ import java.util.List;
  *
  * @author Tim Smith
  */
-@MultipartConfig
+// SECURITY: Limit job XML uploads to 50MB to prevent DoS while allowing moderate-sized job definitions
+@MultipartConfig(
+	fileSizeThreshold = 1024 * 1024,            // 1MB buffer in memory
+	maxFileSize = 50L * 1024L * 1024L,          // 50MB max per file
+	maxRequestSize = 50L * 1024L * 1024L        // 50MB max per request
+)
 public class UploadJobXML extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadJobXML.class);

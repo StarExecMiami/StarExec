@@ -21,6 +21,7 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.HashMap;
 
@@ -29,7 +30,12 @@ import java.util.HashMap;
  *
  * @author Todd Elvers
  */
-@MultipartConfig
+// SECURITY: Limit configuration uploads to 1MB (text files should be small)
+@MultipartConfig(
+	fileSizeThreshold = 1024 * 1024,        // 1MB buffer in memory
+	maxFileSize = 1024L * 1024L,            // 1MB max per file
+	maxRequestSize = 1024L * 1024L          // 1MB max per request
+)
 public class UploadConfiguration extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(UploadConfiguration.class);
 
@@ -156,6 +162,16 @@ public class UploadConfiguration extends HttpServlet {
 			// Write the new configuration file to disk
 			uploadedFile.write(newConfigFile);
 
+			// SECURITY: Validate file is plain text before making executable
+			// This prevents binary malware from being uploaded as "configuration"
+			if (!isPlainTextFile(newConfigFile)) {
+				newConfigFile.delete();
+				return new ValidatorStatusCode(
+					false,
+					"Configuration file must be plain text. Binary files are not allowed."
+				);
+			}
+
 			// Make sure the configuration has the right line endings
 			Util.normalizeFile(newConfigFile);
 
@@ -219,5 +235,96 @@ public class UploadConfiguration extends HttpServlet {
 		}
 
 		return new ValidatorStatusCode(false, "Internal error uploading configuration");
+	}
+
+	/**
+	 * SECURITY: Validates that a file contains only plain text (no binary content).
+	 * This prevents malicious binaries from being uploaded and made executable.
+	 * 
+	 * Uses multiple heuristics:
+	 * 1. Checks for null bytes (0x00) - common in binaries, rare in text
+	 * 2. Validates UTF-8/ASCII encoding
+	 * 3. Checks for ELF/PE/Mach-O magic numbers (executable headers)
+	 * 
+	 * @param file The file to validate
+	 * @return true if file appears to be plain text, false if binary or suspicious
+	 */
+	private boolean isPlainTextFile(File file) {
+		try {
+			// Read first 8KB of file (sufficient for magic number detection)
+			byte[] buffer = new byte[8192];
+			int bytesRead;
+			
+			try (FileInputStream fis = new FileInputStream(file)) {
+				bytesRead = fis.read(buffer);
+			}
+			
+			if (bytesRead == -1) {
+				// Empty file is technically "text"
+				return true;
+			}
+			
+			// Check for binary executable magic numbers (must check BEFORE null byte scan)
+			// ELF: 0x7F 0x45 0x4C 0x46
+			if (bytesRead >= 4 && 
+			    buffer[0] == 0x7F && buffer[1] == 0x45 && buffer[2] == 0x4C && buffer[3] == 0x46) {
+				log.warn("ELF binary executable detected in configuration upload");
+				return false;
+			}
+			
+			// PE/COFF: 0x4D 0x5A (MZ)
+			if (bytesRead >= 2 && buffer[0] == 0x4D && buffer[1] == 0x5A) {
+				log.warn("Windows PE executable detected in configuration upload");
+				return false;
+			}
+			
+			// Mach-O: 0xFE 0xED 0xFA 0xCE or 0xCE 0xFA 0xED 0xFE
+			if (bytesRead >= 4 && 
+			    ((buffer[0] == (byte)0xFE && buffer[1] == (byte)0xED && 
+			      buffer[2] == (byte)0xFA && buffer[3] == (byte)0xCE) ||
+			     (buffer[0] == (byte)0xCE && buffer[1] == (byte)0xFA && 
+			      buffer[2] == (byte)0xED && buffer[3] == (byte)0xFE))) {
+				log.warn("Mach-O executable detected in configuration upload");
+				return false;
+			}
+			
+			// Check for null bytes (0x00) - very rare in text files, common in binaries
+			int nullByteCount = 0;
+			for (int i = 0; i < bytesRead; i++) {
+				if (buffer[i] == 0) {
+					nullByteCount++;
+					// Allow a few null bytes (could be padding), but not many
+					if (nullByteCount > 5) {
+						log.warn("Excessive null bytes detected in configuration upload (binary file)");
+						return false;
+					}
+				}
+			}
+			
+			// Check for non-printable control characters (except newline, tab, carriage return)
+			int controlCharCount = 0;
+			for (int i = 0; i < bytesRead; i++) {
+				byte b = buffer[i];
+				// Allow: tab(9), newline(10), carriage return(13), and printable ASCII (32-126)
+				if (b != 9 && b != 10 && b != 13 && (b < 32 || b > 126)) {
+					// Could be UTF-8 multibyte, which is fine
+					// But excessive control characters suggest binary
+					if (b < 32) {
+						controlCharCount++;
+						if (controlCharCount > bytesRead / 100) { // >1% control chars
+							log.warn("Excessive control characters detected in configuration upload");
+							return false;
+						}
+					}
+				}
+			}
+			
+			return true;
+			
+		} catch (Exception e) {
+			log.error("Error validating configuration file content", e);
+			// Fail closed - if we can't validate, reject the file
+			return false;
+		}
 	}
 }
