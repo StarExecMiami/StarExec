@@ -6184,7 +6184,7 @@ CREATE OR REPLACE FUNCTION starexec.GetConfiguration(_id INT)
 RETURNS TABLE(id INT, solver_id INT, name VARCHAR(128), description TEXT, updated TIMESTAMP, deleted BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT c.id, c.solver_id, c.name, c.description, c.updated, c.deleted
+    SELECT c.id, c.solver_id, c.name, c.description, c.updated, (c.deleted::BOOLEAN) AS deleted
     FROM starexec.configurations c
     WHERE c.id = _id AND (c.deleted::BOOLEAN IS FALSE);
 END;
