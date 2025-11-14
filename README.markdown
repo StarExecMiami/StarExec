@@ -82,6 +82,7 @@ Steps:
     ```bash
     # Clone the repository and enter it
     git clone https://github.com/StarExecMiami/StarExec.git
+    git checkout containerised
     cd StarExec
     ```
 
