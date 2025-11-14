@@ -82,8 +82,8 @@ Steps:
     ```bash
     # Clone the repository and enter it
     git clone https://github.com/StarExecMiami/StarExec.git
-    git checkout containerised
     cd StarExec
+    git checkout containerised
     ```
 
 4. Start StarExec using the Makefile:
