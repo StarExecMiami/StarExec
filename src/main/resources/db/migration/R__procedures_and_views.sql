@@ -2516,6 +2516,8 @@ $$ LANGUAGE plpgsql;
 
 -- Retrieves basic info about job pairs for the given job id
 -- Author: Tyler Jensen
+-- NOTE: `config.deleted` may still be stored as INT during the boolean migration (V0016)
+-- casting it here keeps the repeated procedures compatible with both column types.
 DROP FUNCTION IF EXISTS starexec.GetJobPairsPrimaryStageByJob(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobPairsPrimaryStageByJob(_id INT)
 RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code INT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
@@ -2530,7 +2532,7 @@ BEGIN
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON jobSpace.id=job_pairs.job_space_id
     WHERE job_pairs.job_id=_id AND jobpair_stage_data.stage_number=job_pairs.primary_jobpair_data
-    AND config.deleted = false
+    AND (config.deleted::BOOLEAN IS FALSE)
 	ORDER BY job_pairs.end_time DESC;
 END;
 $$ LANGUAGE plpgsql;
@@ -2721,7 +2723,7 @@ BEGIN
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON job_pairs.job_space_id=jobSpace.id
     WHERE job_pairs.job_id=_id AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
-    AND config.deleted = false;
+    AND (config.deleted::BOOLEAN IS FALSE);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2742,7 +2744,7 @@ BEGIN
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON job_pairs.job_space_id=jobSpace.id
     WHERE job_pairs.job_id=_id AND complete.completion_id>_completionId AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
-    AND config.deleted = false
+    AND (config.deleted::BOOLEAN IS FALSE)
 	ORDER BY job_pairs.end_time DESC;
 END;
 $$ LANGUAGE plpgsql;
@@ -6055,7 +6057,7 @@ BEGIN
             AND ja.attr_key = 'starexec-result'
             AND ja.attr_value != 'starexec-unknown'
             AND jpsd.stage_number = _stageNum
-            AND c.deleted = false;
+            AND (c.deleted::BOOLEAN IS FALSE);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6184,7 +6186,7 @@ BEGIN
     RETURN QUERY
     SELECT c.id, c.solver_id, c.name, c.description, c.updated, c.deleted
     FROM starexec.configurations c
-    WHERE c.id = _id AND c.deleted = false;
+    WHERE c.id = _id AND (c.deleted::BOOLEAN IS FALSE);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6246,7 +6248,7 @@ BEGIN
     RETURN QUERY
     SELECT c.id, c.solver_id, c.name, c.description, c.updated, c.deleted
     FROM starexec.configurations c
-    WHERE c.solver_id = _id AND c.deleted = false;
+    WHERE c.solver_id = _id AND (c.deleted::BOOLEAN IS FALSE);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6286,7 +6288,7 @@ BEGIN
     RETURN QUERY
     SELECT c.solver_id AS id
     FROM starexec.configurations c
-    WHERE c.id = _id AND c.deleted = false;
+    WHERE c.id = _id AND (c.deleted::BOOLEAN IS FALSE);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -6680,7 +6682,7 @@ BEGIN
     RETURN QUERY
     SELECT MAX(c.updated) AS recent
     FROM starexec.configurations c
-    WHERE c.solver_id = _solverId AND c.deleted = false;
+    WHERE c.solver_id = _solverId AND (c.deleted::BOOLEAN IS FALSE);
 END;
 $$ LANGUAGE plpgsql;
 
