@@ -1086,7 +1086,7 @@ public class Util {
 		chmod[2] = "u+rwx,g+rwx";
 		for (File f : files) {
 			chmod[3] = f.getAbsolutePath();
-			Util.executeSandboxCommand(chmod);
+			Util.executeCommand(chmod);
 		}
 	}
 	// public static void sandboxChownDirectory(File dir) throws IOException {
