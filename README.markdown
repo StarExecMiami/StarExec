@@ -123,7 +123,9 @@ Steps:
     ```bash
     docker-compose down
     ```
+
 ---
+
 ## Manual / Raw containers (advanced)
 
 When to use: you need fine-grained control of the runtime and want to run
@@ -162,12 +164,13 @@ Steps (brief):
       --network starexec-net \
       -e STAREXEC_DB_HOST=starexec-postgres \
       -e STAREXEC_DB_PASSWORD=admin \
-      -e STAREXEC_DB_USER=starexec \
-      -e STAREXEC_DB_DATABASE=starexec \
       -v starexec-app-data:/app/data \
       -p 8080:8080 \
       localhost/local/starexec:dev
     ```
+
+    STAREXEC_DB_PORT/STAREXEC_DB_NAME/STAREXEC_DB_USER default to 5432/starexec/starexec,
+    so you can omit them unless you need different values.
 
 Success indicator: both containers run (check with `podman ps`) and web UI
 reachable at the expected port.
@@ -184,10 +187,15 @@ Minimal environment variables to bring up a local development instance:
 
 ```bash
 export STAREXEC_DB_HOST=localhost
-export STAREXEC_DB_PORT=5432
-export STAREXEC_DB_NAME=starexec
-export STAREXEC_DB_USER=starexec
 export STAREXEC_DB_PASSWORD=admin # sensitive
+```
+
+The above variables are the minimum required when connecting to a local database. The following additional variables have defaults but can be overridden if needed:
+
+```bash
+export STAREXEC_DB_PORT=5432        # default
+export STAREXEC_DB_NAME=starexec    # default
+export STAREXEC_DB_USER=starexec    # default
 ```
 
 Validate configuration rendering (example):
@@ -209,11 +217,11 @@ Use the anchors below for direct linking.
 
 | Variable | Default | Example | Notes |
 |---|---:|---|---|
-| `STAREXEC_DB_HOST` | `localhost` | `db.local` | Required |
-| `STAREXEC_DB_PORT` | `5432` | `5432` | Required |
-| `STAREXEC_DB_NAME` | `starexec` | `starexec` | Required |
-| `STAREXEC_DB_USER` | `starexec` | `starexec` | Required |
-| `STAREXEC_DB_PASSWORD` | *(empty)* | `s3cr3t` | Required — sensitive |
+| `STAREXEC_DB_HOST` | `localhost` | `db.local` | Override when using remote database |
+| `STAREXEC_DB_PORT` | `5432` | `5432` | Override for non-standard port |
+| `STAREXEC_DB_NAME` | `starexec` | `starexec` | Override for different database name |
+| `STAREXEC_DB_USER` | `starexec` | `starexec` | Override for different username |
+| `STAREXEC_DB_PASSWORD` | *(empty)* | `s3cr3t` | **Required** — sensitive |
 
 Marking sensitive variables: variables that contain credentials or secrets are
 marked as **sensitive** in their Notes column.
@@ -252,7 +260,9 @@ Validation command (development):
 ```bash
 make config-show ENV=dev
 ```
+
 ---
+
 ## Pros/Cons Comparison of the Three Deployment Methods
 
 | Method | Pros | Cons |
@@ -260,6 +270,7 @@ make config-show ENV=dev
 | Podman + Makefile | Rootless-friendly, works well on CI, reproducible images | Requires podman/tools on host |
 | Docker Compose | Widely used, simple to run | Requires Docker daemon, less rootless-friendly |
 | Manual (Tomcat) | Full control of runtime, good for production Tomcat deployments | More manual steps, more host deps |
+
 ---
 
 <!-- Security -->
