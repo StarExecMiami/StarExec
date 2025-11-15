@@ -111,7 +111,7 @@ Steps:
 
     ```bash
     # Build images and start containers
-    docker-compose up --build
+    docker compose up --build
     ```
 
     Expected outcome: containers are built and started.
@@ -120,9 +120,9 @@ Steps:
 
 2. Stop and remove containers:
 
-    ```bash
-    docker-compose down
-    ```
+  ```bash
+  docker compose down
+  ```
 
 ---
 
@@ -165,15 +165,15 @@ Steps (brief):
       -e STAREXEC_DB_HOST=starexec-postgres \
       -e STAREXEC_DB_PASSWORD=admin \
       -v starexec-app-data:/app/data \
-      -p 8080:8080 \
+      -p 7827:8080 \
       localhost/local/starexec:dev
     ```
 
     STAREXEC_DB_PORT/STAREXEC_DB_NAME/STAREXEC_DB_USER default to 5432/starexec/starexec,
     so you can omit them unless you need different values.
 
-Success indicator: both containers run (check with `podman ps`) and web UI
-reachable at the expected port.
+Success indicator: both containers run (check with `podman ps`) and the web UI
+is reachable at `http://localhost:7827/starexec`.
 
 <!-- Configuration -->
 ### Configuration

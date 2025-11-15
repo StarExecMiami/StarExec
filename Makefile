@@ -11,6 +11,10 @@ HELM_VALUES?=values.yaml
 SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
 STAREXEC_DB_PASSWORD_FILE?=/run/secrets/starexec-db-password
+DB_PASSWORD_DEFAULT?=starexec_dev_password
+DB_USER_DEFAULT?=starexec
+DB_NAME_DEFAULT?=starexec
+DB_HOST_DEFAULT?=localhost
 ENV?=dev
 ENV_VALUES=$(CHART_DIR)/values-$(ENV).yaml
 VOLUME_SCRIPT=./scripts/podman-volumes.sh
@@ -19,29 +23,21 @@ VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
 FORCE?=0
 
+# SECURITY WARNING: Defaults are for DEVELOPMENT ONLY.
+# Override STAREXEC_DB_PASSWORD (or provide STAREXEC_DB_PASSWORD_FILE)
+# before deploying to shared environments.
+
 # Network configuration
 PODMAN_NETWORK?=pasta
 PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
-
-define load_db_password
-# Load database password securely from file or environment variable
-# Uses $(call load_db_password) for immediate expansion at call time
-DB_PASS=$$( \
-	if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
-		cat "$${STAREXEC_DB_PASSWORD_FILE}" | tr -d '\n'; \
-	else \
-		echo "$${STAREXEC_DB_PASSWORD:-starexec_dev_password}"; \
-	fi \
-)
-endef
 
 .PHONY: help build build-fresh build-prod image \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
-	clean-podman clean-cache clean-all clean-hard lint template \
-	logs logs-app logs-postgres test-deps \
+	clean-podman clean-cache clean-all clean-hard lint template config-show \
+	logs logs-app logs-postgres test-deps verify-deps \
 	start stop
 
 start: deploy-podman
@@ -188,9 +184,19 @@ volumes-help:
 
 db-shell:
 	@echo "Opening PostgreSQL shell (container must be running)"
-	@$(load_db_password); \
-	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
-	DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
+	@if ! podman container exists starexec-postgres >/dev/null 2>&1; then \
+		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
+		exit 1; \
+	fi
+	@DB_PASS=$$( \
+		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
+			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
+		else \
+			echo "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}"; \
+		fi \
+	); \
+	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
 	PGPASSWORD=$$DB_PASS podman exec -it starexec-postgres psql -U $$DB_USER -d $$DB_NAME
 
 db-dump:
@@ -199,10 +205,22 @@ db-dump:
 
 db-migrate:
 	@echo "Running Flyway migrations (this may take 30-60 seconds)..."
-	@$(load_db_password); \
-	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
+	@DB_PASS=$$( \
+		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
+			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
+		else \
+			echo "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}"; \
+		fi \
+	); \
+	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
+	DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
+	if command -v pg_isready >/dev/null 2>&1 && ! pg_isready -h $$DB_HOST -p 5432 -U $$DB_USER >/dev/null 2>&1; then \
+		echo "❌ Unable to reach PostgreSQL at $$DB_HOST:5432"; \
+		exit 1; \
+	fi; \
 	mvn -q -DskipTests \
-		-Dflyway.url=jdbc:postgresql://localhost:5432/starexec \
+		-Dflyway.url=jdbc:postgresql://$$DB_HOST:5432/$$DB_NAME \
 		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		flyway:migrate
@@ -210,24 +228,46 @@ db-migrate:
 
 db-status:
 	@echo "Checking Flyway migration status..."
-	@$(load_db_password); \
-	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
+	@DB_PASS=$$( \
+		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
+			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
+		else \
+			echo "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}"; \
+		fi \
+	); \
+	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
+	DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
+	if command -v pg_isready >/dev/null 2>&1 && ! pg_isready -h $$DB_HOST -p 5432 -U $$DB_USER >/dev/null 2>&1; then \
+		echo "❌ Unable to reach PostgreSQL at $$DB_HOST:5432"; \
+		exit 1; \
+	fi; \
 	mvn -q -DskipTests \
-		-Dflyway.url=jdbc:postgresql://localhost:5432/starexec \
+		-Dflyway.url=jdbc:postgresql://$$DB_HOST:5432/$$DB_NAME \
 		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		flyway:info
 
 migrate-repair:
 	@echo "Running Flyway repair..."
-	@$(load_db_password); \
+	@DB_PASS=$$( \
+		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
+			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
+		else \
+			echo "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}"; \
+		fi \
+	); \
 	  echo "Using values file: $(VALS)"; \
-	  db_host=$${DB_HOST:-localhost}; \
-	  DB_USER=$${STAREXEC_DB_USER:-starexec}; \
-	  DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
-	  echo "Running Flyway repair against $$db_host:5432/$$DB_NAME"; \
+	  DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
+	  DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	  DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
+	  if command -v pg_isready >/dev/null 2>&1 && ! pg_isready -h $$DB_HOST -p 5432 -U $$DB_USER >/dev/null 2>&1; then \
+		  echo "❌ Unable to reach PostgreSQL at $$DB_HOST:5432"; \
+		  exit 1; \
+	  fi; \
+	  echo "Running Flyway repair against $$DB_HOST:5432/$$DB_NAME"; \
 	  mvn clean flyway:repair -e \
-		-Dflyway.url=jdbc:postgresql://$$db_host:5432/$$DB_NAME \
+		-Dflyway.url=jdbc:postgresql://$$DB_HOST:5432/$$DB_NAME \
 		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		-Dflyway.schemas=$$DB_NAME
@@ -250,10 +290,20 @@ migrate-podman:
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
-	@$(load_db_password); \
-	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
-	DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
-	DB_HOST=$${DB_HOST:-localhost}; \
+	@if ! podman container exists starexec-postgres >/dev/null 2>&1; then \
+		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
+		exit 1; \
+	fi
+	@DB_PASS=$$( \
+		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
+			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
+		else \
+			echo "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}"; \
+		fi \
+	); \
+	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
+	DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
 	for i in 1 2 3 4 5; do \
 		if podman exec starexec-postgres pg_isready -h localhost -p 5432 -U$$DB_USER >/dev/null 2>&1; then \
 			echo "PostgreSQL is ready"; \
@@ -306,6 +356,16 @@ endef
 deploy-podman: .lock-podman-deploy verify-deps image network-setup volumes-create
 	@echo "Deploying to Podman with environment: $(ENV)"
 	@echo "Using values file: $(VALS)"
+	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
+		echo "⚠️  WARNING: Using default development DB password ($(DB_PASSWORD_DEFAULT))."; \
+		if [ "$(ENV)" = "prod" ]; then \
+			read -p "Continue with insecure password? (y/N): " ans; \
+			if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
+				echo "Aborting deployment."; \
+				exit 1; \
+			fi; \
+		fi; \
+	fi
 	@if command -v helm >/dev/null 2>&1; then \
 		$(MAKE) deploy-podman-helm; \
 	else \

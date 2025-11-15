@@ -56,6 +56,8 @@ spec:
       env:
         - name: STAREXEC_DB_HOST
           value: "localhost"
+        - name: STAREXEC_DB_PORT
+          value: "${STAREXEC_DB_PORT:-5432}"
         - name: STAREXEC_DB_USER
           value: "${STAREXEC_DB_USER:-starexec}"
         - name: STAREXEC_DB_PASSWORD

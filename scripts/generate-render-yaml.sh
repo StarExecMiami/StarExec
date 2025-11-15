@@ -22,6 +22,7 @@ else
     export STAREXEC_DB_PASSWORD="${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
 fi
 export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
+export STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"
 export STAREXEC_DATA_VOL="${STAREXEC_DATA_VOL:-$DEFAULT_DATA_VOL}"
 export STAREXEC_POSTGRES_VOL="${STAREXEC_POSTGRES_VOL:-$DEFAULT_POSTGRES_VOL}"
 export IMAGE_NAME="${IMAGE_NAME:-localhost/local/starexec}"
@@ -46,6 +47,7 @@ echo "    IMAGE:      $IMAGE_NAME:$IMAGE_TAG"
 sed -e "s|\${STAREXEC_DB_USER:-starexec}|$STAREXEC_DB_USER|g" \
     -e "s|\${STAREXEC_DB_PASSWORD:-starexec_dev_password}|$STAREXEC_DB_PASSWORD|g" \
     -e "s|\${STAREXEC_DB_NAME:-starexec}|$STAREXEC_DB_NAME|g" \
+    -e "s|\${STAREXEC_DB_PORT:-5432}|$STAREXEC_DB_PORT|g" \
     -e "s|\${STAREXEC_DATA_VOL:-starexec-dev-data}|$STAREXEC_DATA_VOL|g" \
     -e "s|\${STAREXEC_POSTGRES_VOL:-starexec-dev-postgres}|$STAREXEC_POSTGRES_VOL|g" \
     -e "s|\${IMAGE_NAME:-localhost/local/starexec}:|$IMAGE_NAME:|g" \
