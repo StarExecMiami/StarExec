@@ -1,7 +1,6 @@
 package org.starexec.util;
 
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.LineIterator;
 import org.apache.commons.io.filefilter.FileFilterUtils;
 import org.apache.commons.io.filefilter.IOFileFilter;
@@ -18,17 +17,30 @@ import java.io.*;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
-import java.net.URL;
 import java.net.URI;
+import java.net.URL;
 import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 import static java.util.Objects.isNull;
 import static java.util.Objects.nonNull;
@@ -40,10 +52,41 @@ import static java.util.Objects.nonNull;
  * @author Eric, and others who hate git
  */
 public class Util {
-	protected static final ExecutorService threadPool = Executors.newCachedThreadPool();
+	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+	private static final Pattern UNSAFE_SHELL_META_CHARS = Pattern.compile("[;|&><`\\r\\n]");
+	private static final Pattern SUBSHELL_PATTERN = Pattern.compile("\\$\\(");
+	private static final ExecutorService threadPool = createBoundedExecutor();
+	private static final long COMMAND_TIMEOUT_SECONDS = 30;
+	private static final long OUTPUT_COLLECTION_TIMEOUT_SECONDS = 5;
 	private static final StarLogger log = StarLogger.getLogger(Util.class);
 	private static String docRoot = null;
 	private static String docRootUrl = null;
+
+	private static ExecutorService createBoundedExecutor() {
+		int cores = Math.max(2, Runtime.getRuntime().availableProcessors());
+		int maxThreads = Math.max(cores * 2, 4);
+		int queueCapacity = Math.max(maxThreads * 4, 32);
+		ThreadFactory factory = new ThreadFactory() {
+			private final AtomicInteger counter = new AtomicInteger(0);
+
+			@Override
+			public Thread newThread(Runnable r) {
+				Thread thread = new Thread(r, "starexec-util-" + counter.getAndIncrement());
+				thread.setDaemon(true);
+				return thread;
+			}
+		};
+		ThreadPoolExecutor executor = new ThreadPoolExecutor(
+				cores,
+				maxThreads,
+				60L,
+				TimeUnit.SECONDS,
+				new LinkedBlockingQueue<>(queueCapacity),
+				factory,
+				new ThreadPoolExecutor.CallerRunsPolicy());
+		executor.allowCoreThreadTimeOut(true);
+		return executor;
+	}
 
 	/**
 	 * Gets the current stack trace in the program.
@@ -255,7 +298,7 @@ public class Util {
 	 * @return a temporary password
 	 */
 	public static String getTempPassword() {
-		Random r = new Random();
+		SecureRandom r = SECURE_RANDOM;
 
 		// Random temp password length between 6-20 characters
 		int newPassLength = r.nextInt(15) + 6;
@@ -318,7 +361,7 @@ public class Util {
 				form.put(pn, wrapper);
 			} else {
 				try (InputStream is = p.getInputStream()) {
-					form.put(pn, IOUtils.toString(is, java.nio.charset.StandardCharsets.UTF_8));
+					form.put(pn, new String(is.readAllBytes(), StandardCharsets.UTF_8));
 				}
 			}
 		}
@@ -327,13 +370,14 @@ public class Util {
 	}
 
 	/**
-	 * Calls executeCommand with a size 1 String[]
+	 * Calls executeCommand with a size 1 String[].
 	 *
-	 * @param command
-	 * @return See full executeCommand documentation
-	 * @throws IOException
+	 * @deprecated Passing unsanitized shell strings creates command-injection risks. Prefer
+	 * tokenized overloads that do not invoke a shell.
 	 */
+	@Deprecated(since = "1.0.0", forRemoval = true)
 	public static String executeCommand(String command) throws IOException {
+		ensureShellCommandIsSafe(command);
 		// Use a system shell so that whitespace-separated commands like
 		// "ls -l -R /path" are interpreted correctly. The previous implementation
 		// wrapped the entire string as a single executable name, causing
@@ -349,14 +393,14 @@ public class Util {
 	}
 
 	/**
-	 * Calls executecommand with a size 1 String[] and a null working directory
+	 * Calls executeCommand with a size 1 String[] and a null working directory.
 	 *
-	 * @param command
-	 * @param env
-	 * @return See full executeCommand documentation
-	 * @throws IOException
+	 * @deprecated Passing unsanitized shell strings creates command-injection risks. Prefer
+	 * tokenized overloads that do not invoke a shell.
 	 */
+	@Deprecated(since = "1.0.0", forRemoval = true)
 	public static String executeCommand(String command, String[] env) throws IOException {
+		ensureShellCommandIsSafe(command);
 		String os = System.getProperty("os.name").toLowerCase();
 		String[] cmd;
 		if (os.contains("win")) {
@@ -445,18 +489,12 @@ public class Util {
 	 */
 	public static Process executeCommandAndReturnProcess(String[] command, String[] envp, File workingDirectory)
 			throws IOException {
-		Runtime r = Runtime.getRuntime();
-
-		final String methodName = "executeCommandAndReturnProcess";
-		final StringBuilder b = new StringBuilder();
-		b.append("Executing the following command:");
-		for (String cmd : command) {
-			b.append("  ");
-			b.append(cmd);
+		ProcessBuilder pb = buildProcess(command);
+		if (workingDirectory != null) {
+			pb.directory(workingDirectory);
 		}
-		log.info(methodName, b.toString());
-
-		return r.exec(command, envp, workingDirectory);
+		applyEnvironmentOverrides(pb, envp);
+		return pb.start();
 	}
 
 	/**
@@ -472,7 +510,125 @@ public class Util {
 	 */
 
 	public static String executeCommand(String[] command, String[] envp, File workingDirectory) throws IOException {
-		return drainStreams(executeCommandAndReturnProcess(command, envp, workingDirectory));
+		ProcessBuilder pb = buildProcess(command);
+		if (workingDirectory != null) {
+			pb.directory(workingDirectory);
+		}
+		applyEnvironmentOverrides(pb, envp);
+
+		Process process = pb.start();
+		Future<String> stdoutFuture = threadPool.submit(() -> readStream(process.getInputStream()));
+		Future<String> stderrFuture = threadPool.submit(() -> readStream(process.getErrorStream()));
+		boolean finished;
+		try {
+			finished = process.waitFor(COMMAND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			cancelFuture(stdoutFuture);
+			cancelFuture(stderrFuture);
+			throw new IOException("Interrupted while waiting for command completion", e);
+		}
+		if (!finished) {
+			process.destroyForcibly();
+			cancelFuture(stdoutFuture);
+			cancelFuture(stderrFuture);
+			throw new IOException("Command timed out after " + COMMAND_TIMEOUT_SECONDS + " seconds: " +
+					Arrays.toString(command));
+		}
+
+		String stdout = collectProcessOutput(stdoutFuture, "stdout");
+		String stderr = collectProcessOutput(stderrFuture, "stderr");
+		int exitCode = process.exitValue();
+		if (exitCode != 0) {
+			throw new IOException("Command failed with exit code " + exitCode + ": " + Arrays.toString(command) +
+					System.lineSeparator() + "STDOUT:" + System.lineSeparator() + stdout +
+					System.lineSeparator() + "STDERR:" + System.lineSeparator() + stderr);
+		}
+		return stdout;
+	}
+
+	private static String collectProcessOutput(Future<String> outputFuture, String streamName) throws IOException {
+		try {
+			return outputFuture.get(OUTPUT_COLLECTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IOException("Interrupted while collecting " + streamName + " output", e);
+		} catch (ExecutionException e) {
+			throw new IOException("Failed to read command " + streamName + " output", e.getCause());
+		} catch (TimeoutException e) {
+			throw new IOException("Timed out collecting command " + streamName + " output", e);
+		}
+	}
+
+	private static String readStream(InputStream inputStream) throws IOException {
+		try (InputStream in = inputStream;
+		     InputStreamReader isr = new InputStreamReader(in, StandardCharsets.UTF_8);
+		     BufferedReader reader = new BufferedReader(isr)) {
+			StringBuilder sb = new StringBuilder();
+			String line;
+			while ((line = reader.readLine()) != null) {
+				sb.append(line).append(System.lineSeparator());
+			}
+			return sb.toString();
+		}
+	}
+
+	private static void cancelFuture(Future<?> future) {
+		if (future != null && !future.isDone()) {
+			future.cancel(true);
+		}
+	}
+
+	private static void applyEnvironmentOverrides(ProcessBuilder pb, String[] envp) {
+		if (envp == null) {
+			return;
+		}
+		Map<String, String> env = pb.environment();
+		for (String entry : envp) {
+			if (entry == null) {
+				continue;
+			}
+			int idx = entry.indexOf('=');
+			if (idx <= 0) {
+				continue;
+			}
+			String key = entry.substring(0, idx);
+			String value = entry.substring(idx + 1);
+			env.put(key, value);
+		}
+	}
+
+	private static void ensureShellCommandIsSafe(String command) throws IOException {
+		if (isNullOrEmpty(command)) {
+			throw new IOException("Command cannot be null or empty");
+		}
+		if (UNSAFE_SHELL_META_CHARS.matcher(command).find() || SUBSHELL_PATTERN.matcher(command).find()) {
+			log.warn("Rejected unsafe shell command: " + command);
+			throw new IOException("Unsafe shell metacharacters detected in command. Use the tokenized overload instead.");
+		}
+	}
+
+	private static ProcessBuilder buildProcess(String[] command) {
+		if (command == null || command.length == 0) {
+			throw new IllegalArgumentException("Command cannot be empty");
+		}
+		if (command.length == 1) {
+			String os = System.getProperty("os.name").toLowerCase();
+			if (os.contains("win")) {
+				return new ProcessBuilder("cmd.exe", "/c", command[0]);
+			}
+			return new ProcessBuilder("/bin/sh", "-c", command[0]);
+		}
+		return new ProcessBuilder(command);
+	}
+
+	private static boolean isPermissionDenied(IOException e) {
+		String message = e.getMessage();
+		if (message == null) {
+			return false;
+		}
+		String lowered = message.toLowerCase(Locale.ROOT);
+		return lowered.contains("operation not permitted") || lowered.contains("permission denied");
 	}
 
 	/**
@@ -527,42 +683,6 @@ public class Util {
 		return message.toString();
 	}
 
-	/**
-	 * Drains both the stdout and stderr streams of a process and returns
-	 *
-	 * @param p the process 
-	 * @return A string with stderr first, followed by stdout. 
-	 */
-	public static String drainStreams(final Process p) {
-
-		/* to handle the separate streams of regular output and
-		   error output correctly, it is necessary to try draining
-		   them in parallel.  Otherwise, draining one can block
-		   and prevent the other from making progress as well (since
-		   the process cannot advance in that case). */
-		final StringBuffer message = new StringBuffer();
-		threadPool.execute(() -> {
-			try {
-				//if we got an error from stderr, we throw our custom exception
-				if (drainInputStream(message, p.getErrorStream())) {
-					throw new StarExecException(message.toString());
-				}
-			} catch (StarExecException e) {
-				log.error("drainStreams", "The process produced stderr output", e);
-			} catch (Exception e) {
-				log.error("drainStreams", "Error draining stderr from process: " + e.toString());
-			}
-		});
-		
-		drainInputStream(message, p.getInputStream());
-		try {
-		    p.waitFor();
-		}
-		catch (InterruptedException e) {
-		    log.error("drainStreams", "Received InterruptedException waiting for a process");
-		}
-		return message.toString();
-	}
 
 	/**
 	 * Converts a list of strings into a list of ints
@@ -583,53 +703,30 @@ public class Util {
 	 * @param f The file to normalize
 	 */
 	public static void normalizeFile(File f) {
-		File temp = null;
-		BufferedReader bufferIn = null;
-		BufferedWriter bufferOut = null;
+		if (!f.exists()) {
+			log.warn("Could not find file to open: " + f.getAbsolutePath());
+			return;
+		}
 
+		Path original = f.toPath();
+		Path parent = original.getParent();
 		try {
-			if (f.exists()) {
-				// Create a new temp file to write to
-				temp = new File(f.getAbsolutePath() + ".normalized");
-				temp.createNewFile();
-
-				// Get a stream to read from the file un-normalized file
-				FileInputStream fileIn = new FileInputStream(f);
-				DataInputStream dataIn = new DataInputStream(fileIn);
-				bufferIn = new BufferedReader(new InputStreamReader(dataIn));
-
-				// Get a stream to write to the noramlized file
-				FileOutputStream fileOut = new FileOutputStream(temp);
-				DataOutputStream dataOut = new DataOutputStream(fileOut);
-				bufferOut = new BufferedWriter(new OutputStreamWriter(dataOut));
-
-				// For each line in the un-normalized file
+			Path temp = Files.createTempFile(parent, f.getName(), ".normalized");
+			try (BufferedReader reader = Files.newBufferedReader(original, StandardCharsets.UTF_8);
+			     BufferedWriter writer = Files.newBufferedWriter(temp, StandardCharsets.UTF_8)) {
 				String line;
-				while ((line = bufferIn.readLine()) != null) {
-					// Write the original line plus the operating-system dependent newline
-					bufferOut.write(line);
-					bufferOut.newLine();
+				while ((line = reader.readLine()) != null) {
+					writer.write(line);
+					writer.newLine();
 				}
-
-				bufferIn.close();
-				bufferOut.close();
-
-				// Remove the original file
-				f.delete();
-
-				// And rename the original file to the new one
-				temp.renameTo(f);
-			} else {
-				// If the file doesn't exist...
-				log.warn("Could not find file to open: " + f.getAbsolutePath());
 			}
-		} catch (Exception e) {
-			log.warn(e.getMessage(), e);
-		} finally {
-			// Clean up, temp should never exist
-			FileUtils.deleteQuietly(temp);
-			IOUtils.closeQuietly(bufferIn);
-			IOUtils.closeQuietly(bufferOut);
+			try {
+				Files.move(temp, original, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			} catch (AtomicMoveNotSupportedException ex) {
+				Files.move(temp, original, StandardCopyOption.REPLACE_EXISTING);
+			}
+		} catch (IOException e) {
+			log.warn("Failed to normalize file " + f.getAbsolutePath(), e);
 		}
 	}
 
@@ -1086,7 +1183,16 @@ public class Util {
 		chmod[2] = "u+rwx,g+rwx";
 		for (File f : files) {
 			chmod[3] = f.getAbsolutePath();
-			Util.executeCommand(chmod);
+			try {
+				Util.executeCommand(chmod);
+			} catch (IOException e) {
+				if (isPermissionDenied(e)) {
+					log.info("Permission denied chmodding as current user, retrying as sandbox for " + f.getAbsolutePath());
+					runChmodAsSandboxUser(chmod);
+				} else {
+					throw e;
+				}
+			}
 		}
 	}
 	// public static void sandboxChownDirectory(File dir) throws IOException {
@@ -1113,18 +1219,53 @@ public class Util {
 	 * @throws IOException
 	 */
 	public static void chmodDirectory(String dir, boolean group) throws IOException {
-		String[] chmod = new String[4];
-		chmod[0] = "chmod";
-		chmod[1] = "-R";
-		if (group) {
-			chmod[2] = "g+rwx";
-
-		} else {
-			chmod[2] = "u+rwx";
-
+		File root = new File(dir);
+		if (!root.exists()) {
+			log.warn("chmodDirectory", "Path does not exist: " + dir);
+			return;
 		}
-		chmod[3] = dir;
-		Util.executeCommand(chmod);
+		String permission = group ? "g+rwx" : "u+rwx";
+		chmodFileTree(root, permission);
+	}
+
+	private static void chmodFileTree(File file, String permission) throws IOException {
+		if (file == null || !file.exists()) {
+			return;
+		}
+		chmodSinglePath(file, permission);
+		if (file.isDirectory()) {
+			File[] children = file.listFiles();
+			if (children != null) {
+				for (File child : children) {
+					chmodFileTree(child, permission);
+				}
+			}
+		}
+	}
+
+	private static void chmodSinglePath(File target, String permission) throws IOException {
+		String[] chmod = new String[3];
+		chmod[0] = "chmod";
+		chmod[1] = permission;
+		chmod[2] = target.getAbsolutePath();
+		try {
+			Util.executeCommand(chmod);
+		} catch (IOException e) {
+			if (isPermissionDenied(e)) {
+				log.info("Permission denied chmodding as current user, retrying as sandbox for " + target.getAbsolutePath());
+				runChmodAsSandboxUser(chmod);
+			} else {
+				throw e;
+			}
+		}
+	}
+
+	private static void runChmodAsSandboxUser(String[] chmod) {
+		try {
+			Util.executeSandboxCommand(chmod);
+		} catch (IOException e) {
+			log.warn("Failed to run chmod as sandbox user", e);
+		}
 	}
 
 	/**
@@ -1200,9 +1341,8 @@ public class Util {
 	public static String getRandomAlphaString(int length) {
 		final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		StringBuilder sb = new StringBuilder(length);
-		Random rnd = new Random();
 		for (int i = 0; i < length; i++) {
-			int idx = rnd.nextInt(alphabet.length());
+			int idx = SECURE_RANDOM.nextInt(alphabet.length());
 			sb.append(alphabet.charAt(idx));
 		}
 		return sb.toString();

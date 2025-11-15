@@ -51,14 +51,12 @@ public class ArchiveUtil {
 	 * @author Eric Burns
 	 */
 	private static long getZipSize(String fileName) {
-		try {
+		try (ZipFile temp = new ZipFile(fileName)) {
 			long answer = 0;
-			ZipFile temp = new ZipFile(fileName);
 			Enumeration<ZipArchiveEntry> x = temp.getEntries();
 			while (x.hasMoreElements()) {
 				answer += x.nextElement().getSize();
 			}
-			temp.close();
 			return answer;
 		} catch (Exception e) {
 			log.error("getZipSize", e);
@@ -74,20 +72,14 @@ public class ArchiveUtil {
 	 * @author Eric Burns
 	 */
 	private static long getTarSize(String fileName) {
-		try {
-			InputStream is = new FileInputStream(fileName);
-			BufferedInputStream bis = new BufferedInputStream(is);
-
-			ArchiveInputStream ais = new ArchiveStreamFactory().createArchiveInputStream("tar", bis);
-			ArchiveEntry entry = null;
-			ais.getNextEntry().getSize();
+		try (InputStream is = new FileInputStream(fileName);
+		     BufferedInputStream bis = new BufferedInputStream(is);
+		     ArchiveInputStream ais = new ArchiveStreamFactory().createArchiveInputStream("tar", bis)) {
 			long answer = 0;
+			ArchiveEntry entry;
 			while ((entry = ais.getNextEntry()) != null) {
 				answer += entry.getSize();
 			}
-			ais.close();
-			bis.close();
-			is.close();
 			return answer;
 		} catch (Exception e) {
 			log.error("getTarSize", e);
@@ -106,17 +98,14 @@ public class ArchiveUtil {
 	 */
 	//Returns the size of the TAR file and not the size of the un-archived files within
 	private static long getTarGzSize(String fileName) {
-		try {
-			FileInputStream instream = new FileInputStream(fileName);
-			GzipCompressorInputStream ginstream = new GzipCompressorInputStream(instream);
+		try (FileInputStream instream = new FileInputStream(fileName);
+		     GzipCompressorInputStream ginstream = new GzipCompressorInputStream(instream)) {
 			long answer = 0;
 			long temp;
 			do {
 				temp = ginstream.skip(100000000);
 				answer += temp;
 			} while (temp != 0);
-			instream.close();
-			ginstream.close();
 			return answer;
 		} catch (Exception e) {
 			log.error("getTarGzSize", e);
@@ -396,59 +385,55 @@ public class ArchiveUtil {
 		File destDir = new File(destination);
 		String destCanonicalPath = destDir.getCanonicalPath();
 		
-		InputStream is = new FileInputStream(fileName);
-		BufferedInputStream bis = new BufferedInputStream(is);
-		ArchiveInputStream ais = new ArchiveStreamFactory().createArchiveInputStream(archiveType.type, bis);
-		ArchiveEntry entry = null;
+		try (InputStream is = new FileInputStream(fileName);
+		     BufferedInputStream bis = new BufferedInputStream(is);
+		     ArchiveInputStream ais = new ArchiveStreamFactory().createArchiveInputStream(archiveType.type, bis)) {
+			ArchiveEntry entry;
+			// For each 'file' in the tar file...
+			while ((entry = ais.getNextEntry()) != null) {
+				if (!entry.isDirectory()) {
+					// SECURITY: Validate entry name for path traversal attempts
+					String entryName = entry.getName();
+					if (entryName.contains("..")) {
+						log.warn("Path traversal attempt detected in archive entry: " + entryName);
+						throw new SecurityException("Archive contains path traversal sequence (..) in entry: " + entryName);
+					}
 
-		// For each 'file' in the tar file...
-		while ((entry = ais.getNextEntry()) != null) {
-			if (!entry.isDirectory()) {
-				// SECURITY: Validate entry name for path traversal attempts
-				String entryName = entry.getName();
-				if (entryName.contains("..")) {
-					log.warn("Path traversal attempt detected in archive entry: " + entryName);
-					throw new SecurityException("Archive contains path traversal sequence (..) in entry: " + entryName);
-				}
-				
-				// If it's not a directory...
-				File fileToCreate = new File(destination, entryName);
-				
-				// SECURITY: Double-check with canonical path resolution
-				String outputCanonicalPath = fileToCreate.getCanonicalPath();
-				if (!outputCanonicalPath.startsWith(destCanonicalPath + File.separator) && 
-				    !outputCanonicalPath.equals(destCanonicalPath)) {
-					log.error("Path traversal attack blocked: Entry '" + entryName + 
-					         "' resolves to '" + outputCanonicalPath + 
-					         "' outside destination '" + destCanonicalPath + "'");
-					throw new SecurityException("Archive entry attempts to write outside destination directory: " + entryName);
-				}
-				
-				File dir = new File(fileToCreate.getParent());
-				boolean success = true;
-				if (!dir.exists()) {
-					// And create it if it doesn't exist so we can write a file inside it
-					success = dir.mkdirs();
-					if (!success) {
-						log.warn("Could not create directory: " + dir.getAbsolutePath() + "\n" +
-						         Util.getCurrentStackTrace());
-						log.warn(methodName, "Did file already exist: " + dir.exists());
-						log.warn(methodName, "User was: " + System.getProperty("user.name"));
-						log.warn(methodName, "canWrite for file: " + dir.canWrite());
+					// If it's not a directory...
+					File fileToCreate = new File(destination, entryName);
+
+					// SECURITY: Double-check with canonical path resolution
+					String outputCanonicalPath = fileToCreate.getCanonicalPath();
+					if (!outputCanonicalPath.startsWith(destCanonicalPath + File.separator) &&
+					    !outputCanonicalPath.equals(destCanonicalPath)) {
+						log.error("Path traversal attack blocked: Entry '" + entryName +
+						         "' resolves to '" + outputCanonicalPath +
+						         "' outside destination '" + destCanonicalPath + "'");
+						throw new SecurityException("Archive entry attempts to write outside destination directory: " + entryName);
+					}
+
+					File dir = new File(fileToCreate.getParent());
+					boolean success = true;
+					if (!dir.exists()) {
+						// And create it if it doesn't exist so we can write a file inside it
+						success = dir.mkdirs();
+						if (!success) {
+							log.warn("Could not create directory: " + dir.getAbsolutePath() + "\n" +
+							         Util.getCurrentStackTrace());
+							log.warn(methodName, "Did file already exist: " + dir.exists());
+							log.warn(methodName, "User was: " + System.getProperty("user.name"));
+							log.warn(methodName, "canWrite for file: " + dir.canWrite());
+						}
+					}
+					if (success) {
+						// Finally, extract the file
+						try (OutputStream out = new FileOutputStream(fileToCreate)) {
+							IOUtils.copy(ais, out);
+						}
 					}
 				}
-				if (success) {
-					// Finally, extract the file
-					OutputStream out = new FileOutputStream(fileToCreate);
-					IOUtils.copy(ais, out);
-					out.close();
-				}
-
 			}
 		}
-		is.close();
-		bis.close();
-		ais.close();
 		ArchiveUtil.removeArchive(fileName);
 	}
 
@@ -532,13 +517,13 @@ public class ArchiveUtil {
 		try {
 			long timestamp = srcFile.lastModified();
 			zos.putArchiveEntry(entry);
-			FileInputStream input = new FileInputStream(srcFile);
 			entry.setUnixMode(getUnixMode(srcFile));
 			entry.setSize(srcFile.length());
 			//entry.setInternalAttributes(Util.isBinaryFile(srcFile)?0:1);
-			IOUtils.copy(input, zos);
+			try (FileInputStream input = new FileInputStream(srcFile)) {
+				IOUtils.copy(input, zos);
+			}
 			zos.closeArchiveEntry();
-			input.close();
 			return timestamp;
 		} catch (java.io.FileNotFoundException e) {
 			if (srcFile.getCanonicalPath().equals(srcFile.getAbsolutePath())) {
