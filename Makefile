@@ -605,7 +605,7 @@ config-show:
 # Lock file for deployment operations
 .lock-podman-deploy:
 	@mkdir -p .locks
-	@exec 200>.locks/podman-deploy.lock && flock -n 200 || { echo "❌ Another deployment is in progress. Please wait."; exit 1; }
+	@bash -c 'exec 200>.locks/podman-deploy.lock && flock -n 200 || { echo "❌ Another deployment is in progress. Please wait."; exit 1; }'
 	@echo "🔒 Acquired deployment lock"
 
 # Clean up lock on exit
