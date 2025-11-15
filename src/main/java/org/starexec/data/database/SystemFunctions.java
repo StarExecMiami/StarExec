@@ -20,26 +20,17 @@ public class SystemFunctions {
         final String method = "rebuildSolver";
         Connection con = null;
         PreparedStatement ps = null;
-        ResultSet rs = null;
         try {
             con = Common.getConnection();
             ps = con.prepareStatement("SELECT starexec.RebuildSolver(?)");
             ps.setInt(1, solverId);
-            boolean hasResultSet = ps.execute();
-            if (hasResultSet) {
-                rs = ps.getResultSet();
-                // Consume the result set to avoid cursor leaks
-                while (rs.next()) {
-                    // Do nothing, just consume
-                }
-            }
+            Common.executeAndDrain(ps);
         } catch (SQLException e) {
             throw e;
         } catch (Exception e) {
             log.error(method, e.getMessage(), e);
             throw new SQLException(e);
         } finally {
-            Common.safeClose(rs);
             Common.safeClose(ps);
             Common.safeClose(con);
         }
@@ -78,14 +69,7 @@ public class SystemFunctions {
             con = Common.getConnection();
             ps = con.prepareStatement("SELECT starexec.SetReadOnly(?)");
             ps.setBoolean(1, readOnly);
-            boolean hasResultSet = ps.execute();
-            if (hasResultSet) {
-                ResultSet rs = ps.getResultSet();
-                while (rs.next()) {
-                    // consume the result set
-                }
-                Common.safeClose(rs);
-            }
+            Common.executeAndDrain(ps);
         } catch (SQLException e) {
             throw e;
         } catch (Exception e) {
@@ -130,14 +114,7 @@ public class SystemFunctions {
             con = Common.getConnection();
             ps = con.prepareStatement("SELECT starexec.SetFreezePrimitives(?)");
             ps.setBoolean(1, frozen);
-            boolean hasResultSet = ps.execute();
-            if (hasResultSet) {
-                ResultSet rs = ps.getResultSet();
-                while (rs.next()) {
-                    // consume the result set
-                }
-                Common.safeClose(rs);
-            }
+            Common.executeAndDrain(ps);
         } catch (SQLException e) {
             throw e;
         } catch (Exception e) {

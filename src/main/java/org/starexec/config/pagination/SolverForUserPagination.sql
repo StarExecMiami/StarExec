@@ -13,7 +13,7 @@
 				INNER JOIN executable_types AS types ON types.type_id=solvers.executable_type		
 				
 				
-				where user_id = :userId and deleted=false AND recycled= :recycled
+				where solvers.user_id = :userId AND solvers.deleted = false AND solvers.recycled = :recycled
 
 				-- Exclude Solvers whose name doesn't contain the query string
 				AND 	(name				LIKE	CONCAT('%', :query, '%')

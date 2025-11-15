@@ -2501,10 +2501,10 @@ DROP FUNCTION IF EXISTS starexec.GetJobById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobById(_id INT)
 RETURNS TABLE(id INT, user_id INT, name VARCHAR, description TEXT, queue_id INT, primary_space INT, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, created TIMESTAMP, completed TIMESTAMP, deleted BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path VARCHAR) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.seed, jobs.cpuTimeout, jobs.clockTimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.created, jobs.completed, jobs.deleted, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildJob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
-	FROM starexec.jobs
-	WHERE id = _id AND deleted=false;
+    RETURN QUERY
+    SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.seed, jobs.cpuTimeout, jobs.clockTimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.created, jobs.completed, jobs.deleted, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildJob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
+    FROM starexec.jobs
+    WHERE jobs.id = _id AND jobs.deleted = false;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2556,10 +2556,10 @@ DROP FUNCTION IF EXISTS starexec.GetJobByIdIncludeDeleted(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobByIdIncludeDeleted(_id INT)
 RETURNS TABLE(id INT, user_id INT, name VARCHAR, description TEXT, queue_id INT, primary_space INT, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, created TIMESTAMP, completed TIMESTAMP, deleted BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path VARCHAR) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.seed, jobs.cpuTimeout, jobs.clockTimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.created, jobs.completed, jobs.deleted, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildJob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
-	FROM starexec.jobs
-	WHERE id = _id;
+    RETURN QUERY
+    SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.seed, jobs.cpuTimeout, jobs.clockTimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.created, jobs.completed, jobs.deleted, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildJob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
+    FROM starexec.jobs
+    WHERE jobs.id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3085,6 +3085,10 @@ $$ LANGUAGE plpgsql;
 -- Sets the "paused" property of a job to false
 -- Author: Wyatt Kaiser
 DROP FUNCTION IF EXISTS starexec.ResumeJob CASCADE;
+-- Resumes a job by setting its paused flag to false and resuming any paused job pairs.
+-- If the job has no paused pairs, the operation completes silently without error.
+-- This behavior change was made to prevent exceptions when resuming jobs that were
+-- never actually paused or have no pairs in paused state.
 CREATE OR REPLACE FUNCTION starexec.ResumeJob(_jobId INT)
 RETURNS VOID AS $$
 BEGIN
@@ -3094,22 +3098,12 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
-    UPDATE job_pairs jp SET jp.status_code = 1
+    UPDATE job_pairs jp SET status_code = 1
     FROM starexec.jobpair_stage_data jsd
     WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = 20;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s has no paused pairs to resume', _jobId);
-    END IF;
-    UPDATE jobpair_stage_data jsd SET jsd.status_code = 1
+    UPDATE jobpair_stage_data jsd SET status_code = 1
     FROM starexec.job_pairs jp
     WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = 20;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s has no stage data to resume', _jobId);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 

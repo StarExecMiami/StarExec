@@ -64,30 +64,14 @@ public class Spaces {
 			procSubspace = con.prepareStatement("SELECT starexec.AssociateSpaces(?, ?)");
 			procSubspace.setInt(1, s.getParentSpace());
 			procSubspace.setInt(2, newSpaceId);
-			boolean hasResultSet1 = procSubspace.execute();
-			if (hasResultSet1) {
-				ResultSet rs1 = procSubspace.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs1.next()) {
-					// Do nothing, just consume
-				}
-				Common.safeClose(rs1);
-			}
+			Common.executeAndDrain(procSubspace);
 
 			log.trace(method, "Calling AddUserToSpace");
 			// Add the adding user to the space with the maximal permissions
 			procAddUser = con.prepareStatement("SELECT starexec.AddUserToSpace(?, ?)");
 			procAddUser.setInt(1, userId);
 			procAddUser.setInt(2, newSpaceId);
-			boolean hasResultSet2 = procAddUser.execute();
-			if (hasResultSet2) {
-				ResultSet rs2 = procAddUser.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs2.next()) {
-					// Do nothing, just consume
-				}
-				Common.safeClose(rs2);
-			}
+			Common.executeAndDrain(procAddUser);
 
 			Permission perm = new Permission(true);
 			perm.setLeader(true);
@@ -183,7 +167,7 @@ public class Spaces {
 			ps = con.prepareStatement("SELECT starexec.SetJobSpaceMaxStages(?,?)");
 			ps.setInt(1, jobSpaceId);
 			ps.setInt(2, maxStages);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (Exception e) {
 			log.error("setJobSpaceMaxStages", e);
@@ -278,7 +262,7 @@ public class Spaces {
 			procedure.setInt(1, ancestor);
 			procedure.setInt(2, descendant);
 			procedure.setTimestamp(3, time);
-			procedure.executeUpdate();
+			Common.executeAndDrain(procedure);
 			return true;
 		} catch (Exception e) {
 			log.error("addToJobSpaceClosure", e);
@@ -485,7 +469,7 @@ public class Spaces {
 			ps = con.prepareStatement("SELECT starexec.AssociateJobSpaces(?, ?)");
 			ps.setInt(1, parentId);
 			ps.setInt(2, childId);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (Exception e) {
 			log.error("associateJobSpaces", e);
@@ -780,7 +764,7 @@ public class Spaces {
 			procedure.setInt(1, userId);
 			procedure.setInt(2, spaceId);
 
-			procedure.executeUpdate();
+			Common.executeAndDrain(procedure);
 			return true;
 		} catch (Exception e) {
 			log.error("leave", e);
@@ -973,14 +957,7 @@ public class Spaces {
 				ps = con.prepareStatement("SELECT starexec.MoveSpace(?, ?)");
 				ps.setInt(1, desId);
 				ps.setInt(2, srcId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 			} finally {
 				Common.safeClose(ps);
 			}
@@ -999,14 +976,7 @@ public class Spaces {
 			try {
 				ps = con.prepareStatement("SELECT starexec.RebuildSpaceClosures(?)");
 				ps.setInt(1, spaceId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 			} finally {
 				Common.safeClose(ps);
 			}
@@ -2213,14 +2183,7 @@ public class Spaces {
 			for (int benchId : benchIds) {
 				ps.setInt(1, benchId);
 				ps.setInt(2, spaceId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 			}
 			log.info(benchIds.size() + " benchmark(s) were successfully removed from space " + spaceId);
 		} catch (Exception e) {
@@ -2309,14 +2272,7 @@ public class Spaces {
 			for (int jobId : jobIds) {
 				ps.setInt(1, jobId);
 				ps.setInt(2, spaceId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 			}
 			log.info(jobIds.size() + " job(s) were successfully removed from space " + spaceId);
 		} catch (Exception e) {
@@ -2371,14 +2327,7 @@ public class Spaces {
 			for (int solverId : solverIds) {
 				ps.setInt(1, solverId);
 				ps.setInt(2, spaceId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 			}
 			log.info(solverIds.size() + " solver(s) were successfully removed from space " + spaceId);
 		} catch (Exception e) {
@@ -2452,14 +2401,7 @@ public class Spaces {
 			// For every subspace of the space to be deleted...
 			for (Space subspace : Spaces.getSubSpaceHierarchy(spaceId)) {
 				ps.setInt(1, subspace.getId());
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 				log.info("Space " + subspace.getId() + " has been deleted.");
 			}
 		} finally {
@@ -2508,14 +2450,7 @@ public class Spaces {
 					ps = con.prepareStatement("SELECT starexec.RemoveSubspace(?)");
 				}
 				ps.setInt(1, subspaceId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 				log.info("Space " + subspaceId + " has been deleted.");
 			}
 
@@ -2553,14 +2488,7 @@ public class Spaces {
 			for (int userId : userIds) {
 				ps.setInt(1, userId);
 				ps.setInt(2, spaceId);
-				boolean hasResultSet = ps.execute();
-				if (hasResultSet) {
-					ResultSet rs = ps.getResultSet();
-					while (rs.next()) {
-						// consume the result set
-					}
-					Common.safeClose(rs);
-				}
+				Common.executeAndDrain(ps);
 			}
 		} catch (Exception e) {
 			log.error("removeUsers", e);
@@ -2694,14 +2622,7 @@ public class Spaces {
 			ps = con.prepareStatement("SELECT starexec.setPublicSpace(?, ?)");
 			ps.setInt(1, spaceId);
 			ps.setBoolean(2, pbc);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			log.error("setPublicSpace", e);
 			return false;
@@ -2833,7 +2754,6 @@ public class Spaces {
 	public static boolean updateDescription(int spaceId, String newDesc) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
-		ResultSet rs = null;
 		try {
 			log.info(String.format("updateDescription called: spaceId=%d, newDesc=%s", spaceId, newDesc));
 			con = Common.getConnection();
@@ -2842,15 +2762,7 @@ public class Spaces {
 			ps.setInt(1, spaceId);
 			ps.setString(2, newDesc);
 			log.info("updateDescription: prepared statement with parameters");
-			boolean hasResultSet = ps.execute();
-			log.info("updateDescription: executed, hasResultSet=" + hasResultSet);
-			if (hasResultSet) {
-				rs = ps.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs.next()) {
-					// Intentional no-op: exhaust result set to keep pool stable
-				}
-			}
+			Common.executeAndDrain(ps);
 			log.info(String.format("Space [%d] updated description to [%s]", spaceId, newDesc));
 			return true;
 		} catch (PSQLException e) {
@@ -2869,7 +2781,6 @@ public class Spaces {
 			throw new StarExecDatabaseException(
 				"Unexpected error updating description for space " + spaceId + ": " + e.getMessage(), e);
 		} finally {
-			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
@@ -2956,20 +2867,12 @@ public class Spaces {
 	public static boolean updateName(int spaceId, String newName) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
-		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.UpdateSpaceName(?, ?)");
 			ps.setInt(1, spaceId);
 			ps.setString(2, newName);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				rs = ps.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs.next()) {
-					// Do nothing, just consume
-				}
-			}
+			Common.executeAndDrain(ps);
 			log.info(String.format("Space [%d] updated name to [%s]", spaceId, newName));
 			return true;
 		} catch (PSQLException e) {
@@ -2982,7 +2885,6 @@ public class Spaces {
 			log.error("updateName", e);
 			Common.doRollback(con);
 		} finally {
-			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}

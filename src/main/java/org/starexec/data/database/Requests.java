@@ -38,16 +38,7 @@ public class Requests {
 			ps = con.prepareStatement("SELECT starexec.AddCode(?, ?)");
 			ps.setInt(1, user.getId());
 			ps.setString(2, code);
-
-			// Apply update to database (function returns void/scalar) and ignore any result
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			log.info(String.format("New email activation code [%s] added to VERIFY for user [%s]", code,
 			                       user.getFullName()
 			));
@@ -84,15 +75,7 @@ public class Requests {
 			ps.setInt(2, communityId);
 			ps.setString(3, code);
 			ps.setString(4, message);
-
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			log.debug(String.format("Added invitation record for user [%s] on community %d", user, communityId));
 			return true;
 		} catch (Exception e) {
@@ -147,15 +130,7 @@ public class Requests {
 			ps = con.prepareStatement("SELECT starexec.AddPassResetRequest(?, ?)");
 			ps.setInt(1, userId);
 			ps.setString(2, code);
-
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -183,15 +158,7 @@ public class Requests {
 			ps = con.prepareStatement("SELECT starexec.ApproveCommunityRequest(?, ?)");
 			ps.setInt(1, userId);
 			ps.setInt(2, communityId);
-
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -224,15 +191,7 @@ public class Requests {
 			ps = con.prepareStatement("SELECT starexec.DeclineCommunityRequest(?, ?)");
 			ps.setInt(1, userId);
 			ps.setInt(2, communityId);
-
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (SQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -566,14 +525,7 @@ public class Requests {
 			ps.setInt(1, userId);
 			ps.setString(2, newEmail);
 			ps.setString(3, code);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to add a change email request for user with id=" + userId +
@@ -640,14 +592,7 @@ public class Requests {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteChangeEmailRequest(?)");
 			ps.setInt(1, userId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			throw new StarExecDatabaseException(
 					"There was an error while trying to delete a change email requests for user with id=" + userId +

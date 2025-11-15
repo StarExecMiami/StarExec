@@ -417,6 +417,35 @@ public class Common {
 		}
 	}
 
+	/**
+	 * Executes the given statement and consumes any result sets it returns. This is useful for SELECT-based stored
+	 * procedures that are invoked primarily for their side effects but still return a row.
+	 *
+	 * @implNote The implementation iterates over every returned result set/update-count pair. If a procedure accidentally
+	 * returns a very large result set this method will fully iterate it, so procedures that are meant to be
+	 * side-effect-only should keep their result sets empty or tiny.
+	 *
+	 * @param ps The prepared statement to execute.
+	 * @throws SQLException on database error.
+	 */
+	public static void executeAndDrain(PreparedStatement ps) throws SQLException {
+		boolean hasResults = ps.execute();
+		int updateCount = ps.getUpdateCount();
+		do {
+			if (hasResults) {
+				try (ResultSet rs = ps.getResultSet()) {
+					if (rs != null) {
+						while (rs.next()) {
+							// Drain rows to allow PostgreSQL to free resources.
+						}
+					}
+				}
+			}
+			hasResults = ps.getMoreResults();
+			updateCount = ps.getUpdateCount();
+		} while (hasResults || updateCount != -1);
+	}
+
 	public static <E extends Exception> void runInTransaction(ThrowingConsumer<Connection, E> work) throws SQLException, E {
 		runInTransaction(con -> {
 			work.accept(con);

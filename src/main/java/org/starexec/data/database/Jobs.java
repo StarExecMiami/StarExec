@@ -945,7 +945,7 @@ public class Jobs {
 			procedure.setInt(10, attrs.getResultsInterval());
 			procedure.setInt(11, attrs.getStdoutSaveOption().getVal());
 			procedure.setInt(12, attrs.getExtraOutputSaveOption().getVal());
-			procedure.executeUpdate();
+			Common.executeAndDrain(procedure);
 			return true;
 		} catch (Exception e) {
 			log.error("addJobStageAttributes", e);
@@ -986,22 +986,13 @@ public class Jobs {
 			throws SQLException {
 		java.sql.Connection con = null;
 		java.sql.PreparedStatement ps = null;
-		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.SetOutputBenchmarksPath(?, ?)");
 			ps.setInt(1, jobId);
 			ps.setString(2, outputBenchmarksDirectory);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				rs = ps.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs.next()) {
-					// Do nothing, just consume
-				}
-			}
+			Common.executeAndDrain(ps);
 		} finally {
-			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
@@ -5646,22 +5637,13 @@ public class Jobs {
 	public static void setAsLowPriority(final int jobId) throws SQLException {
 		java.sql.Connection con = null;
 		java.sql.PreparedStatement ps = null;
-		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.SetHighPriority(?,?)");
 			ps.setInt(1, jobId);
 			ps.setBoolean(2, false);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				rs = ps.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs.next()) {
-					// Do nothing, just consume
-				}
-			}
+			Common.executeAndDrain(ps);
 		} finally {
-			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
@@ -5675,22 +5657,13 @@ public class Jobs {
 	public static void setAsHighPriority(final int jobId) throws SQLException {
 		java.sql.Connection con = null;
 		java.sql.PreparedStatement ps = null;
-		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.SetHighPriority(?,?)");
 			ps.setInt(1, jobId);
 			ps.setBoolean(2, true);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				rs = ps.getResultSet();
-				// Consume the result set to avoid cursor leaks
-				while (rs.next()) {
-					// Do nothing, just consume
-				}
-			}
+			Common.executeAndDrain(ps);
 		} finally {
-			Common.safeClose(rs);
 			Common.safeClose(ps);
 			Common.safeClose(con);
 		}

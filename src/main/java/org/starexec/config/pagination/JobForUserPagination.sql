@@ -20,7 +20,7 @@
 				OR		GetJobStatus(id)	LIKE	CONCAT('%', :query, '%'))
 											
 				-- Exclude Jobs that aren't in the specified space
-				AND jobs.user_id= :userId AND deleted=false
+				AND jobs.user_id = :userId AND jobs.deleted = false
 				
 										
 			

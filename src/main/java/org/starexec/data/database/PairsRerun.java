@@ -68,14 +68,7 @@ public class PairsRerun {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.MarkPairAsRerun(?)");
 			ps.setInt(1, pairId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -94,14 +87,7 @@ public class PairsRerun {
 		try {
 			ps = con.prepareStatement("SELECT starexec.MarkPairAsRerun(?)");
 			ps.setInt(1, pairId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -115,14 +101,7 @@ public class PairsRerun {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.UnmarkPairAsRerun(?)");
 			ps.setInt(1, pairId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);

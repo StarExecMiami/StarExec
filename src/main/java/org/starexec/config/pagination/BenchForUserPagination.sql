@@ -22,7 +22,7 @@
 						
 				FROM	benchmarks
 				LEFT JOIN	processors  ON benchmarks.bench_type=processors.id
-				where user_id = :userId and deleted=false AND recycled=:recycled
+				where benchmarks.user_id = :userId AND benchmarks.deleted = false AND benchmarks.recycled = :recycled
 				
 				-- Exclude benchmarks whose name doesn't contain the query string
 				AND 	(benchmarks.name	LIKE	CONCAT('%', :query, '%')

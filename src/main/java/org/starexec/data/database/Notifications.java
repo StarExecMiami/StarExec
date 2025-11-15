@@ -56,14 +56,7 @@ public class Notifications {
 			ps = con.prepareStatement("SELECT starexec.SubscribeUserToJob(?,?)");
 			ps.setInt(1, user);
 			ps.setInt(2, job);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -84,14 +77,7 @@ public class Notifications {
 			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserToJob(?,?)");
 			ps.setInt(1, user);
 			ps.setInt(2, job);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -119,14 +105,7 @@ public class Notifications {
 			ps.setInt(1, userId);
 			ps.setInt(2, job);
 			ps.setString(3, status.name());
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);

@@ -1726,7 +1726,7 @@ public class JobPairs {
 			ps.setInt(1, pairId);
 			ps.setShort(2, (short) statusCode);
 
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 
 			return true;
 		} catch (Exception e) {
@@ -1811,7 +1811,7 @@ public class JobPairs {
 			Common.safeClose(ps);
 			psClear = con.prepareStatement("SELECT starexec.ClearJobpairTimeDeltaData(?)");
 			psClear.setInt(1, queueID);
-			psClear.executeUpdate();
+			Common.executeAndDrain(psClear);
 
 			Common.endTransaction(con);
 			return data;
@@ -1843,7 +1843,7 @@ public class JobPairs {
 
 			ps.setInt(1, pairId);
 			ps.setInt(2, execId);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 
 			return true;
 		} catch (Exception e) {
@@ -1872,7 +1872,7 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT starexec.UpdateJobSpaceId(?, ?)");
 			ps.setInt(1, jobPairId);
 			ps.setInt(2, jobSpaceId);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			log.error("UpdateJobSpaces", e);
 		} finally {
@@ -1982,7 +1982,7 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT starexec.UpdateJobPairStatus(?, ?)");
 			ps.setInt(1, jobPairId);
 			ps.setInt(2, status_code);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
@@ -2080,7 +2080,7 @@ public class JobPairs {
 			ps.setInt(1, p.getId());
 			ps.setInt(2, p.getStatus().getCode().getVal());
 			ps.setInt(3, Status.StatusCode.ERROR_SUBMIT_FAIL.getVal());
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			log.error("setBrokenPairStatus", e);
 		} finally {
@@ -2123,7 +2123,7 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT starexec.UpdatePairNodeId(?, ?)");
 			ps.setInt(1, pairId);
 			ps.setInt(2, nodeId);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);

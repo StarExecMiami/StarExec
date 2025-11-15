@@ -69,14 +69,7 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.AddDefaultBenchmark(?, ?)");
 			ps.setInt(1, settingId);
 			ps.setInt(2, benchId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -98,14 +91,7 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.DeleteDefaultBenchmark(?, ?)");
 			ps.setInt(1, settingId);
 			ps.setInt(2, benchId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -125,14 +111,7 @@ public class Settings {
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT starexec.DeleteAllDefaultBenchmarks(?)");
 			ps.setInt(1, settingId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 			Common.safeClose(con);
@@ -151,14 +130,7 @@ public class Settings {
 		try {
 			ps = con.prepareStatement("SELECT starexec.DeleteAllDefaultBenchmarks(?)");
 			ps.setInt(1, settingId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -180,14 +152,7 @@ public class Settings {
 			ps = con.prepareStatement("SELECT starexec.AddDefaultBenchmark(?, ?)");
 			ps.setInt(1, settingId);
 			ps.setInt(2, benchId);
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 		} finally {
 			Common.safeClose(ps);
 		}

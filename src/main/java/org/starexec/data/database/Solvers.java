@@ -2298,7 +2298,7 @@ public class Solvers {
 				ps.setString(2, name);
 				ps.setString(3, description);
 				ps.setTimestamp(4, new Timestamp(System.currentTimeMillis()));
-				ps.executeUpdate();
+				Common.executeAndDrain(ps);
 
 				log.info(String.format("Configuration [%s] has been successfully updated.", name));
 				return true;
@@ -2387,7 +2387,7 @@ public class Solvers {
 			ps.setString(3, description);
 			ps.setBoolean(4, isDownloadable);
 
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 			log.debug(String.format("Solver [id=%d] was successfully updated.", id));
 
 			return true;
@@ -2428,7 +2428,7 @@ public class Solvers {
 			ps.setInt(1, s.getId());
 			ps.setLong(2, s.getDiskSize());
 
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
 				throw new StarExecDatabaseException("Solver not found: " + s.getId(), e);
@@ -2691,7 +2691,7 @@ public class Solvers {
 			ps = con.prepareStatement("SELECT starexec.SetSolverBuildStatus(?, ?)");
 			ps.setInt(1, s.getId());
 			ps.setInt(2, status);
-			ps.executeUpdate();
+			Common.executeAndDrain(ps);
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		} finally {
@@ -2699,4 +2699,5 @@ public class Solvers {
 			Common.safeClose(ps);
 		}
 	}
+
 }

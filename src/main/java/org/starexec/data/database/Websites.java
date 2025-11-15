@@ -52,15 +52,7 @@ public class Websites {
 			ps.setInt(1, id);
 			ps.setString(2, url);
 			ps.setString(3, name);
-
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			log.info(
 					String.format("Added new website of with [%s] id [%d] with name [%s] and url [%s]", type
 							              .toString(), id, name, url
@@ -123,15 +115,7 @@ public class Websites {
 
 
 			ps.setInt(1, websiteId);
-
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			Common.executeAndDrain(ps);
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
