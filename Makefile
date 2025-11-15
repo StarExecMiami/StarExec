@@ -10,6 +10,7 @@ RELEASE_NAME?=starexec
 HELM_VALUES?=values.yaml
 SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
+STAREXEC_DB_PASSWORD_FILE?=/run/secrets/starexec-db-password
 ENV?=dev
 ENV_VALUES=$(CHART_DIR)/values-$(ENV).yaml
 VOLUME_SCRIPT=./scripts/podman-volumes.sh
@@ -21,6 +22,18 @@ FORCE?=0
 # Network configuration
 PODMAN_NETWORK?=pasta
 PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
+
+define load_db_password
+# Load database password securely from file or environment variable
+# Uses $(call load_db_password) for immediate expansion at call time
+DB_PASS=$$( \
+	if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
+		cat "$${STAREXEC_DB_PASSWORD_FILE}" | tr -d '\n'; \
+	else \
+		echo "$${STAREXEC_DB_PASSWORD:-starexec_dev_password}"; \
+	fi \
+)
+endef
 
 .PHONY: help build build-fresh build-prod image \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
@@ -142,14 +155,21 @@ volumes-create:
 volumes-list:
 	$(VOLUME_SCRIPT) list
 
-volumes-backup:
+volumes-backup: verify-deps
 	@echo "Backing up volumes for environment: $(ENV)"
 	$(VOLUME_SCRIPT) backup-all $(ENV)
 
-volumes-restore:
+volumes-restore: verify-deps
 	@echo "Restore requires timestamp. Available backups:"
 	@ls -1 backups/$(VOLUME_PREFIX)-$(ENV)-full-*.tar.gz 2>/dev/null | sed 's/.*full-//' | sed 's/-.*//' | sort -u || echo "(none)"
-	@read -p "Enter timestamp (YYYYMMDD-HHMMSS): " ts && \
+	@ts=$${RESTORE_TIMESTAMP:-}; \
+	if [ -z "$$ts" ]; then \
+		read -p "Enter timestamp (YYYYMMDD-HHMMSS): " ts; \
+	fi; \
+	if [ -z "$$ts" ]; then \
+		echo "✗ No timestamp provided, aborting"; \
+		exit 1; \
+	fi; \
 	$(VOLUME_SCRIPT) restore-all $(ENV) $$ts
 
 volumes-export:
@@ -168,7 +188,7 @@ volumes-help:
 
 db-shell:
 	@echo "Opening PostgreSQL shell (container must be running)"
-	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
+	@$(load_db_password); \
 	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
 	PGPASSWORD=$$DB_PASS podman exec -it starexec-postgres psql -U $$DB_USER -d $$DB_NAME
@@ -179,7 +199,7 @@ db-dump:
 
 db-migrate:
 	@echo "Running Flyway migrations (this may take 30-60 seconds)..."
-	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
+	@$(load_db_password); \
 	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	mvn -q -DskipTests \
 		-Dflyway.url=jdbc:postgresql://localhost:5432/starexec \
@@ -190,7 +210,7 @@ db-migrate:
 
 db-status:
 	@echo "Checking Flyway migration status..."
-	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
+	@$(load_db_password); \
 	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	mvn -q -DskipTests \
 		-Dflyway.url=jdbc:postgresql://localhost:5432/starexec \
@@ -200,16 +220,17 @@ db-status:
 
 migrate-repair:
 	@echo "Running Flyway repair..."
-	@ echo "Using values file: $(VALS)"; \
+	@$(load_db_password); \
+	  echo "Using values file: $(VALS)"; \
 	  db_host=$${DB_HOST:-localhost}; \
-	  : $${STAREXEC_DB_USER:=starexec}; : $${STAREXEC_DB_DATABASE:=starexec}; \
-	  : $${STAREXEC_DB_PASSWORD:=starexec_dev_password}; \
-	  echo "Running Flyway repair against $$db_host:5432/$$STAREXEC_DB_DATABASE"; \
+	  DB_USER=$${STAREXEC_DB_USER:-starexec}; \
+	  DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
+	  echo "Running Flyway repair against $$db_host:5432/$$DB_NAME"; \
 	  mvn clean flyway:repair -e \
-		-Dflyway.url=jdbc:postgresql://$$db_host:5432/$$STAREXEC_DB_DATABASE \
-		-Dflyway.user=$$STAREXEC_DB_USER \
-		-Dflyway.password=$$STAREXEC_DB_PASSWORD \
-		-Dflyway.schemas=$$STAREXEC_DB_DATABASE
+		-Dflyway.url=jdbc:postgresql://$$db_host:5432/$$DB_NAME \
+		-Dflyway.user=$$DB_USER \
+		-Dflyway.password=$$DB_PASS \
+		-Dflyway.schemas=$$DB_NAME
 
 
 migrate-podman:
@@ -229,7 +250,7 @@ migrate-podman:
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
-	@DB_PASS=$${STAREXEC_DB_PASSWORD:-starexec_dev_password}; \
+	@$(load_db_password); \
 	DB_USER=$${STAREXEC_DB_USER:-starexec}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-starexec}; \
 	DB_HOST=$${DB_HOST:-localhost}; \
@@ -263,18 +284,8 @@ network-setup:
 		podman network create starexec-net; \
 	fi
 
-deploy-podman: image network-setup volumes-create
-	@echo "Deploying to Podman with environment: $(ENV)"
-	@echo "Using values file: $(VALS)"
-	@if command -v helm >/dev/null 2>&1; then \
-		$(MAKE) deploy-podman-helm; \
-	else \
-		echo "Helm not found, using direct deployment..."; \
-		$(MAKE) deploy-podman-direct; \
-	fi
-
-deploy-podman-helm:
-	@echo "Cleaning up existing deployment..."
+define cleanup_deployment
+	@echo "Cleaning up existing StarExec pods, containers, and secrets..."
 	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
 		if podman pod exists $$pod 2>/dev/null; then \
 			echo "  Removing existing pod: $$pod"; \
@@ -290,14 +301,29 @@ deploy-podman-helm:
 	@for key in user password database rootPassword; do \
 		podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-$$key 2>/dev/null || true; \
 	done
+endef
+
+deploy-podman: .lock-podman-deploy verify-deps image network-setup volumes-create
+	@echo "Deploying to Podman with environment: $(ENV)"
+	@echo "Using values file: $(VALS)"
+	@if command -v helm >/dev/null 2>&1; then \
+		$(MAKE) deploy-podman-helm; \
+	else \
+		echo "Helm not found, using direct deployment..."; \
+		$(MAKE) deploy-podman-direct; \
+	fi
+
+deploy-podman-helm:
+	@echo "Cleaning up existing deployment..."
+	$(call cleanup_deployment)
 	@echo "Rendering secrets..."
 	@helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" > secret-render.yaml
 	@for key in user password database rootPassword; do \
 		b64=$$(yq -r ".data.$$key" secret-render.yaml); \
 		[ -z "$$b64" ] && echo "ERROR: No base64 data for $$key" && cat secret-render.yaml && exit 1; \
-		decoded=$$(echo "$$b64" | base64 --decode); \
-		echo "$$decoded" | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
+		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
 	done
+	@rm -f secret-render.yaml
 	@echo "Deploying application pod..."
 	@IMAGE_REPO="$(RELEASE_NAME)"; \
 	IMAGE_VER="$(IMAGE_TAG)"; \
@@ -321,18 +347,7 @@ deploy-podman-helm:
 
 deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
-	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
-		if podman pod exists $$pod 2>/dev/null; then \
-			echo "  Removing existing pod: $$pod"; \
-			podman pod rm -f $$pod 2>/dev/null || true; \
-		fi \
-	done
-	@for container in starexec-app starexec-postgres; do \
-		if podman container exists $$container 2>/dev/null; then \
-			echo "  Removing orphaned container: $$container"; \
-			podman rm -f $$container 2>/dev/null || true; \
-		fi \
-	done
+	$(call cleanup_deployment)
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
@@ -360,18 +375,7 @@ deploy-podman-cached: image
 	fi
 	@echo "Deploying using cached render.yaml..."
 	@echo "Cleaning up existing deployment..."
-	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
-		if podman pod exists $$pod 2>/dev/null; then \
-			echo "  Removing existing pod: $$pod"; \
-			podman pod rm -f $$pod 2>/dev/null || true; \
-		fi \
-	done
-	@for container in starexec-app starexec-postgres; do \
-		if podman container exists $$container 2>/dev/null; then \
-			echo "  Removing orphaned container: $$container"; \
-			podman rm -f $$container 2>/dev/null || true; \
-		fi \
-	done
+	$(call cleanup_deployment)
 	@podman play kube render.yaml
 	@echo ""
 	@echo "✓ Deployment complete (using cached manifest)!"
@@ -381,21 +385,7 @@ deploy-podman-cached: image
 
 undeploy-podman:
 	@echo "Removing Podman deployment (volumes preserved)"
-	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
-		if podman pod exists $$pod 2>/dev/null; then \
-			echo "Removing pod: $$pod"; \
-			podman pod rm -f $$pod 2>/dev/null || true; \
-		fi \
-	done
-	@for container in starexec-app starexec-postgres; do \
-		if podman container exists $$container 2>/dev/null; then \
-			echo "Removing orphaned container: $$container"; \
-			podman rm -f $$container 2>/dev/null || true; \
-		fi \
-	done
-	@for key in user password database rootPassword; do \
-		podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-$$key 2>/dev/null || true; \
-	done
+	$(call cleanup_deployment)
 	@echo ""
 	@echo "✓ Cleanup complete (volumes preserved)"
 	@echo "Note: Use 'make volumes-delete ENV=$(ENV)' to remove data"
@@ -425,11 +415,7 @@ undeploy-k8s:
 
 clean-podman:
 	@echo "Cleaning Podman artifacts (preserving volumes and cache)"
-	@podman pod rm -f starexec starexec-pod $(RELEASE_NAME)-pod 2>/dev/null || true
-	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-user 2>/dev/null || true
-	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-password 2>/dev/null || true
-	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-database 2>/dev/null || true
-	@podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-rootPassword 2>/dev/null || true
+	$(call cleanup_deployment)
 	@echo "Removing StarExec images..."
 	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
 	@echo "✓ Cleanup complete (volumes and cache preserved)"
@@ -463,49 +449,18 @@ clean-all: clean-podman volumes-delete
 	@echo "✓ Full cleanup complete (pods, images, volumes removed; cache preserved)"
 
 clean-hard:
-	@echo "⚠️  HARD RESET: This removes ALL Podman storage"
-	@echo "⚠️  This affects ALL containers/images/volumes on this system"
-	@echo ""
-	@echo "This will PERMANENTLY delete:"
-	@echo "  - All containers (running and stopped)"
-	@echo "  - All images"
-	@echo "  - All volumes (including StarExec data!)"
-	@echo "  - All networks (except default)"
-	@echo "  - Build cache"
-	@echo ""
-	@echo "⚠️  THIS CANNOT BE UNDONE!"
-	@echo ""
-	@if [ -t 0 ]; then \
-		if [ "$(FORCE)" != "1" ]; then \
-			read -p "Type 'yes, delete everything' to confirm: " ans; \
-			if [ "$$ans" != "yes, delete everything" ]; then \
-				echo "Cancelled"; \
-				exit 0; \
-			fi; \
-		else \
-			echo "FORCE=1 set, skipping confirmation"; \
-		fi; \
-	else \
-		echo "❌ Running non-interactively. Refusing to proceed."; \
-		echo "Use this command manually if you really want to reset:"; \
-		echo "  podman system reset"; \
-		exit 1; \
+	@echo "⚠️  STAREXEC-ONLY CLEANUP: removes the StarExec pods, containers, secrets, volumes, and image for ENV=$(ENV)"
+	@read -p "Type '$(ENV)' to confirm: " ans; \
+	if [ "$$ans" != "$(ENV)" ]; then \
+		echo "Cancelled"; \
+		exit 0; \
 	fi
-	@echo ""
-	@echo "Starting hard reset..."
-	@podman ps -aq --all | xargs -r podman rm -f 2>/dev/null || true && \
-		echo "✓ Removed all containers"
-	@podman images -q | xargs -r podman rmi -f 2>/dev/null || true && \
-		echo "✓ Removed all images"
-	@podman volume ls -q | xargs -r podman volume rm -f 2>/dev/null || true && \
-		echo "✓ Removed all volumes"
-	@podman network ls --format "{{.Name}}" | grep -v "^bridge$$" | grep -v "^podman$$" | xargs -r podman network rm 2>/dev/null || true && \
-		echo "✓ Removed  networks"
-	@podman builder prune -a -f 2>/dev/null || true && \
-		echo "✓ Cleared builder cache"
-	@echo ""
-	@echo "✓ Hard reset complete!"
-	@echo "💾 Backup any important data before running this again"
+	$(call cleanup_deployment)
+	@echo "Removing StarExec volumes..."
+	@podman volume rm -f $(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null || true
+	@echo "Removing StarExec image..."
+	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
+	@echo "✓ StarExec scoped cleanup complete"
 
 # ============================================================================
 # DEBUGGING AND DIAGNOSTICS
@@ -553,6 +508,15 @@ test-deps:
 	@echo ""
 	@echo "✓ All job execution dependencies validated"
 
+verify-deps:
+	@echo "Validating required CLI tooling..."
+	@command -v podman >/dev/null || { echo "❌ podman is required"; exit 1; }
+	@command -v yq >/dev/null || { echo "❌ yq is required"; exit 1; }
+	@yq --version >/dev/null 2>&1 && echo "  yq is available" || { echo "❌ yq is not working properly"; exit 1; }
+	@command -v sha256sum >/dev/null || { echo "❌ sha256sum is required"; exit 1; }
+	@echo "Optional tools:"
+	@command -v helm >/dev/null && echo "  helm is available" || echo "  helm is not installed (needed for template/deploy)";
+
 lint:
 	@if command -v helm >/dev/null 2>&1; then \
 		echo "Linting Helm chart..."; \
@@ -590,6 +554,7 @@ config-show:
 	@echo "=== Source Files ==="
 	@echo "Values file: $(VALS)"
 	@echo "Helm chart: $(CHART_DIR)"
+	@echo "Volume prefix: $(VOLUME_PREFIX)"
 	@echo ""
 	@echo "=== Database Configuration ==="
 	@if command -v yq >/dev/null 2>&1; then \
@@ -607,7 +572,8 @@ config-show:
 	@echo "=== Environment Variable Overrides ==="
 	@echo "  STAREXEC_DB_HOST=$${STAREXEC_DB_HOST:-<not set>}"
 	@echo "  STAREXEC_DB_USER=$${STAREXEC_DB_USER:-<not set>}"
-	@echo "  STAREXEC_DB_PASSWORD=$${STAREXEC_DB_PASSWORD:-<not set>}"
+	@echo "  STAREXEC_DB_PASSWORD_FILE=$${STAREXEC_DB_PASSWORD_FILE:-<not set>}"
+	@echo "  STAREXEC_DB_PASSWORD=***REDACTED***"
 	@echo ""
 	@echo "=== Java Defaults (fallback) ==="
 	@echo "  DB User: starexec (EnvironmentConfig.java)"
@@ -625,3 +591,16 @@ config-show:
 	@echo ""
 	@echo "=== Validation ==="
 	@echo "  Run 'make config-validate ENV=$(ENV)' to check for conflicts"
+
+# ============================================================================
+# LOCKING MECHANISM (prevents concurrent deployments)
+# ============================================================================
+
+# Lock file for deployment operations
+.lock-podman-deploy:
+	@mkdir -p .locks
+	@exec 200>.locks/podman-deploy.lock && flock -n 200 || { echo "❌ Another deployment is in progress. Please wait."; exit 1; }
+	@echo "🔒 Acquired deployment lock"
+
+# Clean up lock on exit
+.PHONY: .lock-podman-deploy

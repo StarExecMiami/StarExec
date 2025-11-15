@@ -39,10 +39,10 @@ services:
       STAREXEC_TEST_COMMUNITY_ID: 1
 
     volumes:
-      - starexec_data:/app/data
-      - starexec_sandbox:/app/sandbox
-      - starexec_backend:/app/backend
-      - starexec_work:/app/work
+      - data:/app/data
+      - sandbox:/app/sandbox
+      - backend:/app/backend
+      - work:/app/work
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,11 +74,16 @@ services:
       - starexec_network
 
 volumes:
-  starexec_data:
-  starexec_sandbox:
-  starexec_backend:
-  starexec_work:
+  data:
+    name: ${VOLUME_PREFIX:-starexec}_data
+  sandbox:
+    name: ${VOLUME_PREFIX:-starexec}_sandbox
+  backend:
+    name: ${VOLUME_PREFIX:-starexec}_backend
+  work:
+    name: ${VOLUME_PREFIX:-starexec}_work
   postgres_data:
+    name: ${VOLUME_PREFIX:-starexec}_postgres
 
 networks:
   starexec_network:

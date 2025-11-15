@@ -7,6 +7,7 @@ image:
   pullPolicy: IfNotPresent
 
 replicaCount: 1
+volumePrefix: starexec
 
 persistence:
   enabled: true

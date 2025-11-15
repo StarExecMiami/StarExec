@@ -117,6 +117,20 @@ backup_all() {
     
     log_info "Full backup complete. Archive contents:"
     ls -lh "${BACKUP_DIR}/${backup_name}"*.tar.gz || true
+
+    record_checksum "${BACKUP_DIR}/${backup_name}-data.tar.gz"
+    record_checksum "${BACKUP_DIR}/${backup_name}-postgres.tar.gz"
+}
+
+record_checksum() {
+    local file="$1"
+    if [ -f "$file" ]; then
+        log_info "Recording checksum for $file"
+        mkdir -p "${BACKUP_DIR}"
+        sha256sum "$file" >> "${BACKUP_DIR}/checksums.txt"
+    else
+        log_warn "Cannot record checksum – file missing: $file"
+    fi
 }
 
 # Restore all volumes from backup
@@ -199,16 +213,21 @@ inspect_volume() {
 dump_postgres() {
     local env="${1:-dev}"
     local output="${BACKUP_DIR}/postgres-dump-${env}-${DATE_STAMP}.sql.gz"
-    
+
     mkdir -p "$BACKUP_DIR"
-    
+
     log_info "Creating PostgreSQL logical dump for environment: $env"
-    
+
     # This assumes PostgreSQL container is running
     local container_name="starexec-postgres"
     local db_name="${STAREXEC_DB_NAME:-starexec}"
     local db_user="${STAREXEC_DB_USER:-postgres}"
-    local db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
+    local db_pass
+    if [ -n "${STAREXEC_DB_PASSWORD_FILE:-}" ] && [ -f "${STAREXEC_DB_PASSWORD_FILE}" ]; then
+        db_pass=$(cat "${STAREXEC_DB_PASSWORD_FILE}" | tr -d '\n')
+    else
+        db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
+    fi
     # If the PostgreSQL server is running in the container with the standard socket,
     # pass PGPASSWORD to the container process for non-interactive authentication.
     
@@ -258,11 +277,12 @@ Examples:
   $0 restore-all dev 20250102-143022
 
 Environment Variables:
-  VOLUME_PREFIX        Volume name prefix (default: starexec)
-  BACKUP_DIR           Backup directory (default: ./backups)
-  STAREXEC_DB_USER     PostgreSQL user (default: postgres)
-  STAREXEC_DB_PASSWORD PostgreSQL password (default: starexec_password)
-  STAREXEC_DB_NAME     Database name (default: starexec)
+    VOLUME_PREFIX             Volume name prefix (default: starexec)
+    BACKUP_DIR                Backup directory (default: ./backups)
+    STAREXEC_DB_USER          PostgreSQL user (default: postgres)
+    STAREXEC_DB_PASSWORD      PostgreSQL password (default: starexec_password)
+    STAREXEC_DB_PASSWORD_FILE File containing the PostgreSQL password (optional)
+    STAREXEC_DB_NAME          Database name (default: starexec)
 
 EOF
 }

@@ -10,11 +10,20 @@ TEMPLATE_FILE="$PROJECT_ROOT/render.yaml.template"
 OUTPUT_FILE="$PROJECT_ROOT/render.yaml"
 
 # Set defaults
+ENVIRONMENT="${ENV:-dev}"
+VOLUME_PREFIX="${VOLUME_PREFIX:-starexec}"
+DEFAULT_DATA_VOL="${VOLUME_PREFIX}-${ENVIRONMENT}-data"
+DEFAULT_POSTGRES_VOL="${VOLUME_PREFIX}-${ENVIRONMENT}-postgres"
+
 export STAREXEC_DB_USER="${STAREXEC_DB_USER:-starexec}"
-export STAREXEC_DB_PASSWORD="${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+if [ -n "${STAREXEC_DB_PASSWORD_FILE:-}" ] && [ -f "${STAREXEC_DB_PASSWORD_FILE}" ]; then
+    export STAREXEC_DB_PASSWORD="$(cat "${STAREXEC_DB_PASSWORD_FILE}" | tr -d '\n')"
+else
+    export STAREXEC_DB_PASSWORD="${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+fi
 export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
-export STAREXEC_DATA_VOL="${STAREXEC_DATA_VOL:-starexec-dev-data}"
-export STAREXEC_POSTGRES_VOL="${STAREXEC_POSTGRES_VOL:-starexec-dev-postgres}"
+export STAREXEC_DATA_VOL="${STAREXEC_DATA_VOL:-$DEFAULT_DATA_VOL}"
+export STAREXEC_POSTGRES_VOL="${STAREXEC_POSTGRES_VOL:-$DEFAULT_POSTGRES_VOL}"
 export IMAGE_NAME="${IMAGE_NAME:-localhost/local/starexec}"
 export IMAGE_TAG="${IMAGE_TAG:-dev}"
 

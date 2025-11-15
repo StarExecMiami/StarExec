@@ -6,6 +6,9 @@
  
  Podman play kube requires Pod resource (not Deployment).
 */ -}}
+{{- $volumePrefix := default "starexec" .Values.volumePrefix }}
+{{- $dataName := or .Values.persistence.podmanVolumes.data.name (printf "%s-data" $volumePrefix) }}
+{{- $postgresName := or .Values.persistence.podmanVolumes.postgres.name (printf "%s-postgres" $volumePrefix) }}
 {{- if or .Values.persistence.usePodmanVolumes .Values.persistence.useHostPathForPodman }}
 
 apiVersion: v1
@@ -20,7 +23,7 @@ spec:
     - name: data
       {{- if .Values.persistence.usePodmanVolumes }}
       persistentVolumeClaim:
-        claimName: {{ .Values.persistence.podmanVolumes.data.name | default "starexec-data" }}
+        claimName: {{ tpl $dataName . }}
       {{- else }}
       hostPath:
         path: /tmp/starexec-data
@@ -29,7 +32,7 @@ spec:
     - name: postgres-data
       {{- if and .Values.postgres.persistence.enabled .Values.persistence.usePodmanVolumes }}
       persistentVolumeClaim:
-        claimName: {{ .Values.persistence.podmanVolumes.postgres.name | default "starexec-postgres" }}
+        claimName: {{ tpl $postgresName . }}
       {{- else if .Values.persistence.useHostPathForPodman }}
       hostPath:
         path: /tmp/postgres-data

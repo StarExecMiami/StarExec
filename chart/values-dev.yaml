@@ -8,6 +8,7 @@ image:
   pullPolicy: IfNotPresent
 
 replicaCount: 1
+volumePrefix: starexec
 
 # Podman development mode: uses named volumes for proper lifecycle
 persistence:
@@ -20,9 +21,9 @@ persistence:
   # Named volume configuration (Podman creates/manages these)
   podmanVolumes:
     data:
-      name: starexec-dev-data
+      name: "{{ .Values.volumePrefix }}-dev-data"
     postgres:
-      name: starexec-dev-postgres
+      name: "{{ .Values.volumePrefix }}-dev-postgres"
 
 postgres:
   image:
