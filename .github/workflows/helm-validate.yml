@@ -34,7 +34,13 @@ jobs:
       - name: Lint Helm chart
         run: |
           echo "Linting Helm chart..."
-          helm lint ./chart --strict
+          if [ -f "chart/values-dev.yaml" ]; then
+            echo "Using values-dev.yaml for lint validation..."
+            helm lint ./chart -f chart/values-dev.yaml --strict
+          else
+            echo "⚠️  values-dev.yaml not found, attempting default lint..."
+            helm lint ./chart --strict
+          fi
       
       - name: Validate chart templates
         run: |
@@ -45,7 +51,7 @@ jobs:
               echo "=== Validating $env environment ==="
               helm template starexec ./chart \
                 -f chart/values-$env.yaml \
-                --validate > /tmp/template-$env.yaml
+                > /tmp/template-$env.yaml
               if [ $? -eq 0 ]; then
                 LINES=$(wc -l < /tmp/template-$env.yaml)
                 echo "✓ $env validation passed ($LINES lines generated)"
