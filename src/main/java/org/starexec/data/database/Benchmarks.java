@@ -17,6 +17,7 @@ import org.starexec.util.Timer;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -31,6 +32,34 @@ import java.nio.charset.StandardCharsets;
  */
 public class Benchmarks {
 	private static final StarLogger log = StarLogger.getLogger(Benchmarks.class);
+	private static final int MAX_ATTRIBUTE_LENGTH = 128;
+	private static final String GET_BENCHMARKS_BY_IDS_SQL =
+			"SELECT b.id AS bench_id, " +
+			"b.user_id AS bench_user_id, " +
+			"b.name AS bench_name, " +
+			"b.bench_type AS bench_bench_type, " +
+			"b.uploaded AS bench_uploaded, " +
+			"b.path AS bench_path, " +
+			"b.downloadable AS bench_downloadable, " +
+			"b.disk_size AS bench_disk_size, " +
+			"b.description AS bench_description, " +
+			"b.deleted AS bench_deleted, " +
+			"b.recycled AS bench_recycled, " +
+			"p.id AS types_id, " +
+			"p.community AS types_community, " +
+			"p.name AS types_name, " +
+			"p.description AS types_description, " +
+			"p.path AS types_path, " +
+			"p.disk_size AS types_disk_size, " +
+			"p.processor_type AS types_processor_type, " +
+			"p.time_limit AS types_time_limit, " +
+			"p.syntax_id AS types_syntax_id " +
+			"FROM starexec.benchmarks b " +
+			"LEFT OUTER JOIN processors p ON b.bench_type = p.id " +
+			"WHERE b.id = ANY (?) AND b.deleted = false AND b.recycled = false";
+	private static final String GET_BENCHMARK_ATTRS_BY_IDS_SQL =
+			"SELECT bench_id, attr_key, attr_value " +
+			"FROM starexec.bench_attributes WHERE bench_id = ANY (?)";
 	public static boolean deleteAndRemoveBenchmark(int id) {
 		Benchmark b = Benchmarks.getIncludeDeletedAndRecycled(id, false);
 		if (b == null) {
@@ -128,14 +157,19 @@ public class Benchmarks {
 		int count = 0;
 		for (String key : attrs.keySet()) {
 			String val = attrs.get(key);
+			if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {
+				log.warn("addAttributeSetToDbIfValid", "Skipping empty attribute for benchmark " + benchmark.getId() +
+					" (key='" + key + "', val='" + val + "')");
+				continue;
+			}
 			// Add the attribute to the database
 			count++;
 			log.debug("Adding att number " + count + " " + key + ", " + val + " to bench " + benchmark.getId());
 
 			if (!Benchmarks.addBenchAttr(con, benchmark.getId(), key, val)) {
 				Uploads.setBenchmarkErrorMessage(
-						statusId, "Problem adding the following attribute-value pair to the db, for benchmark " +
-								benchmark.getId() + ": " + key + ", " + val);
+					statusId, "Problem adding the following attribute-value pair to the db, for benchmark " +
+						benchmark.getId() + ": " + key + ", " + val);
 				return false;
 			}
 		}
@@ -172,31 +206,32 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	private static boolean addBenchAttr(Connection con, int benchId, String key, String val) {
-		PreparedStatement procedure = null;
-		Supplier<String> trace = ()->
-			  "\n\tbenchId :" + benchId
-			+ "\n\tkey:     " + key
-			+ "\n\tval:     " + val
-		;
-		try {
-			if (key.length() > 128) {
-				log.warn("addBenchAttr", "key exceeds max length" + trace.get());
-			}
-			if (val.length() > 128) {
-				log.warn("addBenchAttr", "val exceeds max length" + trace.get());
-			}
-			procedure = con.prepareStatement("SELECT starexec.AddBenchAttr(?, ?, ?)");
+		Supplier<String> trace = () ->
+				"\n\tbenchId :" + benchId +
+				"\n\tkey:     " + key +
+				"\n\tval:     " + val;
+		if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {
+			log.warn("addBenchAttr", "key or value was empty" + trace.get());
+			return false;
+		}
+		if (key.length() > MAX_ATTRIBUTE_LENGTH) {
+			log.warn("addBenchAttr", "key exceeds max length" + trace.get());
+			return false;
+		}
+		if (val.length() > MAX_ATTRIBUTE_LENGTH) {
+			log.warn("addBenchAttr", "val exceeds max length" + trace.get());
+			return false;
+		}
+		try (PreparedStatement procedure = con.prepareStatement("SELECT starexec.AddBenchAttr(?, ?, ?)")) {
 			procedure.setInt(1, benchId);
 			procedure.setString(2, key);
 			procedure.setString(3, val);
 			procedure.execute();
 			return true;
-		} catch (Exception e) {
+		} catch (SQLException e) {
 			log.error("addBenchAttr", e);
-		} finally {
-			Common.safeClose(procedure);
+			return false;
 		}
-		return false;
 	}
 
 	/**
@@ -518,17 +553,17 @@ public class Benchmarks {
 	 * @author Albert Giegerich
 	 */
 	public static boolean associate(int benchId, int spaceId) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-			return associate(benchId, spaceId, con);
-		} catch (Exception e) {
+			return Common.runInTransaction(con -> {
+				if (!associate(benchId, spaceId, con)) {
+					throw new SQLException(String.format("AssociateBench failed for benchId=%d, spaceId=%d", benchId, spaceId));
+				}
+				return true;
+			});
+		} catch (SQLException e) {
 			log.error("associate", e);
-			Common.doRollback(con);
-		} finally {
-			Common.safeClose(con);
+			return false;
 		}
-		return false;
 	}
 
 	/**
@@ -566,21 +601,19 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	public static boolean associate(List<Integer> benchIds, int spaceId) {
-		Connection con = null;
 		try {
-			con = Common.getConnection();
-
-			for (int benchId : benchIds) {
-				associate(benchId, spaceId, con);
-			}
-
+			Common.runInTransaction(con -> {
+				for (int benchId : benchIds) {
+					if (!associate(benchId, spaceId, con)) {
+						throw new SQLException(String.format("AssociateBench failed for benchId=%d, spaceId=%d", benchId, spaceId));
+					}
+				}
+			});
 			return true;
-		} catch (Exception e) {
-		    log.error("associate: " + e.toString());
-		} finally {
-			Common.safeClose(con);
+		} catch (SQLException e) {
+			log.error("associate", e);
+			return false;
 		}
-		return false;
 	}
 
 	/**
@@ -1011,6 +1044,21 @@ public class Benchmarks {
 	 * @author Benton McCune
 	 */
 	private static Integer findDependentBench(Integer spaceId, String includePath, Boolean linked, Integer userId) {
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			return findDependentBench(spaceId, includePath, linked, userId, con);
+		} catch (Exception e) {
+			log.error("findDependentBench", e);
+		} finally {
+			Common.safeClose(con);
+		}
+		return -1;
+	}
+
+	private static Integer findDependentBench(
+			Integer spaceId, String includePath, Boolean linked, Integer userId, Connection con
+	) {
 		log.debug("findDependentBench called with: spaceId=" + spaceId + ", includePath=" + includePath + ", linked=" + linked + ", userId=" + userId);
 
 		if (includePath == null) {
@@ -1033,16 +1081,14 @@ public class Benchmarks {
 		Integer currentSpaceId = spaceId;
 		log.debug("Initial currentSpaceId: " + currentSpaceId);
 
-		// Defensive: check index bounds
 		if (index >= spaces.length) {
 			log.warn("Index " + index + " is out of bounds for spaces array of length " + spaces.length);
 			return -1;
 		}
 
-		// dig through subspaces while you have to
 		while ((index < (spaces.length - 1)) && (currentSpaceId != null && currentSpaceId > -1)) {
 			log.info("Looking for SubSpace '" + spaces[index] + "' in Space " + currentSpaceId);
-			Integer nextSpaceId = Spaces.getSubSpaceIDbyName(currentSpaceId, userId, spaces[index]);
+			Integer nextSpaceId = Spaces.getSubSpaceIDbyName(currentSpaceId, userId, spaces[index], con);
 			log.info("Returned with subspace id: " + nextSpaceId + " for name: " + spaces[index]);
 			if (nextSpaceId == null || nextSpaceId <= -1) {
 				log.warn("Subspace not found for name: " + spaces[index] + " in space: " + currentSpaceId);
@@ -1052,15 +1098,19 @@ public class Benchmarks {
 			index++;
 		}
 
-		// now find bench in the subspace you've found
 		if (currentSpaceId != null && currentSpaceId > 1 && index < spaces.length) {
 			log.info("Looking for Benchmark '" + spaces[index] + "' in Space " + currentSpaceId);
-			Integer benchId = Benchmarks.getBenchIdByName(currentSpaceId, spaces[index]);
-			log.info("Returned with bench id: " + benchId + " for name: " + spaces[index]);
-			return benchId;
-		} else {
-			log.warn("Invalid currentSpaceId (" + currentSpaceId + ") or index (" + index + ") out of bounds for spaces array");
+			try {
+				Integer benchId = getBenchIdByName(currentSpaceId, spaces[index], con);
+				log.info("Returned with bench id: " + benchId + " for name: " + spaces[index]);
+				return benchId;
+			} catch (SQLException e) {
+				log.error("findDependentBench", e);
+				return -1;
+			}
 		}
+
+		log.warn("Invalid currentSpaceId (" + currentSpaceId + ") or index (" + index + ") out of bounds for spaces array");
 		return -1;
 	}
 
@@ -1202,25 +1252,89 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	public static List<Benchmark> get(List<Integer> benchIds, boolean includeAttrs) {
+		if (benchIds == null || benchIds.isEmpty()) {
+			return Collections.emptyList();
+		}
 		Connection con = null;
-
 		try {
 			con = Common.getConnection();
-			List<Benchmark> benchList = new ArrayList<>();
-
-			for (int id : benchIds) {
-				benchList.add(Benchmarks.get(con, id, false));
-				if (includeAttrs) {
-					benchList.get(benchList.size() - 1).setAttributes(Benchmarks.getAttributes(con, id));
+			Map<Integer, Benchmark> benchmarksById = fetchBenchmarksByIds(con, benchIds);
+			if (benchmarksById.isEmpty()) {
+				return Collections.emptyList();
+			}
+			if (includeAttrs) {
+				Map<Integer, Map<String, String>> attrsById = fetchAttributesForBenchIds(con, benchmarksById.keySet());
+				for (Map.Entry<Integer, Map<String, String>> entry : attrsById.entrySet()) {
+					Benchmark benchmark = benchmarksById.get(entry.getKey());
+					if (benchmark != null) {
+						benchmark.setAttributes(entry.getValue());
+					}
 				}
 			}
-			return benchList;
-		} catch (Exception e) {
+			List<Benchmark> ordered = new ArrayList<>(benchIds.size());
+			for (Integer id : benchIds) {
+				Benchmark benchmark = benchmarksById.get(id);
+				if (benchmark != null) {
+					ordered.add(benchmark);
+				}
+			}
+			return ordered;
+		} catch (SQLException e) {
 			log.error("get", e);
+			return Collections.emptyList();
 		} finally {
 			Common.safeClose(con);
 		}
-		return null;
+	}
+
+	private static Map<Integer, Benchmark> fetchBenchmarksByIds(Connection con, List<Integer> benchIds) throws SQLException {
+		if (benchIds.isEmpty()) {
+			return Collections.emptyMap();
+		}
+		Array sqlArray = null;
+		try (PreparedStatement ps = con.prepareStatement(GET_BENCHMARKS_BY_IDS_SQL)) {
+			sqlArray = con.createArrayOf("integer", benchIds.toArray(new Integer[0]));
+			ps.setArray(1, sqlArray);
+			try (ResultSet results = ps.executeQuery()) {
+				Map<Integer, Benchmark> benchmarksById = new HashMap<>();
+				while (results.next()) {
+					Benchmark benchmark = resultToBenchmarkWithPrefix(results, "bench");
+					Processor t = Processors.resultSetToProcessor(results, "types");
+					benchmark.setType(t);
+					benchmarksById.put(benchmark.getId(), benchmark);
+				}
+				return benchmarksById;
+			}
+		} finally {
+			if (sqlArray != null) {
+				sqlArray.free();
+			}
+		}
+	}
+
+	private static Map<Integer, Map<String, String>> fetchAttributesForBenchIds(Connection con,
+	                                                                    Collection<Integer> benchIds) throws SQLException {
+		if (benchIds == null || benchIds.isEmpty()) {
+			return Collections.emptyMap();
+		}
+		Array sqlArray = null;
+		try (PreparedStatement ps = con.prepareStatement(GET_BENCHMARK_ATTRS_BY_IDS_SQL)) {
+			sqlArray = con.createArrayOf("integer", benchIds.toArray(new Integer[0]));
+			ps.setArray(1, sqlArray);
+			try (ResultSet results = ps.executeQuery()) {
+				Map<Integer, Map<String, String>> attrsById = new HashMap<>();
+				while (results.next()) {
+					int benchId = results.getInt("bench_id");
+					Map<String, String> attrs = attrsById.computeIfAbsent(benchId, ignored -> new HashMap<>());
+					attrs.put(results.getString("attr_key"), results.getString("attr_value"));
+				}
+				return attrsById;
+			}
+		} finally {
+			if (sqlArray != null) {
+				sqlArray.free();
+			}
+		}
 	}
 
 	/**
@@ -1335,7 +1449,7 @@ public class Benchmarks {
 			Common.safeClose(procedure);
 			Common.safeClose(results);
 		}
-		return null;
+		return Collections.emptyMap();
 	}
 
 	/**
@@ -1355,7 +1469,7 @@ public class Benchmarks {
 		} finally {
 			Common.safeClose(con);
 		}
-		return null;
+		return Collections.emptyMap();
 	}
 
 	/**
@@ -1422,13 +1536,22 @@ public class Benchmarks {
 	 */
 	public static Integer getBenchIdByName(Integer spaceId, String benchName) {
 		log.debug("getBenchIdByName", "Looking for Benchmark " + benchName + " in Space " + spaceId);
-		
-		try (Connection con = Common.getConnection();
-			PreparedStatement procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchByName(?,?)")) {
-			
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			return getBenchIdByName(spaceId, benchName, con);
+		} catch (Exception e) {
+			log.error("getBenchIdByName", e);
+			return -1;
+		} finally {
+			Common.safeClose(con);
+		}
+	}
+
+	private static Integer getBenchIdByName(Integer spaceId, String benchName, Connection con) throws SQLException {
+		try (PreparedStatement procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchByName(?,?)")) {
 			procedure.setInt(1, spaceId);
 			procedure.setString(2, benchName);
-			
 			try (ResultSet results = procedure.executeQuery()) {
 				int benchId = -1;
 				int count = 0;
@@ -1443,14 +1566,10 @@ public class Benchmarks {
 						return -1;
 					}
 				}
-				
+
 				log.debug("# of Benchmarks with this name = " + count);
 				return count == 1 ? benchId : -1;
 			}
-			
-		} catch (Exception e) {
-			log.error("getBenchIdByName", e);
-			return -1;
 		}
 	}
 
@@ -2268,11 +2387,17 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	private static boolean validateDependencies(List<Benchmark> benchmarks, Integer spaceId, Boolean linked, Integer statusID) {
-		HashMap<String, BenchmarkDependency> foundDependencies = new HashMap<>();
-		for (Benchmark benchmark1 : benchmarks) {
-			Benchmark benchmark = benchmark1;
-			String out = validateIndBenchDependencies(benchmark, spaceId, linked, foundDependencies);
-			if (out != "true") {
+		Map<String, Integer> dependencyOwners = new LinkedHashMap<>();
+		for (Benchmark benchmark : benchmarks) {
+			for (String includePath : getDependencyIncludePaths(benchmark)) {
+				dependencyOwners.putIfAbsent(includePath, benchmark.getUserId());
+			}
+		}
+
+		Map<String, BenchmarkDependency> resolvedDependencies = resolveDependencyBatch(spaceId, linked, dependencyOwners);
+		for (Benchmark benchmark : benchmarks) {
+			String out = validateIndBenchDependencies(benchmark, resolvedDependencies);
+			if (!"true".equals(out)) {
 				log.warn("Dependent benchs not found for Bench " + benchmark.getName());
 				Uploads.addFailedBenchmark(statusID, benchmark.getName(), "Dependancy check failed for this benchmark. Failed search for " + out + ".");
 				return false;
@@ -2285,51 +2410,82 @@ public class Benchmarks {
 	 * Validates the dependencies for a benchmark. Adds the dependencies to the benchmark as well
 	 *
 	 * @param bench The benchmark that might have dependencies
-	 * @param spaceId the id of the space where the axiom benchmarks lie
-	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @param resolvedDependencies pre-resolved dependency map keyed by include path
 	 * @return "true" if the dependencies are valid, the name of the failed dependency if otherwise
 	 * @author Benton McCune
 	 */
 	private static String  validateIndBenchDependencies(
-			Benchmark bench, Integer spaceId, Boolean linked, HashMap<String, BenchmarkDependency> foundDependencies
+			Benchmark bench, Map<String, BenchmarkDependency> resolvedDependencies
 	) {
-		Map<String, String> atts = bench.getAttributes();
 		String includePath = "";
 		try {
-			Integer numberDependencies = Integer.valueOf(atts.getOrDefault("starexec-dependencies", "0"));
-			log.info("validateIndBenchDependencies", "# of dependencies = " + numberDependencies);
-			for (int i = 1; i <= numberDependencies; i++) {
-				includePath = atts.getOrDefault("starexec-dependency-" + i, "");
-				log.debug("validateIndBenchDependencies", "Dependency Path of Dependency " + i + " is " + includePath);
-				if (!includePath.isEmpty()) {
-					//checkMap first
-					if (foundDependencies.get(includePath) != null) {
-						log.info("validateIndBenchDependencies", "Already found this one before, its id is " +
-								         foundDependencies.get(includePath).getSecondaryBench().getId());
-					} else {
-						log.info("validateIndBenchDependencies", "This include path (" + includePath + ") is new so we must search the database.");
-						int depBenchId = Benchmarks.findDependentBench(spaceId, includePath, linked, bench.getUserId
-								());
-						if (depBenchId > 0) {
-							// these are new benchmarks, so the primary benchmark has no ID yet. This is fine:
-							// the DB code for entering benchmarks will utilize the correct ID
-							foundDependencies.put(includePath, new BenchmarkDependency(0, depBenchId, includePath));
-							log.info("validateIndBenchDependencies", "Dependent Bench = " + depBenchId);
-						}
-					}
-				}
-
-				if (!foundDependencies.containsKey(includePath)) {
+			List<String> includePaths = getDependencyIncludePaths(bench);
+			log.info("validateIndBenchDependencies", "# of dependencies = " + includePaths.size());
+			for (String path : includePaths) {
+				includePath = path;
+				log.debug("validateIndBenchDependencies", "Dependency Path is " + includePath);
+				BenchmarkDependency dependency = resolvedDependencies.get(includePath);
+				if (dependency == null) {
 					log.warn("validateIndBenchDependencies", "Dependent Bench not found for " + bench.getName());
 					return includePath;
 				}
-				bench.addDependency(foundDependencies.get(includePath));
+				bench.addDependency(dependency);
 			}
 		} catch (Exception e) {
 			log.error("validateIndBenchDependencies", "validate dependency failed on bench " + bench.getName(), e);
 			return includePath;
 		}
 		return "true";
+	}
+
+	private static Map<String, BenchmarkDependency> resolveDependencyBatch(
+			Integer spaceId, Boolean linked, Map<String, Integer> dependencyOwners
+	) {
+		Map<String, BenchmarkDependency> resolved = new HashMap<>();
+		if (dependencyOwners.isEmpty()) {
+			return resolved;
+		}
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			for (Map.Entry<String, Integer> entry : dependencyOwners.entrySet()) {
+				String includePath = entry.getKey();
+				Integer userId = entry.getValue();
+				int depBenchId = findDependentBench(spaceId, includePath, linked, userId, con);
+				if (depBenchId > 0) {
+					resolved.put(includePath, new BenchmarkDependency(0, depBenchId, includePath));
+				}
+			}
+		} catch (Exception e) {
+			log.error("resolveDependencyBatch", e);
+		} finally {
+			Common.safeClose(con);
+		}
+		return resolved;
+	}
+
+	private static List<String> getDependencyIncludePaths(Benchmark bench) {
+		Map<String, String> atts = bench.getAttributes();
+		List<String> includePaths = new ArrayList<>();
+		if (atts == null || atts.isEmpty()) {
+			return includePaths;
+		}
+		int numberDependencies = parseDependencyCount(atts.getOrDefault("starexec-dependencies", "0"));
+		for (int i = 1; i <= numberDependencies; i++) {
+			String includePath = atts.getOrDefault("starexec-dependency-" + i, "");
+			if (!includePath.isEmpty()) {
+				includePaths.add(includePath);
+			}
+		}
+		return includePaths;
+	}
+
+	private static int parseDependencyCount(String rawValue) {
+		try {
+			return Integer.parseInt(rawValue);
+		} catch (NumberFormatException e) {
+			return 0;
+		}
 	}
 
 	/**

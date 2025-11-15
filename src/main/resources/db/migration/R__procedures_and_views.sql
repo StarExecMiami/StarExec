@@ -388,22 +388,28 @@ RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMEST
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
-           b.user_id AS bench_user_id,
-           b.name AS bench_name,
-           b.bench_type AS bench_bench_type,
-           b.uploaded AS bench_uploaded,
-           b.path AS bench_path,
-           b.downloadable AS bench_downloadable,
-           b.disk_size AS bench_disk_size,
-           b.description AS bench_description,
-           b.deleted AS bench_deleted,
-           b.recycled AS bench_recycled,
-           p.id AS types_id,
-           p.name AS types_name,
-           p.description AS types_description
-	FROM starexec.benchmarks b
-	LEFT OUTER JOIN processors p ON b.bench_type = p.id
-	WHERE b.id = _id AND b.deleted = false AND b.recycled = false;
+        b.user_id AS bench_user_id,
+        b.name AS bench_name,
+        b.bench_type AS bench_bench_type,
+        b.uploaded AS bench_uploaded,
+        b.path AS bench_path,
+        b.downloadable AS bench_downloadable,
+        b.disk_size AS bench_disk_size,
+        b.description AS bench_description,
+        b.deleted AS bench_deleted,
+        b.recycled AS bench_recycled,
+        p.id AS types_id,
+        p.name AS types_name,
+        p.description AS types_description,
+        p.community AS types_community,
+        p.path AS types_path,
+        p.disk_size AS types_disk_size,
+        p.processor_type::INT AS types_processor_type,
+        p.time_limit::INT AS types_time_limit,
+        p.syntax_id AS types_syntax_id
+    FROM starexec.benchmarks b
+    LEFT OUTER JOIN processors p ON b.bench_type = p.id
+    WHERE b.id = _id AND b.deleted = false AND b.recycled = false;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -426,22 +432,28 @@ RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMEST
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
-           b.user_id AS bench_user_id,
-           b.name AS bench_name,
-           b.bench_type AS bench_bench_type,
-           b.uploaded AS bench_uploaded,
-           b.path AS bench_path,
-           b.downloadable AS bench_downloadable,
-           b.disk_size AS bench_disk_size,
-           b.description AS bench_description,
-           b.deleted AS bench_deleted,
-           b.recycled AS bench_recycled,
-           p.id AS types_id,
-           p.name AS types_name,
-           p.description AS types_description
-	FROM starexec.benchmarks b
-	LEFT OUTER JOIN processors p ON b.bench_type = p.id
-	WHERE b.id = _id;
+        b.user_id AS bench_user_id,
+        b.name AS bench_name,
+        b.bench_type AS bench_bench_type,
+        b.uploaded AS bench_uploaded,
+        b.path AS bench_path,
+        b.downloadable AS bench_downloadable,
+        b.disk_size AS bench_disk_size,
+        b.description AS bench_description,
+        b.deleted AS bench_deleted,
+        b.recycled AS bench_recycled,
+        p.id AS types_id,
+        p.name AS types_name,
+        p.description AS types_description,
+        p.community AS types_community,
+        p.path AS types_path,
+        p.disk_size AS types_disk_size,
+        p.processor_type AS types_processor_type,
+        p.time_limit AS types_time_limit,
+        p.syntax_id AS types_syntax_id
+    FROM starexec.benchmarks b
+    LEFT OUTER JOIN processors p ON b.bench_type = p.id
+    WHERE b.id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -478,30 +490,59 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetSpaceBenchmarksById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpaceBenchmarksById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, space_id INT, order_id INT, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
+RETURNS TABLE(
+    bench_id INT,
+    bench_user_id INT,
+    bench_name VARCHAR,
+    bench_bench_type INT,
+    bench_uploaded TIMESTAMP,
+    bench_path TEXT,
+    bench_downloadable BOOLEAN,
+    bench_disk_size BIGINT,
+    bench_description TEXT,
+    bench_deleted BOOLEAN,
+    bench_recycled BOOLEAN,
+    bench_assoc_space_id INT,
+    bench_assoc_order_id INT,
+    types_id INT,
+    types_community INT,
+    types_name VARCHAR,
+    types_description TEXT,
+    types_path TEXT,
+    types_disk_size BIGINT,
+    types_processor_type INT,
+    types_time_limit INT,
+    types_syntax_id INT
+) AS $$
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
-           b.user_id AS bench_user_id,
-           b.name AS bench_name,
-           b.bench_type AS bench_bench_type,
-           b.uploaded AS bench_uploaded,
-           b.path AS bench_path,
-           b.downloadable AS bench_downloadable,
-           b.disk_size AS bench_disk_size,
-           b.description AS bench_description,
-           b.deleted AS bench_deleted,
-           b.recycled AS bench_recycled,
-           ba.space_id AS bench_assoc_space_id,
-           ba.order_id AS bench_assoc_order_id,
-           p.id AS types_id,
-           p.name AS types_name,
-           p.description AS types_description
-	FROM starexec.bench_assoc ba
-	JOIN benchmarks b ON b.id = ba.bench_id
-	LEFT OUTER JOIN processors p ON b.bench_type = p.id
-	WHERE ba.space_id = _id AND b.deleted = false AND b.recycled = false
-	ORDER BY ba.order_id ASC;
+        b.user_id AS bench_user_id,
+        b.name AS bench_name,
+        b.bench_type AS bench_bench_type,
+        b.uploaded AS bench_uploaded,
+        b.path AS bench_path,
+        b.downloadable AS bench_downloadable,
+        b.disk_size AS bench_disk_size,
+        b.description AS bench_description,
+        b.deleted AS bench_deleted,
+        b.recycled AS bench_recycled,
+        ba.space_id AS bench_assoc_space_id,
+        ba.order_id AS bench_assoc_order_id,
+        p.id AS types_id,
+        p.community AS types_community,
+        p.name AS types_name,
+        p.description AS types_description,
+        p.path AS types_path,
+        p.disk_size AS types_disk_size,
+        p.processor_type::INT AS types_processor_type,
+        p.time_limit::INT AS types_time_limit,
+        p.syntax_id AS types_syntax_id
+    FROM starexec.bench_assoc ba
+    JOIN benchmarks b ON b.id = ba.bench_id
+    LEFT OUTER JOIN processors p ON b.bench_type = p.id
+    WHERE ba.space_id = _id AND b.deleted = false AND b.recycled = false
+    ORDER BY ba.order_id ASC;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -713,11 +754,20 @@ $$ LANGUAGE plpgsql;
 -- Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetBenchmarksByOwner(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarksByOwner(_userId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT, types_id INT, types_community INT, types_name VARCHAR, types_description TEXT, types_path TEXT, types_disk_size BIGINT, types_processor_type SMALLINT, types_time_limit SMALLINT, types_syntax_id INT) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
-		   p.id as type_id, p.name as type_name, p.description as type_description
+           p.id as type_id, p.name as type_name, p.description as type_description,
+           p.id AS types_id,
+           p.community AS types_community,
+           p.name AS types_name,
+           p.description AS types_description,
+           p.path AS types_path,
+           p.disk_size AS types_disk_size,
+           p.processor_type AS types_processor_type,
+           p.time_limit AS types_time_limit,
+           p.syntax_id AS types_syntax_id
 	FROM starexec.benchmarks b
 	LEFT OUTER JOIN processors p ON b.bench_type = p.id
 	WHERE b.user_id = _userId AND b.deleted = false AND b.recycled = false;
@@ -786,11 +836,20 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetBenchmarksInSharedSpaces(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarksInSharedSpaces(_userId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_name VARCHAR, type_description TEXT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_name VARCHAR, type_description TEXT, types_id INT, types_community INT, types_name VARCHAR, types_description TEXT, types_path TEXT, types_disk_size BIGINT, types_processor_type SMALLINT, types_time_limit SMALLINT, types_syntax_id INT) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT DISTINCT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
-		   p.name AS type_name, p.description AS type_description
+    RETURN QUERY
+    SELECT DISTINCT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
+           p.name AS type_name, p.description AS type_description,
+           p.id AS types_id,
+           p.community AS types_community,
+           p.name AS types_name,
+           p.description AS types_description,
+           p.path AS types_path,
+           p.disk_size AS types_disk_size,
+           p.processor_type AS types_processor_type,
+           p.time_limit AS types_time_limit,
+           p.syntax_id AS types_syntax_id
 	FROM starexec.benchmarks b
 	JOIN bench_assoc ba ON ba.bench_id = b.id
 	JOIN user_assoc ua ON ua.space_id = ba.space_id
@@ -803,11 +862,20 @@ $$ LANGUAGE plpgsql;
 -- Author: Benton McCune
 DROP FUNCTION IF EXISTS starexec.GetPublicBenchmarks() CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPublicBenchmarks()
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_name VARCHAR, type_description TEXT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_name VARCHAR, type_description TEXT, types_id INT, types_community INT, types_name VARCHAR, types_description TEXT, types_path TEXT, types_disk_size BIGINT, types_processor_type SMALLINT, types_time_limit SMALLINT, types_syntax_id INT) AS $$
 BEGIN
-	RETURN QUERY
-	SELECT DISTINCT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
-		   p.name AS type_name, p.description AS type_description
+    RETURN QUERY
+    SELECT DISTINCT b.id, b.user_id, b.name, b.bench_type, b.uploaded, b.path, b.downloadable, b.disk_size, b.description, b.deleted, b.recycled,
+           p.name AS type_name, p.description AS type_description,
+           p.id AS types_id,
+           p.community AS types_community,
+           p.name AS types_name,
+           p.description AS types_description,
+           p.path AS types_path,
+           p.disk_size AS types_disk_size,
+           p.processor_type AS types_processor_type,
+           p.time_limit AS types_time_limit,
+           p.syntax_id AS types_syntax_id
 	FROM starexec.benchmarks b
 	JOIN bench_assoc ba ON ba.bench_id = b.id
 	JOIN spaces s ON s.id = ba.space_id
@@ -3132,7 +3200,7 @@ CREATE OR REPLACE FUNCTION starexec.AddJob(
     _killDelay INT,
     _mem BIGINT,
     _suppressTimestamp BOOLEAN,
-    _usingDeps INT,
+    _usingDeps BOOLEAN,
     _buildJob BOOLEAN,
     _totalPairs INT,
     _benchmarkingFramework VARCHAR(32)

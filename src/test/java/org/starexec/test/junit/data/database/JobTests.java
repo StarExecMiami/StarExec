@@ -9,6 +9,7 @@ import org.starexec.constants.R;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.Queue;
+import org.starexec.test.util.DatabaseTestSupport;
 
 import static org.mockito.ArgumentMatchers.any;
 
@@ -31,6 +32,7 @@ public class JobTests {
 
 	@Test
 	public void GetSlotsInJobQueueForSgeTest() {
+		DatabaseTestSupport.assumeDatabaseAvailable("JobTests.GetSlotsInJobQueueForSgeTest");
 		try (MockedStatic<Jobs> jobsMock = Mockito.mockStatic(Jobs.class)) {
 			Job job = getTestJob();
 			R.BACKEND_TYPE=R.SGE_TYPE;

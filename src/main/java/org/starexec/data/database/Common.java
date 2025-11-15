@@ -417,6 +417,42 @@ public class Common {
 		}
 	}
 
+	public static <E extends Exception> void runInTransaction(ThrowingConsumer<Connection, E> work) throws SQLException, E {
+		runInTransaction(con -> {
+			work.accept(con);
+			return null;
+		});
+	}
+
+	public static <T, E extends Exception> T runInTransaction(ThrowingFunction<Connection, T, E> work) throws SQLException, E {
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			Common.beginTransaction(con);
+			T result = work.accept(con);
+			Common.endTransaction(con);
+			return result;
+		} catch (SQLException e) {
+			log.warn("runInTransaction", "Rolling back transaction due to SQLException", e);
+			Common.doRollback(con);
+			throw e;
+		} catch (RuntimeException e) {
+			Common.doRollback(con);
+			throw e;
+		} catch (Exception e) {
+			log.warn("runInTransaction", "Rolling back transaction due to exception", e);
+			Common.doRollback(con);
+			throw rethrowAs(e);
+		} finally {
+			Common.safeClose(con);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static <E extends Exception> E rethrowAs(Exception e) throws E {
+		throw (E) e;
+	}
+
 
 	/**
 	 * This method performs an update to the database given a connection.
