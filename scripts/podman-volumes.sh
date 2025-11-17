@@ -112,14 +112,60 @@ backup_all() {
     
     log_info "Backing up all volumes for environment: $env"
     
+    # Ensure backup directory exists and is writable
+    if ! mkdir -p "${BACKUP_DIR}" 2>/dev/null; then
+        log_error "Failed to create backup directory: ${BACKUP_DIR}"
+        exit 1
+    fi
+    
+    if ! touch "${BACKUP_DIR}/.write_test" 2>/dev/null; then
+        log_error "Backup directory is not writable: ${BACKUP_DIR}"
+        rm -f "${BACKUP_DIR}/.write_test" 2>/dev/null
+        exit 1
+    fi
+    rm -f "${BACKUP_DIR}/.write_test"
+    
+    # Create metadata file first
+    local metadata="${BACKUP_DIR}/${backup_name}-metadata.json"
+    
+    # Get StarExec version if available
+    local starexec_version="unknown"
+    if [ -f "pom.xml" ]; then
+        starexec_version=$(grep -m 1 "<version>" pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/' 2>/dev/null || echo "unknown")
+    fi
+    
+    # Create metadata with error checking
+    if ! cat > "$metadata" <<EOF
+{
+  "timestamp": "${DATE_STAMP}",
+  "environment": "${env}",
+  "hostname": "$(hostname)",
+  "user": "$(whoami)",
+  "volumes": [
+    "${VOLUME_PREFIX}-${env}-data",
+    "${VOLUME_PREFIX}-${env}-postgres"
+  ],
+  "starexec_version": "${starexec_version}",
+  "backup_tool_version": "1.0.0"
+}
+EOF
+    then
+        log_error "Failed to create metadata file: $metadata"
+        exit 1
+    fi
+    
+    log_info "Created backup metadata: $metadata"
+    
     export_volume "${VOLUME_PREFIX}-${env}-data" "${BACKUP_DIR}/${backup_name}-data.tar.gz"
     export_volume "${VOLUME_PREFIX}-${env}-postgres" "${BACKUP_DIR}/${backup_name}-postgres.tar.gz"
     
     log_info "Full backup complete. Archive contents:"
-    ls -lh "${BACKUP_DIR}/${backup_name}"*.tar.gz || true
+    ls -lh "${BACKUP_DIR}/${backup_name}"*.tar.gz "${BACKUP_DIR}/${backup_name}"*.json 2>/dev/null || true
 
     record_checksum "${BACKUP_DIR}/${backup_name}-data.tar.gz"
     record_checksum "${BACKUP_DIR}/${backup_name}-postgres.tar.gz"
+    
+    log_info "Backup metadata and checksums recorded"
 }
 
 record_checksum() {
@@ -131,6 +177,59 @@ record_checksum() {
     else
         log_warn "Cannot record checksum – file missing: $file"
     fi
+}
+
+# Verify checksum of backup file
+verify_checksum() {
+    local file="$1"
+    local checksum_file="${BACKUP_DIR}/checksums.txt"
+    
+    # Verify file exists first
+    if [ ! -f "$file" ]; then
+        log_error "❌ Archive file not found: $file"
+        return 1
+    fi
+    
+    # Check file is readable
+    if [ ! -r "$file" ]; then
+        log_error "❌ Archive file is not readable: $file"
+        return 1
+    fi
+    
+    # Check file size (catch truncated files)
+    local file_size
+    if command -v stat >/dev/null 2>&1; then
+        file_size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0")
+        if [ "$file_size" -lt 1024 ]; then
+            log_error "❌ Archive file suspiciously small (${file_size} bytes): $file"
+            return 1
+        fi
+    fi
+    
+    if [ ! -f "$checksum_file" ]; then
+        log_warn "No checksum file found - skipping verification"
+        log_warn "This backup may not be verifiable"
+        return 0
+    fi
+    
+    local expected=$(grep "$(basename "$file")" "$checksum_file" | tail -1 | awk '{print $1}')
+    if [ -z "$expected" ]; then
+        log_warn "No checksum found for $(basename "$file")"
+        return 0
+    fi
+    
+    local actual=$(sha256sum "$file" | awk '{print $1}')
+    
+    if [ "$expected" != "$actual" ]; then
+        log_error "❌ CHECKSUM MISMATCH for $file"
+        log_error "   Expected: $expected"
+        log_error "   Got:      $actual"
+        log_error "   File may be corrupted or tampered with!"
+        return 1
+    fi
+    
+    log_info "✅ Checksum verified: $(basename "$file")"
+    return 0
 }
 
 # Restore all volumes from backup
@@ -147,6 +246,11 @@ restore_all() {
     
     local data_archive="${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}-data.tar.gz"
     local pg_archive="${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}-postgres.tar.gz"
+    
+    # Verify checksums before restore
+    log_info "Verifying backup integrity..."
+    verify_checksum "$data_archive" || exit 1
+    verify_checksum "$pg_archive" || exit 1
     
     import_volume "$data_archive" "${VOLUME_PREFIX}-${env}-data"
     import_volume "$pg_archive" "${VOLUME_PREFIX}-${env}-postgres"
@@ -179,6 +283,8 @@ clone_env() {
 # Delete volumes for environment
 delete_volumes() {
     local env="${1:-dev}"
+    local data_vol="${VOLUME_PREFIX}-${env}-data"
+    local pg_vol="${VOLUME_PREFIX}-${env}-postgres"
     
     log_warn "This will DELETE all data for environment: $env"
     read -p "Are you absolutely sure? Type 'DELETE' to confirm: " -r
@@ -189,10 +295,66 @@ delete_volumes() {
         exit 1
     fi
     
-    podman volume rm "${VOLUME_PREFIX}-${env}-data" 2>/dev/null || log_warn "Data volume not found"
-    podman volume rm "${VOLUME_PREFIX}-${env}-postgres" 2>/dev/null || log_warn "PostgreSQL volume not found"
+    # Delete data volume with improved feedback
+    if podman volume exists "$data_vol" 2>/dev/null; then
+        podman volume rm -f "$data_vol" && log_info "Deleted volume: $data_vol"
+    else
+        log_info "Data volume already absent (skipping): $data_vol"
+    fi
     
-    log_info "Volumes deleted for environment: $env"
+    # Delete postgres volume with improved feedback
+    if podman volume exists "$pg_vol" 2>/dev/null; then
+        podman volume rm -f "$pg_vol" && log_info "Deleted volume: $pg_vol"
+    else
+        log_info "PostgreSQL volume already absent (skipping): $pg_vol"
+    fi
+    
+    log_info "Volume cleanup complete for environment: $env"
+}
+
+# Cleanup old backups (retention policy)
+cleanup_old_backups() {
+    local env="${1:-dev}"
+    local keep_count="${2:-10}"  # Keep last 10 backups by default
+    
+    log_info "Cleaning up old backups for environment: $env"
+    log_info "Retention policy: Keep last $keep_count backups"
+    
+    # List all backup sets sorted by timestamp (newest first)
+    local backups=$(ls -1 "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-"*-data.tar.gz 2>/dev/null \
+        | sed 's/.*full-//' \
+        | sed 's/-data.*//' \
+        | sort -ru)
+    
+    if [ -z "$backups" ]; then
+        log_info "No backups found for environment: $env"
+        return 0
+    fi
+    
+    local count=0
+    local deleted=0
+    
+    while IFS= read -r timestamp; do
+        count=$((count + 1))
+        if [ $count -gt $keep_count ]; then
+            log_info "Removing backup set: $timestamp"
+            rm -f "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}"-data.tar.gz 2>/dev/null || true
+            rm -f "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}"-postgres.tar.gz 2>/dev/null || true
+            rm -f "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-${timestamp}"-metadata.json 2>/dev/null || true
+            # Clean up corresponding checksums (portable across platforms)
+            if [ -f "${BACKUP_DIR}/checksums.txt" ]; then
+                grep -v "full-${timestamp}" "${BACKUP_DIR}/checksums.txt" > "${BACKUP_DIR}/checksums.txt.tmp" 2>/dev/null || true
+                mv "${BACKUP_DIR}/checksums.txt.tmp" "${BACKUP_DIR}/checksums.txt" 2>/dev/null || true
+            fi
+            deleted=$((deleted + 1))
+        fi
+    done <<< "$backups"
+    
+    if [ $deleted -eq 0 ]; then
+        log_info "No old backups to remove (have $count, keeping $keep_count)"
+    else
+        log_info "Cleanup complete. Removed $deleted backup set(s), kept $keep_count most recent"
+    fi
 }
 
 # Inspect volume details
@@ -213,29 +375,186 @@ inspect_volume() {
 dump_postgres() {
     local env="${1:-dev}"
     local output="${BACKUP_DIR}/postgres-dump-${env}-${DATE_STAMP}.sql.gz"
+    local container_name="starexec-postgres"
 
     mkdir -p "$BACKUP_DIR"
 
     log_info "Creating PostgreSQL logical dump for environment: $env"
 
     # This assumes PostgreSQL container is running
-    local container_name="starexec-postgres"
     local db_name="${STAREXEC_DB_NAME:-starexec}"
     local db_user="${STAREXEC_DB_USER:-postgres}"
-    local db_pass
-    if [ -n "${STAREXEC_DB_PASSWORD_FILE:-}" ] && [ -f "${STAREXEC_DB_PASSWORD_FILE}" ]; then
-        db_pass=$(cat "${STAREXEC_DB_PASSWORD_FILE}" | tr -d '\n')
-    else
-        db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
-    fi
-    # If the PostgreSQL server is running in the container with the standard socket,
-    # pass PGPASSWORD to the container process for non-interactive authentication.
     
-    podman exec -e PGPASSWORD="$db_pass" "$container_name" \
-        pg_dump -U "$db_user" -d "$db_name" | gzip > "$output"
+    # Use password file inside container (more secure)
+    if [ -n "${STAREXEC_DB_PASSWORD_FILE:-}" ]; then
+        if [ ! -f "${STAREXEC_DB_PASSWORD_FILE}" ]; then
+            log_error "Password file not found: ${STAREXEC_DB_PASSWORD_FILE}"
+            exit 1
+        fi
+        
+        # Check file permissions (should be 0600 or 0400)
+        local perms
+        if command -v stat >/dev/null 2>&1; then
+            perms=$(stat -c "%a" "${STAREXEC_DB_PASSWORD_FILE}" 2>/dev/null || stat -f "%Lp" "${STAREXEC_DB_PASSWORD_FILE}" 2>/dev/null || echo "000")
+            if [ "$perms" != "600" ] && [ "$perms" != "400" ]; then
+                log_warn "Insecure password file permissions: $perms (should be 600 or 400)"
+            fi
+        fi
+        
+        # Copy password file into container temporarily
+        local temp_pass="/tmp/.pgpass.$$"
+        podman cp "${STAREXEC_DB_PASSWORD_FILE}" "${container_name}:${temp_pass}" || {
+            log_error "Failed to copy password file to container"
+            exit 1
+        }
+        
+        # Create .pgpassfile format inside container (secure - no host-side command substitution)
+        podman exec "$container_name" bash -c '
+            # Read password from temp file and construct pgpass inside container
+            password=$(cat "'"${temp_pass}"'" | tr -d "\n")
+            echo "localhost:5432:'"${db_name}"':'"${db_user}"':$password" > /tmp/.pgpass_formatted
+            chmod 600 /tmp/.pgpass_formatted
+            rm -f "'"${temp_pass}"'"
+        ' || {
+            podman exec "$container_name" rm -f /tmp/.pgpass_formatted 2>/dev/null || true
+            log_error "Failed to format password file"
+            exit 1
+        }
+        
+        # Use password file (no password in env or args)
+        podman exec "$container_name" bash -c "
+            PGPASSFILE='/tmp/.pgpass_formatted' pg_dump -h localhost -U '${db_user}' -d '${db_name}' | gzip
+        " > "$output" || {
+            podman exec "$container_name" rm -f /tmp/.pgpass_formatted 2>/dev/null || true
+            log_error "PostgreSQL dump failed"
+            exit 1
+        }
+        
+        # Clean up
+        podman exec "$container_name" rm -f /tmp/.pgpass_formatted 2>/dev/null || true
+    else
+        # Fallback: use PGPASSWORD (less secure but works for dev)
+        log_warn "Using PGPASSWORD environment variable (less secure)"
+        log_warn "Consider setting STAREXEC_DB_PASSWORD_FILE for better security"
+        local db_pass="${STAREXEC_DB_PASSWORD:-starexec_password}"
+        podman exec -e PGPASSWORD="$db_pass" "$container_name" \
+            pg_dump -U "$db_user" -d "$db_name" | gzip > "$output"
+    fi
     
     log_info "Postgres dump complete: $output"
     log_info "Size: $(du -h "$output" | cut -f1)"
+    
+    # Record checksum for backup
+    record_checksum "$output"
+}
+
+# Health check for volumes
+health_check() {
+    local env="${1:-dev}"
+    local errors=0
+    local warnings=0
+    
+    log_info "Running health checks for environment: $env"
+    echo ""
+    
+    # Check volume existence
+    log_info "=== Volume Existence Check ==="
+    for vol in "${VOLUME_PREFIX}-${env}-data" "${VOLUME_PREFIX}-${env}-postgres"; do
+        if ! podman volume exists "$vol" 2>/dev/null; then
+            log_error "❌ Volume missing: $vol"
+            log_error "   Fix: make volumes-create ENV=$env"
+            errors=$((errors + 1))
+        else
+            log_info "✅ Volume exists: $vol"
+        fi
+    done
+    echo ""
+    
+    # Check volume mountability
+    log_info "=== Volume Mount Check ==="
+    for vol in "${VOLUME_PREFIX}-${env}-data" "${VOLUME_PREFIX}-${env}-postgres"; do
+        if podman volume exists "$vol" 2>/dev/null; then
+            if podman run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test 2>/dev/null; then
+                log_info "✅ Volume mountable: $vol"
+            else
+                log_error "❌ Volume mount failed: $vol"
+                log_error "   Volume may be corrupted"
+                log_error "   Fix: make volumes-restore ENV=$env (from backup)"
+                errors=$((errors + 1))
+            fi
+        fi
+    done
+    echo ""
+    
+    # Check volume sizes
+    log_info "=== Volume Size Check ==="
+    local warn_threshold_gb=80
+    local critical_threshold_gb=95
+    
+    for vol in "${VOLUME_PREFIX}-${env}-data" "${VOLUME_PREFIX}-${env}-postgres"; do
+        if podman volume exists "$vol" 2>/dev/null; then
+            local size_bytes=$(podman run --rm -v "$vol:/data:ro" docker.io/library/alpine:latest \
+                du -sb /data 2>/dev/null | awk '{print $1}')
+            local size_gb=$((size_bytes / 1024 / 1024 / 1024))
+            
+            log_info "📊 Volume: $vol - Size: ${size_gb}GB"
+            
+            if [ $size_gb -gt $critical_threshold_gb ]; then
+                log_error "  ⚠️  CRITICAL: Volume size exceeds ${critical_threshold_gb}GB"
+                log_error "  Action required: Immediate backup and cleanup"
+                log_error "  Run: make volumes-backup ENV=$env"
+                errors=$((errors + 1))
+            elif [ $size_gb -gt $warn_threshold_gb ]; then
+                log_warn "  ⚠️  WARNING: Volume size exceeds ${warn_threshold_gb}GB threshold"
+                log_warn "  Recommended: make volumes-backup ENV=$env"
+                warnings=$((warnings + 1))
+            else
+                log_info "  ✅ Size within normal range"
+            fi
+        fi
+    done
+    echo ""
+    
+    # Check last backup age
+    log_info "=== Backup Status Check ==="
+    local latest_backup=$(ls -1t "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-"*-data.tar.gz 2>/dev/null | head -1)
+    
+    if [ -z "$latest_backup" ]; then
+        log_warn "⚠️  No backups found for environment: $env"
+        log_warn "   Recommended: make volumes-backup ENV=$env"
+        warnings=$((warnings + 1))
+    else
+        local backup_age_days
+        if command -v stat >/dev/null 2>&1; then
+            backup_age_days=$(( ($(date +%s) - $(stat -c%Y "$latest_backup" 2>/dev/null || stat -f%m "$latest_backup")) / 86400 ))
+        else
+            backup_age_days=0
+        fi
+        
+        if [ $backup_age_days -gt 7 ]; then
+            log_warn "⚠️  Latest backup is ${backup_age_days} days old"
+            log_warn "   Recommended: make volumes-backup ENV=$env"
+            warnings=$((warnings + 1))
+        else
+            log_info "✅ Recent backup found (${backup_age_days} days old)"
+        fi
+    fi
+    echo ""
+    
+    # Summary
+    log_info "=== Health Check Summary ==="
+    if [ $errors -eq 0 ] && [ $warnings -eq 0 ]; then
+        log_info "✅ All health checks passed - system is healthy"
+        return 0
+    elif [ $errors -eq 0 ]; then
+        log_warn "⚠️  Health check completed with $warnings warning(s)"
+        log_warn "System is operational but attention recommended"
+        return 0
+    else
+        log_error "❌ Health check FAILED with $errors error(s) and $warnings warning(s)"
+        log_error "System requires immediate attention"
+        return 1
+    fi
 }
 
 # Show help
@@ -252,8 +571,10 @@ Commands:
   import <archive> <volume>     Import archive into volume
   backup-all <env>              Backup all volumes for environment
   restore-all <env> <timestamp> Restore all volumes from backup
+  cleanup-backups <env> [keep]  Remove old backups (default: keep last 10)
   clone <source-env> <target>   Clone one environment to another
   delete <env>                  Delete all volumes for environment
+  health-check <env>            Run volume health checks
   inspect <volume>              Show volume details and contents
   dump-postgres <env>           Create PostgreSQL logical dump
   help                          Show this help message
@@ -265,6 +586,12 @@ Examples:
   # Backup before major changes
   $0 backup-all dev
   
+  # Clean up old backups (keep last 5)
+  $0 cleanup-backups dev 5
+  
+  # Check volume health
+  $0 health-check dev
+  
   # Share data with colleague
   $0 export starexec-dev-data
   # Send the .tar.gz file, then colleague runs:
@@ -273,7 +600,7 @@ Examples:
   # Clone prod to staging for testing
   $0 clone prod staging
   
-  # Restore from backup
+  # Restore from backup (with integrity verification)
   $0 restore-all dev 20250102-143022
 
 Environment Variables:
@@ -299,8 +626,10 @@ main() {
         import) import_volume "$@" ;;
         backup-all) backup_all "$@" ;;
         restore-all) restore_all "$@" ;;
+        cleanup-backups) cleanup_old_backups "$@" ;;
         clone) clone_env "$@" ;;
         delete) delete_volumes "$@" ;;
+        health-check) health_check "$@" ;;
         inspect) inspect_volume "$@" ;;
         dump-postgres) dump_postgres "$@" ;;
         help|--help|-h) show_help ;;

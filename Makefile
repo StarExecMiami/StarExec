@@ -22,6 +22,7 @@ VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
 FORCE?=0
+DRY_RUN?=0
 
 # SECURITY WARNING: Defaults are for DEVELOPMENT ONLY.
 # Override STAREXEC_DB_PASSWORD (or provide STAREXEC_DB_PASSWORD_FILE)
@@ -36,8 +37,8 @@ PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
-	clean-podman clean-cache clean-all clean-hard lint template config-show \
-	logs logs-app logs-postgres test-deps verify-deps \
+	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show \
+	logs logs-app logs-postgres test-deps verify-deps docs \
 	start stop
 
 start: deploy-podman
@@ -69,6 +70,8 @@ help:
 	@echo "  volumes-list           List all volumes"
 	@echo "  volumes-backup         Backup all volumes for ENV"
 	@echo "  volumes-restore        Restore volumes from backup"
+	@echo "  volumes-cleanup        Remove old backups (keep last 10)"
+	@echo "  volumes-health         Check volume health and size"
 	@echo "  volumes-export         Export volume for sharing"
 	@echo "  volumes-delete         Delete volumes for ENV"
 	@echo "  volumes-help           Show detailed volume management help"
@@ -85,9 +88,13 @@ help:
 	@echo "  clean-podman           Clean Podman artifacts (keeps volumes)"
 	@echo "  clean-cache            Clear Podman build cache (prune + builder prune)"
 	@echo "  clean-all              Clean everything including volumes AND cache"
-	@echo "  clean-hard             ⚠️  HARD RESET: Remove ALL Podman storage (aggressive)"
+	@echo "  clean-hard             ⚠️  HARD RESET: Remove ALL StarExec resources for ENV"
+	@echo "  reset                  ⚠️  Alias for stop + clean-hard (recommended)"
+	@echo "  nuke                   ⚠️  Alias for reset (complete environment wipe)"
+	@echo "  status                 Show current deployment status"
 	@echo "  lint                   Lint Helm charts (if Helm available)"
 	@echo "  template               Render Helm templates (if Helm available)"
+	@echo "  docs                   Generate auto-updated documentation reference"
 	@echo ""
 	@echo "Debugging Targets:"
 	@echo "  logs                   Show all container logs"
@@ -98,16 +105,23 @@ help:
 	@echo "Quick Start Aliases:"
 	@echo "  start                  Alias for deploy-podman"
 	@echo "  stop                   Alias for undeploy-podman"
+	@echo "  reset                  ⚠️  Complete cleanup (stop + clean-hard)"
 	@echo ""
 	@echo "Environments:"
 	@echo "  ENV=dev               Development (default, named volumes)"
 	@echo "  ENV=ci                CI/testing (ephemeral)"
 	@echo "  ENV=prod              Production (Kubernetes PVCs)"
 	@echo ""
+	@echo "Flags:"
+	@echo "  DRY_RUN=1             Preview destructive operations without executing"
+	@echo "  FORCE=1               Skip confirmation prompts (use with caution)"
+	@echo ""
 	@echo "Examples:"
 	@echo "  make deploy-podman ENV=dev"
 	@echo "  make deploy-podman-cached"
 	@echo "  make volumes-backup ENV=dev"
+	@echo "  make reset ENV=dev                 # Complete cleanup"
+	@echo "  make clean-hard ENV=dev DRY_RUN=1  # Preview cleanup"
 	@echo "  make deploy-k8s ENV=prod"
 
 build:
@@ -172,7 +186,21 @@ volumes-export:
 	@read -p "Volume name: " vol && \
 	$(VOLUME_SCRIPT) export $$vol
 
+volumes-cleanup:
+	@echo "Cleaning up old backups (keeping last 10)"
+	$(VOLUME_SCRIPT) cleanup-backups $(ENV) 10
+
+volumes-health:
+	@echo "Running volume health checks for environment: $(ENV)"
+	$(VOLUME_SCRIPT) health-check $(ENV)
+
 volumes-delete:
+	@if [ "$(DRY_RUN)" = "1" ]; then \
+		echo "[DRY RUN] Would delete volumes for environment: $(ENV)"; \
+		echo "  - $(VOLUME_PREFIX)-$(ENV)-data"; \
+		echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"; \
+		exit 0; \
+	fi
 	$(VOLUME_SCRIPT) delete $(ENV)
 
 volumes-help:
@@ -509,18 +537,92 @@ clean-all: clean-podman volumes-delete
 	@echo "✓ Full cleanup complete (pods, images, volumes removed; cache preserved)"
 
 clean-hard:
-	@echo "⚠️  STAREXEC-ONLY CLEANUP: removes the StarExec pods, containers, secrets, volumes, and image for ENV=$(ENV)"
-	@read -p "Type '$(ENV)' to confirm: " ans; \
-	if [ "$$ans" != "$(ENV)" ]; then \
-		echo "Cancelled"; \
+	@if [ "$(DRY_RUN)" = "1" ]; then \
+		echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"; \
+		echo "  - Remove pods: starexec, starexec-pod, $(RELEASE_NAME)-pod"; \
+		echo "  - Remove containers: starexec-app, starexec-postgres"; \
+		echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"; \
+		echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-postgres"; \
+		echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		exit 0; \
 	fi
+	@echo "⚠️  HARD RESET: Removes ALL StarExec resources for ENV=$(ENV)"
+	@echo "This will delete:"
+	@echo "  - Pods and containers"
+	@echo "  - Secrets"
+	@echo "  - Volumes (ALL DATA will be lost)"
+	@echo "  - Images"
+	@echo ""
+	@if [ "$(FORCE)" != "1" ]; then \
+		read -p "Type '$(ENV)' to confirm: " ans; \
+		if [ "$$ans" != "$(ENV)" ]; then \
+			echo "Cancelled"; \
+			exit 0; \
+		fi; \
+	else \
+		echo "FORCE=1 detected, skipping confirmation"; \
+	fi
+	@echo "Checking for volumes in use..."
+	@VOLUMES="$(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres"; \
+	for vol in $$VOLUMES; do \
+		if podman volume exists $$vol 2>/dev/null; then \
+			USERS=$$(podman ps -a --filter volume=$$vol --format '{{.Names}}' 2>/dev/null); \
+			if [ -n "$$USERS" ]; then \
+				echo "❌ ERROR: Volume $$vol is in use by:"; \
+				echo "$$USERS"; \
+				echo "Stop containers first: make undeploy-podman"; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
 	$(call cleanup_deployment)
 	@echo "Removing StarExec volumes..."
 	@podman volume rm -f $(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null || true
 	@echo "Removing StarExec image..."
 	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
-	@echo "✓ StarExec scoped cleanup complete"
+	@echo "✓ Hard reset complete for ENV=$(ENV)"
+
+# ============================================================================
+# CONVENIENT CLEANUP ALIASES
+# ============================================================================
+
+reset: stop clean-hard
+	@echo ""
+	@echo "✓✓✓ Complete reset finished ✓✓✓"
+	@echo "Environment $(ENV) has been completely cleaned:"
+	@echo "  - All containers stopped and removed"
+	@echo "  - All volumes deleted"
+	@echo "  - All images removed"
+	@echo ""
+	@echo "To redeploy: make deploy-podman ENV=$(ENV)"
+
+nuke: reset
+	@echo "Environment $(ENV) nuked successfully"
+
+status:
+	@echo "========================================"
+	@echo "StarExec Deployment Status (ENV=$(ENV))"
+	@echo "========================================"
+	@echo ""
+	@echo "=== Pods ==="
+	@podman pod ls --filter name=starexec 2>/dev/null || echo "No StarExec pods found"
+	@echo ""
+	@echo "=== Containers ==="
+	@podman ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "No StarExec containers found"
+	@echo ""
+	@echo "=== Volumes ==="
+	@podman volume ls --filter name=$(VOLUME_PREFIX)-$(ENV) --format "table {{.Name}}\t{{.MountPoint}}" 2>/dev/null || echo "No volumes found for ENV=$(ENV)"
+	@echo ""
+	@echo "=== Images ==="
+	@podman images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "No StarExec images found"
+	@echo ""
+	@if podman pod exists starexec 2>/dev/null; then \
+		echo "✓ StarExec is RUNNING"; \
+		echo "  Access: http://localhost:7827/starexec"; \
+	else \
+		echo "⚬ StarExec is NOT running"; \
+		echo "  Deploy with: make deploy-podman ENV=$(ENV)"; \
+	fi
 
 # ============================================================================
 # DEBUGGING AND DIAGNOSTICS
@@ -657,6 +759,60 @@ config-show:
 	@echo ""
 	@echo "=== Validation ==="
 	@echo "  Run 'make config-validate ENV=$(ENV)' to check for conflicts"
+
+# ============================================================================
+# DOCUMENTATION GENERATION (prevents drift)
+# ============================================================================
+
+docs:
+	@echo "Generating documentation reference..."
+	@mkdir -p docs/reference
+	@echo "# Makefile Targets Reference" > docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "> **Auto-generated from Makefile** - Do not edit manually" >> docs/reference/makefile-targets.md
+	@echo "> Run \`make docs\` to update this file" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "## All Available Targets" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^[a-zA-Z0-9_-]+:" Makefile | \
+		grep -v "^.PHONY" | \
+		sed 's/:.*//' | \
+		sort | \
+		uniq | \
+		awk '{print "- `" $$1 "`"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "## Target Categories" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "### Build Targets" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^(build|image)" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Build container image"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "### Deployment Targets" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^(deploy|undeploy|start|stop)" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Deployment operation"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "### Volume Management" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^volumes-" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Volume operation"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "### Database Management" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^(db-|migrate-)" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Database operation"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "### Maintenance & Cleanup" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^(clean-|reset|nuke|status)" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Maintenance operation"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "### Debugging & Diagnostics" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@grep -E "^(logs|test-deps|verify-deps|lint|template|config-)" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Diagnostic operation"}' >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "---" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "For detailed usage of each target, run \`make help\`" >> docs/reference/makefile-targets.md
+	@echo "" >> docs/reference/makefile-targets.md
+	@echo "✓ Generated docs/reference/makefile-targets.md"
+	@echo "  Remember to run 'make docs' after adding new targets!"
 
 # ============================================================================
 # LOCKING MECHANISM (prevents concurrent deployments)
