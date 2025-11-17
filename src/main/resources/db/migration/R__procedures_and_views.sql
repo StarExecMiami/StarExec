@@ -2499,7 +2499,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetJobById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, description TEXT, queue_id INT, primary_space INT, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, created TIMESTAMP, completed TIMESTAMP, deleted BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path VARCHAR) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, description TEXT, queue_id INT, primary_space INT, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, created TIMESTAMP, completed TIMESTAMP, deleted BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
 BEGIN
     RETURN QUERY
     SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.seed, jobs.cpuTimeout, jobs.clockTimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.created, jobs.completed, jobs.deleted, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildJob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
@@ -2554,7 +2554,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetJobByIdIncludeDeleted(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobByIdIncludeDeleted(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, description TEXT, queue_id INT, primary_space INT, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, created TIMESTAMP, completed TIMESTAMP, deleted BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path VARCHAR) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, description TEXT, queue_id INT, primary_space INT, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, created TIMESTAMP, completed TIMESTAMP, deleted BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
 BEGIN
     RETURN QUERY
     SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.seed, jobs.cpuTimeout, jobs.clockTimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.created, jobs.completed, jobs.deleted, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildJob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
@@ -4866,10 +4866,10 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetPendingJobs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPendingJobs(_queueId INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR(64), description TEXT, queue_id INT, primary_space INT, created TIMESTAMP, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR(64), description TEXT, queue_id INT, primary_space INT, created TIMESTAMP, completed TIMESTAMP, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, paused BOOLEAN, killed BOOLEAN, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, buildJob BOOLEAN, total_pairs INT, soft_time_limit INT, kill_delay INT, disk_size BIGINT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
+    SELECT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.completed, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
     FROM starexec.jobs j
     WHERE j.queue_id = _queueId
     AND EXISTS (SELECT 1 FROM starexec.job_pairs jp WHERE jp.status_code = 1 AND jp.job_id = j.id);
@@ -4879,10 +4879,10 @@ $$ LANGUAGE plpgsql;
 -- Retrieves all pending job pairs for a give queue owned by a developer
 DROP FUNCTION IF EXISTS starexec.GetPendingDeveloperJobs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPendingDeveloperJobs(_queueId INT)
-RETURNS TABLE(id INT, userId INT, name VARCHAR(64), description TEXT, queueId INT, primarySpace INT, created TIMESTAMP, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximumMemory BIGINT, paused BOOLEAN, killed BOOLEAN, suppressTimestamp BOOLEAN, usingDependencies BOOLEAN, buildJob BOOLEAN, totalPairs INT, softTimeLimit INT, killDelay INT, diskSize BIGINT, benchmarkingFramework VARCHAR, isHighPriority BOOLEAN, outputBenchmarksDirectoryPath TEXT) AS $$
+RETURNS TABLE(id INT, userId INT, name VARCHAR(64), description TEXT, queueId INT, primarySpace INT, created TIMESTAMP, completed TIMESTAMP, seed BIGINT, cpuTimeout INT, clockTimeout INT, maximumMemory BIGINT, paused BOOLEAN, killed BOOLEAN, suppressTimestamp BOOLEAN, usingDependencies BOOLEAN, buildJob BOOLEAN, totalPairs INT, softTimeLimit INT, killDelay INT, diskSize BIGINT, benchmarkingFramework VARCHAR, isHighPriority BOOLEAN, outputBenchmarksDirectoryPath TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT DISTINCT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
+    SELECT DISTINCT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.completed, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
     FROM starexec.users u
     INNER JOIN user_roles ur ON u.email = ur.email
     INNER JOIN jobs j ON j.user_id = u.id
