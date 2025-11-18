@@ -3779,9 +3779,9 @@ RETURNS TABLE(
     clockTimeout INT,
     maximum_memory BIGINT,
     space_id INT,
+    bench_suffix VARCHAR(64),
     post_processor INT,
     pre_processor INT,
-    bench_suffix VARCHAR(64),
     results_interval INT,
     stdout_save_option INT,
     extra_output_save_option INT
@@ -4483,8 +4483,8 @@ DROP FUNCTION IF EXISTS starexec.GetDependenciesForPipelineStage CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetDependenciesForPipelineStage(_id INT)
 RETURNS TABLE(
     stage_id INT,
-    input_id INT,
     input_type INT,
+    input_id INT,
     input_number INT
 ) AS $$
 BEGIN
