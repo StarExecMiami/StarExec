@@ -1771,7 +1771,7 @@ BEGIN
 	RETURN QUERY
 	SELECT job_attributes.pair_id, job_attributes.attr_key, job_attributes.attr_value, job_attributes.job_id, job_attributes.stage_number
 	FROM starexec.job_attributes
-	WHERE pair_id=_pairId
+	WHERE job_attributes.pair_id=_pairId
 	ORDER BY attr_key ASC;
 END;
 $$ LANGUAGE plpgsql;
@@ -1915,7 +1915,7 @@ BEGIN
 	RETURN QUERY
 	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, job_pairs.solver_name, job_pairs.config_name, job_pairs.solver_id, job_pairs.config_id, job_pairs.start_time, job_pairs.end_time, job_pairs.cpu, job_pairs.wallclock, job_pairs.user_time, job_pairs.system_time, job_pairs.max_vmem, job_pairs.max_res_set, job_pairs.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data
 	FROM starexec.job_pairs
-	WHERE job_id=_jobId AND bench_id=_benchmarkId;
+	WHERE job_pairs.job_id=_jobId AND job_pairs.bench_id=_benchmarkId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1926,7 +1926,7 @@ BEGIN
 	RETURN QUERY
 	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, jobpair_stage_data.max_res_set, jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data
 	FROM starexec.job_pairs INNER JOIN jobpair_stage_data ON job_pairs.id=jobpair_stage_data.jobpair_id
-	WHERE job_id=_jobId AND jobpair_stage_data.solver_id=_solverId;
+	WHERE job_pairs.job_id=_jobId AND jobpair_stage_data.solver_id=_solverId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2029,7 +2029,7 @@ RETURNS TABLE(user_id INT, queue_id INT, time_delta DOUBLE PRECISION) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT jobpair_time_delta.user_id, jobpair_time_delta.queue_id, jobpair_time_delta.time_delta
-	FROM starexec.jobpair_time_delta WHERE queue_id=_qid OR _qid = -1;
+	FROM starexec.jobpair_time_delta WHERE jobpair_time_delta.queue_id=_qid OR _qid = -1;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2642,7 +2642,7 @@ BEGIN
 	RETURN QUERY
 	SELECT job_pairs.bench_id, bench_attributes.attr_value
 	FROM starexec.job_pairs JOIN bench_attributes ON job_pairs.bench_id = bench_attributes.bench_id
-	WHERE attr_key=_attrName AND job_id=_jobId;
+	WHERE bench_attributes.attr_key=_attrName AND job_pairs.job_id=_jobId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3788,7 +3788,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.job_stage_params WHERE job_id = _jobId;
+    SELECT * FROM starexec.job_stage_params WHERE job_stage_params.job_id = _jobId;
 END;
 $$ LANGUAGE plpgsql;
 
