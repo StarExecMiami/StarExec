@@ -55,9 +55,9 @@
 				AND		(bench_name 		LIKE 	CONCAT('%', :query, '%')
 				OR		jobpair_stage_data.config_name		LIKE	CONCAT('%', :query, '%')
 				OR		jobpair_stage_data.solver_name		LIKE	CONCAT('%', :query, '%')
-				OR		jobpair_stage_data.status_code 	LIKE 	CONCAT('%', :query, '%')
-				OR		jobpair_stage_data.wallclock			LIKE	CONCAT('%', :query, '%')
-				OR		cpu				LIKE	CONCAT('%', :query, '%')
+				OR		CAST(jobpair_stage_data.status_code AS TEXT) 	LIKE 	CONCAT('%', :query, '%')
+				OR		CAST(jobpair_stage_data.wallclock AS TEXT)			LIKE	CONCAT('%', :query, '%')
+				OR		CAST(cpu AS TEXT)				LIKE	CONCAT('%', :query, '%')
 				OR      job_attributes.attr_value 		LIKE 	CONCAT('%', :query, '%'))
 
 	

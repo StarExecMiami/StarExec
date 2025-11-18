@@ -2900,7 +2900,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Wyatt Kaiser
 DROP FUNCTION IF EXISTS starexec.GetEnqueuedJobPairsByJob CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetEnqueuedJobPairsByJob(_id INT)
-RETURNS TABLE(id INT, sge_id VARCHAR(128)) AS $$
+RETURNS TABLE(id INT, sge_id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT jp.id, jp.sge_id
@@ -3788,7 +3788,20 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.job_stage_params WHERE job_stage_params.job_id = _jobId;
+    SELECT 
+        job_stage_params.job_id,
+        job_stage_params.stage_number,
+        job_stage_params.cpuTimeout,
+        job_stage_params.clockTimeout,
+        job_stage_params.maximum_memory,
+        job_stage_params.space_id,
+        job_stage_params.bench_suffix,
+        job_stage_params.post_processor,
+        job_stage_params.pre_processor,
+        job_stage_params.results_interval,
+        job_stage_params.stdout_save_option,
+        job_stage_params.extra_output_save_option
+    FROM starexec.job_stage_params WHERE job_stage_params.job_id = _jobId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4483,9 +4496,9 @@ DROP FUNCTION IF EXISTS starexec.GetDependenciesForPipelineStage CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetDependenciesForPipelineStage(_id INT)
 RETURNS TABLE(
     stage_id INT,
-    input_type INT,
-    input_id INT,
-    input_number INT
+    input_type SMALLINT,
+    input_id SMALLINT,
+    input_number SMALLINT
 ) AS $$
 BEGIN
     RETURN QUERY
