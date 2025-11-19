@@ -2040,11 +2040,6 @@ CREATE OR REPLACE FUNCTION starexec.ClearJobpairTimeDeltaData(_qid INT)
 RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.jobpair_time_delta WHERE queue_id=_qid OR _qid=-1;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Jobpair time delta entries for queue %s not found', _qid);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2851,35 +2846,44 @@ CREATE OR REPLACE FUNCTION starexec.GetPendingJobPairsByJob(_id INT, _limit INT)
 RETURNS TABLE(
     id INT,
     job_id INT,
+    sge_id INT,
     bench_id INT,
+    bench_name VARCHAR(255),
     status_code SMALLINT,
-    path VARCHAR(2048),
-    job_space_id INT,
-    bench_name VARCHAR(256),
-    primary_jobpair_data INT,
-    stage_id INT,
-    stage_number INT,
-    solver_id INT,
-    solver_name VARCHAR(255),
-    config_id INT,
-    config_name VARCHAR(255),
-    jobpair_id INT,
-    status_code_stage SMALLINT,
-    cpu BIGINT,
-    wallclock BIGINT,
-    result_id INT,
-    stdout_id INT,
-    stderr_id INT,
-    extra_output_id INT,
+    node_id INT,
+    queuesub_time TIMESTAMP,
     start_time TIMESTAMP,
     end_time TIMESTAMP,
+    job_space_id INT,
+    path VARCHAR(2048),
+    sandbox_num INT,
+    primary_jobpair_data INT,
+    stage_number INT,
+    jobpair_id_stage INT,
+    stage_id INT,
+    cpu DOUBLE PRECISION,
+    wallclock DOUBLE PRECISION,
+    max_vmem DOUBLE PRECISION,
+    max_res_set DOUBLE PRECISION,
+    user_time DOUBLE PRECISION,
+    system_time DOUBLE PRECISION,
+    status_code_stage SMALLINT,
+    solver_name VARCHAR(128),
+    config_name VARCHAR(128),
+    solver_id INT,
+    config_id INT,
+    job_space_id_stage INT,
     disk_size BIGINT,
     dependency_count BIGINT
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT jp.*,
-    (SELECT count(*) FROM starexec.bench_dependency WHERE primary_bench_id = b.id) AS dependency_count
+    SELECT 
+        jp.id, jp.job_id, jp.sge_id, jp.bench_id, jp.bench_name, jp.status_code, jp.node_id, 
+        jp.queuesub_time, jp.start_time, jp.end_time, jp.job_space_id, jp.path, jp.sandbox_num, jp.primary_jobpair_data,
+        jsd.stage_number, jsd.jobpair_id, jsd.stage_id, jsd.cpu, jsd.wallclock, jsd.max_vmem, jsd.max_res_set, 
+        jsd.user_time, jsd.system_time, jsd.status_code, jsd.solver_name, jsd.config_name, jsd.solver_id, jsd.config_id, jsd.job_space_id, jsd.disk_size,
+        (SELECT count(*)::BIGINT FROM starexec.bench_dependency WHERE primary_bench_id = b.id) AS dependency_count
     FROM starexec.job_pairs jp
     JOIN jobpair_stage_data jsd ON jsd.jobpair_id = jp.id
     LEFT JOIN benchmarks b ON b.id = jp.bench_id
