@@ -135,7 +135,7 @@ public enum Analytics {
 
 	private void saveToDB(Date date, int count) throws SQLException {
 		Common.update(
-			"{SELECT starexec.RecordEvent(?,?,?)}",
+			"{call starexec.RecordEvent(?,?,?)}",
 			procedure -> {
 				procedure.setInt(1, id);
 				procedure.setDate(2, date);
@@ -146,7 +146,7 @@ public enum Analytics {
 
 	private void saveUserToDB(Date date, int userId) throws SQLException {
 		Common.update(
-			"{SELECT starexec.RecordEventUser(?,?,?)}",
+			"{call starexec.RecordEventUser(?,?,?)}",
 			procedure -> {
 				procedure.setInt(1, id);
 				procedure.setDate(2, date);

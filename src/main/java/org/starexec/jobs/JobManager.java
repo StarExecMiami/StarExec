@@ -306,7 +306,10 @@ public abstract class JobManager {
 			initMainTemplateIf();
 
 			// updates user load values to take into account actual job pair runtimes.
-			monitor.subtractTimeDeltas(JobPairs.getAndClearTimeDeltas(q.getId()));
+			HashMap<Integer, Integer> timeDeltas = JobPairs.getAndClearTimeDeltas(q.getId());
+			if (timeDeltas != null) {
+				monitor.subtractTimeDeltas(timeDeltas);
+			}
 
 			final LinkedList<SchedulingState> schedule = buildSchedule(joblist, q, queueSize, nodeCount);
 
