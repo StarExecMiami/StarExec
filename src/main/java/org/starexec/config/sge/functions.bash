@@ -1060,7 +1060,7 @@ function saveFileAsBenchmark {
 
 	CURRENT_BENCH_PATH=$CURRENT_BENCH_PATH/$CURRENT_BENCH_NAME
 
-	QUERY="CALL AddAndAssociateBenchmark('$(dbEscape $CURRENT_BENCH_NAME)', '$(dbEscape $CURRENT_BENCH_PATH)', false, $((USER_ID)), 1, $((FILE_SIZE_IN_BYTES)), $((SPACE_ID)), @id)"
+	QUERY="CALL AddAndAssociateBenchmark('$(dbEscape $CURRENT_BENCH_NAME)', '$(dbEscape $CURRENT_BENCH_PATH)', false, $((USER_ID)), 1, $((FILE_SIZE_IN_BYTES)), $((SPACE_ID)), NULL)"
 	log "Adding benchmark using query: $QUERY"
 	if ! (dbExec "$QUERY") ; then
 		log "error saving output as benchmark-- benchmark was not created"
