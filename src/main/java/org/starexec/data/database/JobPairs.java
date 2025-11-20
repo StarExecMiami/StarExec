@@ -52,8 +52,8 @@ public class JobPairs {
 						totalPairsSubmitted += batchSize;
 						log.debug(
 								methodName,
-								"Submitting batch of " + batchSize + " inputs. Total pairs submitted: " + totalPairsSubmitted
-						);
+								"Submitting batch of " + batchSize + " inputs. Total pairs submitted: "
+										+ totalPairsSubmitted);
 						ps.executeBatch();
 						batchCounter = 0;
 					}
@@ -63,8 +63,8 @@ public class JobPairs {
 				totalPairsSubmitted += batchCounter;
 				log.debug(
 						methodName,
-						"Submitting final batch of " + batchCounter + " inputs. Total pairs submitted: " + totalPairsSubmitted
-				);
+						"Submitting final batch of " + batchCounter + " inputs. Total pairs submitted: "
+								+ totalPairsSubmitted);
 				ps.executeBatch();
 			}
 		} catch (Exception e) {
@@ -77,8 +77,7 @@ public class JobPairs {
 	public static Optional<String> populateConfigIdsToSolversMapAndJobPairsForJobXMLUpload(
 			final String rootName, final int userId, final Map<Integer, Benchmark> accessibleCachedBenchmarks,
 			final HashMap<Integer, Solver> configIdsToSolvers, final Job job, final int spaceId,
-			final HashSet<String> jobRootPaths, final ConfigAttrMapPair configAttrMapPair, final NodeList jobPairs
-	) {
+			final HashSet<String> jobRootPaths, final ConfigAttrMapPair configAttrMapPair, final NodeList jobPairs) {
 		final String methodName = "populateJobPairsForJobXMLUpload";
 		Connection con = null;
 
@@ -86,7 +85,7 @@ public class JobPairs {
 		try {
 			con = Common.getConnection();
 
-			//we now iterate through all the job pair elements and add them all to the job
+			// we now iterate through all the job pair elements and add them all to the job
 			final int jobPairsLength = jobPairs.getLength();
 			for (int i = 0; i < jobPairsLength; i++) {
 				final Node jobPairNode = jobPairs.item(i);
@@ -95,7 +94,8 @@ public class JobPairs {
 					final JobPair jobPair = new JobPair();
 					final int benchmarkId = Integer.parseInt(jobPairElement.getAttribute("bench-id"));
 					final int configId = getConfigIdFromElement(jobPairElement, configAttrMapPair);
-					//final int configId = Integer.parseInt(jobPairElement.getAttribute("config-id"));
+					// final int configId =
+					// Integer.parseInt(jobPairElement.getAttribute("config-id"));
 					String path = jobPairElement.getAttribute("job-space-path");
 					if (path.isEmpty()) {
 						path = rootName;
@@ -108,7 +108,7 @@ public class JobPairs {
 					}
 
 					Benchmark b = null;
-					//permissions check on the benchmark for this job pair
+					// permissions check on the benchmark for this job pair
 					if (accessibleCachedBenchmarks.containsKey(benchmarkId)) {
 						b = accessibleCachedBenchmarks.get(benchmarkId);
 					} else {
@@ -134,8 +134,9 @@ public class JobPairs {
 					}
 					jobPair.setBench(b);
 					if (!configIdsToSolvers.containsKey(configId)) {
-						//permissions check on the solver for the pair. Configurations do
-						//not have permissions by themselves-- their permissions are identical to the solver
+						// permissions check on the solver for the pair. Configurations do
+						// not have permissions by themselves-- their permissions are identical to the
+						// solver
 						// permissions
 						Solver s = Solvers.getSolverByConfig(con, configId, true);
 						if (s == null) {
@@ -143,7 +144,7 @@ public class JobPairs {
 						}
 						if (s.isDeleted() || s.isRecycled()) {
 							return Optional.of("This solver associated with config " + configId +
-													   " has been deleted or recycled, solverId: " + s.getId());
+									" has been deleted or recycled, solverId: " + s.getId());
 						}
 
 						if (!Permissions.canUserSeeSolver(con, s.getId(), userId)) {
@@ -155,15 +156,15 @@ public class JobPairs {
 					}
 					Solver s = configIdsToSolvers.get(configId);
 
-					//JobPair elements are for pairs with exactly one stage, so we create a stage
-					//to house the solver and benchmark
+					// JobPair elements are for pairs with exactly one stage, so we create a stage
+					// to house the solver and benchmark
 					JoblineStage stage = new JoblineStage();
 					stage.setStageNumber(1);
 					stage.setSolver(s);
 					stage.setConfiguration(s.getConfigurations().get(0));
 
 					jobPair.addStage(stage);
-					//the primary stage is the one we just added
+					// the primary stage is the one we just added
 					jobPair.setPrimaryStageNumber(jobPair.getStages().size());
 					jobPair.setSpace(Spaces.get(spaceId, con));
 
@@ -197,12 +198,14 @@ public class JobPairs {
 	}
 
 	/**
-	 * Retrieves all the inputs to the given pair from the jobpair_inputs table. Inputs will be ordered by their input
+	 * Retrieves all the inputs to the given pair from the jobpair_inputs table.
+	 * Inputs will be ordered by their input
 	 * numbers (in other words, first input, second input, and so on)
 	 *
 	 * @param pairId
-	 * @param con An open database connection to make calls on
-	 * @return A list of strings pointing to the inputs for this pair, or null on error.
+	 * @param con    An open database connection to make calls on
+	 * @return A list of strings pointing to the inputs for this pair, or null on
+	 *         error.
 	 */
 	public static List<String> getJobPairInputPaths(int pairId, Connection con) {
 		PreparedStatement ps = null;
@@ -229,7 +232,7 @@ public class JobPairs {
 	 * Adds all the jobline stages for all of the given pairs to the database
 	 *
 	 * @param pairs The pairs to add the stages of
-	 * @param con The open connection to make the call on
+	 * @param con   The open connection to make the call on
 	 */
 	private static void addJobPairStages(List<JobPair> pairs, Connection con) {
 		final String methodName = "addJobPairStages";
@@ -267,8 +270,7 @@ public class JobPairs {
 						totalPairsSubmitted += batchSize;
 						log.debug(
 								methodName,
-								"Submitting batch of " + batchSize + ", total pairs submitted: " + totalPairsSubmitted
-						);
+								"Submitting batch of " + batchSize + ", total pairs submitted: " + totalPairsSubmitted);
 						ps.executeBatch();
 						batchCounter = 0;
 					}
@@ -278,9 +280,8 @@ public class JobPairs {
 				totalPairsSubmitted += batchCounter;
 				log.debug(
 						methodName,
-						"Submitting batch of " + batchCounter + ", total pairs submitted: " + totalPairsSubmitted
-				);
-					ps.executeBatch();
+						"Submitting batch of " + batchCounter + ", total pairs submitted: " + totalPairsSubmitted);
+				ps.executeBatch();
 			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -315,7 +316,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Adds a job pair record to the database. This is a helper method for the Jobs.add method
+	 * Adds a job pair record to the database. This is a helper method for the
+	 * Jobs.add method
 	 *
 	 * @param con The connection the update will take place on
 	 * @return True if the operation was successful
@@ -368,12 +370,13 @@ public class JobPairs {
 	}
 
 	/**
-	 * Finds the standard output of a job pair and returns it as a string. Null is returned if the output doesn't exist
+	 * Finds the standard output of a job pair and returns it as a string. Null is
+	 * returned if the output doesn't exist
 	 * or cannot be found
 	 *
-	 * @param pairId The pair to get output for
+	 * @param pairId      The pair to get output for
 	 * @param stageNumber The stage to get pair info for
-	 * @param limit The maximum number of lines to return
+	 * @param limit       The maximum number of lines to return
 	 * @return All console output from a job pair run for the given pair
 	 */
 	public static Optional<String> getStdOut(int pairId, int stageNumber, int limit) throws IOException {
@@ -382,10 +385,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Returns all pairs that are waiting on post processing. Returns a hashmap mapping job pair IDs to post processors
+	 * Returns all pairs that are waiting on post processing. Returns a hashmap
+	 * mapping job pair IDs to post processors
 	 *
-	 * @return A list of triples containing pair id, stage number, post processor id that represents all stages that
-	 * need to be processed.
+	 * @return A list of triples containing pair id, stage number, post processor id
+	 *         that represents all stages that
+	 *         need to be processed.
 	 */
 	public static List<PairStageProcessorTriple> getAllPairsForProcessing() {
 		Connection con = null;
@@ -416,12 +421,14 @@ public class JobPairs {
 	}
 
 	/**
-	 * Updates the total_pairs column for the given job by summing it with the given increment
+	 * Updates the total_pairs column for the given job by summing it with the given
+	 * increment
 	 *
-	 * @param jobId The ID of the job to update
-	 * @param increment The amount to change total_pairs by. Note that if this is negative it means the total_pairs
-	 * column will decrease
-	 * @param con The open connection to make the call on
+	 * @param jobId     The ID of the job to update
+	 * @param increment The amount to change total_pairs by. Note that if this is
+	 *                  negative it means the total_pairs
+	 *                  column will decrease
+	 * @param con       The open connection to make the call on
 	 * @return true on success and false otherwise
 	 */
 	public static boolean incrementTotalJobPairsForJob(int jobId, int increment, Connection con) {
@@ -503,10 +510,11 @@ public class JobPairs {
 	}
 
 	/**
-	 * Post processes the given pair with the given processor ID, add the properties to the pair attributes table, and
+	 * Post processes the given pair with the given processor ID, add the properties
+	 * to the pair attributes table, and
 	 * removes the pair from the processing job pairs table
 	 *
-	 * @param pairId The ID of the pair to process
+	 * @param pairId      The ID of the pair to process
 	 * @param stageNumber
 	 * @param processorId The ID of the processor to use
 	 */
@@ -530,9 +538,10 @@ public class JobPairs {
 	}
 
 	/**
-	 * Runs the given post processor on the given pair stage and returns the properties that were obtained
+	 * Runs the given post processor on the given pair stage and returns the
+	 * properties that were obtained
 	 *
-	 * @param pairId The ID of the pair in question
+	 * @param pairId      The ID of the pair in question
 	 * @param processorId The ID of the processor in question
 	 * @return The properties on success, or null otherwise
 	 */
@@ -550,7 +559,6 @@ public class JobPairs {
 			String benchPath = new File(sandbox, new File(pair.getBench().getPath()).getName()).getAbsolutePath();
 			String outputPath = new File(sandbox, output.getName()).getAbsolutePath();
 			File working = new File(sandbox, new File(p.getFilePath()).getName());
-
 
 			String[] procCmd = new String[3];
 			procCmd[0] = "./" + R.PROCESSOR_RUN_SCRIPT;
@@ -575,10 +583,10 @@ public class JobPairs {
 	/**
 	 * Adds a new attribute to a job pair
 	 *
-	 * @param con The connection to make the update on
+	 * @param con    The connection to make the update on
 	 * @param pairId The id of the job pair the attribute is for
-	 * @param key The key of the attribute
-	 * @param val The value of the attribute
+	 * @param key    The key of the attribute
+	 * @param val    The value of the attribute
 	 * @author Tyler Jensen
 	 */
 	protected static void addJobPairAttr(Connection con, int pairId, int stageId, String key, String val) {
@@ -606,14 +614,15 @@ public class JobPairs {
 	}
 
 	/**
-	 * Adds the list of attributes to the given job pair. If old attributes have the same keys as new ones, the old
+	 * Adds the list of attributes to the given job pair. If old attributes have the
+	 * same keys as new ones, the old
 	 * ones
 	 * are replaced
 	 *
-	 * @param pairId The ID of the pair to add attributes to
-	 * @param stageId The ID of the stage to add attributes for.
+	 * @param pairId     The ID of the pair to add attributes to
+	 * @param stageId    The ID of the stage to add attributes for.
 	 * @param attributes The key/value attributes
-	 * @param con The open connection to make the call on
+	 * @param con        The open connection to make the call on
 	 * @return True on success, false on error
 	 */
 	public static boolean addJobPairAttributes(int pairId, int stageId, Properties attributes, Connection con) {
@@ -635,8 +644,8 @@ public class JobPairs {
 	/**
 	 * Adds a set of attributes to a job pair
 	 *
-	 * @param pairId The id of the job pair the attribute is for
-	 * @param stageId the ID of the stage to add attributes to
+	 * @param pairId     The id of the job pair the attribute is for
+	 * @param stageId    the ID of the stage to add attributes to
 	 * @param attributes The attributes to add to the job pair
 	 * @return True if the operation was a success, false otherwise
 	 * @author Tyler Jensen
@@ -668,61 +677,61 @@ public class JobPairs {
 		List<JobPair> filteredPairs = new ArrayList<>();
 
 		switch (type) {
-		case "incomplete":
-			for (JobPair jp : pairs) {
-				if (jp.getStageFromNumber(stageNumber).getStatus().getCode().statIncomplete()) {
-					filteredPairs.add(jp);
+			case "incomplete":
+				for (JobPair jp : pairs) {
+					if (jp.getStageFromNumber(stageNumber).getStatus().getCode().statIncomplete()) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		case "resource":
-			for (JobPair jp : pairs) {
-				if (jp.getStageFromNumber(stageNumber).getStatus().getCode().resource()) {
-					filteredPairs.add(jp);
+				break;
+			case "resource":
+				for (JobPair jp : pairs) {
+					if (jp.getStageFromNumber(stageNumber).getStatus().getCode().resource()) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		case "failed":
-			for (JobPair jp : pairs) {
-				if (jp.getStageFromNumber(stageNumber).getStatus().getCode().failed()) {
-					filteredPairs.add(jp);
+				break;
+			case "failed":
+				for (JobPair jp : pairs) {
+					if (jp.getStageFromNumber(stageNumber).getStatus().getCode().failed()) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		case "solved":
-			for (JobPair jp : pairs) {
-				JoblineStage stage = jp.getStageFromNumber(stageNumber);
-				if (JobPairs.isPairCorrect(stage) == 0) {
-					filteredPairs.add(jp);
+				break;
+			case "solved":
+				for (JobPair jp : pairs) {
+					JoblineStage stage = jp.getStageFromNumber(stageNumber);
+					if (JobPairs.isPairCorrect(stage) == 0) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		case "wrong":
-			for (JobPair jp : pairs) {
-				JoblineStage stage = jp.getStageFromNumber(stageNumber);
-				if (JobPairs.isPairCorrect(stage) == 1) {
-					filteredPairs.add(jp);
+				break;
+			case "wrong":
+				for (JobPair jp : pairs) {
+					JoblineStage stage = jp.getStageFromNumber(stageNumber);
+					if (JobPairs.isPairCorrect(stage) == 1) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		case "unknown":
-			for (JobPair jp : pairs) {
-				JoblineStage stage = jp.getStageFromNumber(stageNumber);
-				if (JobPairs.isPairCorrect(stage) == 2) {
-					filteredPairs.add(jp);
+				break;
+			case "unknown":
+				for (JobPair jp : pairs) {
+					JoblineStage stage = jp.getStageFromNumber(stageNumber);
+					if (JobPairs.isPairCorrect(stage) == 2) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		case "complete":
-			for (JobPair jp : pairs) {
-				if (jp.getStageFromNumber(stageNumber).getStatus().getCode().statComplete()) {
-					filteredPairs.add(jp);
+				break;
+			case "complete":
+				for (JobPair jp : pairs) {
+					if (jp.getStageFromNumber(stageNumber).getStatus().getCode().statComplete()) {
+						filteredPairs.add(jp);
+					}
 				}
-			}
-			break;
-		default:
-			filteredPairs = pairs;
-			break;
+				break;
+			default:
+				filteredPairs = pairs;
+				break;
 		}
 		return filteredPairs;
 	}
@@ -731,8 +740,9 @@ public class JobPairs {
 	 * Checks whether a given stage is correct
 	 *
 	 * @param stage
-	 * @return -1 == pair is not complete (as in, does not have STATUS_COMPLETE) 0 == pair is correct 1 == pair is
-	 * incorrect 2 == pair is unknown
+	 * @return -1 == pair is not complete (as in, does not have STATUS_COMPLETE) 0
+	 *         == pair is correct 1 == pair is
+	 *         incorrect 2 == pair is unknown
 	 */
 	public static int isPairCorrect(JoblineStage stage) {
 		StatusCode statusCode = stage.getStatus().getCode();
@@ -740,22 +750,22 @@ public class JobPairs {
 		if (statusCode.getVal() == StatusCode.STATUS_COMPLETE.getVal()) {
 			if (stage.getAttributes() != null) {
 				Properties attrs = stage.getAttributes();
-				//log.debug("expected = "+attrs.get(R.EXPECTED_RESULT));
-				//log.debug("actual = "+attrs.get(R.STAREXEC_RESULT));
+				// log.debug("expected = "+attrs.get(R.EXPECTED_RESULT));
+				// log.debug("actual = "+attrs.get(R.STAREXEC_RESULT));
 				if (attrs.containsKey(R.STAREXEC_RESULT) && attrs.get(R.STAREXEC_RESULT).equals(R.STAREXEC_UNKNOWN)) {
-					//don't know the result, so don't mark as correct or incorrect.
+					// don't know the result, so don't mark as correct or incorrect.
 					return 2;
 				} else if (attrs.containsKey(R.EXPECTED_RESULT) &&
 						!attrs.get(R.EXPECTED_RESULT).equals(R.STAREXEC_UNKNOWN)) {
 					if (!attrs.containsKey(R.STAREXEC_RESULT) ||
 							!attrs.get(R.STAREXEC_RESULT).equals(attrs.get(R.EXPECTED_RESULT))) {
-						//the absence of a result, or a nonmatching result, is counted as wrong
+						// the absence of a result, or a nonmatching result, is counted as wrong
 						return 1;
 					} else {
 						return 0;
 					}
 				} else {
-					//if the attributes don't have an expected result, we will mark as unknown
+					// if the attributes don't have an expected result, we will mark as unknown
 					return 2;
 				}
 			} else {
@@ -774,7 +784,7 @@ public class JobPairs {
 	 * @return
 	 */
 	protected static List<SolverComparison> filterComparisons(List<SolverComparison> comparisons, String searchQuery) {
-		//no filtering is necessary if there's no query
+		// no filtering is necessary if there's no query
 		if (Util.isNullOrEmpty(searchQuery)) {
 			return comparisons;
 		}
@@ -795,19 +805,21 @@ public class JobPairs {
 	}
 
 	/**
-	 * Filters a list of job pairs against some search query. The query is compared to solver, benchmark, and config
-	 * names, as well as integer status code and result. The job pair is not filtered if the query is a
+	 * Filters a list of job pairs against some search query. The query is compared
+	 * to solver, benchmark, and config
+	 * names, as well as integer status code and result. The job pair is not
+	 * filtered if the query is a
 	 * case-insensitive
 	 * substring of any of those names
 	 *
-	 * @param pairs The pairs to filter
+	 * @param pairs       The pairs to filter
 	 * @param searchQuery The query
 	 * @return A filtered list of job pairs
 	 * @author Eric Burns
 	 */
 
 	protected static List<JobPair> filterPairs(List<JobPair> pairs, String searchQuery, int stageNumber) {
-		//no filtering is necessary if there's no query
+		// no filtering is necessary if there's no query
 		if (Util.isNullOrEmpty(searchQuery)) {
 			return pairs;
 		}
@@ -826,7 +838,7 @@ public class JobPairs {
 					filteredPairs.add(jp);
 				}
 			} catch (Exception e) {
-				log.warn("filterPairs", "JobPair: " +  jp.getId(), e);
+				log.warn("filterPairs", "JobPair: " + jp.getId(), e);
 			}
 		}
 
@@ -834,11 +846,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Retrieves all attributes (key/value) of the given job pair. Returns a mapping of those attributes to stages
+	 * Retrieves all attributes (key/value) of the given job pair. Returns a mapping
+	 * of those attributes to stages
 	 * based
 	 * on the jobpair_stage_data.stage_number
 	 *
-	 * @param con The connection to make the query on
+	 * @param con    The connection to make the query on
 	 * @param pairId The id of the pair to get the attributes of
 	 * @return The properties object which holds all the pair's attributes
 	 * @author Tyler Jensen
@@ -852,7 +865,6 @@ public class JobPairs {
 			ps.setInt(1, pairId);
 			results = ps.executeQuery();
 
-
 			while (results.next()) {
 				int joblineStageNumber = results.getInt("stage_number");
 				if (!props.containsKey(joblineStageNumber)) {
@@ -860,7 +872,6 @@ public class JobPairs {
 				}
 				props.get(joblineStageNumber).put(results.getString("attr_key"), results.getString("attr_value"));
 			}
-
 
 			return props;
 		} catch (Exception e) {
@@ -895,7 +906,7 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets the path to the output file  for this pair.
+	 * Gets the path to the output file for this pair.
 	 *
 	 * @param pairId The id of the pair to get the filepath for
 	 * @return The string path, or null on failure
@@ -907,7 +918,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Populates a job pair with just enough information to find the file path. The pair will be returned with a single
+	 * Populates a job pair with just enough information to find the file path. The
+	 * pair will be returned with a single
 	 * primary stage set with a solver name and config name
 	 *
 	 * @param pairId
@@ -953,7 +965,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets the path to the directory containing all output files for this job. For jobs created before solver
+	 * Gets the path to the directory containing all output files for this job. For
+	 * jobs created before solver
 	 * pipelines, returns the single output file for the job
 	 *
 	 * @param pairId The id of the pair to get the filepath for
@@ -966,9 +979,11 @@ public class JobPairs {
 	}
 
 	/**
-	 * Returns a list of files representing paths to both a pair's standard output and additional output directories
+	 * Returns a list of files representing paths to both a pair's standard output
+	 * and additional output directories
 	 * . If
-	 * the given file is a directory, it is returned alone. Otherwise, it is interpreted as the single stdout file and
+	 * the given file is a directory, it is returned alone. Otherwise, it is
+	 * interpreted as the single stdout file and
 	 * the additional directory is returned as well if it exists.
 	 *
 	 * @param pairId
@@ -989,10 +1004,13 @@ public class JobPairs {
 	}
 
 	/**
-	 * Returns a list of files representing paths to both a pair's standard output and additional output directories
+	 * Returns a list of files representing paths to both a pair's standard output
+	 * and additional output directories
 	 * . If
-	 * these two things are contained in a single top level directory, as they are when joblines are used, only that
-	 * directory is returned. No extra output dir is returned if extra outputs are not used.
+	 * these two things are contained in a single top level directory, as they are
+	 * when joblines are used, only that
+	 * directory is returned. No extra output dir is returned if extra outputs are
+	 * not used.
 	 *
 	 * @param pairId The pair to get output for
 	 * @return Paths to all output for this job. has no output yet
@@ -1003,7 +1021,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Same as getOutputPaths(pairId), except the given pair is expected to have all relevant fields populated and will
+	 * Same as getOutputPaths(pairId), except the given pair is expected to have all
+	 * relevant fields populated and will
 	 * not need to be retrieved from the database
 	 *
 	 * @param pair
@@ -1019,7 +1038,8 @@ public class JobPairs {
 	 *
 	 * @param pairId
 	 * @param stageNumber
-	 * @return The absolute file path to the output for the given stage of the given pair
+	 * @return The absolute file path to the output for the given stage of the given
+	 *         pair
 	 */
 
 	public static String getStdout(int pairId, int stageNumber) {
@@ -1057,7 +1077,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Returns the log of a job pair by reading in the physical log file into a string.
+	 * Returns the log of a job pair by reading in the physical log file into a
+	 * string.
 	 *
 	 * @param pairId The id of the pair to get the log for
 	 * @return The log of the job run
@@ -1080,10 +1101,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Returns the absolute path to where the log for a pair is stored given the pair.
+	 * Returns the absolute path to where the log for a pair is stored given the
+	 * pair.
 	 *
 	 * @param pair
-	 * @return The absolute path to the log file for the given pair, or null if it could not be found
+	 * @return The absolute path to the log file for the given pair, or null if it
+	 *         could not be found
 	 */
 	public static String getLogFilePath(JobPair pair) {
 		try {
@@ -1100,48 +1123,78 @@ public class JobPairs {
 	}
 
 	/**
-	 * Retrieves the output of a single stage of the given job pair. Requires that the jobId, path, solver name, config
-	 * name, and bench names of the PRIMARY STAGE be populated. The fields do NOT need to be populated for given stage,
+	 * Retrieves the output of a single stage of the given job pair. Requires that
+	 * the jobId, path, solver name, config
+	 * name, and bench names of the PRIMARY STAGE be populated. The fields do NOT
+	 * need to be populated for given stage,
 	 * ONLY the primary stage
 	 *
 	 * @param pair
 	 * @param stageNumber A number >=1 representing the stage of this pair
-	 * @return The absolute file path to the output file for the given stage of the given pair
+	 * @return The absolute file path to the output file for the given stage of the
+	 *         given pair
 	 */
 	public static String getFilePath(JobPair pair, int stageNumber) {
-		String path = getPairStdout(pair); //this is the path to the top level directory of the pair
+		String path = getPairStdout(pair); // this is the path to the top level directory of the pair
 
 		File f = new File(path);
 		if (f.isDirectory()) {
-			//means this is a job created after stages were implemented
+			// means this is a job created after stages were implemented
 			return new File(f, stageNumber + ".txt").getAbsolutePath();
 		} else {
-			//if we get down here, it means that this pair did NOT use stages.
+			// if we get down here, it means that this pair did NOT use stages.
 			return path;
 		}
 	}
 
 	/**
-	 * Gets the path to the directory that contains all the output files for every stage in this pair. For old pairs
-	 * that do not have stages, simply returns the path to the single output file for this pair. Requires that the
-	 * jobId, path, solver name, config name, and bench names be populated for the PRIMARY STAGES
+	 * Gets the path to the directory that contains all the output files for every
+	 * stage in this pair. For old pairs
+	 * that do not have stages, simply returns the path to the single output file
+	 * for this pair. Requires that the
+	 * jobId, path, solver name, config name, and bench names be populated for the
+	 * PRIMARY STAGES
 	 *
 	 * @param pair The pair to get the filepath for
 	 * @return The string path, or null on failure
 	 * @author Eric Burns
 	 */
 
-	//Note that this function tries several things due to supporting several layers of backwards compatibility
+	// Note that this function tries several things due to supporting several layers
+	// of backwards compatibility
 	public static String getPairStdout(JobPair pair) {
 		try {
+			if (pair == null || pair.getBenchPath() == null) {
+				log.warn("getPairStdout: pair or benchPath is null");
+				return null;
+			}
 			final String path = Util.normalizeFilePath(pair.getBenchPath());
-			File file = new File(Jobs.getDirectory(pair.getJobId()), path);
+			String jobDir = Jobs.getDirectory(pair.getJobId());
+			if (jobDir == null) {
+				log.warn("getPairStdout: jobDir is null for jobId " + pair.getJobId());
+				return null;
+			}
+			File file = new File(jobDir, path);
 
-			if (!file.exists()) {        // if the job output could not be found
-				File testFile = new File(file, pair.getPrimarySolver().getName());
-				testFile = new File(testFile, pair.getPrimaryConfiguration().getName());
-				testFile = new File(testFile, pair.getBench().getName());
-				if (testFile.exists()) {  //check the alternate path some pairs are still stored at
+			if (!file.exists()) { // if the job output could not be found
+				if (pair.getPrimarySolver() == null || pair.getPrimaryConfiguration() == null
+						|| pair.getBench() == null) {
+					log.warn("getPairStdout: solver, config, or bench is null for pair " + pair.getId());
+					return null;
+				}
+				// Also check that the names are not null before creating File objects
+				String solverName = pair.getPrimarySolver().getName();
+				String configName = pair.getPrimaryConfiguration().getName();
+				String benchName = pair.getBench().getName();
+				if (solverName == null || configName == null || benchName == null) {
+					log.warn("getPairStdout: solverName, configName, or benchName is null. solver=" + solverName
+							+ ", config=" + configName + ", bench=" + benchName);
+					return null;
+				}
+				File testFile = new File(file, solverName);
+				testFile = new File(testFile, configName);
+				testFile = new File(testFile, benchName);
+				if (testFile.exists()) { // check the alternate path some pairs are still stored at
 					FileUtils.copyFile(testFile, file);
 					if (file.exists()) {
 						testFile.delete();
@@ -1151,7 +1204,8 @@ public class JobPairs {
 				return file.getAbsolutePath();
 			}
 
-			//before solver pipelines, pairs were stored as a single file titled <pairid>.txt . If that file exists,
+			// before solver pipelines, pairs were stored as a single file titled
+			// <pairid>.txt . If that file exists,
 			// returns it
 			File testFile = new File(file, pair.getId() + ".txt");
 
@@ -1159,7 +1213,8 @@ public class JobPairs {
 				return testFile.getAbsolutePath();
 			}
 
-			//otherwise, this is a modern job, and we return a directory with the name of the pair id
+			// otherwise, this is a modern job, and we return a directory with the name of
+			// the pair id
 
 			file = new File(file, String.valueOf(pair.getId()));
 
@@ -1171,8 +1226,10 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets the job pair with the given id non-recursively (Worker node, status, benchmark and solver will NOT be
-	 * populated). Only the primary stage is created! To get all the stages, you need to call getPairDetailed
+	 * Gets the job pair with the given id non-recursively (Worker node, status,
+	 * benchmark and solver will NOT be
+	 * populated). Only the primary stage is created! To get all the stages, you
+	 * need to call getPairDetailed
 	 *
 	 * @param pairId The id of the pair to get
 	 * @return The job pair object with the given id.
@@ -1219,9 +1276,10 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets the job pair with the given id recursively (Worker node, status, benchmark and solver WILL be populated)
+	 * Gets the job pair with the given id recursively (Worker node, status,
+	 * benchmark and solver WILL be populated)
 	 *
-	 * @param con The connection to make the query on
+	 * @param con    The connection to make the query on
 	 * @param pairId The id of the pair to get
 	 * @return The job pair object with the given id.
 	 * @author Tyler Jensen
@@ -1247,7 +1305,7 @@ public class JobPairs {
 				jp.setStatus(s);
 				jp.setJobSpaceName(results.getString("job_space_name"));
 			} else {
-				//couldn't find the pair for some reason
+				// couldn't find the pair for some reason
 				return null;
 			}
 
@@ -1272,21 +1330,21 @@ public class JobPairs {
 			ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairStagesById(?)");
 			ps.setInt(1, jp.getId());
 			results = ps.executeQuery();
-			//next, we get data at the stage level
+			// next, we get data at the stage level
 			while (results.next()) {
 				JoblineStage stage = resultToStage(results);
 				int configId = results.getInt("config_id");
 				int solverId = results.getInt("solver_id");
 				String configName = results.getString("config_name");
 				String solverName = results.getString("solver_name");
-				//means this stage has no configuration
+				// means this stage has no configuration
 				if (configId == -1) {
 					stage.setNoOp(true);
 				} else if (configId > 0) {
 					Solver solver = Solvers.getSolverByConfig(con, configId, true);
 					Configuration c = Solvers.getConfiguration(configId);
 
-					//this can happen if the pair references a deleted solver
+					// this can happen if the pair references a deleted solver
 					if (solver == null) {
 						solver = new Solver();
 						solver.setId(solverId);
@@ -1305,7 +1363,7 @@ public class JobPairs {
 				}
 				jp.addStage(stage);
 			}
-			//last, we get attributes for everything
+			// last, we get attributes for everything
 			HashMap<Integer, Properties> attrs = getAttributes(jp.getId());
 			for (JoblineStage stage : jp.getStages()) {
 				if (attrs.containsKey(stage.getStageNumber())) {
@@ -1319,7 +1377,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets the job pair with the given id recursively (Worker node, status, benchmark and solver WILL be populated)
+	 * Gets the job pair with the given id recursively (Worker node, status,
+	 * benchmark and solver WILL be populated)
 	 *
 	 * @param pairId The id of the pair to get
 	 * @return The job pair object with the given id.
@@ -1389,7 +1448,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Extracts query information into a JoblineStage. Does NOT get deep information like solver and configuration
+	 * Extracts query information into a JoblineStage. Does NOT get deep information
+	 * like solver and configuration
 	 *
 	 * @param result
 	 * @return
@@ -1437,44 +1497,52 @@ public class JobPairs {
 		jp.setJobSpaceId(getIntSafe(result, "job_pairs.job_space_id", "job_space_id"));
 		jp.setPrimaryStageNumber(getIntSafe(result, "job_pairs.primary_jobpair_data", "primary_jobpair_data"));
 		jp.setSandboxNum(getIntSafe(result, "job_pairs.sandbox_num", "sandbox_num"));
-		//log.debug("getting job pair from result set for id " + jp.getId());
+		// log.debug("getting job pair from result set for id " + jp.getId());
 		return jp;
 	}
 
-	/** Helper getters that try multiple column labels (prefixed and unprefixed) and do safe conversions. */
+	/**
+	 * Helper getters that try multiple column labels (prefixed and unprefixed) and
+	 * do safe conversions.
+	 */
 	private static boolean columnExists(ResultSet rs, String col) throws SQLException {
 		ResultSetMetaData md = rs.getMetaData();
 		int cols = md.getColumnCount();
 		for (int i = 1; i <= cols; i++) {
-			if (col.equalsIgnoreCase(md.getColumnLabel(i)) || col.equalsIgnoreCase(md.getColumnName(i))) return true;
+			if (col.equalsIgnoreCase(md.getColumnLabel(i)) || col.equalsIgnoreCase(md.getColumnName(i)))
+				return true;
 		}
 		return false;
 	}
 
 	private static int getIntSafe(ResultSet rs, String... cols) throws SQLException {
 		for (String c : cols) {
-			if (columnExists(rs, c)) return rs.getInt(c);
+			if (columnExists(rs, c))
+				return rs.getInt(c);
 		}
 		throw new SQLException("None of the columns found: " + Arrays.toString(cols));
 	}
 
 	private static long getLongSafe(ResultSet rs, String... cols) throws SQLException {
 		for (String c : cols) {
-			if (columnExists(rs, c)) return rs.getLong(c);
+			if (columnExists(rs, c))
+				return rs.getLong(c);
 		}
 		throw new SQLException("None of the columns found: " + Arrays.toString(cols));
 	}
 
 	private static String getStringSafe(ResultSet rs, String... cols) throws SQLException {
 		for (String c : cols) {
-			if (columnExists(rs, c)) return rs.getString(c);
+			if (columnExists(rs, c))
+				return rs.getString(c);
 		}
 		return null;
 	}
 
 	private static Timestamp getTimestampSafe(ResultSet rs, String... cols) throws SQLException {
 		for (String c : cols) {
-			if (columnExists(rs, c)) return rs.getTimestamp(c);
+			if (columnExists(rs, c))
+				return rs.getTimestamp(c);
 		}
 		return null;
 	}
@@ -1486,7 +1554,8 @@ public class JobPairs {
 					return rs.getDouble(c);
 				} catch (SQLException e) {
 					Object o = rs.getObject(c);
-					if (o instanceof Number) return ((Number) o).doubleValue();
+					if (o instanceof Number)
+						return ((Number) o).doubleValue();
 					throw e;
 				}
 			}
@@ -1497,22 +1566,25 @@ public class JobPairs {
 	/**
 	 * Sets the status of a given job pair stage to the given status
 	 *
-	 * @param pairId The ID of the pair to update
+	 * @param pairId      The ID of the pair to update
 	 * @param stageNumber The number of the stage to update
-	 * @param statusCode The code to give the stage
-	 * @param con An open database connection to make the call on
+	 * @param statusCode  The code to give the stage
+	 * @param con         An open database connection to make the call on
 	 * @return True on success and false on error
 	 */
 	public static boolean setPairStageStatus(int pairId, int statusCode, int stageNumber, Connection con) {
 		PreparedStatement ps = null;
 		try {
-			ps = con.prepareStatement("SELECT starexec.UpdatePairStageStatus(?, ?, ?)");
+			ps = con.prepareStatement("CALL starexec.UpdatePairStageStatus(?, ?, ?)");
 			ps.setInt(1, pairId);
 			ps.setInt(2, stageNumber);
 			ps.setShort(3, (short) statusCode);
 
 			ps.execute();
-			try { Common.safeClose(ps.getResultSet()); } catch (SQLException ignore) {}
+			try {
+				Common.safeClose(ps.getResultSet());
+			} catch (SQLException ignore) {
+			}
 
 			return true;
 		} catch (Exception e) {
@@ -1524,7 +1596,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Sets the status code of every stage that comes after the given stage to the given value
+	 * Sets the status code of every stage that comes after the given stage to the
+	 * given value
 	 *
 	 * @param pairId
 	 * @param statusCode
@@ -1535,19 +1608,12 @@ public class JobPairs {
 	public static boolean setLaterPairStageStatus(int pairId, int statusCode, int stageNumber, Connection con) {
 		PreparedStatement ps = null;
 		try {
-			ps = con.prepareStatement("SELECT starexec.UpdateLaterStageStatuses(?, ?, ?)");
+			ps = con.prepareStatement("CALL starexec.UpdateLaterStageStatuses(?, ?, ?)");
 			ps.setInt(1, pairId);
 			ps.setInt(2, stageNumber);
 			ps.setShort(3, (short) statusCode);
 
-			boolean hasResultSet = ps.execute();
-			if (hasResultSet) {
-				ResultSet rs = ps.getResultSet();
-				while (rs.next()) {
-					// consume the result set
-				}
-				Common.safeClose(rs);
-			}
+			ps.execute();
 			return true;
 		} catch (Exception e) {
 			log.debug(e.getMessage(), e);
@@ -1558,7 +1624,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Sets the status code of every stage that comes after the given stage to the given value
+	 * Sets the status code of every stage that comes after the given stage to the
+	 * given value
 	 *
 	 * @param pairId
 	 * @param statusCode
@@ -1616,7 +1683,7 @@ public class JobPairs {
 	 *
 	 * @param pairId
 	 * @param statusCode
-	 * @param con An open database connection to make calls on
+	 * @param con        An open database connection to make calls on
 	 * @return True on success and false on error
 	 */
 	public static boolean setAllPairStageStatus(int pairId, int statusCode, Connection con) {
@@ -1624,7 +1691,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Sets the disk_size for the given job pair to 0, updating the jobpair_stage_data, jobs, and users tables
+	 * Sets the disk_size for the given job pair to 0, updating the
+	 * jobpair_stage_data, jobs, and users tables
 	 *
 	 * @param jobPairId
 	 */
@@ -1652,12 +1720,15 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets pair ids, node ids, and job ids, that have been enqueued longer than a given amount of time.
+	 * Gets pair ids, node ids, and job ids, that have been enqueued longer than a
+	 * given amount of time.
 	 *
-	 * @param minutes if a pair has been enqueued longer than this number of minutes it will be returned with its node
-	 * and job ids.
-	 * @return the pair ids and their node ids and jobs ids that have been enqueued longer than the given amount of
-	 * time.
+	 * @param minutes if a pair has been enqueued longer than this number of minutes
+	 *                it will be returned with its node
+	 *                and job ids.
+	 * @return the pair ids and their node ids and jobs ids that have been enqueued
+	 *         longer than the given amount of
+	 *         time.
 	 * @throws SQLException if something goes wrong in the database.
 	 */
 	public static ImmutableSet<PairIdJobId> getPairsEnqueuedLongerThan(int minutes) throws SQLException {
@@ -1682,11 +1753,15 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets nodes that may have had pairs enqueued longer than the given amount of time without setting them to
-	 * "running". The SQL procedure gets the queues for pairs that have been enqueued for the amount of time without
-	 * being set to running and then gets the nodes from that queue that haven't been running jobs in that time.
+	 * Gets nodes that may have had pairs enqueued longer than the given amount of
+	 * time without setting them to
+	 * "running". The SQL procedure gets the queues for pairs that have been
+	 * enqueued for the amount of time without
+	 * being set to running and then gets the nodes from that queue that haven't
+	 * been running jobs in that time.
 	 *
-	 * @param minutes the time that nodes must have been idle for to qualify as broken.
+	 * @param minutes the time that nodes must have been idle for to qualify as
+	 *                broken.
 	 * @return the ids of the identified nodes.
 	 * @throws SQLException if there is a database error.
 	 */
@@ -1722,7 +1797,7 @@ public class JobPairs {
 	public static boolean setPairStatus(int pairId, int statusCode, Connection con) {
 		PreparedStatement ps = null;
 		try {
-			ps = con.prepareStatement("SELECT starexec.UpdatePairStatus(?, ?)");
+			ps = con.prepareStatement("CALL starexec.UpdatePairStatus(?, ?)");
 			ps.setInt(1, pairId);
 			ps.setShort(2, (short) statusCode);
 
@@ -1740,9 +1815,9 @@ public class JobPairs {
 	/**
 	 * Updates the status code for a given stage of a specific pair.
 	 *
-	 * @param pairId the id of the pair to update the status of
+	 * @param pairId      the id of the pair to update the status of
 	 * @param stageNumber The stage to update
-	 * @param statusCode the status code to set for the pair
+	 * @param statusCode  the status code to set for the pair
 	 * @return True if the operation was a success, false otherwise
 	 */
 	public static boolean setPairStatus(int pairId, int stageNumber, int statusCode) {
@@ -1761,11 +1836,13 @@ public class JobPairs {
 	}
 
 	/**
-	 * Updates the status_code for a pair. If the pair is being set to enqueued, also sets the pair's queue_sub_time
+	 * Updates the status_code for a pair. If the pair is being set to enqueued,
+	 * also sets the pair's queue_sub_time
 	 * . If
-	 * the pair is being set to a completed status, the pair's completion entry is updated.
+	 * the pair is being set to a completed status, the pair's completion entry is
+	 * updated.
 	 *
-	 * @param pairId the id of the pair to update the status of
+	 * @param pairId     the id of the pair to update the status of
 	 * @param statusCode the status code to set for the pair
 	 * @return True if the operation was a success, false otherwise
 	 */
@@ -1785,10 +1862,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Reads all data for a specific queue from the jobpair_time_delta table and then clears the data from that queue
+	 * Reads all data for a specific queue from the jobpair_time_delta table and
+	 * then clears the data from that queue
 	 * all inside a single transaction.
 	 *
-	 * @param queueID The ID of the queue to get data for. If this is -1, gets and clears all data
+	 * @param queueID The ID of the queue to get data for. If this is -1, gets and
+	 *                clears all data
 	 * @return A HashMap mapping userIds to their time delta values.
 	 */
 
@@ -1857,11 +1936,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Updates the database to give the job pair with the given ID the given job space.
+	 * Updates the database to give the job pair with the given ID the given job
+	 * space.
 	 *
-	 * @param jobPairId The ID of the job pair in question
+	 * @param jobPairId  The ID of the job pair in question
 	 * @param jobSpaceId The job space ID of the pair
-	 * @param con The open connection to perform the update on
+	 * @param con        The open connection to perform the update on
 	 * @throws Exception
 	 * @author Eric Burns
 	 */
@@ -1881,10 +1961,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Calls buildJobSpaceIdtoJobPairMapForJob, and then rounds all cpu and wallclock times before returning results
+	 * Calls buildJobSpaceIdtoJobPairMapForJob, and then rounds all cpu and
+	 * wallclock times before returning results
 	 *
 	 * @param job
-	 * @return Identical to buildJobSpaceIdtoJobPairMapForJob, but with rounded times
+	 * @return Identical to buildJobSpaceIdtoJobPairMapForJob, but with rounded
+	 *         times
 	 */
 	public static Map<Integer, List<JobPair>> buildJobSpaceIdToJobPairMapWithWallCpuTimesRounded(Job job) {
 		Map<Integer, List<JobPair>> outputMap = buildJobSpaceIdToJobPairMapForJob(job);
@@ -1893,8 +1975,7 @@ public class JobPairs {
 	}
 
 	private static void roundWallclockAndCpuTimesInJobSpaceIdToJobPairMap(
-			Map<Integer, List<JobPair>> jobSpaceIdToJobPairMap
-	) {
+			Map<Integer, List<JobPair>> jobSpaceIdToJobPairMap) {
 		for (Integer jobSpaceId : jobSpaceIdToJobPairMap.keySet()) {
 			List<JobPair> jobPairs = jobSpaceIdToJobPairMap.get(jobSpaceId);
 			for (JobPair jp : jobPairs) {
@@ -1905,7 +1986,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Builds a mapping of job space IDs to JobPairs in that JobSpace given the JobSpaces and JobPairs
+	 * Builds a mapping of job space IDs to JobPairs in that JobSpace given the
+	 * JobSpaces and JobPairs
 	 *
 	 * @param job The job to work on
 	 * @return The mapping of job space IDs to in that job space
@@ -1933,11 +2015,12 @@ public class JobPairs {
 	}
 
 	/**
-	 * Given a list of JobPair objects that have their jobSpaceIds set, updates the database to reflect these new job
+	 * Given a list of JobPair objects that have their jobSpaceIds set, updates the
+	 * database to reflect these new job
 	 * space ids
 	 *
 	 * @param jobPairs The pairs to update
-	 * @param con An open connection to make calls on
+	 * @param con      An open connection to make calls on
 	 * @author Eric Burns
 	 */
 
@@ -1969,9 +2052,10 @@ public class JobPairs {
 	}
 
 	/**
-	 * Updates the status of the given job pair, replacing its current status code with the given one
+	 * Updates the status of the given job pair, replacing its current status code
+	 * with the given one
 	 *
-	 * @param jobPairId The ID of the job pair in question
+	 * @param jobPairId   The ID of the job pair in question
 	 * @param status_code The new status code to assign to the job pair
 	 */
 	public static void UpdateStatus(int jobPairId, int status_code) {
@@ -1992,8 +2076,10 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets all job pairs in the database that have the given status code. This should really only be called for rare
-	 * codes like 2-5, as otherwise it may read a very large number of pairs and be very slow.
+	 * Gets all job pairs in the database that have the given status code. This
+	 * should really only be called for rare
+	 * codes like 2-5, as otherwise it may read a very large number of pairs and be
+	 * very slow.
 	 *
 	 * @param statusCode
 	 * @return A list of all pairs with the given status code
@@ -2026,8 +2112,10 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets all job pairs in the database that have the given status code. This should really only be called for rare
-	 * codes like 2-5, as otherwise it may read a very large number of pairs and be very slow.
+	 * Gets all job pairs in the database that have the given status code. This
+	 * should really only be called for rare
+	 * codes like 2-5, as otherwise it may read a very large number of pairs and be
+	 * very slow.
 	 *
 	 * @param statusCode
 	 * @return A list of all pairs with the given status code
@@ -2063,10 +2151,13 @@ public class JobPairs {
 	}
 
 	/**
-	 * Sets the status code for a given pair and all of its stages to ERROR_SUBMIT_FAIL if and only if the pair's
+	 * Sets the status code for a given pair and all of its stages to
+	 * ERROR_SUBMIT_FAIL if and only if the pair's
 	 * status
-	 * code in the database matches the status code set in the given pair. This check is done to prevent a race
-	 * condition in which a pair that is actually not stuck (hence its status code has changed since the pair was read)
+	 * code in the database matches the status code set in the given pair. This
+	 * check is done to prevent a race
+	 * condition in which a pair that is actually not stuck (hence its status code
+	 * has changed since the pair was read)
 	 * but is still set to the error status code.
 	 *
 	 * @param p The JobPair to affect. Must have ID and status code set
@@ -2090,7 +2181,8 @@ public class JobPairs {
 	}
 
 	/**
-	 * Gets all job pairs are currently under the jurisdiction of the backend. These are the pairs with status codes
+	 * Gets all job pairs are currently under the jurisdiction of the backend. These
+	 * are the pairs with status codes
 	 * 2-5.
 	 *
 	 * @return The list of job pairs. Stages will not be populated
