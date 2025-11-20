@@ -766,7 +766,11 @@ public abstract class JobManager {
 			}
 		}
 
-		File outputFile = new File(JobPairs.getPairStdout(pair));
+		String stdoutPath = JobPairs.getPairStdout(pair);
+		if (stdoutPath == null) {
+			throw new StarExecException("JobPairs.getPairStdout returned null for pair " + pair.getId());
+		}
+		File outputFile = new File(stdoutPath);
 
 		// if there is exactly 1 stage, we use the old output format
 		if (stageNumbers.size() == 1) {
@@ -1155,6 +1159,9 @@ public abstract class JobManager {
 		List<JobPair> pairs = new ArrayList<>();
 		// Get the benchmarks and solvers from this space
 		List<Benchmark> benchmarks = Benchmarks.getBySpace(spaceId);
+		if (benchmarks == null) {
+			return null;
+		}
 		// log.debug("found this many benchmarks in the space = "+benchmarks.size());
 		List<Solver> solvers = Solvers.getBySpace(spaceId);
 		for (Solver s : solvers) {
