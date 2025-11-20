@@ -380,7 +380,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetBenchmarkById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarkById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT, types_id INT, types_community INT, types_name VARCHAR, types_description TEXT, types_path TEXT, types_disk_size BIGINT, types_processor_type INT, types_time_limit INT, types_syntax_id INT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, types_id INT, types_name VARCHAR, types_description TEXT, types_community INT, types_path TEXT, types_disk_size BIGINT, types_processor_type INT, types_time_limit INT, types_syntax_id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
@@ -2418,11 +2418,6 @@ RETURNS VOID AS $$
 BEGIN
 	DELETE FROM starexec.job_stats
 	WHERE job_stats.job_space_id = _jobSpaceId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job stats for job space %s not found', _jobSpaceId);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2433,11 +2428,6 @@ BEGIN
 	DELETE FROM starexec.job_stats
 	WHERE job_stats.job_space_id = _jobSpaceId
 		AND job_stats.config_id = _configId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job stats for job space %s and config %s not found', _jobSpaceId, _configId);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
