@@ -94,9 +94,9 @@ RUN mvn clean package -DskipTests -B -V && \
 FROM docker.io/library/eclipse-temurin:17-jre-alpine
 
 LABEL maintainer="StarExec Team" \
-      org.opencontainers.image.title="StarExec" \
-      org.opencontainers.image.description="Logic solver evaluation platform" \
-      org.opencontainers.image.vendor="StarExec"
+    org.opencontainers.image.title="StarExec" \
+    org.opencontainers.image.description="Logic solver evaluation platform" \
+    org.opencontainers.image.vendor="StarExec"
 
 # Install runtime dependencies
 # - bash: Required for job execution scripts
@@ -110,6 +110,9 @@ LABEL maintainer="StarExec Team" \
 # - postgresql-client: PostgreSQL client for database connectivity
 # - procps: Provides ps command with -p option for process monitoring
 # - sudo: Required by job execution scripts to switch to sandbox users
+# - libstdc++: C++ standard library (required by runsolver)
+# - libgcc: GCC runtime library (required by runsolver)
+# - gcompat: glibc compatibility layer for musl (required by solver binaries compiled against glibc)
 RUN apk add --no-cache \
     bash \
     curl \
@@ -121,7 +124,10 @@ RUN apk add --no-cache \
     util-linux \
     postgresql-client \
     procps \
-    sudo && \
+    sudo \
+    libstdc++ \
+    libgcc \
+    gcompat && \
     rm -rf /var/cache/apk/*
 
 # Verify critical tools for job execution
@@ -161,10 +167,10 @@ RUN cd /tmp && \
     rm tomcat.tar.gz && \
     # Remove default webapps for security
     rm -rf ${CATALINA_HOME}/webapps/examples \
-           ${CATALINA_HOME}/webapps/docs \
-           ${CATALINA_HOME}/webapps/ROOT \
-           ${CATALINA_HOME}/webapps/manager \
-           ${CATALINA_HOME}/webapps/host-manager && \
+    ${CATALINA_HOME}/webapps/docs \
+    ${CATALINA_HOME}/webapps/ROOT \
+    ${CATALINA_HOME}/webapps/manager \
+    ${CATALINA_HOME}/webapps/host-manager && \
     # Create necessary directories
     mkdir -p ${STAREXEC_DATA_DIR} ${STAREXEC_LOG_DIR} && \
     mkdir -p /app/backend /app/work /app/data /app/sandbox && \
@@ -174,7 +180,7 @@ RUN cd /tmp && \
     # symlink to the webapp at /starexec later during WAR expansion.
     # Set permissions
     chown -R starexec:starexec ${CATALINA_HOME} ${STAREXEC_DATA_DIR} ${STAREXEC_LOG_DIR} \
-                               /app/backend /app/work /app/data /app/sandbox
+    /app/backend /app/work /app/data /app/sandbox
 
 # Copy runsolver binary from builder stage
 COPY --from=runsolver-builder /tmp/runsolver-output/runsolver /usr/local/bin/runsolver
