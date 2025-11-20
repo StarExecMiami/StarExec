@@ -23,13 +23,13 @@ $$ LANGUAGE plpgsql;
 --   create a record and set its count to `1`
 -- otherwise
 --   increment the count of the existing record
-DROP FUNCTION IF EXISTS starexec.RecordEvent(INT, DATE, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.RecordEvent(
+DROP ROUTINE IF EXISTS starexec.RecordEvent(INT, DATE, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.RecordEvent(
 		_event_id INT,
 		_date_recorded DATE,
 		_count INT
 	)
-RETURNS VOID AS $$
+AS $$
 	BEGIN
 		INSERT INTO analytics_historical (event_id, date_recorded, count)
 			VALUES (_event_id, _date_recorded, _count)
@@ -45,13 +45,13 @@ $$ LANGUAGE plpgsql;
 --   a particular day
 -- If we have already recorded this user/event/day, we can just ignore the
 -- DUPLICATE KEY warning
-DROP FUNCTION IF EXISTS starexec.RecordEventUser(INT, DATE, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.RecordEventUser(
+DROP ROUTINE IF EXISTS starexec.RecordEventUser(INT, DATE, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.RecordEventUser(
 		_event_id INT,
 		_date_recorded DATE,
 		_user_id INT
 	)
-RETURNS VOID AS $$
+AS $$
 	BEGIN
 		INSERT INTO analytics_users (event_id, date_recorded, user_id)
 			VALUES (_event_id, _date_recorded, _user_id)
@@ -215,11 +215,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP FUNCTION IF EXISTS starexec.AddAndAssociateBenchmark(VARCHAR, TEXT, BOOLEAN, INT, INT, BIGINT, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddAndAssociateBenchmark(_name VARCHAR(256), _path TEXT, _downloadable BOOLEAN, _userId INT, _typeId INT, _diskSize BIGINT, _spaceId INT)
-RETURNS INT AS $$
-DECLARE
-	_benchId INT;
+DROP ROUTINE IF EXISTS starexec.AddAndAssociateBenchmark(VARCHAR, TEXT, BOOLEAN, INT, INT, BIGINT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.AddAndAssociateBenchmark(_name VARCHAR(256), _path TEXT, _downloadable BOOLEAN, _userId INT, _typeId INT, _diskSize BIGINT, _spaceId INT, INOUT _benchId INT DEFAULT NULL)
+AS $$
 BEGIN
 	UPDATE users SET disk_size = disk_size + _diskSize WHERE id = _userId;
     IF NOT FOUND THEN
@@ -233,8 +231,6 @@ BEGIN
 
 	INSERT INTO bench_assoc (space_id, bench_id) VALUES (_spaceId, _benchId)
 	ON CONFLICT DO NOTHING;
-
-	RETURN _benchId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -384,7 +380,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetBenchmarkById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarkById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
+RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT, types_id INT, types_community INT, types_name VARCHAR, types_description TEXT, types_path TEXT, types_disk_size BIGINT, types_processor_type INT, types_time_limit INT, types_syntax_id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
@@ -428,7 +424,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, type_id INT, type_name VARCHAR, type_description TEXT) AS $$
+RETURNS TABLE(bench_id INT, bench_user_id INT, bench_name VARCHAR, bench_bench_type INT, bench_uploaded TIMESTAMP, bench_path TEXT, bench_downloadable BOOLEAN, bench_disk_size BIGINT, bench_description TEXT, bench_deleted BOOLEAN, bench_recycled BOOLEAN, types_id INT, types_name VARCHAR, types_description TEXT, types_community INT, types_path TEXT, types_disk_size BIGINT, types_processor_type SMALLINT, types_time_limit SMALLINT, types_syntax_id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
@@ -535,8 +531,8 @@ BEGIN
         p.description AS types_description,
         p.path AS types_path,
         p.disk_size AS types_disk_size,
-        p.processor_type::INT AS types_processor_type,
-        p.time_limit::INT AS types_time_limit,
+        p.processor_type AS types_processor_type,
+        p.time_limit AS types_time_limit,
         p.syntax_id AS types_syntax_id
     FROM starexec.bench_assoc ba
     JOIN benchmarks b ON b.id = ba.bench_id
@@ -788,9 +784,9 @@ $$ LANGUAGE plpgsql;
 
 -- Permanently removes a benchmark from the database
 -- Author: Eric Burns
-DROP FUNCTION IF EXISTS starexec.RemoveBenchmarkFromDatabase(INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.RemoveBenchmarkFromDatabase(_id INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.RemoveBenchmarkFromDatabase(INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.RemoveBenchmarkFromDatabase(_id INT)
+AS $$
 BEGIN
 	DELETE FROM starexec.benchmarks WHERE id = _id;
     IF NOT FOUND THEN
@@ -1452,9 +1448,9 @@ $$ LANGUAGE plpgsql;
 
 -- Updates a job pair's statistics directly from the execution node
 -- Author: Benton McCune
-DROP FUNCTION IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT)
+AS $$
 DECLARE
     _nodeId INT;
     _jobId INT;
@@ -1520,9 +1516,9 @@ $$ LANGUAGE plpgsql;
 
 -- Updates a job pairs node Id
 -- Author: Wyatt
-DROP FUNCTION IF EXISTS starexec.UpdateNodeId(INT, VARCHAR, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdateNodeId(_jobPairId INT, _nodeName VARCHAR(128), _sandbox INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.UpdateNodeId(INT, VARCHAR, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdateNodeId(_jobPairId INT, _nodeName VARCHAR(128), _sandbox INT)
+AS $$
 DECLARE
 	_nodeId INT;
 BEGIN
@@ -1645,9 +1641,10 @@ $$ LANGUAGE plpgsql;
 
 -- Updates a job pair's status
 -- Author: Tyler Jensen
-DROP FUNCTION IF EXISTS starexec.UpdatePairStatus(INT, SMALLINT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdatePairStatus(_jobPairId INT, _statusCode SMALLINT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatus(INT, SMALLINT) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatus(INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatus(_jobPairId INT, _statusCode INT)
+AS $$
 DECLARE
 	_job_id INT;
 	_count INT;
@@ -1692,9 +1689,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Sets the status code for the given stage of the given pair
-DROP FUNCTION IF EXISTS starexec.UpdatePairStageStatus(INT, INT, SMALLINT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatus(_jobPairId INT, _stageNumber INT, _statusCode SMALLINT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatus(INT, INT, SMALLINT) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatus(INT, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdatePairStageStatus(_jobPairId INT, _stageNumber INT, _statusCode INT)
+AS $$
 BEGIN
 	UPDATE jobpair_stage_data SET status_code=_statusCode WHERE jobpair_id=_jobPairId AND stage_number=_stageNumber;
     IF NOT FOUND THEN
@@ -1707,9 +1705,10 @@ $$ LANGUAGE plpgsql;
 
 -- Sets the status code of every stage occurring after the given stage to the given status code.
 -- We do this, for example, when an early stage times out and so later stages are never run
-DROP FUNCTION IF EXISTS starexec.UpdateLaterStageStatuses(INT, INT, SMALLINT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdateLaterStageStatuses(_jobPairId INT, _stageNumber INT, _statusCode SMALLINT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.UpdateLaterStageStatuses(INT, INT, SMALLINT) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdateLaterStageStatuses(INT, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdateLaterStageStatuses(_jobPairId INT, _stageNumber INT, _statusCode INT)
+AS $$
 BEGIN
 	UPDATE jobpair_stage_data SET status_code=_statusCode WHERE jobpair_id=_jobPairId AND stage_number>_stageNumber;
 END;
@@ -1717,9 +1716,9 @@ $$ LANGUAGE plpgsql;
 
 -- Sets all run stats to 0 for stages that come after the given stage. This is used for
 -- pipelines where an early stage fails, causing later stages to not run
-DROP FUNCTION IF EXISTS starexec.SetRunStatsForLaterStagesToZero(INT, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetRunStatsForLaterStagesToZero(_jobPairId INT, _stageNumber INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.SetRunStatsForLaterStagesToZero(INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.SetRunStatsForLaterStagesToZero(_jobPairId INT, _stageNumber INT)
+AS $$
 BEGIN
 	UPDATE jobpair_stage_data
 	SET wallclock = 0,
@@ -1738,10 +1737,10 @@ CREATE OR REPLACE FUNCTION starexec.GetJobPairStagesById(_id INT)
 RETURNS TABLE(jobpair_id INT, stage_id INT, stage_number INT, solver_id INT, solver_name VARCHAR, config_id INT, config_name VARCHAR, status_code SMALLINT, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, job_space_id INT, pipeline_stage_id INT, stage_name VARCHAR, stage_type VARCHAR, exit_code INT) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT jobpair_stage_data.jobpair_id, jobpair_stage_data.stage_id, jobpair_stage_data.stage_number, jobpair_stage_data.solver_id, jobpair_stage_data.solver_name, jobpair_stage_data.config_id, jobpair_stage_data.config_name, jobpair_stage_data.status_code, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, jobpair_stage_data.job_space_id, pipeline_stages.pipeline_id, pipeline_stages.name, pipeline_stages.type, pipeline_stages.exit_code
+	SELECT jobpair_stage_data.jobpair_id, jobpair_stage_data.stage_id, jobpair_stage_data.stage_number, jobpair_stage_data.solver_id, jobpair_stage_data.solver_name, jobpair_stage_data.config_id, jobpair_stage_data.config_name, jobpair_stage_data.status_code, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, jobpair_stage_data.job_space_id, pipeline_stages.pipeline_id, NULL::VARCHAR AS stage_name, NULL::VARCHAR AS stage_type, NULL::INT AS exit_code
 	FROM starexec.jobpair_stage_data
 	LEFT JOIN pipeline_stages ON pipeline_stages.stage_id=jobpair_stage_data.stage_id
-	WHERE jobpair_id=_id
+	WHERE jobpair_stage_data.jobpair_id=_id
 	ORDER BY jobpair_stage_data.stage_id ASC;
 END;
 $$ LANGUAGE plpgsql;
@@ -1837,9 +1836,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Sets the queue submission time to now (the moment this is called) for the pair with the given id
-DROP FUNCTION IF EXISTS starexec.SetPairStartTime(INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetPairStartTime(_id INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.SetPairStartTime(INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.SetPairStartTime(_id INT)
+AS $$
 BEGIN
 	UPDATE job_pairs SET start_time=NOW() WHERE id=_id;
     IF NOT FOUND THEN
@@ -1932,9 +1931,9 @@ $$ LANGUAGE plpgsql;
 
 -- Sets the completion time to now (the moment this is called) for the pair with the given id
 -- Also sets the time_delta for the pair in the jobpair_time_delta table.
-DROP FUNCTION IF EXISTS starexec.SetPairEndTime(INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetPairEndTime(_id INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.SetPairEndTime(INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.SetPairEndTime(_id INT)
+AS $$
 DECLARE
 	_user_id INT;
 	_queue_id INT;
@@ -2223,9 +2222,9 @@ $$ LANGUAGE plpgsql;
 
 -- Adds a new attribute to a job pair for the given stage
 -- Author: Tyler Jensen
-DROP FUNCTION IF EXISTS starexec.AddJobAttr(INT, VARCHAR, VARCHAR, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddJobAttr(_pairId INT, _key VARCHAR(128), _val VARCHAR(128), _stage INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.AddJobAttr(INT, VARCHAR, VARCHAR, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.AddJobAttr(_pairId INT, _key VARCHAR(128), _val VARCHAR(128), _stage INT)
+AS $$
 BEGIN
 	INSERT INTO job_attributes (pair_id, attr_key, attr_value, job_id, stage_number)
 	VALUES (_pairId, _key, _val, (SELECT job_id FROM starexec.job_pairs WHERE id=_pairId), _stage)
@@ -2875,7 +2874,31 @@ RETURNS TABLE(
     job_space_id_stage INT,
     disk_size BIGINT,
     dependency_count BIGINT,
-    user_id INT
+    user_id INT,
+    benchmarks_id INT,
+    benchmarks_user_id INT,
+    benchmarks_name VARCHAR(256),
+    benchmarks_uploaded TIMESTAMP,
+    benchmarks_path TEXT,
+    benchmarks_description TEXT,
+    benchmarks_downloadable BOOLEAN,
+    benchmarks_disk_size BIGINT,
+    benchmarks_recycled BOOLEAN,
+    benchmarks_deleted BOOLEAN,
+    "solvers.id" INT,
+    "solvers.name" VARCHAR(255),
+    "solvers.description" TEXT,
+    "solvers.disk_size" BIGINT,
+    "solvers.path" TEXT,
+    "solvers.downloadable" BOOLEAN,
+    "solvers.uploaded" TIMESTAMP,
+    "solvers.user_id" INT,
+    "solvers.recycled" BOOLEAN,
+    "solvers.deleted" BOOLEAN,
+    executable_type INT,
+    recycled BOOLEAN,
+    deleted BOOLEAN,
+    build_status INT
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -2885,7 +2908,31 @@ BEGIN
         jsd.stage_number, jsd.jobpair_id, jsd.stage_id, jsd.cpu, jsd.wallclock, jsd.max_vmem, jsd.max_res_set, 
         jsd.user_time, jsd.system_time, jsd.status_code, jsd.solver_name, jsd.config_name, jsd.solver_id, jsd.config_id, jsd.job_space_id, jsd.disk_size,
         (SELECT count(*)::BIGINT FROM starexec.bench_dependency WHERE primary_bench_id = b.id) AS dependency_count,
-        b.user_id
+        b.user_id,
+        b.id AS benchmarks_id,
+        b.user_id AS benchmarks_user_id,
+        b.name AS benchmarks_name,
+        b.uploaded AS benchmarks_uploaded,
+        b.path AS benchmarks_path,
+        b.description AS benchmarks_description,
+        b.downloadable AS benchmarks_downloadable,
+        b.disk_size AS benchmarks_disk_size,
+        b.recycled AS benchmarks_recycled,
+        b.deleted AS benchmarks_deleted,
+        s.id AS "solvers.id",
+        s.name AS "solvers.name",
+        s.description AS "solvers.description",
+        s.disk_size AS "solvers.disk_size",
+        s.path AS "solvers.path",
+        s.downloadable AS "solvers.downloadable",
+        s.uploaded AS "solvers.uploaded",
+        s.user_id AS "solvers.user_id",
+        s.recycled AS "solvers.recycled",
+        s.deleted AS "solvers.deleted",
+        s.executable_type,
+        s.recycled,
+        s.deleted,
+        s.build_status
     FROM starexec.job_pairs jp
     JOIN jobpair_stage_data jsd ON jsd.jobpair_id = jp.id
     LEFT JOIN benchmarks b ON b.id = jp.bench_id
@@ -3521,6 +3568,7 @@ RETURNS TABLE(
     queue_id INT,
     primary_space INT,
     created TIMESTAMP,
+    completed TIMESTAMP,
     seed BIGINT,
     cpuTimeout INT,
     clockTimeout INT,
@@ -3534,11 +3582,13 @@ RETURNS TABLE(
     soft_time_limit INT,
     kill_delay INT,
     disk_size BIGINT,
-    benchmarking_framework VARCHAR(32)
+    benchmarking_framework VARCHAR(32),
+    is_high_priority BOOLEAN,
+    output_benchmarks_directory_path TEXT
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework
+    SELECT j.id, j.user_id, j.name, j.description, j.queue_id, j.primary_space, j.created, j.completed, j.seed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.paused, j.killed, j.suppress_timestamp, j.using_dependencies, j.buildJob, j.total_pairs, j.soft_time_limit, j.kill_delay, j.disk_size, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
     FROM starexec.jobs j WHERE j.deleted = true;
 END;
 $$ LANGUAGE plpgsql;
@@ -5221,9 +5271,9 @@ $$ LANGUAGE plpgsql;
 
 -- Adds to the value of an event's occurrences not related to a queue.
 -- Author: Albert Giegerich
-DROP FUNCTION IF EXISTS starexec.AddToEventOccurrencesNotRelatedToQueue CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddToEventOccurrencesNotRelatedToQueue(_eventName VARCHAR(64), _eventOccurrences INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.AddToEventOccurrencesNotRelatedToQueue(VARCHAR, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.AddToEventOccurrencesNotRelatedToQueue(_eventName VARCHAR(64), _eventOccurrences INT)
+AS $$
 BEGIN
     UPDATE report_data
     SET occurrences = occurrences + _eventOccurrences
@@ -5258,9 +5308,9 @@ $$ LANGUAGE plpgsql;
 
 -- Add to the value of an event's occurrences for a specific queue related to a specific job pair.
 -- Author: Albert Giegerich
-DROP FUNCTION IF EXISTS starexec.AddToEventOccurrencesForJobPairsQueue CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddToEventOccurrencesForJobPairsQueue(_eventName VARCHAR(64), _eventOccurrences INT, _pairId INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.AddToEventOccurrencesForJobPairsQueue(VARCHAR, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.AddToEventOccurrencesForJobPairsQueue(_eventName VARCHAR(64), _eventOccurrences INT, _pairId INT)
+AS $$
 DECLARE
     _queueId INT;
     _queueName VARCHAR(128);
@@ -5651,9 +5701,9 @@ $$ LANGUAGE plpgsql;
 
 -- Description: This file contains all Runscript Error procedures
 
-DROP FUNCTION IF EXISTS starexec.RunscriptError CASCADE;
-CREATE OR REPLACE FUNCTION starexec.RunscriptError(node VARCHAR(32), jobPairId INT, stage INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.RunscriptError(VARCHAR, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.RunscriptError(node VARCHAR(32), jobPairId INT, stage INT)
+AS $$
 DECLARE
     _node_id INT;
 BEGIN
@@ -5664,8 +5714,8 @@ BEGIN
     INSERT INTO runscript_errors (node_id, job_pair_id)
     VALUES (_node_id, jobPairId);
 
-    PERFORM UpdatePairStatus(jobPairId, 11);
-    PERFORM UpdateLaterStageStatuses(jobPairId, stage, 11);
+    CALL UpdatePairStatus(jobPairId, 11);
+    CALL UpdateLaterStageStatuses(jobPairId, stage, 11);
     PERFORM SetRunStatsForLaterStagesToZero(jobPairId, stage);
 END;
 $$ LANGUAGE plpgsql;
@@ -6796,9 +6846,9 @@ $$ LANGUAGE plpgsql;
 
 -- Sets the build_status status code of the solver
 -- Author: Andrew Lubinus
-DROP FUNCTION IF EXISTS starexec.SetSolverBuildStatus CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetSolverBuildStatus(_solverId INT, _build_status INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.SetSolverBuildStatus(INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.SetSolverBuildStatus(_solverId INT, _build_status INT)
+AS $$
 BEGIN
     UPDATE solvers
     SET build_status = _build_status
@@ -6813,9 +6863,9 @@ $$ LANGUAGE plpgsql;
 
 -- Updates path to solver
 -- Author: Andrew Lubinus
-DROP FUNCTION IF EXISTS starexec.SetSolverPath CASCADE;
-CREATE OR REPLACE FUNCTION starexec.SetSolverPath(_solverId INT, _path TEXT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.SetSolverPath(INT, TEXT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.SetSolverPath(_solverId INT, _path TEXT)
+AS $$
 BEGIN
     UPDATE solvers
     SET path = _path
@@ -6829,9 +6879,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- This deletes the dummy config from a solver built on Starexec
-DROP FUNCTION IF EXISTS starexec.DeleteBuildConfig CASCADE;
-CREATE OR REPLACE FUNCTION starexec.DeleteBuildConfig(_solverId INT)
-RETURNS VOID AS $$
+DROP ROUTINE IF EXISTS starexec.DeleteBuildConfig(INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.DeleteBuildConfig(_solverId INT)
+AS $$
 BEGIN
     DELETE FROM starexec.configurations -- dummy configs are deleted but not other configs
     WHERE solver_id = _solverId AND name = 'starexec_build';
