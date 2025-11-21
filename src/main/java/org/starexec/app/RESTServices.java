@@ -5296,9 +5296,30 @@ public class RESTServices {
 			return gson.toJson(ERROR_INVALID_PERMISSIONS);
 		}
 		log.debug("restarting...");
-		Util.executeCommand("sudo -u tomcat /sbin/service tomcat7 restart");
+		boolean restartSuccess = restartTomcatService();
 		log.debug("restarted");
-		return gson.toJson(new ValidatorStatusCode(true, "Starexec restarted successfully"));
+		return gson.toJson(restartSuccess ? new ValidatorStatusCode(true, "Starexec restarted successfully")
+				: new ValidatorStatusCode(false, "Failed to restart Starexec"));
+	}
+
+	private boolean restartTomcatService() {
+		ProcessBuilder command = new ProcessBuilder("sudo", "-u", "tomcat", "/sbin/service", "tomcat7", "restart");
+		command.redirectErrorStream(true);
+		try {
+			Process process = command.start();
+			int exitCode = process.waitFor();
+			if (exitCode != 0) {
+				log.error("restartStarExec: Tomcat restart exited with code " + exitCode);
+				return false;
+			}
+			return true;
+		} catch (java.io.IOException | InterruptedException e) {
+			if (e instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
+			}
+			log.error("restartStarExec", e);
+			return false;
+		}
 	}
 
 	/**
