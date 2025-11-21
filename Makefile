@@ -171,7 +171,7 @@ volumes-backup: verify-deps
 
 volumes-restore: verify-deps
 	@echo "Restore requires timestamp. Available backups:"
-	@ls -1 backups/$(VOLUME_PREFIX)-$(ENV)-full-*.tar.gz 2>/dev/null | sed 's/.*full-//' | sed 's/-.*//' | sort -u || echo "(none)"
+	@ls -1 backups/$(VOLUME_PREFIX)-$(ENV)-full-*.tar.gz 2>/dev/null | sed 's/.*full-//' | sed 's/-data.tar.gz//' | sed 's/-postgres.tar.gz//' | sort -u || echo "(none)"
 	@ts=$${RESTORE_TIMESTAMP:-}; \
 	if [ -z "$$ts" ]; then \
 		read -p "Enter timestamp (YYYYMMDD-HHMMSS): " ts; \

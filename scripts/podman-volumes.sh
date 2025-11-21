@@ -240,7 +240,7 @@ restore_all() {
     if [ -z "$timestamp" ]; then
         log_error "Usage: $0 restore-all <env> <timestamp>"
         log_info "Available backups:"
-        ls -1 "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-"*.tar.gz 2>/dev/null | sed 's/.*full-/  /' | sed 's/-.*//' | sort -u || echo "  (none)"
+        ls -1 "${BACKUP_DIR}/${VOLUME_PREFIX}-${env}-full-"*.tar.gz 2>/dev/null | sed 's/.*full-/  /' | sed 's/-data.tar.gz//' | sed 's/-postgres.tar.gz//' | sort -u || echo "  (none)"
         exit 1
     fi
     
