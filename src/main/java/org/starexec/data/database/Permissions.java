@@ -21,9 +21,10 @@ public class Permissions {
 	private static final StarLogger log = StarLogger.getLogger(Permissions.class);
 
 	/**
-	 * Adds a new permission record to the database. This is an internal helper method.
+	 * Adds a new permission record to the database. This is an internal helper
+	 * method.
 	 *
-	 * @param p The permission to add
+	 * @param p   The permission to add
 	 * @param con The connection to add the permission with
 	 * @return The ID of the inserted record
 	 * @throws Exception
@@ -58,12 +59,13 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the benchmark in some way. More specifically, this checks if the user
+	 * Checks to see if the user has access to the benchmark in some way. More
+	 * specifically, this checks if the user
 	 * belongs to any space the benchmark belongs to.
 	 *
 	 * @param benchId The benchmark to check if the user can see
-	 * @param userId The user that is requesting to view the given benchmark
-	 * @param con The open connection to make the query on
+	 * @param userId  The user that is requesting to view the given benchmark
+	 * @param con     The open connection to make the query on
 	 * @return True if the user can somehow see the benchmark, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -107,11 +109,12 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the benchmark in some way. More specifically, this checks if the user
+	 * Checks to see if the user has access to the benchmark in some way. More
+	 * specifically, this checks if the user
 	 * belongs to any space the benchmark belongs to.
 	 *
 	 * @param benchId The benchmark to check if the user can see
-	 * @param userId The user that is requesting to view the given benchmark	 *
+	 * @param userId  The user that is requesting to view the given benchmark *
 	 * @return True if the user can somehow see the benchmark, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -130,11 +133,12 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the benchmarks in some way. More specifically, this checks if the user
+	 * Checks to see if the user has access to the benchmarks in some way. More
+	 * specifically, this checks if the user
 	 * belongs to all spaces the benchmarks belong to.
 	 *
 	 * @param benchIds The benchmarks to check if the user can see
-	 * @param userId The user that is requesting to view the given benchmarks
+	 * @param userId   The user that is requesting to view the given benchmarks
 	 * @return True if the user can somehow see all benchmarks, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -145,7 +149,7 @@ public class Permissions {
 		}
 		try {
 			con = Common.getConnection();
-			//check the permissions for every benchmark
+			// check the permissions for every benchmark
 			for (int id : benchIds) {
 				if (!canUserSeeBench(con, id, userId)) {
 					return false;
@@ -162,10 +166,11 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the job in some way. More specifically, this checks if the user belongs
+	 * Checks to see if the user has access to the job in some way. More
+	 * specifically, this checks if the user belongs
 	 * to any space the job belongs to.
 	 *
-	 * @param jobId The job to check if the user can see
+	 * @param jobId  The job to check if the user can see
 	 * @param userId The user that is requesting to view the given job
 	 * @return True if the user can somehow see the job, false otherwise
 	 * @author Tyler Jensen
@@ -183,9 +188,16 @@ public class Permissions {
 			Job j = Jobs.get(jobId);
 			// job does not exist or has been deleted.
 			if (j == null) {
-				final String message = "Job does not exist or has been deleted.";
-				log.debug(methodName, "User can't see job: " + message);
-				return new ValidatorStatusCode(false, message);
+				if (GeneralSecurity.hasAdminReadPrivileges(userId)) {
+					final String message = "Job does not exist or has been deleted.";
+					log.debug(methodName, "User can't see job: " + message);
+					return new ValidatorStatusCode(false, message);
+				} else {
+					// Return the same message as access denied to prevent enumeration
+					final String failureMessage = "You do not have permission to view this job.";
+					log.debug(methodName, "User can't see job (not found): " + failureMessage);
+					return new ValidatorStatusCode(false, failureMessage);
+				}
 			}
 			if (Jobs.isPublic(jobId)) {
 				log.debug(methodName, "User can see job: Job is public.");
@@ -196,7 +208,8 @@ public class Permissions {
 				return new ValidatorStatusCode(true);
 			}
 
-			//if there was no special case, check to see if the user shares a space with the job or owns the job
+			// if there was no special case, check to see if the user shares a space with
+			// the job or owns the job
 			con = Common.getConnection();
 			ps = con.prepareStatement("SELECT * FROM starexec.CanViewJob(?, ?)");
 			ps.setInt(1, jobId);
@@ -229,12 +242,13 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the solver in some way. More specifically, this checks if the user
+	 * Checks to see if the user has access to the solver in some way. More
+	 * specifically, this checks if the user
 	 * belongs to any space the solver belongs to.
 	 *
 	 * @param solverId The solver to check if the user can see
-	 * @param userId The user that is requesting to view the given solver
-	 * @param con The open connection to query on
+	 * @param userId   The user that is requesting to view the given solver
+	 * @param con      The open connection to query on
 	 * @return True if the user can somehow see the solver, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -275,11 +289,12 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the solver in some way. More specifically, this checks if the user
+	 * Checks to see if the user has access to the solver in some way. More
+	 * specifically, this checks if the user
 	 * belongs to any space the solver belongs to.
 	 *
 	 * @param solverId The solver to check if the user can see
-	 * @param userId The user that is requesting to view the given solver
+	 * @param userId   The user that is requesting to view the given solver
 	 * @return True if the user can somehow see the solver, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -298,12 +313,13 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user has access to the given solvers in some way. More specifically, this checks if the
+	 * Checks to see if the user has access to the given solvers in some way. More
+	 * specifically, this checks if the
 	 * user
 	 * belongs to all the spaces the solvers belong to.
 	 *
 	 * @param solverIds The solvers to check if the user can see
-	 * @param userId The user that is requesting to view the given solvers
+	 * @param userId    The user that is requesting to view the given solvers
 	 * @return True if the user can somehow see the solvers, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -314,7 +330,7 @@ public class Permissions {
 		}
 		try {
 			con = Common.getConnection();
-			//do the check for every solver
+			// do the check for every solver
 			for (int id : solverIds) {
 				if (!canUserSeeSolver(con, id, userId)) {
 					return false;
@@ -331,12 +347,14 @@ public class Permissions {
 	}
 
 	/**
-	 * Checks to see if the user belongs to the given space. Note that this is to check whether a user can see the
-	 * details of a space, not to check whether they can see the space in the explorer tree due to being a member of a
+	 * Checks to see if the user belongs to the given space. Note that this is to
+	 * check whether a user can see the
+	 * details of a space, not to check whether they can see the space in the
+	 * explorer tree due to being a member of a
 	 * subspace.
 	 *
 	 * @param spaceId The space to check if the user can see
-	 * @param userId The user that is requesting to view the given space
+	 * @param userId  The user that is requesting to view the given space
 	 * @return True if the user belongs to the space, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -378,24 +396,25 @@ public class Permissions {
 	/**
 	 * Retrieves the user's maximum set of permissions in a space.
 	 *
-	 * @param userId The user to get permissions for
+	 * @param userId  The user to get permissions for
 	 * @param spaceId The id of the space to get the user's permissions on
-	 * @return A permission object containing the user's permission on the space. Null if the user is not apart of the
-	 * space.
+	 * @return A permission object containing the user's permission on the space.
+	 *         Null if the user is not apart of the
+	 *         space.
 	 * @author Tyler Jensen
 	 */
 	public static Permission get(int userId, int spaceId) {
 		log.debug("getting permissions for user id = " + userId + " and space id  = " + spaceId);
-	Connection con = null;
-	PreparedStatement ps = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
 
 		Space s = Spaces.get(spaceId);
 		if (s == null) {
-			return null; //the space does not even exist
+			return null; // the space does not even exist
 		}
 
-		//the admin has full permissions everywhere
+		// the admin has full permissions everywhere
 		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
 			log.debug("permissions for an admin were obtained userId = " + userId);
 			return Permissions.getFullPermission();
@@ -418,9 +437,11 @@ public class Permissions {
 			if (results.next()) {
 				Permission p = resultsToPermissionWithId(userId, results);
 				if (results.wasNull()) {
-					/* If the permission doesn't exist we always get a result
-					but all of it's values are null, so here we check for a
-					null result and return null */
+					/*
+					 * If the permission doesn't exist we always get a result
+					 * but all of it's values are null, so here we check for a
+					 * null result and return null
+					 */
 
 					if (GeneralSecurity.hasAdminReadPrivileges(userId)) {
 						Permission empty = Permissions.getEmptyPermission();
@@ -445,16 +466,18 @@ public class Permissions {
 	}
 
 	/**
-	 * Returns a permissions object with every permission set to true. The ID is not set
+	 * Returns a permissions object with every permission set to true. The ID is not
+	 * set
 	 *
 	 * @return Permissions object
 	 * @author Eric Burns
 	 */
 
-	 /*
-	  * Adds all permisions and makes the user a leader
-	  * @docs aguo2
-	  */
+	/*
+	 * Adds all permisions and makes the user a leader
+	 * 
+	 * @docs aguo2
+	 */
 	public static Permission getFullPermission() {
 		Permission p = new Permission();
 		p.setAddBenchmark(true);
@@ -472,7 +495,8 @@ public class Permissions {
 	}
 
 	/**
-	 * Returns a permissions object with every permission set to false. The ID is not set
+	 * Returns a permissions object with every permission set to false. The ID is
+	 * not set
 	 *
 	 * @return Permissions object
 	 * @author Eric Burns
@@ -495,10 +519,12 @@ public class Permissions {
 	}
 
 	/**
-	 * Retrieves the default permissions applied to a user when they are added to a space
+	 * Retrieves the default permissions applied to a user when they are added to a
+	 * space
 	 *
 	 * @param spaceId The id of the space to get the default user's permission
-	 * @return A permission object containing the default user permission on the space.
+	 * @return A permission object containing the default user permission on the
+	 *         space.
 	 * @author Tyler Jensen
 	 */
 	public static Permission getSpaceDefault(int spaceId) {
@@ -545,7 +571,7 @@ public class Permissions {
 	/**
 	 * Sets the permissions of a given user in a given space
 	 *
-	 * @param userId the id of the user to set the permissions of
+	 * @param userId  the id of the user to set the permissions of
 	 * @param spaceId the id of the space where the permissions will effect
 	 * @param newPerm the new set of permissions to set
 	 * @return true iff the permissions were successfully set, false otherwise
@@ -570,16 +596,16 @@ public class Permissions {
 	/**
 	 * Sets the permissions of a given user in a given space
 	 *
-	 * @param userId the id of the user to set the permissions of
+	 * @param userId  the id of the user to set the permissions of
 	 * @param spaceId the id of the space where the permissions will effect
 	 * @param newPerm the new set of permissions to set
-	 * @param con The open connection to make the call on
+	 * @param con     The open connection to make the call on
 	 * @return true iff the permissions were successfully set, false otherwise
 	 * @throws Exception
 	 * @author Todd Elvers
 	 */
 	protected static boolean set(int userId, int spaceId, Permission newPerm, Connection con) {
-	PreparedStatement ps = null;
+		PreparedStatement ps = null;
 		int permissionId = add(newPerm, con);
 
 		try {
@@ -607,12 +633,13 @@ public class Permissions {
 	}
 
 	/**
-	 * Updates the permission with the given id. Since this will be one step in a multi-step process, we use
+	 * Updates the permission with the given id. Since this will be one step in a
+	 * multi-step process, we use
 	 * transactions.
 	 *
 	 * @param permId the id of the permission to change
-	 * @param perm a Permission object containing the new permissions
-	 * @param con The open connection to make the call on
+	 * @param perm   a Permission object containing the new permissions
+	 * @param con    The open connection to make the call on
 	 * @throws Exception
 	 * @author Skylar Stark
 	 */
