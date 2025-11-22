@@ -1231,12 +1231,22 @@ public class RESTServices {
 				int id = c.getId();
 
 				JsonObject Comm = new JsonObject();
-				Comm.addProperty("users", R.COMM_INFO_MAP.get(id).get("users").toString());
-				Comm.addProperty("solvers", R.COMM_INFO_MAP.get(id).get("solvers").toString());
-				Comm.addProperty("benchmarks", R.COMM_INFO_MAP.get(id).get("benchmarks").toString());
-				Comm.addProperty("jobs", R.COMM_INFO_MAP.get(id).get("jobs").toString());
-				Comm.addProperty("job_pairs", R.COMM_INFO_MAP.get(id).get("job_pairs").toString());
-				Comm.addProperty("disk_usage", Util.byteCountToDisplaySize(R.COMM_INFO_MAP.get(id).get("disk_usage")));
+				if (R.COMM_INFO_MAP.get(id) == null) {
+					Comm.addProperty("users", "0");
+					Comm.addProperty("solvers", "0");
+					Comm.addProperty("benchmarks", "0");
+					Comm.addProperty("jobs", "0");
+					Comm.addProperty("job_pairs", "0");
+					Comm.addProperty("disk_usage", "0");
+				} else {
+					Comm.addProperty("users", R.COMM_INFO_MAP.get(id).get("users").toString());
+					Comm.addProperty("solvers", R.COMM_INFO_MAP.get(id).get("solvers").toString());
+					Comm.addProperty("benchmarks", R.COMM_INFO_MAP.get(id).get("benchmarks").toString());
+					Comm.addProperty("jobs", R.COMM_INFO_MAP.get(id).get("jobs").toString());
+					Comm.addProperty("job_pairs", R.COMM_INFO_MAP.get(id).get("job_pairs").toString());
+					Comm.addProperty("disk_usage",
+							Util.byteCountToDisplaySize(R.COMM_INFO_MAP.get(id).get("disk_usage")));
+				}
 
 				info.add(name, Comm);
 			}

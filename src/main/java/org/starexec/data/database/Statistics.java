@@ -295,6 +295,10 @@ public class Statistics {
 		for (Space c : communities) {
 			id = c.getId();
 			name = c.getName();
+			if (communityInfo.get(id) == null) {
+				log.warn("No community info found for community id: " + id);
+				continue;
+			}
 			data = communityInfo.get(id).get(type);
 			commMap.put(name, data);
 

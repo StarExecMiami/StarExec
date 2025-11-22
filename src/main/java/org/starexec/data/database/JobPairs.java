@@ -1258,7 +1258,9 @@ public class JobPairs {
 				jp.getPrimarySolver().setId(results.getInt("solver_id"));
 				jp.getPrimarySolver().setName(results.getString("solver_name"));
 				jp.getPrimarySolver().getConfigurations().get(0).setName(results.getString("config_name"));
-				jp.getStages().get(0).setConfiguration(jp.getPrimarySolver().getConfigurations().get(0));
+				if (!jp.getStages().isEmpty() && !jp.getPrimarySolver().getConfigurations().isEmpty()) {
+					jp.getStages().get(0).setConfiguration(jp.getPrimarySolver().getConfigurations().get(0));
+				}
 				return jp;
 			} else {
 				log.warn("getPair", "Pair not found: " + pairId);
