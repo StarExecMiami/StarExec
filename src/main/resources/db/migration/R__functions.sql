@@ -6,13 +6,13 @@
 -- GetCompletePairs
 DROP FUNCTION IF EXISTS starexec.getcompletepairs(integer);
 CREATE OR REPLACE FUNCTION starexec.getcompletepairs(_jobid integer)
-RETURNS integer
+RETURNS bigint
 LANGUAGE plpgsql
 STABLE
 SECURITY INVOKER
 AS $$
 DECLARE
-	completepairs integer;
+	completepairs bigint;
 BEGIN
 	SELECT COUNT(*) INTO completepairs
 	FROM job_pairs
@@ -25,13 +25,13 @@ $$;
 -- GetErrorPairs
 DROP FUNCTION IF EXISTS starexec.geterrorpairs(integer);
 CREATE OR REPLACE FUNCTION starexec.geterrorpairs(_jobid integer)
-RETURNS integer
+RETURNS bigint
 LANGUAGE plpgsql
 STABLE
 SECURITY INVOKER
 AS $$
 DECLARE
-	errorpairs integer;
+	errorpairs bigint;
 BEGIN
 	SELECT COUNT(*) INTO errorpairs
 	FROM job_pairs
@@ -80,13 +80,13 @@ $$;
 -- GetPendingPairs
 DROP FUNCTION IF EXISTS starexec.getpendingpairs(integer);
 CREATE OR REPLACE FUNCTION starexec.getpendingpairs(_jobid integer)
-RETURNS integer
+RETURNS bigint
 LANGUAGE plpgsql
 STABLE
 SECURITY INVOKER
 AS $$
 DECLARE
-	pendingpairs integer;
+	pendingpairs bigint;
 BEGIN
 	SELECT COUNT(*) INTO pendingpairs
 	FROM job_pairs

@@ -1089,7 +1089,7 @@ BEGIN
 		j.deleted,
 		j.primary_space,
 		GetJobStatus(j.id) AS status,
-		j.total_pairs AS totalPairs,
+		CAST(j.total_pairs AS BIGINT) AS totalPairs,
 		GetCompletePairs(j.id) AS completePairs,
 		GetPendingPairs(j.id) AS pendingPairs,
 		GetErrorPairs(j.id) AS errorPairs
@@ -3328,8 +3328,29 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT j.*,
-        j.total_pairs AS totalPairs,
+    SELECT j.id,
+        j.user_id,
+        j.name,
+        j.description,
+        j.queue_id,
+        j.primary_space,
+        j.created,
+        j.seed,
+        j.cpuTimeout,
+        j.clockTimeout,
+        j.maximum_memory,
+        j.paused,
+        j.killed,
+        j.suppress_timestamp,
+        j.using_dependencies,
+        j.buildJob,
+        j.total_pairs,
+        j.soft_time_limit,
+        j.kill_delay,
+        j.disk_size,
+        j.deleted,
+        j.benchmarking_framework,
+        CAST(j.total_pairs AS BIGINT) AS totalPairs,
         GetCompletePairs(j.id) AS completePairs,
         GetPendingPairs(j.id) AS pendingPairs,
         GetErrorPairs(j.id) AS errorPairs
@@ -3724,8 +3745,29 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT j.*,
-        j.total_pairs AS totalPairs,
+    SELECT j.id,
+        j.user_id,
+        j.name,
+        j.description,
+        j.queue_id,
+        j.primary_space,
+        j.created,
+        j.seed,
+        j.cpuTimeout,
+        j.clockTimeout,
+        j.maximum_memory,
+        j.paused,
+        j.killed,
+        j.suppress_timestamp,
+        j.using_dependencies,
+        j.buildJob,
+        j.total_pairs,
+        j.soft_time_limit,
+        j.kill_delay,
+        j.disk_size,
+        j.deleted,
+        j.benchmarking_framework,
+        CAST(j.total_pairs AS BIGINT) AS totalPairs,
         GetCompletePairs(j.id) AS completePairs,
         GetPendingPairs(j.id) AS pendingPairs,
         GetErrorPairs(j.id) AS errorPairs
@@ -9097,9 +9139,9 @@ $$ LANGUAGE plpgsql;
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetCompletePairs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetCompletePairs(_jobId INT)
-RETURNS INT AS $$
+RETURNS BIGINT AS $$
 DECLARE
-    completePairs INT;
+    completePairs BIGINT;
 BEGIN
     SELECT COUNT(*) INTO completePairs
     FROM starexec.job_pairs
@@ -9113,9 +9155,9 @@ $$ LANGUAGE plpgsql;
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetErrorPairs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetErrorPairs(_jobId INT)
-RETURNS INT AS $$
+RETURNS BIGINT AS $$
 DECLARE
-    errorPairs INT;
+    errorPairs BIGINT;
 BEGIN
     SELECT COUNT(*) INTO errorPairs
     FROM starexec.job_pairs
@@ -9183,9 +9225,9 @@ $$ LANGUAGE plpgsql;
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetPendingPairs(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetPendingPairs(_jobId INT)
-RETURNS INT AS $$
+RETURNS BIGINT AS $$
 DECLARE
-    pendingPairs INT;
+    pendingPairs BIGINT;
 BEGIN
     SELECT COUNT(*) INTO pendingPairs
     FROM starexec.job_pairs
