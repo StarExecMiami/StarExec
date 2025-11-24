@@ -40,14 +40,14 @@ on a traditional Tomcat/Postgres stack.
 ## Features
 
 - Web UI for job submission, user and data management.
-- Multiple backend implementations: local, SGE, and OAR.
+- Multiple backend implementations: local, SGE, and Kubernetes.
 - Container-friendly deployment (Podman/Docker Compose).
 - Flyway-based database migrations and safe, layered configuration.
 
 <!-- Quick Start -->
 ## Quick Start with the Makefile
 
-When to use:  Linux systems where `podman` rootless mode is supported. Use this if you want reproducible container-based builds without a Docker daemon (see the Alternative Quick Start below).
+When to use:  Linux systems where `podman` rootless mode is supported. Use this for a prebuilt container that is run without a Docker daemon (see the Alternative Quick Start below).
 
 Estimated time: 10–30 minutes.
 
@@ -95,7 +95,11 @@ Steps:
    If you see permission issues with rootless networking, install,
    run `podman system migrate`. If the error persists, follow the troubleshooting section below.
 
-5. The web UI should be available at `http://localhost:7827/starexec` (see the `make start` output for the exact address). Open you browser and you will reach the StarExec login page. The default credentials are `admin`:`admin`. For information on using StarExec see `https://starexec.ccs.miami.edu/starexec/public/help.jsp`.
+5. The web UI should be available at `http://localhost:7827/starexec` (see the `make start` output
+for the exact address). 
+Open you browser and you will reach the StarExec login page.
+The default credentials are `admin`:`admin`.
+For information on using StarExec see [the StarExec  user manual](https://starexec.ccs.miami.edu/starexec/public/help.jsp).
 
 ---
 <!-- Alternative -->
