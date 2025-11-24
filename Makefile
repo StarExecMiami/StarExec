@@ -562,6 +562,7 @@ clean-hard:
 	else \
 		echo "FORCE=1 detected, skipping confirmation"; \
 	fi
+	$(call cleanup_deployment)
 	@echo "Checking for volumes in use..."
 	@VOLUMES="$(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres"; \
 	for vol in $$VOLUMES; do \
@@ -575,7 +576,6 @@ clean-hard:
 			fi; \
 		fi; \
 	done
-	$(call cleanup_deployment)
 	@echo "Removing StarExec volumes..."
 	@podman volume rm -f $(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null || true
 	@echo "Removing StarExec image..."
