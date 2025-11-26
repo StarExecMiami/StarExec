@@ -138,7 +138,7 @@ function fnRecycledPaginationHandler(sSource, aoData, fnCallback) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error populating table", 5000);
 	});
 }
@@ -169,7 +169,7 @@ function deleteAll(prim) {
 					starexecRoot + "services/deleterecycled/" + prim + "s",
 					postCallback,
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error', "Internal error deleting " + prim + "s",
 						5000);
 				});
@@ -197,7 +197,7 @@ function restoreAll(prim) {
 					starexecRoot + "services/restorerecycled/" + prim + "s",
 					postCallback,
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error', "Internal error restoring " + prim + "s",
 						5000);
 				});
@@ -230,7 +230,7 @@ function deleteSelected(prim) {
 					{selectedIds: getSelectedRows(table)},
 					postCallback,
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error', "Internal error deleting " + prim + "s",
 						5000);
 				});
@@ -263,7 +263,7 @@ function restoreSelected(prim) {
 					{selectedIds: getSelectedRows(table)},
 					postCallback,
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error', "Internal error restoring " + prim + "s",
 						5000);
 				});

@@ -118,8 +118,9 @@ function initButtonUI() {
 	});
 
 	$('#trashcan').button({
+		text: false,
 		icons: {
-			secondary: "ui-icon-trash"
+			primary: "ui-icon-trash"
 		}
 	});
 
@@ -396,7 +397,7 @@ function onSpaceDrop(event, ui) {
 								parseReturnCode(returnCode);
 							},
 							"json"
-						).error(function() {
+						).fail(function() {
 							showMessage('error',
 								"Internal error copying jobs",
 								5000);
@@ -522,7 +523,7 @@ function doSpaceCopyPost(ids, destSpace, copyHierarchy, destName) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error copying spaces", 5000);
 	});
 }
@@ -537,7 +538,7 @@ function doSpaceMovePost(ids, destSpace) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage("error", "Internal error moving spaces", 5000);
 	});
 }
@@ -550,7 +551,7 @@ function doUserCopyPost(ids, destSpace, copyToSubspaces, destName, ui) {
 			parseReturnCode(returnCode);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error copying users", 5000);
 	});
 }
@@ -582,7 +583,7 @@ function doBenchmarkCopyPost(ids, destSpace, spaceId, copy, destName) {
 			parseReturnCode(returnCode);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error copying benchmarks", 5000);
 	});
 }
@@ -610,7 +611,7 @@ function doSolverCopyPost(ids, destSpace, spaceId, hierarchy, copy) {
 			parseReturnCode(returnCode);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error copying solvers", 5000);
 	});
 }
@@ -728,7 +729,7 @@ function removeBenchmarks(selectedBenches, ownsAll) {
 								}
 							},
 							"json"
-						).error(function() {
+						).fail(function() {
 							showMessage('error',
 								"Internal error removing benchmarks",
 								5000);
@@ -757,7 +758,7 @@ function removeBenchmarks(selectedBenches, ownsAll) {
 								}
 							},
 							"json"
-						).error(function() {
+						).fail(function() {
 							showMessage('error',
 								"Internal error removing benchmarks",
 								5000);
@@ -795,7 +796,7 @@ function removeUsersFromSpace(selectedUsers) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error removing users", 5000);
 	});
 }
@@ -832,7 +833,7 @@ function removeUsers(selectedUsers) {
 								}
 							},
 							"json"
-						).error(function() {
+						).fail(function() {
 							showMessage('error', "Internal error removing users", 5000);
 						});
 					}
@@ -872,7 +873,7 @@ function removeSolversFromSpaceHierarchy(selectedSolvers) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error removing solvers", 5000);
 	});
 }
@@ -892,7 +893,7 @@ function removeSolversFromSpace(selectedSolvers) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error removing solvers", 5000);
 	});
 }
@@ -911,7 +912,7 @@ function moveSolversToRecycleBin(selectedSolvers) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error removing solvers", 5000);
 	});
 }
@@ -1007,7 +1008,7 @@ function removeJobs(selectedJobs, ownsAll) {
 								jobTable.fnProcessingIndicator(false);
 							},
 							"json"
-						).error(function() {
+						).fail(function() {
 							showMessage('error',
 								"Internal error removing jobs",
 								5000);
@@ -1043,7 +1044,7 @@ function removeJobs(selectedJobs, ownsAll) {
 								jobTable.fnProcessingIndicator(false);
 							},
 							"json"
-						).error(function() {
+						).fail(function() {
 							showMessage('error',
 								"Internal error removing jobs",
 								5000);
@@ -1109,7 +1110,7 @@ function makeRemoveSubspacesPost(selectedSubspaces, recyclePrims) {
 		{selectedIds: selectedSubspaces, recyclePrims: recyclePrims},
 		parseReturnCode,
 		"json"
-	).error(function() {
+	).fail(function() {
 		log('remove subspace error');
 	});
 }
@@ -1852,7 +1853,7 @@ function getTooltipConfig(type, message) {
 							}
 							return true;
 						}
-					).error(function() {
+					).fail(function() {
 						//showMessage('error',"Internal error getting user permissions",5000); bother the user for a tooltip problem?
 					});
 				},
@@ -1897,7 +1898,7 @@ function getTooltipConfig(type, message) {
 								tooltip.hide();
 								return true;
 							}
-						).error(function() {
+						).fail(function() {
 							//showMessage('error',"Internal error getting space details",5000);
 						});
 					}

@@ -49,7 +49,7 @@ $(document).ready(function() {
 
 function getSelectedSettingType() {
 
-	return $("#settingProfile option:selected").attr("type");
+	return $("#settingProfile option:selected").data("type");
 
 }
 

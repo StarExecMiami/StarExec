@@ -279,7 +279,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error populating table", 5000);
 	});
 }
@@ -353,7 +353,7 @@ function getDetails(id, type, parent_node) {
 		url,
 		populateAttributes,
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error getting node details", 5000);
 	});
 }

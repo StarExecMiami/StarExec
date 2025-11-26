@@ -299,7 +299,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error populating table", 5000);
 	});
 }
@@ -418,7 +418,7 @@ function recycleSelected(prim) {
 
 					},
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error', "Internal error trashing " + prim + "s",
 						5000);
 				});
@@ -457,7 +457,7 @@ function linkAllOrphaned() {
 
 					},
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error',
 						"Internal error linking primitives",
 						5000);
@@ -496,7 +496,7 @@ function recycleOrphaned(prim) {
 
 					},
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error', "Internal error trashing " + prim + "s",
 						5000);
 				});
@@ -534,7 +534,7 @@ function deleteSelectedJobs() {
 						}
 					},
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error',
 						"Internal error deleting job(s)",
 						5000);
@@ -572,7 +572,7 @@ function deleteOrphanedJobs() {
 						}
 					},
 					"json"
-				).error(function() {
+				).fail(function() {
 					showMessage('error',
 						"Internal error deleting job(s)",
 						5000);
@@ -681,7 +681,7 @@ function onSpaceDrop(event, ui) {
 							parseReturnCode(returnCode);
 						},
 						"json"
-					).error(function() {
+					).fail(function() {
 						showMessage('error',
 							"Internal error copying benchmarks",
 							5000);
@@ -713,7 +713,7 @@ function onSpaceDrop(event, ui) {
 							parseReturnCode(returnCode);
 						},
 						"json"
-					).error(function() {
+					).fail(function() {
 						showMessage('error',
 							"Internal error copying jobs",
 							5000);
@@ -747,7 +747,7 @@ function doSolverLinkPost(ids, destSpace, hierarchy) {
 			parseReturnCode(returnCode);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error copying solvers", 5000);
 	});
 }

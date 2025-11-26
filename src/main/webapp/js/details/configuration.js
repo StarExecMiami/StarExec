@@ -31,7 +31,7 @@ jQuery(function($) {
 							}
 						},
 						"json"
-					).error(function() {
+					).fail(function() {
 						showMessage('error',
 							"Internal error deleting configuration.",
 							5000);

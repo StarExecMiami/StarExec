@@ -119,7 +119,7 @@ function attachFormValidation() {
 
 				},
 				"json"
-			).error(function() {
+			).fail(function() {
 				// If there was an AJAX error, destroy the dialog
 				destroyDialog();
 				showMessage('error', "Error updating default " + primType, 5000);

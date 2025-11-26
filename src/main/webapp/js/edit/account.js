@@ -5,7 +5,7 @@ $(document).ready(function () {
   attachFormValidation();
   attachPasswordMonitor();
   attachWebsiteMonitor();
-  userId = $("#infoTable").attr("uid");
+  userId = $("#infoTable").data("user-id");
   log("Found userId: " + userId);
 });
 
@@ -79,7 +79,11 @@ function initUI() {
 
   // Setup "+ add new" & "- add new" animation
   $("#toggleWebsite").click(function () {
-    $("#new_website").slideToggle("fast");
+    var isExpanded = $(this).attr("aria-expanded") === "true";
+    $(this).attr("aria-expanded", !isExpanded);
+    $("#new_website").slideToggle("fast", function() {
+        $(this).attr("aria-hidden", isExpanded);
+    });
     togglePlusMinus(this);
   });
   $("#new_website").hide();
@@ -137,7 +141,7 @@ function initUI() {
         showMessage("success", "Profile settings updated successfully", 5000);
         location.reload();
       }
-    ).error(function (xhr, textStatus, errorThrown) {
+    ).fail(function (xhr, textStatus, errorThrown) {
       log("xhr: ");
       log(xhr);
       log("textStatus: ");
@@ -176,7 +180,7 @@ function initUI() {
               showMessage("success", "Profile created successfully", 5000);
               location.reload();
             }
-          ).error(function (xhr, textStatus, errorThrown) {
+          ).fail(function (xhr, textStatus, errorThrown) {
             log(xhr.statusText);
             log(textStatus);
             log(errorThrown);
@@ -332,7 +336,7 @@ function initUI() {
 }
 
 function getUserIdAssociatedWithPage() {
-  return $("#infoTable").attr("uid");
+  return $("#infoTable").data("user-id");
 }
 
 function sendDeleteUserRequest(userId) {
@@ -378,7 +382,7 @@ function fnPaginationHandler(sSource, aoData, fnCallback, prim) {
 function attachWebsiteMonitor() {
   // Handles deleting an existing website
   $("#websites").on("click", ".delWebsite", function () {
-    var id = $(this).attr("id");
+    var id = $(this).data("id");
     var parent = $(this).parent().parent();
     $("#dialog-confirm-delete-txt").text(
       "Are you sure you want to delete this website?"
@@ -401,7 +405,7 @@ function attachWebsiteMonitor() {
               }
             },
             "json"
-          ).error(function () {
+          ).fail(function () {
             showMessage("error", "Internal error updating user websites", 5000);
           });
         },
@@ -533,7 +537,9 @@ function editable(attribute) {
     var old = $(this).html();
     $(this)
       .after(
-        '<td><input type="text" value="' +
+        '<td><input type="text" id="edit-' +
+          attribute +
+          '-field" value="' +
           old +
           '" />&nbsp;<button id="save' +
           attribute +
@@ -576,10 +582,18 @@ function saveChanges(obj, save, attr, old) {
 
   if (true == save) {
     var newVal = $(obj).siblings("input:first").val();
+    if (newVal === undefined) {
+      showMessage("error", "Could not find input field", 5000);
+      return;
+    }
     var unmodifiedNewVal = newVal;
 
     // Fixes 'session expired' bug that would occur if user inputed the empty String
-    newVal = newVal == "" ? "-1" : newVal;
+    // Only apply -1 substitution for numeric fields, not text fields
+    var numericFields = ["diskquota", "pairquota", "pagesize"];
+    if (numericFields.indexOf(attr) !== -1 && newVal == "") {
+      newVal = "-1";
+    }
 
     if (attr === "diskquota") {
       // Convert input values like 1 KB to 1000
@@ -596,14 +610,14 @@ function saveChanges(obj, save, attr, old) {
 
           // Hide the input box and replace it with the table cell
           $(obj)
-            .parent()
+            .closest("td")
             .after('<td id="edit' + attr + '">' + newVal + "</td>")
             .remove();
           // Make the value editable again
           editable(attr);
         } else {
           $(obj)
-            .parent()
+            .closest("td")
             .after('<td id="edit' + attr + '">' + old + "</td>")
             .remove();
           // Make the value editable again
@@ -611,13 +625,13 @@ function saveChanges(obj, save, attr, old) {
         }
       },
       "json"
-    ).error(function () {
+    ).fail(function () {
       showMessage("error", "Internal error updating user information", 5000);
     });
   } else {
     // Hide the input box and replace it with the table cell
     $(obj)
-      .parent()
+      .closest("td")
       .after('<td id="edit' + attr + '">' + old + "</td>")
       .remove();
     // Make the value editable again

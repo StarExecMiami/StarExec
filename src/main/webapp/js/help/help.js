@@ -64,7 +64,7 @@ function getHTML(URL) {
 			setURL(URL);
 		}
 
-	}, "html").error(function() {
+	}, "html").fail(function() {
 		showMessage('error', "Internal error retrieving help page", 5000);
 	});
 }

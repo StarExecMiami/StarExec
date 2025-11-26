@@ -216,7 +216,7 @@ function attachWebsiteMonitor() {
 
 						},
 						"json"
-					).error(function() {
+					).fail(function() {
 						showMessage('error',
 							"Internal error updating websites",
 							5000);

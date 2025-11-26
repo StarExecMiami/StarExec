@@ -29,15 +29,86 @@ $(document).ready(function() {
 		showMessage(messageClass, messageText, 10000);
 	}
 
-	// Setup navigation submenus
-	$("#pageHeader nav ul li").hover(function() {
-		// When we hover over a menu item...
-		// Find their submenu and slide it down
-		$(this).find("ul.subnav").stop(true, true);
-		$(this).find("ul.subnav").slideDown('fast').show();
+	// Setup navigation submenus with accessibility support
+	var $navItems = $("#pageHeader nav > ul > li");
+	
+	// Mouse hover handling
+	$navItems.hover(function() {
+		var $submenu = $(this).find("ul.subnav");
+		var $trigger = $(this).find("> a[aria-haspopup]");
+		
+		$submenu.stop(true, true);
+		$submenu.slideDown('fast').show();
+		$trigger.attr('aria-expanded', 'true');
 	}, function() {
-		// When I'm hovered out of, slide up my submenu
-		$(this).find("ul.subnav").slideUp('fast');
+		var $submenu = $(this).find("ul.subnav");
+		var $trigger = $(this).find("> a[aria-haspopup]");
+		
+		$submenu.slideUp('fast');
+		$trigger.attr('aria-expanded', 'false');
+	});
+	
+	// Keyboard navigation support
+	$navItems.find("> a[aria-haspopup]").on('keydown', function(e) {
+		var $parent = $(this).parent();
+		var $submenu = $parent.find("ul.subnav");
+		
+		switch(e.key) {
+			case 'Enter':
+			case ' ':
+			case 'ArrowDown':
+				e.preventDefault();
+				$submenu.slideDown('fast').show();
+				$(this).attr('aria-expanded', 'true');
+				$submenu.find('a').first().focus();
+				break;
+			case 'Escape':
+				$submenu.slideUp('fast');
+				$(this).attr('aria-expanded', 'false');
+				break;
+		}
+	});
+	
+	// Submenu keyboard navigation
+	$navItems.find("ul.subnav a").on('keydown', function(e) {
+		var $items = $(this).closest('.subnav').find('a');
+		var index = $items.index(this);
+		var $parentTrigger = $(this).closest('li').parent().siblings('a[aria-haspopup]');
+		
+		switch(e.key) {
+			case 'ArrowDown':
+				e.preventDefault();
+				$items.eq((index + 1) % $items.length).focus();
+				break;
+			case 'ArrowUp':
+				e.preventDefault();
+				$items.eq((index - 1 + $items.length) % $items.length).focus();
+				break;
+			case 'Escape':
+				e.preventDefault();
+				$(this).closest('.subnav').slideUp('fast');
+				$parentTrigger.attr('aria-expanded', 'false').focus();
+				break;
+			case 'Tab':
+				if (!e.shiftKey && index === $items.length - 1) {
+					$(this).closest('.subnav').slideUp('fast');
+					$parentTrigger.attr('aria-expanded', 'false');
+				}
+				break;
+		}
+	});
+	
+	// Logout link handlers (moved from inline onclick)
+	// Header logout
+	$('#logoutLink').on('click', function(e) {
+		e.preventDefault();
+		logout();
+	});
+	
+	// Footer logout
+	$('#footerLogoutLink').on('click', function(e) {
+		e.preventDefault();
+		logout();
 	});
 
 	// Extend jquery functions here
@@ -292,7 +363,7 @@ function logout() {
 			window.location.href = starexecRoot + "secure/index.jsp";
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage(
 			"There was an error logging you out. Please try refreshing this page or restarting your browser");
 	});

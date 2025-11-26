@@ -17,7 +17,7 @@ $(document).ready(function() {
 			populateDetails(data);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error getting community details", 5000);
 	});
 
@@ -86,7 +86,7 @@ function removeUser(userid, id) {
 			parseReturnCode(returnCode);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error removing user", 5000);
 	});
 	setTimeout(function() {document.location.reload(true);}, 1000);
@@ -106,7 +106,7 @@ function promoteUser(userid, id) {
 
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error making user a leader", 5000);
 	});
 
@@ -122,7 +122,7 @@ function demoteUser(userId, id) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error demoting user from leader", 5000);
 	});
 }
@@ -155,7 +155,7 @@ function attachWebsiteMonitor() {
 							}
 						},
 						"json"
-					).error(function() {
+					).fail(function() {
 						showMessage('error',
 							"Internal error updating websites",
 							5000);
@@ -452,23 +452,23 @@ function editable(attribute) {
 
 		if (attribute == "desc") {
 			$(this)
-			.after('<td><textarea>' + old + '</textarea>&nbsp;<button id="save' + attribute + '">save</button>&nbsp;<button id="cancel' + attribute + '">cancel</button>&nbsp;</td>')
+			.after('<td class="edit-field-container"><textarea id="input_' + attribute + '" name="' + attribute + '">' + old + '</textarea><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
 			.remove();
 		} else if (attribute == "name") {
 			$(this)
-			.after('<td><input type="text" value="' + old + '" />&nbsp;<button id="save' + attribute + '">save</button>&nbsp;<button id="cancel' + attribute + '">cancel</button>&nbsp;</td>')
+			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
 			.remove();
 		} else if (attribute == "CpuTimeout") {
 			$(this)
-			.after('<td><input type="text" value="' + old + '" />&nbsp;<button id="save' + attribute + '">save</button>&nbsp;<button id="cancel' + attribute + '">cancel</button>&nbsp;</td>')
+			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
 			.remove();
 		} else if (attribute == "ClockTimeout") {
 			$(this)
-			.after('<td><input type="text" value="' + old + '" />&nbsp;<button id="save' + attribute + '">save</button>&nbsp;<button id="cancel' + attribute + '">cancel</button>&nbsp;</td>')
+			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
 			.remove();
 		} else if (attribute == "MaxMem") {
 			$(this)
-			.after('<td><input type="text" value="' + old + '" />&nbsp;<button id="save' + attribute + '">save</button>&nbsp;<button id="cancel' + attribute + '">cancel</button>&nbsp;</td>')
+			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
 			.remove();
 		}
 
@@ -489,8 +489,6 @@ function editable(attribute) {
 			}
 		});
 	});
-
-	$('#edit' + attribute).css('cursor', 'pointer');
 }
 
 function saveChanges(obj, save, attr, old) {
@@ -499,34 +497,44 @@ function saveChanges(obj, save, attr, old) {
 		//since the description is in a textarea, we need to case switch on it to pull
 		//from the correct object
 		if (attr == 'desc') {
-			newVal = $(obj).siblings('textarea:first').val();
-
-			if (newVal.length > $('#descRow').attr('length')) {
-				showMessage('error', $('#descRow')
-				.attr('length') + " characters maximum", 5000);
+			newVal = $('#input_' + attr).val();
+			if (newVal === undefined) {
+				showMessage('error', 'Could not find description field', 5000);
+				return;
+			}
+			var descMaxLen = $('#descRow').attr('length');
+			if (descMaxLen && newVal.length > parseInt(descMaxLen, 10)) {
+				showMessage('error', descMaxLen + " characters maximum", 5000);
 				return;
 			}
 		} else if (attr == 'name') {
-			newVal = $(obj).siblings('input:first').val();
-			if (newVal.length > $('#nameRow').attr('length')) {
-				showMessage('error', $('#nameRow')
-				.attr('length') + " characters maximum", 5000);
+			newVal = $('#input_' + attr).val();
+			if (newVal === undefined) {
+				showMessage('error', 'Could not find name field', 5000);
+				return;
+			}
+			var nameMaxLen = $('#nameRow').attr('length');
+			if (nameMaxLen && newVal.length > parseInt(nameMaxLen, 10)) {
+				showMessage('error', nameMaxLen + " characters maximum", 5000);
 				return;
 			}
 		} else if (attr == "PostProcess" || attr == "PreProcess" || attr == "BenchProcess" || attr == "UpdateProcess" || attr === EDIT_COMMUNITY.benchmarkingFrameworkAttr) {
 			newVal = obj;
 		} else if (attr == "CpuTimeout") {
-			newVal = $(obj).siblings('input:first').val();
+			newVal = $('#input_' + attr).val();
 		} else if (attr == "ClockTimeout") {
-			newVal = $(obj).siblings('input:first').val();
+			newVal = $('#input_' + attr).val();
 		} else if (attr == "DependenciesEnabled") {
 			newVal = obj;
-		} else if (attr = "MaxMem") {
-			newVal = $(obj).siblings('input:first').val();
+		} else if (attr == "MaxMem") {
+			newVal = $('#input_' + attr).val();
 		}
 
 		// Fixes 'session expired' bug that would occur if user inputed the empty String
-		newVal = (newVal == "") ? "-1" : newVal;
+		// Only apply -1 substitution for numeric/ID fields, not text fields like name/desc
+		if (attr != "name" && attr != "desc") {
+			newVal = (newVal == "") ? "-1" : newVal;
+		}
 
 		//these attributes are of the community itself
 		if (attr == "name" || attr == "desc") {
@@ -539,14 +547,14 @@ function saveChanges(obj, save, attr, old) {
 					if (s) {
 						// Hide the input box and replace it with the table cell
 						$(obj)
-						.parent()
+						.closest('td')
 						.after('<td id="edit' + attr + '">' + newVal + '</td>')
 						.remove();
 						// Make the value editable again
 						editable(attr);
 					} else {
 						$(obj)
-						.parent()
+						.closest('td')
 						.after('<td id="edit' + attr + '">' + old + '</td>')
 						.remove();
 						// Make the value editable again
@@ -554,11 +562,9 @@ function saveChanges(obj, save, attr, old) {
 					}
 				},
 				"json"
-			).error(function() {
-				showMessage('error', "Internal error updating field", 5000);
-			});
-
-			//every other attribute is of the DefaultSettings profile the community has
+			).fail(function() {
+				showMessage('error', "Internal error updating communities.", 5000);
+			});		//every other attribute is of the DefaultSettings profile the community has
 		} else {
 			log('making post to changing default settings for community');
 			$.post(
@@ -570,14 +576,14 @@ function saveChanges(obj, save, attr, old) {
 					if (s) {
 						// Hide the input box and replace it with the table cell
 						$(obj)
-						.parent()
+						.closest('td')
 						.after('<td id="edit' + attr + '">' + newVal + '</td>')
 						.remove();
 						// Make the value editable again
 						editable(attr);
 					} else {
 						$(obj)
-						.parent()
+						.closest('td')
 						.after('<td id="edit' + attr + '">' + old + '</td>')
 						.remove();
 						// Make the value editable again
@@ -585,7 +591,7 @@ function saveChanges(obj, save, attr, old) {
 					}
 				},
 				"json"
-			).error(function() {
+			).fail(function() {
 				showMessage('error', "Internal error updating field", 5000);
 			});
 		}
@@ -593,7 +599,7 @@ function saveChanges(obj, save, attr, old) {
 	} else {
 		// Hide the input box and replace it with the table cell
 		$(obj)
-		.parent()
+		.closest('td')
 		.after('<td id="edit' + attr + '">' + old + '</td>')
 		.remove();
 		// Make the value editable again

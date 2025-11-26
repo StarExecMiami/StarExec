@@ -173,7 +173,7 @@ function getCommunityDetails(id) {
 			populateDetails(data);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error getting community details", 5000);
 	});
 }
@@ -310,7 +310,7 @@ function leaveCommunity(id) {
 			}
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error leaving community", 5000);
 	});
 

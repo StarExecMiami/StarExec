@@ -213,7 +213,7 @@ function getSpaceDetails(id) {
 			populateSpaceDetails(data, id);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error', "Internal error getting space details", 5000);
 	});
 }
@@ -229,7 +229,7 @@ function getPermissionDetails(user_id, space_id) {
 			populatePermissionDetails(data, user_id);
 		},
 		"json"
-	).error(function() {
+	).fail(function() {
 		showMessage('error',
 			"Internal error getting selectd user's permission details",
 			5000);

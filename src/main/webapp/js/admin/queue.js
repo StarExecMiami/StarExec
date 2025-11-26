@@ -86,7 +86,7 @@ function InitUI() {
 
 			},
 			"json"
-		).error(function() {
+		).fail(function() {
 			showMessage('error',
 				"Internal error updating user information",
 				5000);

@@ -693,7 +693,7 @@ function checkPermissions(jsonData, id) {
 				}
 			},
 			"json"
-		).error(function() {
+		).fail(function() {
 			showMessage('error',
 				"Internal error getting determining whether space is public",
 				5000);

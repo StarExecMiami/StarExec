@@ -13,7 +13,7 @@ jQuery(function($) {
 				}
 			},
 			"json"
-		).error(function() {
+		).fail(function() {
 			showMessage("error", "Internal error populating data table", 5000);
 		});
 	};
