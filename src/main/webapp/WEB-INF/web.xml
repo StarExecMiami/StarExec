@@ -347,6 +347,22 @@
     </login-config>
 
     <!-- Constraints -->
+    <!-- Index page accessible to unauthorized/suspended users to show status -->
+    <security-constraint>
+        <web-resource-collection>
+            <web-resource-name>Index Page for All Authenticated Users</web-resource-name>
+            <url-pattern>/secure/index.jsp</url-pattern>
+        </web-resource-collection>
+        <auth-constraint>
+            <role-name>user</role-name>
+            <role-name>admin</role-name>
+            <role-name>developer</role-name>
+            <role-name>test</role-name>
+            <role-name>unauthorized</role-name>
+            <role-name>suspended</role-name>
+        </auth-constraint>
+    </security-constraint>
+
     <security-constraint>
         <web-resource-collection>
             <web-resource-name>Users Only</web-resource-name>

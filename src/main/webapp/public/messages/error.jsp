@@ -34,13 +34,17 @@
 
 <star:template title="It seems an error has occurred..."
                css="error">
-    <p><c:out value="(http ${pageContext.errorData.statusCode} - ${errorDesc})"/></p>
-    <br>
-	<p><c:out value="${requestScope['javax.servlet.error.message']}"/></p>
-	<br>
-	<div id="actions" class="starexecErrorPage">
-		<a href="#" onclick="history.go(-1);return false;">try again</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a
-			href="mailto:${contactEmail}?subject=[Starexec] Error Report">report
-		error</a>
-	</div>
+	<main role="main" class="error-container">
+		<section aria-labelledby="error-heading">
+			<h1 id="error-heading" class="error-title">It seems an error has occurred...</h1>
+			<div role="alert" class="error-details">
+				<p><c:out value="(http ${pageContext.errorData.statusCode} - ${errorDesc})"/></p>
+				<p><c:out value="${requestScope['javax.servlet.error.message']}"/></p>
+			</div>
+			<div id="actions" class="starexecErrorPage">
+				<a href="#" onclick="history.go(-1);return false;" class="btn btn-primary">try again</a>
+				<a href="mailto:${contactEmail}?subject=[Starexec] Error Report" class="btn btn-secondary">report error</a>
+			</div>
+		</section>
+	</main>
 </star:template>

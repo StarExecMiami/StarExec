@@ -10,7 +10,15 @@
 		return;
 	}
 %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <star:template title="email changed">
-	<p>You have successfully changed your email to ${email}</p>
-	<p>You must now use this e-mail when logging in to StarExec.</p>
+	<main role="main" class="message-container">
+		<section aria-labelledby="email-changed-heading">
+			<h1 id="email-changed-heading" class="sr-only">Email Changed Successfully</h1>
+			<div role="status" aria-live="polite">
+				<p>You have successfully changed your email to ${fn:escapeXml(email)}</p>
+				<p>You must now use this e-mail when logging in to StarExec.</p>
+			</div>
+		</section>
+	</main>
 </star:template>

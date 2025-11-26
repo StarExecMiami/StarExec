@@ -4,6 +4,7 @@
 <%@ page import="org.starexec.util.Util, java.util.List" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		int userId = SessionUtil.getUserId(request);
@@ -92,7 +93,7 @@
 	}
 %>
 
-<star:template title="edit ${com.name}"
+<star:template title="edit ${fn:escapeXml(com.name)}"
                js="common/defaultSettings, lib/jquery.dataTables.min, lib/jquery.validate.min, edit/community"
                css="common/table, edit/community">
 	<star:settings setting="${setting}"/>
@@ -111,11 +112,11 @@
 			<tbody>
 			<tr id="nameRow" length="${communityNameLen}">
 				<td>community name</td>
-				<td id="editname">${com.name}</td>
+				<td id="editname">${fn:escapeXml(com.name)}</td>
 			</tr>
 			<tr id="descRow" length="${communityDescLen}">
 				<td>description</td>
-				<td id="editdesc">${com.description}</td>
+				<td id="editdesc">${fn:escapeXml(com.description)}</td>
 			</tr>
 			</tbody>
 		</table>
@@ -165,7 +166,7 @@
 
 			<c:forEach var="site" items="${sites}">
 				<tr>
-					<td><a href="${site.url}" target="_blank">${site.name} <img
+					<td><a href="${fn:escapeXml(site.url)}" target="_blank" rel="noopener">${fn:escapeXml(site.name)} <img
 							class="extLink"
 							src="${starexecRoot}/images/external.png"/></a></td>
 					<td><a class="delWebsite" id="${site.id}">delete</a></td>

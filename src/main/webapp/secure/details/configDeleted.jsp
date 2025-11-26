@@ -33,32 +33,32 @@
     </div>
 
     <div id="starexecNavWrapper">
-        <nav>
-        <ul>
-            <li class="round">
-            <a href="#">Account</a>
-            <ul class="subnav round">
-                <li class="round"><a href="<c:url value='/secure/details/user.jsp?id=3'/>">Profile</a></li>
-                <li class="round"><a href="#" onclick="logout();">Logout</a></li>
+        <nav role="navigation" aria-label="Main navigation">
+        <ul role="menubar">
+            <li role="none">
+            <a href="#" role="menuitem" aria-haspopup="true" aria-expanded="false">Account</a>
+            <ul class="subnav" role="menu" aria-label="Account submenu">
+                <li role="none"><a role="menuitem" href="<c:url value='/secure/details/user.jsp?id=3'/>">Profile</a></li>
+                <li role="none"><a role="menuitem" href="#" id="logoutLink">Logout</a></li>
             </ul>
             </li>
 
-            <li class="round">
-            <a href="#">Spaces</a>
-            <ul class="subnav round">
-                <li class="round"><a href="<c:url value='/secure/explore/spaces.jsp'/>">Explore</a></li>
-                <li class="round"><a href="<c:url value='/secure/explore/communities.jsp'/>">Communities</a></li>
-                <li class="round"><a href="<c:url value='/secure/explore/statistics.jsp'/>">Statistics</a></li>
-                <li class="round"><a href="<c:url value='/secure/explore/reports.jsp'/>">Reports</a></li>
+            <li role="none">
+            <a href="#" role="menuitem" aria-haspopup="true" aria-expanded="false">Spaces</a>
+            <ul class="subnav" role="menu" aria-label="Spaces submenu">
+                <li role="none"><a role="menuitem" href="<c:url value='/secure/explore/spaces.jsp'/>">Explore</a></li>
+                <li role="none"><a role="menuitem" href="<c:url value='/secure/explore/communities.jsp'/>">Communities</a></li>
+                <li role="none"><a role="menuitem" href="<c:url value='/secure/explore/statistics.jsp'/>">Statistics</a></li>
+                <li role="none"><a role="menuitem" href="<c:url value='/secure/explore/reports.jsp'/>">Reports</a></li>
             </ul>
             </li>
-            <li class="round">
-            <a href="#">Cluster</a>
-            <ul class="subnav round">
-                <li class="round"><a href="<c:url value='/secure/explore/cluster.jsp'/>">Status</a></li>
+            <li role="none">
+            <a href="#" role="menuitem" aria-haspopup="true" aria-expanded="false">Cluster</a>
+            <ul class="subnav" role="menu" aria-label="Cluster submenu">
+                <li role="none"><a role="menuitem" href="<c:url value='/secure/explore/cluster.jsp'/>">Status</a></li>
             </ul>
             </li>
-            <li class="round" id="helpTab"><a id="helpTag" href="<c:url value='/secure/help.jsp'/>">Help</a></li>
+            <li role="none" id="helpTab"><a id="helpTag" role="menuitem" href="<c:url value='/secure/help.jsp'/>">Help</a></li>
         </ul>
         </nav>
     </div>
@@ -72,19 +72,21 @@
     <p>Although this configuration file was used in the job you were just viewing, since then it has been deleted and no longer exists.</p>
     </div>
 
-    <footer id="pageFooter">
+    <footer id="pageFooter" role="contentinfo">
+    <nav aria-label="Footer navigation">
     <ul>
-        <li><a target="_blank" href="<c:url value='/secure/details/user.jsp?id=3'/>">Test User</a></li>
-        <li>|</li>
-        <li><a onclick="logout();">Logout</a></li>
-        <li>|</li>
+        <li><a target="_blank" rel="noopener" href="<c:url value='/secure/details/user.jsp?id=3'/>">Test User</a></li>
+        <li aria-hidden="true">|</li>
+        <li><a href="#" id="footerLogoutLink">Logout</a></li>
+        <li aria-hidden="true">|</li>
         <li><a id="about" href="<c:url value='/public/about.jsp'/>">About</a></li>
-        <li>|</li>
+        <li aria-hidden="true">|</li>
         <li><a id="help" href="<c:url value='/public/help.jsp'/>">Support</a></li>
-        <li>|</li>
+        <li aria-hidden="true">|</li>
         <li><a id="starexeccommand" href="<c:url value='/public/starexeccommand.jsp'/>">StarExec Command</a></li>
     </ul>
-    <a class="copyright" href="http://www.cs.uiowa.edu" target="_blank">&copy;
+    </nav>
+    <a class="copyright" href="http://www.cs.uiowa.edu" target="_blank" rel="noopener">&copy;
         2012-18 The University of Iowa</a>
     </footer>
 

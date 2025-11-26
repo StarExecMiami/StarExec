@@ -20,42 +20,42 @@
                js="lib/jquery.validate.min, lib/jquery-ui.min, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, add/user">
 	<p class="registration">create a new user account</p>
 	<form method="POST" action="${starexecRoot}/public/registration/manager"
-	      id="regForm" class="add">
+	      id="regForm" class="add" autocomplete="off">
 		<fieldset>
 			<legend>user information</legend>
 			<table class="shaded">
 				<thead>
 				<tr>
-					<th>attribute</th>
-					<th>value</th>
+					<th scope="col">attribute</th>
+					<th scope="col">value</th>
 				</tr>
 				</thead>
 				<tbody>
 				<tr>
-					<td class="label">first name</td>
+					<td><label for="firstname">first name</label></td>
 					<td><input id="firstname" type="text" name="fn"
-					           maxlength="${firstNameLen}"/></td>
+					           maxlength="${firstNameLen}" autocomplete="given-name" required /></td>
 				</tr>
 				<tr>
-					<td class="label">last name</td>
+					<td><label for="lastname">last name</label></td>
 					<td><input id="lastname" type="text" name="ln"
-					           maxlength="${lastNameLen}"/></td>
+					           maxlength="${lastNameLen}" autocomplete="family-name" required /></td>
 				</tr>
 				<tr>
-					<td class="label">email</td>
-					<td><input id="email" type="text" name="em"
-					           maxlength="${emailLen}"/></td>
+					<td><label for="email">email</label></td>
+					<td><input id="email" type="email" name="em"
+					           maxlength="${emailLen}" autocomplete="email" required /></td>
 				</tr>
 				<tr>
-					<td class="label">institution</td>
+					<td><label for="institution">institution</label></td>
 					<td><input id="institution" type="text" name="inst"
-					           maxlength="${institutionLen}"/></td>
+					           maxlength="${institutionLen}" autocomplete="organization" required /></td>
 				</tr>
 				<tr>
-					<td class="label">password</td>
+					<td><label for="password">password</label></td>
 					<td>
 						<input id="password" type="password" name="pwd"
-						       length="${passwordLen}"/>
+						       maxlength="${passwordLen}" autocomplete="new-password" required />
 					</td>
 				</tr>
 				</tbody>
@@ -66,16 +66,16 @@
 			<table class="shaded">
 				<thead>
 				<tr>
-					<th>attribute</th>
-					<th id="value_header">value</th>
+					<th scope="col">attribute</th>
+					<th scope="col" id="value_header">value</th>
 				</tr>
 				</thead>
 				<tbody>
 				<tr>
-					<td class="label">community</td>
+					<td><label for="community">community</label></td>
 					<td>
-						<select id="community" name="cm" class="styled">
-							<option></option>
+						<select id="community" name="cm" class="styled" required>
+							<option value="">-- select community --</option>
 							<c:forEach var="com" items="${coms}">
 								<option value="${com.id}">${com.name}</option>
 							</c:forEach>
@@ -83,8 +83,8 @@
 					</td>
 				</tr>
 				<tr>
-					<td colspan="3">
-						<button type="submit" id="submit" value="Submit">
+					<td colspan="2">
+						<button type="submit" id="submit">
 							register
 						</button>
 					</td>
@@ -94,10 +94,10 @@
 		</fieldset>
 	</form>
 	<c:if test="${not empty param.result and param.result == 'regSuccess'}">
-		<div class='success message'>User was created successfully</div>
+		<div class="success message" role="alert">User was created successfully</div>
 	</c:if>
 	<c:if test="${not empty param.result and param.result == 'regFail'}">
-		<div class='error message'>User creation was unsuccessful -- please try
+		<div class="error message" role="alert">User creation was unsuccessful -- please try
 			again
 		</div>
 	</c:if>

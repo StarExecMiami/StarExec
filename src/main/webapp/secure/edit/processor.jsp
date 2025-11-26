@@ -3,6 +3,7 @@
         session="true" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
 	try {
 		// Grab relevant user id & processor info
@@ -62,7 +63,7 @@
 		return;
 	}
 %>
-<star:template title="edit ${proc.name}"
+<star:template title="edit ${fn:escapeXml(proc.name)}"
                css="details/shared, edit/processor, edit/shared, shared/copyToStardev"
                js="lib/jquery.validate.min, edit/processor, shared/copyToStardev">
 	<star:primitiveTypes/>
@@ -86,12 +87,12 @@
 					<td class="label">name</td>
 					<td><input id="name" type="text" name="name"
 					           maxlength="${processorNameLen}" pattern="${nameRegex}"
-					           value="${proc.name}"/></td>
+					           value="${fn:escapeXml(proc.name)}"/></td>
 				</tr>
 				<tr>
 					<td class="label">description</td>
 					<td><textarea id="description" name="description"
-					              length="${processorDescLen}">${proc.description}</textarea>
+					              length="${processorDescLen}">${fn:escapeXml(proc.description)}</textarea>
 					</td>
 				</tr>
 				<tr>

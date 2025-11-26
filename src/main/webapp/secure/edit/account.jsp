@@ -1,11 +1,13 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
-        import="org.starexec.data.database.*, org.starexec.data.security.GeneralSecurity,org.starexec.data.to.Benchmark, org.starexec.data.to.DefaultSettings, org.starexec.data.to.Processor,org.starexec.data.to.User, org.starexec.data.to.Website.WebsiteType, org.starexec.data.to.enums.ProcessorType, org.starexec.util.SessionUtil"
+        import="org.starexec.data.database.*, org.starexec.data.security.GeneralSecurity,org.starexec.data.to.Benchmark, org.starexec.data.to.DefaultSettings, org.starexec.data.to.Processor,org.starexec.data.to.User, org.starexec.data.to.Website.WebsiteType, org.starexec.data.to.enums.ProcessorType, org.starexec.util.SessionUtil, org.starexec.logger.StarLogger"
         session="true" %>
 <%@ page import="org.starexec.util.Util" %>
 <%@ page import="java.util.HashMap, java.util.List, java.util.Map" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%
+	final StarLogger log = StarLogger.getLogger(getClass());
 	try {
 		int userId = -1;
 		try {
@@ -16,7 +18,6 @@
 		}
 		User t_user = Users.get(userId);
 		int visiting_userId = SessionUtil.getUserId(request);
-
 
 		if (t_user != null) {
 			long disk_usage = Users.getDiskUsage(t_user.getId());
@@ -62,7 +63,7 @@
 			                                                     WebsiteType.USER
 			));
 			request.setAttribute("settings", listOfDefaultSettings);
-			
+
 			// Get current default profile for UI state management
 			Integer defaultProfileId = Settings.getDefaultProfileForUser(userId);
 			request.setAttribute("defaultProfileId", defaultProfileId);
@@ -91,368 +92,405 @@
 			request.setAttribute("user", t_user);
 		}
 	} catch (Exception e) {
-		response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+		String errorId = java.util.UUID.randomUUID().toString().substring(0, 8);
+		log.error("Error loading account data [errorId=" + errorId + "]", e);
+		response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+			"Unable to load account data. Reference ID: " + errorId);
 		return;
 	}
 %>
-<star:template title="edit account"
+<star:template title="Edit Account"
                css="common/table, common/pass_strength_meter, edit/account"
                js="common/defaultSettings,lib/jquery.validate.min, lib/jquery.validate.password, edit/account, lib/jquery.dataTables.min">
-	<c:forEach items="${settings}" var="setting">
-		<star:settings setting="${setting}"/>
-	</c:forEach>
+	<main role="main" class="account-edit">
+		<c:forEach items="${settings}" var="setting">
+			<star:settings setting="${setting}"/>
+		</c:forEach>
 
-
-	<div id="popDialog">
-		<img id="popImage" src=""/>
-	</div>
-	<p>review and edit your account details here.</p>
-	<fieldset>
-		<legend>personal information</legend>
-		<table id="infoTable" uid="${userId}">
-			<tr>
-				<td id="picSection">
-					<img id="showPicture"
-					     src="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uthn"
-					     enlarge="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uorg">
-					<ul>
-						<li><a class="btnUp" id="uploadPicture"
-						       href="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}">change</a>
-						</li>
-					</ul>
-				</td>
-				<td id="userDetail">
-					<table id="personal" class="shaded">
-						<thead>
-						<tr>
-							<th class="label">attribute</th>
-							<th>current value</th>
-						</tr>
-						</thead>
-						<tbody>
-						<tr>
-							<td>first name</td>
-							<td id="editfirstname">${user.firstName}</td>
-						</tr>
-						<tr>
-							<td>last name</td>
-							<td id="editlastname">${user.lastName}</td>
-						</tr>
-						<tr>
-							<td>institution</td>
-							<td id="editinstitution">${user.institution}</td>
-						</tr>
-						<tr>
-							<td>email</td>
-							<td id="editemail">${user.email}</td>
-						</tr>
-						</tbody>
-					</table>
-				</td>
-			</tr>
-		</table>
-		<h6>(click the current value of an attribute to edit it)</h6>
-	</fieldset>
-	<c:if test="${hasAdminReadPrivileges}">
-		<fieldset>
-			<legend>user quotas</legend>
-			<table id="diskUsageTable" class="shaded" uid="${userId}">
-				<thead>
-				<tr>
-					<th>attribute</th>
-					<th>value</th>
-				</tr>
-				</thead>
-				<tbody>
-				<tr>
-					<td>disk quota <h6>Format: [Integer] [Units(B, KB, MB,
-						GB)]</h6></td>
-					<td id="editdiskquota">${diskQuota}</td>
-				</tr>
-				<tr>
-					<td>current disk usage</td>
-					<td>${diskUsage}</td>
-				</tr>
-				<tr>
-					<td>job pair quota</td>
-					<td id="editpairquota">${pairQuota}</td>
-				</tr>
-				<tr>
-					<td>job pairs owned</td>
-					<td>${pairUsage}</td>
-				</tr>
-				</tbody>
-			</table>
-		</fieldset>
-	</c:if>
-	<fieldset>
-		<legend>site settings</legend>
-		<table id="siteSettingTable">
-			<thead>
-			<tr>
-				<th>setting</th>
-				<th>current value</th>
-			</tr>
-			</thead>
-			<tbody>
-			<tr>
-				<td>table entries per page</td>
-				<td type="int" id="editpagesize">${pagesize}</td>
-			</tr>
-
-
-			</tbody>
-
-		</table>
-
-	</fieldset>
-	<fieldset>
-		<legend>associated websites</legend>
-		<table id="websites" class="shaded">
-			<thead>
-			<tr>
-				<th>link</th>
-				<th>action</th>
-			</tr>
-			</thead>
-			<tbody>
-			<c:forEach items="${sites}" var="s">
-				<tr>
-					<td><a href="${s.url}">${s.name}<img class="extLink"
-					                                     src="${starexecRoot}/images/external.png"/></a>
-					</td>
-					<td><a class="delWebsite" id="${s.id}">delete</a></td>
-				</tr>
-			</c:forEach>
-			</tbody>
-		</table>
-
-		<span id="toggleWebsite" class="caption"><span>+</span> add new</span>
-		<div id="new_website">
-			name: <input type="text" id="website_name"/>
-			url: <input type="text" id="website_url"/>
-			<button id="addWebsite">add</button>
+		<div id="popDialog" role="dialog" aria-labelledby="popDialog-title" aria-hidden="true">
+			<img id="popImage" src="" alt="Profile picture"/>
 		</div>
-	</fieldset>
-	<fieldset>
-		<legend>password</legend>
-		<form id="changePassForm" method="post">
-			<table id="passwordTable" class="shaded">
+
+		<p class="page-description">Review and edit your account details here.</p>
+
+		<section class="personal-information">
+			<h2>Personal Information</h2>
+			<table id="infoTable" data-user-id="${userId}" role="presentation">
+				<tr>
+					<td id="picSection">
+						<img id="showPicture"
+						     src="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uthn"
+						     alt="User profile picture"
+						     data-enlarge="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uorg">
+						<nav aria-label="Picture actions">
+							<ul>
+								<li><a class="btnUp" id="uploadPicture"
+								       href="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}">Change Picture</a>
+								</li>
+							</ul>
+						</nav>
+					</td>
+					<td id="userDetail">
+						<table id="personal" class="shaded" role="table" aria-label="Personal information">
+							<thead>
+							<tr>
+								<th class="label" scope="col">Attribute</th>
+								<th scope="col">Current Value</th>
+							</tr>
+							</thead>
+							<tbody>
+							<tr>
+								<td>First Name</td>
+								<td id="editfirstname" data-editable="true">${fn:escapeXml(user.firstName)}</td>
+							</tr>
+							<tr>
+								<td>Last Name</td>
+								<td id="editlastname" data-editable="true">${fn:escapeXml(user.lastName)}</td>
+							</tr>
+							<tr>
+								<td>Institution</td>
+								<td id="editinstitution" data-editable="true">${fn:escapeXml(user.institution)}</td>
+							</tr>
+							<tr>
+								<td>Email</td>
+								<td id="editemail" data-editable="true">${fn:escapeXml(user.email)}</td>
+							</tr>
+							</tbody>
+						</table>
+					</td>
+				</tr>
+			</table>
+			<p class="help-text">(Click the current value of an attribute to edit it)</p>
+		</section>
+
+		<c:if test="${hasAdminReadPrivileges}">
+			<section class="user-quotas">
+				<h2>User Quotas</h2>
+				<table id="diskUsageTable" class="shaded" data-user-id="${userId}" role="table" aria-label="User quotas">
+					<thead>
+					<tr>
+						<th scope="col">Attribute</th>
+						<th scope="col">Value</th>
+					</tr>
+					</thead>
+					<tbody>
+					<tr>
+						<td>Disk Quota <span class="help-text">Format: [Integer] [Units(B, KB, MB, GB)]</span></td>
+						<td id="editdiskquota" data-editable="true">${diskQuota}</td>
+					</tr>
+					<tr>
+						<td>Current Disk Usage</td>
+						<td>${diskUsage}</td>
+					</tr>
+					<tr>
+						<td>Job Pair Quota</td>
+						<td id="editpairquota" data-editable="true">${pairQuota}</td>
+					</tr>
+					<tr>
+						<td>Job Pairs Owned</td>
+						<td>${pairUsage}</td>
+					</tr>
+					</tbody>
+				</table>
+			</section>
+		</c:if>
+
+		<section class="site-settings">
+			<h2>Site Settings</h2>
+			<table id="siteSettingTable" role="table" aria-label="Site settings">
 				<thead>
 				<tr>
-					<th>attribute</th>
-					<th>value</th>
+					<th scope="col">Setting</th>
+					<th scope="col">Current Value</th>
 				</tr>
 				</thead>
 				<tbody>
 				<tr>
-					<td>current password</td>
-					<td><input type="password" id="current_pass"
-					           name="current_pass"/></td>
+					<td>Table Entries Per Page</td>
+					<td data-type="int" id="editpagesize" data-editable="true">${pagesize}</td>
 				</tr>
+				</tbody>
+			</table>
+		</section>
+		<section class="associated-websites">
+			<h2>Associated Websites</h2>
+			<table id="websites" class="shaded" role="table" aria-label="Associated websites">
+				<thead>
 				<tr>
-					<td>new password</td>
-					<td>
-						<input type="password" id="password" name="pwd"/>
-						<div class="password-meter" id="pwd-meter"
-						     style="visibility:visible">
-							<div class="password-meter-message"></div>
-							<div class="password-meter-bg">
-								<div class="password-meter-bar"></div>
+					<th scope="col">Link</th>
+					<th scope="col">Action</th>
+				</tr>
+				</thead>
+				<tbody>
+				<c:forEach items="${sites}" var="s">
+					<tr>
+						<td><a href="${fn:escapeXml(s.url)}" rel="external">${fn:escapeXml(s.name)}<img class="extLink"
+						                                     src="${starexecRoot}/images/external.png" alt="External link"/></a>
+						</td>
+						<td><button class="delWebsite" data-id="${s.id}" type="button">Delete</button></td>
+					</tr>
+				</c:forEach>
+				</tbody>
+			</table>
+
+			<button id="toggleWebsite" class="caption" type="button" aria-expanded="false" aria-controls="new_website">
+				<span aria-hidden="true">+</span> Add New Website
+			</button>
+			<div id="new_website" class="hidden" aria-hidden="true">
+				<label for="website_name">Name:</label>
+				<input type="text" id="website_name" aria-describedby="website-name-desc"/>
+				<span id="website-name-desc" class="sr-only">Enter the name of the website</span>
+
+				<label for="website_url">URL:</label>
+				<input type="url" id="website_url" aria-describedby="website-url-desc"/>
+				<span id="website-url-desc" class="sr-only">Enter the URL of the website</span>
+
+				<button id="addWebsite" type="button">Add Website</button>
+			</div>
+		</section>
+
+		<section class="password-change">
+			<h2>Change Password</h2>
+			<form id="changePassForm" method="post" novalidate>
+				<table id="passwordTable" class="shaded" role="table" aria-label="Password change form">
+					<thead>
+					<tr>
+						<th scope="col">Attribute</th>
+						<th scope="col">Value</th>
+					</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><label for="current_pass">Current Password</label></td>
+							<td><input type="password" id="current_pass" name="current_pass" required aria-describedby="current-pass-desc" autocomplete="current-password"/>
+								<span id="current-pass-desc" class="sr-only">Enter your current password</span></td>
+						</tr>
+						<tr>
+							<td><label for="password">New Password</label></td>
+							<td>
+								<input type="password" id="password" name="pwd" required aria-describedby="password-desc" autocomplete="new-password"/>
+								<span id="password-desc" class="sr-only">Enter your new password</span>
+								<div class="password-meter" id="pwd-meter" aria-live="polite">
+								<div class="password-meter-message" aria-live="assertive"></div>
+								<div class="password-meter-bg">
+									<div class="password-meter-bar"></div>
+								</div>
 							</div>
-						</div>
+						</td>
+					</tr>
+						<tr>
+							<td><label for="confirm_pass">Re-enter New Password</label></td>
+							<td><input type="password" id="confirm_pass" name="confirm_pass" required aria-describedby="confirm-pass-desc" autocomplete="new-password"/>
+								<span id="confirm-pass-desc" class="sr-only">Re-enter your new password for confirmation</span></td>
+						</tr>
+					<tr>
+						<td class="notShaded" colspan="2">
+							<button id="changePass" type="submit">Change Password</button>
+						</td>
+					</tr>
+					</tbody>
+				</table>
+			</form>
+		</section>
+
+		<section class="default-settings">
+			<h2>Default Settings</h2>
+			<label for="settingProfile">Select Profile:</label>
+			<select id="settingProfile" aria-describedby="profile-select-desc">
+				<c:if test="${empty settings}">
+					<option value="">No profiles available</option>
+				</c:if>
+				<c:forEach var="setting" items="${settings}">
+					<c:set var="isDefault" value="${defaultProfileId != null && defaultProfileId == setting.getId()}" />
+					<option class="settingOption" value="${setting.getId()}"
+					        data-type="${setting.getTypeString()}"
+					        ${isDefault ? 'selected="selected"' : ''}>
+						${setting.name}<c:if test="${isDefault}"> (default)</c:if>
+					</option>
+				</c:forEach>
+			</select>
+			<span id="profile-select-desc" class="sr-only">Choose a settings profile to edit</span>
+
+			<table id="settings" class="shaded" role="table" aria-label="Default settings">
+				<thead>
+				<tr class="headerRow">
+					<th class="label" scope="col">Name</th>
+					<th scope="col">Values</th>
+				</tr>
+				</thead>
+				<tbody>
+				<tr>
+					<td title="The pre processor that will be selected by default for new jobs">
+						Pre Processor
+					</td>
+					<td>
+						<label for="editPreProcess" class="sr-only">Select pre processor</label>
+						<select class="preProcessSetting" id="editPreProcess"
+						        name="editPreProcess" default="${defaultPreProcId}">
+							<option value="-1">None</option>
+							<c:forEach var="proc" items="${preProcs}">
+								<option value="${proc.id}">${proc.name}</option>
+							</c:forEach>
+						</select>
+					</td>
+				</tr>
+
+				<tr>
+					<td title="The benchmark processor that will be selected by default for new jobs">
+						Bench Processor
+					</td>
+					<td>
+						<label for="editBenchProcess" class="sr-only">Select benchmark processor</label>
+						<select class="benchProcessSetting" id="editBenchProcess"
+						        name="editBenchProcess" default="${defaultBPId}">
+							<option value="-1">None</option>
+							<c:forEach var="proc" items="${benchProcs}">
+								<option value="${proc.id}">${proc.name}</option>
+							</c:forEach>
+						</select>
+					</td>
+				</tr>
+
+				<tr>
+					<td title="The post processor that will be selected by default for new jobs">
+						Post Processor
+					</td>
+					<td>
+						<label for="editPostProcess" class="sr-only">Select post processor</label>
+						<select class="postProcessSetting" id="editPostProcess"
+						        name="editPostProcess" default="${defaultPPId}">
+							<option value="-1">None</option>
+							<c:forEach var="proc" items="${postProcs}">
+								<option value="${proc.id}">${proc.name}</option>
+							</c:forEach>
+						</select>
+					</td>
+				</tr>
+				<star:benchmarkingFrameworkRow/>
+				<tr>
+					<td title="The wallclock timeout that will be selected by default for new jobs">
+						Wallclock Timeout
+					</td>
+					<td id="editClockTimeout">
+						<label for="wallclockTimeout" class="sr-only">Wallclock timeout in seconds</label>
+						<input type="number" name="wallclockTimeout" id="wallclockTimeout" min="1" aria-describedby="wallclock-desc"/>
+						<span id="wallclock-desc" class="sr-only">Enter timeout in seconds</span>
 					</td>
 				</tr>
 				<tr>
-					<td>re-enter new password</td>
-					<td><input type="password" id="confirm_pass"
-					           name="confirm_pass"/></td>
+					<td title="The cpu timeout that will be selected by default for new jobs">
+						CPU Timeout
+					</td>
+					<td id="editCpuTimeout">
+						<label for="cpuTimeout" class="sr-only">CPU timeout in seconds</label>
+						<input type="number" name="cpuTimeout" id="cpuTimeout" min="1" aria-describedby="cpu-desc"/>
+						<span id="cpu-desc" class="sr-only">Enter timeout in seconds</span>
+					</td>
 				</tr>
-				<tr></tr>
 				<tr>
-					<td class="notShaded" colspan="2">
-						<button id="changePass">change</button>
+					<td title="The maximum memory that will be selected by default for new jobs">
+						Maximum Memory
+					</td>
+					<td id="editMaxMem">
+						<label for="maxMem" class="sr-only">Maximum memory in MB</label>
+						<input type="number" name="maxMem" id="maxMem" min="1" aria-describedby="memory-desc"/>
+						<span id="memory-desc" class="sr-only">Enter memory limit in MB</span>
+					</td>
+				</tr>
+				<tr>
+					<td>Dependencies Enabled</td>
+					<td>
+						<label for="editDependenciesEnabled" class="sr-only">Enable dependencies</label>
+						<select class="dependencySetting" id="editDependenciesEnabled" name="editDependenciesEnabled">
+							<option value="true">True</option>
+							<option value="false">False</option>
+						</select>
+					</td>
+				</tr>
+				<tr id="defaultSolverRow">
+					<td>Default Solver</td>
+					<td id="solver">
+						<p id="solverNameField"></p>
+						<button class="selectPrim clearSolver" type="button">Clear Solver</button>
 					</td>
 				</tr>
 				</tbody>
 			</table>
-		</form>
-	</fieldset>
-	<fieldset id="settingsField">
-		<legend class="expd"><span></span>default settings</legend>
-		<select id="settingProfile">
-			<c:if test="${empty settings}">
-				<option value=""/>
-			</c:if>
-			<c:forEach var="setting" items="${settings}">
-				<c:set var="isDefault" value="${defaultProfileId != null && defaultProfileId == setting.getId()}" />
-				<option class="settingOption" value="${setting.getId()}"
-				        type="${setting.getTypeString()}"
-				        ${isDefault ? 'selected="selected"' : ''}>
-					${setting.name}<c:if test="${isDefault}"> (default)</c:if>
-				</option>
-			</c:forEach>
-		</select>
-		<table id="settings" class="shaded">
-			<thead>
-			<tr class="headerRow">
-				<th class="label">name</th>
-				<th>values</th>
-			</tr>
-			</thead>
-			<tbody>
-			<tr>
-				<td title="the pre processor that will be selected by default for new jobs">
-					pre processor
-				</td>
-				<td>
-					<select class="preProcessSetting" id="editPreProcess"
-					        name="editPreProcess" default="${defaultPreProcId}">
-						<option value=-1>none</option>
-						<c:forEach var="proc" items="${preProcs}">
-							<option value="${proc.id}">${proc.name}</option>
-						</c:forEach>
-					</select>
-				</td>
-			</tr>
 
-			<tr>
-				<td title="the benchmark processor that will be selected by default for new jobs">
-					bench processor
-				</td>
-				<td>
-					<select class="benchProcessSetting" id="editBenchProcess"
-					        name="editBenchProcess" default="${defaultBPId}">
-						<option value=-1>none</option>
-						<c:forEach var="proc" items="${benchProcs}">
-							<option value="${proc.id}">${proc.name}</option>
-						</c:forEach>
-					</select>
-				</td>
-			</tr>
+			<section class="setting-actions">
+				<h3>Profile Actions</h3>
+				<div class="action-buttons">
+					<button id="saveProfile" type="button">Save Profile Changes</button>
+					<button id="createProfile" type="button">Create New Profile</button>
+					<button id="setDefaultProfile" type="button"
+					        title="Setting a profile as a default means it will be selected automatically when visiting the job creation page">
+						Set Profile as Default
+					</button>
+					<c:set var="hasDefault" value="${defaultProfileId != null && defaultProfileId > 0}" />
+					<button id="clearDefaultProfile" type="button"
+					        title="Remove your currently selected default profile"
+					        ${hasDefault ? '' : 'disabled="disabled"'}>
+						Clear Default Profile
+					</button>
+					<button id="deleteProfile" type="button">Delete Selected Profile</button>
+				</div>
+			</section>
+		</section>
 
-			<tr>
-				<td title="the post processor that will be selected by default for new jobs">
-					post processor
-				</td>
-				<td>
-					<select class="postProcessSetting" id="editPostProcess"
-					        name="editPostProcess" default="${defaultPPId}">
-						<option value=-1>none</option>
-						<c:forEach var="proc" items="${postProcs}">
-							<option value="${proc.id}">${proc.name}</option>
-						</c:forEach>
-					</select>
-				</td>
-			</tr>
-			<star:benchmarkingFrameworkRow/>
-			<tr>
-				<td title="the wallclock timeout that will be selected by default for new jobs">
-					wallclock timeout
-				</td>
-				<td id="editClockTimeout"><input type="text"
-				                                 name="wallclockTimeout"
-				                                 id="wallclockTimeout"/></td>
-			</tr>
-			<tr>
-				<td title="the cpu timeout that will be selected by default for new jobs">
-					cpu timeout
-				</td>
-				<td id="editCpuTimeout"><input type="text" name="cpuTimeout"
-				                               id="cpuTimeout"/></td>
-			</tr>
-			<tr>
-				<td title="the maximum memory that will be selected by default for new jobs">
-					maximum memory
-				</td>
-				<td id="editMaxMem"><input type="text" name="maxMem"
-				                           id="maxMem"/></td>
-			</tr>
-			<tr>
-				<td>dependencies enabled</td>
-				<td>
-					<select class="dependencySetting"
-					        id="editDependenciesEnabled"
-					        name="editDependenciesEnabled">
-						<option value="true">True</option>
-						<option value="false">False</option>
-					</select>
-				</td>
-			</tr>
-			<tr id="defaultSolverRow">
-				<td>default solver</td>
-				<td id="solver"><p id="solverNameField"></p> <span
-						class="selectPrim clearSolver">clear solver</span></td>
-			</tr>
-			</tbody>
-		</table>
-		<fieldset id="settingActions">
-			<legend>actions</legend>
-			<button id="saveProfile">save profile changes</button>
+		<section class="solvers-section">
+			<h2>Solvers</h2>
+			<table id="solverList" role="table" aria-label="User solvers">
+				<thead>
+				<tr>
+					<th scope="col">Name</th>
+					<th scope="col">Description</th>
+					<th scope="col">Type</th>
+				</tr>
+				</thead>
+				<tbody>
+				<!-- Will be populated using AJAX -->
+				</tbody>
+			</table>
+			<button id="useSolver" type="button">Use Selected Solver</button>
+		</section>
 
-			<button id="createProfile">create new profile</button>
-		<button title="Setting a profile as a default means it will be selected
-		automatically when visiting the job creation page"
-		        id="setDefaultProfile">set profile as default
-		</button>
-		<c:set var="hasDefault" value="${defaultProfileId != null && defaultProfileId > 0}" />
-		<button title="Remove your currently selected default profile"
-		        id="clearDefaultProfile"
-		        ${hasDefault ? '' : 'disabled="disabled"'}>clear default profile
-		</button>
-		<button id="deleteProfile">delete selected profile</button>		</fieldset>
-	</fieldset>
+		<section class="benchmarks-section">
+			<h2>Benchmarks</h2>
+			<table id="benchmarkList" role="table" aria-label="User benchmarks">
+				<thead>
+				<tr>
+					<th scope="col">Name</th>
+					<th scope="col">Type</th>
+				</tr>
+				</thead>
+				<tbody>
+				<!-- Will be populated using AJAX -->
+				</tbody>
+			</table>
+			<button id="useBenchmark" type="button">Use Selected Benchmark</button>
+		</section>
 
-	<fieldset>
-		<legend>solvers</legend>
-		<table id="solverList">
-			<thead>
-			<tr>
-				<th>name</th>
-				<th>description</th>
-				<th>type</th>
-			</tr>
-			</thead>
-			<tbody>
-			<!-- Will be populated using AJAX -->
-			</tbody>
+		<c:if test="${canDeleteUser}">
+			<section class="danger-zone">
+				<h2>Delete User</h2>
+				<p class="warning">This action cannot be undone.</p>
+				<button id="deleteUser" type="button" class="danger">Delete User</button>
+			</section>
+		</c:if>
 
-		</table>
-		<button id="useSolver">use selected solver</button>
+		<!-- Dialogs -->
+		<div id="dialog-confirm-delete" title="Confirm Delete" class="hiddenDialog" role="dialog" aria-labelledby="dialog-confirm-delete-title">
+			<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
+					id="dialog-confirm-delete-txt"></span></p>
+		</div>
 
-	</fieldset>
-
-	<fieldset>
-		<legend>benchmarks</legend>
-		<table id="benchmarkList">
-			<thead>
-			<tr>
-				<th>name</th>
-				<th>type</th>
-			</tr>
-			</thead>
-			<tbody>
-			<!-- Will be populated using AJAX -->
-			</tbody>
-
-		</table>
-		<button id="useBenchmark">use selected benchmark</button>
-
-	</fieldset>
-	<c:if test="${canDeleteUser}">
-		<fieldset>
-			<legend>delete user</legend>
-			<button id="deleteUser">delete user</button>
-		</fieldset>
-	</c:if>
-
-	<div id="dialog-confirm-delete" title="confirm delete" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
-				id="dialog-confirm-delete-txt"></span></p>
-	</div>
-	<div id="dialog-createSettingsProfile" title="create settings profile"
-	     class="hiddenDialog">
-		<p><span id="dialog-createSettingsProfile-txt"></span></p><br/>
-		<p><label>name: </label><input id="settingName" type="text"/></p>
-	</div>
+		<div id="dialog-createSettingsProfile" title="Create Settings Profile" class="hiddenDialog" role="dialog" aria-labelledby="dialog-createSettingsProfile-title">
+			<p><span id="dialog-createSettingsProfile-txt"></span></p>
+			<div>
+				<label for="settingName">Profile Name:</label>
+				<input id="settingName" type="text" aria-describedby="setting-name-desc"/>
+				<span id="setting-name-desc" class="sr-only">Enter a name for the new settings profile</span>
+			</div>
+		</div>
+	</main>
 </star:template>

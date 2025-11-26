@@ -2,6 +2,7 @@
         import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Permissions, org.starexec.data.database.Solvers,org.starexec.data.database.Websites, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Solver, org.starexec.data.to.Website.WebsiteType, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
+<%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
 <%
 	try {
@@ -65,7 +66,7 @@
 	}
 %>
 
-<star:template title="edit ${solver.name}"
+<star:template title="edit ${fn:escapeXml(solver.name)}"
                js="lib/jquery.validate.min, edit/solver"
                css="edit/shared, edit/solver">
 	<form id="editSolverForm">
@@ -84,7 +85,7 @@
 					<td class="label">solver name</td>
 					<td>
 						<input id="name" type="text" name="name" pattern="${nameRegex}"
-						       value="${solver.name}">
+						       value="${fn:escapeXml(solver.name)}">
 
 					</td>
 				</tr>
@@ -92,7 +93,7 @@
 					<td class="label">description</td>
 					<td>
 						<textarea id="description" name="description"
-						          length="${solverDescLen}">${solver.description}</textarea>
+						          length="${solverDescLen}">${fn:escapeXml(solver.description)}</textarea>
 					</td>
 				</tr>
 				<tr>
