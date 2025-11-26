@@ -3271,6 +3271,7 @@ RETURNS TABLE(
     queue_id INT,
     primary_space INT,
     created TIMESTAMP,
+    completed TIMESTAMP,
     seed BIGINT,
     cpuTimeout INT,
     clockTimeout INT,
@@ -3285,11 +3286,13 @@ RETURNS TABLE(
     kill_delay INT,
     disk_size BIGINT,
     deleted BOOLEAN,
-    benchmarking_framework VARCHAR(32)
+    benchmarking_framework VARCHAR(32),
+    is_high_priority BOOLEAN,
+    output_benchmarks_directory_path TEXT
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.created, jobs.seed, jobs.cputimeout, jobs.clocktimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildjob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.deleted, jobs.benchmarking_framework
+    SELECT jobs.id, jobs.user_id, jobs.name, jobs.description, jobs.queue_id, jobs.primary_space, jobs.created, jobs.completed, jobs.seed, jobs.cputimeout, jobs.clocktimeout, jobs.maximum_memory, jobs.paused, jobs.killed, jobs.suppress_timestamp, jobs.using_dependencies, jobs.buildjob, jobs.total_pairs, jobs.soft_time_limit, jobs.kill_delay, jobs.disk_size, jobs.deleted, jobs.benchmarking_framework, jobs.is_high_priority, jobs.output_benchmarks_directory_path
     FROM starexec.jobs
     WHERE jobs.user_id = _userId AND jobs.deleted = false
     ORDER BY jobs.created DESC;
@@ -3306,6 +3309,7 @@ RETURNS TABLE(
     queue_id INT,
     primary_space INT,
     created TIMESTAMP,
+    completed TIMESTAMP,
     seed BIGINT,
     cpuTimeout INT,
     clockTimeout INT,
@@ -3321,6 +3325,8 @@ RETURNS TABLE(
     disk_size BIGINT,
     deleted BOOLEAN,
     benchmarking_framework VARCHAR(32),
+    is_high_priority BOOLEAN,
+    output_benchmarks_directory_path TEXT,
     totalPairs BIGINT,
     completePairs BIGINT,
     pendingPairs BIGINT,
@@ -3335,6 +3341,7 @@ BEGIN
         j.queue_id,
         j.primary_space,
         j.created,
+        j.completed,
         j.seed,
         j.cpuTimeout,
         j.clockTimeout,
@@ -3350,6 +3357,8 @@ BEGIN
         j.disk_size,
         j.deleted,
         j.benchmarking_framework,
+        j.is_high_priority,
+        j.output_benchmarks_directory_path,
         CAST(j.total_pairs AS BIGINT) AS totalPairs,
         GetCompletePairs(j.id) AS completePairs,
         GetPendingPairs(j.id) AS pendingPairs,
@@ -3723,6 +3732,7 @@ RETURNS TABLE(
     queue_id INT,
     primary_space INT,
     created TIMESTAMP,
+    completed TIMESTAMP,
     seed BIGINT,
     cpuTimeout INT,
     clockTimeout INT,
@@ -3738,6 +3748,8 @@ RETURNS TABLE(
     disk_size BIGINT,
     deleted BOOLEAN,
     benchmarking_framework VARCHAR(32),
+    is_high_priority BOOLEAN,
+    output_benchmarks_directory_path TEXT,
     totalPairs BIGINT,
     completePairs BIGINT,
     pendingPairs BIGINT,
@@ -3752,6 +3764,7 @@ BEGIN
         j.queue_id,
         j.primary_space,
         j.created,
+        j.completed,
         j.seed,
         j.cpuTimeout,
         j.clockTimeout,
@@ -3767,6 +3780,8 @@ BEGIN
         j.disk_size,
         j.deleted,
         j.benchmarking_framework,
+        j.is_high_priority,
+        j.output_benchmarks_directory_path,
         CAST(j.total_pairs AS BIGINT) AS totalPairs,
         GetCompletePairs(j.id) AS completePairs,
         GetPendingPairs(j.id) AS pendingPairs,
