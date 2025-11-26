@@ -77,24 +77,32 @@ public class SessionFilter implements Filter {
 				log.debug(method, "isFromCommand: true");
 			}
 
-			// Do not create a session eagerly for every request. Creating a session
-			// before the container's FormAuthenticator has a chance to save the
-			// original request can lead to a session-id mismatch during FORM
-			// authentication (observed as HTTP 408 "login timeout"). Use
-			// getSession(false) and only create a session when we need to bridge
-			// container-managed authentication into the application's session.
-			HttpSession session = httpRequest.getSession(false);
+		// Allow access to public resources and authentication endpoints FIRST
+		// Do NOT touch the session for j_security_check or login pages to avoid
+		// interfering with Tomcat's FormAuthenticator
+		String requestURI = httpRequest.getRequestURI();
+		String contextPath = httpRequest.getContextPath();
+		
+		// Use explicit paths for static resources instead of file extensions
+		// to prevent accidentally bypassing auth for protected resources
+		if (requestURI.startsWith(contextPath + "/public/") ||
+			requestURI.startsWith(contextPath + "/login") ||
+			requestURI.startsWith(contextPath + "/j_security_check") ||
+			requestURI.startsWith(contextPath + "/assets/") ||
+			requestURI.startsWith(contextPath + "/css/") ||
+			requestURI.startsWith(contextPath + "/js/") ||
+			requestURI.startsWith(contextPath + "/images/")) {
+			chain.doFilter(request, response);
+			return;
+		}
 
-			// Allow access to public resources
-			if (httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/public/") ||
-				httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/login") ||
-				httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/j_security_check") ||
-				httpRequest.getRequestURI().startsWith(httpRequest.getContextPath() + "/assets/")) {
-				chain.doFilter(request, response);
-				return;
-			}
-
-			HttpServletResponse httpResponse = (HttpServletResponse) response;
+		// Do not create a session eagerly for every request. Creating a session
+		// before the container's FormAuthenticator has a chance to save the
+		// original request can lead to a session-id mismatch during FORM
+		// authentication (observed as HTTP 408 "login timeout"). Use
+		// getSession(false) and only create a session when we need to bridge
+		// container-managed authentication into the application's session.
+		HttpSession session = httpRequest.getSession(false);			HttpServletResponse httpResponse = (HttpServletResponse) response;
 
 			// Bridge between container-managed security and application's session management
 			if (SessionUtil.getUser(httpRequest) == null && httpRequest.getRemoteUser() != null) {

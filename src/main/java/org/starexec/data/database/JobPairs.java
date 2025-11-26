@@ -592,7 +592,7 @@ public class JobPairs {
 	protected static void addJobPairAttr(Connection con, int pairId, int stageId, String key, String val) {
 		PreparedStatement ps = null;
 		try {
-			ps = con.prepareStatement("SELECT starexec.AddJobAttr(?, ?, ?, ?)");
+			ps = con.prepareStatement("CALL starexec.AddJobAttr(?, ?, ?, ?)");
 			ps.setInt(1, pairId);
 
 			ps.setString(2, key);

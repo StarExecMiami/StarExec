@@ -339,7 +339,9 @@ public class Users {
 			if (!users.isEmpty()) {
 				return users.get(0);
 			}
-			log.debug("Could not find user with id = " + id);
+			if (id != R.PUBLIC_USER_ID) {
+				log.debug("Could not find user with id = " + id);
+			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {

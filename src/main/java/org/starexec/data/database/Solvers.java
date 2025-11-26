@@ -2688,7 +2688,7 @@ public class Solvers {
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT starexec.SetSolverBuildStatus(?, ?)");
+			ps = con.prepareStatement("CALL starexec.SetSolverBuildStatus(?, ?)");
 			ps.setInt(1, s.getId());
 			ps.setInt(2, status);
 			Common.executeAndDrain(ps);

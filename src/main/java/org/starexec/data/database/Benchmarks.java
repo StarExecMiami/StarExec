@@ -738,7 +738,7 @@ public class Benchmarks {
 		log.debug("got request permanently remove this benchmark from the database " + benchId);
 		PreparedStatement procedure = null;
 		try {
-			procedure = con.prepareStatement("SELECT starexec.RemoveBenchmarkFromDatabase(?)");
+			procedure = con.prepareStatement("CALL starexec.RemoveBenchmarkFromDatabase(?)");
 			procedure.setInt(1, benchId);
 			procedure.execute();
 			return true;

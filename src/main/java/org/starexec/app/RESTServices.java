@@ -32,6 +32,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
+import javax.ws.rs.core.Response;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -116,10 +117,11 @@ public class RESTServices {
 	@GET
 	@Path("/space/{jobid}/jobspaces/{spaceTree}")
 	@Produces("application/json")
-	public String getJobSpaces(@QueryParam("id") int parentId, @PathParam("jobid") int jobId,
+	public Response getJobSpaces(@QueryParam("id") int parentId, @PathParam("jobid") int jobId,
 			@PathParam("spaceTree") boolean makeSpaceTree, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
-		return RESTHelpers.validateAndGetJobSpacesJson(parentId, jobId, makeSpaceTree, userId);
+		JobSpaceService service = new JobSpaceService();
+		return service.getJobSpaces(parentId, jobId, makeSpaceTree, userId);
 	}
 
 	/**

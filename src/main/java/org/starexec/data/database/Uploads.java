@@ -601,12 +601,32 @@ public class Uploads {
 		if (statusId == null) {
 			return false;
 		}
+		
+		// Build procedure name using safe switch statement instead of string concatenation
+		String procedureName;
+		switch (type) {
+			case "Benchmark":
+				procedureName = "starexec.IncrementXMLCompletedBenchmarks";
+				break;
+			case "Solver":
+				procedureName = "starexec.IncrementXMLCompletedSolvers";
+				break;
+			case "Update":
+				procedureName = "starexec.IncrementXMLCompletedUpdates";
+				break;
+			case "Space":
+				procedureName = "starexec.IncrementXMLCompletedSpaces";
+				break;
+			default:
+				log.error("Unknown XML upload type: " + type);
+				return false;
+		}
+		
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-
-			ps = con.prepareStatement("SELECT starexec.IncrementXMLCompleted" + type + "s(?,?)");
+			ps = con.prepareStatement("SELECT " + procedureName + "(?,?)");
 			ps.setInt(1, statusId);
 			ps.setInt(2, num);
 			ps.execute();
@@ -640,12 +660,32 @@ public class Uploads {
 		if (statusId == null) {
 			return false;
 		}
+		
+		// Build procedure name using safe switch statement instead of string concatenation
+		String procedureName;
+		switch (type) {
+			case "Benchmark":
+				procedureName = "starexec.SetXMLTotalBenchmarks";
+				break;
+			case "Solver":
+				procedureName = "starexec.SetXMLTotalSolvers";
+				break;
+			case "Update":
+				procedureName = "starexec.SetXMLTotalUpdates";
+				break;
+			case "Space":
+				procedureName = "starexec.SetXMLTotalSpaces";
+				break;
+			default:
+				log.error("Unknown XML upload type: " + type);
+				return false;
+		}
+		
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-
-			ps = con.prepareStatement("SELECT starexec.SetXMLTotal" + type + "s(?,?)");
+			ps = con.prepareStatement("SELECT " + procedureName + "(?,?)");
 			ps.setInt(1, statusId);
 			ps.setInt(2, num);
 			ps.execute();

@@ -132,7 +132,7 @@ public class Reports {
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT starexec.ResetReports()");
+			ps = con.prepareStatement("CALL starexec.ResetReports()");
 			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -159,9 +159,9 @@ public class Reports {
 		try {
 			con = Common.getConnection();
 			if (queueName == null) {
-				ps = con.prepareStatement("SELECT starexec.SetEventOccurrencesNotRelatedToQueue(?, ?)");
+				ps = con.prepareStatement("CALL starexec.SetEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
-				ps = con.prepareStatement("SELECT starexec.SetEventOccurrencesForQueue(?, ?, ?)");
+				ps = con.prepareStatement("CALL starexec.SetEventOccurrencesForQueue(?, ?, ?)");
 				ps.setString(3, queueName);
 			}
 			ps.setString(1, eventName);
@@ -198,9 +198,9 @@ public class Reports {
 			con = Common.getConnection();
 			
 			if (queueName == null) {
-				ps = con.prepareStatement("SELECT starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)");
+				ps = con.prepareStatement("CALL starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
-				ps = con.prepareStatement("SELECT starexec.AddToEventOccurrencesForQueue(?, ?, ?)");
+				ps = con.prepareStatement("CALL starexec.AddToEventOccurrencesForQueue(?, ?, ?)");
 				ps.setString(3, queueName);
 			}
 			ps.setString(1, eventName);

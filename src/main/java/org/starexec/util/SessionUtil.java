@@ -30,8 +30,9 @@ public class SessionUtil {
 		// If they have a valid session, then check for the user object
 		User u = null;
 		try {
-			if (request.getSession(false) != null) {
-				u = (User) request.getSession().getAttribute(SessionUtil.USER);
+			HttpSession session = request.getSession(false);
+			if (session != null) {
+				u = (User) session.getAttribute(SessionUtil.USER);
 			}
 		} catch (Exception e) {
 			log.debug(method, "Exception getting user: " + e.getMessage(), e);
@@ -48,7 +49,11 @@ public class SessionUtil {
 	 * @return The current user's id
 	 */
 	public static int getUserId(HttpServletRequest request) {
-		 return SessionUtil.getUserId(request.getSession());
+		HttpSession session = request.getSession(false);
+		if (session == null) {
+			return R.PUBLIC_USER_ID;
+		}
+		return SessionUtil.getUserId(session);
 	}
 	
 	/**
@@ -67,7 +72,7 @@ public class SessionUtil {
 	 * @return The current user's permission cache
 	 */
 	public static HashMap<Integer, Permission> getPermissionCache(HttpServletRequest request) {
-		return SessionUtil.getPermissionCache(request.getSession());
+		return SessionUtil.getPermissionCache(request.getSession(false));
 	}
 		
 	/**
@@ -76,6 +81,9 @@ public class SessionUtil {
 	 */
 	@SuppressWarnings("unchecked")
 	public static HashMap<Integer, Permission> getPermissionCache(HttpSession session) {
+		if (session == null) {
+			return new HashMap<>();
+		}
 		if (session.getAttribute(SessionUtil.PERMISSION_CACHE)==null) {
 			HashMap<Integer, Permission> newCache = new HashMap<>();
 			session.setAttribute(SessionUtil.PERMISSION_CACHE, newCache);
@@ -90,7 +98,7 @@ public class SessionUtil {
 	 * @return The permission associated with the given space
 	 */
 	public static Permission getPermission(HttpServletRequest request, int spaceId) {
-		return SessionUtil.getPermission(request.getSession(), spaceId);
+		return SessionUtil.getPermission(request.getSession(false), spaceId);
 	}
 	
 	
@@ -100,6 +108,9 @@ public class SessionUtil {
 	 * @return The permission associated with the given space
 	 */
 	private static Permission getPermission(HttpSession session, int spaceId) {
+		if (session == null) {
+			return new Permission();
+		}
 		final int userId = SessionUtil.getUserId(session);
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
 		if(!cache.containsKey(spaceId)) {
@@ -147,6 +158,9 @@ public class SessionUtil {
 	 * @param spaceId The id of the space to cache the permission for
 	 */
 	private static void cachePermission(HttpSession session, int spaceId) {
+		if (session == null) {
+			return;
+		}
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
 		int userId = SessionUtil.getUserId(session);
 		if (cache.containsKey(spaceId)) { return; }
@@ -158,6 +172,9 @@ public class SessionUtil {
 
 	// Force re-query permission ignoring existing cached absence
 	private static void forceReloadPermission(HttpSession session, int spaceId) {
+		if (session == null) {
+			return;
+		}
 		HashMap<Integer, Permission> cache = SessionUtil.getPermissionCache(session);
 		cache.remove(spaceId);
 		// log.debug("forceReloadPermission: removed cache entry for spaceId="+spaceId);
