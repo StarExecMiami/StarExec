@@ -39,6 +39,8 @@ tr th {
 	vertical-align: middle;
 }
 
+/* Button positioning for processor edit page action field */
+/* Base button styles come from global components/buttons.scss */
 #actionField button {
 	float:left;
 	margin-left:5px;

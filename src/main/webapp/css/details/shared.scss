@@ -1,3 +1,15 @@
+// =============================================================================
+// DETAILS SHARED STYLES
+// =============================================================================
+// Shared styles for detail pages (user, solver, benchmark, etc.)
+// =============================================================================
+
+@import "../global/colors";
+
+// =============================================================================
+// BASE TABLE STYLES
+// =============================================================================
+
 table {
 	width: 100%;
 }
@@ -6,11 +18,19 @@ table {
 	table-layout: auto;
 }
 
+// =============================================================================
+// FIELDSET STYLES
+// =============================================================================
+
 fieldset {
 	width: 600px;
 	margin-top: 30px;
 	margin-bottom: 20px;
 }
+
+// =============================================================================
+// FORM ELEMENTS
+// =============================================================================
 
 .contentTextarea {
 	width: 98%;
@@ -18,10 +38,26 @@ fieldset {
 	font-family: monospace;
 }
 
+// =============================================================================
+// DIALOG STYLES
+// =============================================================================
+
 #dialog-show-anonymous-link a {
 	color: #0000EE;
 	text-decoration: underline;
 }
+
+#popImage {
+	height: 400px;
+}
+
+#popDialog {
+	display: none;
+}
+
+// =============================================================================
+// LAYOUT UTILITIES
+// =============================================================================
 
 .popoutLink {
 	float: right;
@@ -36,14 +72,6 @@ fieldset {
 #uploadConfigMargin {
 	float: right;
 	margin-right: 185px;
-}
-
-#popImage {
-	height: 400px;
-}
-
-#popDialog {
-	display: none;
 }
 
 #showPicture {
@@ -64,24 +92,6 @@ fieldset {
 	width: 150px;
 }
 
-#infoTable tbody tr:hover {
-	background-color: inherit;
-}
-
-#solverInfo {
-	tbody tr:hover {
-		background-color: #ae0000;
-	}
-
-	thead tr:hover {
-		background-color: #111111;
-	}
-}
-
-#infoTablep tbody tr:hover {
-	background-color: inherit;
-}
-
 #userDetail {
 	vertical-align: top;
 }
@@ -98,21 +108,47 @@ fieldset {
 	margin-right: 10px;
 }
 
+// =============================================================================
+// TABLE HOVER STATES - Using design system colors
+// =============================================================================
+
+#infoTable tbody tr:hover {
+	background-color: inherit;
+}
+
+#solverInfo {
+	tbody tr:hover {
+		background-color: $accent-red;
+	}
+
+	thead tr:hover {
+		background-color: $background-color;
+	}
+}
+
+#infoTablep tbody tr:hover {
+	background-color: inherit;
+}
+
 #infoTable {
 	tbody tr:hover {
-		background-color: #222222 !important;
+		background-color: $foreground-color !important;
 	}
 
 	.detail .shaded {
 		thead tr:hover {
-			background-color: #111111 !important;
+			background-color: $background-color !important;
 		}
 
 		tbody tr:hover {
-			background-color: #ae0000 !important;
+			background-color: $accent-red !important;
 		}
 	}
 }
+
+// =============================================================================
+// STATISTICS TABLE STYLING
+// =============================================================================
 
 #usrJobsTable p.stat {
 	margin: auto;
@@ -120,16 +156,24 @@ fieldset {
 	width: 80px;
 	height: 30px;
 	padding-top: 10px;
-	color: #111;
+	color: $background-color;
 	display: block;
-	border: 1px solid #111;
+	border: 1px solid $background-color;
 }
+
+// =============================================================================
+// ACTION BUTTONS
+// =============================================================================
 
 #actions a, #actions button {
 	margin-left: 8px;
 	margin-right: 8px;
 	margin-bottom: 10px;
 }
+
+// =============================================================================
+// OPTIONS LIST
+// =============================================================================
 
 #options {
 	ul {
@@ -143,9 +187,17 @@ fieldset {
 	}
 }
 
+// =============================================================================
+// INTERACTIVE ELEMENTS
+// =============================================================================
+
 .declineRequestButton, .acceptRequestButton {
 	cursor: pointer;
 }
+
+// =============================================================================
+// RESPONSIVE STYLES
+// =============================================================================
 
 @media only screen and (max-width: 767px) {
 	#wrapper fieldset {

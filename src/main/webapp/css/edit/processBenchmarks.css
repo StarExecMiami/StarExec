@@ -29,6 +29,8 @@ tr th {
 	vertical-align: middle;
 }
 
+/* Button positioning for process benchmarks action field */
+/* Base button styles come from global components/buttons.scss */
 #actionField button {
 	float:right;
 }

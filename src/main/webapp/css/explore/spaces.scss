@@ -1,32 +1,13 @@
-.dragClone {
-	max-width: 200px;
-	overflow: hidden;
-	position: fixed;
-	background-color: #fff;
-	color: #111;
-	z-index: 999;
-	text-align: center;
-	padding: 14px;
-	border-radius: 3px;
-	box-shadow: 4px 4px 5px #111;
-	opacity: 0.8;
+// =============================================================================
+// SPACES PAGE STYLES
+// =============================================================================
+// Page-specific styles for the Spaces explorer page.
+// Base explorer styles are in components/explorer.scss
+// =============================================================================
 
-	span {
-		float: left;
-		margin-right: 5px;
-	}
-}
+@import "../global/colors";
 
-#exploreList a {
-	&.active {
-		border: 1px dashed #008d03;
-	}
-
-	&.hover {
-		background-color: #008d03;
-		border-radius: 2px;
-	}
-}
+// Note: .dragClone and #exploreList base styles are now in components/explorer.scss
 
 #spaceField a.spaceLink {
 	cursor: pointer;
@@ -41,7 +22,7 @@
 	h2 {
 		text-align: right;
 		font-weight: bold;
-		color: #008d03;
+		color: $accent-green;
 	}
 
 	span {
@@ -80,19 +61,18 @@ $select-dialog-separation: 7px;
 	width: 50px;
 	height: 50px;
 	background: transparent;
-	text-align: left;
-	position: fixed;
-	margin-left: 72px;
-	border: 1px dashed #008d03;
+	position: absolute;
+	right: 10px;
+	top: 10px;
+	border: 1px dashed $accent-green;
 	border-radius: 2px;
 
 	&:hover, &.hover {
-		background-color: #008d03;
+		background-color: $accent-green;
 	}
 
 	.ui-icon {
-		margin-top: -8px;
-		margin-right: 10px;
+		transform: scale(1.5);
 	}
 }
 
@@ -237,4 +217,8 @@ div.selectWrap {
 			text-align: center;
 		}
 	}
+}
+
+.dataTable {
+	width: 100% !important;
 }

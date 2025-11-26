@@ -1,17 +1,18 @@
 // Page Content
 
 #wrapper {
-	width: 1024px;
+	width: 100%;
+	max-width: 1024px;
 	height: 100%;
 	margin-left: auto;
 	margin-right: auto;
 	padding-top: 10px;
 
 	@include mobile {
-		width: inherit;
+		width: 100%;
 		height: inherit;
 		margin: 0;
-		padding: 0;
+		padding: 0 10px;
 	}
 }
 
@@ -21,11 +22,13 @@
 	padding: 15px 15px 35px 15px;
 	display: block;
 	position: relative;
-	overflow: hidden;
+	overflow: auto;
+	overflow-x: hidden;
 	clear: right;
 
 	@include mobile {
 		width: inherit;
+		min-height: auto;
 	}
 
 

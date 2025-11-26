@@ -1,12 +1,32 @@
+// 1. Helpers & Utilities (must be first - provides mixins and functions)
 @import "global/helper";
+
+// 2. Variables & Tokens (foundation layer)
+@import "global/colors";
+@import "global/fonts";
+
+// 3. Base & Reset Styles
 @import "global/html5";
 @import "global/elements";
+
+// 4. Layout Components
 @import "global/common";
-@import "global/message";
 @import "global/page";
 @import "global/pageHeader";
+@import "global/nav";
 @import "global/footer";
+@import "global/component-layout";
+
+// 5. UI Components
+@import "global/message";
 @import "global/statusMessage";
-@import "global/support";
-@import "global/mobile";
 @import "global/dataTable";
+@import "components/buttons";
+@import "components/tables";
+@import "components/explorer";
+@import "components/navigation";
+@import "components/footer";
+
+// 6. Utilities & Responsive
+@import "global/mobile";
+@import "global/support";

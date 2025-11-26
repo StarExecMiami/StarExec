@@ -1,5 +1,7 @@
+@import "global/colors";
+
 #content {
-	background-color: #ae0000;
+	background-color: $accent-red;
 	min-height: 350px;
 	padding: 15px;
 	display: block;

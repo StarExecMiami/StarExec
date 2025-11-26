@@ -1,4 +1,5 @@
-@import "../common/pass_strength_meter";
+@import "../common/_pass_strength_meter";
+@import "../global/colors";
 
 fieldset {
 	width: 75%;
@@ -63,8 +64,26 @@ fieldset ul li {
 	font-size: smaller;
 }
 
-#editfirstname:hover, #editlastname:hover, #editinstitution:hover {
+/* Editable cell hover states - indicates clickability */
+#editfirstname,
+#editlastname,
+#editinstitution,
+#editdiskquota,
+#editpairquota,
+#editpagesize,
+#editemail {
 	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+
+#editfirstname:hover,
+#editlastname:hover,
+#editinstitution:hover,
+#editdiskquota:hover,
+#editpairquota:hover,
+#editpagesize:hover,
+#editemail:hover {
+	background-color: rgba(220, 111, 4, 0.1);
 }
 
 .caption {
@@ -109,16 +128,16 @@ input[type="text"] {
 
 #personal {
 	tbody tr:hover {
-		background-color: #ae0000;
+		background-color: $accent-red;
 	}
 
 	thead tr:hover {
-		background-color: #111111;
+		background-color: $background-color;
 	}
 }
 
 .notShaded {
-	background-color: #111111;
+	background-color: $background-color;
 }
 
 #picSection {
@@ -127,16 +146,16 @@ input[type="text"] {
 
 #infoTable {
 	tbody tr:hover {
-		background-color: #222222 !important;
+		background-color: $foreground-color !important;
 	}
 
 	#userDetail #personal {
 		thead tr:hover {
-			background-color: #111111 !important;
+			background-color: $background-color !important;
 		}
 
 		tbody tr:hover {
-			background-color: #ae0000 !important;
+			background-color: $accent-red !important;
 		}
 	}
 }
@@ -156,7 +175,7 @@ input[type="text"] {
 
 @media only screen and (max-width: 767px) {
 	#wrapper #picSection {
-		width: 0;
+		display: none;
 	}
 
 	body {

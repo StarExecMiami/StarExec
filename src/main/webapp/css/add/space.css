@@ -3,6 +3,12 @@
 	margin: 50px auto 30px auto;	
 }
 
+@media only screen and (max-width: 1023px) {
+	#content fieldset {
+		width: 90%;
+	}
+}
+
 #tblSpace {
 	width: 100%;
 }
@@ -30,16 +36,19 @@
 
 .label {
 	width: 140px;
+	min-width: 140px;
+	white-space: nowrap;
 	vertical-align: middle;
 }
 
-button {
+/* Position form buttons in fieldset */
+fieldset button {
 	float: right;
 }
 
 @media only screen and (max-width: 767px) {
-	#wrapper fieldset {
-		width: 75%;
+	#content fieldset, #wrapper fieldset {
+		width: 100%;
 	}
 
 	#tblDefaultPerm {

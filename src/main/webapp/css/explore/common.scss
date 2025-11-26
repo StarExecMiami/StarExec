@@ -1,68 +1,40 @@
-#explorer {
-	margin-top: 15px;
-	float: left;
-	width: 28%;
-	min-height: 90%;
-	height: 90%;
-	overflow: auto;
-	overflow-y: hidden;
-	position: relative;
-}
+// =============================================================================
+// EXPLORE COMMON STYLES
+// =============================================================================
+// Page-specific overrides for explore pages.
+// Base explorer/detailPanel styles are in components/explorer.scss
+// =============================================================================
 
-#explorer a:link {
-	text-decoration: none;
-}
+@import "../global/colors";
 
-#detailPanel {
-	padding-left: 10px;
-	padding-right: 55px;
-	margin-top: 15px;
-	float: right;
-	width: 65%;
-	border-left: solid 3px #111111;
-}
-
-#detailPanel hr {
-	border-top: solid 1px #666666;
-}
-
-#detailPanel h3, #explorer h3 {
-	color: #FFFFFF;
-	font-size: 24px;
-	margin-bottom: 5px;
-	display: inline-block;
-}
-
-#detailPanel .spaceName, #detailPanel #spaceDesc {
-	width: 90%;
-	word-wrap: break-word;
-}
-
-#detailPanel p.accent {
-	color: #666666;
-	font-style: italic;
-}
-
-#detailPanel .button {
-	margin-bottom: 9px;
-}
-
-#detailPanel fieldset {
-	margin-top: 35px;
-}
+// =============================================================================
+// INTERACTIVE ELEMENTS
+// =============================================================================
 
 .expd, .qtip-nonPermanentLeader a.tooltipButton, img {
 	cursor: pointer;
 }
 
+// =============================================================================
+// TABLE STYLES
+// =============================================================================
+
 #content table {
 	width: 100%;
 }
+
+// =============================================================================
+// PROGRESS BAR
+// =============================================================================
 
 #progressBar {
 	display: inline-block;
 	margin-left: 20px;
 }
+
+// =============================================================================
+// DIALOG STYLES
+// =============================================================================
 
 .ui-dialog {
 	height: 1000px;

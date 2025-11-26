@@ -420,6 +420,8 @@ table.dataTable {
 	position: relative;
 	clear: both;
 	zoom: 1;
+	width: 100%;
+	min-width: 0; // Prevent flex container collapse
 
 	.dataTables_length {
 		float: left;

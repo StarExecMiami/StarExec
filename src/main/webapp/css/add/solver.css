@@ -1,6 +1,15 @@
 fieldset {						
 	width: 75%;	
-	margin-top: 50px;
+	margin: 50px auto 0 auto;
+}
+
+@media only screen and (max-width: 767px) {
+	fieldset {
+		width: 95%;
+	}
+	input[type="text"], textarea, input[type="file"] {
+		width: 100%;
+	}
 }
 
 fieldset table {

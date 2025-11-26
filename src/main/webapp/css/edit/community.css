@@ -28,6 +28,8 @@ tr th {
 	height: 125px;
 }
 
+/* Button positioning for community edit page forms */
+/* Base button styles come from global components/buttons.scss */
 .newForm button {
 	width: 90px;
 	float: right;
@@ -109,14 +111,74 @@ tr th {
 	margin-top: 10px;
 }
 
+/* Button positioning in new form */
 .newForm button  {
 	float: right;		
 }
 
-#savedesc, #canceldesc {
-	vertical-align: bottom;
+/* Inline edit save/cancel button alignment */
+#savedesc, #canceldesc,
+[id^="save"], [id^="cancel"] {
+	vertical-align: middle;
+	margin-left: 4px;
 }
 
+/* Inline edit container alignment */
+#detailsTbl td {
+	vertical-align: middle;
+}
+
+/* Inline edit field container for proper alignment */
+.edit-field-container {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.edit-field-container input[type="text"],
+.edit-field-container textarea {
+	flex: 1;
+	min-width: 0;
+}
+
+.edit-buttons {
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
+/* Ensure inline edit inputs align properly with buttons */
+#detailsTbl td input[type="text"],
+#detailsTbl td textarea {
+	vertical-align: middle;
+}
+
+/* Editable cell hover states - indicates clickability */
+#editname,
+#editdesc,
+#editCpuTimeout,
+#editClockTimeout,
+#editMaxMem {
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+
+#editname:hover,
+#editdesc:hover,
+#editCpuTimeout:hover,
+#editClockTimeout:hover,
+#editMaxMem:hover {
+	background-color: rgba(220, 111, 4, 0.1);
+}
+
+/* Empty description placeholder styling */
+#editdesc:empty::before {
+	content: "Click to add a description...";
+	color: #666666;
+	font-style: italic;
+}
+
+/* Base selectPrim button style comes from components/buttons.scss */
 .selectPrim {
 	float:right;
 	font-size: 14px;

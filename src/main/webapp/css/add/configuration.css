@@ -1,7 +1,12 @@
 fieldset {						
 	width: 75%;	
-	margin-bottom: 30px;
-	margin-top: 30px;
+	margin: 30px auto;
+}
+
+@media only screen and (max-width: 767px) {
+	fieldset {
+		width: 95%;
+	}
 }
 
 fieldset table tr td:first-child {
@@ -19,6 +24,8 @@ tr th {
 	vertical-align: middle;
 }
 
+/* Button positioning for this page's layout */
+/* Base button styles come from global components/buttons.scss */
 .uploadBtn, .saveBtn {
 	float: right;
 	margin-right: 10px;

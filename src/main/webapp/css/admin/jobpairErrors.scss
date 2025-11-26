@@ -1,5 +1,5 @@
 /**
- * Analytics Dashboard Styles
+ * Job Pair Errors Dashboard Styles
  * WCAG 2.1 AA compliant, responsive, and accessible
  * Uses StarExec color palette and design patterns
  */
@@ -91,7 +91,7 @@
 }
 
 /* ========== Loading Indicator ========== */
-.analytics-loading {
+.jobpairerrors-loading {
 	display: flex;
 	align-items: center;
 	gap: 1em;
@@ -121,8 +121,8 @@
 }
 
 /* ========== Message Containers ========== */
-.analytics-error-container,
-.analytics-info-container {
+.jobpairerrors-error-container,
+.jobpairerrors-info-container {
 	padding: 1em;
 	margin-bottom: 1em;
 	@extend %rounded-corners;
@@ -136,7 +136,7 @@
 	}
 }
 
-.analytics-error-container {
+.jobpairerrors-error-container {
 	background-color: darken($accent-red, 30%);
 	border: 1px solid $accent-red;
 	color: $text-main-color;
@@ -146,7 +146,7 @@
 	}
 }
 
-.analytics-info-container {
+.jobpairerrors-info-container {
 	background-color: darken($accent-green, 30%);
 	border: 1px solid $accent-green;
 	color: $text-main-color;
@@ -225,7 +225,7 @@
 	}
 }
 
-#analytics_results {
+#jobpairErrors {
 	width: 100%;
 	border-collapse: collapse;
 	background: $foreground-color;
@@ -283,6 +283,27 @@
 	}
 }
 
+/* ========== Links in Table ========== */
+#jobpairErrors a {
+	color: $accent-orange;
+	text-decoration: none;
+	transition: all 0.2s ease;
+
+	&:hover {
+		color: darken($accent-orange, 15%);
+		text-decoration: underline;
+	}
+
+	&:focus {
+		outline: 2px solid $accent-orange;
+		outline-offset: 2px;
+	}
+
+	&:visited {
+		color: darken($accent-orange, 20%);
+	}
+}
+
 /* ========== Responsive Design ========== */
 @media (max-width: 768px) {
 	#dateselector {
@@ -327,7 +348,7 @@
 		margin: 20px auto 15px auto;
 	}
 
-	#analytics_results {
+	#jobpairErrors {
 		font-size: 0.9em;
 
 		thead th,
@@ -338,9 +359,9 @@
 }
 
 @media (max-width: 480px) {
-	.analytics-loading,
-	.analytics-error-container,
-	.analytics-info-container {
+	.jobpairerrors-loading,
+	.jobpairerrors-error-container,
+	.jobpairerrors-info-container {
 		font-size: 0.9em;
 		padding: 0.75em;
 
@@ -350,7 +371,7 @@
 		}
 	}
 
-	#analytics_results {
+	#jobpairErrors {
 		font-size: 0.85em;
 
 		thead th,
@@ -371,28 +392,17 @@
 /* ========== Print Styles ========== */
 @media print {
 	#dateselector,
-	.analytics-loading,
-	.analytics-error-container,
-	.analytics-info-container {
+	.jobpairerrors-loading,
+	.jobpairerrors-error-container,
+	.jobpairerrors-info-container {
 		display: none;
 	}
 
-	#analytics_results {
+	#jobpairErrors {
 		page-break-inside: avoid;
 
 		tbody tr {
 			page-break-inside: avoid;
 		}
 	}
-}
-
-/* ========== Legacy Support ========== */
-.bar {
-	background: $accent-green;
-	display: inline-block;
-	vertical-align: bottom;
-}
-
-#analytics_timeline {
-	display: none;
 }

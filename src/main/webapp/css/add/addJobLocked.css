@@ -1,6 +1,6 @@
 #pageWrapper {
     background: #ae0000;
-    height: 410px;
+    min-height: 410px;
 }
 
 #innerWrapper {

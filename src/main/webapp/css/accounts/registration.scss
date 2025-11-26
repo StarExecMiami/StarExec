@@ -1,4 +1,9 @@
+// =============================================================================
+// REGISTRATION PAGE STYLES
+// =============================================================================
+
 @import "../common/_pass_strength_meter";
+@import "../global/colors";
 
 fieldset {
 	width: 75%;
@@ -40,7 +45,7 @@ tr .label {
 }
 
 .shade {
-	background-color: #111111;
+	background-color: $background-color;
 }
 
 table .styled {
@@ -49,7 +54,7 @@ table .styled {
 	font-size: 16px;
 
 	&.error {
-		border: solid 1px #ae0000;
+		border: solid 1px $accent-red;
 	}
 }
 
@@ -57,7 +62,7 @@ textarea#reason {
 	height: 80px;
 
 	&.error {
-		border: solid 1px #ae0000;
+		border: solid 1px $accent-red;
 	}
 }
 
@@ -68,7 +73,7 @@ textarea#reason {
 #javascriptDisabled {
 	margin-top: 200px;
 	text-align: center;
-	color: #ae0000;
+	color: $accent-red;
 	font-weight: bold;
 }
 
@@ -77,6 +82,6 @@ textarea#reason {
 	height: 28px;
 
 	&.error {
-		border: solid 1px #ae0000;
+		border: solid 1px $accent-red;
 	}
 }

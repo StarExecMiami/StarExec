@@ -3,6 +3,18 @@
 	margin: 50px auto 50px auto;	
 }
 
+@media only screen and (max-width: 1023px) {
+	#content fieldset {
+		width: 90%;
+	}
+}
+
+@media only screen and (max-width: 767px) {
+	#content fieldset {
+		width: 100%;
+	}
+}
+
 .hidden {
 	display: none;
 }
@@ -29,7 +41,8 @@
 	width: 200px;
 }
 
-button {
+/* Position form buttons in fieldset - except for action bar buttons */
+fieldset button:not(#actionBar button) {
 	float: right;
 }
 

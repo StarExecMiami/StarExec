@@ -3,6 +3,12 @@
 	margin: 50px auto 30px auto;
 }
 
+@media only screen and (max-width: 1023px) {
+	#content fieldset {
+		width: 90%;
+	}
+}
+
 #tblUploadBench {
 	width: 100%;
 }
@@ -28,7 +34,9 @@ select {
 	vertical-align: middle;
 }
 
-button {
+/* Position form buttons in fieldset */
+fieldset button,
+#uploadForm button {
 	float: right;
 }
 
@@ -42,8 +50,8 @@ button {
 }
 
 @media only screen and (max-width: 767px) {
-	#uploadForm > fieldset {
-		width: 75%;
+	#content fieldset, #uploadForm > fieldset {
+		width: 100%;
 	}
 
 	#tblDefaultPerm {

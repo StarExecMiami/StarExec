@@ -1,3 +1,11 @@
+// =============================================================================
+// EDIT SHARED STYLES
+// =============================================================================
+// Shared styles for edit pages
+// =============================================================================
+
+@import "../global/colors";
+
 fieldset {
 	width: 600px;
 	margin: auto auto 20px;
@@ -37,7 +45,7 @@ input[type="text"], textarea, select {
 }
 
 textarea#description.error {
-	border: 1px solid #ae0000;
+	border: 1px solid $accent-red;
 	vertical-align: middle;
 	padding: 5px;
 }

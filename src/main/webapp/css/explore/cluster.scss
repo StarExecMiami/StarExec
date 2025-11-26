@@ -1,4 +1,5 @@
 @import "../global/helper";
+@import "../global/colors";
 
 #benchHead {
 	width: 19%;
@@ -28,7 +29,7 @@
 }
 
 #queueDescriptionWrapper {
-	background-color: #111111;
+	background-color: $background-color;
 	word-wrap: break-word;
 	padding: 15px;
 }
@@ -89,5 +90,31 @@
 	#details td, #details th {
 		text-align: center;
 		font-size: 12px;
+	}
+}
+
+// =============================================================================
+// FIX: DataTables width issue in expandable containers
+// =============================================================================
+// DataTables sets width: 0px inline when table is initialized while hidden.
+// These styles override the inline width to ensure tables display correctly.
+
+#details,
+#jobs {
+	width: 100% !important;
+	min-width: 100% !important;
+	
+	th, td {
+		min-width: 50px;
+	}
+}
+
+.expdContainer {
+	table {
+		width: 100% !important;
+	}
+	
+	.dataTables_wrapper {
+		width: 100% !important;
 	}
 }
