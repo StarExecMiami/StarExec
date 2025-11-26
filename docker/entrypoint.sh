@@ -430,6 +430,20 @@ if [ ! -f /app/data/sge_scripts/functions.bash ]; then
 fi
 echo ""
 
+# Update loading page to redirect to StarExec home page
+# This provides visual feedback that startup completed successfully
+ROOT_INDEX="${CATALINA_HOME}/webapps/ROOT/index.html"
+if [ -f "$ROOT_INDEX" ]; then
+    echo "Updating loading page - migrations complete, starting Tomcat..."
+    # Replace status message to indicate app is ready
+    sed -i 's/StarExec is starting up.../StarExec is ready!/g' "$ROOT_INDEX"
+    sed -i 's/Initializing database and loading application/Redirecting to application.../g' "$ROOT_INDEX"
+    # Change refresh to redirect to /starexec/ (the actual home page)
+    sed -i 's|meta http-equiv="refresh" content="5"|meta http-equiv="refresh" content="2;url=/starexec/"|g' "$ROOT_INDEX"
+    echo "✓ Loading page updated - will redirect to /starexec/"
+fi
+echo ""
+
 # Start Tomcat using full path
 echo "Starting Tomcat..."
 echo "=========================================="

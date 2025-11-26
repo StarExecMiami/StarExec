@@ -165,12 +165,13 @@ RUN cd /tmp && \
     tar xzf tomcat.tar.gz && \
     mv apache-tomcat-${TOMCAT_VERSION} ${CATALINA_HOME} && \
     rm tomcat.tar.gz && \
-    # Remove default webapps for security
+    # Remove default webapps for security (keep ROOT for loading page)
     rm -rf ${CATALINA_HOME}/webapps/examples \
     ${CATALINA_HOME}/webapps/docs \
-    ${CATALINA_HOME}/webapps/ROOT \
     ${CATALINA_HOME}/webapps/manager \
     ${CATALINA_HOME}/webapps/host-manager && \
+    # Create minimal ROOT webapp with loading page placeholder
+    mkdir -p ${CATALINA_HOME}/webapps/ROOT && \
     # Create necessary directories
     mkdir -p ${STAREXEC_DATA_DIR} ${STAREXEC_LOG_DIR} && \
     mkdir -p /app/backend /app/work /app/data /app/sandbox && \
@@ -220,6 +221,9 @@ RUN chown -R starexec:starexec /config
 
 # Copy build metadata
 COPY --from=builder --chown=starexec:starexec /build/build-metadata/build-info.properties /tmp/build-info.properties
+
+# Copy loading page for startup
+COPY --chown=starexec:starexec docker/loading.html ${CATALINA_HOME}/webapps/ROOT/index.html
 
 # Copy entrypoint and configuration scripts
 COPY --chown=starexec:starexec docker/entrypoint.sh /usr/local/bin/entrypoint.sh
