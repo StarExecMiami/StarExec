@@ -2677,7 +2677,7 @@ BEGIN
 	job_pairs.bench_name,
 	anonymous_primitive_names.anonymous_name,
 	job_pairs.path,
-	completion_id,
+	job_pair_completion.completion_id,
 	primary_jobpair_data
 	FROM starexec.job_pairs
 	JOIN job_spaces ON job_spaces.id = job_pairs.job_space_id
@@ -4574,7 +4574,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT id, user_id AS userId, name, uploaded, description, primary_stage_id AS primaryStageId 
+    SELECT solver_pipelines.id, user_id AS userId, name, uploaded, description, primary_stage_id AS primaryStageId 
     FROM starexec.solver_pipelines WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -4590,7 +4590,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.pipeline_stages WHERE pipeline_id = _id;
+    SELECT * FROM starexec.pipeline_stages WHERE pipeline_stages.pipeline_id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4605,7 +4605,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.pipeline_dependencies WHERE stage_id = _id ORDER BY input_number;
+    SELECT * FROM starexec.pipeline_dependencies WHERE pipeline_dependencies.stage_id = _id ORDER BY input_number;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -7237,7 +7237,7 @@ BEGIN
         RETURN QUERY
         SELECT s.name, s.description, s.locked, s.id
         FROM starexec.spaces s
-        WHERE s.id = (SELECT MIN(id) FROM starexec.spaces);
+        WHERE s.id = (SELECT MIN(spaces.id) FROM starexec.spaces);
     ELSE
         -- Else find all children spaces that are an ancestor of a space the user is apart of
         RETURN QUERY
@@ -7289,7 +7289,7 @@ BEGIN
         RETURN QUERY
         SELECT s.name, s.description, s.locked, s.id
         FROM starexec.spaces s
-        WHERE s.id = (SELECT MIN(id) FROM starexec.spaces);
+        WHERE s.id = (SELECT MIN(spaces.id) FROM starexec.spaces);
     ELSE
     RETURN QUERY
     -- Explicitly alias the selected id column as "id" so callers continue to see column name 'id'
@@ -7313,7 +7313,7 @@ BEGIN
         RETURN QUERY
         SELECT s.name, s.description, s.locked, s.id
         FROM starexec.spaces s
-        WHERE s.id = (SELECT MIN(id) FROM starexec.spaces);
+        WHERE s.id = (SELECT MIN(spaces.id) FROM starexec.spaces);
     ELSE
         RETURN QUERY
         SELECT DISTINCT s.name, s.description, s.locked, s.id
@@ -7336,7 +7336,7 @@ BEGIN
         RETURN QUERY
         SELECT s.id, s.name, s.created, s.description, s.locked, s.default_permission, s.public_access, s.sticky_leaders
         FROM starexec.spaces s
-        WHERE s.id = (SELECT MIN(id) FROM starexec.spaces);
+        WHERE s.id = (SELECT MIN(spaces.id) FROM starexec.spaces);
     ELSE
         RETURN QUERY
         SELECT s.id, s.name, s.created, s.description, s.locked, s.default_permission, s.public_access, s.sticky_leaders
