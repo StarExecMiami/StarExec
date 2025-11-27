@@ -32,6 +32,12 @@ DRY_RUN?=0
 PODMAN_NETWORK?=pasta
 PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
 
+# ANSI Colors for UI
+GREEN  := $(shell tput -Txterm setaf 2)
+YELLOW := $(shell tput -Txterm setaf 3)
+RED    := $(shell tput -Txterm setaf 1)
+RESET  := $(shell tput -Txterm sgr0)
+
 .PHONY: help build build-fresh build-prod image \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s \
@@ -381,7 +387,7 @@ define cleanup_deployment
 	done
 endef
 
-deploy-podman: .lock-podman-deploy verify-deps image network-setup volumes-create
+deploy-podman: verify-deps image network-setup volumes-create
 	@echo "Deploying to Podman with environment: $(ENV)"
 	@echo "Using values file: $(VALS)"
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
@@ -405,13 +411,13 @@ deploy-podman-helm:
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@echo "Rendering secrets..."
-	@helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" > secret-render.yaml
-	@for key in user password database rootPassword; do \
-		b64=$$(yq -r ".data.$$key" secret-render.yaml); \
-		[ -z "$$b64" ] && echo "ERROR: No base64 data for $$key" && cat secret-render.yaml && exit 1; \
-		echo "$$b64" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
+	@# Extract secrets directly from Helm template without writing to disk
+	@helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" | \
+	yq -r '.data | to_entries | .[] | .key + "=" + .value' | \
+	while read -r line; do \
+		key=$${line%%=*}; val=$${line#*=}; \
+		echo "$$val" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
 	done
-	@rm -f secret-render.yaml
 	@echo "Deploying application pod..."
 	@IMAGE_REPO="$(RELEASE_NAME)"; \
 	IMAGE_VER="$(IMAGE_TAG)"; \
@@ -437,21 +443,7 @@ deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@echo "Ensuring Podman infra image exists..."
-	@if ! podman image exists k8s.gcr.io/pause:3.5; then \
-		echo "⚠️  Default pause image (k8s.gcr.io/pause:3.5) missing. Attempting to pull..."; \
-		if podman pull k8s.gcr.io/pause:3.5 2>/dev/null; then \
-			echo "✓ Pulled k8s.gcr.io/pause:3.5"; \
-		else \
-			echo "  Pull failed (likely deprecated registry). Pulling from registry.k8s.io..."; \
-			if podman pull registry.k8s.io/pause:3.5; then \
-				echo "✓ Pulled registry.k8s.io/pause:3.5"; \
-				echo "  Tagging as k8s.gcr.io/pause:3.5 for compatibility..."; \
-				podman tag registry.k8s.io/pause:3.5 k8s.gcr.io/pause:3.5; \
-			else \
-				echo "❌ Failed to pull pause image. 'podman play kube' might fail."; \
-			fi; \
-		fi; \
-	fi
+	@./scripts/ensure-pause-image.sh
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
@@ -525,8 +517,8 @@ clean-podman:
 	@echo "✓ Cleanup complete (volumes and cache preserved)"
 
 clean-cache:
-	@echo "⚠️  WARNING: Clearing Podman build cache"
-	@echo "This affects ALL projects on this system, not just StarExec"
+	@echo "${YELLOW}⚠️  WARNING: Clearing Podman build cache${RESET}"
+	@echo "${YELLOW}This affects ALL projects on this system, not just StarExec${RESET}"
 	@echo ""
 	@echo "This will remove:"
 	@echo "  - Unused images"
@@ -830,15 +822,4 @@ docs:
 	@echo "✓ Generated docs/reference/makefile-targets.md"
 	@echo "  Remember to run 'make docs' after adding new targets!"
 
-# ============================================================================
-# LOCKING MECHANISM (prevents concurrent deployments)
-# ============================================================================
 
-# Lock file for deployment operations
-.lock-podman-deploy:
-	@mkdir -p .locks
-	@bash -c 'exec 200>.locks/podman-deploy.lock && flock -n 200 || { echo "❌ Another deployment is in progress. Please wait."; exit 1; }'
-	@echo "🔒 Acquired deployment lock"
-
-# Clean up lock on exit
-.PHONY: .lock-podman-deploy
