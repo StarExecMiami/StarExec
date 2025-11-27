@@ -436,6 +436,22 @@ deploy-podman-helm:
 deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
+	@echo "Ensuring Podman infra image exists..."
+	@if ! podman image exists k8s.gcr.io/pause:3.5; then \
+		echo "⚠️  Default pause image (k8s.gcr.io/pause:3.5) missing. Attempting to pull..."; \
+		if podman pull k8s.gcr.io/pause:3.5 2>/dev/null; then \
+			echo "✓ Pulled k8s.gcr.io/pause:3.5"; \
+		else \
+			echo "  Pull failed (likely deprecated registry). Pulling from registry.k8s.io..."; \
+			if podman pull registry.k8s.io/pause:3.5; then \
+				echo "✓ Pulled registry.k8s.io/pause:3.5"; \
+				echo "  Tagging as k8s.gcr.io/pause:3.5 for compatibility..."; \
+				podman tag registry.k8s.io/pause:3.5 k8s.gcr.io/pause:3.5; \
+			else \
+				echo "❌ Failed to pull pause image. 'podman play kube' might fail."; \
+			fi; \
+		fi; \
+	fi
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
