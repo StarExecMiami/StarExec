@@ -2554,8 +2554,8 @@ CREATE OR REPLACE FUNCTION starexec.GetJobPairsByJobSimple(_id INT)
 RETURNS TABLE(id INT, job_space_id INT, path VARCHAR, solver_name VARCHAR, solver_id INT, config_name VARCHAR, config_id INT, bench_name VARCHAR, bench_id INT, pipeline_name VARCHAR, job_space_name VARCHAR, status_code SMALLINT, job_space_id_dup INT, pipeline_id INT, stage_number INT) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT job_pairs.id, job_pairs.job_space_id, path, jobpair_stage_data.solver_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_name,
-	jobpair_stage_data.config_id, bench_name, bench_id, solver_pipelines.name,
+	SELECT job_pairs.id, job_pairs.job_space_id, job_pairs.path, jobpair_stage_data.solver_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_name,
+	jobpair_stage_data.config_id, job_pairs.bench_name, job_pairs.bench_id, solver_pipelines.name,
 	job_spaces.name, job_pairs.status_code, job_spaces.id, pipeline_stages.pipeline_id, jobpair_stage_data.stage_number
 	FROM starexec.job_pairs
 	JOIN job_spaces ON job_spaces.id=job_space_id
@@ -2639,9 +2639,9 @@ BEGIN
 	RETURN QUERY
 	SELECT job_pairs.status_code,
 	job_pairs.id, job_pairs.bench_id, job_pairs.bench_name,
-	completion_id, jobpair_stage_data.solver_id, jobpair_stage_data.solver_name, jobpair_stage_data.status_code,
+	job_pair_completion.completion_id, jobpair_stage_data.solver_id, jobpair_stage_data.solver_name, jobpair_stage_data.status_code,
 	jobpair_stage_data.config_id, jobpair_stage_data.config_name, jobpair_stage_data.cpu, jobpair_stage_data.stage_id,
-	jobpair_stage_data.wallclock, primary_jobpair_data, job_pairs.path,
+	jobpair_stage_data.wallclock, job_pairs.primary_jobpair_data, job_pairs.path,
 	anonymous_solver_names.anonymous_name,
 	anonymous_config_names.anonymous_name,
 	anonymous_bench_names.anonymous_name,
