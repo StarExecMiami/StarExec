@@ -1,4 +1,28 @@
 # StarExec DevOps Build System
+#
+# ============================================================================
+# CONFIGURATION VARIABLES
+# ============================================================================
+# These can be overridden via environment variables or command-line:
+#   make deploy-podman ENV=prod IMAGE_TAG=v1.2.3
+#
+# IMAGE_REGISTRY  - Container registry URL (default: ghcr.io/starexecmiami)
+# IMAGE_TAG       - Image version tag (default: latest)
+# ENV             - Deployment environment: dev, ci, prod (default: dev)
+# FORCE           - Skip confirmation prompts: 0 or 1 (default: 0)
+# DRY_RUN         - Preview destructive ops without executing: 0 or 1 (default: 0)
+#
+# Database Configuration:
+# STAREXEC_DB_PASSWORD      - Database password (⚠️ set for non-dev environments)
+# STAREXEC_DB_PASSWORD_FILE - Path to file containing DB password (preferred)
+# STAREXEC_DB_USER          - Database user (default: starexec)
+# STAREXEC_DB_DATABASE      - Database name (default: starexec)
+# DB_HOST                   - Database host (default: localhost)
+#
+# SECURITY WARNING: Defaults are for DEVELOPMENT ONLY.
+# Override STAREXEC_DB_PASSWORD (or provide STAREXEC_DB_PASSWORD_FILE)
+# before deploying to shared environments.
+# ============================================================================
 
 # IMAGE_REGISTRY?=ghcr.io/andrescdo
 # IMAGE_NAME?=starexec
@@ -24,9 +48,8 @@ VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 FORCE?=0
 DRY_RUN?=0
 
-# SECURITY WARNING: Defaults are for DEVELOPMENT ONLY.
-# Override STAREXEC_DB_PASSWORD (or provide STAREXEC_DB_PASSWORD_FILE)
-# before deploying to shared environments.
+# Retry/timeout configuration
+POSTGRES_READY_TIMEOUT?=5
 
 # Network configuration
 PODMAN_NETWORK?=pasta
@@ -36,6 +59,8 @@ PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.
 GREEN  := $(shell tput -Txterm setaf 2)
 YELLOW := $(shell tput -Txterm setaf 3)
 RED    := $(shell tput -Txterm setaf 1)
+BLUE   := $(shell tput -Txterm setaf 4)
+BOLD   := $(shell tput -Txterm bold)
 RESET  := $(shell tput -Txterm sgr0)
 
 .PHONY: help build build-fresh build-prod image \
@@ -388,14 +413,18 @@ define cleanup_deployment
 endef
 
 deploy-podman: verify-deps image network-setup volumes-create
-	@echo "Deploying to Podman with environment: $(ENV)"
+	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
 	@echo "Using values file: $(VALS)"
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
-		echo "⚠️  WARNING: Using default development DB password ($(DB_PASSWORD_DEFAULT))."; \
+		echo ""; \
+		echo "${RED}╔════════════════════════════════════════════════════════╗${RESET}"; \
+		echo "${RED}║  ⚠️  INSECURE: Using default development DB password   ║${RESET}"; \
+		echo "${RED}╚════════════════════════════════════════════════════════╝${RESET}"; \
+		echo ""; \
 		if [ "$(ENV)" = "prod" ]; then \
 			read -p "Continue with insecure password? (y/N): " ans; \
 			if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-				echo "Aborting deployment."; \
+				echo "${RED}Aborting deployment.${RESET}"; \
 				exit 1; \
 			fi; \
 		fi; \
@@ -403,7 +432,7 @@ deploy-podman: verify-deps image network-setup volumes-create
 	@if command -v helm >/dev/null 2>&1; then \
 		$(MAKE) deploy-podman-helm; \
 	else \
-		echo "Helm not found, using direct deployment..."; \
+		echo "${YELLOW}Helm not found, using direct deployment...${RESET}"; \
 		$(MAKE) deploy-podman-direct; \
 	fi
 
@@ -427,13 +456,13 @@ deploy-podman-helm:
 		--set image.pullPolicy=Never > render.yaml
 	@podman play kube render.yaml
 	@echo ""
-	@echo "✓ Deployment complete!"
-	@echo "  Environment: $(ENV)"
+	@echo "${GREEN}✓ Deployment complete!${RESET}"
+	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
 	@echo "  Values: $(VALS)"
 	@echo "  Migrations: Executed automatically during startup"
-	@echo "  Access: http://localhost:7827/starexec"
+	@echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"
 	@echo ""
-	@echo "Useful commands:"
+	@echo "${BOLD}Useful commands:${RESET}"
 	@echo "  make db-shell              - PostgreSQL shell"
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
 	@echo "  podman logs starexec-app   - Application logs"
@@ -453,12 +482,12 @@ deploy-podman-direct:
 	@echo "Deploying application pod..."
 	@podman play kube render.yaml
 	@echo ""
-	@echo "✓ Deployment complete!"
-	@echo "  Environment: $(ENV)"
-	@echo "  Access: http://localhost:7827/starexec"
+	@echo "${GREEN}✓ Deployment complete!${RESET}"
+	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
+	@echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"
 	@echo "  Migrations: Executed automatically during startup"
 	@echo ""
-	@echo "Useful commands:"
+	@echo "${BOLD}Useful commands:${RESET}"
 	@echo "  make db-shell              - PostgreSQL shell"
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
 	@echo "  podman logs starexec-app   - Application logs"
@@ -466,7 +495,7 @@ deploy-podman-direct:
 
 deploy-podman-cached: image
 	@if [ ! -f render.yaml ]; then \
-		echo "WARNING: render.yaml not found! Running 'make template' to generate..."; \
+		echo "${YELLOW}WARNING: render.yaml not found! Running 'make template' to generate...${RESET}"; \
 		$(MAKE) template; \
 	fi
 	@echo "Deploying using cached render.yaml..."
@@ -474,17 +503,17 @@ deploy-podman-cached: image
 	$(call cleanup_deployment)
 	@podman play kube render.yaml
 	@echo ""
-	@echo "✓ Deployment complete (using cached manifest)!"
-	@echo "  Access: http://localhost:7827/starexec"
+	@echo "${GREEN}✓ Deployment complete (using cached manifest)!${RESET}"
+	@echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"
 	@echo ""
-	@echo "Note: To regenerate manifest, run 'make template' or 'make deploy-podman'"
+	@echo "Note: To regenerate manifest, run '${BLUE}make template${RESET}' or '${BLUE}make deploy-podman${RESET}'"
 
 undeploy-podman:
 	@echo "Removing Podman deployment (volumes preserved)"
 	$(call cleanup_deployment)
 	@echo ""
-	@echo "✓ Cleanup complete (volumes preserved)"
-	@echo "Note: Use 'make volumes-delete ENV=$(ENV)' to remove data"
+	@echo "${GREEN}✓ Cleanup complete (volumes preserved)${RESET}"
+	@echo "Note: Use '${BLUE}make volumes-delete ENV=$(ENV)${RESET}' to remove data"
 
 # ============================================================================
 # KUBERNETES DEPLOYMENT
@@ -536,13 +565,13 @@ clean-cache:
 		exit 1; \
 	fi
 	@echo "Pruning system..."
-	@podman system prune -a -f || { echo "✗ Error during system prune"; exit 1; }
+	@podman system prune -a -f || { echo "${RED}✗ Error during system prune${RESET}"; exit 1; }
 	@echo "Pruning builder cache..."
 	@podman builder prune -a -f 2>/dev/null || true
-	@echo "✓ Build cache cleared successfully"
+	@echo "${GREEN}✓ Build cache cleared successfully${RESET}"
 
 clean-all: clean-podman volumes-delete
-	@echo "✓ Full cleanup complete (pods, images, volumes removed; cache preserved)"
+	@echo "${GREEN}✓ Full cleanup complete (pods, images, volumes removed; cache preserved)${RESET}"
 
 clean-hard:
 	@if [ "$(DRY_RUN)" = "1" ]; then \
@@ -554,21 +583,21 @@ clean-hard:
 		echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		exit 0; \
 	fi
-	@echo "⚠️  HARD RESET: Removes ALL StarExec resources for ENV=$(ENV)"
-	@echo "This will delete:"
+	@echo "${YELLOW}⚠️  HARD RESET: Removes ALL StarExec resources for ENV=$(ENV)${RESET}"
+	@echo "${RED}This will delete:${RESET}"
 	@echo "  - Pods and containers"
 	@echo "  - Secrets"
-	@echo "  - Volumes (ALL DATA will be lost)"
+	@echo "  - ${RED}Volumes (ALL DATA will be lost)${RESET}"
 	@echo "  - Images"
 	@echo ""
 	@if [ "$(FORCE)" != "1" ]; then \
 		read -p "Type '$(ENV)' to confirm: " ans; \
 		if [ "$$ans" != "$(ENV)" ]; then \
-			echo "Cancelled"; \
+			echo "${YELLOW}Cancelled${RESET}"; \
 			exit 0; \
 		fi; \
 	else \
-		echo "FORCE=1 detected, skipping confirmation"; \
+		echo "${YELLOW}FORCE=1 detected, skipping confirmation${RESET}"; \
 	fi
 	$(call cleanup_deployment)
 	@echo "Checking for volumes in use..."
@@ -577,9 +606,9 @@ clean-hard:
 		if podman volume exists $$vol 2>/dev/null; then \
 			USERS=$$(podman ps -a --filter volume=$$vol --format '{{.Names}}' 2>/dev/null); \
 			if [ -n "$$USERS" ]; then \
-				echo "❌ ERROR: Volume $$vol is in use by:"; \
+				echo "${RED}❌ ERROR: Volume $$vol is in use by:${RESET}"; \
 				echo "$$USERS"; \
-				echo "Stop containers first: make undeploy-podman"; \
+				echo "Stop containers first: ${BLUE}make undeploy-podman${RESET}"; \
 				exit 1; \
 			fi; \
 		fi; \
@@ -588,7 +617,7 @@ clean-hard:
 	@podman volume rm -f $(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null || true
 	@echo "Removing StarExec image..."
 	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
-	@echo "✓ Hard reset complete for ENV=$(ENV)"
+	@echo "${GREEN}✓ Hard reset complete for ENV=$(ENV)${RESET}"
 
 # ============================================================================
 # CONVENIENT CLEANUP ALIASES
@@ -596,40 +625,55 @@ clean-hard:
 
 reset: stop clean-hard
 	@echo ""
-	@echo "✓✓✓ Complete reset finished ✓✓✓"
-	@echo "Environment $(ENV) has been completely cleaned:"
+	@echo "${GREEN}✓✓✓ Complete reset finished ✓✓✓${RESET}"
+	@echo "Environment ${BOLD}$(ENV)${RESET} has been completely cleaned:"
 	@echo "  - All containers stopped and removed"
 	@echo "  - All volumes deleted"
 	@echo "  - All images removed"
 	@echo ""
-	@echo "To redeploy: make deploy-podman ENV=$(ENV)"
+	@echo "To redeploy: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"
 
 nuke: reset
-	@echo "Environment $(ENV) nuked successfully"
+	@echo "${GREEN}Environment $(ENV) nuked successfully${RESET}"
 
 status:
-	@echo "========================================"
-	@echo "StarExec Deployment Status (ENV=$(ENV))"
-	@echo "========================================"
+	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
+	@echo "${BOLD}${BLUE}  StarExec Status (ENV=$(ENV))${RESET}"
+	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
 	@echo ""
-	@echo "=== Pods ==="
-	@podman pod ls --filter name=starexec 2>/dev/null || echo "No StarExec pods found"
+	@printf "%-20s: " "Deployment State"
+	@if podman pod exists starexec 2>/dev/null; then \
+		echo "${GREEN}RUNNING${RESET}"; \
+	else \
+		echo "${RED}STOPPED${RESET}"; \
+	fi
+	@printf "%-20s: %s\n" "Environment" "$(ENV)"
+	@printf "%-20s: %s\n" "Image" "$(RELEASE_NAME):$(IMAGE_TAG)"
+	@printf "%-20s: " "Data Volume"
+	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-data 2>/dev/null; then \
+		echo "${GREEN}✓ exists${RESET}"; \
+	else \
+		echo "${RED}✗ missing${RESET}"; \
+	fi
+	@printf "%-20s: " "Postgres Volume"
+	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null; then \
+		echo "${GREEN}✓ exists${RESET}"; \
+	else \
+		echo "${RED}✗ missing${RESET}"; \
+	fi
 	@echo ""
-	@echo "=== Containers ==="
-	@podman ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "No StarExec containers found"
+	@echo "${BOLD}=== Containers ===${RESET}"
+	@podman ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
 	@echo ""
-	@echo "=== Volumes ==="
-	@podman volume ls --filter name=$(VOLUME_PREFIX)-$(ENV) --format "table {{.Name}}\t{{.MountPoint}}" 2>/dev/null || echo "No volumes found for ENV=$(ENV)"
-	@echo ""
-	@echo "=== Images ==="
-	@podman images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "No StarExec images found"
+	@echo "${BOLD}=== Images ===${RESET}"
+	@podman images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
 	@echo ""
 	@if podman pod exists starexec 2>/dev/null; then \
-		echo "✓ StarExec is RUNNING"; \
-		echo "  Access: http://localhost:7827/starexec"; \
+		echo "${GREEN}✓ StarExec is RUNNING${RESET}"; \
+		echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"; \
 	else \
-		echo "⚬ StarExec is NOT running"; \
-		echo "  Deploy with: make deploy-podman ENV=$(ENV)"; \
+		echo "${YELLOW}○ StarExec is NOT running${RESET}"; \
+		echo "  Deploy with: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"; \
 	fi
 
 # ============================================================================
@@ -652,40 +696,44 @@ logs-postgres:
 	@podman logs -f starexec-postgres
 
 test-deps:
-	@echo "Testing job execution dependencies in container..."
+	@echo "${BOLD}Testing job execution dependencies in container...${RESET}"
 	@echo ""
-	@echo "=== Installed Packages ==="
+	@echo "${BOLD}=== Installed Packages ===${RESET}"
 	@podman exec starexec-app apk list --installed | grep -E "bash|util-linux|postgresql-client|procps" || true
 	@echo ""
-	@echo "=== Tool Versions ==="
+	@echo "${BOLD}=== Tool Versions ===${RESET}"
 	@podman exec starexec-app bash -c "echo 'bash:' && bash --version | head -1"
 	@podman exec starexec-app bash -c "echo 'flock:' && flock --version"
 	@podman exec starexec-app bash -c "echo 'lscpu:' && lscpu --version"
 	@podman exec starexec-app bash -c "echo 'psql:' && psql --version"
 	@podman exec starexec-app bash -c "echo 'ps:' && ps --version"
 	@echo ""
-	@echo "=== Command Availability ==="
+	@echo "${BOLD}=== Command Availability ===${RESET}"
 	@podman exec starexec-app bash -c "which bash flock lscpu psql ps runsolver"
 	@echo ""
-	@echo "=== Test ps -p Command ==="
+	@echo "${BOLD}=== Test ps -p Command ===${RESET}"
 	@podman exec starexec-app bash -c 'ps -p $$$$ -o pid,cmd'
 	@echo ""
-	@echo "=== Test flock -w Command ==="
+	@echo "${BOLD}=== Test flock -w Command ===${RESET}"
 	@podman exec starexec-app bash -c "timeout 2 flock -x -w 1 /tmp/test.lock echo 'flock -w works!'"
 	@echo ""
-	@echo "=== CPU Info ==="
+	@echo "${BOLD}=== CPU Info ===${RESET}"
 	@podman exec starexec-app lscpu | head -10
 	@echo ""
-	@echo "✓ All job execution dependencies validated"
+	@echo "${GREEN}✓ All job execution dependencies validated${RESET}"
 
 verify-deps:
-	@echo "Validating required CLI tooling..."
-	@command -v podman >/dev/null || { echo "❌ podman is required"; exit 1; }
-	@command -v yq >/dev/null || { echo "❌ yq is required"; exit 1; }
-	@yq --version >/dev/null 2>&1 && echo "  yq is available" || { echo "❌ yq is not working properly"; exit 1; }
-	@command -v sha256sum >/dev/null || { echo "❌ sha256sum is required"; exit 1; }
-	@echo "Optional tools:"
-	@command -v helm >/dev/null && echo "  helm is available" || echo "  helm is not installed (needed for template/deploy)";
+	@echo "${BOLD}Validating required CLI tooling...${RESET}"
+	@echo -n "  podman: "
+	@command -v podman >/dev/null && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
+	@echo -n "  yq: "
+	@command -v yq >/dev/null && yq --version >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
+	@echo -n "  sha256sum: "
+	@command -v sha256sum >/dev/null && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
+	@echo "${BOLD}Optional tools:${RESET}"
+	@echo -n "  helm: "
+	@command -v helm >/dev/null && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ not installed (needed for template/deploy)${RESET}"
+	@echo "${GREEN}✓ All required dependencies satisfied${RESET}"
 
 lint:
 	@if command -v helm >/dev/null 2>&1; then \
