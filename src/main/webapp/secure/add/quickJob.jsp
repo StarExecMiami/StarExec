@@ -278,17 +278,17 @@
 			</table>
 			<button id="useSolver">use selected solver</button>
 		</fieldset>
-		<fieldset id="actionField">
-			<legend>actions</legend>
-			<div id="actionBar">
-				<button type="submit" class="round" id="btnDone">submit</button>
-				<button type="button" class="round" id="btnBack">cancel</button>
-			</div>
-		</fieldset>
+		<div id="actionBar">
+			<button type="submit" class="round" id="btnDone">submit</button>
+			<button type="button" class="round" id="btnBack">Cancel</button>
+		</div>
 	</form>
-	<div id="dialog-createSettingsProfile" title="create settings profile"
-	     class="hiddenDialog">
-		<p><span id="dialog-createSettingsProfile-txt"></span></p><br/>
-		<p><label>name: </label><input id="settingName" type="text"/></p>
+	<div id="dialog-createSettingsProfile" title="Create Settings Profile" class="hiddenDialog" role="dialog" aria-labelledby="dialog-createSettingsProfile-title">
+		<p><span id="dialog-createSettingsProfile-txt"></span></p>
+		<div>
+			<label for="settingName">Profile Name:</label>
+			<input id="settingName" type="text" aria-describedby="setting-name-desc"/>
+			<span id="setting-name-desc" class="sr-only">Enter a name for the new settings profile</span>
+		</div>
 	</div>
 </star:template>
