@@ -6763,7 +6763,7 @@ CREATE OR REPLACE FUNCTION starexec.SetRecycledSolversToDeleted(_userId INT)
 RETURNS VOID AS $$
 BEGIN
     UPDATE users
-    SET users.disk_size = users.disk_size - (SELECT COALESCE(SUM(s.disk_size), 0) FROM starexec.solvers s WHERE s.user_id = _userId AND s.recycled = true AND s.deleted = false)
+    SET disk_size = users.disk_size - (SELECT COALESCE(SUM(s.disk_size), 0) FROM starexec.solvers s WHERE s.user_id = _userId AND s.recycled = true AND s.deleted = false)
     WHERE users.id = _userId;
     UPDATE solvers
     SET deleted = true, disk_size = 0

@@ -159,9 +159,9 @@ public class Reports {
 		try {
 			con = Common.getConnection();
 			if (queueName == null) {
-				ps = con.prepareStatement("CALL starexec.SetEventOccurrencesNotRelatedToQueue(?, ?)");
+				ps = con.prepareStatement("SELECT starexec.SetEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
-				ps = con.prepareStatement("CALL starexec.SetEventOccurrencesForQueue(?, ?, ?)");
+				ps = con.prepareStatement("SELECT starexec.SetEventOccurrencesForQueue(?, ?, ?)");
 				ps.setString(3, queueName);
 			}
 			ps.setString(1, eventName);
@@ -200,7 +200,7 @@ public class Reports {
 			if (queueName == null) {
 				ps = con.prepareStatement("CALL starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
-				ps = con.prepareStatement("CALL starexec.AddToEventOccurrencesForQueue(?, ?, ?)");
+				ps = con.prepareStatement("SELECT starexec.AddToEventOccurrencesForQueue(?, ?, ?)");
 				ps.setString(3, queueName);
 			}
 			ps.setString(1, eventName);
