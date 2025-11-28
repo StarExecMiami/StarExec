@@ -1,6 +1,79 @@
 @import "../common/_pass_strength_meter";
 @import "../global/colors";
 
+// =============================================================================
+// ACCOUNT PAGE LAYOUT
+// =============================================================================
+// This page uses semantic HTML5 sections with h2 headings instead of the
+// legacy fieldset/legend pattern used on other edit pages. The styles below
+// provide visual consistency with the rest of the application.
+// =============================================================================
+
+// Page description text
+.page-description {
+	text-align: center;
+	color: $text-accent-color;
+	margin-bottom: 30px;
+	font-size: 0.95em;
+}
+
+// Section layout (replaces fieldset in this page)
+.account-edit {
+	> section {
+		width: 600px;
+		margin: 0 auto 30px;
+		border: 3px solid $background-color;
+		border-radius: 3px;
+		padding: 10px;
+
+		@media (max-width: 767px) {
+			width: 95%;
+		}
+
+		// Section headings (replaces legend)
+		> h2 {
+			border: 2px solid $background-color;
+			border-radius: 3px;
+			background-color: $background-color;
+			padding: 5px 8px;
+			margin: -20px 0 15px 25px;
+			display: inline-block;
+			font-size: 1em;
+			text-transform: lowercase;
+		}
+
+		> h3 {
+			font-size: 0.9em;
+			margin-top: 20px;
+			margin-bottom: 10px;
+		}
+
+		table, ul {
+			width: 100%;
+		}
+	}
+
+	// Nested sections (like setting-actions) don't need the fieldset styling
+	section section {
+		border: none;
+		padding: 0;
+		margin: 15px 0 0;
+		width: 100%;
+
+		> h3 {
+			margin: 0 0 10px;
+		}
+	}
+
+	.help-text {
+		text-align: right;
+		font-size: small;
+		color: $text-accent-color;
+		margin-top: 5px;
+	}
+}
+
+// Legacy fieldset support (in case any remain)
 fieldset {
 	width: 75%;
 	margin-top: 50px;
@@ -32,16 +105,41 @@ tr .label {
 	width: 35%;
 }
 
-fieldset h6 {
-	padding-top: 20px;
-	text-align: right;
-	font-size: small;
+// Action buttons layout
+.action-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 10px;
+
+	button {
+		flex: 0 0 auto;
+	}
+}
+
+.danger-zone {
+	border-color: $accent-red !important;
+
+	.warning {
+		color: $accent-red;
+		margin-bottom: 15px;
+	}
+
+	button.danger {
+		background-color: $accent-red;
+		border-color: $accent-red;
+
+		&:hover {
+			background-color: darken($accent-red, 10%);
+		}
+	}
 }
 
 input {
 	width: 50%;
 }
 
+// Legacy fieldset list styling
 fieldset ul li {
 	list-style: none;
 	display: block;

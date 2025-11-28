@@ -100,7 +100,7 @@
 	}
 %>
 <star:template title="Edit Account"
-               css="common/table, common/pass_strength_meter, edit/account"
+               css="common/table, edit/account"
                js="common/defaultSettings,lib/jquery.validate.min, lib/jquery.validate.password, edit/account, lib/jquery.dataTables.min">
 	<main role="main" class="account-edit">
 		<c:forEach items="${settings}" var="setting">
@@ -252,6 +252,8 @@
 		<section class="password-change">
 			<h2>Change Password</h2>
 			<form id="changePassForm" method="post" novalidate>
+				<!-- Hidden username field for accessibility (browsers use this for password managers) -->
+				<input type="text" name="username" value="${fn:escapeXml(user.email)}" style="display: none;" aria-hidden="true" autocomplete="username"/>
 				<table id="passwordTable" class="shaded" role="table" aria-label="Password change form">
 					<thead>
 					<tr>
