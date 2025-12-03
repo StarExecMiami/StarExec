@@ -1,0 +1,67 @@
+{
+  "extends": [
+    "stylelint-config-standard-scss"
+  ],
+  "plugins": [
+    "stylelint-scss"
+  ],
+  "rules": {
+    "at-rule-no-unknown": null,
+    "scss/at-rule-no-unknown": true,
+    "declaration-no-important": [true, {
+      "severity": "warning",
+      "message": "Avoid !important - use more specific selectors or document why it's needed"
+    }],
+    "max-nesting-depth": [4, {
+      "ignore": ["blockless-at-rules", "pseudo-classes"],
+      "message": "Nesting too deep - consider flattening selectors"
+    }],
+    "selector-max-id": [0, {
+      "severity": "warning",
+      "message": "Avoid ID selectors - use classes instead"
+    }],
+    "color-named": ["never", {
+      "message": "Use design tokens or hex colors, not named colors"
+    }],
+    "color-no-hex": null,
+    "color-hex-length": "long",
+    "selector-class-pattern": [
+      "^[a-z][a-z0-9]*(-[a-z0-9]+)*(__[a-z0-9]+(-[a-z0-9]+)*)?(--[a-z0-9]+(-[a-z0-9]+)*)?$",
+      {
+        "message": "Use BEM naming: .block, .block__element, .block--modifier",
+        "severity": "warning"
+      }
+    ],
+    "scss/dollar-variable-pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+    "scss/percent-placeholder-pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+    "property-no-vendor-prefix": [true, {
+      "ignoreProperties": ["appearance", "text-fill-color", "box-shadow"]
+    }],
+    "value-no-vendor-prefix": [true, {
+      "ignoreValues": ["grab", "grabbing"]
+    }],
+    "no-descending-specificity": null,
+    "no-duplicate-selectors": true,
+    "font-family-name-quotes": "always-where-recommended",
+    "function-url-quotes": "always",
+    "string-quotes": "double",
+    "unit-allowed-list": ["rem", "em", "px", "%", "vh", "vw", "vmin", "vmax", "s", "ms", "deg", "fr"],
+    "scss/at-import-partial-extension": null,
+    "scss/at-import-no-partial-leading-underscore": null,
+    "import-notation": null
+  },
+  "ignoreFiles": [
+    "node_modules/**",
+    "**/vendor/**",
+    "**/*.min.css",
+    "**/jquery-ui*.scss"
+  ],
+  "overrides": [
+    {
+      "files": ["**/components/buttons.scss", "**/components/jquery-ui-dark.scss"],
+      "rules": {
+        "declaration-no-important": null
+      }
+    }
+  ]
+}
