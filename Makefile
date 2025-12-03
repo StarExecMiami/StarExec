@@ -29,7 +29,7 @@
 IMAGE_REGISTRY?=ghcr.io/starexecmiami
 IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
 IMAGE_TAG?=latest
-CHART_DIR=./chart
+CHART_DIR=./charts/starexec
 RELEASE_NAME?=starexec
 HELM_VALUES?=values.yaml
 SECRET_NAME=secret-postgres
@@ -418,14 +418,19 @@ deploy-podman: verify-deps image network-setup volumes-create
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
 		echo ""; \
 		echo "${RED}╔════════════════════════════════════════════════════════╗${RESET}"; \
-		echo "${RED}║  ⚠️  INSECURE: Using default development DB password   ║${RESET}"; \
+		echo "${RED}║  ⚠️  INSECURE: Using default development DB password    ║${RESET}"; \
 		echo "${RED}╚════════════════════════════════════════════════════════╝${RESET}"; \
 		echo ""; \
 		if [ "$(ENV)" = "prod" ]; then \
-			read -p "Continue with insecure password? (y/N): " ans; \
-			if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
-				echo "${RED}Aborting deployment.${RESET}"; \
+			echo "${RED}ERROR: Cannot deploy to production with default password!${RESET}"; \
+			echo ""; \
+			echo "Set STAREXEC_DB_PASSWORD or use STAREXEC_DB_PASSWORD_FILE to provide a secure password."; \
+			echo "To override this check (NOT RECOMMENDED), use: FORCE=1 make deploy-podman ENV=prod"; \
+			echo ""; \
+			if [ "$(FORCE)" != "1" ]; then \
 				exit 1; \
+			else \
+				echo "${YELLOW}WARNING: FORCE=1 specified, proceeding with insecure password...${RESET}"; \
 			fi; \
 		fi; \
 	fi
