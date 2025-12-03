@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StarExec Helm Charts</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      padding: 50px;
+      text-align: center;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    .container {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 800px;
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    }
+    h1 {
+      font-size: 3rem;
+      margin-bottom: 20px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+    }
+    p {
+      font-size: 1.2rem;
+      margin-bottom: 30px;
+      opacity: 0.9;
+    }
+    pre {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+      padding: 20px;
+      text-align: left;
+      overflow-x: auto;
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin: 15px 0;
+    }
+    code {
+      color: #a8ff60;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    }
+    .section {
+      margin: 30px 0;
+    }
+    a {
+      color: #a8ff60;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.2);
+      padding: 5px 15px;
+      border-radius: 20px;
+      margin: 5px;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>StarExec Helm Charts</h1>
+    <p>Official Helm repository for the StarExec Logic Solver Competition Platform</p>
+    
+    <div class="section">
+      <p><strong>Add the repository:</strong></p>
+      <pre><code>helm repo add starexec https://starexecmiami.github.io/StarExec
+helm repo update</code></pre>
+    </div>
+
+    <div class="section">
+      <p><strong>Search for charts:</strong></p>
+      <pre><code>helm search repo starexec</code></pre>
+    </div>
+
+    <div class="section">
+      <p><strong>Install StarExec:</strong></p>
+      <pre><code># Install latest version
+helm install starexec starexec/starexec --create-namespace -n starexec
+
+# Or install specific version
+helm install starexec starexec/starexec --version 0.1.0 -n starexec</code></pre>
+    </div>
+
+    <div class="section">
+      <p><strong>Customize installation:</strong></p>
+      <pre><code># With your own values file
+helm install starexec starexec/starexec -f my-values.yaml -n starexec
+
+# View available configuration options
+helm show values starexec/starexec</code></pre>
+    </div>
+
+    <div class="section">
+      <div class="badge">SMT</div>
+      <div class="badge">Theorem Proving</div>
+      <div class="badge">Benchmarking</div>
+      <div class="badge">Kubernetes</div>
+    </div>
+
+    <div class="section">
+      <p>
+        <a href="https://github.com/StarExecMiami/StarExec" target="_blank">Documentation</a> |
+        <a href="https://github.com/StarExecMiami/StarExec/issues" target="_blank">Report Issues</a> |
+        <a href="index.yaml">Chart Index</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
