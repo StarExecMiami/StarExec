@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://json.schemastore.org/chart.json
+apiVersion: v2
+name: starexec
+description: StarExec - Logic Solver Competition Platform (containerised version)
+type: application
+version: 0.1.0
+appVersion: "2025.12"
+home: https://github.com/StarExecMiami/StarExec
+sources:
+  - https://github.com/StarExecMiami/StarExec
+maintainers:
+  - name: Andres Caicedo
+    email: Andrezz1997@gmail.com
+keywords:
+  - starexec
+  - solver
+  - smt
+  - theorem-proving
+  - benchmark
+kubeVersion: ">=1.16.0"

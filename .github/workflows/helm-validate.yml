@@ -4,12 +4,12 @@ on:
   push:
     branches: [UMprod, dev, containerised]
     paths:
-      - 'chart/**'
-      - '.github/workflows/helm-validate.yml'
+      - "charts/**"
+      - ".github/workflows/helm-validate.yml"
   pull_request:
     branches: [UMprod, dev, containerised]
     paths:
-      - 'chart/**'
+      - "charts/**"
 
 permissions:
   contents: read
@@ -18,39 +18,39 @@ jobs:
   validate:
     name: Lint & Validate Helm Charts
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: 'latest'
-      
+          version: "latest"
+
       - name: Verify Helm installation
         run: helm version
-      
+
       - name: Lint Helm chart
         run: |
           echo "Linting Helm chart..."
-          if [ -f "chart/values-dev.yaml" ]; then
+          if [ -f "charts/starexec/values-dev.yaml" ]; then
             echo "Using values-dev.yaml for lint validation..."
-            helm lint ./chart -f chart/values-dev.yaml --strict
+            helm lint ./charts/starexec -f charts/starexec/values-dev.yaml --strict
           else
             echo "⚠️  values-dev.yaml not found, attempting default lint..."
-            helm lint ./chart --strict
+            helm lint ./charts/starexec --strict
           fi
-      
+
       - name: Validate chart templates
         run: |
           echo "Validating Helm templates for all environments..."
           for env in dev ci; do
-            if [ -f "chart/values-$env.yaml" ]; then
+            if [ -f "charts/starexec/values-$env.yaml" ]; then
               echo ""
               echo "=== Validating $env environment ==="
-              helm template starexec ./chart \
-                -f chart/values-$env.yaml \
+              helm template starexec ./charts/starexec \
+                -f charts/starexec/values-$env.yaml \
                 > /tmp/template-$env.yaml
               if [ $? -eq 0 ]; then
                 LINES=$(wc -l < /tmp/template-$env.yaml)
@@ -63,23 +63,23 @@ jobs:
               echo "⚠ values-$env.yaml not found, skipping"
             fi
           done
-      
+
       - name: Check chart version
         id: chart-info
         run: |
-          CHART_VERSION=$(helm show chart ./chart | grep '^version:' | awk '{print $2}')
-          CHART_NAME=$(helm show chart ./chart | grep '^name:' | awk '{print $2}')
-          CHART_APPVERSION=$(helm show chart ./chart | grep '^appVersion:' | awk '{print $2}')
-          
+          CHART_VERSION=$(helm show chart ./charts/starexec | grep '^version:' | awk '{print $2}')
+          CHART_NAME=$(helm show chart ./charts/starexec | grep '^name:' | awk '{print $2}')
+          CHART_APPVERSION=$(helm show chart ./charts/starexec | grep '^appVersion:' | awk '{print $2}')
+
           echo "chart-version=$CHART_VERSION" >> $GITHUB_OUTPUT
           echo "chart-name=$CHART_NAME" >> $GITHUB_OUTPUT
           echo "chart-appversion=$CHART_APPVERSION" >> $GITHUB_OUTPUT
-          
+
           echo "Chart Information:"
           echo "  Name: $CHART_NAME"
           echo "  Version: $CHART_VERSION"
           echo "  App Version: $CHART_APPVERSION"
-      
+
       - name: Generate Helm validation summary
         if: success()
         run: |
@@ -93,7 +93,7 @@ jobs:
           echo "- ✅ Chart lint: Passed" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Template validation: Passed" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Environment templates: Generated successfully" >> $GITHUB_STEP_SUMMARY
-      
+
       - name: Upload rendered templates as artifacts
         if: always()
         uses: actions/upload-artifact@v4

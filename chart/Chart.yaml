@@ -1,7 +1,0 @@
-# yaml-language-server: $schema=https://json.schemastore.org/chart.json
-apiVersion: v2
-name: starexec
-version: 0.1.0
-appVersion: "1.0.0"
-description: "Helm chart for StarExec"
-kubeVersion: ">=1.16.0"
