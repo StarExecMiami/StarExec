@@ -1,21 +1,58 @@
+{{- /*
+  Database Migration Job
+  
+  Runs Flyway migrations using the EmbeddedFlywayLauncher built into the application.
+  This job runs as a pre-install/pre-upgrade hook to ensure the database schema
+  is up-to-date before the application starts.
+  
+  The container image includes flyway-core in WEB-INF/lib and the
+  EmbeddedFlywayLauncher class handles the migration execution.
+  
+  NOTE: This job is ONLY used when postgres.host is NOT localhost (i.e., external database).
+  When postgres runs in the same pod (localhost), the application entrypoint handles
+  migrations automatically at startup, so this job is skipped.
+*/ -}}
+{{- if and .Values.migrations.enabled (ne .Values.postgres.host "localhost") }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "chart.fullname" . }}-migrate
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
   template:
     spec:
       containers:
       - name: flyway
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        command: ["sh","-c","mvn -DskipTests -Dflyway.url=$FLYWAY_URL -Dflyway.user=$FLYWAY_USER -Dflyway.password=$FLYWAY_PASSWORD flyway:migrate"]
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - sh
+          - -c
+          - |
+            set -e
+            WEBAPP_DIR="/usr/local/tomcat/webapps/starexec"
+            CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
+            echo "Running database migrations..."
+            java -cp "$CLASSPATH" \
+              -Dflyway.url="$FLYWAY_URL" \
+              -Dflyway.user="$FLYWAY_USER" \
+              -Dflyway.password="$FLYWAY_PASSWORD" \
+              org.starexec.migration.EmbeddedFlywayLauncher
+            echo "Migrations completed successfully"
         env:
         - name: FLYWAY_URL
           value: "jdbc:postgresql://{{ .Values.postgres.host }}:{{ default 5432 .Values.postgres.port }}/{{ .Values.postgres.database }}"
         - name: FLYWAY_USER
           value: {{ .Values.postgres.user | quote }}
         - name: FLYWAY_PASSWORD
-          value: {{ .Values.postgres.password | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "chart.name" . }}-secret-postgres
+              key: password
       restartPolicy: OnFailure
+{{- end }}

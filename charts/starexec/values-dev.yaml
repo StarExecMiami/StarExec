@@ -5,7 +5,7 @@
 image:
   repository: localhost/local/starexec
   tag: dev
-  pullPolicy: IfNotPresent
+  pullPolicy: Never
 
 replicaCount: 1
 volumePrefix: starexec
