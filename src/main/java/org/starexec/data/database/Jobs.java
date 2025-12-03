@@ -3402,9 +3402,9 @@ public class Jobs {
 				s.addConfiguration(c);
 				stage.setSolver(s);
 				jp.addStage(stage);
-				jp.setId(results.getInt("id"));
-				jp.setJobSpaceId(ResultSetUtils.getInt(results, "job_pairs.job_space_id", "job_pairs_job_space_id",
-						"job_space_id"));
+				jp.setId(results.getInt("pair_id"));
+				jp.setJobSpaceId(ResultSetUtils.getInt(results, "pair_job_space_id", "job_pairs_job_space_id",
+						"pair_job_space_id"));
 				jp.getStatus().setCode(ResultSetUtils.getInt(results, "job_pairs.status_code", "job_pairs_status_code",
 						"status_code"));
 				jp.getBench()
@@ -3419,14 +3419,14 @@ public class Jobs {
 						"solver_id"));
 				s.setName(ResultSetUtils.getString(results, "jobpair_stage_data.solver_name",
 						"jobpair_stage_data_solver_name", "solver_name"));
-				jp.getSpace().setName(results.getString("name"));
-				jp.getSpace().setId(ResultSetUtils.getInt(results, "job_spaces.id", "job_spaces_id", "id"));
+				jp.getSpace().setName(results.getString("job_space_name"));
+				jp.getSpace().setId(ResultSetUtils.getInt(results, "job_space_id_dup", "job_spaces_id", "job_space_id_dup"));
 				jp.setPath(results.getString("path"));
 				int pipeId = results.getInt("pipeline_id");
 				if (pipeId > 0) {
 					SolverPipeline pipe = new SolverPipeline();
-					pipe.setName(ResultSetUtils.getString(results, "solver_pipelines.name", "solver_pipelines_name",
-							"name"));
+					pipe.setName(ResultSetUtils.getString(results, "pipeline_name", "solver_pipelines_name",
+							"pipeline_name"));
 					jp.setPipeline(pipe);
 				} else {
 					jp.setPipeline(null);
@@ -3666,6 +3666,10 @@ public class Jobs {
 			return false;
 		try {
 			List<JobPair> pairs = Jobs.getPairsSimple(jobId);
+			if (pairs == null) {
+				log.warn("setAllPairsToPending - getPairsSimple returned null for jobId=" + jobId);
+				return false;
+			}
 			boolean success = true;
 			for (JobPair jp : pairs) {
 				success = success && Jobs.rerunPair(jp.getId());
@@ -4780,8 +4784,8 @@ public class Jobs {
 			int id;
 			int stageNumber;
 			while (results.next()) {
-				id = results.getInt("pair.id");
-				stageNumber = results.getInt("attr.stage_number");
+				id = results.getInt("pair_id");
+				stageNumber = results.getInt("stage_number");
 				if (!props.containsKey(id)) {
 					props.put(id, new HashMap<>());
 				}
@@ -4789,8 +4793,8 @@ public class Jobs {
 				if (!pairMap.containsKey(stageNumber)) {
 					pairMap.put(stageNumber, new Properties());
 				}
-				String key = results.getString("attr.attr_key");
-				String value = results.getString("attr.attr_value");
+				String key = results.getString("attr_key");
+				String value = results.getString("attr_value");
 				if (key != null && value != null) {
 					props.get(id).get(stageNumber).put(key, value);
 				}

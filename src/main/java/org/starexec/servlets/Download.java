@@ -312,6 +312,11 @@ public class Download extends HttpServlet {
 			response.addCookie(new Cookie("Older-Pairs", String.valueOf(olderPairs)));
 			response.addCookie(new Cookie("Total-Pairs", String.valueOf(Jobs.getPairCount(jobId))));
 		}
+		// Handle null props gracefully - use empty map if attributes couldn't be loaded
+		if (props == null) {
+			log.warn("handleJob - Job attributes returned null for jobId=" + jobId + ", using empty properties");
+			props = new HashMap<>();
+		}
 		Jobs.loadPropertiesIntoPairs(job.getJobPairs(), props);
 		log.debug("about to create a job CSV with " + job.getJobPairs().size() + " pairs");
 		String jobFile = CreateJobCSV(job, returnIds, onlyCompleted);

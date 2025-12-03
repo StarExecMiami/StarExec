@@ -929,6 +929,10 @@ public class RESTHelpers {
 				// Retrieves the relevant Job objects to use in constructing the
 				// JSON to send to the client
 				List<JobPair> jobPairsToDisplay = Queues.getJobPairsForNextClusterPage(query, id);
+				if (jobPairsToDisplay == null) {
+					log.warn("getNextDataTablesPageCluster - getJobPairsForNextClusterPage returned null for queueId=" + id);
+					jobPairsToDisplay = new java.util.ArrayList<>();
+				}
 				query.setTotalRecords(Queues.getCountOfEnqueuedPairsByQueue(id));
 				// there is no filter function on this table, so this is always equal to the
 				// above
@@ -938,6 +942,10 @@ public class RESTHelpers {
 				// Retrieves the relevant Job objects to use in constructing the
 				// JSON to send to the client
 				List<JobPair> jobPairsToDisplay = Queues.getPairsRunningOnNode(id);
+				if (jobPairsToDisplay == null) {
+					log.warn("getNextDataTablesPageCluster - getPairsRunningOnNode returned null for nodeId=" + id);
+					jobPairsToDisplay = new java.util.ArrayList<>();
+				}
 				query.setTotalRecords(jobPairsToDisplay.size());
 				// there is no filter function on this table, so this is always equal to the
 				// above

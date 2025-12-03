@@ -2342,7 +2342,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetJobAttrs(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobAttrs(_jobId INT)
-RETURNS TABLE(id INT, attr_key VARCHAR, attr_value VARCHAR, stage_number INT) AS $$
+RETURNS TABLE(pair_id INT, attr_key VARCHAR, attr_value VARCHAR, stage_number INT) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT pair.id, attr.attr_key, attr.attr_value, attr.stage_number
@@ -2356,7 +2356,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetNewJobAttrs(INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetNewJobAttrs(_jobId INT, _completionId INT)
-RETURNS TABLE(id INT, attr_key VARCHAR, attr_value VARCHAR, stage_number INT) AS $$
+RETURNS TABLE(pair_id INT, attr_key VARCHAR, attr_value VARCHAR, stage_number INT) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT pair.id, attr.attr_key, attr.attr_value, attr.stage_number
@@ -2551,14 +2551,14 @@ $$ LANGUAGE plpgsql;
 -- Author: Julio Cervantes
 DROP FUNCTION IF EXISTS starexec.GetJobPairsByJobSimple(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobPairsByJobSimple(_id INT)
-RETURNS TABLE(id INT, job_space_id INT, path VARCHAR, solver_name VARCHAR, solver_id INT, config_name VARCHAR, config_id INT, bench_name VARCHAR, bench_id INT, pipeline_name VARCHAR, job_space_name VARCHAR, status_code SMALLINT, job_space_id_dup INT, pipeline_id INT, stage_number INT) AS $$
+RETURNS TABLE(pair_id INT, pair_job_space_id INT, path VARCHAR, solver_name VARCHAR, solver_id INT, config_name VARCHAR, config_id INT, bench_name VARCHAR, bench_id INT, pipeline_name VARCHAR, job_space_name VARCHAR, status_code SMALLINT, job_space_id_dup INT, pipeline_id INT, stage_number INT) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT job_pairs.id, job_pairs.job_space_id, job_pairs.path, jobpair_stage_data.solver_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_name,
 	jobpair_stage_data.config_id, job_pairs.bench_name, job_pairs.bench_id, solver_pipelines.name,
 	job_spaces.name, job_pairs.status_code, job_spaces.id, pipeline_stages.pipeline_id, jobpair_stage_data.stage_number
 	FROM starexec.job_pairs
-	JOIN job_spaces ON job_spaces.id=job_space_id
+	JOIN job_spaces ON job_spaces.id=job_pairs.job_space_id
 	JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id = job_pairs.id
 	LEFT JOIN pipeline_stages ON pipeline_stages.stage_id = jobpair_stage_data.stage_id
 	LEFT JOIN solver_pipelines ON pipeline_stages.pipeline_id = solver_pipelines.id
@@ -2594,6 +2594,7 @@ $$ LANGUAGE plpgsql;
 
 -- Counts the entries in the job space closure table with the given ancestor and updates their last_used time
 -- Author: Eric Burns
+-- Note: Returns 0 if no entries exist for the ancestor (this is a valid case, not an error)
 DROP FUNCTION IF EXISTS starexec.RefreshEntriesByAncestor(INT, TIMESTAMP) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.RefreshEntriesByAncestor(_id INT, _time TIMESTAMP)
 RETURNS BIGINT AS $$
@@ -2603,11 +2604,7 @@ BEGIN
 	UPDATE job_space_closure
 	SET last_used=_time
 	WHERE ancestor=_id;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job space closure entries for ancestor %s not found', _id);
-    END IF;
+	-- Note: NOT FOUND is acceptable - ancestor may not have entries yet
 
 	SELECT COUNT(*) INTO count_val
 	FROM starexec.job_space_closure
@@ -5201,7 +5198,7 @@ RETURNS TABLE(id INT, path TEXT, primaryJobpairData INT, jobId INT, benchId INT,
 BEGIN
     RETURN QUERY
     SELECT jp.id,
-           jp.path,
+           jp.path::TEXT,
            jp.primary_jobpair_data,
            jp.job_id,
            jp.bench_id,
