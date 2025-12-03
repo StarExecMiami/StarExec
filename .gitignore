@@ -59,9 +59,19 @@ Thumbs.db
 /.history/
 
 ####################################
-# Sass cache
+# Sass
 ####################################
 .sass-cache/
+**/*.css.map
+**/*.scss.map
+
+# Generated CSS from SCSS (keep only SCSS sources)
+# Vendor CSS files are explicitly tracked via git add -f
+src/main/webapp/css/**/*.css
+!src/main/webapp/css/datatables/*.css
+!src/main/webapp/css/jqueryui/*.css
+!src/main/webapp/css/jstree/**/*.css
+!src/main/webapp/css/explore/jquery.qtip.css
 
 ####################################
 # Legacy/Ant / Maven wrapper
@@ -87,6 +97,10 @@ backups/
 *.zip
 *.sql
 *.sql.gz
+
+# But allow tracked migration scripts
+!src/main/resources/db/migration/*.sql
+!src/main/resources/sql/**/*.sql
 
 ####################################
 # Docker / Podman / Container
