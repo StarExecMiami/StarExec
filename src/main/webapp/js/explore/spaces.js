@@ -1,7 +1,16 @@
 // Global object for explore/spaces. Future globals should go here.
 var EXP_SP = {
 	copySpaceDialog: '#dialog-confirm-space-copy',
-	copySpaceDialogText: '#dialog-confirm-space-copy-txt'
+	copySpaceDialogText: '#dialog-confirm-space-copy-txt',
+	hierarchyDialogConfig: {
+		open: function() {
+			$('#hierarchy-action-container').removeClass('hidden');
+			$('#applyActionInHierarchy').prop('checked', false);
+		},
+		close: function() {
+			$('#hierarchy-action-container').addClass('hidden');
+		}
+	}
 };
 
 /** Global Variables */
@@ -678,17 +687,7 @@ function initSpaceExplorer() {
 }
 
 
-function insertApplyActionInHierarchyCheckbox(e,ui){
-	var pane = $(this).dialog("widget").find(".ui-dialog-buttonpane")
-	var script = "<script> applyActionInHierarchy = false; </script>"
-	
-	var onclickJS = "applyActionInHierarchy = this.checked"
-	var inputHTML = "<input type='checkbox' onclick='" + onclickJS + "' />"
-	var labelStyle = "float:left; display:inline-block; margin-top:1em;"
-	var final = script + "<label style='" + labelStyle + "'>Apply Action in hierarchy?" + inputHTML + "</label>"
 
-	$(final).prependTo(pane)
-}
 
 
 /**
@@ -706,12 +705,13 @@ function removeBenchmarks(selectedBenches, ownsAll) {
 		modal: true,
 		width: 800,
 		height: 400,
-		create: insertApplyActionInHierarchyCheckbox,
+		open: EXP_SP.hierarchyDialogConfig.open,
+		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
 			{
 				'text': "Unlink from space",
 				'click': function() {
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						alert("Unlinking benchmarks in hierarchy is not supported yet.")
 					}
 					else{
@@ -741,7 +741,7 @@ function removeBenchmarks(selectedBenches, ownsAll) {
 				'text': "Move to Trash Bin",
 				'disabled': !ownsAll,
 				'click': function() {
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						alert("Moving benchmarks to trash hierarchically is not supported yet.")
 					}
 					else{
@@ -813,12 +813,13 @@ function removeUsers(selectedUsers) {
 		modal: true,
 		width: 800,
 		height: 400,
-		create: insertApplyActionInHierarchyCheckbox,
+		open: EXP_SP.hierarchyDialogConfig.open,
+		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
 			{
 				'text': "Unlink from space",
 				'click': function(){
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						log('user confirmed user deletion from space and its hierarchy');
 						// If the user actually confirms, close the dialog right away
 						$('#dialog-confirm-delete').dialog('close');
@@ -929,12 +930,13 @@ function removeSolvers(selectedSolvers, ownsAll) {
 		modal: true,
 		width: 800,
 		height: 400,
-		create: insertApplyActionInHierarchyCheckbox,
+		open: EXP_SP.hierarchyDialogConfig.open,
+		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
 			{
 				'text': "Unlink from space",
 				'click': function() {
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						removeSolversFromSpaceHierarchy(selectedSolvers);
 					}
 					else{
@@ -946,7 +948,7 @@ function removeSolvers(selectedSolvers, ownsAll) {
 				'text': "Move to Trash Bin",
 				'disabled': !ownsAll,
 				'click': function() {
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						// alert('Moving solvers to trash hierarchically is not supported yet.');
 						moveSolversToRecycleBin(selectedSolvers);
 						removeSolversFromSpaceHierarchy(selectedSolvers);
@@ -983,12 +985,13 @@ function removeJobs(selectedJobs, ownsAll) {
 		modal: true,
 		width: 800,
 		height: 400,
-		create: insertApplyActionInHierarchyCheckbox,
+		open: EXP_SP.hierarchyDialogConfig.open,
+		close: EXP_SP.hierarchyDialogConfig.close,
 		buttons: [
 			{
 				'text': "Unlink from space",
 				'click': function() {
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						alert("Unlinking jobs hierarchically is not supported yet.")
 					}
 					else{
@@ -1024,7 +1027,7 @@ function removeJobs(selectedJobs, ownsAll) {
 				'text': "Delete Permanently",
 				'disabled': !ownsAll,
 				'click': function() {
-					if(applyActionInHierarchy){
+					if($('#applyActionInHierarchy').is(':checked')){
 						alert("Permanently deleting jobs hierarchically is not supported yet.")
 					}
 					else{
@@ -1074,7 +1077,6 @@ function removeSubspaces(selectedSubspaces) {
 		modal: true,
 		width: 800,
 		height: 400,
-		create: insertApplyActionInHierarchyCheckbox,
 		buttons: {
 			"Remove subspace(s) only": function() {
 				log('user confirmed subspace deletion');
