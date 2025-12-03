@@ -6,6 +6,7 @@ import org.starexec.data.database.Users;
 import org.starexec.logger.StarLogger;
 import org.starexec.test.integration.TestManager;
 import org.starexec.util.Hash;
+import org.starexec.util.PasswordHasher;
 import org.starexec.util.Util;
 import org.starexec.util.Validator;
 
@@ -14,19 +15,22 @@ import java.sql.Connection;
 public class GeneralSecurity {
 
 	private static final StarLogger log = StarLogger.getLogger(GeneralSecurity.class);
-    //        private static final org.owasp.esapi.Logger esapiLogger = ESAPI.getLogger(GeneralSecurity.class.toString());
+	// private static final org.owasp.esapi.Logger esapiLogger =
+	// ESAPI.getLogger(GeneralSecurity.class.toString());
 
 	/**
-	 * Checks to see if the given user has permission to execute tests without checking to see if tests are already
+	 * Checks to see if the given user has permission to execute tests without
+	 * checking to see if tests are already
 	 * running
 	 *
 	 * @param userId The ID of the user making the request
-	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
-	 * otherwise
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a
+	 *         status code from ValidatorStatusCodes
+	 *         otherwise
 	 */
 
 	public static ValidatorStatusCode canUserRunTestsNoRunningCheck(int userId) {
-		//only the admin can run tests, and they cannot be run on production
+		// only the admin can run tests, and they cannot be run on production
 		if (!GeneralSecurity.hasAdminWritePrivileges(userId) || !R.ALLOW_TESTING) {
 			return new ValidatorStatusCode(false, "You do not have permission to perform this operation");
 		}
@@ -38,8 +42,9 @@ public class GeneralSecurity {
 	 *
 	 * @param userId The ID of the user making the request
 	 * @param stress True if the tests in question are stress tests, false otherwise
-	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
-	 * otherwise
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a
+	 *         status code from ValidatorStatusCodes
+	 *         otherwise
 	 */
 
 	public static ValidatorStatusCode canUserRunTests(int userId, boolean stress) {
@@ -60,7 +65,8 @@ public class GeneralSecurity {
 	}
 
 	/**
-	 * Given a string, returns the same string in an HTML safe format Do NOT use this for HTML attributes! Use the
+	 * Given a string, returns the same string in an HTML safe format Do NOT use
+	 * this for HTML attributes! Use the
 	 * function specifically for attributes
 	 *
 	 * @param str The string to change
@@ -71,18 +77,17 @@ public class GeneralSecurity {
 	}
 
 	/**
-	 * a test method to make sure ESAPI is working correctly 
+	 * a test method to make sure ESAPI is working correctly
 	 */
 	public static void test() {
 		try {
 			String str = getHTMLSafeString("test");
 			log.info("ESAPI test passed: " + str);
-		}
-		catch(Exception e) {
+		} catch (Exception e) {
 			log.error("Caught exception checking that ESAPI is working: " + Util.getStackTrace(e));
 			return;
 		}
-	}	
+	}
 
 	/**
 	 * Formats a string so it is safe to insert in to an HTML attribute
@@ -96,8 +101,10 @@ public class GeneralSecurity {
 	}
 
 	/**
-	 * Formats a string so it is safe to insert into Javascript Do NOT use this for strings that will eventually
-	 * inserted into HTML, even if they are going to Javascript first! It is not secure for that condition.
+	 * Formats a string so it is safe to insert into Javascript Do NOT use this for
+	 * strings that will eventually
+	 * inserted into HTML, even if they are going to Javascript first! It is not
+	 * secure for that condition.
 	 *
 	 * @param str
 	 * @return The formatted string
@@ -108,8 +115,7 @@ public class GeneralSecurity {
 	}
 
 	public static ValidatorStatusCode canUserUpdatePassword(
-			int userId, int userIdMakingRequest, String oldPass, String newPass, String confirmNewPass
-	) {
+			int userId, int userIdMakingRequest, String oldPass, String newPass, String confirmNewPass) {
 		boolean userIsChangingOwnPassword = (userId == userIdMakingRequest);
 		boolean userIsAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdMakingRequest);
 		if (!(userIsChangingOwnPassword || userIsAdmin)) {
@@ -118,10 +124,26 @@ public class GeneralSecurity {
 		if (Users.isPublicUser(userIdMakingRequest)) {
 			return new ValidatorStatusCode(false, "Passwords for guests cannot be changed");
 		}
-		String hashedPass = Hash.hashPassword(oldPass);
+
+		// Get stored password and algorithm
 		String databasePass = Users.getPassword(userId);
-		if (!hashedPass.equals(databasePass)) {
-			return new ValidatorStatusCode(false, "The supplied password is incorrect");
+		if (databasePass == null || databasePass.isEmpty()) {
+			log.error("No password hash found for user " + userId);
+			return new ValidatorStatusCode(false,
+					"Account configuration error. Please contact support.");
+		}
+
+		try {
+			String algorithm = PasswordHasher.detectAlgorithm(databasePass);
+
+			// Verify old password using appropriate algorithm
+			if (!PasswordHasher.verify(oldPass, databasePass, algorithm)) {
+				return new ValidatorStatusCode(false, "The supplied password is incorrect");
+			}
+		} catch (Exception e) {
+			log.error("Password verification failed for user " + userId, e);
+			return new ValidatorStatusCode(false,
+					"Authentication error. Please try again or contact support.");
 		}
 		if (!newPass.equals(confirmNewPass)) {
 			return new ValidatorStatusCode(false, "The passwords are not the same");
@@ -130,7 +152,6 @@ public class GeneralSecurity {
 		if (!Validator.isValidPassword(newPass)) {
 			return new ValidatorStatusCode(false, "The supplied password is invalid");
 		}
-
 
 		return new ValidatorStatusCode(true);
 	}
@@ -151,7 +172,8 @@ public class GeneralSecurity {
 	}
 
 	/**
-	 * Checks to see whether a user can make admin-only changes to the website/backend.
+	 * Checks to see whether a user can make admin-only changes to the
+	 * website/backend.
 	 *
 	 * @param userId
 	 * @return True if the user is an admin and false otherwise
@@ -175,36 +197,35 @@ public class GeneralSecurity {
 	/**
 	 * Checks if a user can generate a public anonymous link for a given primitive.
 	 *
-	 * @param userId The id of the user making the request for the link.
+	 * @param userId        The id of the user making the request for the link.
 	 * @param primitiveType The type of the primitive. (Benchmark, Solver, etc.)
-	 * @param primitiveId The id of the primitive.
+	 * @param primitiveId   The id of the primitive.
 	 * @author Albert Giegerich
 	 */
 	public static ValidatorStatusCode canUserGetAnonymousLinkForPrimitive(
-			int userId, String primitiveType, int primitiveId
-	) {
+			int userId, String primitiveType, int primitiveId) {
 		final String methodName = "canUserGetAnonymousLinkForPrimitive";
 		log.entry(methodName);
 		log.debug("Checking if user can get anonymous link for primitive of type " + primitiveType);
 		switch (primitiveType) {
-		case R.BENCHMARK:
-			log.debug(
-					methodName, "Found that primitive was of type " + R.BENCHMARK +
-							" while checking if an anonymous link could be generated for it.");
-			return BenchmarkSecurity.canUserGetAnonymousLink(primitiveId, userId);
-		case R.SOLVER:
-			log.debug(
-					methodName, "Found that primitive was of type " + R.SOLVER +
-							" while checking if an anonymous link could be generated for it.");
-			return SolverSecurity.canUserGetAnonymousLink(primitiveId, userId);
-		case R.JOB:
-			log.debug(
-					methodName, "Found that primitive was of type " + R.JOB +
-							" while checking if an anonymous link could be generated for it.");
-			return JobSecurity.canUserGetAnonymousLink(primitiveId, userId);
-		default:
-			return new ValidatorStatusCode(
-					false, "You do not have permission to get an anonymous link for this primitive.");
+			case R.BENCHMARK:
+				log.debug(
+						methodName, "Found that primitive was of type " + R.BENCHMARK +
+								" while checking if an anonymous link could be generated for it.");
+				return BenchmarkSecurity.canUserGetAnonymousLink(primitiveId, userId);
+			case R.SOLVER:
+				log.debug(
+						methodName, "Found that primitive was of type " + R.SOLVER +
+								" while checking if an anonymous link could be generated for it.");
+				return SolverSecurity.canUserGetAnonymousLink(primitiveId, userId);
+			case R.JOB:
+				log.debug(
+						methodName, "Found that primitive was of type " + R.JOB +
+								" while checking if an anonymous link could be generated for it.");
+				return JobSecurity.canUserGetAnonymousLink(primitiveId, userId);
+			default:
+				return new ValidatorStatusCode(
+						false, "You do not have permission to get an anonymous link for this primitive.");
 		}
 	}
 }

@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class Users {
 	private static final StarLogger log = StarLogger.getLogger(Users.class);
-	
+
 	// Cache for isAdmin results to reduce database calls
 	private static final ConcurrentHashMap<Integer, CacheEntry<Boolean>> isAdminCache = new ConcurrentHashMap<>();
 	private static final long CACHE_DURATION_MS = TimeUnit.MINUTES.toMillis(5); // Cache for 5 minutes
@@ -53,8 +53,8 @@ public class Users {
 	/**
 	 * Associates a user with a space (i.e. adds the user to the space)
 	 *
-	 * @param con The connection to perform the database operation on
-	 * @param userId The id of the user to add to the space
+	 * @param con     The connection to perform the database operation on
+	 * @param userId  The id of the user to add to the space
 	 * @param spaceId The space to add the user to
 	 * @author Tyler Jensen
 	 */
@@ -76,7 +76,8 @@ public class Users {
 	}
 
 	/**
-	 * Adds a new DefaultSettings object to the database. The type of the DefaultSettings object will be a USER
+	 * Adds a new DefaultSettings object to the database. The type of the
+	 * DefaultSettings object will be a USER
 	 * settings
 	 * object
 	 *
@@ -91,7 +92,7 @@ public class Users {
 	/**
 	 * Gets the user preference for a default dataTables page size
 	 *
-	 * @param userId The ID of the user having the setting changed
+	 * @param userId  The ID of the user having the setting changed
 	 * @param newSize the number of elements in a default table page
 	 * @return True on success and false otherwise
 	 */
@@ -124,7 +125,8 @@ public class Users {
 	 * Gets the user preference for a default dataTables page size
 	 *
 	 * @param userId
-	 * @return The integer default page size for the given user, or 10 (the system default) if none could be found.
+	 * @return The integer default page size for the given user, or 10 (the system
+	 *         default) if none could be found.
 	 */
 	public static int getDefaultPageSize(int userId) {
 		Connection con = null;
@@ -153,7 +155,7 @@ public class Users {
 	/**
 	 * Adds an association between a list of users and a space
 	 *
-	 * @param con the database transaction to use
+	 * @param con     the database transaction to use
 	 * @param userIds the ids of the users to add to a space
 	 * @param spaceId the id of the space to add the users to
 	 * @throws Exception
@@ -168,7 +170,7 @@ public class Users {
 	/**
 	 * Associates a user with a space (i.e. adds the user to the space)
 	 *
-	 * @param userId The id of the user to add to the space
+	 * @param userId  The id of the user to add to the space
 	 * @param spaceId The space to add the user to
 	 * @return True if the operation was a success, false otherwise
 	 * @author Tyler Jensen
@@ -193,27 +195,31 @@ public class Users {
 	/**
 	 * Associates the given users with the given space
 	 *
-	 * @param userIds The users to add to the space. Nothing will happen if they are already present
-	 * @param spaceId The ID of the space to add users to
-	 * @param hierarchy True to add users to every space in the hierarchy rooted at spaceId, and false to only do the
-	 * single space
-	 * @param requestUserId The ID of the user making the request. If hierarchy is true, this is used to determine
-	 * which
-	 * subspaces to impact
+	 * @param userIds       The users to add to the space. Nothing will happen if
+	 *                      they are already present
+	 * @param spaceId       The ID of the space to add users to
+	 * @param hierarchy     True to add users to every space in the hierarchy rooted
+	 *                      at spaceId, and false to only do the
+	 *                      single space
+	 * @param requestUserId The ID of the user making the request. If hierarchy is
+	 *                      true, this is used to determine
+	 *                      which
+	 *                      subspaces to impact
 	 * @return True on success and false otherwise
 	 */
 	public static boolean associate(List<Integer> userIds, int spaceId, boolean hierarchy, int requestUserId) {
 		if (!hierarchy) {
 			return associate(userIds, spaceId);
 		} else {
-			List<Space> subspaces =
-					Spaces.trimSubSpaces(requestUserId, Spaces.getSubSpaceHierarchy(spaceId, requestUserId));
+			List<Space> subspaces = Spaces.trimSubSpaces(requestUserId,
+					Spaces.getSubSpaceHierarchy(spaceId, requestUserId));
 			List<Integer> subspaceIds = new LinkedList<>();
 
 			// Add the destination space to the list of spaces to associate the user(s) with
 			subspaceIds.add(spaceId);
 
-			// Iterate once through all subspaces of the destination space to ensure the user has addUser permissions
+			// Iterate once through all subspaces of the destination space to ensure the
+			// user has addUser permissions
 			// in each
 			for (Space subspace : subspaces) {
 				subspaceIds.add(subspace.getId());
@@ -223,7 +229,8 @@ public class Users {
 	}
 
 	/**
-	 * Associates a group of users user with a space (i.e. adds the user to the space)
+	 * Associates a group of users user with a space (i.e. adds the user to the
+	 * space)
 	 *
 	 * @param userIds The id's of the users to add to the space
 	 * @param spaceId The space to add the users to
@@ -237,11 +244,13 @@ public class Users {
 	}
 
 	/**
-	 * Adds an association between a list of users and a list of spaces, in an all-or-none fashion
+	 * Adds an association between a list of users and a list of spaces, in an
+	 * all-or-none fashion
 	 *
-	 * @param userIds the ids of the users to add to the spaces
+	 * @param userIds  the ids of the users to add to the spaces
 	 * @param spaceIds the ids of the spaces to add the users to
-	 * @return true iff all spaces in spaceIds successfully have all users in userIds add to them, false otherwise
+	 * @return true iff all spaces in spaceIds successfully have all users in
+	 *         userIds add to them, false otherwise
 	 * @author Todd Elvers
 	 */
 	public static boolean associate(List<Integer> userIds, List<Integer> spaceIds) {
@@ -270,7 +279,8 @@ public class Users {
 	}
 
 	/**
-	 * Given a ResultSet currently pointing at a row with a user in it, returns that user.
+	 * Given a ResultSet currently pointing at a row with a user in it, returns that
+	 * user.
 	 *
 	 * @param results
 	 * @return
@@ -399,8 +409,10 @@ public class Users {
 	}
 
 	/**
-	 * NOTE: Make sure your your queries result-set has all the columns that resultsToUser checks for or it will throw
-	 * an exception. Returns a list of users based on the sql database stored procedure that is input.
+	 * NOTE: Make sure your your queries result-set has all the columns that
+	 * resultsToUser checks for or it will throw
+	 * an exception. Returns a list of users based on the sql database stored
+	 * procedure that is input.
 	 *
 	 * @param sql An sql statement used for calling a database stored procedure.
 	 * @return A List of users based on the sql procedure that was input.
@@ -412,7 +424,8 @@ public class Users {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			// strip surrounding braces if present (some callers pass strings like "{SELECT ...}")
+			// strip surrounding braces if present (some callers pass strings like "{SELECT
+			// ...}")
 			String cleaned = sql;
 			if (cleaned.startsWith("{") && cleaned.endsWith("}")) {
 				cleaned = cleaned.substring(1, cleaned.length() - 1);
@@ -475,7 +488,7 @@ public class Users {
 	 * Gets the number of Users in a given space that match a given query
 	 *
 	 * @param spaceId the id of the space to count the Users in
-	 * @param query The query to match the users against
+	 * @param query   The query to match the users against
 	 * @return the number of Users
 	 * @author Eric Burns
 	 */
@@ -509,7 +522,8 @@ public class Users {
 	}
 
 	/**
-	 * Iterates through every user in the DB, updating their disk_size fields in the DB.
+	 * Iterates through every user in the DB, updating their disk_size fields in the
+	 * DB.
 	 *
 	 * @return
 	 */
@@ -532,7 +546,8 @@ public class Users {
 
 					if (difference != 0) {
 						log.info(
-								"Disk usage did not match between users table " + "and other tables for user " + u.getId()
+								"Disk usage did not match between users table " + "and other tables for user "
+										+ u.getId()
 										+ ". Difference was " + difference);
 					}
 				} finally {
@@ -550,30 +565,25 @@ public class Users {
 	}
 
 	/**
-	 * Gets the number of bytes a user is consuming on disk by returning the disk_usage column from the users table.
+	 * Gets the number of bytes a user is consuming on disk by returning the
+	 * disk_usage column from the users table.
 	 *
 	 * @param userId the id of the user to get the disk usage of
-	 * @return the disk usage of the given user
+	 * @return the disk usage of the given user, or 0 if not found or on error
 	 */
 	public static long getDiskUsage(int userId) {
-		Connection con = null;
-		PreparedStatement procedure = null;
-		ResultSet results = null;
-		try {
-			con = Common.getConnection();
-			procedure = con.prepareStatement("SELECT * FROM starexec.GetUserDiskUsage(?)");
+		try (Connection con = Common.getConnection();
+		     PreparedStatement procedure = con.prepareStatement(
+		         "SELECT * FROM starexec.GetUserDiskUsage(?)")) {
 			procedure.setInt(1, userId);
 
-			results = procedure.executeQuery();
-			if (results.next()) {
-				return results.getLong("disk_size");
+			try (ResultSet results = procedure.executeQuery()) {
+				if (results.next()) {
+					return results.getLong("disk_size");
+				}
 			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
-			Common.safeClose(results);
 		}
 
 		return 0;
@@ -611,7 +621,8 @@ public class Users {
 	}
 
 	/**
-	 * Retrieves an unregistered user from the database given their user_id. This is a helper method for user
+	 * Retrieves an unregistered user from the database given their user_id. This is
+	 * a helper method for user
 	 * registration and shouldn't be used anywhere else.
 	 *
 	 * @param id The id of the unregistered user to retrieve
@@ -741,25 +752,27 @@ public class Users {
 
 	private static String getUserOrderColumn(int columnIndex) {
 		switch (columnIndex) {
-		case 0:
-			return "full_name";
-		case 1:
-			return "institution";
-		case 2:
-			return "email";
+			case 0:
+				return "full_name";
+			case 1:
+				return "institution";
+			case 2:
+				return "email";
 		}
 
 		return "full_name";
 	}
 
 	/**
-	 * Gets the minimal number of Users necessary in order to service the client's request for the next page of
+	 * Gets the minimal number of Users necessary in order to service the client's
+	 * request for the next page of
 	 * Users in
 	 * their DataTables object
 	 *
-	 * @param query a DataTablesQuery object
+	 * @param query   a DataTablesQuery object
 	 * @param spaceId the id of the space to get the Users from
-	 * @return a list of 10, 25, 50, or 100 Users containing the minimal amount of data necessary
+	 * @return a list of 10, 25, 50, or 100 Users containing the minimal amount of
+	 *         data necessary
 	 * @author Todd Elvers
 	 */
 	public static List<User> getUsersForNextPage(DataTablesQuery query, int spaceId) {
@@ -769,9 +782,8 @@ public class Users {
 		try {
 			con = Common.getConnection();
 			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries.GET_USERS_IN_SPACE_QUERY,
-			                                                            getUserOrderColumn(query.getSortColumn()),
-			                                                            query
-			);
+					getUserOrderColumn(query.getSortColumn()),
+					query);
 
 			procedure = new NamedParameterStatement(con, builder.getSQL());
 			procedure.setInt("spaceId", spaceId);
@@ -787,7 +799,7 @@ public class Users {
 				u.setLastName(results.getString("last_name"));
 				u.setEmail(results.getString("email"));
 
-				//Prevents public user from appearing in table.
+				// Prevents public user from appearing in table.
 				users.add(u);
 			}
 
@@ -804,12 +816,14 @@ public class Users {
 	}
 
 	/**
-	 * Gets the minimal number of Users necessary in order to service the client's request for the next page of
+	 * Gets the minimal number of Users necessary in order to service the client's
+	 * request for the next page of
 	 * Users in
 	 * their DataTables object
 	 *
 	 * @param query A DataTablesQuery object
-	 * @return a list of 10, 25, 50, or 100 Users containing the minimal amount of data necessary
+	 * @return a list of 10, 25, 50, or 100 Users containing the minimal amount of
+	 *         data necessary
 	 * @author Wyatt Kaiser
 	 **/
 	public static List<User> getUsersForNextPageAdmin(DataTablesQuery query) {
@@ -819,9 +833,8 @@ public class Users {
 		try {
 			con = Common.getConnection();
 			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries.GET_USERS_ADMIN_QUERY,
-			                                                            getUserOrderColumn(query.getSortColumn()),
-			                                                            query
-			);
+					getUserOrderColumn(query.getSortColumn()),
+					query);
 
 			procedure = new NamedParameterStatement(con, builder.getSQL());
 			procedure.setString("query", query.getSearchQuery());
@@ -855,7 +868,7 @@ public class Users {
 	/**
 	 * Checks to see whether the given user is in the given community
 	 *
-	 * @param userId The ID of the user in question
+	 * @param userId      The ID of the user in question
 	 * @param communityId The ID of the community in question
 	 * @return True if the user is in the community, false if not or on error
 	 * @author Eric Burns
@@ -897,9 +910,11 @@ public class Users {
 	/**
 	 * Checks if a given user is a member of a particular space
 	 *
-	 * @param userId the id of the user to check for membership in a particular space
+	 * @param userId  the id of the user to check for membership in a particular
+	 *                space
 	 * @param spaceId the id of the space to check for a given user's membership
-	 * @return true iff the given user is a member of the given space, false otherwise
+	 * @return true iff the given user is a member of the given space, false
+	 *         otherwise
 	 * @author Todd Elvers
 	 */
 	public static boolean isMemberOfSpace(int userId, int spaceId) {
@@ -927,13 +942,14 @@ public class Users {
 	}
 
 	/**
-	 * Adds the specified user to the database. This method will hash the user's password for them, so it must be
+	 * Adds the specified user to the database. This method will hash the user's
+	 * password for them, so it must be
 	 * supplied in plaintext.
 	 *
-	 * @param user The user to add
+	 * @param user        The user to add
 	 * @param communityId the id of the community to add this user wants to join
-	 * @param message the message from the user to the leaders of a community
-	 * @param code the unique code to add to the database for this user
+	 * @param message     the message from the user to the leaders of a community
+	 * @param code        the unique code to add to the database for this user
 	 * @return True if the operation was a success, false otherwise
 	 * @author Todd Elvers
 	 */
@@ -946,7 +962,7 @@ public class Users {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 
-			String hashedPass = Hash.hashPassword(user.getPassword());
+			String hashedPass = PasswordHasher.hash(user.getPassword());
 
 			stmt = con.prepareStatement("SELECT AddUser(?, ?, ?, ?, ?, ?)");
 			stmt.setString(1, user.getFirstName());
@@ -993,7 +1009,7 @@ public class Users {
 	/**
 	 * Sets a new pair quota for a given user
 	 *
-	 * @param userId the user to set the new pair quota for
+	 * @param userId       the user to set the new pair quota for
 	 * @param newPairQuota The new number of job pairs
 	 * @return true iff the new pair quota is successfully set, false otherwise
 	 */
@@ -1026,7 +1042,7 @@ public class Users {
 	/**
 	 * Sets a new disk quota for a given user (input should always be bytes)
 	 *
-	 * @param userId the user to set the new disk quota for
+	 * @param userId       the user to set the new disk quota for
 	 * @param newDiskQuota the new disk quota, in bytes, to set for the given user
 	 * @return true iff the new disk quota is successfully set, false otherwise
 	 * @author Todd Elvers
@@ -1044,8 +1060,7 @@ public class Users {
 
 			log.info("Disk quota changed to [" +
 					FileUtils.byteCountToDisplaySize(newDiskQuota) +
-					"] for user [" + userId + "]"
-			);
+					"] for user [" + userId + "]");
 
 			return true;
 		} catch (SQLException e) {
@@ -1061,18 +1076,17 @@ public class Users {
 
 		log.warn("Failed to change disk quota to [" +
 				FileUtils.byteCountToDisplaySize(newDiskQuota) +
-				"] for user [" + userId + "]"
-		);
+				"] for user [" + userId + "]");
 		return false;
 	}
 
-
-	//We should not be using this right now, since our login setup can't handle changing email
+	// We should not be using this right now, since our login setup can't handle
+	// changing email
 
 	/**
 	 * Updates the email address of a user in the database with the given user ID
 	 *
-	 * @param userId the user ID of the user we want to update
+	 * @param userId   the user ID of the user we want to update
 	 * @param newValue what the email address will be updated to
 	 * @author Skylar Stark
 	 */
@@ -1103,7 +1117,7 @@ public class Users {
 	/**
 	 * Updates the first name of a user in the database with the given user ID
 	 *
-	 * @param userId the user ID of the user we want to update
+	 * @param userId   the user ID of the user we want to update
 	 * @param newValue what the first name will be updated to
 	 * @return True if the operation was a success, false otherwise
 	 * @author Skylar Stark
@@ -1138,7 +1152,7 @@ public class Users {
 	/**
 	 * Updates the institution of a user in the database with the given user ID
 	 *
-	 * @param userId the user ID of the user we want to update
+	 * @param userId   the user ID of the user we want to update
 	 * @param newValue what the institution will be updated to
 	 * @return True if the operation was a success, false otherwise
 	 * @author Skylar Stark
@@ -1173,7 +1187,7 @@ public class Users {
 	/**
 	 * Updates the last name of a user in the database with the given user ID
 	 *
-	 * @param userId the user ID of the user we want to update
+	 * @param userId   the user ID of the user we want to update
 	 * @param newValue what the last name will be updated to
 	 * @return true iff the update succeeds on exactly one entry
 	 * @author Skylar Stark
@@ -1206,10 +1220,11 @@ public class Users {
 	}
 
 	/**
-	 * Updates the password of a user in the database with the given user ID. Hashes the password before updating, so
+	 * Updates the password of a user in the database with the given user ID. Hashes
+	 * the password before updating, so
 	 * the password should be supplied in plain-text.
 	 *
-	 * @param userId the user ID of the user we want to update
+	 * @param userId   the user ID of the user we want to update
 	 * @param newValue what the password will be updated to
 	 * @return True if the operation was a success, false otherwise
 	 * @author Skylar Stark
@@ -1221,7 +1236,7 @@ public class Users {
 			con = Common.getConnection();
 			procedure = con.prepareStatement("SELECT starexec.UpdatePassword(?, ?)");
 			procedure.setInt(1, userId);
-			String hashedPassword = Hash.hashPassword(newValue);
+			String hashedPassword = PasswordHasher.hash(newValue);
 			procedure.setString(2, hashedPassword);
 
 			procedure.execute();
@@ -1243,6 +1258,37 @@ public class Users {
 	}
 
 	/**
+	 * Records the password hashing algorithm used during the user's last login.
+	 * This method supports monitoring the migration from SHA-512 to BCrypt.
+	 *
+	 * @param userId    The unique identifier of the user
+	 * @param algorithm The algorithm used: {@link org.starexec.util.PasswordHasher#ALG_SHA512} (legacy) 
+	 *                  or {@link org.starexec.util.PasswordHasher#ALG_BCRYPT} (current)
+	 * @return true if the update succeeded, false otherwise
+	 * @see org.starexec.util.PasswordHasher#detectAlgorithm(String)
+	 */
+	public static boolean updateLastLoginAlgorithm(int userId, String algorithm) {
+		try (Connection con = Common.getConnection();
+		     PreparedStatement stmt = con.prepareStatement(
+		         "UPDATE users SET last_login_algorithm = ? WHERE id = ?")) {
+			stmt.setString(1, algorithm);
+			stmt.setInt(2, userId);
+			int rows = stmt.executeUpdate();
+
+			if (rows > 0) {
+				log.debug("Updated last_login_algorithm to " + algorithm + " for user " + userId);
+				return true;
+			} else {
+				log.warn("No rows updated for user " + userId + " last_login_algorithm");
+				return false;
+			}
+		} catch (Exception e) {
+			log.error("Failed to update last_login_algorithm for user " + userId, e);
+			return false;
+		}
+	}
+
+	/**
 	 * Completely deletes a user from the database.
 	 *
 	 * @param userToDeleteId The ID of the user to delete
@@ -1259,16 +1305,19 @@ public class Users {
 
 			// Delete the user's personal space first to avoid orphan subspaces
 			if (personalSpace != null) {
-				log.info("Deleting personal space for user " + userToDeleteId + " with space id " + personalSpace.getId());
+				log.info("Deleting personal space for user " + userToDeleteId + " with space id "
+						+ personalSpace.getId());
 				if (!Spaces.removeSubspace(personalSpace.getId())) {
-					log.error("Failed to delete personal space for user " + userToDeleteId + " - aborting user deletion to avoid orphan subspaces");
+					log.error("Failed to delete personal space for user " + userToDeleteId
+							+ " - aborting user deletion to avoid orphan subspaces");
 					return false;
 				}
 			} else {
 				log.debug("No personal space found for user " + userToDeleteId);
 			}
 
-			// Delete the user from the database - this should delete all benchmarks and solvers and jobs
+			// Delete the user from the database - this should delete all benchmarks and
+			// solvers and jobs
 			// from the database using cascading deletes.
 			con = Common.getConnection();
 			procedure = con.prepareStatement("SELECT starexec.DeleteUser(?)");
@@ -1277,8 +1326,10 @@ public class Users {
 
 			log.debug("Database deletion successful for user with id=" + userToDeleteId);
 
-			// Only delete the users primitive directories if both personal space and database deletion succeeded
-			// This ensures we don't leave orphan directories if any part of the deletion fails
+			// Only delete the users primitive directories if both personal space and
+			// database deletion succeeded
+			// This ensures we don't leave orphan directories if any part of the deletion
+			// fails
 			deleteUsersPrimitiveDirectories(userToDeleteId);
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
@@ -1300,7 +1351,8 @@ public class Users {
 
 	/**
 	 * Deletes ALL user-related data from the filesystem.
-	 * This includes: solvers, benchmarks, jobs, and ALL pictures (user, solver, and benchmark).
+	 * This includes: solvers, benchmarks, jobs, and ALL pictures (user, solver, and
+	 * benchmark).
 	 *
 	 * @param userId Id of user whose data is to be completely deleted.
 	 * @author Albert Giegerich, Andres Caicedo (comprehensive cleanup)
@@ -1308,25 +1360,25 @@ public class Users {
 	private static void deleteUsersPrimitiveDirectories(int userId) {
 		final String method = "deleteUsersPrimitiveDirectories";
 		log.info(method + ": Deleting ALL data for user with id=" + userId);
-		
+
 		// Delete user's solver directory
 		deleteUsersSolverDirectory(userId);
-		
+
 		// Delete user's benchmark directory
 		deleteUsersBenchmarkDirectory(userId);
-		
+
 		// Delete all job output directories for user's jobs
 		deleteUsersJobDirectories(userId);
-		
+
 		// Delete user's profile pictures
 		deleteUserPictures(userId);
-		
+
 		// Delete pictures for all user's solvers
 		deleteUsersSolverPictures(userId);
-		
+
 		// Delete pictures for all user's benchmarks
 		deleteUsersBenchmarkPictures(userId);
-		
+
 		log.info(method + ": Completed deletion of all data for user with id=" + userId);
 	}
 
@@ -1374,7 +1426,8 @@ public class Users {
 	}
 
 	/**
-	 * Deletes a user's profile pictures (original and thumbnail) from the pictures directory.
+	 * Deletes a user's profile pictures (original and thumbnail) from the pictures
+	 * directory.
 	 * User pictures are stored as:
 	 * - Original: /app/data/pictures/users/Pic{userId}_org.jpg
 	 * - Thumbnail: /app/data/pictures/users/Pic{userId}_thn.jpg
@@ -1390,14 +1443,14 @@ public class Users {
 		long totalFreedSpace = 0;
 
 		// Delete original picture
-		String originalPicture = picturePath + java.io.File.separator + "users" + 
-								java.io.File.separator + "Pic" + userId + "_org.jpg";
+		String originalPicture = picturePath + java.io.File.separator + "users" +
+				java.io.File.separator + "Pic" + userId + "_org.jpg";
 		java.io.File originalFile = new java.io.File(originalPicture);
 		if (originalFile.exists()) {
 			long originalSize = originalFile.length();
 			if (originalFile.delete()) {
 				totalFreedSpace += originalSize;
-				log.info(method + ": Deleted original picture: " + originalPicture + 
+				log.info(method + ": Deleted original picture: " + originalPicture +
 						" (" + FileUtils.byteCountToDisplaySize(originalSize) + ")");
 			} else {
 				log.warn(method + ": Failed to delete original picture: " + originalPicture);
@@ -1407,14 +1460,14 @@ public class Users {
 		}
 
 		// Delete thumbnail picture
-		String thumbnailPicture = picturePath + java.io.File.separator + "users" + 
-								 java.io.File.separator + "Pic" + userId + "_thn.jpg";
+		String thumbnailPicture = picturePath + java.io.File.separator + "users" +
+				java.io.File.separator + "Pic" + userId + "_thn.jpg";
 		java.io.File thumbnailFile = new java.io.File(thumbnailPicture);
 		if (thumbnailFile.exists()) {
 			long thumbnailSize = thumbnailFile.length();
 			if (thumbnailFile.delete()) {
 				totalFreedSpace += thumbnailSize;
-				log.info(method + ": Deleted thumbnail picture: " + thumbnailPicture + 
+				log.info(method + ": Deleted thumbnail picture: " + thumbnailPicture +
 						" (" + FileUtils.byteCountToDisplaySize(thumbnailSize) + ")");
 			} else {
 				log.warn(method + ": Failed to delete thumbnail picture: " + thumbnailPicture);
@@ -1424,13 +1477,14 @@ public class Users {
 		}
 
 		if (totalFreedSpace > 0) {
-			log.info(method + ": Total space freed from user pictures: " + 
+			log.info(method + ": Total space freed from user pictures: " +
 					FileUtils.byteCountToDisplaySize(totalFreedSpace));
 		}
 	}
 
 	/**
-	 * Deletes profile pictures (original and thumbnail) for all solvers owned by the user.
+	 * Deletes profile pictures (original and thumbnail) for all solvers owned by
+	 * the user.
 	 * Solver pictures are stored as:
 	 * - Original: /app/data/pictures/solvers/Pic{solverId}_org.jpg
 	 * - Thumbnail: /app/data/pictures/solvers/Pic{solverId}_thn.jpg
@@ -1441,7 +1495,7 @@ public class Users {
 	private static void deleteUsersSolverPictures(int userId) {
 		final String method = "deleteUsersSolverPictures";
 		long totalFreed = 0;
-		
+
 		try {
 			// Get all solver IDs for this user
 			List<Solver> solvers = Solvers.getByUser(userId);
@@ -1449,13 +1503,13 @@ public class Users {
 				log.debug(method + ": No solvers found for user " + userId);
 				return;
 			}
-			
+
 			String picturePath = R.getPicturePath() + java.io.File.separator + "solvers";
-			
+
 			for (Solver solver : solvers) {
 				// Delete original picture
-				java.io.File orgFile = new java.io.File(picturePath + java.io.File.separator + 
-														"Pic" + solver.getId() + "_org.jpg");
+				java.io.File orgFile = new java.io.File(picturePath + java.io.File.separator +
+						"Pic" + solver.getId() + "_org.jpg");
 				if (orgFile.exists()) {
 					long size = orgFile.length();
 					if (orgFile.delete()) {
@@ -1463,10 +1517,10 @@ public class Users {
 						log.debug(method + ": Deleted solver picture: " + orgFile.getPath());
 					}
 				}
-				
+
 				// Delete thumbnail
-				java.io.File thnFile = new java.io.File(picturePath + java.io.File.separator + 
-														"Pic" + solver.getId() + "_thn.jpg");
+				java.io.File thnFile = new java.io.File(picturePath + java.io.File.separator +
+						"Pic" + solver.getId() + "_thn.jpg");
 				if (thnFile.exists()) {
 					long size = thnFile.length();
 					if (thnFile.delete()) {
@@ -1475,9 +1529,9 @@ public class Users {
 					}
 				}
 			}
-			
+
 			if (totalFreed > 0) {
-				log.info(method + ": Freed " + FileUtils.byteCountToDisplaySize(totalFreed) + 
+				log.info(method + ": Freed " + FileUtils.byteCountToDisplaySize(totalFreed) +
 						" from solver pictures for user " + userId);
 			}
 		} catch (Exception e) {
@@ -1486,7 +1540,8 @@ public class Users {
 	}
 
 	/**
-	 * Deletes profile pictures (original and thumbnail) for all benchmarks owned by the user.
+	 * Deletes profile pictures (original and thumbnail) for all benchmarks owned by
+	 * the user.
 	 * Benchmark pictures are stored as:
 	 * - Original: /app/data/pictures/benchmarks/Pic{benchmarkId}_org.jpg
 	 * - Thumbnail: /app/data/pictures/benchmarks/Pic{benchmarkId}_thn.jpg
@@ -1497,7 +1552,7 @@ public class Users {
 	private static void deleteUsersBenchmarkPictures(int userId) {
 		final String method = "deleteUsersBenchmarkPictures";
 		long totalFreed = 0;
-		
+
 		try {
 			// Get all benchmark IDs for this user
 			List<Benchmark> benchmarks = Benchmarks.getByUser(userId);
@@ -1505,13 +1560,13 @@ public class Users {
 				log.debug(method + ": No benchmarks found for user " + userId);
 				return;
 			}
-			
+
 			String picturePath = R.getPicturePath() + java.io.File.separator + "benchmarks";
-			
+
 			for (Benchmark benchmark : benchmarks) {
 				// Delete original picture
-				java.io.File orgFile = new java.io.File(picturePath + java.io.File.separator + 
-														"Pic" + benchmark.getId() + "_org.jpg");
+				java.io.File orgFile = new java.io.File(picturePath + java.io.File.separator +
+						"Pic" + benchmark.getId() + "_org.jpg");
 				if (orgFile.exists()) {
 					long size = orgFile.length();
 					if (orgFile.delete()) {
@@ -1519,10 +1574,10 @@ public class Users {
 						log.debug(method + ": Deleted benchmark picture: " + orgFile.getPath());
 					}
 				}
-				
+
 				// Delete thumbnail
-				java.io.File thnFile = new java.io.File(picturePath + java.io.File.separator + 
-														"Pic" + benchmark.getId() + "_thn.jpg");
+				java.io.File thnFile = new java.io.File(picturePath + java.io.File.separator +
+						"Pic" + benchmark.getId() + "_thn.jpg");
 				if (thnFile.exists()) {
 					long size = thnFile.length();
 					if (thnFile.delete()) {
@@ -1531,9 +1586,9 @@ public class Users {
 					}
 				}
 			}
-			
+
 			if (totalFreed > 0) {
-				log.info(method + ": Freed " + FileUtils.byteCountToDisplaySize(totalFreed) + 
+				log.info(method + ": Freed " + FileUtils.byteCountToDisplaySize(totalFreed) +
 						" from benchmark pictures for user " + userId);
 			}
 		} catch (Exception e) {
@@ -1544,8 +1599,9 @@ public class Users {
 	/**
 	 * Checks to see whether the given user is an admin
 	 *
-	 * @param userId
-	 * @return True if the user is an admin and false otherwise (including if there was an error)
+	 * @param userId the id of the user to check
+	 * @return True if the user is an admin and false otherwise (including if there
+	 *         was an error)
 	 */
 	public static boolean isAdmin(int userId) {
 		// Check cache first
@@ -1554,17 +1610,13 @@ public class Users {
 			return entry.value;
 		}
 
-		Connection con = null;
-		try {
-			con = Common.getConnection();
+		try (Connection con = Common.getConnection()) {
 			boolean isAdmin = isAdmin(con, userId);
 			// Update cache after DB check
 			isAdminCache.put(userId, new CacheEntry<>(isAdmin));
 			return isAdmin;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
-		} finally {
-			Common.safeClose(con);
 		}
 		return false;
 	}
@@ -1588,7 +1640,9 @@ public class Users {
 	}
 
 	/**
-	 * Invalidates the isAdmin cache for a specific user. Call this when a user's role changes.
+	 * Invalidates the isAdmin cache for a specific user. Call this when a user's
+	 * role changes.
+	 * 
 	 * @param userId The ID of the user to invalidate.
 	 */
 	public static void invalidateIsAdminCache(int userId) {
@@ -1600,7 +1654,8 @@ public class Users {
 	 * Checks to see whether the given user is a developer
 	 *
 	 * @param userId
-	 * @return True if the user is a developer and false otherwise (including if there was an error)
+	 * @return True if the user is a developer and false otherwise (including if
+	 *         there was an error)
 	 */
 
 	public static boolean isDeveloper(int userId) {
@@ -1628,7 +1683,8 @@ public class Users {
 	 * Checks to see whether the given user is unauthorized
 	 *
 	 * @param userId
-	 * @return True if the user has yet to be accepted by a community and false otherwise
+	 * @return True if the user has yet to be accepted by a community and false
+	 *         otherwise
 	 */
 	public static boolean isUnauthorized(int userId) {
 		User u = Users.get(userId);
@@ -1660,7 +1716,8 @@ public class Users {
 	/**
 	 * Adds the given user to the database
 	 *
-	 * @param user The user to add. The user's password should be in plaintext and will be hashed before being added
+	 * @param user The user to add. The user's password should be in plaintext and
+	 *             will be hashed before being added
 	 * @return The ID of the new user
 	 */
 	public static int add(User user) {
@@ -1672,7 +1729,7 @@ public class Users {
 		try {
 			con = Common.getConnection();
 
-			String hashedPass = Hash.hashPassword(user.getPassword());
+			String hashedPass = PasswordHasher.hash(user.getPassword());
 			log.debug("hashedPass = " + hashedPass);
 			stmt = con.prepareStatement("SELECT AddUserAuthorized(?, ?, ?, ?, ?, ?, ?, ?)");
 			stmt.setString(1, user.getFirstName());
@@ -1708,7 +1765,7 @@ public class Users {
 	 * Sets the role of the given user to the given role
 	 *
 	 * @param userId The ID of the user to affect
-	 * @param role The role to give the user
+	 * @param role   The role to give the user
 	 * @return True on success and false otherwise
 	 */
 	public static boolean changeUserRole(int userId, String role) throws StarExecDatabaseException {
@@ -1721,7 +1778,7 @@ public class Users {
 			stmt.setInt(1, userId);
 			stmt.setString(2, role);
 			stmt.execute();
-			
+
 			// Invalidate cache after role change
 			invalidateIsAdminCache(userId);
 
@@ -1743,13 +1800,15 @@ public class Users {
 	}
 
 	/**
-	 * Updates a user's preferences regarding whether to receive weekly emails containing Starexec reports
+	 * Updates a user's preferences regarding whether to receive weekly emails
+	 * containing Starexec reports
 	 *
 	 * @param userId
 	 * @param willBeSubscribed True to subscribe and false to unsubscribe
 	 * @return True on success and false otherwise
 	 */
-	private static boolean setUserReportSubscription(int userId, Boolean willBeSubscribed) throws StarExecDatabaseException {
+	private static boolean setUserReportSubscription(int userId, Boolean willBeSubscribed)
+			throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement stmt = null;
 		try {
@@ -1777,7 +1836,8 @@ public class Users {
 	}
 
 	/**
-	 * Sets the role of the given user to 'suspended' NOTE: The old role of the user is not stored, so if they are
+	 * Sets the role of the given user to 'suspended' NOTE: The old role of the user
+	 * is not stored, so if they are
 	 * later
 	 * reinstated, they will always be set to 'user,' regardless of their old role!
 	 *
@@ -1794,10 +1854,28 @@ public class Users {
 	}
 
 	/**
-	 * Sets the role of the given user back to 'user'
+	 * Sets the role of the given user to 'unauthorized' NOTE: The old role of the
+	 * user is not stored, so if they are
+	 * later
+	 * reinstated, they will always be set to 'user,' regardless of their old role!
 	 *
 	 * @param userId
-	 * @return True on success and false otherwise
+	 * @return True on success or false otherwise
+	 */
+	public static boolean markUnauthorized(int userId) {
+		try {
+			return changeUserRole(userId, R.UNAUTHORIZED_ROLE_NAME);
+		} catch (StarExecDatabaseException e) {
+			log.error("Failed to mark user unauthorized: " + userId, e);
+			return false;
+		}
+	}
+
+	/**
+	 * Sets the role of the given user to 'user'
+	 *
+	 * @param userId
+	 * @return True on success or false otherwise
 	 */
 	public static boolean reinstate(int userId) {
 		try {

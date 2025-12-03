@@ -7,6 +7,7 @@ import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.User;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.CsrfUtil;
 import org.starexec.util.Mail;
 import org.starexec.util.Util;
 import org.starexec.util.Validator;
@@ -72,6 +73,14 @@ public class PasswordReset extends HttpServlet {
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
 		try {
+			// Validate CSRF token first
+			if (!CsrfUtil.validateToken(request)) {
+				log.warn("CSRF token validation failed for password reset request");
+				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Security validation failed. Please try again."));
+				response.sendError(HttpServletResponse.SC_FORBIDDEN, "Invalid security token");
+				return;
+			}
+
 			// Ensure the parameters are well formed
 			ValidatorStatusCode status = isPostRequestValid(request);
 			if (status.isSuccess()) {

@@ -5,6 +5,7 @@ import org.starexec.data.database.*;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.PasswordHasher;
 import org.starexec.util.SessionUtil;
 import org.starexec.util.Util;
 
@@ -16,8 +17,10 @@ import java.io.IOException;
 import java.util.regex.Pattern;
 
 /**
- * This class is responsible for intercepting all requests to protected resources
- * and checking if the user has the appropriate session variables set to continue
+ * This class is responsible for intercepting all requests to protected
+ * resources
+ * and checking if the user has the appropriate session variables set to
+ * continue
  * using the website. As a side-effect, this is where newly logged in users
  * are detected and logged.
  *
@@ -36,13 +39,14 @@ public class SessionFilter implements Filter {
 
 	/**
 	 * Detects requests originating from StarExecCommand
+	 * 
 	 * @param request HTTP Request
 	 * @return true if request is from StarExecCommand, false otherwise
 	 */
 	private static boolean isFromCommand(HttpServletRequest request) {
 		final String userAgent = request.getHeader("User-Agent");
 		return userAgent != null
-			&& StarExecCommand.matcher(userAgent).find();
+				&& StarExecCommand.matcher(userAgent).find();
 	}
 
 	/** This RegEx is used to match known Python API User-Agent headers. */
@@ -50,13 +54,14 @@ public class SessionFilter implements Filter {
 
 	/**
 	 * Detects requests originating from StarExecCommand
+	 * 
 	 * @param request HTTP Request
 	 * @return true if request is from StarExecCommand, false otherwise
 	 */
 	private static boolean isFromPython(HttpServletRequest request) {
 		final String userAgent = request.getHeader("User-Agent");
 		return userAgent != null
-			&& PythonUserAgent.matcher(userAgent).find();
+				&& PythonUserAgent.matcher(userAgent).find();
 	}
 
 	@Override
@@ -65,55 +70,86 @@ public class SessionFilter implements Filter {
 	}
 
 	@Override
-	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+			throws IOException, ServletException {
 		try {
 			final String method = "doFilter";
 			// Cast the servlet request to an httpRequest so we have access to the session
 			HttpServletRequest httpRequest = (HttpServletRequest) request;
-			log.debug(method, "Request URI: "+httpRequest.getRequestURI());
+			log.debug(method, "Request URI: " + httpRequest.getRequestURI());
 
 			boolean isCommandRequest = isFromCommand(httpRequest);
 			if (isCommandRequest) {
 				log.debug(method, "isFromCommand: true");
 			}
 
-		// Allow access to public resources and authentication endpoints FIRST
-		// Do NOT touch the session for j_security_check or login pages to avoid
-		// interfering with Tomcat's FormAuthenticator
-		String requestURI = httpRequest.getRequestURI();
-		String contextPath = httpRequest.getContextPath();
-		
-		// Use explicit paths for static resources instead of file extensions
-		// to prevent accidentally bypassing auth for protected resources
-		if (requestURI.startsWith(contextPath + "/public/") ||
-			requestURI.startsWith(contextPath + "/login") ||
-			requestURI.startsWith(contextPath + "/j_security_check") ||
-			requestURI.startsWith(contextPath + "/assets/") ||
-			requestURI.startsWith(contextPath + "/css/") ||
-			requestURI.startsWith(contextPath + "/js/") ||
-			requestURI.startsWith(contextPath + "/images/")) {
-			chain.doFilter(request, response);
-			return;
-		}
+			// Allow access to public resources and authentication endpoints FIRST
+			// Do NOT touch the session for j_security_check or login pages to avoid
+			// interfering with Tomcat's FormAuthenticator
+			String requestURI = httpRequest.getRequestURI();
+			String contextPath = httpRequest.getContextPath();
 
-		// Do not create a session eagerly for every request. Creating a session
-		// before the container's FormAuthenticator has a chance to save the
-		// original request can lead to a session-id mismatch during FORM
-		// authentication (observed as HTTP 408 "login timeout"). Use
-		// getSession(false) and only create a session when we need to bridge
-		// container-managed authentication into the application's session.
-		HttpSession session = httpRequest.getSession(false);			HttpServletResponse httpResponse = (HttpServletResponse) response;
+			// Use explicit paths for static resources instead of file extensions
+			// to prevent accidentally bypassing auth for protected resources
+			if (requestURI.startsWith(contextPath + "/public/") ||
+					requestURI.startsWith(contextPath + "/login") ||
+					requestURI.startsWith(contextPath + "/j_security_check") ||
+					requestURI.startsWith(contextPath + "/assets/") ||
+					requestURI.startsWith(contextPath + "/css/") ||
+					requestURI.startsWith(contextPath + "/js/") ||
+					requestURI.startsWith(contextPath + "/images/")) {
+				chain.doFilter(request, response);
+				return;
+			}
 
-			// Bridge between container-managed security and application's session management
+			// Do not create a session eagerly for every request. Creating a session
+			// before the container's FormAuthenticator has a chance to save the
+			// original request can lead to a session-id mismatch during FORM
+			// authentication (observed as HTTP 408 "login timeout"). Use
+			// getSession(false) and only create a session when we need to bridge
+			// container-managed authentication into the application's session.
+			HttpSession session = httpRequest.getSession(false);
+			HttpServletResponse httpResponse = (HttpServletResponse) response;
+
+			// Bridge between container-managed security and application's session
+			// management
 			if (SessionUtil.getUser(httpRequest) == null && httpRequest.getRemoteUser() != null) {
 				String username = httpRequest.getRemoteUser();
-				log.debug(method, "User is authenticated by container but not in session. Initializing session for: " + username);
+				log.debug(method,
+						"User is authenticated by container but not in session. Initializing session for: " + username);
 				User user = Users.get(username);
 				if (user != null) {
 					if (session == null) {
 						session = httpRequest.getSession(true);
 					}
 					session.setAttribute(SessionUtil.USER, user);
+
+					// LEGACY PASSWORD DETECTION: Check if user has SHA-512 password hash
+					// Container-managed auth prevents auto-upgrade (no access to plaintext)
+					// User will be migrated to BCrypt on next password change
+					try {
+						String storedHash = Users.getPassword(user.getId());
+						String algorithm = PasswordHasher.detectAlgorithm(storedHash);
+
+						if (PasswordHasher.ALG_SHA512.equals(algorithm)) {
+							log.info("User " + user.getId() + " (" + user.getEmail() +
+									") authenticated with legacy SHA-512 hash");
+							log.debug("User will be migrated to BCrypt on next password change");
+
+							// Track last login algorithm
+							Users.updateLastLoginAlgorithm(user.getId(), PasswordHasher.ALG_SHA512);
+
+							// Set session flag for user notification banner
+							session.setAttribute("showPasswordUpgradeNotice", true);
+						} else if (PasswordHasher.ALG_BCRYPT.equals(algorithm)) {
+							log.debug("User " + user.getId() + " using secure BCrypt hash");
+							Users.updateLastLoginAlgorithm(user.getId(), PasswordHasher.ALG_BCRYPT);
+						}
+					} catch (Exception e) {
+						log.error("Error checking password algorithm for user " + user.getId(), e);
+						// Don't fail login due to algorithm detection
+					}
+
 					logUserLogin(user, httpRequest);
 				} else {
 					log.error(method, "Could not find user in database for authenticated user: " + username);
@@ -121,7 +157,8 @@ public class SessionFilter implements Filter {
 			}
 
 			// If the user is logged in...
-			if (SessionUtil.getUser(httpRequest) != null && SessionUtil.getUser(httpRequest).getId() != R.PUBLIC_USER_ID) {
+			if (SessionUtil.getUser(httpRequest) != null
+					&& SessionUtil.getUser(httpRequest).getId() != R.PUBLIC_USER_ID) {
 				User user = SessionUtil.getUser(httpRequest);
 				String userEmail = user.getEmail();
 				// Check if they have the necessary user SessionUtil stored in their session
@@ -138,12 +175,13 @@ public class SessionFilter implements Filter {
 						return;
 					}
 				}
-				log.debug(method, "User role was found to be "+user.getRole());
-				//suspended and unauthorized users cannot utilize the system: always place them back on the index page
-				//whenever they try to access anything secure.
+				log.debug(method, "User role was found to be " + user.getRole());
+				// suspended and unauthorized users cannot utilize the system: always place them
+				// back on the index page
+				// whenever they try to access anything secure.
 				if (user.getRole().equals(R.SUSPENDED_ROLE_NAME) || user.getRole().equals(R.UNAUTHORIZED_ROLE_NAME)) {
 					if (!httpRequest.getRequestURI().equals("/" + R.STAREXEC_APPNAME + "/")) {
-						log.debug(method, "Redirecting "+user.getRole()+" user to index.");
+						log.debug(method, "Redirecting " + user.getRole() + " user to index.");
 						httpResponse.sendRedirect(Util.docRoot(""));
 					}
 				}
@@ -164,7 +202,8 @@ public class SessionFilter implements Filter {
 
 	/**
 	 * Adds a record to the database that represents the login
-	 * @param user The user that just logged in
+	 * 
+	 * @param user    The user that just logged in
 	 * @param request The request containing data required to log
 	 */
 	private void logUserLogin(User user, HttpServletRequest request) {
@@ -184,7 +223,8 @@ public class SessionFilter implements Filter {
 
 		// Also save in the database to maintain a historical record
 		Common.addLoginRecord(user.getId(), ip, rawBrowser);
-		// Get the number of unique logins that have occurred since the last report was sent and
+		// Get the number of unique logins that have occurred since the last report was
+		// sent and
 		// record it in the reports table.
 		Integer uniqueLogins = Logins.getNumberOfUniqueLogins();
 		if (uniqueLogins != null) {

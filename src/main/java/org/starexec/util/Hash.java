@@ -15,12 +15,19 @@ public class Hash {
 	private static final StarLogger log = StarLogger.getLogger(Hash.class);
 
 	/**
-	 * Hashes a password using a pre-specified hashing algorithm.
+	 * Hashes a password using SHA-512 (LEGACY - INSECURE).
+	 * 
+	 * @deprecated Use {@link org.starexec.util.PasswordHasher#hash(String)}
+	 *             instead.
+	 *             This method is kept only for verifying legacy passwords during
+	 *             migration.
+	 *             SHA-512 without salt is vulnerable to rainbow table attacks.
 	 *
 	 * @param unhashedPassword The password to be hashed
-	 * @return The hashed version of the password
+	 * @return The hashed version of the password (SHA-512, no salt)
 	 */
-	public static String hashPassword(String unhashedPassword) {
+	@Deprecated
+	public static String hashPasswordLegacy(String unhashedPassword) {
 		try {
 			// encoder used to hash password for storage
 			MessageDigest hasher = MessageDigest.getInstance(R.PWD_HASH_ALGORITHM);
@@ -37,7 +44,7 @@ public class Hash {
 	/**
 	 * @param raw A raw byte array
 	 * @return A string representing the hexidecimal version of the raw input. Every
-	 * byte will be represented by exactly two hex characters
+	 *         byte will be represented by exactly two hex characters
 	 */
 	public static String getHex(byte[] raw) {
 		if (raw == null) {
