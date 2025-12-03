@@ -5,10 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>StarExec Helm Charts</title>
   <style>
+    :root {
+      /* StarExec Color Palette */
+      --background-color: #0f0f0f;
+      --foreground-color: #2a2a2a;
+      --text-main-color: #f8f8f8;
+      --text-accent-color: #999999;
+      --text-highlight-color: #ff6b35;
+      --accent-purple: #8b5cf6;
+      --accent-blue: #3b82f6;
+      --accent-orange: #f97316;
+      --accent-green: #10b981;
+      --input-background: #3a3a3a;
+    }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: #fff;
+      font-family: "Century Gothic", sans-serif;
+      font-weight: lighter;
+      background-color: var(--background-color);
+      color: var(--text-main-color);
       padding: 50px;
       text-align: center;
       margin: 0;
@@ -19,55 +34,68 @@
       align-items: center;
     }
     .container {
-      background: rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(10px);
-      border-radius: 20px;
+      background-color: var(--foreground-color);
+      border-radius: 8px;
       padding: 40px;
       max-width: 800px;
-      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
     }
     h1 {
-      font-size: 3rem;
-      margin-bottom: 20px;
-      text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+      font-family: "Century Gothic", sans-serif;
+      font-weight: lighter;
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+      color: var(--text-main-color);
     }
     p {
-      font-size: 1.2rem;
-      margin-bottom: 30px;
-      opacity: 0.9;
+      font-size: 1.1rem;
+      margin-bottom: 20px;
+      color: var(--text-accent-color);
+    }
+    p strong {
+      color: var(--text-main-color);
     }
     pre {
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 10px;
-      padding: 20px;
+      background-color: var(--input-background);
+      border-radius: 4px;
+      padding: 16px;
       text-align: left;
       overflow-x: auto;
       font-size: 0.9rem;
       line-height: 1.6;
-      margin: 15px 0;
+      margin: 10px 0;
+      border: 1px solid var(--input-background);
     }
     code {
-      color: #a8ff60;
+      color: var(--accent-green);
       font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     }
     .section {
-      margin: 30px 0;
+      margin: 25px 0;
     }
     a {
-      color: #a8ff60;
+      color: var(--text-highlight-color);
       text-decoration: none;
-      font-weight: bold;
     }
     a:hover {
       text-decoration: underline;
     }
     .badge {
       display: inline-block;
-      background: rgba(255, 255, 255, 0.2);
-      padding: 5px 15px;
-      border-radius: 20px;
-      margin: 5px;
-      font-size: 0.9rem;
+      background-color: var(--input-background);
+      color: var(--text-accent-color);
+      padding: 5px 12px;
+      border-radius: 4px;
+      margin: 4px;
+      font-size: 0.85rem;
+    }
+    .footer-links {
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 1px solid var(--input-background);
+    }
+    .footer-links a {
+      margin: 0 10px;
     }
   </style>
 </head>
@@ -112,12 +140,10 @@ helm show values starexec/starexec</code></pre>
       <div class="badge">Kubernetes</div>
     </div>
 
-    <div class="section">
-      <p>
-        <a href="https://github.com/StarExecMiami/StarExec" target="_blank">Documentation</a> |
-        <a href="https://github.com/StarExecMiami/StarExec/issues" target="_blank">Report Issues</a> |
-        <a href="index.yaml">Chart Index</a>
-      </p>
+    <div class="footer-links">
+      <a href="https://github.com/StarExecMiami/StarExec" target="_blank">Documentation</a>
+      <a href="https://github.com/StarExecMiami/StarExec/issues" target="_blank">Report Issues</a>
+      <a href="index.yaml">Chart Index</a>
     </div>
   </div>
 </body>
