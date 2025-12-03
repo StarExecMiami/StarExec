@@ -49,7 +49,17 @@ RUN curl -L https://www.cril.univ-artois.fr/~roussel/runsolver/runsolver-3.4.1.t
     chmod +x /tmp/runsolver-output/runsolver
 
 # ==============================================================================
-# Stage 3: Build Application with Maven
+# Stage 3: Build Credential Handler for Tomcat lib
+# ==============================================================================
+FROM docker.io/library/maven:3.9-eclipse-temurin-17-alpine AS credential-handler
+
+WORKDIR /build
+COPY tomcat-credential-handler/pom.xml ./pom.xml
+COPY tomcat-credential-handler/src ./src
+RUN mvn clean package -B -q
+
+# ==============================================================================
+# Stage 4: Build Application with Maven
 # ==============================================================================
 FROM docker.io/library/maven:3.9-eclipse-temurin-17-alpine AS builder
 
@@ -89,7 +99,7 @@ RUN mvn clean package -DskipTests -B -V && \
     cp target/starexec.war /build/output/starexec.war
 
 # ==============================================================================
-# Stage 4: Runtime - Tomcat with Security Hardening
+# Stage 5: Runtime - Tomcat with Security Hardening
 # ==============================================================================
 FROM docker.io/library/eclipse-temurin:17-jre-alpine
 
@@ -194,6 +204,9 @@ RUN chmod +x /usr/local/bin/GetComputerInfo && \
     chown root:root /usr/local/bin/GetComputerInfo && \
     mkdir -p /home/starexec/bin && \
     ln -s /usr/local/bin/GetComputerInfo /home/starexec/bin/GetComputerInfo
+
+# Copy BCrypt credential handler to Tomcat lib (needed for Realm initialization)
+COPY --from=credential-handler /build/target/starexec-credential-handler-1.0.0.jar ${CATALINA_HOME}/lib/
 
 # Copy WAR from builder and expand it
 COPY --from=builder --chown=starexec:starexec /build/output/starexec.war ${CATALINA_HOME}/webapps/starexec.war
