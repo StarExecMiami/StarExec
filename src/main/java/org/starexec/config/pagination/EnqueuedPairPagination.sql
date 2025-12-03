@@ -4,20 +4,20 @@
 
 SELECT 	   job_pairs.id,
 		   job_pairs.path,
-		   job_pairs.primary_jobpair_data,
-		   job_pairs.job_id,
-		   job_pairs.bench_id,
-		   job_pairs.bench_name,
-		   job_pairs.queuesub_time,
-		   jobpair_stage_data.solver_id,
-		   jobpair_stage_data.solver_name,
-		   jobpair_stage_data.config_id,
-		   jobpair_stage_data.config_name,
-		   jobs.id,
-		   jobs.name,
-		   users.id,
-		   users.first_name,
-		   users.last_name
+		   job_pairs.primary_jobpair_data AS primaryJobpairData,
+		   job_pairs.job_id AS jobId,
+		   job_pairs.bench_id AS benchId,
+		   job_pairs.bench_name AS benchName,
+		   job_pairs.queuesub_time AS queuesubTime,
+		   jobpair_stage_data.solver_id AS solverId,
+		   jobpair_stage_data.solver_name AS solverName,
+		   jobpair_stage_data.config_id AS configId,
+		   jobpair_stage_data.config_name AS configName,
+		   jobs.id AS jobIdDup,
+		   jobs.name AS jobName,
+		   users.id AS userId,
+		   users.first_name AS firstName,
+		   users.last_name AS lastName
 FROM job_pairs
 -- Where the job_pair is running on the input Queue
 	JOIN jobs ON jobs.id = job_pairs.job_id
