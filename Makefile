@@ -1,6 +1,19 @@
 # StarExec DevOps Build System
 #
 # ============================================================================
+# SHELL CONFIGURATION
+# ============================================================================
+# We explicitly use /bin/sh for POSIX compliance across Linux distributions.
+# This ensures compatibility with dash (Debian/Ubuntu), ash (Alpine), and bash.
+# All shell code in this Makefile MUST be POSIX-compliant:
+#   - Use 'printf' instead of 'echo -n' or 'read -p'
+#   - Use $(cmd) instead of `cmd` for command substitution
+#   - Avoid bash arrays, [[ ]], and other bash-specific features
+# ============================================================================
+SHELL := /bin/sh
+.SHELLFLAGS := -ec
+
+# ============================================================================
 # CONFIGURATION VARIABLES
 # ============================================================================
 # These can be overridden via environment variables or command-line:
@@ -48,8 +61,13 @@ VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 FORCE?=0
 DRY_RUN?=0
 
-# Retry/timeout configuration
-POSTGRES_READY_TIMEOUT?=5
+# Container naming (derived from RELEASE_NAME for consistency)
+APP_CONTAINER=$(RELEASE_NAME)-app
+DB_CONTAINER=$(RELEASE_NAME)-postgres
+POD_NAME=$(RELEASE_NAME)-pod
+
+# Port configuration
+APP_PORT?=7827
 
 # Network configuration
 PODMAN_NETWORK?=pasta
@@ -198,23 +216,107 @@ volumes-list:
 
 volumes-backup: verify-deps
 	@echo "Backing up volumes for environment: $(ENV)"
+	@# Safety check: warn if containers are running during backup
+	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
+		echo ""; \
+		echo "${YELLOW}⚠️  WARNING: StarExec containers are currently RUNNING${RESET}"; \
+		echo "${YELLOW}   For a consistent backup, consider stopping first:${RESET}"; \
+		echo "   ${BLUE}make stop${RESET}"; \
+		echo ""; \
+		if [ "$(FORCE)" != "1" ] && [ -t 0 ]; then \
+			printf "Continue with backup anyway? (y/N): "; \
+			read ans; \
+			if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
+				echo "Backup cancelled."; \
+				exit 0; \
+			fi; \
+		fi; \
+	fi
 	$(VOLUME_SCRIPT) backup-all $(ENV)
 
 volumes-restore: verify-deps
+	@# =========================================================================
+	@# Backup Restore Wizard
+	@# =========================================================================
+	@# This target implements an interactive backup selection menu.
+	@# For complex restore scenarios, consider using the volume script directly:
+	@#   ./scripts/podman-volumes.sh restore-all ENV TIMESTAMP
+	@# =========================================================================
 	@echo "Restore requires timestamp. Available backups:"
-	@ls -1 backups/$(VOLUME_PREFIX)-$(ENV)-full-*.tar.gz 2>/dev/null | sed 's/.*full-//' | sed 's/-data.tar.gz//' | sed 's/-postgres.tar.gz//' | sort -u || echo "(none)"
-	@ts=$${RESTORE_TIMESTAMP:-}; \
+	@# Safety check: ensure containers are stopped before restore
+	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
+		echo ""; \
+		echo "${RED}╔══════════════════════════════════════════════════════════════╗${RESET}"; \
+		echo "${RED}║  ⚠️  DANGER: StarExec is currently RUNNING!                   ║${RESET}"; \
+		echo "${RED}║                                                              ║${RESET}"; \
+		echo "${RED}║  Restoring volumes while the database is running will        ║${RESET}"; \
+		echo "${RED}║  CORRUPT your PostgreSQL data (WAL mismatch).                ║${RESET}"; \
+		echo "${RED}╚══════════════════════════════════════════════════════════════╝${RESET}"; \
+		echo ""; \
+		echo "Please stop the deployment first:"; \
+		echo "  ${BLUE}make stop${RESET}"; \
+		echo ""; \
+		echo "Then retry:"; \
+		echo "  ${BLUE}make volumes-restore${RESET}"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@# Parse backup timestamps from filenames using a robust pattern
+	@# Expected format: backups/starexec-ENV-full-YYYYMMDD-HHMMSS-{data,postgres}.tar.gz
+	@BACKUP_PATTERN="backups/$(VOLUME_PREFIX)-$(ENV)-full-*-*.tar.gz"; \
+	BACKUPS=$$(ls -1 $$BACKUP_PATTERN 2>/dev/null | \
+		sed -n 's|.*/$(VOLUME_PREFIX)-$(ENV)-full-\([0-9]\{8\}-[0-9]\{6\}\)-.*\.tar\.gz|\1|p' | \
+		sort -u); \
+	if [ -z "$$BACKUPS" ]; then \
+		echo "${RED}✗ No backups found for environment: $(ENV)${RESET}"; \
+		echo "  Expected pattern: $$BACKUP_PATTERN"; \
+		exit 1; \
+	fi; \
+	BACKUP_COUNT=$$(echo "$$BACKUPS" | wc -l | tr -d ' '); \
+	LATEST=$$(echo "$$BACKUPS" | tail -1); \
+	ts=$${RESTORE_TIMESTAMP:-}; \
 	if [ -z "$$ts" ]; then \
-		read -p "Enter timestamp (YYYYMMDD-HHMMSS): " ts; \
+		echo ""; \
+		echo "Available backups (newest last):"; \
+		echo "$$BACKUPS" | awk -v latest="$$LATEST" -v green="${GREEN}" -v reset="${RESET}" '{ \
+			if ($$0 == latest) printf "  %s%d) %s (latest)%s\n", green, NR, $$0, reset; \
+			else printf "  %d) %s\n", NR, $$0; \
+		}'; \
+		echo ""; \
+		if [ -t 0 ]; then \
+			printf "Select backup [1-$$BACKUP_COUNT] or timestamp (default: $$BACKUP_COUNT = latest): "; \
+			read selection; \
+		else \
+			echo "Non-interactive mode: using latest backup"; \
+			selection=""; \
+		fi; \
+		if [ -z "$$selection" ]; then \
+			ts=$$LATEST; \
+			echo "Using latest backup: $$ts"; \
+		elif echo "$$selection" | grep -qE '^[0-9]+$$' && [ "$$selection" -ge 1 ] && [ "$$selection" -le "$$BACKUP_COUNT" ]; then \
+			ts=$$(echo "$$BACKUPS" | sed -n "$${selection}p"); \
+			echo "Selected backup: $$ts"; \
+		else \
+			ts=$$selection; \
+			if ! echo "$$BACKUPS" | grep -qx "$$ts"; then \
+				echo "${YELLOW}⚠ Warning: '$$ts' not in backup list, attempting anyway...${RESET}"; \
+			fi; \
+			echo "Using timestamp: $$ts"; \
+		fi; \
 	fi; \
 	if [ -z "$$ts" ]; then \
-		echo "✗ No timestamp provided, aborting"; \
+		echo "${RED}✗ No timestamp provided, aborting${RESET}"; \
 		exit 1; \
 	fi; \
 	$(VOLUME_SCRIPT) restore-all $(ENV) $$ts
 
 volumes-export:
-	@read -p "Volume name: " vol && \
+	@printf "Volume name: "; \
+	read vol; \
+	if [ -z "$$vol" ]; then \
+		echo "${RED}✗ No volume name provided, aborting${RESET}"; \
+		exit 1; \
+	fi; \
 	$(VOLUME_SCRIPT) export $$vol
 
 volumes-cleanup:
@@ -243,7 +345,7 @@ volumes-help:
 
 db-shell:
 	@echo "Opening PostgreSQL shell (container must be running)"
-	@if ! podman container exists starexec-postgres >/dev/null 2>&1; then \
+	@if ! podman container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
 		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
 		exit 1; \
 	fi
@@ -256,7 +358,7 @@ db-shell:
 	); \
 	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
-	PGPASSWORD=$$DB_PASS podman exec -it starexec-postgres psql -U $$DB_USER -d $$DB_NAME
+	PGPASSWORD="$$DB_PASS" podman exec -it $(DB_CONTAINER) psql -U "$$DB_USER" -d "$$DB_NAME"
 
 db-dump:
 	@echo "Creating PostgreSQL dump (uses volume script if available)"
@@ -342,14 +444,15 @@ migrate-podman:
 	@echo "  - Applying migrations to external/remote databases"
 	@echo "  - Development testing of migration scripts"
 	@echo ""
-	@read -p "Continue with manual migration? (y/N): " ans; \
+	@printf "Continue with manual migration? (y/N): "; \
+	read ans; \
 	if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
 		echo "Cancelled"; \
 		exit 0; \
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
-	@if ! podman container exists starexec-postgres >/dev/null 2>&1; then \
+	@if ! podman container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
 		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
 		exit 1; \
 	fi
@@ -364,7 +467,7 @@ migrate-podman:
 	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
 	DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
 	for i in 1 2 3 4 5; do \
-		if podman exec starexec-postgres pg_isready -h localhost -p 5432 -U$$DB_USER >/dev/null 2>&1; then \
+		if podman exec $(DB_CONTAINER) pg_isready -h localhost -p 5432 -U"$$DB_USER" >/dev/null 2>&1; then \
 			echo "PostgreSQL is ready"; \
 			break; \
 		fi; \
@@ -374,9 +477,9 @@ migrate-podman:
 	echo "Running Flyway migration against $$DB_HOST:5432/$$DB_NAME"; \
 	mvn clean flyway:migrate -e \
 		-Dflyway.url=jdbc:postgresql://$$DB_HOST:5432/$$DB_NAME \
-		-Dflyway.user=$$DB_USER \
-		-Dflyway.password=$$DB_PASS \
-		-Dflyway.schemas=$$DB_NAME
+		-Dflyway.user="$$DB_USER" \
+		-Dflyway.password="$$DB_PASS" \
+		-Dflyway.schemas="$$DB_NAME"
 
 # ============================================================================
 # PODMAN DEPLOYMENT
@@ -395,13 +498,13 @@ network-setup:
 
 define cleanup_deployment
 	@echo "Cleaning up existing StarExec pods, containers, and secrets..."
-	@for pod in starexec starexec-pod $(RELEASE_NAME)-pod; do \
+	@for pod in starexec starexec-pod $(POD_NAME); do \
 		if podman pod exists $$pod 2>/dev/null; then \
 			echo "  Removing existing pod: $$pod"; \
 			podman pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
-	@for container in starexec-app starexec-postgres; do \
+	@for container in $(APP_CONTAINER) $(DB_CONTAINER) starexec-app starexec-postgres; do \
 		if podman container exists $$container 2>/dev/null; then \
 			echo "  Removing orphaned container: $$container"; \
 			podman rm -f $$container 2>/dev/null || true; \
@@ -442,6 +545,13 @@ deploy-podman: verify-deps image network-setup volumes-create
 	fi
 
 deploy-podman-helm:
+	@# Verify values file exists before proceeding
+	@if [ ! -f "$(VALS)" ]; then \
+		echo "${RED}✗ Values file not found: $(VALS)${RESET}"; \
+		echo "Available values files:"; \
+		ls -1 $(CHART_DIR)/values*.yaml 2>/dev/null || echo "  (none found)"; \
+		exit 1; \
+	fi
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@echo "Rendering secrets..."
@@ -455,23 +565,27 @@ deploy-podman-helm:
 	@echo "Deploying application pod..."
 	@IMAGE_REPO="$(RELEASE_NAME)"; \
 	IMAGE_VER="$(IMAGE_TAG)"; \
-	helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
+	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set image.repository=$$IMAGE_REPO \
 		--set image.tag=$$IMAGE_VER \
-		--set image.pullPolicy=Never > render.yaml
+		--set image.pullPolicy=Never > render.yaml; then \
+		echo "${RED}✗ Helm template generation failed${RESET}"; \
+		echo "Check your values file: $(VALS)"; \
+		exit 1; \
+	fi
 	@podman play kube render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
 	@echo "  Values: $(VALS)"
 	@echo "  Migrations: Executed automatically during startup"
-	@echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"
+	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
 	@echo ""
 	@echo "${BOLD}Useful commands:${RESET}"
 	@echo "  make db-shell              - PostgreSQL shell"
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
-	@echo "  podman logs starexec-app   - Application logs"
-	@echo "  podman logs starexec-postgres - Database logs"
+	@echo "  podman logs $(APP_CONTAINER)   - Application logs"
+	@echo "  podman logs $(DB_CONTAINER) - Database logs"
 
 deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
@@ -489,14 +603,14 @@ deploy-podman-direct:
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
-	@echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"
+	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
 	@echo "  Migrations: Executed automatically during startup"
 	@echo ""
 	@echo "${BOLD}Useful commands:${RESET}"
 	@echo "  make db-shell              - PostgreSQL shell"
 	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
-	@echo "  podman logs starexec-app   - Application logs"
-	@echo "  podman logs starexec-postgres - Database logs"
+	@echo "  podman logs $(APP_CONTAINER)   - Application logs"
+	@echo "  podman logs $(DB_CONTAINER) - Database logs"
 
 deploy-podman-cached: image
 	@if [ ! -f render.yaml ]; then \
@@ -509,13 +623,15 @@ deploy-podman-cached: image
 	@podman play kube render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete (using cached manifest)!${RESET}"
-	@echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"
+	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
 	@echo ""
 	@echo "Note: To regenerate manifest, run '${BLUE}make template${RESET}' or '${BLUE}make deploy-podman${RESET}'"
 
 undeploy-podman:
 	@echo "Removing Podman deployment (volumes preserved)"
 	$(call cleanup_deployment)
+	@echo "Waiting for resources to be fully released..."
+	@sleep 2
 	@echo ""
 	@echo "${GREEN}✓ Cleanup complete (volumes preserved)${RESET}"
 	@echo "Note: Use '${BLUE}make volumes-delete ENV=$(ENV)${RESET}' to remove data"
@@ -559,14 +675,18 @@ clean-cache:
 	@echo "  - Build cache"
 	@echo "  - Builder instances"
 	@echo ""
-	@if [ -t 0 ]; then \
-		read -p "Continue? (y/N): " ans; \
-		if [ "$$ans" != "y" ]; then \
+	@if [ "$(FORCE)" = "1" ]; then \
+		echo "${YELLOW}FORCE=1 detected, skipping confirmation${RESET}"; \
+	elif [ -t 0 ]; then \
+		printf "Continue? (y/N): "; \
+		read ans; \
+		if [ "$$ans" != "y" ] && [ "$$ans" != "Y" ]; then \
 			echo "Cancelled"; \
 			exit 0; \
 		fi; \
 	else \
-		echo "Running non-interactively. Set FORCE=1 to skip confirmation"; \
+		echo "${RED}Running non-interactively without FORCE=1. Aborting.${RESET}"; \
+		echo "Set FORCE=1 to skip confirmation: make clean-cache FORCE=1"; \
 		exit 1; \
 	fi
 	@echo "Pruning system..."
@@ -581,8 +701,8 @@ clean-all: clean-podman volumes-delete
 clean-hard:
 	@if [ "$(DRY_RUN)" = "1" ]; then \
 		echo "[DRY RUN] Would perform HARD RESET for ENV=$(ENV):"; \
-		echo "  - Remove pods: starexec, starexec-pod, $(RELEASE_NAME)-pod"; \
-		echo "  - Remove containers: starexec-app, starexec-postgres"; \
+		echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"; \
+		echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"; \
 		echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"; \
 		echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-postgres"; \
 		echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"; \
@@ -596,7 +716,8 @@ clean-hard:
 	@echo "  - Images"
 	@echo ""
 	@if [ "$(FORCE)" != "1" ]; then \
-		read -p "Type '$(ENV)' to confirm: " ans; \
+		printf "Type '$(ENV)' to confirm: "; \
+		read ans; \
 		if [ "$$ans" != "$(ENV)" ]; then \
 			echo "${YELLOW}Cancelled${RESET}"; \
 			exit 0; \
@@ -647,7 +768,7 @@ status:
 	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
 	@echo ""
 	@printf "%-20s: " "Deployment State"
-	@if podman pod exists starexec 2>/dev/null; then \
+	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
 		echo "${GREEN}RUNNING${RESET}"; \
 	else \
 		echo "${RED}STOPPED${RESET}"; \
@@ -673,9 +794,9 @@ status:
 	@echo "${BOLD}=== Images ===${RESET}"
 	@podman images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
 	@echo ""
-	@if podman pod exists starexec 2>/dev/null; then \
+	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
 		echo "${GREEN}✓ StarExec is RUNNING${RESET}"; \
-		echo "  Access: ${BLUE}http://localhost:7827/starexec${RESET}"; \
+		echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"; \
 	else \
 		echo "${YELLOW}○ StarExec is NOT running${RESET}"; \
 		echo "  Deploy with: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"; \
@@ -685,45 +806,49 @@ status:
 # DEBUGGING AND DIAGNOSTICS
 # ============================================================================
 
+# Log tail limits (adjust via LOG_LINES_APP/LOG_LINES_DB if needed)
+LOG_LINES_APP?=50
+LOG_LINES_DB?=30
+
 logs:
-	@echo "=== Application Logs ==="
-	@podman logs --tail 50 starexec-app 2>&1 || echo "App container not running"
+	@echo "=== Application Logs (last $(LOG_LINES_APP) lines) ==="
+	@podman logs --tail $(LOG_LINES_APP) $(APP_CONTAINER) 2>&1 || echo "App container not running"
 	@echo ""
-	@echo "=== PostgreSQL Logs ==="
-	@podman logs --tail 30 starexec-postgres 2>&1 || echo "Postgres container not running"
+	@echo "=== PostgreSQL Logs (last $(LOG_LINES_DB) lines) ==="
+	@podman logs --tail $(LOG_LINES_DB) $(DB_CONTAINER) 2>&1 || echo "Postgres container not running"
 
 logs-app:
 	@echo "Following application logs (Ctrl+C to stop)..."
-	@podman logs -f starexec-app
+	@podman logs -f $(APP_CONTAINER)
 
 logs-postgres:
 	@echo "Following PostgreSQL logs (Ctrl+C to stop)..."
-	@podman logs -f starexec-postgres
+	@podman logs -f $(DB_CONTAINER)
 
 test-deps:
 	@echo "${BOLD}Testing job execution dependencies in container...${RESET}"
 	@echo ""
 	@echo "${BOLD}=== Installed Packages ===${RESET}"
-	@podman exec starexec-app apk list --installed | grep -E "bash|util-linux|postgresql-client|procps" || true
+	@podman exec $(APP_CONTAINER) apk list --installed | grep -E "bash|util-linux|postgresql-client|procps" || true
 	@echo ""
 	@echo "${BOLD}=== Tool Versions ===${RESET}"
-	@podman exec starexec-app bash -c "echo 'bash:' && bash --version | head -1"
-	@podman exec starexec-app bash -c "echo 'flock:' && flock --version"
-	@podman exec starexec-app bash -c "echo 'lscpu:' && lscpu --version"
-	@podman exec starexec-app bash -c "echo 'psql:' && psql --version"
-	@podman exec starexec-app bash -c "echo 'ps:' && ps --version"
+	@podman exec $(APP_CONTAINER) bash -c "echo 'bash:' && bash --version | head -1"
+	@podman exec $(APP_CONTAINER) bash -c "echo 'flock:' && flock --version"
+	@podman exec $(APP_CONTAINER) bash -c "echo 'lscpu:' && lscpu --version"
+	@podman exec $(APP_CONTAINER) bash -c "echo 'psql:' && psql --version"
+	@podman exec $(APP_CONTAINER) bash -c "echo 'ps:' && ps --version"
 	@echo ""
 	@echo "${BOLD}=== Command Availability ===${RESET}"
-	@podman exec starexec-app bash -c "which bash flock lscpu psql ps runsolver"
+	@podman exec $(APP_CONTAINER) bash -c "which bash flock lscpu psql ps runsolver"
 	@echo ""
 	@echo "${BOLD}=== Test ps -p Command ===${RESET}"
-	@podman exec starexec-app bash -c 'ps -p $$$$ -o pid,cmd'
+	@podman exec $(APP_CONTAINER) bash -c 'ps -p $$$$ -o pid,cmd'
 	@echo ""
 	@echo "${BOLD}=== Test flock -w Command ===${RESET}"
-	@podman exec starexec-app bash -c "timeout 2 flock -x -w 1 /tmp/test.lock echo 'flock -w works!'"
+	@podman exec $(APP_CONTAINER) bash -c "timeout 2 flock -x -w 1 /tmp/test.lock echo 'flock -w works!'"
 	@echo ""
 	@echo "${BOLD}=== CPU Info ===${RESET}"
-	@podman exec starexec-app lscpu | head -10
+	@podman exec $(APP_CONTAINER) lscpu | head -10
 	@echo ""
 	@echo "${GREEN}✓ All job execution dependencies validated${RESET}"
 
