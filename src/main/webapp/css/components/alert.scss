@@ -1,0 +1,184 @@
+// =============================================================================
+// ALERT COMPONENTS
+// =============================================================================
+// Standardized alert/message styling for notifications, warnings, and feedback
+// =============================================================================
+
+@use "../global/colors" as c;
+@use "../global/typography" as t;
+@use "../global/spacing" as s;
+@use "../global/mixins" as m;
+
+// =============================================================================
+// BASE ALERT
+// =============================================================================
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: s.$spacing-sm;
+  padding: s.$spacing-md s.$spacing-lg;
+  border-radius: 8px;
+  font-size: t.$font-size-sm;
+  line-height: 1.5;
+  margin-bottom: s.$spacing-md;
+  
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.alert-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+}
+
+.alert-content {
+  flex: 1;
+}
+
+.alert-title {
+  font-weight: t.$font-weight-semibold;
+  margin-bottom: s.$spacing-2xs;
+}
+
+.alert-dismiss {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  padding: s.$spacing-2xs;
+  margin: -#{s.$spacing-2xs};
+  border-radius: 4px;
+  @include m.transition-default;
+  
+  &:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+// =============================================================================
+// ALERT VARIANTS
+// =============================================================================
+
+.alert--success {
+  background: rgba(c.$success, 0.15);
+  color: c.$success;
+  border: 1px solid rgba(c.$success, 0.3);
+  
+  .alert-icon {
+    color: c.$success;
+  }
+}
+
+.alert--error {
+  background: rgba(c.$error, 0.15);
+  color: c.$error;
+  border: 1px solid rgba(c.$error, 0.3);
+  
+  .alert-icon {
+    color: c.$error;
+  }
+}
+
+.alert--warning {
+  background: rgba(c.$warning, 0.15);
+  color: c.$warning;
+  border: 1px solid rgba(c.$warning, 0.3);
+  
+  .alert-icon {
+    color: c.$warning;
+  }
+}
+
+.alert--info {
+  background: rgba(c.$info, 0.15);
+  color: c.$info;
+  border: 1px solid rgba(c.$info, 0.3);
+  
+  .alert-icon {
+    color: c.$info;
+  }
+}
+
+// =============================================================================
+// INLINE MESSAGE (Legacy Support)
+// =============================================================================
+
+// Support for existing .message classes
+.error.message,
+.message.error {
+  @extend .alert;
+  @extend .alert--error;
+}
+
+.success.message,
+.message.success {
+  @extend .alert;
+  @extend .alert--success;
+}
+
+.warning.message,
+.message.warn,
+.warning-message {
+  @extend .alert;
+  @extend .alert--warning;
+}
+
+.info.message,
+.message.info {
+  @extend .alert;
+  @extend .alert--info;
+}
+
+// =============================================================================
+// TOAST NOTIFICATIONS (Fixed Position)
+// =============================================================================
+
+.toast {
+  @extend .alert;
+  position: fixed;
+  top: s.$spacing-lg;
+  right: s.$spacing-lg;
+  max-width: 400px;
+  z-index: var(--z-index-tooltip, 700);
+  box-shadow: var(--shadow-lg);
+  animation: slideIn 0.3s ease-out;
+  
+  @include m.mobile {
+    left: s.$spacing-md;
+    right: s.$spacing-md;
+    max-width: none;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast--success {
+  @extend .alert--success;
+}
+
+.toast--error {
+  @extend .alert--error;
+}
+
+.toast--warning {
+  @extend .alert--warning;
+}
+
+.toast--info {
+  @extend .alert--info;
+}

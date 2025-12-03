@@ -4,6 +4,120 @@
 
 @import "../common/_pass_strength_meter";
 @import "../global/colors";
+@import "../global/typography";
+@import "../global/spacing";
+@import "../global/mixins";
+
+// =============================================================================
+// PAGE LAYOUT
+// =============================================================================
+
+.registration-page {
+  min-height: 100vh;
+  background: $background-color;
+}
+
+.registration-header {
+  background: linear-gradient(135deg, $foreground-color 0%, lighten($foreground-color, 5%) 100%);
+  padding: $spacing-2xl 0;
+  border-bottom: 1px solid $surface-tertiary;
+  text-align: center;
+
+  @include mobile {
+    padding: $spacing-xl 0;
+  }
+}
+
+.page-title {
+  font-size: $font-size-3xl;
+  font-weight: $font-weight-bold;
+  color: $text-main-color;
+  margin: 0 0 $spacing-xs;
+
+  @include mobile {
+    font-size: $font-size-2xl;
+  }
+}
+
+.page-subtitle {
+  font-size: $font-size-lg;
+  color: $text-accent-color;
+  margin: 0;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 0 $spacing-lg;
+}
+
+// =============================================================================
+// FORM WRAPPER
+// =============================================================================
+
+.registration-form-wrapper {
+  padding: $spacing-2xl 0;
+
+  @include mobile {
+    padding: $spacing-xl 0;
+  }
+}
+
+.registration-form {
+  background: $foreground-color;
+  border: 1px solid $surface-tertiary;
+  border-radius: 16px;
+  padding: $spacing-2xl;
+
+  @include mobile {
+    padding: $spacing-lg;
+    border-radius: 12px;
+  }
+}
+
+// =============================================================================
+// ALERT STYLES
+// =============================================================================
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: $spacing-sm;
+  padding: $spacing-md $spacing-lg;
+  border-radius: 8px;
+  margin-bottom: $spacing-lg;
+  
+  .alert-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  &--error {
+    background: rgba($accent-red, 0.1);
+    border: 1px solid $accent-red;
+    color: $soft-red;
+  }
+
+  &--success {
+    background: rgba($accent-green, 0.1);
+    border: 1px solid $accent-green;
+    color: $accent-green;
+  }
+}
+
+// =============================================================================
+// SECTION ICONS
+// =============================================================================
+
+.section-icon {
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+// =============================================================================
+// LEGACY STYLES (for backwards compatibility)
+// =============================================================================
 
 fieldset {
 	width: 75%;
@@ -29,10 +143,6 @@ table tr td {
 	}
 
 	padding: 5px;
-}
-
-input, select, textarea {
-	width: 200px;
 }
 
 td button {

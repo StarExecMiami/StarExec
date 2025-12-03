@@ -1,0 +1,107 @@
+// ============================================================================
+// Custom Scrollbar Styling
+// ============================================================================
+// Applies consistent scrollbar styling across all scrollable elements
+// using WebKit (Chrome/Safari/Edge) and Firefox custom scrollbar APIs
+
+// WebKit Browsers (Chrome, Safari, Edge)
+// ============================================================================
+
+// Scrollbar width and height
+*::-webkit-scrollbar {
+  width: 12px;  // vertical scrollbar width
+  height: 12px; // horizontal scrollbar height
+}
+
+// Track (the background/gutter of the scrollbar)
+*::-webkit-scrollbar-track {
+  background: $surface-tertiary;
+  border-radius: 6px;
+}
+
+// Thumb (the draggable scrollbar handle)
+*::-webkit-scrollbar-thumb {
+  background: $text-secondary;
+  border-radius: 6px;
+  border: 3px solid $surface-tertiary;
+  transition: background 0.2s ease;
+}
+
+// Thumb hover state
+*::-webkit-scrollbar-thumb:hover {
+  background: $accent-orange;
+}
+
+// Thumb active state
+*::-webkit-scrollbar-thumb:active {
+  background: darken($accent-orange, 10%);
+}
+
+// Firefox
+// ============================================================================
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: $text-secondary $surface-tertiary;
+}
+
+// ============================================================================
+// Specialized Scrollbar Styles
+// ============================================================================
+
+// Code blocks and pre elements - slightly thinner for better readability
+pre,
+code,
+.example-code,
+.code-block {
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: darken($surface-tertiary, 3%);
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: lighten($text-secondary, 5%);
+    border: 2px solid darken($surface-tertiary, 3%);
+  }
+  
+  &::-webkit-scrollbar-thumb:hover {
+    background: $accent-blue;
+  }
+}
+
+// Table wrappers
+.table-wrapper,
+.dataTables_wrapper {
+  &::-webkit-scrollbar-track {
+    background: $surface-secondary; // #23272f
+  }
+}
+
+// Explorer and navigation panels
+#explorer,
+.doc-nav,
+.jstree-default {
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: rgba($text-secondary, 0.5);
+    border: 2px solid $surface-tertiary;
+  }
+  
+  &::-webkit-scrollbar-thumb:hover {
+    background: rgba($accent-orange, 0.8);
+  }
+}
+
+// Main content area
+#content {
+  &::-webkit-scrollbar-track {
+    background: $foreground-color; // #222222
+  }
+}

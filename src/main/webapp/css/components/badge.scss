@@ -1,0 +1,33 @@
+@use "../global/colors" as c;
+@use "../global/spacing" as s;
+@use "../global/typography" as t;
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: s.$spacing-2xs;
+  padding: s.$spacing-2xs s.$spacing-xs;
+  font-size: t.$font-size-xs;
+  font-weight: t.$font-weight-medium;
+  border-radius: 4px;
+  
+  &--success {
+    background: rgba(c.$success, 0.15);
+    color: c.$success;
+  }
+  
+  &--warning {
+    background: rgba(c.$warning, 0.15);
+    color: c.$warning;
+  }
+  
+  &--error {
+    background: rgba(c.$error, 0.15);
+    color: c.$error;
+  }
+  
+  &--info {
+    background: rgba(c.$info, 0.15);
+    color: c.$info;
+  }
+}

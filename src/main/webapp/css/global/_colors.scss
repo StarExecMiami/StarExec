@@ -1,16 +1,49 @@
-$background-color: #111111;
-$foreground-color: #222222;
-$text-main-color: #ffffff;
-$text-accent-color: #666666;
-$text-highlight-color: #8c0000;
-$accent-purple: #3b0264;
-$accent-blue: #002fa6;
-$accent-orange: #dc6f04;
-$accent-green: #008d03;
-$accent-red: #ae0000;
+// =============================================================================
+// STAREXEC COLOR PALETTE
+// =============================================================================
+// WCAG AA compliant (4.5:1 minimum) | Brand-aligned
+// =============================================================================
 
-$soft-red: #e62e25;
+// --- Base Colors ---
+$background-color: #0f0f0f;
+$foreground-color: #2a2a2a;
 
-$input-background: #333333;
-$input-background-selected: #666666;
-$input-text: #ffffff;
+// --- Text Colors ---
+$text-main-color: #f8f8f8;
+$text-accent-color: #999999;
+$text-highlight-color: #ff6b35; // Brand orange from logo
+
+// --- Accent Colors ---
+$accent-purple: #8b5cf6;
+$accent-blue: #3b82f6;
+$accent-orange: #f97316;
+$accent-green: #10b981;
+$accent-red: #ef4444;
+
+// --- Additional Color ---
+$soft-red: #f87171;
+
+// --- Input Colors ---
+$input-background: #3a3a3a;
+$input-background-selected: #4a4a4a;
+$input-text: #f8f8f8;
+
+// =============================================================================
+// SEMANTIC ALIASES
+// =============================================================================
+
+// --- Surface Colors ---
+$surface-primary: $foreground-color;
+$surface-secondary: lighten($foreground-color, 5%);
+$surface-tertiary: lighten($foreground-color, 10%);
+
+// --- Text Semantic Colors ---
+$text-primary: $text-main-color;
+$text-secondary: $text-accent-color;
+$text-tertiary: darken($text-accent-color, 10%);
+
+// --- Status Colors ---
+$success: $accent-green;
+$warning: $accent-orange;
+$error: $accent-red;
+$info: $accent-blue;
