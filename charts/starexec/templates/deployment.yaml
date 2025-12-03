@@ -152,12 +152,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           resources:
-            requests:
-              memory: "256Mi"
-              cpu: "250m"
-            limits:
-              memory: "512Mi"
-              cpu: "500m"
+            {{- toYaml .Values.resources.app | nindent 12 }}
           ports:
             - containerPort: 7827
           env:
@@ -200,6 +195,8 @@ spec:
         - name: postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.resources.postgres | nindent 12 }}
           ports:
             - containerPort: 5432
           env:
