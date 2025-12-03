@@ -1258,37 +1258,6 @@ public class Users {
 	}
 
 	/**
-	 * Records the password hashing algorithm used during the user's last login.
-	 * This method supports monitoring the migration from SHA-512 to BCrypt.
-	 *
-	 * @param userId    The unique identifier of the user
-	 * @param algorithm The algorithm used: {@link org.starexec.util.PasswordHasher#ALG_SHA512} (legacy) 
-	 *                  or {@link org.starexec.util.PasswordHasher#ALG_BCRYPT} (current)
-	 * @return true if the update succeeded, false otherwise
-	 * @see org.starexec.util.PasswordHasher#detectAlgorithm(String)
-	 */
-	public static boolean updateLastLoginAlgorithm(int userId, String algorithm) {
-		try (Connection con = Common.getConnection();
-		     PreparedStatement stmt = con.prepareStatement(
-		         "UPDATE users SET last_login_algorithm = ? WHERE id = ?")) {
-			stmt.setString(1, algorithm);
-			stmt.setInt(2, userId);
-			int rows = stmt.executeUpdate();
-
-			if (rows > 0) {
-				log.debug("Updated last_login_algorithm to " + algorithm + " for user " + userId);
-				return true;
-			} else {
-				log.warn("No rows updated for user " + userId + " last_login_algorithm");
-				return false;
-			}
-		} catch (Exception e) {
-			log.error("Failed to update last_login_algorithm for user " + userId, e);
-			return false;
-		}
-	}
-
-	/**
 	 * Completely deletes a user from the database.
 	 *
 	 * @param userToDeleteId The ID of the user to delete

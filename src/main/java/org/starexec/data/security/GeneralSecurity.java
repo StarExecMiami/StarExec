@@ -125,7 +125,7 @@ public class GeneralSecurity {
 			return new ValidatorStatusCode(false, "Passwords for guests cannot be changed");
 		}
 
-		// Get stored password and algorithm
+		// Get stored password hash
 		String databasePass = Users.getPassword(userId);
 		if (databasePass == null || databasePass.isEmpty()) {
 			log.error("No password hash found for user " + userId);
@@ -134,10 +134,8 @@ public class GeneralSecurity {
 		}
 
 		try {
-			String algorithm = PasswordHasher.detectAlgorithm(databasePass);
-
-			// Verify old password using appropriate algorithm
-			if (!PasswordHasher.verify(oldPass, databasePass, algorithm)) {
+			// Verify old password using BCrypt
+			if (!PasswordHasher.verify(oldPass, databasePass)) {
 				return new ValidatorStatusCode(false, "The supplied password is incorrect");
 			}
 		} catch (Exception e) {

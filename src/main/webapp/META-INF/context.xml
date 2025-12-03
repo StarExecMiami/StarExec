@@ -27,8 +27,8 @@
             userCredCol="password"
             userRoleTable="user_roles"
             roleNameCol="role">
-            <CredentialHandler className="org.apache.catalina.realm.MessageDigestCredentialHandler"
-                          algorithm="SHA-512"/>
+            <!-- BCrypt credential handler for secure password authentication -->
+            <CredentialHandler className="org.starexec.tomcat.BCryptCredentialHandler"/>
     </Realm>
   </Realm>
 

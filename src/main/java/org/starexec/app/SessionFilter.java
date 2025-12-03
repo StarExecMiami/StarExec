@@ -5,7 +5,6 @@ import org.starexec.data.database.*;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
-import org.starexec.util.PasswordHasher;
 import org.starexec.util.SessionUtil;
 import org.starexec.util.Util;
 
@@ -123,33 +122,6 @@ public class SessionFilter implements Filter {
 						session = httpRequest.getSession(true);
 					}
 					session.setAttribute(SessionUtil.USER, user);
-
-					// LEGACY PASSWORD DETECTION: Check if user has SHA-512 password hash
-					// Container-managed auth prevents auto-upgrade (no access to plaintext)
-					// User will be migrated to BCrypt on next password change
-					try {
-						String storedHash = Users.getPassword(user.getId());
-						String algorithm = PasswordHasher.detectAlgorithm(storedHash);
-
-						if (PasswordHasher.ALG_SHA512.equals(algorithm)) {
-							log.info("User " + user.getId() + " (" + user.getEmail() +
-									") authenticated with legacy SHA-512 hash");
-							log.debug("User will be migrated to BCrypt on next password change");
-
-							// Track last login algorithm
-							Users.updateLastLoginAlgorithm(user.getId(), PasswordHasher.ALG_SHA512);
-
-							// Set session flag for user notification banner
-							session.setAttribute("showPasswordUpgradeNotice", true);
-						} else if (PasswordHasher.ALG_BCRYPT.equals(algorithm)) {
-							log.debug("User " + user.getId() + " using secure BCrypt hash");
-							Users.updateLastLoginAlgorithm(user.getId(), PasswordHasher.ALG_BCRYPT);
-						}
-					} catch (Exception e) {
-						log.error("Error checking password algorithm for user " + user.getId(), e);
-						// Don't fail login due to algorithm detection
-					}
-
 					logUserLogin(user, httpRequest);
 				} else {
 					log.error(method, "Could not find user in database for authenticated user: " + username);

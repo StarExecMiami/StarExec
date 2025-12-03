@@ -57,7 +57,7 @@ public class UserTests extends TestSequence {
 		try {
 			Assert.assertTrue(Users.updatePassword(user1.getId(), randomPass));
 			String dbHash = Users.getPassword(user1.getId());
-			Assert.assertTrue(PasswordHasher.verify(randomPass, dbHash, PasswordHasher.detectAlgorithm(dbHash)));
+			Assert.assertTrue(PasswordHasher.verify(randomPass, dbHash));
 			user1.setPassword(randomPass);
 		} catch (StarExecDatabaseException e) {
 			Assert.fail("Caught a StarExecDatabaseException: " + Util.getStackTrace(e));
