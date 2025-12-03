@@ -52,11 +52,11 @@
 				<h2 id="resources-heading">Helpful Resources</h2>
 				<nav>
 					<ul class="resource-links">
-						<li><a href="http://starexec.cs.uiowa.edu/starexec/public/quickReference.jsp" rel="external">Quick Reference</a></li>
-						<li><a href="http://wiki.uiowa.edu/display/stardev/User+Guide" rel="external">User Guide</a></li>
-						<li><a href="http://wiki.uiowa.edu/display/stardev/Home" rel="external">Public Dev Wiki</a></li>
-						<li><a href="mailto:${contactEmail}?subject=[Starexec ${buildVersion}] Feedback" rel="external">Give Feedback</a></li>
-						<li><a href="mailto:${contactEmail}?subject=[Starexec ${buildVersion}] Bug Report" rel="external">Report Bug</a></li>
+						<li><a href="${starexecRoot}/public/quickReference.jsp" rel="external">Quick Reference</a></li>
+						<li><a href="${starexecRoot}/public/StarExecUserGuide.pdf" target="_blank" rel="noopener noreferrer">User Guide</a></li>
+						<li><a href="http://wiki.uiowa.edu/display/stardev/Home" target="_blank" rel="noopener noreferrer">Public Dev Wiki</a></li>
+						<li><a href="mailto:${contactEmail}?subject=[Starexec ${buildVersion}] Feedback">Give Feedback</a></li>
+						<li><a href="mailto:${contactEmail}?subject=[Starexec ${buildVersion}] Bug Report">Report Bug</a></li>
 					</ul>
 				</nav>
 				<footer class="build-info">

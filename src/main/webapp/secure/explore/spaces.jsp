@@ -238,6 +238,10 @@
 	<div id="dialog-confirm-delete" title="confirm delete" class="hiddenDialog">
 		<p><span class="ui-icon ui-icon-alert"></span><span
 				id="dialog-confirm-delete-txt"></span></p>
+		<div id="hierarchy-action-container" class="hidden">
+			<label for="applyActionInHierarchy">Apply Action in hierarchy?</label>
+			<input type="checkbox" id="applyActionInHierarchy"/>
+		</div>
 	</div>
 	<div id="dialog-spacexml" title="xml properties" class="hiddenDialog">
 		<p><span id="dialog-spacexml-attributes-txt"></span></p>
