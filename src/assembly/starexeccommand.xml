@@ -1,0 +1,23 @@
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 http://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>starexeccommand</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    
+    <!-- Include the StarexecCommand uber-JAR -->
+    <files>
+        <file>
+            <source>${project.build.directory}/StarexecCommand.jar</source>
+            <destName>StarexecCommand.jar</destName>
+            <fileMode>0755</fileMode>
+        </file>
+        <!-- Include the manual -->
+        <file>
+            <source>${project.basedir}/src/main/webapp/public/manual.txt</source>
+            <destName>manual.txt</destName>
+        </file>
+    </files>
+</assembly>
