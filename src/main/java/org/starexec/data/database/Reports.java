@@ -20,7 +20,7 @@ public class Reports {
 	/**
 	 * Set the number of occurrences for an event not related to a queue.
 	 *
-	 * @param eventName the name of the event.
+	 * @param eventName   the name of the event.
 	 * @param occurrences the number of times the event occurred.
 	 * @return True on success and false on error
 	 * @author Albert Giegerich
@@ -32,7 +32,7 @@ public class Reports {
 	/**
 	 * Add occurrences to an event not related to a queue.
 	 *
-	 * @param eventName the name of the event.
+	 * @param eventName   the name of the event.
 	 * @param occurrences the number of times the event occurred.
 	 * @return True on success and false on error
 	 * @author Albert Giegerich
@@ -44,9 +44,9 @@ public class Reports {
 	/**
 	 * Add occurrences to an event related to a queue
 	 *
-	 * @param eventName the name of the event.
+	 * @param eventName   the name of the event.
 	 * @param occurrences the number of times the event occurred.
-	 * @param queueName the name of the queue related to the event.
+	 * @param queueName   the name of the queue related to the event.
 	 * @return True on success and false on error
 	 */
 	public static boolean addToEventOccurrencesForQueue(String eventName, int occurrences, String queueName) {
@@ -54,9 +54,11 @@ public class Reports {
 	}
 
 	/**
-	 * Gets every event and the number of times it occurred for events that are not related to a queue.
+	 * Gets every event and the number of times it occurred for events that are not
+	 * related to a queue.
 	 *
-	 * @return a list of ImmutablePairs representing and event and the number of times it occurred.
+	 * @return a list of ImmutablePairs representing and event and the number of
+	 *         times it occurred.
 	 * @author Albert Giegerich
 	 */
 	public static List<Report> getAllReportsNotRelatedToQueues() {
@@ -88,10 +90,12 @@ public class Reports {
 	}
 
 	/**
-	 * Get every event, the number of times it occurred, and the queue it occurred on.
-	 *
-	 * @return a list of Reports representing the event, the number of times it occurred, and which queue it occurred
+	 * Get every event, the number of times it occurred, and the queue it occurred
 	 * on.
+	 *
+	 * @return a list of Reports representing the event, the number of times it
+	 *         occurred, and which queue it occurred
+	 *         on.
 	 * @author Albert Giegerich
 	 */
 	public static List<List<Report>> getAllReportsForAllQueues() throws SQLException {
@@ -123,7 +127,8 @@ public class Reports {
 	}
 
 	/**
-	 * Resets all report data by setting all occurrences to 0 and deleting any rows related to queues.
+	 * Resets all report data by setting all occurrences to 0 and deleting any rows
+	 * related to queues.
 	 *
 	 * @author Albert Giegerich
 	 */
@@ -132,7 +137,7 @@ public class Reports {
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("CALL starexec.ResetReports()");
+			ps = con.prepareStatement("SELECT starexec.ResetReports()");
 			ps.execute();
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -143,13 +148,15 @@ public class Reports {
 	}
 
 	/**
-	 * Inner method that sets the number of event occurrences not related to a queue if queueName is null otherwise
+	 * Inner method that sets the number of event occurrences not related to a queue
+	 * if queueName is null otherwise
 	 * sets
 	 * the number of event occurrences related to the specified queue.
 	 *
-	 * @param eventName the name of the event to set the number of occurrences for
+	 * @param eventName   the name of the event to set the number of occurrences for
 	 * @param occurrences the number of times the event occurred
-	 * @param queueName the name of the queue for which the event occurred. Null the event is unrelated to a queue.
+	 * @param queueName   the name of the queue for which the event occurred. Null
+	 *                    the event is unrelated to a queue.
 	 * @author Albert Giegerich
 	 */
 	private static boolean setEventOccurrences(String eventName, int occurrences, String queueName) {
@@ -182,12 +189,14 @@ public class Reports {
 	}
 
 	/**
-	 * Inner method that adds to the number of event occurrences not related to a queue if queueName is null, otherwise
+	 * Inner method that adds to the number of event occurrences not related to a
+	 * queue if queueName is null, otherwise
 	 * adds to the number of event occurrences related to the specified queue.
 	 *
-	 * @param eventName the name of the event
+	 * @param eventName   the name of the event
 	 * @param occurrences the number of times the event occurred
-	 * @param queueName the name of the queue the event is related to. Null if not related to a queue.
+	 * @param queueName   the name of the queue the event is related to. Null if not
+	 *                    related to a queue.
 	 * @return True on success and false on error
 	 * @author Albert Giegerich
 	 */
@@ -196,7 +205,7 @@ public class Reports {
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			
+
 			if (queueName == null) {
 				ps = con.prepareStatement("CALL starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)");
 			} else {
@@ -208,7 +217,7 @@ public class Reports {
 
 			ps.execute();
 			log.debug("Added " + occurrences + " occurrences to " + eventName +
-					  (queueName == null ? "" : " for queue " + queueName) + ".");
+					(queueName == null ? "" : " for queue " + queueName) + ".");
 			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -220,7 +229,8 @@ public class Reports {
 	}
 
 	/**
-	 * Turns a list of reports related to queues into a list of lists related to queues where each inner list is
+	 * Turns a list of reports related to queues into a list of lists related to
+	 * queues where each inner list is
 	 * made up
 	 * of reports related to a different queue.
 	 *
@@ -228,7 +238,8 @@ public class Reports {
 	 * @author Albert Giegerich
 	 */
 	private static List<List<Report>> separateReportsByQueue(List<Report> reports) {
-		// Build a map that separates all the reports into lists based on which queue they're related to.
+		// Build a map that separates all the reports into lists based on which queue
+		// they're related to.
 		Map<String, List<Report>> reportMap = new HashMap<>();
 		for (Report report : reports) {
 			String queueName = report.getQueueName();
@@ -241,7 +252,8 @@ public class Reports {
 			}
 		}
 
-		// Use the map to build a list of lists where each inner list contains all the reports related to a single
+		// Use the map to build a list of lists where each inner list contains all the
+		// reports related to a single
 		// queue.
 		List<List<Report>> reportsSeparatedByQueue = new LinkedList<>();
 		Set<String> keys = reportMap.keySet();
