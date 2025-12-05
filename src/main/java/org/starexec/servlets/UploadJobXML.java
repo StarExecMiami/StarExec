@@ -68,7 +68,7 @@ public class UploadJobXML extends HttpServlet {
 				if (!status.isSuccess()) {
 					log.info(method, "Request to upload job xml was not valid. Sending bad request error.");
 					//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 					response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 					return;
 				}

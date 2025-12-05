@@ -72,7 +72,7 @@ public class UploadConfiguration extends HttpServlet {
 				ValidatorStatusCode status = isValidRequest(configAttrMap);
 
 				if (!status.isSuccess()) {
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 					response.sendError(HttpServletResponse.SC_UNAUTHORIZED, status.getMessage());
 					return;
 				}
@@ -81,7 +81,7 @@ public class UploadConfiguration extends HttpServlet {
 						.canUserAddConfiguration(Integer.parseInt((String) configAttrMap.get(SOLVER_ID)), userId);
 				if (!status.isSuccess()) {
 					//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 					response.sendError(HttpServletResponse.SC_UNAUTHORIZED, status.getMessage());
 					return;
 				}
@@ -93,7 +93,7 @@ public class UploadConfiguration extends HttpServlet {
 
 				// Redirect user based on how the configuration handling went
 				if (!result.isSuccess()) {
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, result.getMessage()));
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, result.getMessage()));
 
 					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, result.getMessage());
 				} else {

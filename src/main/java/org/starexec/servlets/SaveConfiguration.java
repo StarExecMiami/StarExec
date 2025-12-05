@@ -57,7 +57,7 @@ public class SaveConfiguration extends HttpServlet {
 			ValidatorStatusCode status = this.isValidRequest(request);
 			if (!status.isSuccess()) {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 				return;
 			}
@@ -69,7 +69,7 @@ public class SaveConfiguration extends HttpServlet {
 
 			// Redirect user based on how the configuration handling went
 			if (result == -1) {
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Failed to save new configuration."));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "Failed to save new configuration."));
 
 				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to save new configuration.");
 			} else {

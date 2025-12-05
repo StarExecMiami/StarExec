@@ -76,7 +76,7 @@ public class PasswordReset extends HttpServlet {
 			// Validate CSRF token first
 			if (!CsrfUtil.validateToken(request)) {
 				log.warn("CSRF token validation failed for password reset request");
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Security validation failed. Please try again."));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "Security validation failed. Please try again."));
 				response.sendError(HttpServletResponse.SC_FORBIDDEN, "Invalid security token");
 				return;
 			}
@@ -108,7 +108,7 @@ public class PasswordReset extends HttpServlet {
 				response.sendRedirect(Util.docRoot("public/password_reset.jsp?result=success"));
 			} else {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 			}
 		} catch (Exception e) {

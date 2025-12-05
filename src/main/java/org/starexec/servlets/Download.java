@@ -816,7 +816,7 @@ public class Download extends HttpServlet {
 			if (!status.isSuccess()) {
 				log.debug("Bad download Request--" + status.getMessage());
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 				return;
 			}

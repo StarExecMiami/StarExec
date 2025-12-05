@@ -97,11 +97,24 @@
 			</tr>
 			<tr>
 				<td>upload error message</td>
-				<td>${status.errorMessage}</td>
+				<td>
+					<c:choose>
+						<c:when test="${not empty status.errorMessage}">
+							<span class="error-text">${status.errorMessage}</span>
+						</c:when>
+						<c:otherwise>
+							<span class="success-text">None</span>
+						</c:otherwise>
+					</c:choose>
+				</td>
 			</tr>
 			</tbody>
 		</table>
 	</fieldset>
-	<a id="returnLink" href="${starexecRoot}/secure/explore/spaces.jsp">back</a>
-
+	<div class="page-actions">
+		<a id="returnLink" href="${starexecRoot}/secure/explore/spaces.jsp" class="btn btn-secondary">
+			<span class="ui-icon ui-icon-arrowthick-1-w" aria-hidden="true"></span>
+			Back to Spaces
+		</a>
+	</div>
 </star:template>

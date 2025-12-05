@@ -122,7 +122,7 @@ public class Registration extends HttpServlet {
 							cookieValue = cookieValue.substring(0, 4000);
 						}
 					}
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, cookieValue));
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, cookieValue));
 					response.sendRedirect(Util.docRoot(redirectUrl + "?result=regFail"));
 				} catch (Exception e) {
 					log.error("Failed to redirect after failed registration", e);

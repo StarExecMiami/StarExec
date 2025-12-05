@@ -86,17 +86,17 @@ public class UploadPicture extends HttpServlet {
 						response.sendRedirect(redirectUrl);
 					} else {
 						log.error("Picture upload failed: handleUploadRequest returned null for user " + userIdOfCaller);
-						response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed. Please check server logs."));
+						response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed. Please check server logs."));
 						response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed");
 					}
 				} catch (Exception e) {
 					log.error("Failed to upload picture for user " + userIdOfCaller + ": " + e.getMessage(), e);
-					response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed: " + e.getMessage()));
+					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, "Picture upload failed: " + e.getMessage()));
 					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Picture upload failed: " + e.getMessage());
 				}
 			} else {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				// Or else the request was invalid, send bad request error
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 			}

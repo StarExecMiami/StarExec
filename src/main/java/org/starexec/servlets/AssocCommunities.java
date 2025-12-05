@@ -44,7 +44,7 @@ public class AssocCommunities extends HttpServlet {
 			int userId = SessionUtil.getUserId(request);
 			if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {
 				String message = "You do not have permission to perform this operation";
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, message));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, message));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, message);
 			}
 			String queue_name = (String) request.getParameter(name);

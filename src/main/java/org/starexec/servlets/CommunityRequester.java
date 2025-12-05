@@ -44,7 +44,7 @@ public class CommunityRequester extends HttpServlet {
 			CommunityRequest comRequest = constructComRequest(user, request);
 			if (comRequest == null) {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, errorMessage));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, errorMessage));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, errorMessage);
 				return;
 			}

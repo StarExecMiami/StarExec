@@ -56,7 +56,7 @@ public class CreateQueue extends HttpServlet {
 			if (!status.isSuccess()) {
 				log.warn("Request validation failed: " + status.getMessage());
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
-				response.addCookie(new Cookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
+				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_FORBIDDEN, status.getMessage());
 				return;
 			}

@@ -8,6 +8,7 @@ import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import javax.servlet.http.Cookie;
 
 public class UtilTests {
 
@@ -107,5 +108,74 @@ public class UtilTests {
 			assertTrue("Class file should be detected as binary", Util.isBinaryFile(binaryFile));
 		}
 		// If class file doesn't exist (e.g., clean build), skip binary test
+	}
+
+	// ========== Cookie Encoding Tests ==========
+
+	@Test
+	public void testEncodeCookieValue_nullValue() {
+		assertEquals("", Util.encodeCookieValue(null));
+	}
+
+	@Test
+	public void testEncodeCookieValue_emptyValue() {
+		assertEquals("", Util.encodeCookieValue(""));
+	}
+
+	@Test
+	public void testEncodeCookieValue_simpleValue() {
+		assertEquals("hello", Util.encodeCookieValue("hello"));
+	}
+
+	@Test
+	public void testEncodeCookieValue_specialCharacters() {
+		// Space is encoded as +
+		assertEquals("hello+world", Util.encodeCookieValue("hello world"));
+		// Semicolon is encoded as %3B
+		assertEquals("a%3Bb%3Bc", Util.encodeCookieValue("a;b;c"));
+		// Comma is encoded as %2C
+		assertEquals("a%2Cb%2Cc", Util.encodeCookieValue("a,b,c"));
+		// Equals sign is encoded as %3D
+		assertEquals("key%3Dvalue", Util.encodeCookieValue("key=value"));
+	}
+
+	@Test
+	public void testEncodeCookieValue_unicodeCharacters() {
+		// Unicode characters should be properly encoded
+		String encoded = Util.encodeCookieValue("héllo");
+		assertNotNull(encoded);
+		assertFalse(encoded.isEmpty());
+		// 'é' should be URL-encoded
+		assertTrue(encoded.contains("%"));
+	}
+
+	@Test
+	public void testCreateEncodedCookie_basicFunctionality() {
+		Cookie cookie = Util.createEncodedCookie("test", "hello world");
+		assertEquals("test", cookie.getName());
+		assertEquals("hello+world", cookie.getValue());
+	}
+
+	@Test
+	public void testCreateEncodedCookie_securityAttributes() {
+		Cookie cookie = Util.createEncodedCookie("session", "user123");
+		
+		// Verify security attributes are set
+		assertTrue("Cookie should be HttpOnly", cookie.isHttpOnly());
+		assertEquals("Cookie path should be /starexec", "/starexec", cookie.getPath());
+	}
+
+	@Test
+	public void testCreateEncodedCookie_nullValue() {
+		Cookie cookie = Util.createEncodedCookie("test", null);
+		assertEquals("test", cookie.getName());
+		assertEquals("", cookie.getValue());
+	}
+
+	@Test
+	public void testCreateEncodedCookie_emptyValue() {
+		Cookie cookie = Util.createEncodedCookie("test", "");
+		assertEquals("test", cookie.getName());
+		assertEquals("", cookie.getValue());
 	}
 }
