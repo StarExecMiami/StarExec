@@ -50,13 +50,16 @@
 		title="Conflicting benchmarks for solver/config ${solver.name} / ${configuration.name}"
 		js="details/solverConflicts, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
 		css="details/solverConflicts, common/table, common/delaySpinner, explore/common, details/shared">
-	<table class="conflictsTable">
-		<thead>
-		<tr>
-			<th>name</th>
-		</tr>
-		</thead>
-		<tbody>
+	<fieldset>
+		<legend>Conflicting Benchmarks</legend>
+		<p class="field-hint">These benchmarks produced conflicting results for <strong>${solver.name}</strong> with configuration <strong>${configuration.name}</strong>.</p>
+		<table class="conflictsTable shaded" aria-label="List of benchmarks with conflicting results">
+			<thead>
+			<tr>
+				<th scope="col">Benchmark Name</th>
+			</tr>
+			</thead>
+			<tbody>
 		<c:forEach var="bench" items="${conflictingBenchmarks}">
 			<tr>
 				<td>
@@ -68,6 +71,7 @@
 				</td>
 			</tr>
 		</c:forEach>
-		</tbody>
-	</table>
+			</tbody>
+		</table>
+	</fieldset>
 </star:template>

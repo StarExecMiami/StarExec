@@ -1,8 +1,119 @@
-#pageWrapper {
-    background: #ae0000;
-    min-height: 410px;
+@use "../global/colors" as c;
+@use "../global/typography" as t;
+@use "../global/spacing" as s;
+
+// Local variables for this component
+$btn-border-radius: s.$spacing-2xs; // 4px from spacing system
+$hover-overlay: rgba(c.$text-main-color, 0.1);
+
+#content {
+    background-color: c.$accent-orange;
+    min-height: 350px;
+    padding: s.$spacing-lg;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-#innerWrapper {
-    padding: 10px;
+.locked-container {
+    text-align: center;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.locked-icon {
+    margin-bottom: s.$spacing-md;
+    
+    .ui-icon {
+        display: inline-block;
+        width: 48px;
+        height: 48px;
+        background-size: contain;
+        opacity: 0.9;
+    }
+}
+
+.locked-title {
+    font-size: t.$font-size-2xl;
+    font-weight: t.$font-weight-bold;
+    color: c.$text-main-color;
+    margin-bottom: s.$spacing-md;
+}
+
+.locked-details {
+    margin-bottom: s.$spacing-xl;
+    
+    p {
+        font-size: t.$font-size-base;
+        line-height: 1.6;
+        margin-bottom: s.$spacing-sm;
+        color: c.$text-main-color;
+        
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+}
+
+.locked-actions {
+    display: flex;
+    justify-content: center;
+    gap: s.$spacing-md;
+    flex-wrap: wrap;
+    
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: s.$spacing-xs;
+        padding: s.$spacing-sm s.$spacing-lg;
+        border-radius: $btn-border-radius;
+        font-weight: t.$font-weight-semibold;
+        text-decoration: none;
+        transition: background-color 0.2s, transform 0.1s;
+        
+        &:hover {
+            transform: translateY(-1px);
+        }
+        
+        &:active {
+            transform: translateY(0);
+        }
+        
+        .ui-icon {
+            width: 16px;
+            height: 16px;
+        }
+    }
+    
+    .btn-primary {
+        background-color: c.$text-main-color;
+        color: c.$accent-orange;
+        
+        &:hover {
+            background-color: darken(c.$text-main-color, 10%);
+        }
+    }
+    
+    .btn-secondary {
+        background-color: transparent;
+        color: c.$text-main-color;
+        border: 2px solid c.$text-main-color;
+        
+        &:hover {
+            background-color: $hover-overlay;
+        }
+    }
+}
+
+@media only screen and (max-width: 767px) {
+    .locked-actions {
+        flex-direction: column;
+        align-items: center;
+        
+        .btn {
+            width: 100%;
+            max-width: 250px;
+            justify-content: center;
+        }
+    }
 }

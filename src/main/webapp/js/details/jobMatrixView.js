@@ -27,9 +27,10 @@ var stageNumber;
 $(document).ready(function() {
 	'use strict';
 
-	jobId = $('#jobId').text();
-	jobSpaceId = $('#jobSpaceId').text();
-	stageNumber = $('#stageNumber').text();
+	var $matrixPanel = $('#matrixPanel');
+	jobId = $matrixPanel.data('job-id');
+	jobSpaceId = $matrixPanel.data('job-space-id');
+	stageNumber = $matrixPanel.data('stage');
 
 	registerCheckboxEventHandlers();
 	removeHeader();
@@ -61,11 +62,10 @@ $(document).ready(function() {
 		log('Input value is ' + stageToRedirectTo);
 		if (isInt(stageToRedirectTo)) {
 			log('Input value is an integer, redirecting.');
-			var jobId = $('#jobId').text();
 			window.location.replace(starexecRoot + '/secure/details/jobMatrixView.jsp?id=' + jobId + '&stage=' + stageToRedirectTo);
 		} else {
 			log('Input value is not an integer, showing error message.');
-			$('#selectStageError').show();
+			$('#selectStageError').removeClass('hidden');
 		}
 	});
 

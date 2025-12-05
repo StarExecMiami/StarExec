@@ -39,27 +39,47 @@
 		css="common/delaySpinner, add/batchSpace"
 		js="common/delaySpinner, lib/jquery.validate.min, add/batchSpace">
 	<form method="POST" enctype="multipart/form-data"
-	      action="${starexecRoot}/secure/upload/space" id="upForm">
+	      action="${starexecRoot}/secure/upload/space" id="upForm"
+	      aria-labelledby="upload-legend">
 		<input type="hidden" name="space" value="${space.id}"/>
 		<fieldset>
-			<legend>upload your compressed file</legend>
-			<table id="tblXML" class="shaded">
-				<tr></tr>
+			<legend id="upload-legend">upload space hierarchy XML</legend>
+			<table id="tblXML" class="shaded contentTbl">
+				<thead>
 				<tr>
-					<td>file location</td>
-					<td><input id="fileUpload" name="f" type="file"/></td>
+					<th scope="col">attribute</th>
+					<th scope="col">value</th>
 				</tr>
+				</thead>
+				<tbody>
 				<tr>
-					<td colspan="2">
-						<button id="btnUpload" type="submit">upload</button>
+					<td><label for="fileUpload">file location</label></td>
+					<td>
+						<input id="fileUpload" name="f" type="file"
+						       accept=".xml,.zip,.tar,.tar.gz,.tgz,.txt"
+						       aria-describedby="file-hint"/>
+						<p id="file-hint" class="field-hint">
+							Accepted formats: .xml, .zip, .tar, .tar.gz, .tgz, .txt
+						</p>
 					</td>
 				</tr>
-				<tr>
-					<td><a id="viewSchema"
-					       href="../../public/batchSpaceSchema.xsd">view the
-						schema here</a></td>
-				</tr>
+				</tbody>
 			</table>
+			<div class="form-actions">
+				<button id="btnUpload" type="submit" class="btn-primary">
+					Upload Configuration
+				</button>
+			</div>
+			<div class="help-links">
+				<a id="viewSchema" href="../../public/batchSpaceSchema.xsd" class="help-link">
+					<span class="ui-icon ui-icon-document" aria-hidden="true"></span>
+					View XML Schema
+				</a>
+				<a id="viewExample" href="../../public/ExampleSpace.xml" class="help-link">
+					<span class="ui-icon ui-icon-document" aria-hidden="true"></span>
+					View Example File
+				</a>
+			</div>
 		</fieldset>
 	</form>
 </star:template>

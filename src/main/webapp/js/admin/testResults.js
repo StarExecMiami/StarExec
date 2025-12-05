@@ -17,8 +17,8 @@ jQuery(function($) {
 	};
 
 	var tableConfig = new window.star.DataTableConfig({
-		"sAjaxSource": starexecRoot + "services/testResults/pagination/" + $(
-			"#sequenceName").attr("value"),
+		"sAjaxSource": starexecRoot + "services/testResults/pagination/" + 
+			$('#tableTests').closest('[data-sequence-name]').data('sequence-name'),
 		"fnServerData": fnPaginationHandler,
 		"order": [[1, 'asc'], [0, 'asc']]
 	});

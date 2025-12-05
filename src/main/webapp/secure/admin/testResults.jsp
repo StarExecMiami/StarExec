@@ -17,8 +17,8 @@
 <star:template title="${sequenceName}"
                js="admin/testResults, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
                css="common/table, admin/testing">
-	<span id="sequenceName" value="${sequenceName}"></span>
-	<star:panel title="Existing Tests" withCount="false" expandable="false">
+	<star:panel title="Existing Tests" withCount="false" expandable="false" 
+	            data-sequence-name="${sequenceName}">
 		<table id="tableTests" class="shaded contentTbl">
 			<thead>
 			<tr>

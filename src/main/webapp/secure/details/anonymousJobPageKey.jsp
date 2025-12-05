@@ -14,13 +14,19 @@
 <star:template title="${job.name}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, details/anonymousJobPageKey, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, common/delaySpinner, explore/common, details/shared, details/anonymousJobPageKey">
-	<p class="noteText">Note: Only the owner of the job can see this page.</p>
+	<div class="alert alert--info" role="status">
+		<span class="ui-icon ui-icon-info" aria-hidden="true"></span>
+		<div class="alert-content">
+			<strong>Note:</strong> Only the owner of the job can see this page.
+		</div>
+	</div>
 	<fieldset id="solverNameKeyFieldset">
-		<table id="solverNameKeyTable">
+		<legend>Solver Name Mapping</legend>
+		<table id="solverNameKeyTable" class="shaded" aria-label="Solver name to anonymized name mapping">
 			<thead>
 			<tr>
-				<th>Solver Name</th>
-				<th>Anonymized Name</th>
+				<th scope="col">Solver Name</th>
+				<th scope="col">Anonymized Name</th>
 			</tr>
 			</thead>
 			<tbody>

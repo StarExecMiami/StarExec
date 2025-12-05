@@ -1,3 +1,5 @@
+"use strict";
+
 var dialog = null;
 
 $(document).ready(function() {
@@ -265,19 +267,84 @@ function unselectAll() {
 }
 
 function fnPaginationHandler(sSource, aoData, fnCallback) {
+	// Get the space ID from the data attribute and parse once
+	var spaceIdRaw = $("#spaceIdField").data("space-id");
+	var spaceId = parseInt(spaceIdRaw, 10);
+	var isValidSpaceId = !isNaN(spaceId) && spaceId > 0;
+	
+	// Use space-specific endpoint if space ID is valid, otherwise fall back to user solvers
+	var endpoint;
+	if (isValidSpaceId) {
+		endpoint = sSource + "space/" + spaceId + "/solver/pagination/";
+	} else {
+		endpoint = sSource + "users/solvers/pagination";
+	}
+	
 	// Request the next page of primitives from the server via AJAX
 	$.post(
-		sSource + "users/solvers/pagination",
+		endpoint,
 		aoData,
 		function(nextDataTablePage) {
-			s = parseReturnCode(nextDataTablePage);
+			var s = parseReturnCode(nextDataTablePage);
 			if (s) {
-
-
+				// Check if no solvers are available
+				if (nextDataTablePage.iTotalRecords === 0 && isValidSpaceId) {
+					showNoSolversWarning();
+				}
 				// Replace the current page with the newly received page
 				fnCallback(nextDataTablePage);
 			}
 		},
 		"json"
 	);
+}
+
+function showNoSolversWarning() {
+	// Get the space ID from the data attribute
+	var spaceIdRaw = $("#spaceIdField").data("space-id");
+	// Validate spaceId is a positive integer to prevent XSS
+	var spaceId = parseInt(spaceIdRaw, 10);
+	if (isNaN(spaceId) || spaceId <= 0) {
+		return;
+	}
+	
+	var $warning = $("#noSolversWarning");
+	if ($warning.length === 0) {
+		// Build alert using jQuery DOM methods for safety and readability
+		var $alert = $("<div>", {
+			id: "noSolversWarning",
+			"class": "alert alert--warning",
+			role: "alert"
+		});
+		
+		var $icon = $("<span>", {
+			"class": "ui-icon ui-icon-alert alert-icon"
+		});
+		
+		var $content = $("<div>", {
+			"class": "alert-content"
+		});
+		
+		// Use encodeURIComponent for URL safety
+		var $link = $("<a>", {
+			href: starexecRoot + "secure/explore/spaces.jsp?id=" + encodeURIComponent(spaceId),
+			text: "Add solvers to the space"
+		});
+		
+		$content.append(
+			document.createTextNode("No solvers are available in this space. "),
+			$link,
+			document.createTextNode(" or select a different space.")
+		);
+		
+		$alert.append($icon, $content);
+		$("#solverField legend").after($alert);
+		
+		// Disable the use solver button and update solver display
+		$("#useSolver").button("disable");
+		$("#solverNameField").html($("<em>", {
+			"class": "text-muted",
+			text: "No solvers available"
+		}));
+	}
 }

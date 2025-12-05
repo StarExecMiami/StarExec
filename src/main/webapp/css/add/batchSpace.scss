@@ -1,41 +1,117 @@
-fieldset {						
-	width: 75%;	
-	margin: 50px auto 0 auto;
+@use "../global/colors" as c;
+@use "../global/typography" as t;
+@use "../global/spacing" as s;
+
+fieldset {
+	width: 75%;
+	margin: s.$spacing-xl auto 0 auto;
 }
 
 fieldset table {
 	width: 100%;
 }
 
-#uploadFile {
-	border: none;
+.contentTbl {
+	thead th {
+		text-align: left;
+		padding: s.$spacing-sm s.$spacing-md;
+		font-weight: t.$font-weight-semibold;
+	}
+	
+	tbody td {
+		padding: s.$spacing-sm s.$spacing-md;
+		vertical-align: middle;
+	}
+	
+	tbody tr td:first-child {
+		width: 30%;
+	}
 }
 
 input[type="text"], textarea, input[type="file"] {
 	width: 60%;
 }
 
-#fileLoc {
-	width: 62%;
+.field-hint {
+	font-size: t.$font-size-sm;
+	color: c.$text-secondary;
+	margin-top: s.$spacing-xs;
+	margin-bottom: 0;
 }
 
-#btnUpload {	
-	float: right;
+.form-actions {
+	margin-top: s.$spacing-lg;
+	text-align: right;
+	
+	.btn-primary {
+		display: inline-flex;
+		align-items: center;
+		gap: s.$spacing-xs;
+		padding: s.$spacing-sm s.$spacing-lg;
+		background-color: c.$accent-blue;
+		color: c.$text-main-color;
+		border: none;
+		border-radius: 4px;
+		font-weight: t.$font-weight-semibold;
+		cursor: pointer;
+		transition: background-color 0.2s;
+		
+		&:hover {
+			background-color: darken(c.$accent-blue, 10%);
+		}
+	}
 }
 
-tbody tr td:first-child {
-	width: 30%;
+.help-links {
+	margin-top: s.$spacing-lg;
+	padding-top: s.$spacing-md;
+	border-top: 1px solid rgba(c.$text-secondary, 0.2);
+	display: flex;
+	gap: s.$spacing-lg;
+	flex-wrap: wrap;
 }
 
-td, .error {
-	vertical-align: middle;
+.help-link {
+	display: inline-flex;
+	align-items: center;
+	gap: s.$spacing-xs;
+	color: c.$accent-blue;
+	text-decoration: none;
+	font-size: t.$font-size-sm;
+	
+	&:hover {
+		text-decoration: underline;
+	}
+	
+	.ui-icon {
+		width: 16px;
+		height: 16px;
+	}
+}
+
+label.error {
+	color: c.$accent-red;
+	font-size: t.$font-size-sm;
+	margin-left: s.$spacing-sm;
+	display: inline-block;
+	font-weight: t.$font-weight-semibold;
 }
 
 @media only screen and (max-width: 767px) {
 	fieldset {
 		width: 95%;
 	}
-	body input[type="text"], body textarea, body input[type="file"] {
+	
+	input[type="text"], textarea, input[type="file"] {
 		width: 100%;
+	}
+	
+	.form-actions {
+		text-align: center;
+	}
+	
+	.help-links {
+		flex-direction: column;
+		gap: s.$spacing-sm;
 	}
 }

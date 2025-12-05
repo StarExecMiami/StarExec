@@ -45,10 +45,7 @@
 <star:template title="${job.name}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/jobMatrixView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min"
                css="details/jobMatrixView, common/dataTable, common/dataTables.fixedColumns">
-	<div id="matrixPanel">
-		<span id="jobId" style="display: none;">${job.id}</span>
-		<span id="jobSpaceId" style="display: none;">${jobSpaceId}</span>
-		<span id="stageNumber" style="display:none;">${stage}</span>
+	<div id="matrixPanel" data-job-id="${job.id}" data-job-space-id="${jobSpaceId}" data-stage="${stage}">
 		<h2 class="jobSpaceName">matrix for job space
 			"${matrix.getJobSpaceName()}" with id=${matrix.getJobSpaceId()}</h2>
 		<div class="matrixLegend">
@@ -88,12 +85,12 @@
 			</form>
 			<c:if test="${matrix.hasMultipleStages()}">
 				<form class="matrixStageSelection">
-					Stage: <input id="selectStageInput" type="text" name="stage"
+					<label for="selectStageInput">Stage:</label>
+					<input id="selectStageInput" type="text" name="stage"
 					              value="${stage}">
 					<button id="selectStageButton" type="button">Show Stage
 					</button>
-					<span id="selectStageError"
-					      style="color: red; display: none;">Stage must be a positive integer.</span>
+					<span id="selectStageError" class="error-text hidden">Stage must be a positive integer.</span>
 				</form>
 			</c:if>
 		</div>

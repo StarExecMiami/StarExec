@@ -44,15 +44,16 @@
 <star:template title="${job.name}"
                js=" lib/jquery.jstree, util/jobDetailsUtilityFunctions, lib/jquery.dataTables.min, common/delaySpinner, details/shared, details/jobPanelView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="common/table, explore/common, details/shared, details/jobPanelView">
-	<span style="display:none" id="jobId" value="${job.id}"> </span>
-	<span style="display:none" id="spaceId" value="${jobspace.id}"></span>
-	<span style="display:none" id="stageNumber" value="${stageNumber}"></span>
-	<div id="mainPanel">
-		<form class="panelStageSelection">
-			Stage: <input id="selectStageInput" type="text" name="stage"
-			              value="${stageNumber}">
+	<div id="mainPanel"
+	     data-job-id="${job.id}"
+	     data-space-id="${jobspace.id}"
+	     data-stage-number="${stageNumber}">
+		<form class="panelStageSelection" aria-label="Stage selection">
+			<label for="selectStageInput">Stage:</label>
+			<input id="selectStageInput" type="text" name="stage"
+			       value="${stageNumber}" aria-describedby="selectStageError">
 			<button id="selectStageButton" type="button">Show Stage</button>
-			<span id="selectStageError" style="color: red; display: none;">Stage must be a positive integer.</span>
+			<span id="selectStageError" class="error-text hidden" role="alert">Stage must be a positive integer.</span>
 		</form>
 		<fieldset id="subspaceSummaryField">
 			<legend class="expd" id="subspaceExpd">subspace summaries</legend>

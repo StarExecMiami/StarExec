@@ -30,23 +30,38 @@
 <star:template title="upload a picture" css="add/picture"
                js="lib/jquery.validate.min, add/picture, lib/jquery.qtip.min, common/delaySpinner">
 	<form method="POST" enctype="multipart/form-data"
-	      action="${starexecRoot}/secure/upload/pictures" id="upForm">
+	      action="${starexecRoot}/secure/upload/pictures" id="upForm"
+	      aria-labelledby="upload-legend">
 		<input type="hidden" name="type" value="${type}"/>
 		<input type="hidden" name="Id" value="${Id}"/>
 		<fieldset>
-			<legend>picture information</legend>
-			<table id="tblSolver" class="shaded">
-				<tr></tr>
+			<legend id="upload-legend">upload picture</legend>
+			<table id="tblPicture" class="shaded contentTbl">
+				<thead>
 				<tr>
-					<td>picture location</td>
-					<td><input id="uploadPic" name="f" type="file"/></td>
+					<th scope="col">attribute</th>
+					<th scope="col">value</th>
 				</tr>
+				</thead>
+				<tbody>
 				<tr>
-					<td colspan="2">
-						<button id="btnUpload" type="submit">upload</button>
+					<td><label for="uploadPic">picture file</label></td>
+					<td>
+						<input id="uploadPic" name="f" type="file"
+						       accept=".jpg,.jpeg,.png,.gif,.bmp"
+						       aria-describedby="file-hint"/>
+						<p id="file-hint" class="field-hint">
+							Accepted formats: .jpg, .jpeg, .png, .gif, .bmp
+						</p>
 					</td>
 				</tr>
+				</tbody>
 			</table>
+			<div class="form-actions">
+				<button id="btnUpload" type="submit" class="btn-primary">
+					Upload Picture
+				</button>
+			</div>
 		</fieldset>
 	</form>
 </star:template>

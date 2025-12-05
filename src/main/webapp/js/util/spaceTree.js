@@ -60,11 +60,21 @@ function openSpace(curSp, childId) {
 	});
 }
 
-function getSpaceChain(selector) {
+function getSpaceChain(selectorOrValue) {
 	chain = [];
-	spaceString = $(selector).attr("value");
+	// Support both DOM selectors (for backward compatibility) and direct values
+	var spaceString;
+	if (selectorOrValue && selectorOrValue.charAt(0) === '#') {
+		// It's a selector - try data attribute first, then fall back to attr('value')
+		var $el = $(selectorOrValue);
+		spaceString = $el.data('space-chain') || $el.attr("value") || '';
+	} else {
+		// It's a direct value
+		spaceString = selectorOrValue || '';
+	}
+	spaceString = spaceString.toString();
 	if (spaceString.length == 0) {
-		return spaceString;
+		return [];
 	}
 	spaces = spaceString.split(",");
 	index = 0;
@@ -80,9 +90,10 @@ function getSpaceChain(selector) {
 
 /**
  * Takes a list of spaces and moves the space tree down to the final space
+ * @param selectorOrValue - DOM selector, data attribute value, or direct comma-separated value
  */
-function handleSpaceChain(selector) {
-	spaceChain = getSpaceChain(selector);
+function handleSpaceChain(selectorOrValue) {
+	spaceChain = getSpaceChain(selectorOrValue);
 	if (spaceChain.length < 2) {
 		return;
 	}

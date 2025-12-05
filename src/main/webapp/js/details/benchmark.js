@@ -1,7 +1,10 @@
 var bid;
+var $benchmarkPage;
 
 $(document).ready(function() {
 	bid = getParameterByName('id');
+	$benchmarkPage = $('#benchmarkPage');
+	
 	$('#fieldType').expandable(true);
 	$('#fieldAttributes').expandable(true);
 	$('#fieldDepends').expandable(true);
@@ -21,16 +24,17 @@ function registerDownloadLinkButtonEventHandler() {
 		createDialog(
 			"Processing your download request, please wait. This will take some time for large benchmarks.");
 		var token = Math.floor(Math.random() * 100000000);
-		log("isAnonymousPage: " + $('#isAnonymousPage').attr('value'));
-		if ($('#isAnonymousPage').attr('value') === 'true') {
+		var isAnonymousPage = $benchmarkPage.data('is-anonymous-page') === true;
+		log("isAnonymousPage: " + isAnonymousPage);
+		if (isAnonymousPage) {
 			var anonId = getParameterByName('anonId');
 			log('anonId: ' + anonId);
 			$('#downLink')
 			.attr('href', starexecRoot + "secure/download?token=" + token + "&type=bench&anonId=" + anonId);
 		} else {
 			$('#downLink')
-			.attr('href', starexecRoot + "secure/download?token=" + token + "&type=bench&id=" + $(
-				"#benchId").attr("value"));
+			.attr('href', starexecRoot + "secure/download?token=" + token + "&type=bench&id=" + 
+				$benchmarkPage.data('bench-id'));
 		}
 		destroyOnReturn(token);
 	});
@@ -51,13 +55,13 @@ function registerAnonymousLinkButtonEventHandler() {
 				'yes': function() {
 					$(this).dialog('close');
 					makeAnonymousLinkPost('bench',
-						$('#benchId').attr('value'),
+						$benchmarkPage.data('bench-id'),
 						'all');
 				},
 				'no': function() {
 					$(this).dialog('close');
 					makeAnonymousLinkPost('bench',
-						$('#benchId').attr('value'),
+						$benchmarkPage.data('bench-id'),
 						'none');
 				}
 			}

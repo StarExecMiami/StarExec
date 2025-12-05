@@ -5,16 +5,18 @@ var useWallclock = true;
 var includeUnknown = false;
 var stageNumber;
 $(document).ready(function() {
-	jobId = $("#jobId").attr("value");
-	jobSpaceId = $("#spaceId").attr("value");
-	stageNumber = $("#stageNumber").attr("value");
+	// Get data from data attributes on mainPanel element
+	var $mainPanel = $("#mainPanel");
+	jobId = $mainPanel.data("job-id");
+	jobSpaceId = $mainPanel.data("space-id");
+	stageNumber = $mainPanel.data("stage-number");
 
 	$('#selectStageButton').click(function() {
 		var stageToRedirectTo = $('#selectStageInput').val();
 		if (isInt(stageToRedirectTo)) {
 			window.location.replace(starexecRoot + 'secure/details/jobPanelView.jsp?jobid=' + jobId + '&spaceid=' + jobSpaceId + '&stage=' + stageToRedirectTo);
 		} else {
-			$('#selectStageError').show();
+			$('#selectStageError').removeClass('hidden').show();
 		}
 	});
 

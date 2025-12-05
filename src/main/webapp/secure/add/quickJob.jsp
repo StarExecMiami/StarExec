@@ -87,6 +87,8 @@
 	</c:forEach>
 	<span id="defaultProfile" style="display:none"
 	      value="${defaultProfile}"></span>
+	<%-- Space ID field using data attribute for JavaScript access --%>
+	<input type="hidden" id="spaceIdField" data-space-id="${spaceId}" />
 	<form id="addForm" method="post" action="${starexecRoot}/secure/add/job">
 		<input type="hidden" name="runChoice" value="quickJob"/>
 		<input type="hidden" name="seed" value="0"/>
