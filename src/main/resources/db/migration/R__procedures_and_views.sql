@@ -1912,8 +1912,8 @@ CREATE OR REPLACE FUNCTION starexec.GetJobPairsInJobContainingBenchmark(_jobId I
 RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, job_pairs.solver_name, job_pairs.config_name, job_pairs.solver_id, job_pairs.config_id, job_pairs.start_time, job_pairs.end_time, job_pairs.cpu, job_pairs.wallclock, job_pairs.user_time, job_pairs.system_time, job_pairs.max_vmem, CAST(job_pairs.max_res_set AS BIGINT), job_pairs.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data
-	FROM starexec.job_pairs
+	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data
+	FROM starexec.job_pairs INNER JOIN jobpair_stage_data ON job_pairs.id=jobpair_stage_data.jobpair_id
 	WHERE job_pairs.job_id=_jobId AND job_pairs.bench_id=_benchmarkId;
 END;
 $$ LANGUAGE plpgsql;
@@ -2279,12 +2279,12 @@ BEGIN
 		SELECT COUNT(*) INTO job_pair_count
 		FROM starexec.job_pairs
 		JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id=job_pairs.id
-		WHERE jobpair_stage_data.job_space_id=_jobSpaceId AND stage_number=_stageNumber;
+		WHERE jobpair_stage_data.job_space_id=_jobSpaceId AND jobpair_stage_data.stage_number=_stageNumber;
 	ELSE
 		SELECT COUNT(*) INTO job_pair_count
 		FROM starexec.job_pairs
 		JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id=job_pairs.id
-		WHERE jobpair_stage_data.job_space_id=_jobSpaceId AND stage_number=job_pairs.primary_jobpair_data;
+		WHERE jobpair_stage_data.job_space_id=_jobSpaceId AND jobpair_stage_data.stage_number=job_pairs.primary_jobpair_data;
 	END IF;
 	RETURN job_pair_count;
 END;
@@ -2317,7 +2317,7 @@ BEGIN
 		SELECT COUNT(*) INTO job_pair_count
 		FROM starexec.job_pairs
 		JOIN jobpair_stage_data ON (jobpair_stage_data.jobpair_id = job_pairs.id)
-		WHERE jobpair_stage_data.job_space_id=_jobSpaceId AND stage_number = _stageNumber
+		WHERE jobpair_stage_data.job_space_id=_jobSpaceId AND jobpair_stage_data.stage_number = _stageNumber
 		AND (bench_name LIKE CONCAT('%', _query, '%')
 		OR jobpair_stage_data.config_name LIKE CONCAT('%', _query, '%')
 		OR jobpair_stage_data.solver_name LIKE CONCAT('%', _query, '%')
@@ -2396,7 +2396,7 @@ BEGIN
 	LEFT JOIN anonymous_primitive_names AS anonymous_config_names
 		ON config.id=anonymous_config_names.primitive_id AND anonymous_config_names.primitive_type='config'
 		AND anonymous_config_names.job_id=_jobId
-	WHERE job_stats.job_space_id = _jobSpaceId AND stage_number=_stageNumber AND include_unknowns=_includeUnknown;
+	WHERE job_stats.job_space_id = _jobSpaceId AND job_stats.stage_number=_stageNumber AND job_stats.include_unknowns=_includeUnknown;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3465,19 +3465,20 @@ $$ LANGUAGE plpgsql;
 -- job_pair table. Should only need to be run once on Starexec and Stardev to get the table
 -- up to date
 -- Author: Eric Burns
+-- NOTE: This procedure populates denormalized columns in job_pairs from related tables
+-- It uses the primary stage data (job_pairs.primary_jobpair_data = stage_number)
 DROP FUNCTION IF EXISTS starexec.SetNewColumns CASCADE;
 CREATE OR REPLACE FUNCTION starexec.SetNewColumns()
 RETURNS VOID AS $$
 BEGIN
     UPDATE job_pairs jp
     SET bench_name = b.name,
-        solver_name = s.name,
-        config_name = c.name,
-        solver_id = s.id
-    FROM starexec.benchmarks b, configurations c, solvers s
+        solver_name = jsd.solver_name,
+        config_name = jsd.config_name
+    FROM starexec.benchmarks b, jobpair_stage_data jsd
     WHERE b.id = jp.bench_id
-      AND c.id = jp.config_id
-      AND s.id = c.solver_id;
+      AND jsd.jobpair_id = jp.id
+      AND jsd.stage_number = jp.primary_jobpair_data;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3498,7 +3499,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT jp.path, jp.solver_name, jp.config_name, jp.bench_name, jp.status_code,
+    SELECT jp.path, jsd.solver_name, jsd.config_name, jp.bench_name, jp.status_code,
            complete.completion_id, jp.id, jp.primary_jobpair_data
     FROM starexec.job_pairs jp
     LEFT JOIN job_pair_completion complete ON jp.id = complete.pair_id
@@ -3988,15 +3989,15 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ja.solver_id, ja.solver_name, ja.config_id, ja.config_name, ja.attr_value,
+    SELECT jsd.solver_id, jsd.solver_name, jsd.config_id, jsd.config_name, ja.attr_value::TEXT,
            COUNT(ja.attr_value)::BIGINT AS attr_count,
            SUM(jsd.wallclock)::BIGINT AS wallclock_sum,
            SUM(jsd.cpu)::BIGINT AS cpu_sum
     FROM starexec.job_attributes ja
     JOIN job_pairs jp ON ja.pair_id = jp.id
-    JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id
+    JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id AND ja.stage_number = jsd.stage_number
     WHERE ja.attr_key = 'starexec-result' AND jp.job_space_id = _jobSpaceId
-    GROUP BY ja.solver_id, ja.config_id, ja.attr_value;
+    GROUP BY jsd.solver_id, jsd.config_id, jsd.solver_name, jsd.config_name, ja.attr_value;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5244,7 +5245,7 @@ CREATE OR REPLACE FUNCTION starexec.GetDescForQueue(_qID INT)
 RETURNS TABLE(description TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT q.description
+    SELECT q.description::TEXT
     FROM starexec.starexec.queues q
     WHERE q.id = _qID;
 END;
@@ -5760,7 +5761,7 @@ BEGIN
 
     CALL UpdatePairStatus(jobPairId, 11);
     CALL UpdateLaterStageStatuses(jobPairId, stage, 11);
-    PERFORM SetRunStatsForLaterStagesToZero(jobPairId, stage);
+    CALL SetRunStatsForLaterStagesToZero(jobPairId, stage);
 END;
 $$ LANGUAGE plpgsql;
 
