@@ -116,14 +116,15 @@ pvc-render.yaml
 
 ####################################
 # Render / deployment configs (ignore local secrets/overrides)
+# Note: Only ignore root-level files, not charts/starexec/values-*.yaml
 ####################################
-render.yaml
+/render.yaml
 secret-render.yaml
 secret-*.yaml
 backups/
-values-podman.yaml
-values-local.yaml
-*-local.yaml
+/values-podman.yaml
+/values-local.yaml
+/*-local.yaml
 
 ####################################
 # Keys, credentials, sensitive files
