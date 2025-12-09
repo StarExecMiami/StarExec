@@ -1,0 +1,370 @@
+# Configuration Reference
+
+Complete guide to configuring StarExec.
+
+## Configuration Layers
+
+StarExec uses a layered configuration system:
+
+1. **Java defaults** (`EnvironmentConfig.java`) - Fallback values
+2. **Helm values** (`values.yaml`, `values-ENV.yaml`) - Deployment-specific
+3. **Environment variables** - Runtime overrides (highest priority)
+4. **Kubernetes secrets** - Sensitive data (production)
+
+## Quick Configuration
+
+### Minimal Setup (Development)
+
+```bash
+export STAREXEC_DB_HOST=localhost
+export STAREXEC_DB_PASSWORD=admin  # Change for production!
+```
+
+The following have defaults but can be overridden:
+
+```bash
+export STAREXEC_DB_PORT=5432
+export STAREXEC_DB_NAME=starexec
+export STAREXEC_DB_USER=starexec
+```
+
+### Production Setup
+
+**Never use default passwords in production!**
+
+Use environment variables or Kubernetes secrets:
+
+```bash
+export STAREXEC_DB_PASSWORD=$(cat /run/secrets/db-password)
+export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
+```
+
+## Environment Variables Reference
+
+### Database Configuration
+
+| Variable | Default | Required | Example | Notes |
+|----------|---------|----------|---------|-------|
+| `STAREXEC_DB_HOST` | `localhost` | Yes | `db.local` | Database hostname |
+| `STAREXEC_DB_PORT` | `5432` | No | `5432` | PostgreSQL port |
+| `STAREXEC_DB_NAME` | `starexec` | No | `starexec` | Database name |
+| `STAREXEC_DB_USER` | `starexec` | No | `starexec` | Database username |
+| `STAREXEC_DB_PASSWORD` | *(empty)* | **Yes** | `s3cr3t` | ⚠️ **Sensitive** |
+| `STAREXEC_DB_PASSWORD_FILE` | *(empty)* | No | `/run/secrets/db-pwd` | Path to password file (preferred) |
+
+**Security Note:** Use `STAREXEC_DB_PASSWORD_FILE` in production to avoid exposing passwords in process listings.
+
+### Cluster Compute Configuration
+
+| Variable | Default | Required | Example | Notes |
+|----------|---------|----------|---------|-------|
+| `STAREXEC_CLUSTER_DB_USER` | `starexec` | No | `cluster_user` | Cluster database user |
+| `STAREXEC_CLUSTER_DB_PASSWORD` | *(empty)* | No | `cluster_pass` | ⚠️ **Sensitive** |
+
+### Email Configuration
+
+| Variable | Default | Required | Example | Notes |
+|----------|---------|----------|---------|-------|
+| `STAREXEC_EMAIL_SMTP` | `localhost` | No | `smtp.example.org` | SMTP server |
+| `STAREXEC_EMAIL_PORT` | `25` | No | `587` | SMTP port |
+| `STAREXEC_EMAIL_USER` | *(empty)* | No | `mailer@example.org` | ⚠️ **Sensitive** |
+| `STAREXEC_EMAIL_PASSWORD` | *(empty)* | No | `...` | ⚠️ **Sensitive** |
+
+### Backend / System Configuration
+
+| Variable | Default | Required | Example | Notes |
+|----------|---------|----------|---------|-------|
+| `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, sge, oar |
+| `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
+
+### Performance Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU_cores)` | Max parallel jobs (local backend) |
+| `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `4096` | Memory per container (4GB) |
+| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `1` | CPU cores per container |
+
+## Helm Values Configuration
+
+### Structure
+
+Helm values are organized by environment:
+
+```
+charts/starexec/
+├── values.yaml           # Base defaults
+├── values-dev.yaml       # Development overrides
+├── values-ci.yaml        # CI/testing overrides
+└── values-prod.yaml      # Production overrides
+```
+
+### Base Values Example
+
+```yaml
+# values-dev.yaml
+image:
+  repository: starexec
+  tag: latest
+  pullPolicy: Never
+
+postgres:
+  host: starexec-postgres
+  port: 5432
+  user: starexec
+  database: starexec
+  password: "starexec_dev_password"  # Override in production!
+
+resources:
+  limits:
+    memory: 4Gi
+    cpu: 2
+  requests:
+    memory: 2Gi
+    cpu: 1
+
+backend:
+  type: podman
+  dataDir: /app/data
+```
+
+### Production Values Example
+
+```yaml
+# values-prod.yaml
+image:
+  repository: ghcr.io/starexecmiami/starexec
+  tag: v1.0.0
+  pullPolicy: IfNotPresent
+
+postgres:
+  host: postgres.prod.svc.cluster.local
+  # Password managed via Kubernetes secret
+  existingSecret: starexec-postgres-secret
+
+resources:
+  limits:
+    memory: 8Gi
+    cpu: 4
+  requests:
+    memory: 4Gi
+    cpu: 2
+
+persistence:
+  enabled: true
+  storageClass: "fast-ssd"
+  size: 100Gi
+
+backend:
+  type: kubernetes
+  dataDir: /var/lib/starexec/data
+```
+
+## Configuration Validation
+
+### Check Current Configuration
+
+```bash
+# View effective configuration
+make config-show ENV=dev
+
+# Render templates to see final values
+make template ENV=prod
+cat render.yaml
+```
+
+### Verify Database Connection
+
+```bash
+# Test connection from app container
+make db-shell
+
+# Check migration status
+make db-status
+```
+
+### Common Validation Issues
+
+**Issue:** Database connection refused
+```bash
+# Check host resolution
+podman exec starexec-app ping -c 1 starexec-postgres
+
+# Verify PostgreSQL is listening
+podman exec starexec-postgres pg_isready
+```
+
+**Issue:** Password authentication failed
+```bash
+# Verify password is set correctly
+echo $STAREXEC_DB_PASSWORD  # Should not be empty
+
+# Check if using password file
+cat $STAREXEC_DB_PASSWORD_FILE
+```
+
+## Environment-Specific Configuration
+
+### Development (ENV=dev)
+
+- Uses named volumes for persistence
+- Default passwords acceptable
+- Local container builds
+- Minimal resource limits
+
+```bash
+make deploy-podman ENV=dev
+```
+
+### CI (ENV=ci)
+
+- Ephemeral volumes
+- Automated cleanup
+- Fast startup/teardown
+- Minimal logging
+
+```bash
+make deploy-podman ENV=ci
+```
+
+### Production (ENV=prod)
+
+- **Requires secure passwords**
+- Persistent volumes with backups
+- Registry-pulled images
+- Resource limits enforced
+- Monitoring enabled
+
+```bash
+# Production deployment requires password
+export STAREXEC_DB_PASSWORD="$(generate-secure-password)"
+make deploy-podman ENV=prod
+```
+
+## Advanced Configuration
+
+### Custom Helm Values
+
+Create a custom values file:
+
+```yaml
+# my-custom-values.yaml
+backend:
+  type: kubernetes
+  
+postgres:
+  host: external-db.company.com
+  existingSecret: company-db-secret
+
+resources:
+  limits:
+    memory: 16Gi
+    cpu: 8
+```
+
+Deploy with custom values:
+
+```bash
+helm install starexec starexec/starexec \
+  -f my-custom-values.yaml \
+  -n starexec
+```
+
+### Using Kubernetes Secrets
+
+Create secrets for sensitive data:
+
+```bash
+# Create database secret
+kubectl create secret generic starexec-postgres-secret \
+  --from-literal=password="$(generate-password)" \
+  -n starexec
+
+# Create SMTP secret
+kubectl create secret generic starexec-smtp-secret \
+  --from-literal=user="notifications@example.com" \
+  --from-literal=password="$(generate-password)" \
+  -n starexec
+```
+
+Reference in values:
+
+```yaml
+postgres:
+  existingSecret: starexec-postgres-secret
+  
+email:
+  existingSecret: starexec-smtp-secret
+```
+
+### Java System Properties
+
+Advanced users can set JVM properties:
+
+```bash
+# Via environment variable
+export JAVA_OPTS="-Xmx4g -XX:+UseG1GC"
+
+# Via Helm values
+javaOpts: "-Xmx4g -XX:+UseG1GC"
+```
+
+## Configuration Precedence
+
+From highest to lowest priority:
+
+1. **Environment variables** (runtime)
+2. **Kubernetes secrets** (mounted)
+3. **Helm values** (deployment-specific)
+4. **Default values.yaml** (base defaults)
+5. **Java EnvironmentConfig.java** (hardcoded fallbacks)
+
+Example resolution for `STAREXEC_DB_HOST`:
+
+```
+Environment variable → Helm values → values.yaml → EnvironmentConfig.java → "localhost"
+```
+
+## Troubleshooting Configuration
+
+### View Effective Configuration
+
+```bash
+# Show all configuration sources
+make config-show ENV=dev
+
+# Check rendered manifest
+make template ENV=prod
+less render.yaml
+```
+
+### Debug Database Connection
+
+```bash
+# Test from app container
+podman exec starexec-app bash -c '
+  psql "postgresql://$STAREXEC_DB_USER:$STAREXEC_DB_PASSWORD@$STAREXEC_DB_HOST:5432/$STAREXEC_DB_NAME" \
+    -c "SELECT version();"
+'
+```
+
+### Common Mistakes
+
+1. **Forgetting to set `STAREXEC_DB_PASSWORD`**
+   - Symptom: Authentication failed
+   - Fix: `export STAREXEC_DB_PASSWORD=your-password`
+
+2. **Wrong environment selected**
+   - Symptom: Using dev config in production
+   - Fix: Always specify `ENV=prod` explicitly
+
+3. **Secrets not mounted**
+   - Symptom: Empty password in container
+   - Fix: Verify secret exists and is referenced correctly
+
+## Next Steps
+
+- **Backend configuration:** [BACKENDS.md](BACKENDS.md)
+- **Security hardening:** [SECURITY.md](SECURITY.md)
+- **Performance tuning:** [PERFORMANCE.md](PERFORMANCE.md)
