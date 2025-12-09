@@ -1,5 +1,8 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project
+    xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
+>
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.starexec</groupId>
@@ -8,7 +11,8 @@
     <packaging>war</packaging>
 
     <name>StarExec</name>
-    <description>A web-based service for the comparative evaluation of logic solvers.</description>
+    <description
+    >A web-based service for the comparative evaluation of logic solvers.</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -231,6 +235,13 @@
             <version>7.5</version>
             <scope>test</scope>
         </dependency>
+        <!-- Awaitility for deterministic async test assertions (replaces Thread.sleep) -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <version>4.2.0</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.seleniumhq.selenium</groupId>
             <artifactId>selenium-java</artifactId>
@@ -323,14 +334,25 @@
         <!-- Dependencia para el cliente Docker/Podman -->
         <dependency>
             <groupId>com.github.docker-java</groupId>
-            <artifactId>docker-java</artifactId>
+            <artifactId>docker-java-core</artifactId>
             <version>3.3.6</version>
+            <exclusions>
+                <!-- Exclude httpclient5 transport - we use zerodep instead -->
+                <exclusion>
+                    <groupId>com.github.docker-java</groupId>
+                    <artifactId>docker-java-transport-httpclient5</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
-        <!-- Implementación del cliente HTTP para docker-java -->
+        <!--
+            Zero-dependency transport for docker-java.
+            Uses Java 11+ native HttpClient with Unix socket support.
+            More compatible with Podman than httpclient5.
+        -->
         <dependency>
             <groupId>com.github.docker-java</groupId>
-            <artifactId>docker-java-transport-httpclient5</artifactId>
+            <artifactId>docker-java-transport-zerodep</artifactId>
             <version>3.3.6</version>
         </dependency>
     </dependencies>
@@ -363,7 +385,8 @@
                             <filtering>true</filtering>
                         </resource>
                     </webResources>
-                    <containerConfigXML>src/main/webapp/META-INF/context.xml</containerConfigXML>
+                    <containerConfigXML
+                    >src/main/webapp/META-INF/context.xml</containerConfigXML>
                 </configuration>
             </plugin>
             <plugin>
@@ -388,7 +411,8 @@
                 <artifactId>flyway-maven-plugin</artifactId>
                 <version>${flyway.version}</version>
                 <configuration>
-                    <url>jdbc:postgresql://${starexec.db.host}:5432/${starexec.db.name}</url>
+                    <url
+                    >jdbc:postgresql://${starexec.db.host}:5432/${starexec.db.name}</url>
                     <user>${starexec.db.user}</user>
                     <password>${starexec.db.password}</password>
                     <schemas>
@@ -396,7 +420,8 @@
                     </schemas>
                     <locations>
                         <location>classpath:db/migration</location>
-                        <location>filesystem:${project.basedir}/src/main/resources/db/migration</location>
+                        <location
+                        >filesystem:${project.basedir}/src/main/resources/db/migration</location>
                     </locations>
                     <baselineOnMigrate>true</baselineOnMigrate>
                     <connectRetries>10</connectRetries>
@@ -487,10 +512,14 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <outputFile>${project.build.directory}/StarexecCommand.jar</outputFile>
+                            <outputFile
+                            >${project.build.directory}/StarexecCommand.jar</outputFile>
                             <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.starexec.command.Shell</mainClass>
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"
+                                >
+                                    <mainClass
+                                    >org.starexec.command.Shell</mainClass>
                                 </transformer>
                             </transformers>
                             <filters>
@@ -528,11 +557,13 @@
                         </goals>
                         <configuration>
                             <descriptors>
-                                <descriptor>src/assembly/starexeccommand.xml</descriptor>
+                                <descriptor
+                                >src/assembly/starexeccommand.xml</descriptor>
                             </descriptors>
                             <finalName>starexeccommand</finalName>
                             <appendAssemblyId>false</appendAssemblyId>
-                            <outputDirectory>${project.basedir}/src/main/webapp/public</outputDirectory>
+                            <outputDirectory
+                            >${project.basedir}/src/main/webapp/public</outputDirectory>
                         </configuration>
                     </execution>
                 </executions>
@@ -580,10 +611,13 @@
                                     <executable>java</executable>
                                     <arguments>
                                         <argument>-jar</argument>
-                                        <argument>${project.build.directory}/StarexecCommand.jar</argument>
-                                        <argument>testDataCommands.txt</argument>
+                                        <argument
+                                        >${project.build.directory}/StarexecCommand.jar</argument>
+                                        <argument
+                                        >testDataCommands.txt</argument>
                                     </arguments>
-                                    <workingDirectory>${project.basedir}/src/test/resources/upload-test</workingDirectory>
+                                    <workingDirectory
+                                    >${project.basedir}/src/test/resources/upload-test</workingDirectory>
                                 </configuration>
                             </execution>
                         </executions>
@@ -612,8 +646,10 @@
                                     <executable>gcc</executable>
                                     <arguments>
                                         <argument>-o</argument>
-                                        <argument>${project.basedir}/src/test/resources/test-pipeline/bin/DummySolver</argument>
-                                        <argument>${project.basedir}/src/test/resources/test-pipeline/src/DummySolver.c</argument>
+                                        <argument
+                                        >${project.basedir}/src/test/resources/test-pipeline/bin/DummySolver</argument>
+                                        <argument
+                                        >${project.basedir}/src/test/resources/test-pipeline/src/DummySolver.c</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -627,8 +663,10 @@
                                     <executable>gcc</executable>
                                     <arguments>
                                         <argument>-o</argument>
-                                        <argument>${project.basedir}/src/test/resources/test-pipeline/bin/starexec-solver</argument>
-                                        <argument>${project.basedir}/src/test/resources/test-pipeline/src/starexec-solver.c</argument>
+                                        <argument
+                                        >${project.basedir}/src/test/resources/test-pipeline/bin/starexec-solver</argument>
+                                        <argument
+                                        >${project.basedir}/src/test/resources/test-pipeline/src/starexec-solver.c</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -642,8 +680,10 @@
                                     <executable>gcc</executable>
                                     <arguments>
                                         <argument>-o</argument>
-                                        <argument>${project.basedir}/src/test/resources/test-pipeline/bin/starexec-kill</argument>
-                                        <argument>${project.basedir}/src/test/resources/test-pipeline/src/starexec-kill.c</argument>
+                                        <argument
+                                        >${project.basedir}/src/test/resources/test-pipeline/bin/starexec-kill</argument>
+                                        <argument
+                                        >${project.basedir}/src/test/resources/test-pipeline/src/starexec-kill.c</argument>
                                         <argument>-lpthread</argument>
                                     </arguments>
                                 </configuration>
