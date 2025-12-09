@@ -3,6 +3,7 @@ package org.starexec.jobs;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
@@ -157,7 +158,15 @@ public abstract class JobManager {
 		mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
 		mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
 		mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_POSTGRES_PASSWORD);
-		mainTemplate = mainTemplate.replace("$$REPORT_HOST$$", R.REPORT_HOST);
+		
+		// For containerized job execution, use the container-specific DB host
+		// Job containers are separate from the app pod, so they can't use localhost
+		String reportHost = EnvironmentConfig.getContainerDbHost();
+		if (reportHost == null || reportHost.isEmpty()) {
+			reportHost = R.REPORT_HOST; // Fall back to default
+		}
+		mainTemplate = mainTemplate.replace("$$REPORT_HOST$$", reportHost);
+		
 		mainTemplate = mainTemplate.replace("$$STAREXEC_DATA_DIR$$", R.STAREXEC_DATA_DIR);
 		// Impose resource limits
 		mainTemplate = mainTemplate.replace("$$MAX_WRITE$$", String.valueOf(R.MAX_PAIR_FILE_WRITE));
