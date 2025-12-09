@@ -859,7 +859,7 @@ logs-postgres:
 	@podman logs -f $(DB_CONTAINER)
 
 test: test-deps
-   @mvn test
+	@mvn test
 
 test-deps:
 	@echo "${BOLD}Testing job execution dependencies in container...${RESET}"
