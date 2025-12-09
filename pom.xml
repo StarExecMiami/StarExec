@@ -543,7 +543,9 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- Create starexeccommand.zip and copy to webapp -->
+            <!-- Create starexeccommand.zip for GitHub Release distribution -->
+            <!-- This ZIP is NOT bundled in the WAR - it's published as a separate release artifact -->
+            <!-- Users download it from: https://github.com/StarExecMiami/StarExec/releases/latest/download/starexeccommand.zip -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
@@ -563,7 +565,7 @@
                             <finalName>starexeccommand</finalName>
                             <appendAssemblyId>false</appendAssemblyId>
                             <outputDirectory
-                            >${project.basedir}/src/main/webapp/public</outputDirectory>
+                            >${project.build.directory}</outputDirectory>
                         </configuration>
                     </execution>
                 </executions>

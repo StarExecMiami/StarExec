@@ -6,3 +6,8 @@ README.markdown
 .env
 node_modules/
 web-docs/
+
+# StarExecCommand CLI tool - distributed via GitHub Releases, not bundled in Docker image
+# This exclusion prevents ~736MB of bloat if the ZIP accidentally exists in the source tree
+**/starexeccommand.zip
+**/StarexecCommand.jar

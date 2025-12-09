@@ -26,15 +26,15 @@
 
         <div class="download-section">
           <a
-            href="${starexecRoot}/public/starexeccommand.zip"
+            href="https://github.com/StarExecMiami/StarExec/releases/latest/download/starexeccommand.zip"
             class="btn-download"
-            rel="external"
-            download
+            rel="external noopener"
+            target="_blank"
           >
             <span class="icon" aria-hidden="true">&#8595;</span>
             <span>Download StarExecCommand</span>
           </a>
-          <span class="version-info">Includes JAR and documentation</span>
+          <span class="version-info">Includes JAR and documentation &middot; <a href="https://github.com/StarExecMiami/StarExec/releases" target="_blank" rel="noopener">View all releases</a></span>
         </div>
       </div>
     </header>
