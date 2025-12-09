@@ -20,8 +20,8 @@ WHERE email = 'admin';
 
 -- BCrypt hash for 'public' password
 -- Generated using: BCrypt.hashpw("public", BCrypt.gensalt(12))
-UPDATE starexec.users 
-SET password = '$2a$12$QkBGvjXmYpZ2TvMVXGjwi.kj8YQQCNvXC5XjEHR5LJGnXQ9LZ9Gxa'
+UPDATE starexec.users
+SET password = '$2a$12$PtxXbL4q86Yrk40WDnTmBeKhf1MNVmME8iLg99L7ULa4HMl7Btaty'
 WHERE email = 'public';
 
 -- Verify the update
