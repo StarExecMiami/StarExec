@@ -167,7 +167,8 @@ ENV CATALINA_HOME=/opt/tomcat \
     TOMCAT_VERSION=9.0.82 \
     JAVA_OPTS="-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseStringDeduplication" \
     STAREXEC_DATA_DIR=/var/starexec/data \
-    STAREXEC_LOG_DIR=/var/log/starexec
+    STAREXEC_LOG_DIR=/var/log/starexec \
+    PATH="/home/starexec/bin:${PATH}"
 
 # Download and install Tomcat
 RUN cd /tmp && \
@@ -199,11 +200,13 @@ RUN chmod +x /usr/local/bin/runsolver && \
     chown root:root /usr/local/bin/runsolver
 
 # Copy GetComputerInfo binary for system monitoring
+# Note: /home/starexec permissions are set later after sandbox users are added to the starexec group
 COPY scripts/GetComputerInfo /usr/local/bin/GetComputerInfo
 RUN chmod +x /usr/local/bin/GetComputerInfo && \
     chown root:root /usr/local/bin/GetComputerInfo && \
     mkdir -p /home/starexec/bin && \
-    ln -s /usr/local/bin/GetComputerInfo /home/starexec/bin/GetComputerInfo
+    ln -s /usr/local/bin/GetComputerInfo /home/starexec/bin/GetComputerInfo && \
+    chown -R starexec:starexec /home/starexec/bin
 
 # Copy BCrypt credential handler to Tomcat lib (needed for Realm initialization)
 COPY --from=credential-handler /build/target/starexec-credential-handler-1.0.0.jar ${CATALINA_HOME}/lib/
@@ -261,7 +264,11 @@ RUN echo "starexec ALL=(starexec1,starexec2) NOPASSWD: ALL" > /etc/sudoers.d/sta
 RUN addgroup starexec1 starexec && \
     addgroup starexec2 starexec && \
     chmod g+rwxs /app/sandbox && \
-    chmod g+rwxs /app/work
+    chmod g+rwxs /app/work && \
+    # Set group-based permissions for /home/starexec (sandbox users need access to bin/)
+    # Using group permissions instead of world-readable for better security
+    chmod 750 /home/starexec && \
+    chmod 750 /home/starexec/bin
 
 # Security hardening - Update Tomcat server.xml
 RUN sed -i 's/port="8080"/port="8080" maxThreads="200" minSpareThreads="10"/' ${CATALINA_HOME}/conf/server.xml

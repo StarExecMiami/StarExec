@@ -1,3 +1,13 @@
+# StarExec Docker Compose Configuration
+#
+# Basic usage (local backend - no job execution):
+#   docker compose up -d
+#
+# Podman/Container backend (enables job execution via DooD pattern):
+#   docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
+#
+# See docker-compose.podman.yml for container backend configuration.
+
 services:
   starexec:
     container_name: starexec-app
@@ -33,6 +43,11 @@ services:
       STAREXEC_BACKEND_TYPE: local
       STAREXEC_BACKEND_ROOT: /app/backend
       STAREXEC_BACKEND_WORKING_DIR: /app/work
+
+      # Scalability Tuning (adjust for your workload)
+      # STAREXEC_NUM_JOB_PAIRS_AT_A_TIME: 5      # Max concurrent job pairs per node (default: 5)
+      # STAREXEC_NODE_MULTIPLIER: 16             # Virtual nodes per physical node (default: 16)
+      # STAREXEC_CONTAINER_MONITOR_POLL_MS: 5000 # Container status poll interval in ms (default: 5000)
 
       # Testing
       STAREXEC_ALLOW_TESTING: "True"

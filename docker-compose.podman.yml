@@ -1,0 +1,58 @@
+# Docker Compose override for Podman backend (DooD - Docker-outside-of-Docker)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
+#
+# Prerequisites:
+#   1. Build the job runner image: make build-job-runner
+#   2. Ensure Docker/Podman socket is accessible
+#   3. Set STAREXEC_CONTAINER_HOST_DATA_PATH if using named volumes
+#
+# Note: This uses DooD pattern where StarExec spawns sibling containers
+# on the host's container engine, NOT nested containers.
+
+services:
+  starexec:
+    # Run as root to access container socket (required for DooD)
+    user: "0:0"
+    
+    environment:
+      # Backend Configuration - Switch to Podman/Container backend
+      STAREXEC_BACKEND_TYPE: podman
+      
+      # Container Job Image (build with: make build-job-runner)
+      STAREXEC_CONTAINER_JOB_IMAGE: starexec/job-runner:latest
+      
+      # Container socket path (inside the StarExec container)
+      STAREXEC_CONTAINER_SOCKET: unix:///var/run/docker.sock
+      
+      # Network for job containers - use the compose network
+      # Jobs need to reach postgres container by hostname
+      STAREXEC_CONTAINER_NETWORK_MODE: starexec_starexec_network
+      
+      # Database host for job containers (they're sibling containers, not inside StarExec)
+      STAREXEC_CONTAINER_DB_HOST: starexec-postgres
+      
+      # DooD Path Translation (REQUIRED for named volumes)
+      # Set this to the host path where the 'data' volume is mounted
+      # For Docker: /var/lib/docker/volumes/starexec_data/_data
+      # For Podman: ~/.local/share/containers/storage/volumes/starexec_data/_data
+      # Leave empty if using bind mounts where paths match
+      STAREXEC_CONTAINER_HOST_DATA_PATH: ${STAREXEC_CONTAINER_HOST_DATA_PATH:-}
+      
+      # Scalability Tuning (uncomment to override defaults)
+      # STAREXEC_NUM_JOB_PAIRS_AT_A_TIME: 5
+      # STAREXEC_NODE_MULTIPLIER: 16
+      # STAREXEC_CONTAINER_MONITOR_POLL_MS: 5000
+      
+      # Container resource limits
+      STAREXEC_CONTAINER_DEFAULT_MEMORY_MB: 2048
+      STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT: 600
+      STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT: 600
+    
+    volumes:
+      # Mount container socket for DooD pattern
+      # Docker: /var/run/docker.sock
+      # Podman (rootful): /var/run/podman/podman.sock
+      # Podman (rootless): /run/user/1000/podman/podman.sock
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
