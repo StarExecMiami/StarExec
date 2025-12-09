@@ -9,6 +9,9 @@ image:
 
 replicaCount: 1
 
+kubernetes:
+  enabled: false
+
 # Ephemeral mode: no persistence, fresh state each run
 persistence:
   enabled: false
