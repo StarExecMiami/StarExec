@@ -1,14 +1,13 @@
 package org.starexec.data.to;
 
-import org.starexec.data.database.Analytics;
-import org.starexec.logger.StarLogger;
-
 import java.sql.Date;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import org.starexec.data.database.Analytics;
+import org.starexec.logger.StarLogger;
 
 /**
  * Analytics keeps a record of how often events happen.
@@ -16,49 +15,59 @@ import java.util.List;
  * Actions must be added both here and in the `analytics_events` table.
  */
 public class AnalyticsResults {
-	public final Analytics event;
-	public final int count;
-	public final int users;
 
-	protected static final StarLogger log = StarLogger.getLogger(AnalyticsResults.class);
+    public final Analytics event;
+    public final int count;
+    public final int users;
 
-	public AnalyticsResults(String event, int count, int users) {
-		this.event = Analytics.valueOf(event);
-		this.count = count;
-		this.users = users;
-	}
+    protected static final StarLogger log = StarLogger.getLogger(
+        AnalyticsResults.class
+    );
 
-	/**
-	 * Creates a list of AnalyticsResults from a sql ResultSet
-	 * @param results ResultSet containing
-	 * @return list of AnalyticsResults
-	 */
-	public static List<AnalyticsResults> listFromResults(ResultSet results) throws SQLException {
-		LinkedList<AnalyticsResults> list = new LinkedList<>();
-		while (results.next()) {
-			list.add(
-				new AnalyticsResults(
-					results.getString("event"),
-					results.getInt("count"),
-					results.getInt("users")
-				)
-			);
-		}
-		return Collections.unmodifiableList(list);
-	}
+    public AnalyticsResults(String event, int count, int users) {
+        this.event = Analytics.valueOf(event);
+        this.count = count;
+        this.users = users;
+    }
 
-	/**
-	 * Gets results for all events between `start` and `end`
-	 * @param start date
-	 * @param end date
-	 * @return AnalyticsResults
-	 */
-	public static Iterable<AnalyticsResults> getAllEvents(Date start, Date end) {
-		try {
-			return org.starexec.data.database.SystemFunctions.getAnalyticsForDateRange(start, end);
-		} catch (SQLException e) {
-			log.error("GetAnalyticsForDateRange");
-			return Collections.emptyList();
-		}
-	}
+    /**
+     * Creates a list of AnalyticsResults from a sql ResultSet
+     * @param results ResultSet containing
+     * @return list of AnalyticsResults
+     */
+    public static List<AnalyticsResults> listFromResults(ResultSet results)
+        throws SQLException {
+        LinkedList<AnalyticsResults> list = new LinkedList<>();
+        while (results.next()) {
+            list.add(
+                new AnalyticsResults(
+                    results.getString("event"),
+                    results.getInt("count"),
+                    results.getInt("users")
+                )
+            );
+        }
+        return Collections.unmodifiableList(list);
+    }
+
+    /**
+     * Gets results for all events between `start` and `end`
+     * @param start date
+     * @param end date
+     * @return AnalyticsResults
+     */
+    public static Iterable<AnalyticsResults> getAllEvents(
+        Date start,
+        Date end
+    ) {
+        try {
+            return org.starexec.data.database.SystemFunctions.getAnalyticsForDateRange(
+                start,
+                end
+            );
+        } catch (SQLException e) {
+            log.error("GetAnalyticsForDateRange", e);
+            return Collections.emptyList();
+        }
+    }
 }
