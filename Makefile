@@ -87,8 +87,8 @@ RESET  := $(shell tput -Txterm sgr0)
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
 	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show \
-	logs logs-app logs-postgres test-deps verify-deps docs \
-	start stop
+	logs logs-app logs-postgres test-deps verify-deps test docs \
+	start stop fix-cgroup-delegation
 
 start: deploy-podman
 
@@ -140,6 +140,7 @@ help:
 	@echo "  clean-hard             ⚠️  HARD RESET: Remove ALL StarExec resources for ENV"
 	@echo "  reset                  ⚠️  Alias for stop + clean-hard (recommended)"
 	@echo "  nuke                   ⚠️  Alias for reset (complete environment wipe)"
+	@echo "  fix-cgroup-delegation  Fix cgroup controller delegation for Podman rootless"
 	@echo "  status                 Show current deployment status"
 	@echo "  lint                   Lint Helm charts (if Helm available)"
 	@echo "  template               Render Helm templates (if Helm available)"
@@ -150,6 +151,7 @@ help:
 	@echo "  logs-app               Show application logs (follow mode)"
 	@echo "  logs-postgres          Show PostgreSQL logs (follow mode)"
 	@echo "  test-deps              Test job execution dependencies in container"
+	@echo "  test                   Run all unit and integration tests"
 	@echo ""
 	@echo "Quick Start Aliases:"
 	@echo "  start                  Alias for deploy-podman"
@@ -202,6 +204,29 @@ image:
 			$(MAKE) build; \
 		fi; \
 	fi
+
+# Build the job-runner image used by PodmanBackend for solver execution
+# Production images are pulled from GHCR: ghcr.io/starexecmiami/starexec-job-runner
+# Local builds are for development/testing only
+JOB_RUNNER_IMAGE?=ghcr.io/starexecmiami/starexec-job-runner
+JOB_RUNNER_TAG?=latest
+JOB_RUNNER_LOCAL_IMAGE?=starexec/job-runner
+
+# Pull the production job-runner image from GHCR (recommended)
+pull-job-runner:
+	@echo "Pulling job-runner image from GHCR: $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)"
+	podman pull $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
+	@echo "✓ Job runner image pulled successfully"
+	@podman images --format "  Size: {{.Size}}" $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
+
+# Build job-runner locally (for development only)
+build-job-runner:
+	@echo "Building job-runner image locally (Alpine): $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)"
+	@echo "Note: Production deployments should use 'make pull-job-runner' instead"
+	podman build -t $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG) -f docker/job-runner.Dockerfile .
+	@echo "✓ Job runner image built successfully"
+	@echo "  Image: $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)"
+	@podman images --format "  Size: {{.Size}}" $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)
 
 # ============================================================================
 # VOLUME MANAGEMENT (Podman Named Volumes - RECOMMENDED APPROACH)
@@ -565,14 +590,20 @@ deploy-podman-helm:
 	@echo "Deploying application pod..."
 	@IMAGE_REPO="$(RELEASE_NAME)"; \
 	IMAGE_VER="$(IMAGE_TAG)"; \
+	DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
+	HOST_DATA_PATH=$$(podman volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
+	echo "Volume host path: $$HOST_DATA_PATH"; \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set image.repository=$$IMAGE_REPO \
 		--set image.tag=$$IMAGE_VER \
-		--set image.pullPolicy=Never > render.yaml; then \
+		--set image.pullPolicy=Never \
+		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
 		echo "Check your values file: $(VALS)"; \
 		exit 1; \
 	fi
+	@# Ensure pause image exists (Podman uses it automatically for pod infra)
+	@./scripts/ensure-pause-image.sh
 	@podman play kube render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
@@ -599,6 +630,8 @@ deploy-podman-direct:
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
 	@echo "Deploying application pod..."
+	@# Ensure pause image exists (Podman uses it automatically for pod infra)
+	@./scripts/ensure-pause-image.sh
 	@podman play kube render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
@@ -825,6 +858,9 @@ logs-postgres:
 	@echo "Following PostgreSQL logs (Ctrl+C to stop)..."
 	@podman logs -f $(DB_CONTAINER)
 
+test: test-deps
+   @mvn test
+
 test-deps:
 	@echo "${BOLD}Testing job execution dependencies in container...${RESET}"
 	@echo ""
@@ -852,6 +888,10 @@ test-deps:
 	@echo ""
 	@echo "${GREEN}✓ All job execution dependencies validated${RESET}"
 
+fix-cgroup-delegation:
+	@echo "Fixing cgroup controller delegation for Podman rootless mode..."
+	@./scripts/check-cgroup-delegation.sh --fix
+
 verify-deps:
 	@echo "${BOLD}Validating required CLI tooling...${RESET}"
 	@echo -n "  podman: "
@@ -863,6 +903,9 @@ verify-deps:
 	@echo "${BOLD}Optional tools:${RESET}"
 	@echo -n "  helm: "
 	@command -v helm >/dev/null && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ not installed (needed for template/deploy)${RESET}"
+	@echo "${BOLD}Podman rootless configuration:${RESET}"
+	@echo -n "  cgroup delegation: "
+	@./scripts/check-cgroup-delegation.sh >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ needs configuration (run 'make fix-cgroup-delegation')${RESET}"
 	@echo "${GREEN}✓ All required dependencies satisfied${RESET}"
 
 lint:
@@ -999,5 +1042,3 @@ docs:
 	@echo "" >> docs/reference/makefile-targets.md
 	@echo "✓ Generated docs/reference/makefile-targets.md"
 	@echo "  Remember to run 'make docs' after adding new targets!"
-
-
