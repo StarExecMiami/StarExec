@@ -16,6 +16,67 @@
 . $SCRIPT_DIR/status_codes.bash
 
 #################################################################################
+# Container Mode Support
+# When CONTAINER_MODE=true, write status/stats to files instead of database
+#################################################################################
+
+# Output directory for container mode (ContainerJobMonitor reads from here)
+CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
+CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
+CONTAINER_ATTRS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/attributes.txt"
+
+# Write status update for container mode
+function containerWriteStatus {
+	local STATUS=$1
+	local STAGE_NUMBER=${2:-0}
+	local TIMESTAMP=$(date +%s)
+	mkdir -p "$(dirname "$CONTAINER_STATUS_FILE")"
+	echo "{\"pairId\":$PAIR_ID,\"status\":$STATUS,\"stageNumber\":$STAGE_NUMBER,\"timestamp\":$TIMESTAMP}" > "$CONTAINER_STATUS_FILE"
+	log "Container mode: wrote status $STATUS for stage $STAGE_NUMBER"
+}
+
+# Write stats update for container mode
+function containerWriteStats {
+	local WALLCLOCK=$1
+	local CPU=$2
+	local USER=$3
+	local SYSTEM=$4
+	local MAXVM=$5
+	local MAXRSS=$6
+	local STAGE=$7
+	local DISKSIZE=$8
+	mkdir -p "$(dirname "$CONTAINER_STATS_FILE")"
+	cat > "$CONTAINER_STATS_FILE" <<EOF
+{
+  "pairId": $PAIR_ID,
+  "stageNumber": $STAGE,
+  "wallclockTime": $WALLCLOCK,
+  "cpuTime": $CPU,
+  "userTime": $USER,
+  "systemTime": $SYSTEM,
+  "maxVirtualMemory": $MAXVM,
+  "maxResidentSetSize": $MAXRSS,
+  "diskSize": $DISKSIZE,
+  "hostname": "$(hostname)"
+}
+EOF
+	log "Container mode: wrote stats for stage $STAGE"
+}
+
+# Write attributes for container mode
+function containerWriteAttribute {
+	local KEY=$1
+	local VALUE=$2
+	mkdir -p "$(dirname "$CONTAINER_ATTRS_FILE")"
+	echo "${KEY}=${VALUE}" >> "$CONTAINER_ATTRS_FILE"
+}
+
+# Check if running in container mode
+function isContainerMode {
+	[[ "${CONTAINER_MODE:-false}" == "true" ]]
+}
+
+#################################################################################
 # base64 decode some names which could otherwise have nasty characters in them
 #################################################################################
 
@@ -263,7 +324,7 @@ function trySandbox {
 	fi
 	#force script to wait until it can get the outer lock file to do the block in parens
 	#timeout is 4 seconds-- we give up if we aren't able to get the lock in that amount of time
-	
+
 	if (
 		flock -x -w 4 200 || return 1
 		#we have exclusive rights to work on the lock for this sandbox within this block
@@ -312,6 +373,29 @@ function trySandbox {
 # figures out which sandbox the given job pair should run in.
 # If no sandbox can be secured, terminate this jobpair
 function initSandbox {
+	# Container mode: each container IS its own isolated sandbox, no locking needed
+	if [ "$CONTAINER_MODE" = "true" ]; then
+		log "Container mode detected - using container as sandbox (no locking needed)"
+		SANDBOX=1
+		SANDBOX_PARAM=$SANDBOX_USER_ONE
+		# Use all available cores in container - fallback to nproc or 1 if lscpu not available
+		if command -v lscpu &> /dev/null; then
+			coresPerSocket="$(lscpu | grep -E "^ *Core" | sed -e "s/^.* \([0-9][0-9]*\)/\1/")" || coresPerSocket=1
+		elif command -v nproc &> /dev/null; then
+			coresPerSocket="$(nproc)" || coresPerSocket=1
+		else
+			coresPerSocket=1
+		fi
+		CORES="0-$(($coresPerSocket-1))"
+		WORKING_DIR=$WORKING_DIR_BASE'/sandbox'
+
+		# Ensure working directory exists
+		mkdir -p "$WORKING_DIR"
+
+		sendNode "$HOSTNAME" "$SANDBOX"
+		return
+	fi
+
 	# Check number of cores available:
 	coresPerSocket="$(lscpu | grep -E "^ *Core" | sed -e "s/^.* \([0-9][0-9]*\)/\1/")"
 
@@ -385,7 +469,11 @@ function safeRm {
 #cleans up files to prepare for the next stage of the job
 function cleanForNextStage {
 	cd $WORKING_DIR
-	sudo chown -R $(whoami) $WORKING_DIR
+	# In container mode, we don't need sudo since we're already the correct user
+	# Check both CONTAINER_MODE variable and direct detection for robustness
+	if ! isContainerMode && [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && ! grep -q 'docker\|kubepods\|containerd' /proc/1/cgroup 2>/dev/null; then
+		sudo chown -R $(whoami) $WORKING_DIR 2>/dev/null || true
+	fi
 	chmod -R gu+rxw $WORKING_DIR
 
 	# Clear the output directory
@@ -418,7 +506,13 @@ function killDeadlockedJobPair {
 
 	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime."
 	cd $WORKING_DIR
-	sudo -u $CURRENT_USER killall -SIGKILL --user $CURRENT_USER
+
+	# In container mode, we don't need sudo since we're already root with container isolation
+	if isContainerMode; then
+		killall -SIGKILL --user $CURRENT_USER 2>/dev/null || true
+	else
+		sudo -u $CURRENT_USER killall -SIGKILL --user $CURRENT_USER
+	fi
 
 	if [ $BUILD_JOB == "true" ]; then
 		cleanUpAfterKilledBuildJob
@@ -457,7 +551,11 @@ function cleanWorkspace {
 
 	cd $WORKING_DIR
 	# change ownership and permissions to make sure we can clean everything up
-	sudo chown -R $(whoami) $WORKING_DIR
+	# In container mode, we don't need sudo since we're already the correct user
+	# Check both CONTAINER_MODE variable and direct detection for robustness
+	if ! isContainerMode && [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && ! grep -q 'docker\|kubepods\|containerd' /proc/1/cgroup 2>/dev/null; then
+		sudo chown -R $(whoami) $WORKING_DIR 2>/dev/null || true
+	fi
 
 	chmod 770 $WORKING_DIR
 	chmod g+s $WORKING_DIR
@@ -488,7 +586,12 @@ function cleanWorkspace {
 		rm -f "$JOB_IN_DIR/depend_$PAIR_ID.txt"
 		# remove all /tmp files owned by the user that executed this job
 		cd /tmp
-		sudo -u $2 find /tmp/* -user $2 -exec rm -fr {} \; 2>/dev/null
+		# In container mode, we don't need sudo since we're already root
+		if isContainerMode; then
+			find /tmp/* -user $2 -exec rm -fr {} \; 2>/dev/null || true
+		else
+			sudo -u $2 find /tmp/* -user $2 -exec rm -fr {} \; 2>/dev/null
+		fi
 		cd $WORKING_DIR
 
 		if ((SANDBOX == 1)); then
@@ -501,6 +604,12 @@ function cleanWorkspace {
 }
 
 function dbExec {
+	# In container mode, log the query but don't execute (no psql available)
+	if isContainerMode; then
+		log "Container mode: skipping DB query: $1"
+		return 0
+	fi
+
 	local ATTEMPT=2
 	while
 		((ATTEMPT != 0)) &&
@@ -522,26 +631,40 @@ function sendStageStatus {
 	local STAGE_NUMBER=$(($2))
 	local STATUS=$(($1))
 	log "sending status for stage number $STAGE_NUMBER"
-	dbExec "CALL UpdatePairStageStatus($PAIR_ID, $STAGE_NUMBER, $STATUS)"
+	if isContainerMode; then
+		containerWriteStatus $STATUS $STAGE_NUMBER
+	else
+		dbExec "CALL UpdatePairStageStatus($PAIR_ID, $STAGE_NUMBER, $STATUS)"
+	fi
 }
 
 function sendStatusToLaterStages {
 	local STAGE_NUMBER=$(($2))
 	local STATUS=$(($1))
 	log "sending status for stage numbers greater than $STAGE_NUMBER"
-	dbExec "CALL UpdateLaterStageStatuses($PAIR_ID, $STAGE_NUMBER, $STATUS)"
+	if isContainerMode; then
+		containerWriteStatus $STATUS $STAGE_NUMBER
+	else
+		dbExec "CALL UpdateLaterStageStatuses($PAIR_ID, $STAGE_NUMBER, $STATUS)"
+	fi
 }
 
 function setRunStatsToZeroForLaterStages {
 	local STAGE=$(($1))
 	log "setting all stats to 0 for stages greater than $STAGE"
-	dbExec "CALL SetRunStatsForLaterStagesToZero($PAIR_ID, $STAGE)"
+	if ! isContainerMode; then
+		dbExec "CALL SetRunStatsForLaterStagesToZero($PAIR_ID, $STAGE)"
+	fi
 }
 
 function sendStatus {
 	local STATUS=$(($1))
 	log "sending job status $STATUS"
-	dbExec "CALL UpdatePairStatus($PAIR_ID, $STATUS)"
+	if isContainerMode; then
+		containerWriteStatus $STATUS 0
+	else
+		dbExec "CALL UpdatePairStatus($PAIR_ID, $STATUS)"
+	fi
 }
 
 function sendWallclockExceededStatus {
@@ -564,16 +687,26 @@ function sendExceedMemStatus {
 
 function setStartTime {
 	log "sending start time for pair id = $PAIR_ID"
-	dbExec "CALL SetPairStartTime($PAIR_ID)"
+	if isContainerMode; then
+		# In container mode, the start time is tracked by the host
+		log "Container mode: start time tracked by host"
+	else
+		dbExec "CALL SetPairStartTime($PAIR_ID)"
+	fi
 }
 
 function setEndTime {
 	log "sending end time for pair id = $PAIR_ID"
-	dbExec "
-		CALL SetPairEndTime($PAIR_ID);
-		CALL AddToEventOccurrencesNotRelatedToQueue('job pairs run', 1);
-		CALL AddToEventOccurrencesForJobPairsQueue('job pairs run', 1, $PAIR_ID);
-	"
+	if isContainerMode; then
+		# In container mode, the end time is tracked by the host
+		log "Container mode: end time tracked by host"
+	else
+		dbExec "
+			CALL SetPairEndTime($PAIR_ID);
+			CALL AddToEventOccurrencesNotRelatedToQueue('job pairs run', 1);
+			CALL AddToEventOccurrencesForJobPairsQueue('job pairs run', 1, $PAIR_ID);
+		"
+	fi
 }
 
 function sendNode {
@@ -582,9 +715,11 @@ function sendNode {
 	log "sending Node Id $NODE to $REPORT_HOST in sandbox $SANDBOX"
 	sendStatus $STATUS_RUNNING
 	sendStageStatus $STATUS_RUNNING ${STAGE_NUMBERS[STAGE_INDEX]}
-	dbExec "
-		CALL UpdateNodeId($PAIR_ID, '$NODE', $SANDBOX);
-	"
+	if ! isContainerMode; then
+		dbExec "
+			CALL UpdateNodeId($PAIR_ID, '$NODE', $SANDBOX);
+		"
+	fi
 }
 
 function limitExceeded {
@@ -617,13 +752,17 @@ function processAttributes {
 			key=$(dbEscape $key)
 			# value=$(dbEscape $value)
 			log "processing attribute $a (pair=$PAIR_ID, key='$key', value='$value' stage='$STAGE')"
-			QUERY+="CALL AddJobAttr($PAIR_ID, '$key', '$value', $STAGE);"
+			if isContainerMode; then
+				containerWriteAttribute "$key" "$value"
+			else
+				QUERY+="CALL AddJobAttr($PAIR_ID, '$key', '$value', $STAGE);"
+			fi
 		else
 			log "bad post processing - cannot process attribute $a"
 		fi
 	done < $1
 
-	if [[ -n $QUERY ]]; then
+	if [[ -n $QUERY ]] && ! isContainerMode; then
 		log "saving attributes to database"
 		dbExec "$QUERY"
 	fi
@@ -695,7 +834,10 @@ function updateStats {
 	getTotalOutputSizeToCopy $3 $4
 	log "sending Pair Stats"
 
-	if ! (dbExec "CALL UpdatePairRunSolverStats($PAIR_ID, '$EXEC_HOST', $WALLCLOCK_TIME, $CPU_TIME, $CPU_USER_TIME, $SYSTEM_TIME, $MAX_VIRTUAL_MEMORY, $((MAX_RESIDENT_SET_SIZE)), $((CURRENT_STAGE_NUMBER)), $((DISK_SIZE)))") ; then
+	if isContainerMode; then
+		# Write stats to file for ContainerJobMonitor to read
+		containerWriteStats "$WALLCLOCK_TIME" "$CPU_TIME" "$CPU_USER_TIME" "$SYSTEM_TIME" "$MAX_VIRTUAL_MEMORY" "$((MAX_RESIDENT_SET_SIZE))" "$((CURRENT_STAGE_NUMBER))" "$((DISK_SIZE))"
+	elif ! (dbExec "CALL UpdatePairRunSolverStats($PAIR_ID, '$EXEC_HOST', $WALLCLOCK_TIME, $CPU_TIME, $CPU_USER_TIME, $SYSTEM_TIME, $MAX_VIRTUAL_MEMORY, $((MAX_RESIDENT_SET_SIZE)), $((CURRENT_STAGE_NUMBER)), $((DISK_SIZE)))") ; then
 		log "Error copying stats from watchfile into database. Copying varfile to log {"
 		cat $1
 		log "} End varfile."
@@ -797,6 +939,15 @@ function copyOutput {
 		log "processing attributes"
 		atts=$(<$OUT_DIR/attributes.txt)
 		processAttributes $OUT_DIR/attributes.txt $1
+
+		# In CONTAINER_MODE, copy attributes.txt to STAREXEC_OUTPUT_DIR for LocalJobMonitor to find
+		if [ "$CONTAINER_MODE" = "true" ] && [ -n "$STAREXEC_OUTPUT_DIR" ]; then
+			if [ -f "$OUT_DIR/attributes.txt" ]; then
+				mkdir -p "$STAREXEC_OUTPUT_DIR"
+				cp "$OUT_DIR/attributes.txt" "$STAREXEC_OUTPUT_DIR/attributes.txt"
+				log "Copied attributes.txt to STAREXEC_OUTPUT_DIR: $STAREXEC_OUTPUT_DIR/attributes.txt"
+			fi
+		fi
 	fi
 
 	copyOutputNoStats $1 $2 $3
@@ -880,14 +1031,26 @@ function copyBenchmarkDependencies {
 function sandboxWorkspace {
 	cd $WORKING_DIR
 
+	# In container mode, we don't need sudo since containers provide isolation
+	# and we're already running as the correct user
+	# Check both CONTAINER_MODE variable and direct detection for robustness
+	if isContainerMode || [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -q 'docker\|kubepods\|containerd' /proc/1/cgroup 2>/dev/null; then
+		log "Container mode: skipping chown (container provides isolation)"
+		# Just ensure proper permissions for group access
+		chmod -R gu+rwx "$WORKING_DIR" 2>/dev/null || true
+		chmod a=rx,u+w "$WORKING_DIR"
+		chmod -R a=rX,u+w "$LOCAL_BENCH_DIR"
+		return
+	fi
+
 	# First, recursively change the owner of everything *inside* WORKING_DIR to
 	# the sandbox user
 	if [[ $WORKING_DIR == *sandbox2* ]]; then
 		log "sandboxing workspace with second sandbox user"
-		sudo chown -R $SANDBOX_USER_TWO $WORKING_DIR
+		sudo chown -R $SANDBOX_USER_TWO $WORKING_DIR 2>/dev/null || true
 	else
 		log "sandboxing workspace with first sandbox user"
-		sudo chown -R $SANDBOX_USER_ONE $WORKING_DIR
+		sudo chown -R $SANDBOX_USER_ONE $WORKING_DIR 2>/dev/null || true
 	fi
 
 	# Then, change the owner of the WORKING_DIR *itself* back to tomcat
@@ -1073,6 +1236,12 @@ function saveFileAsBenchmark {
 # sets the variable REMAINING_DISK_QUOTA with the number of bytes the user should be allowed
 # to write. This includes a 1G buffer for going over their quota
 function setRemainingDiskQuota {
+	if isContainerMode; then
+		# In container mode, assume no quota restriction
+		REMAINING_DISK_QUOTA=1073741824000  # 1 TiB default
+		log "Container mode: using default disk quota"
+		return
+	fi
 	# Query PostgreSQL for the user's disk usage. Use -t -A to return only the value.
 	DISK_USAGE=$(PGPASSWORD="$DB_PASS" psql -h "$REPORT_HOST" -U "$DB_USER" -d "$DB_NAME" -t -A -c "SELECT GetUserDiskUsage($((USER_ID)));")
 	# sanitize empty/null results
@@ -1188,7 +1357,11 @@ function verifyWorkspace {
 # $1 The current stage number
 function markRunscriptError {
 	local STAGE=$(($1-1))
-	dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $STAGE)"
+	if isContainerMode; then
+		containerWriteStatus $ERROR_RUNSCRIPT $STAGE
+	else
+		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $STAGE)"
+	fi
 }
 
 # this function checks to make sure that runsolver output was generated correctly.
