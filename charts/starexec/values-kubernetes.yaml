@@ -1,0 +1,172 @@
+# Kubernetes-Native Backend Configuration
+# =========================================
+#
+# This values file configures StarExec for true Kubernetes-native job execution
+# where each job runs as a Kubernetes Job resource.
+#
+# Usage:
+#   helm install starexec ./charts/starexec -f ./charts/starexec/values-kubernetes.yaml
+#
+# Prerequisites:
+#   1. A Kubernetes cluster with sufficient worker nodes
+#   2. A PersistentVolumeClaim for shared data (ReadWriteMany)
+#   3. Worker nodes labeled: starexec.org/worker=true
+#   4. (Optional) Queue labels: starexec/queue=<queue-name>
+
+image:
+  repository: ghcr.io/starexecmiami/starexec
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+volumePrefix: starexec
+
+# Enable Kubernetes-native backend
+backend:
+  type: "kubernetes-native"  # Uses KubernetesNativeBackend
+  root: "/app/backend"       # Not used for K8s backend
+  workingDir: "/app/work"    # Not used for K8s backend
+
+# Kubernetes-specific configuration
+kubernetes:
+  enabled: true
+  
+  # Namespace for StarExec jobs (can be different from app namespace)
+  jobNamespace: "starexec-jobs"
+  
+  # Job runner image
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  
+  # ServiceAccount for job pods
+  jobServiceAccount: "starexec-job"
+  
+  # PVC for shared data volume (must support ReadWriteMany)
+  dataPvc:
+    name: "starexec-data"
+    storageClass: ""  # Use cluster default, or specify: "nfs", "cephfs", etc.
+    size: "100Gi"
+    accessModes:
+      - ReadWriteMany
+  
+  # Node selection for worker nodes
+  nodeSelector:
+    starexec.org/worker: "true"
+  
+  # Queue label key
+  queueLabelKey: "starexec/queue"
+  
+  # Enable node management (requires ClusterRole)
+  nodeManagement:
+    enabled: true
+  
+  # Default resource limits for jobs
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+  
+  # Job cleanup (TTL after completion)
+  ttlSecondsAfterFinished: 3600  # 1 hour
+  
+  # Backoff limit (retries on failure)
+  backoffLimit: 0  # No retries - StarExec handles retry logic
+
+# Scalability Tuning for Kubernetes
+scalability:
+  numJobPairsAtATime: 50      # Higher concurrency possible with K8s
+  nodeMultiplier: 100          # More aggressive queue filling
+  containerMonitorPollMs: 1000 # Not used (K8s uses informers)
+
+# PostgreSQL configuration
+postgres:
+  image:
+    repository: docker.io/library/postgres
+    pullPolicy: IfNotPresent
+    tag: "16"
+  
+  # For production, use an external database
+  host: postgres.starexec.svc.cluster.local
+  port: 5432
+  user: starexec
+  database: starexec
+  
+  # Use existing secret for credentials
+  existingSecret: "starexec-postgres-credentials"
+  existingSecretKeys:
+    user: "username"
+    password: "password"
+    database: "database"
+    rootPassword: "postgres-password"
+  
+  persistence:
+    enabled: true
+    storageClass: ""
+    size: 50Gi
+
+# Application data directory
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+# Resource limits for StarExec application
+resources:
+  app:
+    requests:
+      memory: "2Gi"
+      cpu: "1"
+    limits:
+      memory: "4Gi"
+      cpu: "4"
+  postgres:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+
+# Persistence configuration
+persistence:
+  enabled: true
+  storageClass: ""  # Use default, or specify RWX-capable class
+  size: 100Gi
+  
+  # For Kubernetes, use PVC (not Podman volumes)
+  usePodmanVolumes: false
+  useHostPathForPodman: false
+
+# Environment variables
+env:
+  # Kubernetes backend configuration
+  STAREXEC_K8S_NAMESPACE: "starexec-jobs"
+  STAREXEC_K8S_JOB_IMAGE: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  STAREXEC_K8S_DATA_PVC: "starexec-data"
+  STAREXEC_K8S_SERVICE_ACCOUNT: "starexec-job"
+  STAREXEC_K8S_QUEUE_LABEL: "starexec/queue"
+  
+  # Logging
+  LOG_LEVEL: "INFO"
+  
+  # Flyway (database migrations)
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+
+# Ingress configuration (optional)
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: starexec.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Monitoring (optional)
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s

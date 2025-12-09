@@ -9,17 +9,15 @@ image:
 
 replicaCount: 1
 volumePrefix: starexec
-kubernetes:
-  enabled: false
 
 # Podman development mode: uses named volumes for proper lifecycle
 persistence:
   enabled: true
-  storageClass: "" # Not applicable to Podman
+  storageClass: ""  # Not applicable to Podman
   size: 5Gi
-  useHostPathForPodman: false # Use named volumes instead
-  usePodmanVolumes: true # Enable Podman-specific named volume handling
-
+  useHostPathForPodman: false  # Use named volumes instead
+  usePodmanVolumes: true  # Enable Podman-specific named volume handling
+  
   # Named volume configuration (Podman creates/manages these)
   podmanVolumes:
     data:
@@ -32,26 +30,27 @@ postgres:
     repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
     tag: "16"
-
-  host: localhost # Within pod, containers share localhost
+  
+  host: localhost  # Within pod, containers share localhost
   port: 5432
   user: starexec
-  password: starexec_dev_password # Dev-only; use env override for local testing
+  password: starexec_dev_password  # Dev-only; use env override for local testing
   database: starexec
   rootPassword: starexec_dev_password
-
+  
   persistence:
-    enabled: true # Enable persistence in dev for database continuity
+    enabled: true  # Enable persistence in dev for database continuity
 
 backend:
-  type: "local"
+  type: "podman"
   root: "/app/backend"
-  workingDir: "/app/data/work"
-  # Network for job containers to connect to the same network as the app pod
-  networkMode: "podman-default-kube-network"
-  # Database host that job containers should use (different from app which uses localhost in pod)
-  # Job containers are separate from the pod so they need to use the postgres service name
-  jobDbHost: "postgres"
+  workingDir: "/app/work"
+
+# Scalability Tuning for Podman backend
+scalability:
+  numJobPairsAtATime: 5      # Concurrent job pairs per node
+  nodeMultiplier: 16          # Virtual nodes per physical node
+  containerMonitorPollMs: 5000 # Container status poll interval (ms)
 
 dataDir: "/app/data"
 sandboxDir: "/app/sandbox"
@@ -79,3 +78,5 @@ env:
   STAREXEC_WEB_ADDRESS: "localhost:7827"
   STAREXEC_URL_PREFIX: "http"
   STAREXEC_WEB_BASE_DIR: "/opt/tomcat/webapps/starexec"
+  # Use locally built job runner image (not GHCR)
+  STAREXEC_CONTAINER_JOB_IMAGE: "starexec/job-runner:latest"

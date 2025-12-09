@@ -61,6 +61,15 @@ backend:
   root: "/app/backend"
   workingDir: "/app/work"
 
+# Scalability Tuning - adjust these based on your workload
+scalability:
+  # Maximum concurrent job pairs per node
+  numJobPairsAtATime: 5
+  # Virtual nodes per physical node (affects queue depth)
+  nodeMultiplier: 16
+  # Container status polling interval in milliseconds
+  containerMonitorPollMs: 5000
+
 dataDir: "/app/data"
 sandboxDir: "/app/sandbox"
 

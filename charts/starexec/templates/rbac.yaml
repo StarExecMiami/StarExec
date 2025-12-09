@@ -1,0 +1,129 @@
+# Kubernetes RBAC Configuration for StarExec
+# ============================================
+#
+# This file contains the RBAC resources needed for KubernetesNativeBackend
+# to create and manage Kubernetes Jobs.
+#
+# Resources:
+#   - ServiceAccount: Identity for StarExec pods
+#   - Role: Permissions to manage Jobs and Pods in namespace
+#   - RoleBinding: Binds the Role to the ServiceAccount
+#
+# For cluster-wide node management (queue labels), you'll also need:
+#   - ClusterRole: Permissions to read/update nodes
+#   - ClusterRoleBinding: Binds ClusterRole to ServiceAccount
+#
+# Usage:
+#   kubectl apply -f rbac.yaml -n starexec
+
+{{- if .Values.kubernetes.enabled }}
+
+---
+# ServiceAccount for StarExec application
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "chart.name" . }}-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "chart.name" . }}
+    component: app
+
+---
+# ServiceAccount for job runner pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "chart.name" . }}-job
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "chart.name" . }}
+    component: job-runner
+
+---
+# Role for managing Jobs within the namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "chart.name" . }}-job-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "chart.name" . }}
+rules:
+  # Manage Kubernetes Jobs
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # View Pods (for job status and logs)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # View Pod logs
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  
+  # Manage ConfigMaps (for job configuration)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # View Secrets (for job credentials)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding: Allow StarExec app to manage jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "chart.name" . }}-job-manager-binding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "chart.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chart.name" . }}-app
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "chart.name" . }}-job-manager
+
+{{- if .Values.kubernetes.nodeManagement.enabled }}
+---
+# ClusterRole for reading and labeling nodes (queue management)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "chart.name" . }}-node-manager
+  labels:
+    app: {{ include "chart.name" . }}
+rules:
+  # Read and update nodes (for queue assignment via labels)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+---
+# ClusterRoleBinding: Allow StarExec to manage node labels
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "chart.name" . }}-node-manager-binding
+  labels:
+    app: {{ include "chart.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chart.name" . }}-app
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "chart.name" . }}-node-manager
+{{- end }}
+
+{{- end }}
