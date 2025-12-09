@@ -1,0 +1,222 @@
+# =============================================================================
+# GitHub Actions Workflow: Job Runner Image Build & Publish
+# =============================================================================
+#
+# This workflow builds and publishes the StarExec Job Runner container image
+# to GitHub Container Registry (ghcr.io).
+#
+# The job-runner image is a minimal Alpine-based container used by PodmanBackend
+# to execute solver jobs in isolated environments.
+#
+# Triggers:
+#   - Push to main branches when job-runner files change
+#   - Manual dispatch with version input
+#   - Release tags (v*)
+#
+# Published tags:
+#   - latest (on default branch)
+#   - <branch>-<sha> (on any branch push)
+#   - <version> (on release tags)
+#
+# =============================================================================
+
+name: Job Runner Publish
+
+on:
+  push:
+    branches: [UMprod, containerised, main]
+    paths:
+      - 'docker/job-runner.Dockerfile'
+      - 'docker/job-entrypoint.sh'
+      - '.github/workflows/job-runner-publish.yml'
+  pull_request:
+    branches: [UMprod, containerised, main]
+    paths:
+      - 'docker/job-runner.Dockerfile'
+      - 'docker/job-entrypoint.sh'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version tag (e.g., 2.0.0)'
+        required: false
+        default: ''
+      push:
+        description: 'Push image to registry'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/starexec-job-runner
+
+jobs:
+  build:
+    name: Build & Publish Job Runner
+    runs-on: ubuntu-latest
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Set latest tag for default branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' || github.ref == 'refs/heads/UMprod' }}
+            # Branch + short SHA
+            type=sha,prefix={{branch}}-,format=short,enable=${{ github.event_name == 'push' }}
+            # Semantic version from release tag
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}},enable=${{ github.event_name == 'release' }}
+            # Manual version input
+            type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event.inputs.version != '' }}
+          labels: |
+            org.opencontainers.image.title=StarExec Job Runner
+            org.opencontainers.image.description=Minimal Alpine-based container for executing StarExec solver jobs
+            org.opencontainers.image.vendor=StarExec Miami
+      
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/job-runner.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' && (github.event.inputs.push != 'false') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+      
+      - name: Scan image for vulnerabilities
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-job-runner.sarif'
+          severity: 'CRITICAL,HIGH'
+      
+      - name: Upload Trivy scan results
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-job-runner.sarif'
+          category: 'trivy-job-runner'
+      
+      - name: Generate build summary
+        if: always()
+        run: |
+          echo "## 🐳 Job Runner Image Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "**Mode:** Build validation only (PR)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Mode:** Build and push to GHCR" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Image Details" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Registry | \`${{ env.REGISTRY }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Platforms | \`linux/amd64, linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base | \`alpine:3.21\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "### Published Tags" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '${{ steps.meta.outputs.tags }}' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Pull Command" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -f "trivy-job-runner.sarif" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Trivy scan results uploaded to Security tab" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Notify on failure (optional - can be extended with Slack/email)
+  notify:
+    name: Notify on Failure
+    needs: build
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create issue on failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `🚨 Job Runner Build Failed - ${context.sha.substring(0, 7)}`;
+            const body = `
+            ## Build Failure Alert
+            
+            The Job Runner image build failed on \`${context.ref}\`.
+            
+            **Workflow Run:** [View Details](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+            **Commit:** ${context.sha}
+            **Triggered by:** ${context.actor}
+            
+            Please investigate and fix the issue.
+            `;
+            
+            // Check if similar issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'ci-failure,job-runner'
+            });
+            
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['ci-failure', 'job-runner']
+              });
+            }
