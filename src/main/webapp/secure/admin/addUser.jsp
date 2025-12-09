@@ -94,11 +94,29 @@
 		</fieldset>
 	</form>
 	<c:if test="${not empty param.result and param.result == 'regSuccess'}">
-		<div class="success message" role="alert">User was created successfully</div>
+		<div class="alert alert--success" role="alert">
+			<span class="alert-icon" aria-hidden="true">
+				<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<polyline points="20 6 9 17 4 12"></polyline>
+				</svg>
+			</span>
+			<div class="alert-content">
+				<strong>Success:</strong> User was created successfully
+			</div>
+		</div>
 	</c:if>
 	<c:if test="${not empty param.result and param.result == 'regFail'}">
-		<div class="error message" role="alert">User creation was unsuccessful -- please try
-			again
+		<div class="alert alert--error" role="alert">
+			<span class="alert-icon" aria-hidden="true">
+				<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<circle cx="12" cy="12" r="10"></circle>
+					<line x1="12" y1="8" x2="12" y2="12"></line>
+					<line x1="12" y1="16" x2="12.01" y2="16"></line>
+				</svg>
+			</span>
+			<div class="alert-content">
+				<strong>Error:</strong> User creation was unsuccessful -- please try again
+			</div>
 		</div>
 	</c:if>
 </star:template>

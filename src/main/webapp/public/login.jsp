@@ -16,15 +16,32 @@
 
 			<!-- Maintenance/Debug Warning -->
 			<c:if test="${debug_mode}">
-				<div role="alert" class="warning-message" aria-live="polite">
-					<p>Notice: StarExec is currently down for maintenance. Logging in will not be possible until StarExec is back online. Please try again later.</p>
+				<div role="alert" class="alert alert--warning" aria-live="polite">
+					<span class="alert-icon" aria-hidden="true">
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M12 9v4"></path>
+							<circle cx="12" cy="12" r="10"></circle>
+						</svg>
+					</span>
+					<div class="alert-content">
+						<strong>Maintenance Notice:</strong> StarExec is currently down for maintenance. Logging in will not be possible until StarExec is back online. Please try again later.
+					</div>
 				</div>
 			</c:if>
 
 			<!-- Login Error Message -->
 			<c:if test="${param.error == 'true'}">
-				<div class="error message" role="alert" aria-live="assertive">
-					Invalid username or password. Please try again.
+				<div class="alert alert--error" role="alert" aria-live="assertive">
+					<span class="alert-icon" aria-hidden="true">
+						<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="10"></circle>
+							<line x1="12" y1="8" x2="12" y2="12"></line>
+							<line x1="12" y1="16" x2="12.01" y2="16"></line>
+						</svg>
+					</span>
+					<div class="alert-content">
+						<strong>Login Failed:</strong> Invalid username or password. Please try again.
+					</div>
 				</div>
 			</c:if>
 
@@ -113,7 +130,7 @@
 					this.classList.add('was-validated');
 					return false;
 				}
-				
+
 				// Set cookie check value
 				$('#cookieexists').val(document.cookie.length > 0 ? 'true' : 'false');
 			});

@@ -79,7 +79,7 @@
 %>
 
 <star:template title="${t_user.fullName}"
-               js="util/draggable, util/spaceTree, common/delaySpinner, details/user, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
+               js="util/draggable, util/spaceTree, common/delaySpinner, common/alerts, details/user, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="explore/common, details/user, common/delaySpinner, common/table, details/shared">
 	<span id="userId" value="${userId}"></span>
 	<div id="popDialog">
