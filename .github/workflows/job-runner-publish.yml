@@ -56,7 +56,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/starexec-job-runner
+  # Note: Docker image names must be lowercase
+  IMAGE_NAME: starexecmiami/starexec-job-runner
 
 jobs:
   build:
@@ -127,7 +128,8 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          # Use the first tag from metadata (most specific one)
+          image-ref: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
           format: 'sarif'
           output: 'trivy-job-runner.sarif'
           severity: 'CRITICAL,HIGH'
