@@ -85,7 +85,7 @@ postgres:
   image:
     repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
-    tag: "16"
+    tag: "15"
   
   # For production, use an external database
   host: postgres.starexec.svc.cluster.local

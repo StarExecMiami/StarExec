@@ -22,7 +22,7 @@ postgres:
   image:
     repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
-    tag: "16"
+    tag: "15"
 
   host: localhost
   port: 5432
