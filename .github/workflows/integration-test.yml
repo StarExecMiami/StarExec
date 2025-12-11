@@ -112,10 +112,22 @@ jobs:
             --build-arg VCS_REF=${{ github.sha }} \
             --build-arg VERSION=${{ github.sha }} \
             -t ghcr.io/starexecmiami/starexec:latest \
+            -t ghcr.io/starexecmiami/starexec:ci-test-latest \
             -t ghcr.io/starexecmiami/starexec:${{ github.sha }} \
             .
           echo "✓ Docker image built successfully"
           docker images | grep starexec
+
+      - name: Verify Docker image availability
+        run: |
+          echo "Verifying Docker image is available locally..."
+          docker image inspect ghcr.io/starexecmiami/starexec:latest > /dev/null 2>&1 && \
+            echo "✓ Image ghcr.io/starexecmiami/starexec:latest found" || \
+            { echo "✗ Image not found"; exit 1; }
+          docker image inspect ghcr.io/starexecmiami/starexec:ci-test-latest > /dev/null 2>&1 && \
+            echo "✓ Image ghcr.io/starexecmiami/starexec:ci-test-latest found" || \
+            { echo "✗ Image not found"; exit 1; }
+          echo "All images verified successfully"
 
       - name: Start PostgreSQL service
         env:
@@ -125,11 +137,12 @@ jobs:
           STAREXEC_DB_NAME: starexec
           STAREXEC_DB_USER: starexec
           STAREXEC_DB_SCHEMA: starexec
-          STAREXEC_VERSION: ci-test-latest
+          STAREXEC_VERSION: latest
           VOLUME_PREFIX: starexec-ci
+          DOCKER_BUILDKIT: 1
         run: |
           echo "Starting PostgreSQL service..."
-          docker compose up -d --build postgres
+          docker compose up -d postgres
           echo "✓ PostgreSQL container created"
 
       - name: Wait for PostgreSQL to accept connections
@@ -148,10 +161,13 @@ jobs:
           STAREXEC_DB_NAME: starexec
           STAREXEC_DB_USER: starexec
           STAREXEC_DB_SCHEMA: starexec
-          STAREXEC_VERSION: ci-test-latest
+          STAREXEC_VERSION: latest
           VOLUME_PREFIX: starexec-ci
+          DOCKER_BUILDKIT: 1
         run: |
           echo "Running database migrations..."
+          echo "Checking if image is available..."
+          docker image inspect ghcr.io/starexecmiami/starexec:latest || { echo "Image not found!"; exit 1; }
           # Use docker compose run to execute migrations service
           # The --rm flag removes the container after it exits
           # Exit code from migrations will propagate to this step
@@ -194,8 +210,9 @@ jobs:
           STAREXEC_DB_NAME: starexec
           STAREXEC_DB_USER: starexec
           STAREXEC_DB_SCHEMA: starexec
-          STAREXEC_VERSION: ci-test-latest
+          STAREXEC_VERSION: latest
           VOLUME_PREFIX: starexec-ci
+          DOCKER_BUILDKIT: 1
         run: |
           echo "Starting StarExec application..."
           docker compose up -d starexec
