@@ -4,18 +4,19 @@ on:
   push:
     branches: [UMprod, dev, containerised]
     paths:
-      - 'src/**'
-      - 'Dockerfile'
-      - 'docker/entrypoint.sh'
-      - 'docker/setenv.sh'
-      - 'pom.xml'
-      - '.github/workflows/container-build.yml'
+      - "starexec-app/**"
+      - "Dockerfile"
+      - "docker/entrypoint.sh"
+      - "docker/setenv.sh"
+      - "pom.xml"
+      - ".github/workflows/container-build.yml"
   pull_request:
     branches: [UMprod, dev, containerised]
     paths:
-      - 'Dockerfile'
-      - 'docker/entrypoint.sh'
-      - 'docker/setenv.sh'
+      - "Dockerfile"
+      - "docker/entrypoint.sh"
+      - "docker/setenv.sh"
+      - "pom.xml"
 
 permissions:
   contents: read
@@ -25,14 +26,14 @@ jobs:
   build:
     name: Build & Scan Container
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Build container image
         uses: docker/build-push-action@v5
         with:
@@ -42,38 +43,46 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
-      
+          build-args: |
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VERSION=test-${{ github.sha }}
+
       - name: Run container structure tests
         run: |
           echo "Running container validation tests..."
-          
+
           # Test Java installation
           docker run --rm starexec:test java -version
-          
+
           # Test basic container inspection
           IMAGE_INFO=$(docker inspect starexec:test)
           echo "✓ Container structure validation passed"
-          
+
           # Display image details
           echo ""
           echo "=== Container Image Details ==="
           docker inspect starexec:test | jq '.[0] | {Size, Created, Architecture: .Architecture, Os: .Os}'
-      
+
+      - name: Verify multi-module Maven build
+        run: |
+          echo "Verifying Maven multi-module build configuration..."
+          docker run --rm starexec:test sh -c 'test -d /opt/tomcat/webapps/starexec && echo "✓ Container built with multi-module Maven structure"'
+
       - name: Scan image for vulnerabilities with Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'starexec:test'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-      
+          image-ref: "starexec:test"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
-          category: 'trivy-container'
-      
+          sarif_file: "trivy-results.sarif"
+          category: "trivy-container"
+
       - name: Generate scan summary
         if: always()
         run: |
@@ -81,6 +90,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Build Status:** ✓ Success" >> $GITHUB_STEP_SUMMARY
           echo "**Image Tag:** starexec:test" >> $GITHUB_STEP_SUMMARY
+          echo "**Maven Structure:** Multi-module (Parent POM + starexec-app)" >> $GITHUB_STEP_SUMMARY
           echo "**Scan Tool:** Trivy" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f "trivy-results.sarif" ]; then

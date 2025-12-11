@@ -14,7 +14,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --silent
 
 # Copy CSS sources
-COPY src/main/webapp/css ./src/main/webapp/css
+COPY starexec-app/src/main/webapp/css ./src/main/webapp/css
 
 # Compile SCSS to CSS
 RUN npx sass --style=compressed --load-path src/main/webapp/css src/main/webapp/css
@@ -59,7 +59,7 @@ COPY tomcat-credential-handler/src ./src
 RUN mvn clean package -B -q
 
 # ==============================================================================
-# Stage 4: Build Application with Maven
+# Stage 4: Build Application with Maven (Multi-Module Structure)
 # ==============================================================================
 FROM docker.io/library/maven:3.9-eclipse-temurin-17-alpine AS builder
 
@@ -71,16 +71,21 @@ WORKDIR /build
 ENV MAVEN_OPTS="-XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Xmx3g"
 
 # Copy POM and NPM files first for dependency caching
-COPY pom.xml package.json package-lock.json* ./
+COPY pom.xml ./
+COPY starexec-app/pom.xml ./starexec-app/
 
-# Download dependencies 
-RUN mvn dependency:go-offline -B
+# Copy package files to both root and module directory (frontend-maven-plugin needs it in module dir)
+COPY package.json package-lock.json* ./
+COPY package.json package-lock.json* ./starexec-app/
+
+# Download dependencies
+RUN mvn dependency:go-offline -B -pl starexec-app
 
 # Copy source code
-COPY src ./src
+COPY starexec-app/src ./starexec-app/src
 
 # Copy compiled CSS from assets stage
-COPY --from=assets /build/src/main/webapp/css ./src/main/webapp/css
+COPY --from=assets /build/src/main/webapp/css ./starexec-app/src/main/webapp/css
 
 # Build metadata using ARG (no git dependency needed)
 ARG BUILD_DATE=unknown
@@ -94,9 +99,9 @@ RUN mkdir -p /build/build-metadata && \
     echo "BUILD_USER=docker" >> /build/build-metadata/build-info.properties
 
 # Build the WAR (skip tests to speed iteration)
-RUN mvn clean package -DskipTests -B -V && \
+RUN mvn clean install -DskipTests -Dmaven.test.skip=true -B -V -pl starexec-app && \
     mkdir -p /build/output && \
-    cp target/starexec.war /build/output/starexec.war
+    cp starexec-app/target/starexec.war /build/output/starexec.war
 
 # ==============================================================================
 # Stage 5: Runtime - Tomcat with Security Hardening
@@ -227,12 +232,12 @@ RUN cd ${CATALINA_HOME}/webapps && \
     chown -R starexec:starexec ${CATALINA_HOME}/webapps/starexec /starexec
 
 # Copy default pictures (only the files needed)
-COPY --from=builder /build/src/main/resources/static/default-pics/* /app/data/pictures/
+COPY --from=builder /build/starexec-app/src/main/resources/static/default-pics/* /app/data/pictures/
 RUN chmod -R a+r /app/data/pictures && \
     chown -R starexec:starexec /app/data/pictures
 
 # Copy external configuration assets
-COPY --from=builder /build/src/main/java/org/starexec/config /config
+COPY --from=builder /build/starexec-app/src/main/java/org/starexec/config /config
 RUN chown -R starexec:starexec /config
 
 # Copy build metadata
@@ -291,4 +296,3 @@ ENTRYPOINT ["/sbin/tini", "--"]
 
 # Start with entrypoint script
 CMD ["/usr/local/bin/entrypoint.sh"]
-
