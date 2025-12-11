@@ -4,15 +4,16 @@ on:
   push:
     branches: [UMprod, containerised]
     paths:
-      - 'src/**'
-      - 'Dockerfile'
-      - 'pom.xml'
+      - "src/**"
+      - "Dockerfile"
+      - "docker/migrations.sh"
+      - "pom.xml"
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment for deployment'
+        description: "Target environment for deployment"
         required: true
-        default: 'dev'
+        default: "dev"
         type: choice
         options:
           - dev
@@ -30,21 +31,21 @@ jobs:
   publish:
     name: Build & Publish Container
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -57,7 +58,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' }}
-      
+
       - name: Build and push container image
         uses: docker/build-push-action@v5
         with:
@@ -71,7 +72,7 @@ jobs:
             BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
             VCS_REF=${{ github.sha }}
             VERSION=${{ github.ref_name }}
-      
+
       - name: Generate image summary
         if: success()
         run: |
@@ -90,7 +91,7 @@ jobs:
           if [ "${{ github.ref }}" == "refs/heads/containerised" ]; then
             echo "✅ **Latest tag:** Updated on production branch" >> $GITHUB_STEP_SUMMARY
           fi
-      
+
       - name: Create deployment annotation
         if: success()
         uses: actions/github-script@v7

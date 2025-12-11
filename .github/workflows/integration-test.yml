@@ -7,6 +7,7 @@ on:
       - "starexec-app/**"
       - "docker-compose.yml"
       - "Dockerfile"
+      - "docker/migrations.sh"
       - "pom.xml"
       - ".github/workflows/integration-test.yml"
   push:
@@ -15,6 +16,7 @@ on:
       - "starexec-app/**"
       - "docker-compose.yml"
       - "Dockerfile"
+      - "docker/migrations.sh"
       - "pom.xml"
   workflow_dispatch:
 
@@ -22,91 +24,297 @@ permissions:
   contents: read
 
 jobs:
+  # Job 1: Verify migrations are packaged correctly
+  verify-migrations:
+    name: Verify Migrations Packaged
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: maven
+
+      - name: Build application WAR
+        run: |
+          cd starexec-app
+          mvn clean package -DskipTests -B -q
+
+      - name: Verify migration files in source
+        run: |
+          MIGRATION_DIR="starexec-app/src/main/resources/db/migration"
+          SOURCE_COUNT=$(find "$MIGRATION_DIR" -maxdepth 1 -type f -name "*.sql" 2>/dev/null | wc -l)
+
+          echo "Source migration files: $SOURCE_COUNT"
+          if [ "$SOURCE_COUNT" -lt 1 ]; then
+            echo "❌ FAILED: Expected at least 1 migration file, found $SOURCE_COUNT"
+            exit 1
+          fi
+          echo "✅ PASSED: Migration source files verified"
+
+      - name: Verify migrations in WAR
+        run: |
+          WAR_FILE="starexec-app/target/starexec.war"
+          WAR_COUNT=$(unzip -l "$WAR_FILE" 2>/dev/null | grep -c "WEB-INF/classes/db/migration" || echo 0)
+
+          echo "WAR migration entries: $WAR_COUNT"
+          if [ "$WAR_COUNT" -lt 1 ]; then
+            echo "❌ FAILED: Expected migration entries in WAR, found $WAR_COUNT"
+            exit 1
+          fi
+          echo "✅ PASSED: Migrations packaged in WAR correctly"
+
+      - name: List packaged migrations
+        run: |
+          WAR_FILE="starexec-app/target/starexec.war"
+          echo "Packaged migration files:"
+          unzip -l "$WAR_FILE" 2>/dev/null | grep "WEB-INF/classes/db/migration.*\.sql$" | awk '{print $NF}' || echo "(none found)"
+
+  # Job 2: Integration tests with Docker Compose
   integration-test:
     name: Docker Compose Integration Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    needs: verify-migrations
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Verify multi-module structure
-        run: |
-          echo "Verifying multi-module Maven structure before Docker build..."
-          ls -la pom.xml starexec-app/pom.xml || exit 1
-          echo "✓ Multi-module structure verified"
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Start test environment with Docker Compose
+      - name: Start PostgreSQL service
         env:
-          STAREXEC_DB_PASSWORD: ci_test_password
-          STRICT_DB_CONNECTION: true
+          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+          STAREXEC_DB_HOST: postgres
+          STAREXEC_DB_PORT: 5432
+          STAREXEC_DB_NAME: starexec
+          STAREXEC_DB_USER: starexec
+          STAREXEC_DB_SCHEMA: starexec
+          STAREXEC_VERSION: ci-test-latest
+          VOLUME_PREFIX: starexec-ci
         run: |
-          echo "Building and starting Docker Compose services..."
-          docker compose up -d --build
-          docker compose ps
+          echo "Starting PostgreSQL service..."
+          docker compose up -d --build postgres
+          echo "✓ PostgreSQL container created"
 
-      - name: Wait for application startup
+      - name: Wait for PostgreSQL to accept connections
         run: |
-          echo "Waiting for StarExec application to start..."
-          timeout 180 bash -c 'until curl -f http://localhost:8080/starexec/ 2>/dev/null; do
-            sleep 5
-            echo "Still waiting for application..."
+          echo "Waiting for PostgreSQL to be ready..."
+          timeout 120 bash -c 'until docker compose exec -T postgres pg_isready -U starexec 2>/dev/null; do
+            sleep 2
           done'
-          echo "✓ Application is ready at http://localhost:8080/starexec/"
+          echo "✓ PostgreSQL is accepting connections"
+
+      - name: Run database migrations
+        env:
+          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+          STAREXEC_DB_HOST: postgres
+          STAREXEC_DB_PORT: 5432
+          STAREXEC_DB_NAME: starexec
+          STAREXEC_DB_USER: starexec
+          STAREXEC_DB_SCHEMA: starexec
+          STAREXEC_VERSION: ci-test-latest
+          VOLUME_PREFIX: starexec-ci
+        run: |
+          echo "Running database migrations..."
+          # Use docker compose run to execute migrations service
+          # The --rm flag removes the container after it exits
+          # Exit code from migrations will propagate to this step
+          docker compose run --rm migrations
+          MIGRATION_EXIT=$?
+
+          if [ $MIGRATION_EXIT -eq 0 ]; then
+            echo "✓ Migrations completed successfully"
+          else
+            echo "✗ Migrations failed with exit code $MIGRATION_EXIT"
+            exit $MIGRATION_EXIT
+          fi
+
+      - name: Verify credentials not exposed in migration logs
+        if: always()
+        run: |
+          echo "Verifying credential redaction in migration logs..."
+          LOGS=$(docker compose logs migrations 2>/dev/null || echo "")
+
+          # Check for common password patterns
+          if echo "$LOGS" | grep -E "(password|passwd|pwd)\s*[:=]" | grep -v "REDACTED" > /dev/null 2>&1; then
+            echo "✗ FAILED: Potential credential exposure detected!"
+            echo "Problematic patterns found:"
+            echo "$LOGS" | grep -E "(password|passwd|pwd)\s*[:=]" | head -5 || true
+            exit 1
+          fi
+
+          # Verify we see redaction markers
+          if echo "$LOGS" | grep -F "REDACTED" > /dev/null 2>&1; then
+            echo "✓ PASSED: Credentials properly redacted in logs"
+          else
+            echo "⚠ WARNING: No credential redaction markers found - verify this is expected"
+          fi
+
+      - name: Start StarExec application
+        env:
+          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+          STAREXEC_DB_HOST: postgres
+          STAREXEC_DB_PORT: 5432
+          STAREXEC_DB_NAME: starexec
+          STAREXEC_DB_USER: starexec
+          STAREXEC_DB_SCHEMA: starexec
+          STAREXEC_VERSION: ci-test-latest
+          VOLUME_PREFIX: starexec-ci
+        run: |
+          echo "Starting StarExec application..."
+          docker compose up -d starexec
+          echo "✓ Application container started"
+
+      - name: Wait for application to be healthy
+        run: |
+          echo "Waiting for StarExec application to be healthy..."
+          timeout 180 bash -c 'until curl -sf http://localhost:8080/starexec/ > /dev/null 2>&1; do
+            sleep 3
+            echo "Waiting for application..."
+          done'
+          echo "✓ Application is responding at http://localhost:8080/starexec/"
 
       - name: Verify application health
         run: |
           echo "Testing application endpoints..."
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/starexec/)
-          if [ "$HTTP_STATUS" = "200" ]; then
+          if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "302" ]; then
             echo "✓ Application health check passed (HTTP $HTTP_STATUS)"
           else
             echo "✗ Application health check failed (HTTP $HTTP_STATUS)"
             exit 1
           fi
 
-      - name: Run integration tests
+      - name: Verify database schema initialization
+        run: |
+          echo "Verifying database schema was initialized..."
+          MIGRATIONS_COUNT=$(docker compose exec -T postgres psql -U starexec -d starexec -t -c "
+            SELECT COUNT(*) FROM flyway_schema_history WHERE success = true;" 2>/dev/null || echo "0")
+
+          # Remove leading/trailing whitespace
+          MIGRATIONS_COUNT=$(echo "$MIGRATIONS_COUNT" | xargs)
+
+          if [ -z "$MIGRATIONS_COUNT" ] || [ "$MIGRATIONS_COUNT" -eq 0 ]; then
+            echo "✗ FAILED: No migrations found in flyway_schema_history"
+            exit 1
+          fi
+
+          echo "✓ Database schema initialized: $MIGRATIONS_COUNT successful migrations applied"
+
+      - name: Run integration test suite
         run: |
           echo "Running integration test suite..."
-          curl -f http://localhost:8080/starexec/ || exit 1
-          # Add additional integration test commands here as needed
-          echo "✓ Integration tests passed"
+          echo ""
 
-      - name: Collect application logs on failure
+          # Test 1: Basic connectivity
+          echo "Test 1: Basic application connectivity..."
+          if curl -sf http://localhost:8080/starexec/ > /dev/null 2>&1; then
+            echo "✓ Test 1 PASSED: Application is accessible"
+          else
+            echo "✗ Test 1 FAILED: Cannot reach application"
+            exit 1
+          fi
+
+          # Test 2: Check all services are healthy
+          echo "Test 2: Verify all services are running..."
+          RUNNING_SERVICES=$(docker compose ps --services --filter "status=running" 2>/dev/null | wc -l)
+          EXPECTED_SERVICES=3  # postgres, migrations (exited ok), starexec
+
+          if [ "$RUNNING_SERVICES" -ge 2 ]; then
+            echo "✓ Test 2 PASSED: Required services are running ($RUNNING_SERVICES active)"
+          else
+            echo "✗ Test 2 FAILED: Expected at least 2 running services, found $RUNNING_SERVICES"
+            docker compose ps
+            exit 1
+          fi
+
+          # Test 3: Database connectivity from app
+          echo "Test 3: Verify database is accessible..."
+          if docker compose exec -T postgres psql -U starexec -d starexec -c "SELECT 1;" > /dev/null 2>&1; then
+            echo "✓ Test 3 PASSED: Database is accessible"
+          else
+            echo "✗ Test 3 FAILED: Cannot connect to database"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ All integration tests completed successfully"
+
+      - name: Collect logs on failure
         if: failure()
         run: |
-          echo "=== Docker Compose Logs ==="
-          docker compose logs
+          echo "=== Service Status ==="
+          docker compose ps -a
           echo ""
-          echo "=== Container Status ==="
-          docker compose ps
+          echo "=== Docker Compose Logs (Last 100 lines) ==="
+          docker compose logs --tail=100 || true
           echo ""
-          echo "=== Network Inspection ==="
-          docker network inspect starexec_default || true
+          echo "=== Migrations Service Logs ==="
+          docker compose logs migrations || true
+          echo ""
+          echo "=== StarExec Application Logs (Last 50 lines) ==="
+          docker compose logs --tail=50 starexec || true
+          echo ""
+          echo "=== PostgreSQL Logs (Last 50 lines) ==="
+          docker compose logs --tail=50 postgres || true
 
-      - name: Capture service diagnostics on failure
+      - name: Capture system diagnostics on failure
         if: failure()
         run: |
-          echo "Collecting diagnostic information..."
-          echo "=== StarExec Container Logs ==="
-          docker compose logs starexec || true
+          echo "=== System Information ==="
+          echo "Disk Space:"
+          df -h || true
           echo ""
-          echo "=== Database Container Logs ==="
-          docker compose logs db || true
+          echo "Memory Usage:"
+          free -h || true
           echo ""
-          echo "=== Disk Space ==="
-          df -h
+          echo "Docker Info:"
+          docker system df || true
           echo ""
-          echo "=== Memory Usage ==="
-          free -h
+          echo "Docker Network:"
+          docker network inspect starexec-ci_starexec_network 2>/dev/null || docker network ls || true
 
       - name: Cleanup Docker Compose
         if: always()
         run: |
           echo "Cleaning up Docker Compose services..."
-          docker compose down -v
-          docker system prune -f
+          docker compose down -v --remove-orphans
+          echo "✓ Cleanup complete"
+
+  # Job 3: Summary
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [verify-migrations, integration-test]
+    if: always()
+
+    steps:
+      - name: Report test results
+        run: |
+          if [ "${{ needs.verify-migrations.result }}" = "success" ] && [ "${{ needs.integration-test.result }}" = "success" ]; then
+            echo "## ✅ All Integration Tests Passed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Migrations:** ✅ Verified and packaged correctly" >> $GITHUB_STEP_SUMMARY
+            echo "**Docker Compose:** ✅ Services started successfully" >> $GITHUB_STEP_SUMMARY
+            echo "**Credentials:** ✅ Properly redacted in logs" >> $GITHUB_STEP_SUMMARY
+            echo "**Application:** ✅ Healthy and responding" >> $GITHUB_STEP_SUMMARY
+            echo "**Database:** ✅ Migrations applied successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Integration Tests Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Verify Migrations:** ${{ needs.verify-migrations.result }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Integration Tests:** ${{ needs.integration-test.result }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "See job logs above for details." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi

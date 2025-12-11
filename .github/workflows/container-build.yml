@@ -8,6 +8,7 @@ on:
       - "Dockerfile"
       - "docker/entrypoint.sh"
       - "docker/setenv.sh"
+      - "docker/migrations.sh"
       - "pom.xml"
       - ".github/workflows/container-build.yml"
   pull_request:
@@ -16,6 +17,7 @@ on:
       - "Dockerfile"
       - "docker/entrypoint.sh"
       - "docker/setenv.sh"
+      - "docker/migrations.sh"
       - "pom.xml"
 
 permissions:
