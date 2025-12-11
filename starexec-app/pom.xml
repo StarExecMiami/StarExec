@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project
+    xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd"
+>
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
@@ -400,12 +403,10 @@
                 <version>3.3.2</version>
                 <configuration>
                     <warSourceDirectory>src/main/webapp</warSourceDirectory>
-                    <webResources>
-                        <resource>
-                            <directory>src/main/resources</directory>
-                            <filtering>true</filtering>
-                        </resource>
-                    </webResources>
+                    <!-- NOTE: webResources are NOT used here because src/main/resources
+                         is already processed by the build/resources section and included
+                         in WEB-INF/classes. Using webResources would add these files
+                         to the WAR root instead, breaking migration file discovery. -->
                     <containerConfigXML
                     >src/main/webapp/META-INF/context.xml</containerConfigXML>
 
@@ -540,7 +541,9 @@
                             <outputFile
                             >${project.build.directory}/StarexecCommand.jar</outputFile>
                             <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"
+                                >
                                     <mainClass
                                     >org.starexec.command.Shell</mainClass>
                                 </transformer>
