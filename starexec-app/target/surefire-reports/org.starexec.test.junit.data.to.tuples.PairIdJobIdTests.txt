@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: org.starexec.test.junit.data.to.tuples.PairIdJobIdTests
--------------------------------------------------------------------------------
-Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.015 s -- in org.starexec.test.junit.data.to.tuples.PairIdJobIdTests

@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: org.starexec.test.junit.data.database.JobTests
--------------------------------------------------------------------------------
-Tests run: 3, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.576 s -- in org.starexec.test.junit.data.database.JobTests
