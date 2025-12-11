@@ -1,5 +1,7 @@
-#!/bin/sh
+#!/bin/bash
 # docker/setenv.sh — safe, parameterized setenv for Tomcat
+# Safety mode: exit on error, undefined variables, and pipe failures
+set -euo pipefail
 
 # Build metadata may be written at build-time; leave empty if not set
 : "${STAREXEC_BUILD_VERSION:=unknown}"

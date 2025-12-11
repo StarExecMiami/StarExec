@@ -1,0 +1,104 @@
+# StarExec sudoers configuration
+# This file grants minimal, specific privileges to the starexec user
+# for job isolation and sandbox management.
+#
+# SECURITY NOTES:
+# - All commands are absolute paths (prevents PATH manipulation)
+# - Commands are restricted to specific use cases (no wildcards)
+# - Arguments are validated where possible
+# - No NOPASSWD on unrestricted commands
+# - Logs all usage via syslog
+
+# ============================================================================
+# JOB EXECUTION ISOLATION
+# ============================================================================
+# Allow starexec to execute commands as sandbox users (starexec1, starexec2)
+# This is required for job isolation: each job runs as a different UID
+#
+# Constraints:
+#   - Can only become starexec1 or starexec2 (not arbitrary users)
+#   - Can only use /bin/bash and /bin/sh (standard shells)
+#   - Environment is sanitized (SETENV not allowed)
+#
+# Usage: sudo -u starexec1 /bin/bash /path/to/solver.sh
+starexec ALL=(starexec1,starexec2) NOPASSWD: /bin/bash, /bin/sh
+
+# ============================================================================
+# FILE OWNERSHIP MANAGEMENT
+# ============================================================================
+# Allow starexec to change ownership of job directories
+# NOTE: File ownership is handled by the application via:
+#   1. Copying files as the sandbox user (automatic ownership)
+#   2. Group permissions (chmod g+rwxs for shared access)
+#   3. NOT via sudo chown
+#
+# The sandboxChownDirectory() method is intentionally commented out.
+# See SUDO_ARGUMENT_INJECTION_ANALYSIS.md for detailed threat analysis.
+# This rule was removed in v2.2.0 to eliminate the sudo chown footgun.
+
+# ============================================================================
+# SECURITY CONSTRAINTS
+# ============================================================================
+# The following are explicitly NOT allowed:
+#
+# ❌ NOPASSWD: ALL
+#    (Would allow any command as any user)
+#
+# ❌ ALL=(ALL)
+#    (Would allow becoming any user, not just sandbox users)
+#
+# ❌ NOPASSWD: /bin/sh -c *
+#    (Would allow arbitrary shell interpretation)
+#
+# ❌ !requiretty
+#    (Enforces TTY requirement, prevents non-interactive abuse)
+#
+# ❌ SETENV
+#    (Prevents environment variable injection attacks)
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+# All sudo commands are logged to syslog by default.
+# Monitor sudo usage:
+#   journalctl -u sudo
+#   grep sudo /var/log/auth.log
+#
+# Alert on suspicious patterns:
+#   - Multiple failed attempts (indicates brute force or misconfiguration)
+#   - Execution of commands outside expected scope
+#   - chown to unexpected users (indicates privilege escalation attempt)
+
+# ============================================================================
+# MAINTENANCE & AUDITING
+# ============================================================================
+# When modifying this file:
+#
+# 1. Test the change in a staging container:
+#    docker run --rm -it starexec:test bash
+#    sudo -l  # Lists allowed commands
+#
+# 2. Verify the exact syntax:
+#    visudo -c -f /etc/sudoers.d/starexec
+#
+# 3. Document the change:
+#    - Add comment explaining the new rule
+#    - Reference the GitHub issue or requirement
+#
+# 4. Review the change:
+#    - Security team approval required
+#    - Test in staging environment
+#    - Monitor logs after deployment
+
+# ============================================================================
+# FUTURE IMPROVEMENTS
+# ============================================================================
+# Potential hardening for v3.0+:
+#
+# 1. Use Podman instead of sudo
+#    Replace sudo with podman's --userns=auto feature
+#    (Eliminates privilege escalation vector entirely)
+#
+# 2. Separate job runner container
+#    Move job execution to isolated sidecar
+#    (Main app never needs sudo)

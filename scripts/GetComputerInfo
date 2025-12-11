@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #==============================================================================
 # GetComputerInfo - Shell Version
 #
@@ -18,6 +18,10 @@
 #   % CPU        : speed
 #   % Memory     : total RAM
 #   % OS         : operating system info
+#==============================================================================
+
+# Safety mode: exit on error, undefined variables, and pipe failures
+set -euo pipefail
 #   % CPULimit   : (if STAREXEC_CPU_LIMIT set)
 #   % WCLimit    : (if STAREXEC_WALLCLOCK_LIMIT set)
 #   % MemLimit   : (if STAREXEC_MEM_LIMIT set)

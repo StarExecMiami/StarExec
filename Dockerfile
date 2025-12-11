@@ -258,11 +258,17 @@ RUN addgroup -g 2001 starexec1 && \
     adduser -D -u 2002 -G starexec2 starexec2
 
 # Configure sudo for passwordless execution (required for job execution)
-# Allow starexec user to run commands as starexec1/starexec2 without password
-# Also allow chown as root for file ownership management during solver uploads
-RUN echo "starexec ALL=(starexec1,starexec2) NOPASSWD: ALL" > /etc/sudoers.d/starexec && \
-    echo "starexec ALL=(root) NOPASSWD: /bin/chown" >> /etc/sudoers.d/starexec && \
-    chmod 0440 /etc/sudoers.d/starexec
+# Restrictions applied:
+#   - Job execution: Can only run /bin/bash, /bin/sh as starexec1/starexec2
+#   - File ownership: Can only use /bin/chown (path validated by app)
+#   - No NOPASSWD on unrestricted commands
+#   - All commands use absolute paths (prevents PATH manipulation)
+#
+# See docker/sudoers-starexec for full configuration and security justification
+# See DOCKER_SECURITY_DESIGN.md for threat model
+COPY docker/sudoers-starexec /etc/sudoers.d/starexec
+RUN chmod 0440 /etc/sudoers.d/starexec && \
+    visudo -c -f /etc/sudoers.d/starexec
 
 # Set proper permissions for sandbox directory so all users can access it
 # Add sandbox users to starexec group to allow shared access
@@ -276,6 +282,7 @@ RUN addgroup starexec1 starexec && \
     chmod 750 /home/starexec/bin
 
 # Security hardening - Update Tomcat server.xml
+# Sets connection limits to prevent resource exhaustion
 RUN sed -i 's/port="8080"/port="8080" maxThreads="200" minSpareThreads="10"/' ${CATALINA_HOME}/conf/server.xml
 
 # Health check
