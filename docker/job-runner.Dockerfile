@@ -82,7 +82,7 @@ RUN adduser -D -s /bin/bash -h /home/starexec_user starexec_user \
     && chown -R starexec_user:starexec_user /starexec
 
 # Copy runsolver binary for resource limiting
-COPY --chmod=755 src/main/java/org/starexec/config/sge/RunSolverSource/runsolver /usr/local/bin/runsolver
+COPY --chmod=755 starexec-app/src/main/java/org/starexec/config/sge/RunSolverSource/runsolver /usr/local/bin/runsolver
 
 # Copy GetComputerInfo script (shell version - 154 lines vs 36MB Perl)
 # Backward compatibility: create symlink at legacy path
