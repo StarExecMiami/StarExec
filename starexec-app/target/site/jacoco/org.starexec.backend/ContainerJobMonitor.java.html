@@ -1,0 +1,604 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContainerJobMonitor.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.backend</a> &gt; <span class="el_source">ContainerJobMonitor.java</span></div><h1>ContainerJobMonitor.java</h1><pre class="source lang-java linenums">package org.starexec.backend;
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.regex.*;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.to.Status.StatusCode;
+import org.starexec.logger.StarLogger;
+
+/**
+ * Monitors completed container jobs and updates the database with results.
+ *
+ * &lt;p&gt;This class is designed to work with the containerized job execution model
+ * where jobs write their results to files instead of directly updating the DB.
+ * The monitor periodically checks for completed containers and processes their
+ * output files.&lt;/p&gt;
+ *
+ * &lt;h2&gt;Adaptive Polling&lt;/h2&gt;
+ * &lt;p&gt;This monitor uses adaptive polling to reduce CPU usage during idle periods:&lt;/p&gt;
+ * &lt;ul&gt;
+ *   &lt;li&gt;Starts at a base interval (default: 1 second) for responsive job detection&lt;/li&gt;
+ *   &lt;li&gt;Backs off to longer intervals when no jobs are completing&lt;/li&gt;
+ *   &lt;li&gt;Immediately resets to base interval when new containers are submitted&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h2&gt;Output File Format&lt;/h2&gt;
+ * &lt;p&gt;Jobs are expected to write the following files:&lt;/p&gt;
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code var.out} - Runsolver variable output (CPU time, wallclock, memory)&lt;/li&gt;
+ *   &lt;li&gt;{@code watcher.out} - Runsolver watcher output (exit code, resource usage)&lt;/li&gt;
+ *   &lt;li&gt;{@code attributes.txt} - Post-processor output (key=value pairs)&lt;/li&gt;
+ *   &lt;li&gt;{@code stdout.txt} - Solver stdout&lt;/li&gt;
+ *   &lt;li&gt;{@code status.json} - Job completion status (optional)&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * @see PodmanBackend
+ * @see AdaptivePollInterval
+ */
+public class ContainerJobMonitor {
+
+<span class="nc" id="L43">    private static final StarLogger log = StarLogger.getLogger(</span>
+        ContainerJobMonitor.class
+    );
+
+    // Executor for async processing
+    private final ScheduledExecutorService scheduler;
+    private final PodmanBackend backend;
+<span class="nc" id="L50">    private volatile boolean running = false;</span>
+
+    // Adaptive polling interval manager
+    private final AdaptivePollInterval pollInterval;
+
+    // Handle for the currently scheduled poll (for cancellation on interval change)
+    private volatile ScheduledFuture&lt;?&gt; scheduledPoll;
+
+<span class="nc" id="L58">    public ContainerJobMonitor(PodmanBackend backend) {</span>
+<span class="nc" id="L59">        this.backend = backend;</span>
+<span class="nc" id="L60">        this.scheduler = Executors.newSingleThreadScheduledExecutor(r -&gt; {</span>
+<span class="nc" id="L61">            Thread t = new Thread(r, &quot;ContainerJobMonitor&quot;);</span>
+<span class="nc" id="L62">            t.setDaemon(true);</span>
+<span class="nc" id="L63">            return t;</span>
+        });
+<span class="nc" id="L65">        this.pollInterval = new AdaptivePollInterval(&quot;ContainerJobMonitor&quot;);</span>
+<span class="nc" id="L66">    }</span>
+
+    /**
+     * Starts the monitor with adaptive polling.
+     */
+    public void start() {
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        if (running) {</span>
+<span class="nc" id="L73">            log.warn(&quot;ContainerJobMonitor already running&quot;);</span>
+<span class="nc" id="L74">            return;</span>
+        }
+<span class="nc" id="L76">        running = true;</span>
+
+        // Schedule the first poll
+<span class="nc" id="L79">        scheduleNextPoll();</span>
+
+<span class="nc" id="L81">        log.info(</span>
+            &quot;ContainerJobMonitor started with adaptive polling: &quot; +
+<span class="nc" id="L83">                pollInterval.getStats()</span>
+        );
+<span class="nc" id="L85">    }</span>
+
+    /**
+     * Schedules the next poll based on the current adaptive interval.
+     */
+    private void scheduleNextPoll() {
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        if (!running) {</span>
+<span class="nc" id="L92">            return;</span>
+        }
+
+<span class="nc" id="L95">        long interval = pollInterval.getCurrentInterval();</span>
+<span class="nc" id="L96">        scheduledPoll = scheduler.schedule(</span>
+            this::pollAndReschedule,
+            interval,
+            TimeUnit.MILLISECONDS
+        );
+<span class="nc" id="L101">    }</span>
+
+    /**
+     * Executes a poll and schedules the next one.
+     * This method is called by the scheduler.
+     */
+    private void pollAndReschedule() {
+        try {
+<span class="nc" id="L109">            checkCompletedJobs();</span>
+        } finally {
+            // Always reschedule, even if an exception occurred
+<span class="nc bnc" id="L112" title="All 2 branches missed.">            if (running) {</span>
+<span class="nc" id="L113">                scheduleNextPoll();</span>
+            }
+        }
+<span class="nc" id="L116">    }</span>
+
+    /**
+     * Notifies the monitor that new work has been submitted.
+     * Resets the poll interval to base and immediately reschedules the poll
+     * for responsive detection.
+     *
+     * &lt;p&gt;This method cancels any pending poll that may be sleeping at a backed-off
+     * interval (up to MAX_INTERVAL) and immediately schedules a new poll at the
+     * base interval. This ensures that newly submitted work is detected within
+     * BASE_INTERVAL milliseconds, not up to MAX_INTERVAL milliseconds.&lt;/p&gt;
+     *
+     * &lt;p&gt;Call this from PodmanBackend when submitting new containers.&lt;/p&gt;
+     */
+    public void notifyNewWorkSubmitted() {
+<span class="nc" id="L131">        pollInterval.resetToBase();</span>
+
+        // Cancel the current scheduled poll and reschedule immediately
+        // This avoids the &quot;latency trap&quot; where we're sleeping at MAX_INTERVAL
+        // but new work has arrived and should be detected quickly.
+<span class="nc" id="L136">        cancelCurrentPollAndReschedule();</span>
+
+<span class="nc" id="L138">        log.debug(</span>
+            &quot;ContainerJobMonitor: Reset to base interval and rescheduled due to new work submission&quot;
+        );
+<span class="nc" id="L141">    }</span>
+
+    /**
+     * Cancels the currently scheduled poll (if any) and immediately schedules
+     * a new poll at the current interval.
+     *
+     * &lt;p&gt;This is used to &quot;wake up&quot; the monitor when new work is submitted while
+     * the monitor is sleeping at a backed-off interval.&lt;/p&gt;
+     *
+     * &lt;p&gt;Thread safety: This method may be called from HTTP request threads while
+     * the scheduler thread is executing pollAndReschedule(). The worst case is
+     * a harmless duplicate poll (the cancelled poll's finally block schedules
+     * another poll, and we also schedule one here). The ConcurrentHashMap-based
+     * tracking handles concurrent access correctly.&lt;/p&gt;
+     */
+    private void cancelCurrentPollAndReschedule() {
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        if (!running) {</span>
+<span class="nc" id="L158">            return;</span>
+        }
+
+<span class="nc" id="L161">        ScheduledFuture&lt;?&gt; currentPoll = scheduledPoll;</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        if (currentPoll != null) {</span>
+            // Cancel with mayInterruptIfRunning=false - don't interrupt if
+            // the poll is currently executing, just prevent it from running
+            // if it hasn't started yet.
+<span class="nc" id="L166">            currentPoll.cancel(false);</span>
+        }
+
+        // Immediately schedule a new poll at the (now reset) base interval
+<span class="nc" id="L170">        scheduleNextPoll();</span>
+<span class="nc" id="L171">    }</span>
+
+    /**
+     * Stops the monitor.
+     */
+    public void stop() {
+<span class="nc" id="L177">        running = false;</span>
+
+        // Cancel any pending poll
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        if (scheduledPoll != null) {</span>
+<span class="nc" id="L181">            scheduledPoll.cancel(false);</span>
+        }
+
+<span class="nc" id="L184">        scheduler.shutdown();</span>
+        try {
+<span class="nc bnc" id="L186" title="All 2 branches missed.">            if (!scheduler.awaitTermination(10, TimeUnit.SECONDS)) {</span>
+<span class="nc" id="L187">                scheduler.shutdownNow();</span>
+            }
+<span class="nc" id="L189">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L190">            scheduler.shutdownNow();</span>
+<span class="nc" id="L191">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L192">        }</span>
+<span class="nc" id="L193">        log.info(</span>
+            &quot;ContainerJobMonitor stopped. Final stats: &quot; +
+<span class="nc" id="L195">                pollInterval.getStats()</span>
+        );
+<span class="nc" id="L197">    }</span>
+
+    /**
+     * Checks for completed containers and processes their results.
+     */
+    private void checkCompletedJobs() {
+        try {
+            // Get all completed containers that haven't been processed
+<span class="nc" id="L205">            List&lt;PodmanBackend.CompletedContainerInfo&gt; completedJobs =</span>
+<span class="nc" id="L206">                backend.getCompletedContainers();</span>
+
+<span class="nc" id="L208">            int processedCount = 0;</span>
+
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            for (PodmanBackend.CompletedContainerInfo info : completedJobs) {</span>
+                try {
+<span class="nc" id="L212">                    processCompletedJob(info);</span>
+                    // Remove container after successful processing
+<span class="nc" id="L214">                    backend.removeCompletedContainer(info.containerId);</span>
+<span class="nc" id="L215">                    processedCount++;</span>
+<span class="nc" id="L216">                } catch (Exception e) {</span>
+<span class="nc" id="L217">                    log.error(</span>
+                        &quot;Error processing completed job &quot; + info.pairId,
+                        e
+                    );
+                    // Mark as error so we don't keep retrying
+                    try {
+<span class="nc" id="L223">                        JobPairs.setStatusForPairAndStages(</span>
+                            info.pairId,
+<span class="nc" id="L225">                            StatusCode.ERROR_RUNSCRIPT.getVal()</span>
+                        );
+                        // Still remove the container to avoid infinite loop
+<span class="nc" id="L228">                        backend.removeCompletedContainer(info.containerId);</span>
+<span class="nc" id="L229">                    } catch (Exception ex) {</span>
+<span class="nc" id="L230">                        log.error(</span>
+                            &quot;Failed to set error status for pair &quot; +
+                                info.pairId,
+                            ex
+                        );
+<span class="nc" id="L235">                    }</span>
+<span class="nc" id="L236">                }</span>
+<span class="nc" id="L237">            }</span>
+
+            // Update adaptive polling based on work found
+<span class="nc bnc" id="L240" title="All 2 branches missed.">            if (processedCount &gt; 0) {</span>
+<span class="nc" id="L241">                pollInterval.recordWorkFound(processedCount);</span>
+<span class="nc" id="L242">                log.debug(</span>
+                    &quot;ContainerJobMonitor: Processed &quot; +
+                        processedCount +
+                        &quot; completed jobs. &quot; +
+<span class="nc" id="L246">                        pollInterval.getStats()</span>
+                );
+            } else {
+<span class="nc" id="L249">                pollInterval.recordIdle();</span>
+<span class="nc" id="L250">                log.trace(</span>
+                    &quot;ContainerJobMonitor: No completed jobs found. &quot; +
+<span class="nc" id="L252">                        pollInterval.getStats()</span>
+                );
+            }
+<span class="nc" id="L255">        } catch (Exception e) {</span>
+<span class="nc" id="L256">            log.error(&quot;Error in checkCompletedJobs&quot;, e);</span>
+            // Still record as idle to allow backoff even on errors
+<span class="nc" id="L258">            pollInterval.recordIdle();</span>
+<span class="nc" id="L259">        }</span>
+<span class="nc" id="L260">    }</span>
+
+    /**
+     * Processes a completed job by reading output files and updating the database.
+     */
+    private void processCompletedJob(PodmanBackend.CompletedContainerInfo info)
+        throws Exception {
+<span class="nc" id="L267">        Path outputPath = Paths.get(info.outputDir);</span>
+
+        // First, try to get the actual pair ID from status.json
+        // This is more reliable than the container label which may have timestamp
+<span class="nc" id="L271">        int pairId = info.pairId;</span>
+<span class="nc" id="L272">        Path statusJson = outputPath.resolve(&quot;status.json&quot;);</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">        if (Files.exists(statusJson)) {</span>
+            try {
+<span class="nc" id="L275">                String json = Files.readString(statusJson);</span>
+<span class="nc" id="L276">                Matcher m = Pattern.compile(</span>
+                    &quot;\&quot;pairId\&quot;\\s*:\\s*(\\d+)&quot;
+<span class="nc" id="L278">                ).matcher(json);</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">                if (m.find()) {</span>
+<span class="nc" id="L280">                    pairId = Integer.parseInt(m.group(1));</span>
+<span class="nc" id="L281">                    log.debug(&quot;Extracted pairId from status.json: &quot; + pairId);</span>
+                }
+<span class="nc" id="L283">            } catch (Exception e) {</span>
+<span class="nc" id="L284">                log.warn(</span>
+                    &quot;Failed to read pairId from status.json, using label value: &quot; +
+                        info.pairId,
+                    e
+                );
+<span class="nc" id="L289">            }</span>
+        }
+
+<span class="nc" id="L292">        log.info(</span>
+            &quot;Processing completed job: pairId=&quot; +
+                pairId +
+                &quot;, containerId=&quot; +
+<span class="nc" id="L296">                info.containerId.substring(</span>
+                    0,
+<span class="nc" id="L298">                    Math.min(12, info.containerId.length())</span>
+                ) +
+                &quot;, outputDir=&quot; +
+                info.outputDir +
+                &quot;, exitCode=&quot; +
+                info.exitCode
+        );
+
+        // 1. Parse runsolver output (var.out)
+<span class="nc" id="L307">        RunsolverStats stats = parseRunsolverOutput(outputPath);</span>
+<span class="nc" id="L308">        stats.exitCode = info.exitCode; // Use container exit code as fallback</span>
+
+        // 2. Determine job status from stats
+<span class="nc" id="L311">        StatusCode status = determineStatus(stats, outputPath);</span>
+
+        // 3. Parse attributes if post-processor ran
+<span class="nc" id="L314">        Properties attributes = parseAttributes(outputPath);</span>
+
+        // 4. Update database
+<span class="nc" id="L317">        updateDatabase(pairId, stats, status, attributes);</span>
+
+<span class="nc" id="L319">        log.info(&quot;Completed job &quot; + pairId + &quot; processed: status=&quot; + status);</span>
+<span class="nc" id="L320">    }</span>
+
+    /**
+     * Parses runsolver var.out and watcher.out files.
+     * Also checks for stats.json as an alternative format.
+     */
+    private RunsolverStats parseRunsolverOutput(Path outputDir) {
+<span class="nc" id="L327">        RunsolverStats stats = new RunsolverStats();</span>
+
+        // Try stats.json first (written by functions.bash in container mode)
+<span class="nc" id="L330">        Path statsJson = outputDir.resolve(&quot;stats.json&quot;);</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">        if (Files.exists(statsJson)) {</span>
+            try {
+<span class="nc" id="L333">                String json = Files.readString(statsJson);</span>
+<span class="nc" id="L334">                parseStatsJson(json, stats);</span>
+<span class="nc" id="L335">                log.debug(&quot;Parsed stats from stats.json&quot;);</span>
+<span class="nc" id="L336">                return stats;</span>
+<span class="nc" id="L337">            } catch (IOException e) {</span>
+<span class="nc" id="L338">                log.warn(</span>
+                    &quot;Failed to parse stats.json, falling back to var.out&quot;,
+                    e
+                );
+            }
+        }
+
+        // Parse var.out
+<span class="nc" id="L346">        Path varFile = outputDir.resolve(&quot;var.out&quot;);</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">        if (Files.exists(varFile)) {</span>
+            try {
+<span class="nc" id="L349">                List&lt;String&gt; lines = Files.readAllLines(varFile);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">                for (String line : lines) {</span>
+<span class="nc" id="L351">                    parseVarLine(line, stats);</span>
+<span class="nc" id="L352">                }</span>
+<span class="nc" id="L353">            } catch (IOException e) {</span>
+<span class="nc" id="L354">                log.warn(&quot;Failed to parse var.out&quot;, e);</span>
+<span class="nc" id="L355">            }</span>
+        }
+
+        // Parse watcher.out
+<span class="nc" id="L359">        Path watcherFile = outputDir.resolve(&quot;watcher.out&quot;);</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">        if (Files.exists(watcherFile)) {</span>
+            try {
+<span class="nc" id="L362">                List&lt;String&gt; lines = Files.readAllLines(watcherFile);</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                for (String line : lines) {</span>
+<span class="nc" id="L364">                    parseWatcherLine(line, stats);</span>
+<span class="nc" id="L365">                }</span>
+<span class="nc" id="L366">            } catch (IOException e) {</span>
+<span class="nc" id="L367">                log.warn(&quot;Failed to parse watcher.out&quot;, e);</span>
+<span class="nc" id="L368">            }</span>
+        }
+
+<span class="nc" id="L371">        return stats;</span>
+    }
+
+    /**
+     * Parses stats.json (written by functions.bash in container mode).
+     * Simple JSON parsing without external dependencies.
+     */
+    private void parseStatsJson(String json, RunsolverStats stats) {
+        // Simple regex-based JSON parsing
+        Matcher m;
+<span class="nc" id="L381">        if (</span>
+<span class="nc" id="L382">            (m = Pattern.compile(&quot;\&quot;wallclockTime\&quot;\\s*:\\s*([0-9.]+)&quot;).matcher(</span>
+                    json
+<span class="nc bnc" id="L384" title="All 2 branches missed.">                )).find()</span>
+        ) {
+<span class="nc" id="L386">            stats.wallclockTime = Double.parseDouble(m.group(1));</span>
+        }
+<span class="nc" id="L388">        if (</span>
+<span class="nc" id="L389">            (m = Pattern.compile(&quot;\&quot;cpuTime\&quot;\\s*:\\s*([0-9.]+)&quot;).matcher(</span>
+                    json
+<span class="nc bnc" id="L391" title="All 2 branches missed.">                )).find()</span>
+        ) {
+<span class="nc" id="L393">            stats.cpuTime = Double.parseDouble(m.group(1));</span>
+        }
+<span class="nc" id="L395">        if (</span>
+<span class="nc" id="L396">            (m = Pattern.compile(&quot;\&quot;userTime\&quot;\\s*:\\s*([0-9.]+)&quot;).matcher(</span>
+                    json
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                )).find()</span>
+        ) {
+<span class="nc" id="L400">            stats.userTime = Double.parseDouble(m.group(1));</span>
+        }
+<span class="nc" id="L402">        if (</span>
+<span class="nc" id="L403">            (m = Pattern.compile(&quot;\&quot;systemTime\&quot;\\s*:\\s*([0-9.]+)&quot;).matcher(</span>
+                    json
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                )).find()</span>
+        ) {
+<span class="nc" id="L407">            stats.systemTime = Double.parseDouble(m.group(1));</span>
+        }
+<span class="nc" id="L409">        if (</span>
+<span class="nc" id="L410">            (m = Pattern.compile(</span>
+                    &quot;\&quot;maxVirtualMemory\&quot;\\s*:\\s*([0-9.]+)&quot;
+<span class="nc bnc" id="L412" title="All 2 branches missed.">                ).matcher(json)).find()</span>
+        ) {
+<span class="nc" id="L414">            stats.maxVirtualMemory = Double.parseDouble(m.group(1));</span>
+        }
+<span class="nc" id="L416">        if (</span>
+<span class="nc" id="L417">            (m = Pattern.compile(</span>
+                    &quot;\&quot;maxResidentSetSize\&quot;\\s*:\\s*([0-9]+)&quot;
+<span class="nc bnc" id="L419" title="All 2 branches missed.">                ).matcher(json)).find()</span>
+        ) {
+<span class="nc" id="L421">            stats.maxResidentSetSize = Long.parseLong(m.group(1));</span>
+        }
+<span class="nc" id="L423">    }</span>
+
+    /**
+     * Parses a line from var.out (runsolver format).
+     */
+    private void parseVarLine(String line, RunsolverStats stats) {
+        // Format: KEY=value
+        Matcher m;
+
+<span class="nc" id="L432">        if (</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            (m = Pattern.compile(&quot;^WCTIME=([0-9.]+)$&quot;).matcher(line)).matches()</span>
+        ) {
+<span class="nc" id="L435">            stats.wallclockTime = Double.parseDouble(m.group(1));</span>
+<span class="nc" id="L436">        } else if (</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">            (m = Pattern.compile(&quot;^CPUTIME=([0-9.]+)$&quot;).matcher(line)).matches()</span>
+        ) {
+<span class="nc" id="L439">            stats.cpuTime = Double.parseDouble(m.group(1));</span>
+<span class="nc" id="L440">        } else if (</span>
+<span class="nc" id="L441">            (m = Pattern.compile(&quot;^USERTIME=([0-9.]+)$&quot;).matcher(</span>
+                    line
+<span class="nc bnc" id="L443" title="All 2 branches missed.">                )).matches()</span>
+        ) {
+<span class="nc" id="L445">            stats.userTime = Double.parseDouble(m.group(1));</span>
+<span class="nc" id="L446">        } else if (</span>
+<span class="nc" id="L447">            (m = Pattern.compile(&quot;^SYSTEMTIME=([0-9.]+)$&quot;).matcher(</span>
+                    line
+<span class="nc bnc" id="L449" title="All 2 branches missed.">                )).matches()</span>
+        ) {
+<span class="nc" id="L451">            stats.systemTime = Double.parseDouble(m.group(1));</span>
+<span class="nc" id="L452">        } else if (</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">            (m = Pattern.compile(&quot;^MAXVM=([0-9.]+)$&quot;).matcher(line)).matches()</span>
+        ) {
+<span class="nc" id="L455">            stats.maxVirtualMemory = Double.parseDouble(m.group(1));</span>
+        }
+<span class="nc" id="L457">    }</span>
+
+    /**
+     * Parses a line from watcher.out (runsolver format).
+     */
+    private void parseWatcherLine(String line, RunsolverStats stats) {
+        Matcher m;
+
+<span class="nc" id="L465">        if (</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">            (m = Pattern.compile(&quot;Child status: (\\d+)&quot;).matcher(line)).find()</span>
+        ) {
+<span class="nc" id="L468">            stats.exitCode = Integer.parseInt(m.group(1));</span>
+<span class="nc" id="L469">        } else if (</span>
+<span class="nc" id="L470">            (m = Pattern.compile(&quot;maximum resident set size: (\\d+)&quot;).matcher(</span>
+                    line
+<span class="nc bnc" id="L472" title="All 2 branches missed.">                )).find()</span>
+        ) {
+<span class="nc" id="L474">            stats.maxResidentSetSize = Long.parseLong(m.group(1));</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">        } else if (line.contains(&quot;wall clock time exceeded&quot;)) {</span>
+<span class="nc" id="L476">            stats.wallclockExceeded = true;</span>
+<span class="nc bnc" id="L477" title="All 2 branches missed.">        } else if (line.contains(&quot;CPU time exceeded&quot;)) {</span>
+<span class="nc" id="L478">            stats.cpuExceeded = true;</span>
+<span class="nc bnc" id="L479" title="All 2 branches missed.">        } else if (line.contains(&quot;VSize exceeded&quot;)) {</span>
+<span class="nc" id="L480">            stats.memoryExceeded = true;</span>
+        }
+<span class="nc" id="L482">    }</span>
+
+    /**
+     * Determines the job status based on runsolver stats and output files.
+     */
+    private StatusCode determineStatus(RunsolverStats stats, Path outputDir) {
+<span class="nc bnc" id="L488" title="All 2 branches missed.">        if (stats.wallclockExceeded) {</span>
+<span class="nc" id="L489">            return StatusCode.EXCEED_RUNTIME;</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">        } else if (stats.cpuExceeded) {</span>
+<span class="nc" id="L491">            return StatusCode.EXCEED_CPU;</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">        } else if (stats.memoryExceeded) {</span>
+<span class="nc" id="L493">            return StatusCode.EXCEED_MEM;</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">        } else if (stats.exitCode != 0) {</span>
+            // Check if var.out exists - if not, likely runscript error
+<span class="nc bnc" id="L496" title="All 2 branches missed.">            if (!Files.exists(outputDir.resolve(&quot;var.out&quot;))) {</span>
+<span class="nc" id="L497">                return StatusCode.ERROR_RUNSCRIPT;</span>
+            }
+        }
+<span class="nc" id="L500">        return StatusCode.STATUS_COMPLETE;</span>
+    }
+
+    /**
+     * Parses post-processor attributes from attributes.txt.
+     */
+    private Properties parseAttributes(Path outputDir) {
+<span class="nc" id="L507">        Properties props = new Properties();</span>
+<span class="nc" id="L508">        Path attrsFile = outputDir.resolve(&quot;attributes.txt&quot;);</span>
+
+<span class="nc bnc" id="L510" title="All 2 branches missed.">        if (Files.exists(attrsFile)) {</span>
+<span class="nc" id="L511">            try (BufferedReader reader = Files.newBufferedReader(attrsFile)) {</span>
+                String line;
+<span class="nc bnc" id="L513" title="All 2 branches missed.">                while ((line = reader.readLine()) != null) {</span>
+<span class="nc bnc" id="L514" title="All 2 branches missed.">                    if (line.isEmpty()) continue;</span>
+<span class="nc" id="L515">                    int eq = line.indexOf('=');</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">                    if (eq &gt; 0) {</span>
+<span class="nc" id="L517">                        String key = line.substring(0, eq).trim();</span>
+<span class="nc" id="L518">                        String value = line.substring(eq + 1).trim();</span>
+<span class="nc bnc" id="L519" title="All 4 branches missed.">                        if (!key.isEmpty() &amp;&amp; !value.isEmpty()) {</span>
+<span class="nc" id="L520">                            props.setProperty(key, value);</span>
+                        }
+                    }
+<span class="nc" id="L523">                }</span>
+<span class="nc" id="L524">            } catch (IOException e) {</span>
+<span class="nc" id="L525">                log.warn(&quot;Failed to parse attributes.txt&quot;, e);</span>
+<span class="nc" id="L526">            }</span>
+        }
+
+<span class="nc" id="L529">        return props;</span>
+    }
+
+    /**
+     * Updates the database with job results.
+     */
+    private void updateDatabase(
+        int pairId,
+        RunsolverStats stats,
+        StatusCode status,
+        Properties attributes
+    ) throws Exception {
+        // Update pair status
+<span class="nc" id="L542">        JobPairs.setStatusForPairAndStages(pairId, status.getVal());</span>
+
+        // TODO: Update run stats using UpdatePairRunSolverStats stored procedure
+        // This requires adding a Java method to call the stored procedure
+
+        // Update attributes if any
+<span class="nc bnc" id="L548" title="All 2 branches missed.">        if (!attributes.isEmpty()) {</span>
+            // Stage 1 for now - multi-stage pipelines would need enhancement
+<span class="nc" id="L550">            JobPairs.addJobPairAttributes(pairId, 1, attributes);</span>
+        }
+
+<span class="nc" id="L553">        log.debug(</span>
+            &quot;Updated database for pair &quot; +
+                pairId +
+                &quot;: status=&quot; +
+                status +
+                &quot;, attrs=&quot; +
+<span class="nc" id="L559">                attributes.size()</span>
+        );
+<span class="nc" id="L561">    }</span>
+
+    /**
+     * Returns the current poll interval statistics.
+     *
+     * @return Statistics string for monitoring
+     */
+    public String getStats() {
+<span class="nc" id="L569">        return pollInterval.getStats();</span>
+    }
+
+    /**
+     * Container for runsolver statistics.
+     */
+<span class="nc" id="L575">    public static class RunsolverStats {</span>
+
+<span class="nc" id="L577">        public double wallclockTime = 0;</span>
+<span class="nc" id="L578">        public double cpuTime = 0;</span>
+<span class="nc" id="L579">        public double userTime = 0;</span>
+<span class="nc" id="L580">        public double systemTime = 0;</span>
+<span class="nc" id="L581">        public double maxVirtualMemory = 0;</span>
+<span class="nc" id="L582">        public long maxResidentSetSize = 0;</span>
+<span class="nc" id="L583">        public int exitCode = 0;</span>
+<span class="nc" id="L584">        public boolean wallclockExceeded = false;</span>
+<span class="nc" id="L585">        public boolean cpuExceeded = false;</span>
+<span class="nc" id="L586">        public boolean memoryExceeded = false;</span>
+
+        @Override
+        public String toString() {
+<span class="nc" id="L590">            return String.format(</span>
+                &quot;RunsolverStats{wall=%.2f, cpu=%.2f, mem=%.0f, exit=%d, &quot; +
+                    &quot;wallExceeded=%b, cpuExceeded=%b, memExceeded=%b}&quot;,
+<span class="nc" id="L593">                wallclockTime,</span>
+<span class="nc" id="L594">                cpuTime,</span>
+<span class="nc" id="L595">                maxVirtualMemory,</span>
+<span class="nc" id="L596">                exitCode,</span>
+<span class="nc" id="L597">                wallclockExceeded,</span>
+<span class="nc" id="L598">                cpuExceeded,</span>
+<span class="nc" id="L599">                memoryExceeded</span>
+            );
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

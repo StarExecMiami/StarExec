@@ -1,0 +1,2714 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Connection.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.command</a> &gt; <span class="el_source">Connection.java</span></div><h1>Connection.java</h1><pre class="source lang-java linenums">package org.starexec.command;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
+import org.apache.commons.compress.archivers.zip.ZipFile;
+import org.apache.commons.compress.utils.IOUtils;
+import org.apache.http.Header;
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.CookieStore;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpRequestBase;
+import org.apache.http.client.params.ClientPNames;
+import org.apache.http.client.utils.DateUtils;
+import org.apache.http.cookie.Cookie;
+import org.apache.http.entity.mime.MultipartEntityBuilder;
+import org.apache.http.entity.mime.content.FileBody;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.message.AbstractHttpMessage;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
+import org.starexec.constants.R;
+import org.starexec.data.to.Permission;
+import org.starexec.data.to.enums.CopyPrimitivesOption;
+import org.starexec.data.to.tuples.HtmlStatusCodePair;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.servlet.http.HttpServletResponse;
+
+/**
+ * This class is responsible for communicating with the Starexec server It is
+ * designed to be a useful Starexec API, which makes it very important to keep
+ * this file well documented.
+ *
+ * @author Eric
+ */
+@SuppressWarnings({&quot;deprecation&quot;})
+public class Connection {
+<span class="nc" id="L49">	final private CommandLogger log = CommandLogger.getLogger(Connection.class);</span>
+<span class="nc" id="L50">	DefaultHttpClient client = null;</span>
+	private String baseURL;
+<span class="nc" id="L52">	private String sessionID = null;</span>
+	private String username, password;
+	private String lastError;
+	private Map&lt;Integer, Integer&gt; job_info_indices; // these two map job ids
+	// to the max completion
+	// index
+	private Map&lt;Integer, PollJobData&gt; job_out_indices;
+
+	/**
+	 * Constructor used for copying the setup of one connection into a new
+	 * connection. Useful if a connection gets into a bad state (possibly
+	 * response streams left open due to errors)
+	 *
+	 * @param con The old connection to copy
+	 */
+
+<span class="nc" id="L68">	protected Connection(Connection con) {</span>
+
+<span class="nc" id="L70">		this.setBaseURL(con.getBaseURL());</span>
+<span class="nc" id="L71">		setUsername(con.getUsername());</span>
+<span class="nc" id="L72">		setPassword(con.getPassword());</span>
+<span class="nc" id="L73">		client = buildClient();</span>
+
+<span class="nc" id="L75">		client.getParams();</span>
+<span class="nc" id="L76">		setInfoIndices(con.getInfoIndices());</span>
+<span class="nc" id="L77">		setOutputIndices(con.getOutputIndices());</span>
+<span class="nc" id="L78">		setLastError(con.getLastError());</span>
+<span class="nc" id="L79">	}</span>
+
+	/**
+	 * Sets the new Connection object's username and password based on
+	 * user-specified parameters. Also sets the instance of StarExec that is
+	 * being connected to
+	 *
+	 * @param user The username for this login
+	 * @param pass The password for this login
+	 * @param url the URL to the Starexec instance that we want to communicate
+	 * with
+	 */
+
+<span class="nc" id="L92">	public Connection(String user, String pass, String url) {</span>
+<span class="nc" id="L93">		this.setBaseURL(url);</span>
+<span class="nc" id="L94">		setUsername(user);</span>
+<span class="nc" id="L95">		setPassword(pass);</span>
+<span class="nc" id="L96">		initializeComponents();</span>
+<span class="nc" id="L97">	}</span>
+
+	/**
+	 * Sets the new Connection object's username and password based on
+	 * user-specified parameters. The URL instance used is the default
+	 * (www.starexec.org)
+	 *
+	 * @param user The username for this login
+	 * @param pass The password for this login
+	 */
+
+<span class="nc" id="L108">	public Connection(String user, String pass) {</span>
+<span class="nc" id="L109">		setBaseURL(C.URL_STAREXEC_BASE);</span>
+<span class="nc" id="L110">		setUsername(user);</span>
+<span class="nc" id="L111">		setPassword(pass);</span>
+<span class="nc" id="L112">		initializeComponents();</span>
+<span class="nc" id="L113">	}</span>
+
+	/**
+	 * Creates a new connection to the default StarExec instance as a guest user
+	 */
+<span class="nc" id="L118">	public Connection() {</span>
+<span class="nc" id="L119">		setBaseURL(C.URL_STAREXEC_BASE);</span>
+<span class="nc" id="L120">		setUsername(&quot;public&quot;);</span>
+<span class="nc" id="L121">		setPassword(&quot;public&quot;);</span>
+<span class="nc" id="L122">		initializeComponents();</span>
+<span class="nc" id="L123">	}</span>
+
+	private static DefaultHttpClient buildClient() {
+<span class="nc" id="L126">		return new DefaultHttpClient();</span>
+
+		// HttpClientBuilder clientBuilder = HttpClientBuilder.create();
+		// clientBuilder.disableCookieManagement();
+
+		// return clientBuilder.build();
+	}
+
+	private static String convertStreamToString(InputStream is) {
+<span class="nc" id="L135">		try (Scanner s = new Scanner(is).useDelimiter(&quot;\\A&quot;)) {</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">			return s.hasNext() ? s.next() : &quot;&quot;;</span>
+		}
+	}
+
+	private static Optional&lt;Integer&gt; checkIfValidZipFile(File out) throws IOException {
+<span class="nc" id="L141">		ZipFile zipfile = null;</span>
+		try {
+			// Make sure the file is a valid zipfile.
+<span class="nc" id="L144">			zipfile = new ZipFile(out);</span>
+<span class="nc" id="L145">			return Optional.empty();</span>
+<span class="nc" id="L146">		} catch (IOException e) {</span>
+<span class="nc" id="L147">			out.delete();</span>
+<span class="nc" id="L148">			throw e; // we got back an invalid archive for some reason</span>
+		} finally {
+			try {
+<span class="nc bnc" id="L151" title="All 2 branches missed.">				if (zipfile != null) {</span>
+<span class="nc" id="L152">					zipfile.close();</span>
+				}
+<span class="nc" id="L154">			} catch (IOException e) {</span>
+<span class="nc" id="L155">			}</span>
+		}
+	}
+
+	private void initializeComponents() {
+<span class="nc" id="L160">		client = buildClient();</span>
+
+<span class="nc" id="L162">		setInfoIndices(new HashMap&lt;&gt;());</span>
+<span class="nc" id="L163">		setOutputIndices(new HashMap&lt;&gt;());</span>
+<span class="nc" id="L164">		lastError = &quot;&quot;;</span>
+<span class="nc" id="L165">	}</span>
+
+	protected String getBaseURL() {
+<span class="nc" id="L168">		return baseURL;</span>
+	}
+
+	protected void setBaseURL(String baseURL) {
+<span class="nc" id="L172">		this.baseURL = baseURL;</span>
+<span class="nc" id="L173">	}</span>
+
+	/**
+	 * Gets the username that is being used on this connection
+	 *
+	 * @return The username as a String
+	 */
+	protected String getUsername() {
+<span class="nc" id="L181">		return username;</span>
+	}
+
+	protected void setUsername(String username) {
+<span class="nc" id="L185">		this.username = username;</span>
+<span class="nc" id="L186">	}</span>
+
+	/**
+	 * Gets the password that is being used on this connection
+	 *
+	 * @return The password as a String
+	 */
+	protected String getPassword() {
+<span class="nc" id="L194">		return password;</span>
+	}
+
+	protected void setPassword(String password) {
+<span class="nc" id="L198">		this.password = password;</span>
+<span class="nc" id="L199">	}</span>
+
+	protected Map&lt;Integer, PollJobData&gt; getOutputIndices() {
+<span class="nc" id="L202">		return job_out_indices;</span>
+	}
+
+	protected void setOutputIndices(Map&lt;Integer, PollJobData&gt; job_out_indices) {
+<span class="nc" id="L206">		this.job_out_indices = job_out_indices;</span>
+<span class="nc" id="L207">	}</span>
+
+	protected Map&lt;Integer, Integer&gt; getInfoIndices() {
+<span class="nc" id="L210">		return job_info_indices;</span>
+	}
+
+	protected void setInfoIndices(Map&lt;Integer, Integer&gt; job_info_indices) {
+<span class="nc" id="L214">		this.job_info_indices = job_info_indices;</span>
+<span class="nc" id="L215">	}</span>
+
+	/**
+	 * @return whether the Connection object represents a valid connection to
+	 * the server
+	 * @author Eric Burns
+	 */
+
+	public boolean isValid() {
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		return sessionID != null;</span>
+	}
+
+	// Supports dependencies for benchmarks via uploadBenchmarks overloads
+
+	/**
+	 * Uploads a set of benchmarks to Starexec. The benchmarks will be expanded
+	 * in a full space hierarchy.
+	 *
+	 * @param filePath The path to the archive containing the benchmarks
+	 * @param processorID The ID of the processor that should be used on the
+	 * benchmarks. If there is no such processor, this can be null
+	 * @param spaceID The ID of the space to put the benchmarks in
+	 * @param downloadable Whether the benchmarks should be downloadable by
+	 * other users.
+	 * @return A positive upload id on success, and a negative error code
+	 * otherwise.
+	 */
+	public int uploadBenchmarksToSingleSpace(String filePath, Integer processorID, Integer spaceID, Boolean downloadable) {
+<span class="nc" id="L243">		return uploadBenchmarks(filePath, processorID, spaceID, &quot;local&quot;, new Permission(), &quot;&quot;, downloadable, false, false, false, null);</span>
+	}
+
+	protected int uploadBenchmarks(String filePath, Integer type, Integer spaceID, String upMethod, Permission p, String url, Boolean downloadable, Boolean hierarchy, Boolean dependency, Boolean linked, Integer depRoot) {
+<span class="nc" id="L247">		HttpResponse response = null;</span>
+		try {
+
+<span class="nc" id="L250">			String postUrl = baseURL + C.URL_UPLOADBENCHMARKS;</span>
+<span class="nc" id="L251">			HttpPost post = new HttpPost(postUrl);</span>
+<span class="nc" id="L252">			MultipartEntityBuilder entity = MultipartEntityBuilder.create();</span>
+<span class="nc" id="L253">			logAddTextBody(entity, R.SPACE, spaceID.toString());</span>
+<span class="nc" id="L254">			logAddTextBody(entity, &quot;localOrUrlOrGit&quot;, upMethod);</span>
+
+			// it is ok to set URL even if we don't need it
+<span class="nc" id="L257">			logAddTextBody(entity, &quot;url&quot;, url);</span>
+
+<span class="nc" id="L259">			logAddTextBody(entity, &quot;download&quot;, downloadable.toString());</span>
+<span class="nc" id="L260">			logAddTextBody(entity, &quot;benchType&quot;, type.toString());</span>
+<span class="nc" id="L261">			logAddTextBody(entity, &quot;dependency&quot;, dependency.toString());</span>
+
+<span class="nc" id="L263">			logAddTextBody(entity, &quot;linked&quot;, linked.toString());</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">			if (depRoot == null) {</span>
+<span class="nc" id="L265">				logAddTextBody(entity, &quot;depRoot&quot;, &quot;-1&quot;);</span>
+			} else {
+<span class="nc" id="L267">				logAddTextBody(entity, &quot;depRoot&quot;, depRoot.toString());</span>
+			}
+<span class="nc bnc" id="L269" title="All 2 branches missed.">			if (hierarchy) {</span>
+<span class="nc" id="L270">				logAddTextBody(entity, &quot;upMethod&quot;, &quot;convert&quot;);</span>
+			} else {
+<span class="nc" id="L272">				logAddTextBody(entity, &quot;upMethod&quot;, &quot;dump&quot;);</span>
+			}
+
+<span class="nc bnc" id="L275" title="All 2 branches missed.">			for (String x : p.getOnPermissions()) {</span>
+<span class="nc" id="L276">				logAddTextBody(entity, x, &quot;true&quot;);</span>
+<span class="nc" id="L277">			}</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">			for (String x : p.getOffPermissions()) {</span>
+<span class="nc" id="L279">				logAddTextBody(entity, x, &quot;false&quot;);</span>
+<span class="nc" id="L280">			}</span>
+
+			// only include the archive file if we need it
+<span class="nc bnc" id="L283" title="All 2 branches missed.">			if (upMethod.equals(&quot;local&quot;)) {</span>
+<span class="nc" id="L284">				FileBody fileBody = new FileBody(new File(filePath));</span>
+<span class="nc" id="L285">				entity.addPart(&quot;benchFile&quot;, fileBody);</span>
+			}
+
+<span class="nc" id="L288">			post.setEntity(entity.build());</span>
+<span class="nc" id="L289">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L291">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L293">			int returnCode = response.getStatusLine().getStatusCode();</span>
+
+<span class="nc bnc" id="L295" title="All 2 branches missed.">			if (returnCode == HttpServletResponse.SC_FOUND) {</span>
+<span class="nc" id="L296">				int id = CommandValidator.getIdOrMinusOne(HTMLParser.extractCookie(response.getAllHeaders(), &quot;New_ID&quot;));</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">				if (id &gt; 0) {</span>
+<span class="nc" id="L298">					return id;</span>
+				} else {
+<span class="nc" id="L300">					lastError = &quot;We did not get a New_ID header&quot;;</span>
+<span class="nc" id="L301">					return Status.ERROR_INTERNAL; // we should have gotten an</span>
+					// error from the server and
+					// no redirect if there was
+					// a catchable error
+				}
+
+			} else {
+<span class="nc" id="L308">				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+<span class="nc" id="L309">				return Status.ERROR_SERVER;</span>
+			}
+<span class="nc" id="L311">		} catch (Exception e) {</span>
+<span class="nc" id="L312">			lastError = Util.getStackTrace(e);</span>
+<span class="nc" id="L313">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L315">			safeCloseResponse(response);</span>
+		}
+	}
+
+	public void logAddTextBody(MultipartEntityBuilder entity, String name, String text) {
+<span class="nc" id="L320">		log.log(&quot;Adding text body for multipart entity: name=&quot; + name + &quot;, text=&quot; + text);</span>
+<span class="nc" id="L321">		entity.addTextBody(name, text);</span>
+<span class="nc" id="L322">	}</span>
+
+	// Logs and executes a GET/POST request.
+	private HttpResponse executeGetOrPost(HttpRequestBase request) throws IOException {
+					// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+					//C.debugMode = false; // goes back to false at the end of the function
+<span class="nc bnc" id="L328" title="All 2 branches missed.">					if (C.debugMode) {</span>
+<span class="nc" id="L329">						System.out.println( &quot;---- now ENTERING executeGetOrPost() --------\n&quot; );</span>
+					}
+					// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<span class="nc" id="L332">		log.log(&quot;Sending &quot; + request.getMethod() + &quot; request to URI: &quot; + request.getURI());</span>
+<span class="nc" id="L333">		List&lt;Header&gt; headers = Arrays.asList(request.getAllHeaders());</span>
+		// Bypass the for loop if debug mode is off.
+<span class="nc bnc" id="L335" title="All 2 branches missed.">		if (C.debugMode) {</span>
+<span class="nc" id="L336">			log.log(&quot;Headers for request: &quot;);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">			for (Header header : headers) {</span>
+<span class="nc" id="L338">				log.log(&quot;\tName: &quot; + header.getName());</span>
+<span class="nc" id="L339">				log.log(&quot;\tValue: &quot; + header.getValue());</span>
+<span class="nc" id="L340">				log.log(&quot;&quot;);</span>
+<span class="nc" id="L341">			}</span>
+<span class="nc" id="L342">			CookieStore store = client.getCookieStore();</span>
+<span class="nc" id="L343">			List&lt;Cookie&gt; cookies = store.getCookies();</span>
+<span class="nc" id="L344">			log.log(&quot;Cookies before request: &quot;);</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">			for (Cookie cookie : cookies) {</span>
+<span class="nc" id="L346">				log.log(&quot;\tName : &quot; + cookie.getName());</span>
+<span class="nc" id="L347">				log.log(&quot;\tValue: &quot; + cookie.getValue());</span>
+<span class="nc" id="L348">				log.log(&quot;&quot;);</span>
+<span class="nc" id="L349">			}</span>
+		}
+
+<span class="nc" id="L352">		request.setHeader(&quot;User-Agent&quot;, C.USER_AGENT);</span>
+<span class="nc" id="L353">		HttpResponse response = client.execute(request);</span>
+
+<span class="nc bnc" id="L355" title="All 2 branches missed.">		if (C.debugMode) {</span>
+<span class="nc" id="L356">			log.log(&quot;Got response from server.&quot;);</span>
+<span class="nc" id="L357">			log.log(&quot;HTTP Status: &quot; + response.getStatusLine().getStatusCode());</span>
+<span class="nc" id="L358">			List&lt;Header&gt; responseHeaders = Arrays.asList(response.getAllHeaders());</span>
+<span class="nc" id="L359">			log.log(&quot;Headers for response: &quot;);</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">			for (Header header : responseHeaders) {</span>
+<span class="nc" id="L361">				log.log(&quot;\tName: &quot; + header.getName());</span>
+<span class="nc" id="L362">				log.log(&quot;\tValue: &quot; + header.getValue());</span>
+<span class="nc" id="L363">				log.log(&quot;&quot;);</span>
+<span class="nc" id="L364">			}</span>
+<span class="nc" id="L365">			CookieStore store = client.getCookieStore();</span>
+<span class="nc" id="L366">			List&lt;Cookie&gt; cookies = store.getCookies();</span>
+<span class="nc" id="L367">			log.log(&quot;Cookies after request: &quot;);</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">			for (Cookie cookie : cookies) {</span>
+<span class="nc" id="L369">				log.log(&quot;\tName : &quot; + cookie.getName());</span>
+<span class="nc" id="L370">				log.log(&quot;\tValue: &quot; + cookie.getValue());</span>
+<span class="nc" id="L371">				log.log(&quot;&quot;);</span>
+<span class="nc" id="L372">			}</span>
+		}
+					// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+<span class="nc bnc" id="L375" title="All 2 branches missed.">					if (C.debugMode) {</span>
+<span class="nc" id="L376">						System.out.println( &quot;\n---- now EXITING executeGetOrPost() --------\n&quot; );</span>
+					}					
+					//C.debugMode = false;
+					// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<span class="nc" id="L380">		return response;</span>
+	}
+
+	/**
+	 * Uploads a new configuration to an existing solver
+	 *
+	 * @param name The name of the new configuration
+	 * @param desc A description of the configuration
+	 * @param filePath The file to upload
+	 * @param solverID The ID of the solver to attach the configuration to
+	 * @return The ID of the new configuration on success (a positive integer),
+	 * or a negative error code on failure
+	 */
+	public int uploadConfiguration(String name, String desc, String filePath, Integer solverID) {
+<span class="nc" id="L394">		HttpResponse response = null;</span>
+		try {
+
+<span class="nc" id="L397">			HttpPost post = new HttpPost(baseURL + C.URL_UPLOADCONFIG);</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">			if (desc == null) {</span>
+<span class="nc" id="L399">				desc = &quot;&quot;;</span>
+			}
+
+<span class="nc" id="L402">			MultipartEntityBuilder entity = MultipartEntityBuilder.create();</span>
+<span class="nc" id="L403">			logAddTextBody(entity, &quot;solverId&quot;, solverID.toString());</span>
+<span class="nc" id="L404">			logAddTextBody(entity, &quot;uploadConfigDesc&quot;, desc);</span>
+<span class="nc" id="L405">			logAddTextBody(entity, &quot;uploadConfigName&quot;, name);</span>
+
+<span class="nc" id="L407">			FileBody fileBody = new FileBody(new File(filePath));</span>
+<span class="nc" id="L408">			log.log(&quot;Adding file part for multipart entity builder.&quot;);</span>
+<span class="nc" id="L409">			entity.addPart(&quot;file&quot;, fileBody);</span>
+<span class="nc" id="L410">			post = (HttpPost) setHeaders(post);</span>
+<span class="nc" id="L411">			post.setEntity(entity.build());</span>
+
+<span class="nc" id="L413">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L415">			int id = CommandValidator.getIdOrMinusOne(HTMLParser.extractCookie(response.getAllHeaders(), &quot;New_ID&quot;));</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">			if (id &lt;= 0) {</span>
+<span class="nc" id="L417">				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+<span class="nc" id="L418">				return Status.ERROR_SERVER;</span>
+			}
+
+<span class="nc" id="L421">			return id;</span>
+<span class="nc" id="L422">		} catch (Exception e) {</span>
+<span class="nc" id="L423">			lastError = Util.getStackTrace(e);</span>
+<span class="nc" id="L424">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L426">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Uploads a processor to starexec
+	 *
+	 * @param name The name to give the processor
+	 * @param desc A description for the processor
+	 * @param filePath An absolute file path to the file to upload
+	 * @param communityID The ID of the community that will be given the
+	 * processor
+	 * @param type Must be &quot;post&quot; or R.BENCHMARK
+	 * @return The positive integer ID assigned the new processor on success, or
+	 * a negative error code on failure
+	 */
+
+	protected int uploadProcessor(String name, String desc, String filePath, Integer communityID, String type) {
+<span class="nc" id="L444">		File f = new File(filePath); // file is also required</span>
+<span class="nc" id="L445">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L447">			HttpPost post = new HttpPost(baseURL + C.URL_UPLOADPROCESSOR);</span>
+<span class="nc" id="L448">			MultipartEntityBuilder entity = MultipartEntityBuilder.create();</span>
+<span class="nc" id="L449">			logAddTextBody(entity, &quot;action&quot;, &quot;add&quot;);</span>
+<span class="nc" id="L450">			logAddTextBody(entity, &quot;type&quot;, type);</span>
+<span class="nc" id="L451">			logAddTextBody(entity, &quot;name&quot;, name);</span>
+<span class="nc" id="L452">			logAddTextBody(entity, &quot;desc&quot;, desc);</span>
+<span class="nc" id="L453">			logAddTextBody(entity, &quot;com&quot;, communityID.toString());</span>
+<span class="nc" id="L454">			logAddTextBody(entity, &quot;uploadMethod&quot;, &quot;local&quot;);</span>
+<span class="nc" id="L455">			FileBody fileBody = new FileBody(f);</span>
+<span class="nc" id="L456">			entity.addPart(&quot;file&quot;, fileBody);</span>
+
+<span class="nc" id="L458">			post.setEntity(entity.build());</span>
+<span class="nc" id="L459">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L461">			response = executeGetOrPost(post);</span>
+
+			// we are expecting to be redirected to the page for the processor
+<span class="nc bnc" id="L464" title="All 2 branches missed.">			if (response.getStatusLine().getStatusCode() != HttpServletResponse.SC_FOUND) {</span>
+<span class="nc" id="L465">				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+<span class="nc" id="L466">				return Status.ERROR_SERVER;</span>
+			}
+<span class="nc" id="L468">			return Integer.valueOf(HTMLParser.extractCookie(response.getAllHeaders(), &quot;New_ID&quot;));</span>
+<span class="nc" id="L469">		} catch (Exception e) {</span>
+<span class="nc" id="L470">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L472">			safeCloseResponse(response);</span>
+		}
+
+	}
+
+	/**
+	 * Uploads a post processor to starexec
+	 *
+	 * @param name The name to give the post processor
+	 * @param desc A description for the processor
+	 * @param filePath An absolute file path to the file to upload
+	 * @param communityID The ID of the community that will be given the
+	 * processor
+	 * @return The positive integer ID assigned the new processor on success, or
+	 * a negative error code on failure
+	 */
+	public int uploadPostProc(String name, String desc, String filePath, Integer communityID) {
+<span class="nc" id="L489">		return uploadProcessor(name, desc, filePath, communityID, &quot;post&quot;);</span>
+	}
+
+	/**
+	 * Uploads a benchmark processor to starexec
+	 *
+	 * @param name The name to give the benchmark processor
+	 * @param desc A description for the processor
+	 * @param filePath An absolute file path to the file to upload
+	 * @param communityID The ID of the community that will be given the
+	 * processor
+	 * @return The positive integer ID assigned the new processor on success, or
+	 * a negative error code on failure
+	 */
+	public int uploadBenchProc(String name, String desc, String filePath, Integer communityID) {
+<span class="nc" id="L504">		return uploadProcessor(name, desc, filePath, communityID, R.BENCHMARK);</span>
+	}
+
+	/**
+	 * Uploads a pre processor to starexec
+	 *
+	 * @param name The name to give the pre processor
+	 * @param desc A description for the processor
+	 * @param filePath An absolute file path to the file to upload
+	 * @param communityID The ID of the community that will be given the
+	 * processor
+	 * @return The positive integer ID assigned the new processor on success, or
+	 * a negative error code on failure
+	 */
+	public int uploadPreProc(String name, String desc, String filePath, Integer communityID) {
+<span class="nc" id="L519">		return uploadProcessor(name, desc, filePath, communityID, &quot;pre&quot;);</span>
+	}
+
+	/**
+	 * Uploads an xml (job or space) to specified space
+	 *
+	 * @param filePath An absolute file path to the file to upload
+	 * @param spaceID The ID of the space where the job is being uploaded to
+	 * @param isJobXML True if this is a job XML and false if it is a space XML
+	 * @return The ids of the newly created jobs. On failure, a size 1 list with
+	 * a negative error code
+	 * @author Julio Cervantes
+	 */
+	public List&lt;Integer&gt; uploadXML(String filePath, Integer spaceID, boolean isJobXML) {
+<span class="nc" id="L533">		List&lt;Integer&gt; ids = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L534">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L536">			String ext = C.URL_UPLOADSPACE;</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">			if (isJobXML) {</span>
+<span class="nc" id="L538">				ext = C.URL_UPLOADJOBXML;</span>
+			}
+<span class="nc" id="L540">			HttpPost post = new HttpPost(baseURL + ext);</span>
+<span class="nc" id="L541">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L543">			MultipartEntityBuilder entity = MultipartEntityBuilder.create();</span>
+<span class="nc" id="L544">			logAddTextBody(entity, R.SPACE, spaceID.toString());</span>
+<span class="nc" id="L545">			File f = new File(filePath);</span>
+<span class="nc" id="L546">			FileBody fileBody = new FileBody(f);</span>
+<span class="nc" id="L547">			entity.addPart(&quot;f&quot;, fileBody);</span>
+
+<span class="nc" id="L549">			post.setEntity(entity.build());</span>
+
+<span class="nc" id="L551">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L553">			int code = response.getStatusLine().getStatusCode();</span>
+			// if space, gives 200 code. if job, gives 302
+<span class="nc bnc" id="L555" title="All 4 branches missed.">			if (code != HttpServletResponse.SC_OK &amp;&amp; code != HttpServletResponse.SC_FOUND) {</span>
+<span class="nc" id="L556">				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+<span class="nc" id="L557">				ids.add(Status.ERROR_SERVER);</span>
+<span class="nc" id="L558">				return ids;</span>
+			}
+
+<span class="nc" id="L561">			String[] newIds = HTMLParser.extractMultipartCookie(response.getAllHeaders(), &quot;New_ID&quot;);</span>
+<span class="nc bnc" id="L562" title="All 2 branches missed.">			for (String s : newIds) {</span>
+<span class="nc" id="L563">				ids.add(Integer.parseInt(s));</span>
+			}
+<span class="nc" id="L565">			return ids;</span>
+<span class="nc" id="L566">		} catch (Exception e) {</span>
+<span class="nc" id="L567">			ids.add(Status.ERROR_INTERNAL);</span>
+<span class="nc" id="L568">			return ids;</span>
+		} finally {
+<span class="nc" id="L570">			safeCloseResponse(response);</span>
+		}
+
+	}
+
+	/**
+	 * Uploads a solver to Starexec. The description of the solver will be taken
+	 * from the archive being uploaded
+	 *
+	 * @param name The name of the solver
+	 * @param desc The description of the solver
+	 * @param spaceID The ID of the space to put the solver in
+	 * @param filePath the path to the solver archive to upload
+	 * @param downloadable True if the solver should be downloadable by other
+	 * users, and false otherwise
+	 * @param runTestJob Whether to run a test job after uploading this solver
+	 * @param settingId The ID of the settings profile to be used if a test job
+	 * is created
+	 * @param type the type of executable for this upload. See the
+	 * StarexecCommand docs for a list of codes
+	 * @return The ID of the new solver, which must be positive, or a negative
+	 * error code
+	 */
+	public int uploadSolver(String name, String desc, Integer spaceID, String filePath, Boolean downloadable, Boolean runTestJob, Integer settingId, Integer type) {
+<span class="nc" id="L594">		return uploadSolver(name, desc, &quot;text&quot;, spaceID, filePath, downloadable, runTestJob, settingId, type);</span>
+	}
+
+	/**
+	 * Uploads a solver to Starexec. The description of the solver will be taken
+	 * from the archive being uploaded
+	 *
+	 * @param name The name of the solver
+	 * @param spaceID The ID of the space to put the solver in
+	 * @param filePath the path to the solver archive to upload
+	 * @param downloadable True if the solver should be downloadable by other
+	 * users, and false otherwise
+	 * @param runTestJob Whether to run a test job after uploading this solver
+	 * @param settingId The ID of a settings profile to use if a test job is
+	 * created
+	 * @param type the type of executable for this upload. See the
+	 * StarexecCommand docs for a list of codes
+	 * @return The ID of the new solver, which must be positive, or a negative
+	 * error code
+	 */
+	public int uploadSolver(String name, Integer spaceID, String filePath, Boolean downloadable, Boolean runTestJob, Integer settingId, Integer type) {
+<span class="nc" id="L615">		return uploadSolver(name, &quot;&quot;, &quot;upload&quot;, spaceID, filePath, downloadable, runTestJob, settingId, type);</span>
+	}
+
+	/**
+	 * Uploads a solver to StarexecCommand. Called by one of the overloading
+	 * methods.
+	 *
+	 * @param entity
+	 * @param post
+	 * @param name
+	 * @param desc
+	 * @param descMethod
+	 * @param spaceID
+	 * @param downloadable
+	 * @param runTestJob
+	 * @param settingId
+	 * @param type
+	 * @return
+	 */
+	private int uploadSolver(MultipartEntityBuilder entity, HttpPost post, String name, String desc, String descMethod, Integer spaceID, Boolean downloadable, Boolean runTestJob, Integer settingId, Integer type) {
+<span class="nc" id="L635">		HttpResponse response = null;</span>
+		try {
+			// Only include the description file if we need it
+<span class="nc bnc" id="L638" title="All 2 branches missed.">			if (descMethod.equals(&quot;file&quot;)) {</span>
+<span class="nc" id="L639">				FileBody descFileBody = new FileBody(new File(desc));</span>
+<span class="nc" id="L640">				entity.addPart(&quot;d&quot;, descFileBody);</span>
+			}
+
+<span class="nc" id="L643">			logAddTextBody(entity, &quot;sn&quot;, name);</span>
+<span class="nc bnc" id="L644" title="All 2 branches missed.">			if (descMethod.equals(&quot;text&quot;)) {</span>
+<span class="nc" id="L645">				logAddTextBody(entity, &quot;desc&quot;, desc);</span>
+			} else {
+<span class="nc" id="L647">				logAddTextBody(entity, &quot;desc&quot;, &quot;&quot;);</span>
+			}
+<span class="nc" id="L649">			logAddTextBody(entity, R.SPACE, spaceID.toString());</span>
+
+<span class="nc" id="L651">			logAddTextBody(entity, &quot;descMethod&quot;, descMethod);</span>
+<span class="nc" id="L652">			logAddTextBody(entity, &quot;dlable&quot;, downloadable.toString());</span>
+<span class="nc" id="L653">			logAddTextBody(entity, &quot;runTestJob&quot;, runTestJob.toString());</span>
+<span class="nc" id="L654">			logAddTextBody(entity, &quot;type&quot;, type.toString());</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">			if (settingId != null) {</span>
+<span class="nc" id="L656">				logAddTextBody(entity, &quot;setting&quot;, settingId.toString());</span>
+
+			}
+<span class="nc" id="L659">			post.setEntity(entity.build());</span>
+<span class="nc" id="L660">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L662">			response = executeGetOrPost(post);</span>
+<span class="nc" id="L663">			int newID = CommandValidator.getIdOrMinusOne(HTMLParser.extractCookie(response.getAllHeaders(), &quot;New_ID&quot;));</span>
+			// if the request was not successful
+<span class="nc bnc" id="L665" title="All 2 branches missed.">			if (newID &lt;= 0) {</span>
+<span class="nc" id="L666">				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+<span class="nc" id="L667">				return Status.ERROR_SERVER;</span>
+			}
+<span class="nc" id="L669">			return newID;</span>
+<span class="nc" id="L670">		} catch (Exception e) {</span>
+<span class="nc" id="L671">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L673">			safeCloseResponse(response);</span>
+		}
+
+	}
+
+	/**
+	 * @param name The name of the solver
+	 * @param desc If the upload method is &quot;text&quot;, then this should be the
+	 * description. If it is &quot;file&quot;, it should be a filepath to the
+	 * needed description file. If it is &quot;upload,&quot; it is not needed
+	 * @param descMethod Either &quot;text&quot;, &quot;upload&quot;, or &quot;file&quot;
+	 * @param spaceID The ID of the space to put the solver in
+	 * @param filePath The path to the solver archive to upload.
+	 * @param downloadable True if the solver should be downloadable by other
+	 * users, and false otherwise
+	 * @param runTestJob Whether to run a test job after uploading this solver
+	 * @param settingId The ID of the default settings profile that should be
+	 * used for a test job for this job
+	 * @return The ID of the new solver, which must be positive, or a negative
+	 * error code
+	 */
+	protected int uploadSolver(String name, String desc, String descMethod, Integer spaceID, String filePath, Boolean downloadable, Boolean runTestJob, Integer settingId, Integer type) {
+		try {
+<span class="nc" id="L696">			HttpPost post = new HttpPost(baseURL + C.URL_UPLOADSOLVER);</span>
+<span class="nc" id="L697">			MultipartEntityBuilder entity = MultipartEntityBuilder.create();</span>
+<span class="nc" id="L698">			FileBody fileBody = new FileBody(new File(filePath));</span>
+<span class="nc" id="L699">			entity.addPart(&quot;f&quot;, fileBody);</span>
+<span class="nc" id="L700">			logAddTextBody(entity, &quot;url&quot;, &quot;&quot;);</span>
+<span class="nc" id="L701">			logAddTextBody(entity, &quot;upMethod&quot;, &quot;local&quot;);</span>
+
+<span class="nc" id="L703">			return uploadSolver(entity, post, name, desc, descMethod, spaceID, downloadable, runTestJob, settingId, type);</span>
+<span class="nc" id="L704">		} catch (Exception e) {</span>
+<span class="nc" id="L705">			return Status.ERROR_INTERNAL;</span>
+		}
+	}
+
+	/**
+	 * Uploads a solver to Starexec given a URL.
+	 *
+	 * @param name The name to give the solver
+	 * @param desc Either a string description OR a file path to a file
+	 * containing the description, depending on the value of descMethod
+	 * @param descMethod The method by which a description is being provided,
+	 * which is either 'file' or 'text'
+	 * @param spaceID The space to put the solver in
+	 * @param url The direct URL to the solver
+	 * @param downloadable Whether the solver should be downloadable or not
+	 * @param runTestJob Whether to run a test job for this solver after
+	 * uploading it
+	 * @param settingId The ID of the settings profile that will be used if we
+	 * want to run a test job\
+	 * @param type the type of executable for this upload. See the
+	 * StarexecCommand docs for a list of codes
+	 * @return The positive ID for the solver or a negative error code
+	 */
+	public int uploadSolverFromURL(String name, String desc, String descMethod, Integer spaceID, String url, Boolean downloadable, Boolean runTestJob, Integer settingId, Integer type) {
+		try {
+<span class="nc" id="L730">			HttpPost post = new HttpPost(baseURL + C.URL_UPLOADSOLVER);</span>
+<span class="nc" id="L731">			MultipartEntityBuilder entity = MultipartEntityBuilder.create();</span>
+<span class="nc" id="L732">			logAddTextBody(entity, &quot;url&quot;, url);</span>
+<span class="nc" id="L733">			logAddTextBody(entity, &quot;upMethod&quot;, &quot;URL&quot;);</span>
+
+<span class="nc" id="L735">			return uploadSolver(entity, post, name, desc, descMethod, spaceID, downloadable, runTestJob, settingId, type);</span>
+<span class="nc" id="L736">		} catch (Exception e) {</span>
+<span class="nc" id="L737">			return Status.ERROR_INTERNAL;</span>
+		}
+	}
+
+	/**
+	 * Uploads a solver to Starexec. The description of the solver will be taken
+	 * from the archive being uploaded
+	 *
+	 * @param name The name of the solver
+	 * @param spaceID The ID of the space to put the solver in
+	 * @param url The URL of hte archived solver to upload
+	 * @param downloadable True if the solver should be downloadable by other
+	 * users, and false otherwise
+	 * @param runTestJob Whether to run a test job for this solver after
+	 * uploading it
+	 * @param type The type of the executable being uploaded. See Starexec
+	 * Command docs for a list of codes
+	 * @param settingId The ID of the settings profile that will be used if we
+	 * want to run a test job
+	 * @return The ID of the new solver, which must be positive, or a negative
+	 * error code
+	 */
+	public int uploadSolverFromURL(String name, Integer spaceID, String url, Boolean downloadable, Boolean runTestJob, Integer settingId, Integer type) {
+<span class="nc" id="L760">		return uploadSolverFromURL(name, &quot;&quot;, &quot;upload&quot;, spaceID, url, downloadable, runTestJob, settingId, type);</span>
+	}
+
+	/**
+	 * Sets HTTP headers required to communicate with the StarExec server
+	 *
+	 * @param msg --The outgoing HTTP request, likely an HttpGet or HttpPost
+	 * @return msg with required headers added
+	 * @author Eric Burns
+	 */
+
+	private AbstractHttpMessage setHeaders(AbstractHttpMessage msg) {
+<span class="nc" id="L772">		msg.addHeader(&quot;StarExecCommand&quot;, &quot;StarExecCommand&quot;);</span>
+<span class="nc" id="L773">		msg.addHeader(&quot;Connection&quot;, &quot;keep-alive&quot;);</span>
+<span class="nc" id="L774">		msg.addHeader(&quot;Accept-Language&quot;, &quot;en-US,en;q=0.5&quot;);</span>
+
+<span class="nc" id="L776">		return msg;</span>
+	}
+
+	/**
+	 * Changes your first name on StarExec to the given value
+	 *
+	 * @param name The new name
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	public int setFirstName(String name) {
+<span class="nc" id="L787">		return this.setUserSetting(&quot;firstname&quot;, name);</span>
+	}
+
+	/**
+	 * Changes your last name on StarExec to the given value
+	 *
+	 * @param name The new name
+	 * @return 0 on success or a negative error code on failure
+	 */
+	public int setLastName(String name) {
+<span class="nc" id="L797">		return this.setUserSetting(&quot;lastname&quot;, name);</span>
+	}
+
+	/**
+	 * Changes your institution on StarExec to the given value
+	 *
+	 * @param inst The name of the new institution
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	public int setInstitution(String inst) {
+<span class="nc" id="L808">		return this.setUserSetting(&quot;institution&quot;, inst);</span>
+	}
+
+	/**
+	 * Deletes all of the given solvers permanently
+	 *
+	 * @param ids The IDs of each solver to delete
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	public int deleteSolvers(List&lt;Integer&gt; ids) {
+<span class="nc" id="L819">		return deletePrimitives(ids, R.SOLVER);</span>
+	}
+
+	/**
+	 * Deletes all of the given benchmarks permanently
+	 *
+	 * @param ids The IDs of each benchmark to delete
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	public int deleteBenchmarks(List&lt;Integer&gt; ids) {
+<span class="nc" id="L830">		return deletePrimitives(ids, &quot;benchmark&quot;);</span>
+	}
+
+	/**
+	 * Deletes all of the given processors permanently
+	 *
+	 * @param ids The IDs of each processor to delete
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	public int deleteProcessors(List&lt;Integer&gt; ids) {
+<span class="nc" id="L841">		return deletePrimitives(ids, &quot;processor&quot;);</span>
+	}
+
+	/**
+	 * Deletes all of the given configurations permanently
+	 *
+	 * @param ids The IDs of each configuration to delete
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	public int deleteConfigurations(List&lt;Integer&gt; ids) {
+<span class="nc" id="L852">		return deletePrimitives(ids, &quot;configuration&quot;);</span>
+	}
+
+	/**
+	 * Deletes all of the given jobs permanently
+	 *
+	 * @param ids The IDs of each job to delete
+	 * @return 0 on success or a negative error code on failure
+	 */
+	public int deleteJobs(List&lt;Integer&gt; ids) {
+<span class="nc" id="L862">		return deletePrimitives(ids, R.JOB);</span>
+	}
+
+	/**
+	 * Deletes all of the given primitives of the given type
+	 *
+	 * @param ids IDs of some primitive type
+	 * @param type The type of primitives being deleted
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	protected int deletePrimitives(List&lt;Integer&gt; ids, String type) {
+<span class="nc" id="L874">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L876">			HttpPost post = new HttpPost(baseURL + C.URL_DELETEPRIMITIVE + &quot;/&quot; + type);</span>
+<span class="nc" id="L877">			post = (HttpPost) setHeaders(post);</span>
+<span class="nc" id="L878">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L879" title="All 2 branches missed.">			for (Integer id : ids) {</span>
+<span class="nc" id="L880">				params.add(new BasicNameValuePair(&quot;selectedIds[]&quot;, id.toString()));</span>
+<span class="nc" id="L881">			}</span>
+<span class="nc" id="L882">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+
+<span class="nc" id="L884">			response = executeGetOrPost(post);</span>
+<span class="nc" id="L885">			JsonObject obj = JsonHandler.getJsonObject(response);</span>
+<span class="nc" id="L886">			boolean success = JsonHandler.getSuccessOfResponse(obj);</span>
+<span class="nc" id="L887">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+
+<span class="nc bnc" id="L889" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L890">				return 0;</span>
+			} else {
+<span class="nc" id="L892">				setLastError(message);</span>
+<span class="nc" id="L893">				return Status.ERROR_SERVER;</span>
+			}
+
+<span class="nc" id="L896">		} catch (Exception e) {</span>
+<span class="nc" id="L897">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L899">			safeCloseResponse(response);</span>
+		}
+
+	}
+
+	/**
+	 * Checks to see whether the given page can be retrieved normally, meaning
+	 * we get back HTTP status code 200
+	 *
+	 * @param relURL The URL following starexecRoot
+	 * @return True if the page was retrieved successfully and false otherwise
+	 */
+	public boolean canGetPage(String relURL) {
+<span class="nc" id="L912">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L914">			HttpGet get = new HttpGet(baseURL + relURL);</span>
+<span class="nc" id="L915">			get = (HttpGet) setHeaders(get);</span>
+
+<span class="nc" id="L917">			response = executeGetOrPost(get);</span>
+
+			// we should get 200, which is the code for ok
+<span class="nc bnc" id="L920" title="All 2 branches missed.">			return response.getStatusLine().getStatusCode() == HttpServletResponse.SC_OK;</span>
+
+<span class="nc" id="L922">		} catch (Exception e) {</span>
+
+		} finally {
+<span class="nc" id="L925">			safeCloseResponse(response);</span>
+		}
+<span class="nc" id="L927">		return false;</span>
+	}
+
+	/**
+	 * Gets the HTML of a page using the open connection.
+	 *
+	 * @param relUrl The URL following starexecRoot
+	 * @return the HTML as a String
+	 * @throws IOException if the request fails.
+	 */
+	public HtmlStatusCodePair getPageHtml(String relUrl) throws IOException {
+<span class="nc" id="L938">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L940">			HttpGet get = new HttpGet(baseURL + relUrl);</span>
+<span class="nc" id="L941">			get = (HttpGet) setHeaders(get);</span>
+
+<span class="nc" id="L943">			response = executeGetOrPost(get);</span>
+<span class="nc" id="L944">			final String html = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);</span>
+<span class="nc" id="L945">			final int code = response.getStatusLine().getStatusCode();</span>
+<span class="nc" id="L946">			return new HtmlStatusCodePair(html, code);</span>
+		} finally {
+<span class="nc" id="L948">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Gets the ID of the user currently logged in to StarExec
+	 *
+	 * @return The integer user ID
+	 */
+	public int getUserID() {
+<span class="nc" id="L958">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L960">			HttpGet get = new HttpGet(baseURL + C.URL_GETID);</span>
+<span class="nc" id="L961">			get = (HttpGet) setHeaders(get);</span>
+
+<span class="nc" id="L963">			response = executeGetOrPost(get);</span>
+<span class="nc" id="L964">			JsonElement json = JsonHandler.getJsonString(response);</span>
+<span class="nc" id="L965">			return json.getAsInt();</span>
+
+<span class="nc" id="L967">		} catch (Exception e) {</span>
+<span class="nc" id="L968">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L970">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Sets a space or hierarchy to be public or private
+	 *
+	 * @param spaceID The ID of the individual space or the root of the
+	 * hierarchy to work on
+	 * @param hierarchy True if working on a hierarchy, false if a single space
+	 * @param setPublic True if making the space(s) public, false if private
+	 * @return 0 on success or a negative error code otherwise
+	 */
+	protected int setSpaceVisibility(Integer spaceID, Boolean hierarchy, Boolean setPublic) {
+<span class="nc" id="L984">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L986">			HttpPost post = new HttpPost(baseURL + C.URL_EDITSPACEVISIBILITY + &quot;/&quot; + spaceID.toString() + &quot;/&quot; + hierarchy.toString() + &quot;/&quot; + setPublic.toString());</span>
+<span class="nc" id="L987">			post = (HttpPost) setHeaders(post);</span>
+<span class="nc" id="L988">			response = executeGetOrPost(post);</span>
+
+			// we should get back an HTTP OK if we're allowed to change the visibility
+<span class="nc bnc" id="L991" title="All 2 branches missed.">			if (response.getStatusLine().getStatusCode() != HttpServletResponse.SC_OK) {</span>
+<span class="nc" id="L992">				return Status.ERROR_BAD_PARENT_SPACE;</span>
+			}
+<span class="nc" id="L994">			return 0;</span>
+<span class="nc" id="L995">		} catch (Exception e) {</span>
+<span class="nc" id="L996">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L998">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Changes one of the settings for a given user (like name, institution, or
+	 * so on)
+	 *
+	 * @param setting The name of the setting
+	 * @param val The new value for the setting
+	 * @return
+	 */
+
+	protected int setUserSetting(String setting, String val) {
+<span class="nc" id="L1012">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L1014">			int userId = getUserID();</span>
+<span class="nc" id="L1015">			String url = baseURL + C.URL_USERSETTING + setting + &quot;/&quot; + userId + &quot;/&quot; + val;</span>
+<span class="nc" id="L1016">			url = url.replace(&quot; &quot;, &quot;%20&quot;); // encodes white space, which can't</span>
+			// be used in a URL
+<span class="nc" id="L1018">			HttpPost post = new HttpPost(url);</span>
+<span class="nc" id="L1019">			post = (HttpPost) setHeaders(post);</span>
+<span class="nc" id="L1020">			response = executeGetOrPost(post);</span>
+<span class="nc" id="L1021">			JsonObject obj = JsonHandler.getJsonObject(response);</span>
+
+<span class="nc" id="L1023">			boolean success = JsonHandler.getSuccessOfResponse(obj);</span>
+<span class="nc" id="L1024">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L1026">				return 0;</span>
+			} else {
+<span class="nc" id="L1028">				setLastError(message);</span>
+<span class="nc" id="L1029">				return Status.ERROR_SERVER;</span>
+			}
+
+<span class="nc" id="L1032">		} catch (Exception e) {</span>
+<span class="nc" id="L1033">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L1035">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Reruns the job with the given ID
+	 *
+	 * @param jobID The ID of the job to rerun
+	 * @return An integer status code as definied in Status.java
+	 */
+
+	public int rerunJob(Integer jobID) {
+<span class="nc" id="L1047">		return makePostWithId(baseURL + C.URL_RERUNJOB, jobID);</span>
+	}
+
+	/**
+	 * Reruns the job pair with the given ID
+	 *
+	 * @param pairID The ID of the pair to rerun
+	 * @return A status code as defined in status.java
+	 */
+
+	public int rerunPair(Integer pairID) {
+<span class="nc" id="L1058">		return makePostWithId(baseURL + C.URL_RERUNPAIR, pairID);</span>
+	}
+
+	private int makePostWithId(final String url, final Integer id) {
+<span class="nc" id="L1062">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L1064">			String URL = url;</span>
+<span class="nc" id="L1065">			URL = URL.replace(&quot;{id}&quot;, id.toString());</span>
+<span class="nc" id="L1066">			HttpPost post = new HttpPost(URL);</span>
+<span class="nc" id="L1067">			post = (HttpPost) setHeaders(post);</span>
+<span class="nc" id="L1068">			post.setEntity(new UrlEncodedFormEntity(new ArrayList&lt;&gt;(), &quot;UTF-8&quot;));</span>
+<span class="nc" id="L1069">			response = executeGetOrPost(post);</span>
+<span class="nc" id="L1070">			JsonObject obj = JsonHandler.getJsonObject(response);</span>
+
+<span class="nc" id="L1072">			boolean success = JsonHandler.getSuccessOfResponse(obj);</span>
+<span class="nc" id="L1073">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+
+<span class="nc bnc" id="L1075" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L1076">				return 0;</span>
+			} else {
+<span class="nc" id="L1078">				setLastError(message);</span>
+<span class="nc" id="L1079">				return Status.ERROR_SERVER;</span>
+			}
+
+<span class="nc" id="L1082">		} catch (Exception e) {</span>
+<span class="nc" id="L1083">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L1085">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Pauses or resumes a job depending on the value of pause
+	 *
+	 * @param pause Pauses a job if true and resumes it if false
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	protected int pauseOrResumeJob(Integer jobID, boolean pause) {
+		try {
+<span class="nc" id="L1098">			String URL = baseURL + C.URL_PAUSEORRESUME;</span>
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">			if (pause) {</span>
+<span class="nc" id="L1100">				URL = URL.replace(&quot;{method}&quot;, &quot;pause&quot;);</span>
+			} else {
+<span class="nc" id="L1102">				URL = URL.replace(&quot;{method}&quot;, &quot;resume&quot;);</span>
+			}
+<span class="nc" id="L1104">			return makePostWithId(URL, jobID);</span>
+<span class="nc" id="L1105">		} catch (Exception e) {</span>
+<span class="nc" id="L1106">			return Status.ERROR_INTERNAL;</span>
+		}
+	}
+
+	/**
+	 * Removes the given solvers from the given space. The solvers are NOT
+	 * deleted.
+	 *
+	 * @param solverIds The IDs of the solvers to remove
+	 * @param spaceID The ID of the space
+	 * @return 0 on success, or a negative integer status code on failure
+	 */
+	public int removeSolvers(List&lt;Integer&gt; solverIds, Integer spaceID) {
+<span class="nc" id="L1119">		return removePrimitives(solverIds, spaceID, R.SOLVER, false);</span>
+	}
+
+	/**
+	 * Removes the given jobs from the given space. The jobs are NOT deleted.
+	 *
+	 * @param jobIds The IDs of the jobs to remove
+	 * @param spaceID The ID of the space
+	 * @return 0 on success, or a negative integer status code on failure
+	 */
+
+	public int removeJobs(List&lt;Integer&gt; jobIds, Integer spaceID) {
+<span class="nc" id="L1131">		return removePrimitives(jobIds, spaceID, R.JOB, false);</span>
+	}
+
+	/**
+	 * Removes the given benchmarks from the given space. The benchmarks are NOT
+	 * deleted.
+	 *
+	 * @param benchmarkIds The IDs of the benchmarks to remove
+	 * @param spaceID The ID of the space
+	 * @return 0 on success, or a negative integer status code on failure
+	 */
+
+	public int removeBenchmarks(List&lt;Integer&gt; benchmarkIds, Integer spaceID) {
+<span class="nc" id="L1144">		return removePrimitives(benchmarkIds, spaceID, &quot;benchmark&quot;, false);</span>
+	}
+
+	/**
+	 * Removes the given subspaces from the given space.
+	 *
+	 * @param subspaceIds The IDs of the subspaces to remove
+	 * @param recyclePrims If true, all primitives owned by the calling user
+	 * that are present in any space being removed will be deleted (or
+	 * moved to the recycle bin, if applicable)
+	 * @return 0 on success, or a negative integer status code on failure
+	 */
+
+	public int removeSubspace(List&lt;Integer&gt; subspaceIds, Boolean recyclePrims) {
+<span class="nc" id="L1158">		return removePrimitives(subspaceIds, null, &quot;subspace&quot;, recyclePrims);</span>
+	}
+
+	/**
+	 * Removes the association between a primitive and a space on StarExec
+	 *
+	 * @param type The type of primitive being remove
+	 * @return 0 on success, and a negative error code on failure
+	 * @author Eric Burns
+	 */
+	protected int removePrimitives(List&lt;Integer&gt; primIDs, Integer spaceID, String type, Boolean recyclePrims) {
+<span class="nc" id="L1169">		HttpResponse response = null;</span>
+		try {
+			HttpPost post;
+<span class="nc bnc" id="L1172" title="All 2 branches missed.">			if (type.equalsIgnoreCase(&quot;subspace&quot;)) {</span>
+<span class="nc" id="L1173">				post = new HttpPost(baseURL + C.URL_REMOVEPRIMITIVE + &quot;/&quot; + type);</span>
+
+			} else {
+<span class="nc" id="L1176">				post = new HttpPost(baseURL + C.URL_REMOVEPRIMITIVE + &quot;/&quot; + type + &quot;/&quot; + spaceID.toString());</span>
+
+			}
+			// first sets username and password data into HTTP POST request
+<span class="nc" id="L1180">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1181">			String key = &quot;selectedIds[]&quot;;</span>
+<span class="nc bnc" id="L1182" title="All 2 branches missed.">			for (Integer id : primIDs) {</span>
+<span class="nc" id="L1183">				params.add(new BasicNameValuePair(key, id.toString()));</span>
+<span class="nc" id="L1184">			}</span>
+
+<span class="nc" id="L1186">			params.add(new BasicNameValuePair(&quot;recyclePrims&quot;, recyclePrims.toString()));</span>
+<span class="nc" id="L1187">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+
+<span class="nc" id="L1189">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L1191">			JsonObject obj = JsonHandler.getJsonObject(response);</span>
+
+<span class="nc" id="L1193">			boolean success = JsonHandler.getSuccessOfResponse(obj);</span>
+<span class="nc" id="L1194">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+<span class="nc bnc" id="L1195" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L1196">				return 0;</span>
+			} else {
+<span class="nc" id="L1198">				setLastError(message);</span>
+<span class="nc" id="L1199">				return Status.ERROR_SERVER;</span>
+			}
+<span class="nc" id="L1201">		} catch (Exception e) {</span>
+<span class="nc" id="L1202">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L1204">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Ends the current Starexec session
+	 *
+	 * @return True on success, false otherwise
+	 * @author Eric Burns
+	 */
+
+	public boolean logout() {
+<span class="nc" id="L1216">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L1218">			HttpPost post = new HttpPost(baseURL + C.URL_LOGOUT);</span>
+<span class="nc" id="L1219">			post = (HttpPost) setHeaders(post);</span>
+<span class="nc" id="L1220">			response = executeGetOrPost(post);</span>
+<span class="nc" id="L1221">			return true;</span>
+<span class="nc" id="L1222">		} catch (Exception e) {</span>
+<span class="nc" id="L1223">			return false;</span>
+		} finally {
+<span class="nc" id="L1225">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Log into StarExec with the username and password of this connection
+	 *
+	 * @return An integer indicating status, with 0 being normal and a negative
+	 * integer indicating an error
+	 * @author Eric Burns
+	 */
+	public int login() {
+<span class="nc" id="L1237">		HttpResponse response = null;</span>
+
+					// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+					// System.out.println( &quot;now running login()\n&quot; );
+					// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+		try {
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;at the top of try block\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1248">			log.log(&quot;Logging in...&quot;);</span>
+<span class="nc" id="L1249">			HttpGet get = new HttpGet(baseURL + C.URL_HOME);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;creating the first 'get' with &quot; + baseURL + C.URL_HOME + &quot;\n&quot; );
+						// for ( Header header : get.getAllHeaders() ) {
+						// 	System.out.println( &quot;\t&quot; + header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+<span class="nc" id="L1259">			response = executeGetOrPost(get);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;response contents after =executeGetOrPost(get):&quot; );
+						// for ( Header header : response.getAllHeaders() ) {
+						// 	System.out.println( &quot;\t&quot; + header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1268">			sessionID = HTMLParser.extractCookie(response.getAllHeaders(), C.TYPE_SESSIONID);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;sessionID after =extractCookie():\n&quot; + sessionID + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1273">			log.log(&quot;Set Session ID to: &quot; + sessionID);</span>
+<span class="nc" id="L1274">			response.getEntity().getContent().close();</span>
+
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;this.isValid(): &quot; + this.isValid() + &quot;\n&quot; );
+						// System.out.println( &quot;baseURL: &quot; + baseURL + &quot;; C.URL_STAREXEC_BASE: &quot; + C.URL_STAREXEC_BASE + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc bnc" id="L1281" title="All 2 branches missed.">			if (!this.isValid()) {</span>
+				// if the user specified their own URL, it is probably the
+				// problem.
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">				if (!baseURL.equals(C.URL_STAREXEC_BASE)) {</span>
+<span class="nc" id="L1285">					return Status.ERROR_BAD_URL;</span>
+				}
+<span class="nc" id="L1287">				return Status.ERROR_INTERNAL;</span>
+			}
+
+			// first sets username and password data into HTTP POST request
+<span class="nc" id="L1291">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;(3);</span>
+
+<span class="nc" id="L1293">			params.add(new BasicNameValuePair(&quot;j_username&quot;, username));</span>
+<span class="nc" id="L1294">			params.add(new BasicNameValuePair(&quot;j_password&quot;, password));</span>
+<span class="nc" id="L1295">			params.add(new BasicNameValuePair(&quot;cookieexists&quot;, &quot;false&quot;));</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;params.toString() after the .add()s:\n&quot; + params.toString() + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1300">			HttpPost post = new HttpPost(baseURL + C.URL_LOGIN);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;creating the first 'post' with &quot; + baseURL + C.URL_LOGIN + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1305">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// UrlEncodedFormEntity urlEncodedFormEntity = new UrlEncodedFormEntity(params, &quot;UTF-8&quot;);
+						// post.setEntity( urlEncodedFormEntity );
+						// System.out.println( &quot;urlEncodedFormEntity: &quot;+convertStreamToString( urlEncodedFormEntity.getContent() )+&quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1312">			post = (HttpPost) setHeaders(post);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;post contents after =setHeaders(post):&quot; );
+						// for ( Header header : post.getAllHeaders() ) {
+						// 	System.out.println( &quot;\t&quot; + header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+			// Post login credentials to server
+<span class="nc" id="L1322">			response = executeGetOrPost(post);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;response contents after =executeGetOrPost(post):&quot; );
+						// for ( Header header : response.getAllHeaders() ) {
+						// 	System.out.println( &quot;\t&quot; + header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+			// -- fix -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+			// instead of trying to assign to sessionID after the second GET request, do it here, using the response
+			// from the POST request
+			//sessionID = HTMLParser.extractCookie(response.getAllHeaders(), C.TYPE_SESSIONID);
+			// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1337">			response.getEntity().getContent().close();</span>
+
+			// On success, starexec will try to redirect, but we don't want that
+<span class="nc" id="L1340">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, false);</span>
+
+<span class="nc" id="L1342">			get = new HttpGet(baseURL + C.URL_HOME);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;creating second 'get' with &quot; + baseURL + C.URL_HOME + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1347">			get = (HttpGet) setHeaders(get);</span>
+
+<span class="nc" id="L1349">			response = executeGetOrPost(get);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;response contents after =executeGetOrPost(get):&quot; );
+						// for ( Header header : response.getAllHeaders() ) {
+						// 	System.out.println( &quot;\t&quot; + header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1358">			log.log(&quot;Set Session ID to: &quot; + sessionID);</span>
+
+<span class="nc" id="L1360">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);</span>
+
+<span class="nc" id="L1362">			safeCloseResponse(response);</span>
+
+<span class="nc" id="L1364">			get = new HttpGet(baseURL + C.URL_LOGGED_IN); // first get to have C.URL_LOGGED_IN</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;creating third 'get' with &quot; + baseURL + C.URL_LOGGED_IN + &quot;\n&quot; );
+						// System.out.println( &quot;get contents after =new HttpGet():&quot; );
+						// for ( Header header : get.getAllHeaders() ) {
+						// 	System.out.println( header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1374">			get = (HttpGet) setHeaders(get);</span>
+
+<span class="nc" id="L1376">			response = executeGetOrPost(get);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;response contents after =executeGetOrPost(get):&quot; );
+						// for ( Header header : response.getAllHeaders() ) {
+						// 	System.out.println( &quot;\t&quot; + header.getName() + &quot; : &quot; + header.getValue() );
+						// }
+						// System.out.println();
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+			// previous location of sessionID assignment (before 5/25/20 ish)
+			// sessionID = HTMLParser.extractCookie(response.getAllHeaders(), C.TYPE_SESSIONID);
+
+<span class="nc" id="L1388">			boolean loggedIn = convertStreamToString(response.getEntity().getContent()).equals(&quot;true&quot;);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//						String tmpString = convertStreamToString(response.getEntity().getContent());
+//						boolean loggedIn = tmpString.equals( &quot;true&quot; );
+//						System.out.println( &quot;entity as string: &quot; + tmpString );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc bnc" id="L1395" title="All 2 branches missed.">			if (loggedIn) {</span>
+<span class="nc" id="L1396">				log.log(&quot;Service says we're logged in.&quot;);</span>
+			} else {
+<span class="nc" id="L1398">				log.log(&quot;Service says we're not logged in.&quot;);</span>
+			}
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;sessionID: &quot; + sessionID );
+						// System.out.println( &quot;loggedIn: &quot; + loggedIn + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+
+			// this means that the server did not give us a new session for the
+			// login
+<span class="nc bnc" id="L1410" title="All 4 branches missed.">			if (sessionID == null || !loggedIn) {</span>
+							// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+							// System.out.println( &quot;(sessionID == null || !loggedIn): &quot; + true + &quot;\n&quot; );
+							// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1415">				log.log(&quot;Returning bad credentials message.&quot;);</span>
+							// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+							// System.out.println(&quot;in catch block; returning Status.ERROR_BAD_CREDENTIALS\n&quot;);
+							// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1420">				return Status.ERROR_BAD_CREDENTIALS;</span>
+			}
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println(&quot;returning 0\n&quot;);
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1426">			return 0;</span>
+
+<span class="nc" id="L1428">		} catch (IllegalStateException e) {</span>
+<span class="nc" id="L1429">			log.log(&quot;Caught IllegalStateException: &quot; + Util.getStackTrace(e));</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println(&quot;in catch block; returning Status.ERROR_BAD_URL\n&quot;);
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1434">			return Status.ERROR_BAD_URL;</span>
+
+<span class="nc" id="L1436">		} catch (Exception e) {</span>
+<span class="nc" id="L1437">			log.log(&quot;Caught Exception: &quot; + Util.getStackTrace(e));</span>
+<span class="nc" id="L1438">			setLastError(e.getMessage() + &quot;: &quot; + Util.getStackTrace(e));</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println(&quot;in catch block; returning Status.ERROR_INTERNAL_EXCEPTION&quot;);
+						// System.out.println( e.getMessage() + &quot;\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1444">			return Status.ERROR_INTERNAL_EXCEPTION;</span>
+		} finally {
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println(&quot;at the top of finally block\n&quot;);
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="nc" id="L1450">			safeCloseResponse(response);</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+						// System.out.println( &quot;response.toString() after safeCloseResponse(response):\n&quot; + response.toString() + &quot;\n&quot; );
+						// System.out.println(&quot;-- END --&quot;);
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+		}
+
+	}
+
+	/**
+	 * Links solvers to a new space
+	 *
+	 * @param solverIds The solver Ids to be added to a new space
+	 * @param oldSpaceId The space they are being linked from, or null if none
+	 * exists
+	 * @param newSpaceId The ID of the space they are being linked to
+	 * @param hierarchy Whether to link to the entire hierarchy
+	 * @return 0 on success or a negative status code on error
+	 */
+
+	public int linkSolvers(Integer[] solverIds, Integer oldSpaceId, Integer newSpaceId, Boolean hierarchy) {
+<span class="nc" id="L1472">		return linkPrimitives(solverIds, oldSpaceId, newSpaceId, hierarchy, R.SOLVER);</span>
+	}
+
+	/**
+	 * Links benchmark to a new space
+	 *
+	 * @param benchmarkIds The benchmark Ids to be added to a new space
+	 * @param oldSpaceId The space they are being linked from, or null if none
+	 * exists
+	 * @param newSpaceId The ID of the space they are being linked to
+	 * @return 0 on success or a negative status code on error
+	 */
+
+	public int linkBenchmarks(Integer[] benchmarkIds, Integer oldSpaceId, Integer newSpaceId) {
+<span class="nc" id="L1486">		return linkPrimitives(benchmarkIds, oldSpaceId, newSpaceId, false, &quot;benchmark&quot;);</span>
+	}
+
+	/**
+	 * Links users to a new space
+	 *
+	 * @param userIds The user Ids to be added to a new space
+	 * @param oldSpaceId The space they are being linked from, or null if none
+	 * exists
+	 * @param newSpaceId The ID of the space they are being linked to
+	 * @return 0 on success or a negative status code on error
+	 */
+	public int linkUsers(Integer[] userIds, Integer oldSpaceId, Integer newSpaceId) {
+<span class="nc" id="L1499">		return linkPrimitives(userIds, oldSpaceId, newSpaceId, false, &quot;user&quot;);</span>
+	}
+
+	/**
+	 * Copies solvers to a new space
+	 *
+	 * @param solverIds The solver Ids to be added to a new space
+	 * @param oldSpaceId The space they are being linked from, or null if none
+	 * exists
+	 * @param newSpaceId The ID of the space they are being linked to
+	 * @param hierarchy Whether to link to the entire hierarchy
+	 * @return 0 on success or a negative status code on error
+	 */
+
+	public List&lt;Integer&gt; copySolvers(Integer[] solverIds, Integer oldSpaceId, Integer newSpaceId, Boolean hierarchy) {
+<span class="nc" id="L1514">		return copyPrimitives(solverIds, oldSpaceId, newSpaceId, hierarchy, false, R.SOLVER);</span>
+	}
+
+	/**
+	 * Copies benchmarks to a new space
+	 *
+	 * @param benchmarkIds The benchmark Ids to be added to a new space
+	 * @param oldSpaceId The space they are being linked from, or null if none
+	 * exists
+	 * @param newSpaceId The ID of the space they are being linked to
+	 * @return 0 on success or a negative status code on error
+	 */
+
+	public List&lt;Integer&gt; copyBenchmarks(Integer[] benchmarkIds, Integer oldSpaceId, Integer newSpaceId) {
+<span class="nc" id="L1528">		return copyPrimitives(benchmarkIds, oldSpaceId, newSpaceId, false, false, &quot;benchmark&quot;);</span>
+	}
+
+	/**
+	 * Copies spaces to a new space
+	 *
+	 * @param spaceIds The space Ids to be added to a new space
+	 * @param oldSpaceId The space they are being linked from, or null if none
+	 * exists
+	 * @param newSpaceId The ID of the space they are being linked to
+	 * @param hierarchy Whether to copy every space in the hierarchies rooted at
+	 * the given spaces
+	 * @return 0 on success or a negative status code on error
+	 */
+
+	public List&lt;Integer&gt; copySpaces(Integer[] spaceIds, Integer oldSpaceId, Integer newSpaceId, Boolean hierarchy, Boolean copyPrimitives) {
+<span class="nc" id="L1544">		return copyPrimitives(spaceIds, oldSpaceId, newSpaceId, hierarchy, copyPrimitives, R.SPACE);</span>
+	}
+
+	/**
+	 * Copies all the primitives of the given types
+	 *
+	 * @param ids The IDs of the primitives to copy
+	 * @param oldSpaceId A space where the primitives currently reside, or null
+	 * if there is no old space
+	 * @param newSpaceID The ID of the space to put all the primitives in
+	 * @param hierarchy (only for solvers) True if copying the primitives to
+	 * each space in a hierarchy (only 1 new prim is created per ID)
+	 * @param type The type of the primitives
+	 * @return A list of positive IDs on success, or size 1 list with a negative
+	 * error code on failure
+	 */
+
+	protected List&lt;Integer&gt; copyPrimitives(Integer[] ids, Integer oldSpaceId, Integer newSpaceID, Boolean hierarchy, Boolean copyPrimitives, String type) {
+<span class="nc" id="L1562">		return copyOrLinkPrimitives(ids, oldSpaceId, newSpaceID, true, hierarchy, copyPrimitives, type);</span>
+	}
+
+	/**
+	 * Links all the primitives of the given types
+	 *
+	 * @param ids The IDs of the primitives to link
+	 * @param oldSpaceId A space where the primitives currently reside, or null
+	 * if there is no old space
+	 * @param newSpaceID The ID of the space to put all the primitives in
+	 * @param hierarchy (only for solvers and users) True if linking the
+	 * primitives to each space in a hierarchy (only 1 new prim is
+	 * created per ID)
+	 * @param type The type of the primitives
+	 * @return 0 on success or a negative error code on failure
+	 */
+
+	protected int linkPrimitives(Integer[] ids, Integer oldSpaceId, Integer newSpaceID, Boolean hierarchy, String type) {
+
+<span class="nc" id="L1581">		return copyOrLinkPrimitives(ids, oldSpaceId, newSpaceID, false, hierarchy, false, type).get(0);</span>
+	}
+
+	/**
+	 * Sends a copy or link request to the StarExec server and returns a status
+	 * code indicating the result of the request
+	 *
+	 * @param copy True if a copy should be performed, and false if a link
+	 * should be performed.
+	 * @param type The type of primitive being copied.
+	 * @return An integer error code where 0 indicates success and a negative
+	 * number is an error.
+	 */
+	private List&lt;Integer&gt; copyOrLinkPrimitives(Integer[] ids, Integer oldSpaceId, Integer newSpaceID, Boolean copy, Boolean hierarchy, Boolean copyPrimitives, String type) {
+<span class="nc" id="L1595">		List&lt;Integer&gt; fail = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1596">		HttpResponse response = null;</span>
+		try {
+			String urlExtension;
+<span class="nc bnc" id="L1599" title="All 5 branches missed.">			switch (type) {</span>
+			case R.SOLVER:
+<span class="nc" id="L1601">				urlExtension = C.URL_COPYSOLVER;</span>
+<span class="nc" id="L1602">				break;</span>
+			case R.SPACE:
+<span class="nc" id="L1604">				urlExtension = C.URL_COPYSPACE;</span>
+<span class="nc" id="L1605">				break;</span>
+			case R.JOB:
+<span class="nc" id="L1607">				urlExtension = C.URL_COPYJOB;</span>
+<span class="nc" id="L1608">				break;</span>
+			case &quot;user&quot;:
+<span class="nc" id="L1610">				urlExtension = C.URL_COPYUSER;</span>
+<span class="nc" id="L1611">				break;</span>
+			default:
+<span class="nc" id="L1613">				urlExtension = C.URL_COPYBENCH;</span>
+				break;
+			}
+
+<span class="nc" id="L1617">			urlExtension = urlExtension.replace(&quot;{spaceID}&quot;, newSpaceID.toString());</span>
+
+<span class="nc" id="L1619">			HttpPost post = new HttpPost(baseURL + urlExtension);</span>
+
+<span class="nc" id="L1621">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;(3);</span>
+
+			// not all of the following are needed for every copy request, but
+			// including them does no harm
+			// and allows all the copy commands to be handled by this function
+<span class="nc" id="L1626">			params.add(new BasicNameValuePair(&quot;copyToSubspaces&quot;, hierarchy.toString()));</span>
+<span class="nc bnc" id="L1627" title="All 2 branches missed.">			if (oldSpaceId != null) {</span>
+<span class="nc" id="L1628">				params.add(new BasicNameValuePair(&quot;fromSpace&quot;, oldSpaceId.toString()));</span>
+			}
+<span class="nc bnc" id="L1630" title="All 2 branches missed.">			for (Integer id : ids) {</span>
+<span class="nc" id="L1631">				params.add(new BasicNameValuePair(&quot;selectedIds[]&quot;, id.toString()));</span>
+			}
+
+<span class="nc" id="L1634">			params.add(new BasicNameValuePair(&quot;copy&quot;, copy.toString()));</span>
+<span class="nc" id="L1635">			params.add(new BasicNameValuePair(&quot;copyHierarchy&quot;, String.valueOf(hierarchy.toString())));</span>
+
+<span class="nc bnc" id="L1637" title="All 2 branches missed.">			CopyPrimitivesOption copyPrimitivesOption = copyPrimitives ? CopyPrimitivesOption.COPY : CopyPrimitivesOption.LINK;</span>
+
+<span class="nc" id="L1639">			params.add(new BasicNameValuePair(&quot;copyPrimitives&quot;, String.valueOf(copyPrimitivesOption.toString())));</span>
+<span class="nc" id="L1640">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+
+<span class="nc" id="L1642">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L1644">			response = executeGetOrPost(post);</span>
+<span class="nc" id="L1645">			JsonObject obj = JsonHandler.getJsonObject(response);</span>
+
+<span class="nc" id="L1647">			boolean success = JsonHandler.getSuccessOfResponse(obj);</span>
+<span class="nc" id="L1648">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+<span class="nc bnc" id="L1649" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L1650">				List&lt;Integer&gt; newPrimIds = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1651">				String[] newIds = HTMLParser.extractMultipartCookie(response.getAllHeaders(), &quot;New_ID&quot;);</span>
+<span class="nc bnc" id="L1652" title="All 2 branches missed.">				if (newIds != null) {</span>
+<span class="nc bnc" id="L1653" title="All 2 branches missed.">					for (String s : newIds) {</span>
+<span class="nc" id="L1654">						newPrimIds.add(Integer.parseInt(s));</span>
+					}
+
+				} else {
+<span class="nc" id="L1658">					newPrimIds.add(0);</span>
+				}
+<span class="nc" id="L1660">				return newPrimIds;</span>
+			} else {
+<span class="nc" id="L1662">				setLastError(message);</span>
+<span class="nc" id="L1663">				fail.add(Status.ERROR_SERVER);</span>
+<span class="nc" id="L1664">				return fail;</span>
+			}
+<span class="nc" id="L1666">		} catch (Exception e) {</span>
+<span class="nc" id="L1667">			fail.add(Status.ERROR_INTERNAL);</span>
+<span class="nc" id="L1668">			return fail;</span>
+		} finally {
+<span class="nc" id="L1670">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Creates a subspace of an existing space on StarExec
+	 *
+	 * @param name The name to give the new space
+	 * @param desc The description to give the new space
+	 * @param parentSpaceID The ID of the parent space for the new space
+	 * @param p The permission object reflecting all the default permissions for
+	 * the new space
+	 * @param locked Whether the space should be locked initially
+	 * @return the new space ID on success and a negative error code otherwise
+	 * @author Eric Burns
+	 */
+
+	public int createSubspace(String name, String desc, Integer parentSpaceID, Permission p, Boolean locked) {
+<span class="nc" id="L1688">		HttpResponse response = null;</span>
+		try {
+			// first sets username and password data into HTTP POST request
+<span class="nc" id="L1691">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;(3);</span>
+<span class="nc" id="L1692">			params.add(new BasicNameValuePair(&quot;parent&quot;, parentSpaceID.toString()));</span>
+<span class="nc" id="L1693">			params.add(new BasicNameValuePair(&quot;name&quot;, name));</span>
+<span class="nc" id="L1694">			params.add(new BasicNameValuePair(&quot;desc&quot;, desc));</span>
+<span class="nc" id="L1695">			params.add(new BasicNameValuePair(&quot;locked&quot;, locked.toString()));</span>
+
+<span class="nc bnc" id="L1697" title="All 2 branches missed.">			for (String x : p.getOnPermissions()) {</span>
+<span class="nc" id="L1698">				params.add(new BasicNameValuePair(x, &quot;on&quot;));</span>
+
+<span class="nc" id="L1700">			}</span>
+
+<span class="nc" id="L1702">			HttpPost post = new HttpPost(baseURL + C.URL_ADDSPACE);</span>
+<span class="nc" id="L1703">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+<span class="nc" id="L1704">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L1706">			response = executeGetOrPost(post);</span>
+<span class="nc bnc" id="L1707" title="All 2 branches missed.">			if (response.getStatusLine().getStatusCode() != HttpServletResponse.SC_FOUND) {</span>
+<span class="nc" id="L1708">				return Status.ERROR_BAD_PARENT_SPACE;</span>
+			}
+<span class="nc" id="L1710">			return Integer.valueOf(HTMLParser.extractCookie(response.getAllHeaders(), &quot;New_ID&quot;));</span>
+<span class="nc" id="L1711">		} catch (Exception e) {</span>
+<span class="nc" id="L1712">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L1714">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all
+	 * solvers in the given space
+	 *
+	 * @param spaceID The ID of the space
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getSolversInSpace(Integer spaceID) {
+<span class="nc" id="L1729">		return listPrims(spaceID, null, false, &quot;solvers&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all
+	 * benchmarks in the given space
+	 *
+	 * @param spaceID The ID of the space
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getBenchmarksInSpace(Integer spaceID) {
+<span class="nc" id="L1743">		return listPrims(spaceID, null, false, &quot;benchmarks&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all jobs
+	 * in the given space
+	 *
+	 * @param spaceID The ID of the space
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getJobsInSpace(Integer spaceID) {
+<span class="nc" id="L1757">		return listPrims(spaceID, null, false, &quot;jobs&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all users
+	 * in the given space
+	 *
+	 * @param spaceID The ID of the space
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getUsersInSpace(Integer spaceID) {
+<span class="nc" id="L1771">		return listPrims(spaceID, null, false, &quot;users&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all spaces
+	 * in the given space
+	 *
+	 * @param spaceID The ID of the space
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getSpacesInSpace(Integer spaceID) {
+<span class="nc" id="L1785">		return listPrims(spaceID, null, false, &quot;spaces&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all
+	 * solvers the current user owns
+	 *
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getSolversByUser() {
+<span class="nc" id="L1798">		return listPrims(null, null, true, &quot;solvers&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all
+	 * benchmarks the current user owns
+	 *
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+
+	public Map&lt;Integer, String&gt; getBenchmarksByUser() {
+<span class="nc" id="L1811">		return listPrims(null, null, true, &quot;benchmarks&quot;);</span>
+	}
+
+	/**
+	 * Gets a Map that maps the IDs of solvers to their names for all jobs
+	 * the current user owns
+	 *
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+	public Map&lt;Integer, String&gt; getJobsByUser() {
+<span class="nc" id="L1823">		return listPrims(null, null, true, &quot;jobs&quot;);</span>
+	}
+
+	/**
+	 * @param solverID Integer id of a solver
+	 * @param limit Integer limiting number of configurations displayed
+	 * @return A Map mapping IDs to names If there was an error, the Map
+	 * will contain only one key, and it will be negative, whereas all
+	 * IDs must be positive.
+	 */
+	protected Map&lt;Integer, String&gt; getSolverConfigs(Integer solverID, Integer limit) {
+<span class="nc" id="L1834">		Map&lt;Integer, String&gt; errorMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L1835">		Map&lt;Integer, String&gt; prims = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L1836">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L1838">			String serverURL = baseURL + C.URL_GETSOLVERCONFIGS;</span>
+
+<span class="nc" id="L1840">			HttpPost post = new HttpPost(serverURL);</span>
+<span class="nc" id="L1841">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L1843">			List&lt;NameValuePair&gt; urlParameters = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1844">			urlParameters.add(new BasicNameValuePair(&quot;solverid&quot;, solverID.toString()));</span>
+<span class="nc bnc" id="L1845" title="All 2 branches missed.">			if (limit != null) {</span>
+<span class="nc" id="L1846">				urlParameters.add(new BasicNameValuePair(&quot;limit&quot;, limit.toString()));</span>
+			} else {
+				// -1 is a null value
+<span class="nc" id="L1849">				urlParameters.add(new BasicNameValuePair(&quot;limit&quot;, &quot;-1&quot;));</span>
+			}
+<span class="nc" id="L1851">			post.setEntity(new UrlEncodedFormEntity(urlParameters));</span>
+
+<span class="nc" id="L1853">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L1855">			final BufferedReader br = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));</span>
+
+			String line;
+<span class="nc bnc" id="L1858" title="All 2 branches missed.">			while ((line = br.readLine()) != null) {</span>
+<span class="nc" id="L1859">				System.out.println(line);</span>
+
+			}
+
+<span class="nc" id="L1863">			int code = response.getStatusLine().getStatusCode();</span>
+			// if space, gives 200 code. if job, gives 302
+<span class="nc bnc" id="L1865" title="All 4 branches missed.">			if (code != HttpServletResponse.SC_OK &amp;&amp; code != HttpServletResponse.SC_FOUND) {</span>
+<span class="nc" id="L1866">				System.out.println(&quot;Connection.java : &quot; + code + &quot; &quot; + response.getStatusLine().getReasonPhrase());</span>
+
+			}
+
+<span class="nc" id="L1870">			return prims;</span>
+<span class="nc" id="L1871">		} catch (Exception e) {</span>
+<span class="nc" id="L1872">			errorMap.put(Status.ERROR_INTERNAL, e.getMessage());</span>
+
+<span class="nc" id="L1874">			return errorMap;</span>
+		} finally {
+<span class="nc" id="L1876">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Lists the IDs and names of some kind of primitives in a given space
+	 *
+	 * @return A Map mapping integer ids to string names
+	 * @author Eric Burns
+	 */
+	protected Map&lt;Integer, String&gt; listPrims(Integer spaceID, Integer limit, boolean forUser, String type) {
+<span class="nc" id="L1887">		Map&lt;Integer, String&gt; errorMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L1888">		Map&lt;Integer, String&gt; prims = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L1889">		HttpResponse response = null;</span>
+		try {
+
+<span class="nc" id="L1892">			Map&lt;String, String&gt; urlParams = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L1894">			urlParams.put(C.FORMPARAM_TYPE, type);</span>
+
+			String URL;
+<span class="nc bnc" id="L1897" title="All 2 branches missed.">			if (forUser) {</span>
+<span class="nc" id="L1898">				int id = getUserID();</span>
+<span class="nc bnc" id="L1899" title="All 2 branches missed.">				if (id &lt; 0) {</span>
+<span class="nc" id="L1900">					errorMap.put(id, null);</span>
+<span class="nc" id="L1901">					return errorMap;</span>
+				}
+
+<span class="nc" id="L1904">				urlParams.put(C.FORMPARAM_ID, String.valueOf(id));</span>
+<span class="nc" id="L1905">				URL = baseURL + C.URL_GETUSERPRIM;</span>
+<span class="nc" id="L1906">			} else {</span>
+<span class="nc" id="L1907">				urlParams.put(C.FORMPARAM_ID, spaceID.toString());</span>
+<span class="nc" id="L1908">				URL = baseURL + C.URL_GETPRIM;</span>
+			}
+			// in the absence of limit, we want all the primitives
+<span class="nc" id="L1911">			int maximum = Integer.MAX_VALUE;</span>
+<span class="nc bnc" id="L1912" title="All 2 branches missed.">			if (limit != null) {</span>
+<span class="nc" id="L1913">				maximum = limit;</span>
+			}
+
+			// need to specify the number of columns according to what
+			// GetNextPageOfPrimitives in RESTHelpers
+			// expects
+<span class="nc" id="L1919">			String columns = &quot;0&quot;;</span>
+<span class="nc bnc" id="L1920" title="All 6 branches missed.">			switch (type) {</span>
+			case &quot;solvers&quot;:
+<span class="nc" id="L1922">				columns = &quot;2&quot;;</span>
+<span class="nc" id="L1923">				break;</span>
+			case &quot;users&quot;:
+<span class="nc" id="L1925">				columns = &quot;3&quot;;</span>
+<span class="nc" id="L1926">				break;</span>
+			case &quot;benchmarks&quot;:
+<span class="nc" id="L1928">				columns = &quot;2&quot;;</span>
+<span class="nc" id="L1929">				break;</span>
+			case &quot;jobs&quot;:
+<span class="nc" id="L1931">				columns = &quot;6&quot;;</span>
+<span class="nc" id="L1932">				break;</span>
+			case &quot;spaces&quot;:
+<span class="nc" id="L1934">				columns = &quot;2&quot;;</span>
+				break;
+			}
+
+<span class="nc" id="L1938">			URL = URL.replace(&quot;{id}&quot;, urlParams.get(C.PARAM_ID));</span>
+<span class="nc" id="L1939">			URL = URL.replace(&quot;{type}&quot;, urlParams.get(&quot;type&quot;));</span>
+<span class="nc" id="L1940">			HttpPost post = new HttpPost(URL);</span>
+<span class="nc" id="L1941">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L1943">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L1945">			params.add(new BasicNameValuePair(&quot;sEcho&quot;, &quot;1&quot;));</span>
+<span class="nc" id="L1946">			params.add(new BasicNameValuePair(&quot;iColumns&quot;, columns));</span>
+<span class="nc" id="L1947">			params.add(new BasicNameValuePair(&quot;sColumns&quot;, &quot;&quot;));</span>
+<span class="nc" id="L1948">			params.add(new BasicNameValuePair(&quot;iDisplayStart&quot;, &quot;0&quot;));</span>
+
+<span class="nc" id="L1950">			params.add(new BasicNameValuePair(&quot;iDisplayLength&quot;, String.valueOf(maximum)));</span>
+<span class="nc" id="L1951">			params.add(new BasicNameValuePair(&quot;iSortCol_0&quot;, &quot;0&quot;));</span>
+<span class="nc" id="L1952">			params.add(new BasicNameValuePair(&quot;sSearch&quot;, &quot;&quot;));</span>
+<span class="nc" id="L1953">			params.add(new BasicNameValuePair(&quot;sSortDir_0&quot;, &quot;asc&quot;));</span>
+
+<span class="nc" id="L1955">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+
+<span class="nc" id="L1957">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L1959">			JsonElement jsonE = JsonHandler.getJsonString(response);</span>
+<span class="nc" id="L1960">			JsonObject obj = jsonE.getAsJsonObject();</span>
+<span class="nc" id="L1961">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+
+			// if we got back a ValidatorStatusCode, there was an error
+<span class="nc bnc" id="L1964" title="All 2 branches missed.">			if (message != null) {</span>
+<span class="nc" id="L1965">				setLastError(message);</span>
+<span class="nc" id="L1966">				errorMap.put(Status.ERROR_SERVER, null);</span>
+<span class="nc" id="L1967">				return errorMap;</span>
+			}
+
+			// we should get back a jsonObject which has a jsonArray of
+			// primitives labeled 'aaData'
+<span class="nc" id="L1972">			JsonArray json = jsonE.getAsJsonObject().get(&quot;aaData&quot;).getAsJsonArray();</span>
+			JsonArray curPrim;
+			String name;
+			Integer id;
+			JsonPrimitive element;
+
+			// the array is itself composed of arrays, with each array
+			// containing multiple elements
+			// describing a single primitive
+<span class="nc bnc" id="L1981" title="All 2 branches missed.">			for (JsonElement x : json) {</span>
+<span class="nc" id="L1982">				curPrim = x.getAsJsonArray();</span>
+<span class="nc bnc" id="L1983" title="All 2 branches missed.">				for (JsonElement y : curPrim) {</span>
+<span class="nc" id="L1984">					element = y.getAsJsonPrimitive();</span>
+
+<span class="nc" id="L1986">					id = HTMLParser.extractIDFromJson(element.getAsString());</span>
+<span class="nc" id="L1987">					name = HTMLParser.extractNameFromJson(element.getAsString(), urlParams.get(&quot;type&quot;));</span>
+
+					// if the element has an ID and a name, save them
+<span class="nc bnc" id="L1990" title="All 4 branches missed.">					if (id != null &amp;&amp; name != null) {</span>
+<span class="nc" id="L1991">						prims.put(id, name);</span>
+					}
+
+<span class="nc" id="L1994">				}</span>
+
+<span class="nc" id="L1996">			}</span>
+
+<span class="nc" id="L1998">			return prims;</span>
+
+<span class="nc" id="L2000">		} catch (Exception e) {</span>
+<span class="nc" id="L2001">			errorMap.put(Status.ERROR_INTERNAL, e.getMessage());</span>
+
+<span class="nc" id="L2003">			return errorMap;</span>
+		} finally {
+<span class="nc" id="L2005">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Downloads a solver from StarExec in the form of a zip file
+	 *
+	 * @param solverId The ID of the solver to download
+	 * @param filePath The output path where the file will be saved
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadSolver(Integer solverId, String filePath) throws IOException {
+<span class="nc" id="L2017">		return downloadArchive(solverId, R.SOLVER, null, null, filePath, false, false, false, false, null, false, false, null, false);</span>
+	}
+
+	/**
+	 * Downloads a list of job pairs
+	 *
+	 * @param pairIds The IDs of all the pairs that should be downloaded
+	 * @param filePath Absolute file path to the spot that an archive containing
+	 * all the given pairs should be placed
+	 * @return A status code as defined in status.java
+	 */
+	public int downloadJobPairs(List&lt;Integer&gt; pairIds, String filePath) {
+<span class="nc" id="L2029">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L2031">			Map&lt;String, String&gt; urlParams = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L2032">			urlParams.put(C.FORMPARAM_TYPE, R.JOB_OUTPUTS);</span>
+<span class="nc" id="L2033">			StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L2034" title="All 2 branches missed.">			for (Integer id : pairIds) {</span>
+<span class="nc" id="L2035">				sb.append(id);</span>
+<span class="nc" id="L2036">				sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L2037">			}</span>
+<span class="nc" id="L2038">			String ids = sb.substring(0, sb.length() - 1);</span>
+
+<span class="nc" id="L2040">			urlParams.put(C.FORMPARAM_ID + &quot;[]&quot;, ids);</span>
+
+<span class="nc" id="L2042">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, false);</span>
+			// First, put in the request for the server to generate the desired
+			// archive
+
+<span class="nc" id="L2046">			HttpGet get = new HttpGet(HTMLParser.URLEncode(baseURL + C.URL_DOWNLOAD, urlParams));</span>
+<span class="nc" id="L2047">			get = (HttpGet) setHeaders(get);</span>
+<span class="nc" id="L2048">			response = executeGetOrPost(get);</span>
+
+<span class="nc bnc" id="L2050" title="All 2 branches missed.">			boolean fileFound = response.getFirstHeader(&quot;Content-Disposition&quot;) != null;</span>
+
+<span class="nc bnc" id="L2052" title="All 2 branches missed.">			if (!fileFound) {</span>
+<span class="nc" id="L2053">				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+
+<span class="nc" id="L2055">				return Status.ERROR_ARCHIVE_NOT_FOUND;</span>
+			}
+
+			// copy file from the HTTPResponse to an output stream
+<span class="nc" id="L2059">			File out = new File(filePath);</span>
+<span class="nc" id="L2060">			File parent = new File(out.getAbsolutePath().substring(0, out.getAbsolutePath().lastIndexOf(File.separator)));</span>
+<span class="nc" id="L2061">			parent.mkdirs();</span>
+<span class="nc" id="L2062">			FileOutputStream outs = new FileOutputStream(out);</span>
+<span class="nc" id="L2063">			IOUtils.copy(response.getEntity().getContent(), outs);</span>
+<span class="nc" id="L2064">			outs.close();</span>
+<span class="nc" id="L2065">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);</span>
+
+<span class="nc" id="L2067">			return 0;</span>
+<span class="nc" id="L2068">		} catch (Exception e) {</span>
+<span class="nc" id="L2069">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);</span>
+<span class="nc" id="L2070">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L2072">			safeCloseResponse(response);</span>
+		}
+
+	}
+
+	/**
+	 * Downloads the job output from a job from StarExec in the form of a zip
+	 * file
+	 *
+	 * @param jobId The ID of the job to download the output from
+	 * @param filePath The output path where the file will be saved
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadJobOutput(Integer jobId, String filePath) throws IOException {
+<span class="nc" id="L2086">		return downloadArchive(jobId, R.JOB_OUTPUT, null, null, filePath, false, false, false, false, null, false, false, null, false);</span>
+	}
+
+	/**
+	 * Downloads a CSV describing a job from StarExec in the form of a zip file
+	 *
+	 * @param jobId The ID of the job to download the CSV for
+	 * @param filePath The output path where the file will be saved
+	 * @param includeIds Whether to include columns in the CSV displaying the
+	 * IDs of the primitives involved
+	 * @param onlyCompleted If true, only include completed pairs in the csv
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadJobInfo(Integer jobId, String filePath, boolean includeIds, boolean onlyCompleted) throws IOException {
+<span class="nc" id="L2100">		return downloadArchive(jobId, R.JOB, null, null, filePath, false, false, includeIds, false, null, onlyCompleted, false, null, false);</span>
+	}
+
+	/**
+	 * Downloads a space XML file from StarExec in the form of a zip file
+	 *
+	 * @param spaceId The ID of the space to download the XML for
+	 * @param filePath The output path where the file will be saved
+	 * @param getAttributes If true, adds benchmark attributes to the XML
+	 * @param updateId The ID of the update processor to use in the XML. No
+	 * update processor if null
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadSpaceXML(Integer spaceId, String filePath, boolean getAttributes, Integer updateId) throws IOException {
+<span class="nc" id="L2114">		return downloadArchive(spaceId, R.SPACE_XML, null, null, filePath, false, false, false, false, null, false, getAttributes, updateId, false);</span>
+	}
+
+	/**
+	 * Downloads the data contained in a single space
+	 *
+	 * @param spaceId The ID of the space to download
+	 * @param filePath Where to output the ZIP file
+	 * @param excludeSolvers If true, excludes solvers from the ZIP file.
+	 * @param excludeBenchmarks If true, excludes benchmarks from the ZIP file
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadSpace(Integer spaceId, String filePath, boolean excludeSolvers, boolean excludeBenchmarks) throws IOException {
+<span class="nc" id="L2127">		return downloadArchive(spaceId, R.SPACE, null, null, filePath, excludeSolvers, excludeBenchmarks, false, false, null, false, false, null, false);</span>
+	}
+
+	/**
+	 * Downloads the data contained in a space hierarchy rooted at the given
+	 * space
+	 *
+	 * @param spaceId The ID of the root space of the hierarchy to download
+	 * @param filePath Where to output the ZIP file
+	 * @param excludeSolvers If true, excludes solvers from the ZIP file.
+	 * @param excludeBenchmarks If true, excludes benchmarks from the ZIP file
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadSpaceHierarchy(Integer spaceId, String filePath, boolean excludeSolvers, boolean excludeBenchmarks) throws IOException {
+<span class="nc" id="L2141">		return downloadArchive(spaceId, R.SPACE, null, null, filePath, excludeSolvers, excludeBenchmarks, false, true, null, false, false, null, false);</span>
+	}
+
+	/**
+	 * Downloads a post processor from StarExec in the form of a zip file
+	 *
+	 * @param procId The ID of the processor to download
+	 * @param filePath The output path where the file will be saved
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadPostProcessor(Integer procId, String filePath) throws IOException {
+<span class="nc" id="L2152">		return downloadArchive(procId, R.PROCESSOR, null, null, filePath, false, false, false, false, &quot;post&quot;, false, false, null, false);</span>
+	}
+
+	/**
+	 * Downloads a benchmark from StarExec in the form of a zip file
+	 *
+	 * @param benchId The ID of the benchmark to download
+	 * @param filePath The output path where the file will be saved
+	 * @return A status code as defined in the Status class
+	 */
+	public int downloadBenchmark(Integer benchId, String filePath) throws IOException {
+<span class="nc" id="L2163">		return downloadArchive(benchId, R.BENCHMARK, null, null, filePath, false, false, false, false, null, false, false, null, false);</span>
+	}
+
+	/**
+	 * Returns the community id that a space is in.
+	 *
+	 * @param spaceId the space id to get the community of
+	 * @return the id of the community the space is in.
+	 * @throws IOException
+	 */
+	public int getCommunityIdOfSpace(int spaceId) throws IOException {
+<span class="nc" id="L2174">		final String url = baseURL + C.URL_COMMUNITY_FROM_SPACE.replace(C.URL_COMMUNITY_FROM_SPACE_SPACE_ID_PARAM, String.valueOf(spaceId));</span>
+
+<span class="nc" id="L2176">		HttpGet get = new HttpGet(url);</span>
+<span class="nc" id="L2177">		get = (HttpGet) setHeaders(get);</span>
+<span class="nc" id="L2178">		HttpResponse response = null;</span>
+
+		try {
+<span class="nc" id="L2181">			response = executeGetOrPost(get);</span>
+<span class="nc" id="L2182">			return JsonHandler.getJsonString(response).getAsInt();</span>
+		} finally {
+<span class="nc" id="L2184">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Downloads an archive from Starexec
+	 *
+	 * @param id The ID of the primitive that is going to be downloaded
+	 * @param type The type of the primitive (R.SOLVER, R.BENCHMARK, and so on
+	 * @param since If downloading new job info, this represents the last seen
+	 * completion index. Otherwise, it should be null
+	 * @param filePath The path to where the archive should be output, including
+	 * the filename
+	 * @param excludeSolvers If downloading a space, whether to exclude solvers
+	 * @param excludeBenchmarks If downloading a space, whether to exclude
+	 * benchmarks
+	 * @param includeIds If downloading a job info CSV, whether to include
+	 * columns for IDs
+	 * @param hierarchy If downloading a space, whether to get the full
+	 * hierarchy
+	 * @param procClass If downloading a processor, what type of processor it is
+	 * (R.BENCHMARK,&quot;post&quot;,or &quot;pre&quot;)
+	 * @return
+	 */
+	protected int downloadArchive(Integer id, String type, Integer since, Long lastTimestamp, final String filePath, boolean excludeSolvers, boolean excludeBenchmarks, boolean includeIds, Boolean hierarchy, String procClass, boolean onlyCompleted, boolean includeAttributes, Integer updateId, Boolean longPath) throws IOException {
+<span class="nc" id="L2209">		HttpResponse response = null;</span>
+
+		try {
+<span class="nc" id="L2212">			Map&lt;String, String&gt; urlParams = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L2213">			log.log(&quot;Downloading archive of type: &quot; + type);</span>
+<span class="nc" id="L2214">			urlParams.put(C.FORMPARAM_TYPE, type);</span>
+<span class="nc" id="L2215">			urlParams.put(C.FORMPARAM_ID, id.toString());</span>
+<span class="nc bnc" id="L2216" title="All 2 branches missed.">			if (type.equals(R.SPACE)) {</span>
+<span class="nc" id="L2217">				urlParams.put(&quot;hierarchy&quot;, hierarchy.toString());</span>
+			}
+<span class="nc bnc" id="L2219" title="All 2 branches missed.">			if (since != null) {</span>
+<span class="nc" id="L2220">				urlParams.put(C.FORMPARAM_SINCE, since.toString());</span>
+			}
+<span class="nc bnc" id="L2222" title="All 2 branches missed.">			if (lastTimestamp != null) {</span>
+<span class="nc" id="L2223">				urlParams.put(&quot;lastTimestamp&quot;, lastTimestamp.toString());</span>
+			}
+<span class="nc bnc" id="L2225" title="All 2 branches missed.">			if (procClass != null) {</span>
+<span class="nc" id="L2226">				urlParams.put(&quot;procClass&quot;, procClass);</span>
+			}
+			// if the use put in the include ids param, pass it on to the server
+<span class="nc bnc" id="L2229" title="All 2 branches missed.">			if (includeIds) {</span>
+<span class="nc" id="L2230">				urlParams.put(&quot;returnids&quot;, &quot;true&quot;);</span>
+			}
+<span class="nc bnc" id="L2232" title="All 2 branches missed.">			if (onlyCompleted) {</span>
+<span class="nc" id="L2233">				urlParams.put(&quot;getcompleted&quot;, &quot;true&quot;);</span>
+			}
+<span class="nc bnc" id="L2235" title="All 2 branches missed.">			if (includeAttributes) {</span>
+<span class="nc" id="L2236">				urlParams.put(&quot;includeattrs&quot;, &quot;true&quot;);</span>
+			}
+<span class="nc bnc" id="L2238" title="All 2 branches missed.">			if (updateId != null) {</span>
+<span class="nc" id="L2239">				urlParams.put(&quot;updates&quot;, &quot;true&quot;);</span>
+<span class="nc" id="L2240">				urlParams.put(&quot;upid&quot;, updateId.toString());</span>
+			}
+<span class="nc bnc" id="L2242" title="All 2 branches missed.">			if (excludeBenchmarks) {</span>
+<span class="nc" id="L2243">				urlParams.put(&quot;includebenchmarks&quot;, &quot;false&quot;);</span>
+			}
+<span class="nc bnc" id="L2245" title="All 2 branches missed.">			if (excludeSolvers) {</span>
+<span class="nc" id="L2246">				urlParams.put(&quot;includesolvers&quot;, &quot;false&quot;);</span>
+			}
+<span class="nc bnc" id="L2248" title="All 2 branches missed.">			if (longPath) {</span>
+<span class="nc" id="L2249">				urlParams.put(&quot;longpath&quot;, &quot;true&quot;);</span>
+			}
+<span class="nc" id="L2251">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, false);</span>
+			// First, put in the request for the server to generate the desired
+			// archive
+
+<span class="nc" id="L2255">			String getUrl = HTMLParser.URLEncode(baseURL + C.URL_DOWNLOAD, urlParams);</span>
+<span class="nc" id="L2256">			HttpGet get = new HttpGet(getUrl);</span>
+
+<span class="nc" id="L2258">			log.log(&quot;Making request to &quot; + getUrl);</span>
+
+<span class="nc" id="L2260">			get = (HttpGet) setHeaders(get);</span>
+<span class="nc" id="L2261">			response = executeGetOrPost(get);</span>
+<span class="nc" id="L2262">			final Map&lt;String, String&gt; cookies = getCookies(response);</span>
+<span class="nc" id="L2263">			final int httpStatus = response.getStatusLine().getStatusCode();</span>
+<span class="nc bnc" id="L2264" title="All 2 branches missed.">			final boolean fileFound = response.getFirstHeader(&quot;Content-Disposition&quot;) != null;</span>
+
+<span class="nc bnc" id="L2266" title="All 4 branches missed.">			if (!fileFound &amp;&amp; httpStatus != HttpServletResponse.SC_NOT_MODIFIED) {</span>
+<span class="nc" id="L2267">				final String errorMessage = cookies.get(C.STATUS_MESSAGE_COOKIE);</span>
+<span class="nc" id="L2268">				log.log(&quot;Content-Disposition header was missing.&quot;);</span>
+<span class="nc" id="L2269">				log.log(&quot;Server status message: &quot; + errorMessage);</span>
+<span class="nc" id="L2270">				setLastError(errorMessage);</span>
+<span class="nc" id="L2271">				return Status.ERROR_ARCHIVE_NOT_FOUND;</span>
+			}
+
+<span class="nc" id="L2274">			final Header modifiedHeader = response.getFirstHeader(&quot;Last-Modified&quot;);</span>
+			final long lastModified;
+<span class="nc bnc" id="L2276" title="All 2 branches missed.">			if (modifiedHeader != null) {</span>
+<span class="nc" id="L2277">				lastModified = DateUtils.parseDate(modifiedHeader.getValue()).getTime();</span>
+			} else {
+<span class="nc" id="L2279">				lastModified = 0;</span>
+			}
+
+			/* Running-Pairs is not always sent, so we need to default to 0
+			 */
+<span class="nc" id="L2284">			final int runningPairs = Integer.parseInt(cookies.getOrDefault(&quot;Running-Pairs&quot;, &quot;0&quot;));</span>
+<span class="nc" id="L2285">			final int foundPairs = Integer.parseInt(cookies.getOrDefault(&quot;Pairs-Found&quot;, &quot;0&quot;));</span>
+<span class="nc" id="L2286">			final int totalPairs = Integer.parseInt(cookies.getOrDefault(&quot;Total-Pairs&quot;, &quot;0&quot;));</span>
+<span class="nc" id="L2287">			final int oldPairs = Integer.parseInt(cookies.getOrDefault(&quot;Older-Pairs&quot;, &quot;0&quot;));</span>
+<span class="nc" id="L2288">			final int lastSeen = Integer.parseInt(cookies.getOrDefault(&quot;Max-Completion&quot;, &quot;0&quot;));</span>
+
+			// if we're sending 'since,' it means this is a request for new job data
+<span class="nc" id="L2291">			final boolean isNewJobRequest = urlParams.containsKey(C.FORMPARAM_SINCE);</span>
+<span class="nc" id="L2292">			final boolean isNewOutputRequest = urlParams.get(C.FORMPARAM_TYPE).equals(R.JOB_OUTPUT);</span>
+<span class="nc" id="L2293">			final boolean isNewInfoRequest = urlParams.get(C.FORMPARAM_TYPE).equals(R.JOB);</span>
+<span class="nc" id="L2294">			boolean jobDone = false;</span>
+<span class="nc bnc" id="L2295" title="All 2 branches missed.">			if (isNewJobRequest) {</span>
+<span class="nc bnc" id="L2296" title="All 4 branches missed.">				final boolean jobStarted = foundPairs != 0 || runningPairs != 0;</span>
+<span class="nc bnc" id="L2297" title="All 2 branches missed.">				jobDone = totalPairs == (foundPairs + oldPairs);</span>
+<span class="nc bnc" id="L2298" title="All 4 branches missed.">				if (isNewOutputRequest &amp;&amp; !jobStarted) {</span>
+					// There are no new pairs so the zip will be empty.
+<span class="nc" id="L2300">					return C.SUCCESS_NOFILE;</span>
+				}
+				// check to see if the job is complete
+<span class="nc bnc" id="L2303" title="All 4 branches missed.">				if (since != null &amp;&amp; lastSeen &lt;= since) { // indicates there was no new information</span>
+<span class="nc bnc" id="L2304" title="All 2 branches missed.">					if (jobDone) {</span>
+<span class="nc" id="L2305">						return C.SUCCESS_JOBDONE;</span>
+<span class="nc bnc" id="L2306" title="All 2 branches missed.">					} else if (!isNewOutputRequest) {</span>
+<span class="nc" id="L2307">						log.log(&quot;No new job info available; returning SUCCESS_NOFILE.&quot;);</span>
+<span class="nc" id="L2308">						return C.SUCCESS_NOFILE;</span>
+					} else {
+						// When polling for output, allow the download logic to continue to check the server response.
+					}
+				}
+			}
+
+<span class="nc bnc" id="L2315" title="All 2 branches missed.">			if (httpStatus == HttpServletResponse.SC_NOT_MODIFIED) {</span>
+<span class="nc bnc" id="L2316" title="All 2 branches missed.">				if (jobDone) {</span>
+<span class="nc" id="L2317">					return C.SUCCESS_JOBDONE;</span>
+				} else {
+<span class="nc" id="L2319">					return C.SUCCESS_NOFILE;</span>
+				}
+			}
+
+			// copy file from the HTTPResponse to an output stream
+<span class="nc" id="L2324">			File out = new File(filePath);</span>
+<span class="nc" id="L2325">			File parent = new File(out.getAbsolutePath().substring(0, out.getAbsolutePath().lastIndexOf(File.separator)));</span>
+<span class="nc" id="L2326">			parent.mkdirs();</span>
+<span class="nc" id="L2327">			FileOutputStream outs = new FileOutputStream(out);</span>
+<span class="nc" id="L2328">			IOUtils.copy(response.getEntity().getContent(), outs);</span>
+<span class="nc" id="L2329">			outs.close();</span>
+<span class="nc" id="L2330">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);</span>
+
+			/* If it's not a valid zipfile we need to return SUCCESS_NOFILE
+			 * if the request was a new output request, otherwise throw the
+			 * exception. Don't return anything if it is a valid zipfile.
+			 */
+<span class="nc" id="L2336">			Optional&lt;Integer&gt; errorCode = checkIfValidZipFile(out);</span>
+<span class="nc bnc" id="L2337" title="All 2 branches missed.">			if (errorCode.isPresent()) {</span>
+<span class="nc" id="L2338">				return errorCode.get();</span>
+			}
+
+			// only after we've successfully saved the file should we update the
+			// maximum completion index,
+			// which keeps us from downloading the same stuff twice
+<span class="nc bnc" id="L2344" title="All 2 branches missed.">			if (isNewJobRequest) {</span>
+<span class="nc bnc" id="L2345" title="All 2 branches missed.">				if (isNewInfoRequest) {</span>
+<span class="nc" id="L2346">					this.setJobInfoCompletion(id, lastSeen);</span>
+<span class="nc bnc" id="L2347" title="All 2 branches missed.">				} else if (isNewOutputRequest) {</span>
+<span class="nc" id="L2348">					this.setJobOutCompletion(id, new PollJobData(lastSeen, lastModified));</span>
+				}
+
+<span class="nc bnc" id="L2351" title="All 2 branches missed.">				if (foundPairs != 0) {</span>
+<span class="nc" id="L2352">					System.out.printf(</span>
+							&quot;completed pairs found =%d-%d/%d (highest=%d)\n&quot;,
+<span class="nc" id="L2354">							oldPairs + 1,</span>
+<span class="nc" id="L2355">							oldPairs + foundPairs,</span>
+<span class="nc" id="L2356">							totalPairs,</span>
+<span class="nc" id="L2357">							lastSeen</span>
+					);
+				}
+			}
+
+<span class="nc" id="L2362">			return 0;</span>
+<span class="nc" id="L2363">		} catch (IOException e) {</span>
+<span class="nc" id="L2364">			log.log(&quot;Caught exception in downloadArchive: &quot; + Util.getStackTrace(e));</span>
+
+<span class="nc" id="L2366">			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);</span>
+<span class="nc" id="L2367">			throw e;</span>
+		} finally {
+<span class="nc" id="L2369">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Sets the highest seen completion ID for info on a given job
+	 *
+	 * @param jobID An ID of a job on StarExec
+	 * @param completion The completion ID
+	 */
+	protected void setJobInfoCompletion(int jobID, int completion) {
+<span class="nc" id="L2380">		job_info_indices.put(jobID, completion);</span>
+<span class="nc" id="L2381">	}</span>
+
+	/**
+	 * Sets the highest seen completion ID for output on a given job
+	 *
+	 * @param jobID An ID of a job on StarExec
+	 */
+	protected void setJobOutCompletion(int jobID, PollJobData data) {
+<span class="nc" id="L2389">		job_out_indices.put(jobID, data);</span>
+<span class="nc" id="L2390">	}</span>
+
+	/**
+	 * Gets the status of a benchmark archive upload given the ID of the upload
+	 * status.
+	 *
+	 * @param statusId The upload ID to use
+	 * @return A human-readable string containing details of the benchmark
+	 * upload in the following format benchmarks: {validated} / {failed
+	 * validation} / {total} | spaces: {completed} / {total} {error
+	 * message if exists} {&quot;upload complete&quot; if finished} Null is
+	 * returned if there was an error, and this Connection's error
+	 * message will have been set
+	 */
+	public String getBenchmarkUploadStatus(Integer statusId) {
+<span class="nc" id="L2405">		HttpResponse response = null;</span>
+		try {
+
+<span class="nc" id="L2408">			String URL = baseURL + C.URL_GET_BENCH_UPLOAD_STATUS;</span>
+<span class="nc" id="L2409">			URL = URL.replace(&quot;{statusId}&quot;, statusId.toString());</span>
+<span class="nc" id="L2410">			HttpGet get = new HttpGet(URL);</span>
+<span class="nc" id="L2411">			get = (HttpGet) setHeaders(get);</span>
+<span class="nc" id="L2412">			response = executeGetOrPost(get);</span>
+<span class="nc" id="L2413">			JsonObject obj = JsonHandler.getJsonObject(response);</span>
+
+<span class="nc" id="L2415">			boolean success = JsonHandler.getSuccessOfResponse(obj);</span>
+<span class="nc" id="L2416">			String message = JsonHandler.getMessageOfResponse(obj);</span>
+<span class="nc bnc" id="L2417" title="All 2 branches missed.">			if (success) {</span>
+
+<span class="nc" id="L2419">				return message;</span>
+			} else {
+<span class="nc" id="L2421">				setLastError(message);</span>
+			}
+
+<span class="nc" id="L2424">		} catch (Exception e) {</span>
+<span class="nc" id="L2425">			setLastError(&quot;Internal error getting benchmark upload details&quot;);</span>
+<span class="nc" id="L2426">			return null;</span>
+		} finally {
+<span class="nc" id="L2428">			safeCloseResponse(response);</span>
+		}
+<span class="nc" id="L2430">		return null;</span>
+	}
+
+	/**
+	 * Creates a job on Starexec according to the given parameters
+	 *
+	 * @param spaceId The ID of the root space for the job
+	 * @param name The name of the job. Must be unique to the space
+	 * @param desc A description of the job. Can be empty.
+	 * @param postProcId The ID of the post processor to apply to the job output
+	 * @param preProcId The ID of the pre procesor that will be run on
+	 * benchmarks before they are fed into solvers
+	 * @param queueId The ID of the queue to run the job on
+	 * @param wallclock The wallclock timeout for job pairs. If null, the
+	 * default for the space will be used
+	 * @param cpu The cpu timeout for job pairs. If null, the default for the
+	 * space will be used.
+	 * @param useDepthFirst If true, job pairs will be run in a depth-first
+	 * fashion in the space hierarchy.
+	 * @param startPaused If true, job will be paused upon creation
+	 * @param seed A number that will be passed into the preprocessor for every
+	 * job pair in this job If false, they will be run in a round-robin
+	 * fashion.
+	 * @param maxMemory Specifies the maximum amount of memory, in gigabytes,
+	 * that can be used by any one job pair.
+	 * @param suppressTimestamps If true, timestamps will not be added to job
+	 * output lines. Defaults to false.
+	 * @param resultsInterval The interval at which to get incremental results,
+	 * in seconds. 0 means no incremental results
+	 * @return A status code as defined in status.java
+	 */
+	public int createJob(Integer spaceId, String name, String desc, Integer postProcId, Integer preProcId, Integer queueId, Integer wallclock, Integer cpu, Boolean useDepthFirst, Double maxMemory, boolean startPaused, Long seed, Boolean suppressTimestamps, Integer resultsInterval) {
+<span class="nc" id="L2462">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L2464">			List&lt;NameValuePair&gt; params = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L2466">			String traversalMethod = &quot;depth&quot;;</span>
+<span class="nc bnc" id="L2467" title="All 2 branches missed.">			if (!useDepthFirst) {</span>
+<span class="nc" id="L2468">				traversalMethod = &quot;robin&quot;;</span>
+			}
+
+<span class="nc" id="L2471">			HttpPost post = new HttpPost(baseURL + C.URL_POSTJOB);</span>
+
+<span class="nc" id="L2473">			post = (HttpPost) setHeaders(post);</span>
+
+<span class="nc" id="L2475">			params.add(new BasicNameValuePair(&quot;sid&quot;, spaceId.toString()));</span>
+<span class="nc" id="L2476">			params.add(new BasicNameValuePair(&quot;name&quot;, name));</span>
+<span class="nc" id="L2477">			params.add(new BasicNameValuePair(&quot;desc&quot;, desc));</span>
+<span class="nc bnc" id="L2478" title="All 2 branches missed.">			if (wallclock != null) {</span>
+<span class="nc" id="L2479">				params.add(new BasicNameValuePair(&quot;wallclockTimeout&quot;, String.valueOf(wallclock)));</span>
+			}
+<span class="nc bnc" id="L2481" title="All 2 branches missed.">			if (cpu != null) {</span>
+<span class="nc" id="L2482">				params.add(new BasicNameValuePair(&quot;cpuTimeout&quot;, String.valueOf(cpu)));</span>
+			}
+<span class="nc" id="L2484">			params.add(new BasicNameValuePair(&quot;queue&quot;, queueId.toString()));</span>
+<span class="nc" id="L2485">			params.add(new BasicNameValuePair(&quot;postProcess&quot;, postProcId.toString()));</span>
+<span class="nc" id="L2486">			params.add(new BasicNameValuePair(&quot;preProcess&quot;, preProcId.toString()));</span>
+<span class="nc" id="L2487">			params.add(new BasicNameValuePair(&quot;seed&quot;, seed.toString()));</span>
+<span class="nc" id="L2488">			params.add(new BasicNameValuePair(&quot;resultsInterval&quot;, resultsInterval.toString()));</span>
+<span class="nc" id="L2489">			params.add(new BasicNameValuePair(C.FORMPARAM_TRAVERSAL, traversalMethod));</span>
+<span class="nc" id="L2490">			params.add(new BasicNameValuePair(R.BENCHMARKING_FRAMEWORK_OPTION, R.DEFAULT_BENCHMARKING_FRAMEWORK.toString()));</span>
+
+<span class="nc bnc" id="L2492" title="All 2 branches missed.">			if (maxMemory != null) {</span>
+<span class="nc" id="L2493">				params.add(new BasicNameValuePair(&quot;maxMem&quot;, String.valueOf(maxMemory)));</span>
+			}
+<span class="nc" id="L2495">			params.add(new BasicNameValuePair(&quot;runChoice&quot;, &quot;keepHierarchy&quot;));</span>
+<span class="nc bnc" id="L2496" title="All 2 branches missed.">			if (startPaused) {</span>
+<span class="nc" id="L2497">				params.add(new BasicNameValuePair(&quot;pause&quot;, &quot;yes&quot;));</span>
+			} else {
+<span class="nc" id="L2499">				params.add(new BasicNameValuePair(&quot;pause&quot;, &quot;no&quot;));</span>
+			}
+<span class="nc bnc" id="L2501" title="All 2 branches missed.">			if (suppressTimestamps) {</span>
+<span class="nc" id="L2502">				params.add(new BasicNameValuePair(&quot;suppressTimestamp&quot;, &quot;yes&quot;));</span>
+			} else {
+<span class="nc" id="L2504">				params.add(new BasicNameValuePair(&quot;suppressTimestamp&quot;, &quot;no&quot;));</span>
+			}
+
+<span class="nc" id="L2507">			post.setEntity(new UrlEncodedFormEntity(params, &quot;UTF-8&quot;));</span>
+
+<span class="nc" id="L2509">			response = executeGetOrPost(post);</span>
+
+<span class="nc" id="L2511">			String id = HTMLParser.extractCookie(response.getAllHeaders(), &quot;New_ID&quot;);</span>
+
+			// make sure the id we got back is positive, indicating we made a
+			// job successfully
+<span class="nc bnc" id="L2515" title="All 2 branches missed.">			if (Validator.isValidPosInteger(id)) {</span>
+<span class="nc" id="L2516">				return Integer.parseInt(id);</span>
+			}
+
+<span class="nc" id="L2519">			setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));</span>
+<span class="nc" id="L2520">			return Status.ERROR_SERVER;</span>
+<span class="nc" id="L2521">		} catch (Exception e) {</span>
+<span class="nc" id="L2522">			return Status.ERROR_INTERNAL;</span>
+		} finally {
+<span class="nc" id="L2524">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Gets the max completion ID yet seen for output downloads on a given job
+	 *
+	 * @param jobID The ID of a job on StarExec
+	 * @return The maximum completion ID seen yet, or 0 if not seen.
+	 */
+
+	protected PollJobData getJobOutCompletion(int jobID) {
+<span class="nc bnc" id="L2536" title="All 2 branches missed.">		if (!job_out_indices.containsKey(jobID)) {</span>
+<span class="nc" id="L2537">			job_out_indices.put(jobID, new PollJobData());</span>
+		}
+<span class="nc" id="L2539">		return job_out_indices.get(jobID);</span>
+
+	}
+
+	/**
+	 * Gets the max completion ID for info downloads on the given job.
+	 *
+	 * @param jobID The ID of a job on StarExec
+	 * @return The maximum completion ID seen for the job, or 0 if not seen
+	 */
+	protected int getJobInfoCompletion(int jobID) {
+<span class="nc bnc" id="L2550" title="All 2 branches missed.">		if (!job_info_indices.containsKey(jobID)) {</span>
+<span class="nc" id="L2551">			job_info_indices.put(jobID, 0);</span>
+		}
+<span class="nc" id="L2553">		return job_info_indices.get(jobID);</span>
+	}
+
+	/**
+	 * @return The last error that was sent back by the server. This will be
+	 * updated whenever ERROR_SERVER is returned as a status code by any
+	 * function
+	 */
+	public String getLastError() {
+<span class="nc" id="L2562">		return lastError;</span>
+	}
+
+	/**
+	 * @param lastError the lastError to set. Leading/trailing whitespace and
+	 * quotes will be removed
+	 */
+	private void setLastError(String lastError) {
+<span class="nc bnc" id="L2570" title="All 2 branches missed.">		if (lastError == null) {</span>
+<span class="nc" id="L2571">			this.lastError = &quot;&quot;;</span>
+<span class="nc" id="L2572">			return;</span>
+		}
+<span class="nc" id="L2574">		lastError = lastError.trim();</span>
+<span class="nc bnc" id="L2575" title="All 2 branches missed.">		if (lastError.charAt(0) == '&quot;') {</span>
+<span class="nc" id="L2576">			lastError = lastError.replaceFirst(&quot;\&quot;&quot;, &quot;&quot;);</span>
+		}
+<span class="nc bnc" id="L2578" title="All 2 branches missed.">		if (lastError.charAt(lastError.length() - 1) == '&quot;') {</span>
+<span class="nc" id="L2579">			lastError = lastError.substring(0, lastError.length() - 1);</span>
+		}
+<span class="nc" id="L2581">		this.lastError = lastError;</span>
+<span class="nc" id="L2582">	}</span>
+
+	/**
+	 * Gets the attributes for a configuration in a Map
+	 *
+	 * @param id The primitive ID
+	 * @return The Map of attributes, or null on error
+	 */
+	public Map&lt;String, String&gt; getConfigurationAttributes(int id) {
+<span class="nc" id="L2591">		return getPrimitiveAttributes(id, &quot;configuration&quot;);</span>
+	}
+
+	/**
+	 * Gets the attributes for a processor in a Map
+	 *
+	 * @param id The primitive ID
+	 * @return The Map of attributes, or null on error
+	 */
+	public Map&lt;String, String&gt; getProcessorAttributes(int id) {
+<span class="nc" id="L2601">		return getPrimitiveAttributes(id, &quot;processor&quot;);</span>
+	}
+
+	/**
+	 * Gets the attributes for a solver in a Map
+	 *
+	 * @param id The primitive ID
+	 * @return The Map of attributes, or null on error
+	 */
+	public Map&lt;String, String&gt; getSolverAttributes(int id) {
+<span class="nc" id="L2611">		return getPrimitiveAttributes(id, R.SOLVER);</span>
+	}
+
+	/**
+	 * Gets the attributes for a benchmark in a Map
+	 *
+	 * @param id The primitive ID
+	 * @return The Map of attributes, or null on error
+	 */
+
+	public Map&lt;String, String&gt; getBenchmarkAttributes(int id) {
+<span class="nc" id="L2622">		return getPrimitiveAttributes(id, &quot;benchmark&quot;);</span>
+	}
+
+	/**
+	 * Gets the attributes for a job in a Map
+	 *
+	 * @param id The primitive ID
+	 * @return The Map of attributes, or null on error
+	 */
+
+	public Map&lt;String, String&gt; getJobAttributes(int id) {
+<span class="nc" id="L2633">		return getPrimitiveAttributes(id, R.JOB);</span>
+	}
+
+	/**
+	 * Gets the attributes for a space in a Map
+	 *
+	 * @param id The primitive ID
+	 * @return The Map of attributes, or null on error
+	 */
+
+	public Map&lt;String, String&gt; getSpaceAttributes(int id) {
+<span class="nc" id="L2644">		return getPrimitiveAttributes(id, R.SPACE);</span>
+	}
+
+	/**
+	 * Asks the server for a Json object representing a primitive and returns
+	 * the attributes of that primitive in a Map of keys to values.
+	 *
+	 * @param id The ID of the primitive
+	 * @param type The type of the primitive
+	 * @return The Map, or null on error
+	 */
+	protected Map&lt;String, String&gt; getPrimitiveAttributes(int id, String type) {
+<span class="nc" id="L2656">		Map&lt;String, String&gt; failMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L2657">		HttpResponse response = null;</span>
+		try {
+<span class="nc" id="L2659">			HttpGet get = new HttpGet(baseURL + C.URL_GETPRIMJSON.replace(&quot;{type}&quot;, type).replace(&quot;{id}&quot;, String.valueOf(id)));</span>
+<span class="nc" id="L2660">			get = (HttpGet) setHeaders(get);</span>
+<span class="nc" id="L2661">			response = executeGetOrPost(get);</span>
+<span class="nc" id="L2662">			JsonElement json = JsonHandler.getJsonString(response);</span>
+<span class="nc" id="L2663">			String errorMessage = JsonHandler.getMessageOfResponse(json.getAsJsonObject());</span>
+<span class="nc bnc" id="L2664" title="All 2 branches missed.">			if (errorMessage != null) {</span>
+<span class="nc" id="L2665">				this.setLastError(errorMessage);</span>
+<span class="nc" id="L2666">				failMap.put(&quot;-1&quot;, String.valueOf(Status.ERROR_SERVER));</span>
+<span class="nc" id="L2667">				return failMap;</span>
+			}
+<span class="nc" id="L2669">			return JsonHandler.getJsonAttributes(json.getAsJsonObject());</span>
+<span class="nc" id="L2670">		} catch (Exception e) {</span>
+<span class="nc" id="L2671">			failMap.put(&quot;-1&quot;, String.valueOf(Status.ERROR_INTERNAL));</span>
+<span class="nc" id="L2672">			return failMap;</span>
+		} finally {
+<span class="nc" id="L2674">			safeCloseResponse(response);</span>
+		}
+	}
+
+	/**
+	 * Closes an HttpResponse, suppressing any errors.
+	 *
+	 * @param response
+	 */
+	private void safeCloseResponse(HttpResponse response) {
+		try {
+<span class="nc" id="L2685">			response.getEntity().getContent().close();</span>
+<span class="nc" id="L2686">		} catch (Exception e) {</span>
+			// ignore
+<span class="nc" id="L2688">		}</span>
+<span class="nc" id="L2689">	}</span>
+
+	/**
+	 * Returns a Map of all cookies set by a response.
+	 * Cookies are returned as individual Headers of the form:
+	 * Set-Cookie: key=value; expires=Sat, 02 May 2009 23:38:25 GMT
+	 *
+	 * @param response
+	 * @return Map of cookies set by response
+	 */
+	private Map&lt;String, String&gt; getCookies(HttpResponse response) {
+<span class="nc" id="L2700">		final Map&lt;String, String&gt; cookies = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L2701">		final Pattern regex = Pattern.compile(&quot;^\\s*([^=]+)=([^;]+)&quot;);</span>
+<span class="nc bnc" id="L2702" title="All 2 branches missed.">		for (Header h : response.getHeaders(&quot;Set-Cookie&quot;)) {</span>
+<span class="nc" id="L2703">			Matcher matcher = regex.matcher(h.getValue());</span>
+<span class="nc bnc" id="L2704" title="All 2 branches missed.">			if (matcher.find()) {</span>
+<span class="nc" id="L2705">				final String k = matcher.group(1);</span>
+<span class="nc" id="L2706">				final String v = matcher.group(2);</span>
+<span class="nc" id="L2707">				cookies.put(k, v);</span>
+			}
+		}
+<span class="nc" id="L2710">		return cookies;</span>
+	}
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

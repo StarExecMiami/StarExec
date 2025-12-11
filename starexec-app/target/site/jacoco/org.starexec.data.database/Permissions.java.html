@@ -1,0 +1,680 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Permissions.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Permissions.java</span></div><h1>Permissions.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.constants.R;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.*;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Collection;
+import java.util.List;
+
+/**
+ * Handles all database interaction for permissions
+ */
+<span class="nc" id="L20">public class Permissions {</span>
+<span class="fc" id="L21">	private static final StarLogger log = StarLogger.getLogger(Permissions.class);</span>
+
+	/**
+	 * Adds a new permission record to the database. This is an internal helper
+	 * method.
+	 *
+	 * @param p   The permission to add
+	 * @param con The connection to add the permission with
+	 * @return The ID of the inserted record
+	 * @throws Exception
+	 * @author Tyler Jensen
+	 */
+	protected static int add(Permission p, Connection con) {
+<span class="nc" id="L34">		PreparedStatement stmtDefaultPerm = null;</span>
+<span class="nc" id="L35">		ResultSet rs = null;</span>
+		try {
+<span class="nc" id="L37">			stmtDefaultPerm = con.prepareStatement(&quot;SELECT AddPermissions(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L38">			stmtDefaultPerm.setBoolean(1, p.canAddSolver());</span>
+<span class="nc" id="L39">			stmtDefaultPerm.setBoolean(2, p.canAddBenchmark());</span>
+<span class="nc" id="L40">			stmtDefaultPerm.setBoolean(3, p.canAddUser());</span>
+<span class="nc" id="L41">			stmtDefaultPerm.setBoolean(4, p.canAddSpace());</span>
+<span class="nc" id="L42">			stmtDefaultPerm.setBoolean(5, p.canAddJob());</span>
+<span class="nc" id="L43">			stmtDefaultPerm.setBoolean(6, p.canRemoveSolver());</span>
+<span class="nc" id="L44">			stmtDefaultPerm.setBoolean(7, p.canRemoveBench());</span>
+<span class="nc" id="L45">			stmtDefaultPerm.setBoolean(8, p.canRemoveSpace());</span>
+<span class="nc" id="L46">			stmtDefaultPerm.setBoolean(9, p.canRemoveUser());</span>
+<span class="nc" id="L47">			stmtDefaultPerm.setBoolean(10, p.canRemoveJob());</span>
+<span class="nc" id="L48">			stmtDefaultPerm.setBoolean(11, p.isLeader());</span>
+<span class="nc" id="L49">			rs = stmtDefaultPerm.executeQuery();</span>
+<span class="nc" id="L50">			rs.next();</span>
+<span class="nc" id="L51">			return rs.getInt(1);</span>
+<span class="nc" id="L52">		} catch (Exception e) {</span>
+<span class="nc" id="L53">			log.error(&quot;add&quot;, e);</span>
+		} finally {
+<span class="nc" id="L55">			Common.safeClose(rs);</span>
+<span class="nc" id="L56">			Common.safeClose(stmtDefaultPerm);</span>
+		}
+<span class="nc" id="L58">		return -1;</span>
+	}
+
+	/**
+	 * Checks to see if the user has access to the benchmark in some way. More
+	 * specifically, this checks if the user
+	 * belongs to any space the benchmark belongs to.
+	 *
+	 * @param benchId The benchmark to check if the user can see
+	 * @param userId  The user that is requesting to view the given benchmark
+	 * @param con     The open connection to make the query on
+	 * @return True if the user can somehow see the benchmark, false otherwise
+	 * @author Tyler Jensen
+	 */
+
+	public static boolean canUserSeeBench(Connection con, int benchId, int userId) {
+<span class="nc" id="L74">		Benchmark b = Benchmarks.getIncludeDeletedAndRecycled(con, benchId, false);</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if (b == null) {</span>
+<span class="nc" id="L76">			return false;</span>
+		}
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (Benchmarks.isPublic(con, benchId)) {</span>
+<span class="nc" id="L79">			return true;</span>
+		}
+
+<span class="nc" id="L82">		User u = Users.get(con, userId);</span>
+<span class="nc bnc" id="L83" title="All 6 branches missed.">		if (u != null &amp;&amp; (u.getRole().equals(R.ADMIN_ROLE_NAME) || u.getRole().equals(R.DEVELOPER_ROLE_NAME))) {</span>
+<span class="nc" id="L84">			return true;</span>
+		}
+<span class="nc bnc" id="L86" title="All 2 branches missed.">		if (Settings.canUserSeeBenchmarkInSettings(con, userId, benchId)) {</span>
+<span class="nc" id="L87">			return true;</span>
+		}
+
+<span class="nc" id="L90">		PreparedStatement ps = null;</span>
+<span class="nc" id="L91">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L93">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.CanViewBenchmark(?, ?)&quot;);</span>
+<span class="nc" id="L94">			ps.setInt(1, benchId);</span>
+<span class="nc" id="L95">			ps.setInt(2, userId);</span>
+<span class="nc" id="L96">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L98" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L99">				return results.getBoolean(1);</span>
+			}
+<span class="nc" id="L101">		} catch (Exception e) {</span>
+<span class="nc" id="L102">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L104">			Common.safeClose(ps);</span>
+<span class="nc" id="L105">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L108">		return false;</span>
+	}
+
+	/**
+	 * Checks to see if the user has access to the benchmark in some way. More
+	 * specifically, this checks if the user
+	 * belongs to any space the benchmark belongs to.
+	 *
+	 * @param benchId The benchmark to check if the user can see
+	 * @param userId  The user that is requesting to view the given benchmark *
+	 * @return True if the user can somehow see the benchmark, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean canUserSeeBench(int benchId, int userId) {
+<span class="nc" id="L122">		Connection con = null;</span>
+		try {
+<span class="nc" id="L124">			con = Common.getConnection();</span>
+<span class="nc" id="L125">			return canUserSeeBench(con, benchId, userId);</span>
+<span class="nc" id="L126">		} catch (Exception e) {</span>
+<span class="nc" id="L127">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L129">			Common.safeClose(con);</span>
+		}
+
+<span class="nc" id="L132">		return false;</span>
+	}
+
+	/**
+	 * Checks to see if the user has access to the benchmarks in some way. More
+	 * specifically, this checks if the user
+	 * belongs to all spaces the benchmarks belong to.
+	 *
+	 * @param benchIds The benchmarks to check if the user can see
+	 * @param userId   The user that is requesting to view the given benchmarks
+	 * @return True if the user can somehow see all benchmarks, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean canUserSeeBenchs(List&lt;Integer&gt; benchIds, int userId) {
+<span class="nc" id="L146">		Connection con = null;</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L148">			return true;</span>
+		}
+		try {
+<span class="nc" id="L151">			con = Common.getConnection();</span>
+			// check the permissions for every benchmark
+<span class="nc bnc" id="L153" title="All 2 branches missed.">			for (int id : benchIds) {</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">				if (!canUserSeeBench(con, id, userId)) {</span>
+<span class="nc" id="L155">					return false;</span>
+				}
+<span class="nc" id="L157">			}</span>
+<span class="nc" id="L158">			return true;</span>
+<span class="nc" id="L159">		} catch (Exception e) {</span>
+<span class="nc" id="L160">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L162">			Common.safeClose(con);</span>
+		}
+
+<span class="nc" id="L165">		return false;</span>
+	}
+
+	/**
+	 * Checks to see if the user has access to the job in some way. More
+	 * specifically, this checks if the user belongs
+	 * to any space the job belongs to.
+	 *
+	 * @param jobId  The job to check if the user can see
+	 * @param userId The user that is requesting to view the given job
+	 * @return True if the user can somehow see the job, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static ValidatorStatusCode canUserSeeJob(final int jobId, final int userId) {
+<span class="nc" id="L179">		final String methodName = &quot;canUserSeeJob&quot;;</span>
+<span class="nc" id="L180">		log.entry(methodName);</span>
+<span class="nc" id="L181">		log.debug(methodName, &quot;\tjobId: &quot; + jobId);</span>
+<span class="nc" id="L182">		log.debug(methodName, &quot;\tuserId: &quot; + userId);</span>
+
+<span class="nc" id="L184">		Connection con = null;</span>
+<span class="nc" id="L185">		ResultSet results = null;</span>
+<span class="nc" id="L186">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L188">			Job j = Jobs.get(jobId);</span>
+			// job does not exist or has been deleted.
+<span class="nc bnc" id="L190" title="All 2 branches missed.">			if (j == null) {</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">				if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L192">					final String message = &quot;Job does not exist or has been deleted.&quot;;</span>
+<span class="nc" id="L193">					log.debug(methodName, &quot;User can't see job: &quot; + message);</span>
+<span class="nc" id="L194">					return new ValidatorStatusCode(false, message);</span>
+				} else {
+					// Return the same message as access denied to prevent enumeration
+<span class="nc" id="L197">					final String failureMessage = &quot;You do not have permission to view this job.&quot;;</span>
+<span class="nc" id="L198">					log.debug(methodName, &quot;User can't see job (not found): &quot; + failureMessage);</span>
+<span class="nc" id="L199">					return new ValidatorStatusCode(false, failureMessage);</span>
+				}
+			}
+<span class="nc bnc" id="L202" title="All 2 branches missed.">			if (Jobs.isPublic(jobId)) {</span>
+<span class="nc" id="L203">				log.debug(methodName, &quot;User can see job: Job is public.&quot;);</span>
+<span class="nc" id="L204">				return new ValidatorStatusCode(true);</span>
+			}
+<span class="nc bnc" id="L206" title="All 2 branches missed.">			if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L207">				log.debug(methodName, &quot;User can see job: User has admin read privileges.&quot;);</span>
+<span class="nc" id="L208">				return new ValidatorStatusCode(true);</span>
+			}
+
+			// if there was no special case, check to see if the user shares a space with
+			// the job or owns the job
+<span class="nc" id="L213">			con = Common.getConnection();</span>
+<span class="nc" id="L214">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.CanViewJob(?, ?)&quot;);</span>
+<span class="nc" id="L215">			ps.setInt(1, jobId);</span>
+<span class="nc" id="L216">			ps.setInt(2, userId);</span>
+<span class="nc" id="L217">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L219" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L220">				boolean userCanSeeJob = results.getBoolean(1);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">				if (userCanSeeJob) {</span>
+<span class="nc" id="L222">					log.debug(methodName, &quot;User can see job.&quot;);</span>
+<span class="nc" id="L223">					return new ValidatorStatusCode(true);</span>
+				} else {
+<span class="nc" id="L225">					final String failureMessage = &quot;You do not have permission to view this job.&quot;;</span>
+<span class="nc" id="L226">					log.debug(methodName, &quot;User can't see job: &quot; + failureMessage);</span>
+<span class="nc" id="L227">					return new ValidatorStatusCode(false, failureMessage);</span>
+				}
+			} else {
+<span class="nc" id="L230">				log.warn(methodName, &quot;Failed to retrieve results.&quot;);</span>
+<span class="nc" id="L231">				return new ValidatorStatusCode(false, &quot;Database error: Failed to retrieve results.&quot;);</span>
+			}
+<span class="nc" id="L233">		} catch (SQLException e) {</span>
+<span class="nc" id="L234">			log.error(e.getMessage(), e);</span>
+<span class="nc" id="L235">			return new ValidatorStatusCode(false, &quot;Database error: Caught SQLException at &quot; + Util.getTime());</span>
+		} finally {
+<span class="nc" id="L237">			Common.safeClose(results);</span>
+<span class="nc" id="L238">			Common.safeClose(con);</span>
+<span class="nc" id="L239">			Common.safeClose(ps);</span>
+<span class="nc" id="L240">			log.exit(methodName);</span>
+		}
+	}
+
+	/**
+	 * Checks to see if the user has access to the solver in some way. More
+	 * specifically, this checks if the user
+	 * belongs to any space the solver belongs to.
+	 *
+	 * @param solverId The solver to check if the user can see
+	 * @param userId   The user that is requesting to view the given solver
+	 * @param con      The open connection to query on
+	 * @return True if the user can somehow see the solver, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean canUserSeeSolver(Connection con, int solverId, int userId) {
+<span class="nc" id="L256">		Solver s = Solvers.getIncludeDeleted(con, solverId);</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L258">			return false;</span>
+		}
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (Solvers.isPublic(con, solverId)) {</span>
+<span class="nc" id="L261">			return true;</span>
+		}
+<span class="nc bnc" id="L263" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminReadPrivileges(con, userId)) {</span>
+<span class="nc" id="L264">			return true;</span>
+		}
+<span class="nc bnc" id="L266" title="All 2 branches missed.">		if (Settings.canUserSeeSolverInSettings(con, userId, solverId)) {</span>
+<span class="nc" id="L267">			return true;</span>
+		}
+
+<span class="nc" id="L270">		PreparedStatement ps = null;</span>
+<span class="nc" id="L271">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L273">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.CanViewSolver(?, ?)&quot;);</span>
+<span class="nc" id="L274">			ps.setInt(1, solverId);</span>
+<span class="nc" id="L275">			ps.setInt(2, userId);</span>
+<span class="nc" id="L276">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L278" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L279">				return results.getBoolean(1);</span>
+			}
+<span class="nc" id="L281">		} catch (Exception e) {</span>
+<span class="nc" id="L282">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L284">			Common.safeClose(ps);</span>
+<span class="nc" id="L285">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L288">		return false;</span>
+	}
+
+	/**
+	 * Checks to see if the user has access to the solver in some way. More
+	 * specifically, this checks if the user
+	 * belongs to any space the solver belongs to.
+	 *
+	 * @param solverId The solver to check if the user can see
+	 * @param userId   The user that is requesting to view the given solver
+	 * @return True if the user can somehow see the solver, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean canUserSeeSolver(int solverId, int userId) {
+<span class="nc" id="L302">		Connection con = null;</span>
+		try {
+<span class="nc" id="L304">			con = Common.getConnection();</span>
+<span class="nc" id="L305">			return canUserSeeSolver(con, solverId, userId);</span>
+<span class="nc" id="L306">		} catch (Exception e) {</span>
+<span class="nc" id="L307">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L309">			Common.safeClose(con);</span>
+		}
+
+<span class="nc" id="L312">		return false;</span>
+	}
+
+	/**
+	 * Checks to see if the user has access to the given solvers in some way. More
+	 * specifically, this checks if the
+	 * user
+	 * belongs to all the spaces the solvers belong to.
+	 *
+	 * @param solverIds The solvers to check if the user can see
+	 * @param userId    The user that is requesting to view the given solvers
+	 * @return True if the user can somehow see the solvers, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean canUserSeeSolvers(Collection&lt;Integer&gt; solverIds, int userId) {
+<span class="nc" id="L327">		Connection con = null;</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L329">			return true;</span>
+		}
+		try {
+<span class="nc" id="L332">			con = Common.getConnection();</span>
+			// do the check for every solver
+<span class="nc bnc" id="L334" title="All 2 branches missed.">			for (int id : solverIds) {</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">				if (!canUserSeeSolver(con, id, userId)) {</span>
+<span class="nc" id="L336">					return false;</span>
+				}
+<span class="nc" id="L338">			}</span>
+<span class="nc" id="L339">			return true;</span>
+<span class="nc" id="L340">		} catch (Exception e) {</span>
+<span class="nc" id="L341">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L343">			Common.safeClose(con);</span>
+		}
+
+<span class="nc" id="L346">		return false;</span>
+	}
+
+	/**
+	 * Checks to see if the user belongs to the given space. Note that this is to
+	 * check whether a user can see the
+	 * details of a space, not to check whether they can see the space in the
+	 * explorer tree due to being a member of a
+	 * subspace.
+	 *
+	 * @param spaceId The space to check if the user can see
+	 * @param userId  The user that is requesting to view the given space
+	 * @return True if the user belongs to the space, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean canUserSeeSpace(int spaceId, int userId) {
+<span class="nc bnc" id="L362" title="All 2 branches missed.">		if (spaceId &lt;= 1) {</span>
+			// Can always see root space
+<span class="nc" id="L364">			return true;</span>
+		}
+<span class="nc bnc" id="L366" title="All 2 branches missed.">		if (Spaces.isPublicSpace(spaceId)) {</span>
+<span class="nc" id="L367">			return true;</span>
+		}
+<span class="nc bnc" id="L369" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L370">			return true;</span>
+		}
+<span class="nc" id="L372">		Connection con = null;</span>
+<span class="nc" id="L373">		PreparedStatement ps = null;</span>
+<span class="nc" id="L374">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L376">			con = Common.getConnection();</span>
+<span class="nc" id="L377">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.CanViewSpace(?, ?)&quot;);</span>
+<span class="nc" id="L378">			ps.setInt(1, spaceId);</span>
+<span class="nc" id="L379">			ps.setInt(2, userId);</span>
+<span class="nc" id="L380">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L382" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L383">				return results.getBoolean(1);</span>
+			}
+<span class="nc" id="L385">		} catch (Exception e) {</span>
+<span class="nc" id="L386">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L388">			Common.safeClose(con);</span>
+<span class="nc" id="L389">			Common.safeClose(ps);</span>
+<span class="nc" id="L390">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L393">		return false;</span>
+	}
+
+	/**
+	 * Retrieves the user's maximum set of permissions in a space.
+	 *
+	 * @param userId  The user to get permissions for
+	 * @param spaceId The id of the space to get the user's permissions on
+	 * @return A permission object containing the user's permission on the space.
+	 *         Null if the user is not apart of the
+	 *         space.
+	 * @author Tyler Jensen
+	 */
+	public static Permission get(int userId, int spaceId) {
+<span class="nc" id="L407">		log.debug(&quot;getting permissions for user id = &quot; + userId + &quot; and space id  = &quot; + spaceId);</span>
+<span class="nc" id="L408">		Connection con = null;</span>
+<span class="nc" id="L409">		PreparedStatement ps = null;</span>
+<span class="nc" id="L410">		ResultSet results = null;</span>
+
+<span class="nc" id="L412">		Space s = Spaces.get(spaceId);</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L414">			return null; // the space does not even exist</span>
+		}
+
+		// the admin has full permissions everywhere
+<span class="nc bnc" id="L418" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {</span>
+<span class="nc" id="L419">			log.debug(&quot;permissions for an admin were obtained userId = &quot; + userId);</span>
+<span class="nc" id="L420">			return Permissions.getFullPermission();</span>
+		}
+
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (Users.isPublicUser(userId)) {</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">			if (Spaces.isPublicSpace(spaceId)) {</span>
+<span class="nc" id="L425">				return Permissions.getEmptyPermission();</span>
+			}
+<span class="nc" id="L427">			return null;</span>
+		}
+		try {
+
+<span class="nc" id="L431">			con = Common.getConnection();</span>
+<span class="nc" id="L432">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetUserPermissions(?, ?)&quot;);</span>
+<span class="nc" id="L433">			ps.setInt(1, userId);</span>
+<span class="nc" id="L434">			ps.setInt(2, spaceId);</span>
+<span class="nc" id="L435">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L437" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L438">				Permission p = resultsToPermissionWithId(userId, results);</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">				if (results.wasNull()) {</span>
+					/*
+					 * If the permission doesn't exist we always get a result
+					 * but all of it's values are null, so here we check for a
+					 * null result and return null
+					 */
+
+<span class="nc bnc" id="L446" title="All 2 branches missed.">					if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L447">						Permission empty = Permissions.getEmptyPermission();</span>
+<span class="nc" id="L448">						empty.setAddSpace(true);</span>
+<span class="nc" id="L449">						empty.setAddUser(true);</span>
+<span class="nc" id="L450">						return empty;</span>
+					}
+<span class="nc" id="L452">					return null;</span>
+				}
+
+<span class="nc" id="L455">				return p;</span>
+			}
+<span class="nc" id="L457">		} catch (Exception e) {</span>
+<span class="nc" id="L458">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L460">			Common.safeClose(con);</span>
+<span class="nc" id="L461">			Common.safeClose(ps);</span>
+<span class="nc" id="L462">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L465">		return null;</span>
+	}
+
+	/**
+	 * Returns a permissions object with every permission set to true. The ID is not
+	 * set
+	 *
+	 * @return Permissions object
+	 * @author Eric Burns
+	 */
+
+	/*
+	 * Adds all permisions and makes the user a leader
+	 * 
+	 * @docs aguo2
+	 */
+	public static Permission getFullPermission() {
+<span class="fc" id="L482">		Permission p = new Permission();</span>
+<span class="fc" id="L483">		p.setAddBenchmark(true);</span>
+<span class="fc" id="L484">		p.setAddSolver(true);</span>
+<span class="fc" id="L485">		p.setAddSpace(true);</span>
+<span class="fc" id="L486">		p.setAddUser(true);</span>
+<span class="fc" id="L487">		p.setAddJob(true);</span>
+<span class="fc" id="L488">		p.setRemoveBench(true);</span>
+<span class="fc" id="L489">		p.setRemoveSolver(true);</span>
+<span class="fc" id="L490">		p.setRemoveSpace(true);</span>
+<span class="fc" id="L491">		p.setRemoveUser(true);</span>
+<span class="fc" id="L492">		p.setRemoveJob(true);</span>
+<span class="fc" id="L493">		p.setLeader(true);</span>
+<span class="fc" id="L494">		return p;</span>
+	}
+
+	/**
+	 * Returns a permissions object with every permission set to false. The ID is
+	 * not set
+	 *
+	 * @return Permissions object
+	 * @author Eric Burns
+	 */
+
+	public static Permission getEmptyPermission() {
+<span class="nc" id="L506">		Permission p = new Permission();</span>
+<span class="nc" id="L507">		p.setAddBenchmark(false);</span>
+<span class="nc" id="L508">		p.setAddSolver(false);</span>
+<span class="nc" id="L509">		p.setAddSpace(false);</span>
+<span class="nc" id="L510">		p.setAddUser(false);</span>
+<span class="nc" id="L511">		p.setAddJob(false);</span>
+<span class="nc" id="L512">		p.setRemoveBench(false);</span>
+<span class="nc" id="L513">		p.setRemoveSolver(false);</span>
+<span class="nc" id="L514">		p.setRemoveSpace(false);</span>
+<span class="nc" id="L515">		p.setRemoveUser(false);</span>
+<span class="nc" id="L516">		p.setRemoveJob(false);</span>
+<span class="nc" id="L517">		p.setLeader(false);</span>
+<span class="nc" id="L518">		return p;</span>
+	}
+
+	/**
+	 * Retrieves the default permissions applied to a user when they are added to a
+	 * space
+	 *
+	 * @param spaceId The id of the space to get the default user's permission
+	 * @return A permission object containing the default user permission on the
+	 *         space.
+	 * @author Tyler Jensen
+	 */
+	public static Permission getSpaceDefault(int spaceId) {
+<span class="nc" id="L531">		Connection con = null;</span>
+<span class="nc" id="L532">		PreparedStatement ps = null;</span>
+<span class="nc" id="L533">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L535">			con = Common.getConnection();</span>
+<span class="nc" id="L536">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetSpacePermissions(?)&quot;);</span>
+<span class="nc" id="L537">			ps.setInt(1, spaceId);</span>
+<span class="nc" id="L538">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L540" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L541">				return resultsToPermissionWithId(results.getInt(&quot;id&quot;), results);</span>
+			}
+<span class="nc" id="L543">		} catch (Exception e) {</span>
+<span class="nc" id="L544">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L546">			Common.safeClose(con);</span>
+<span class="nc" id="L547">			Common.safeClose(ps);</span>
+<span class="nc" id="L548">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L551">		return null;</span>
+	}
+
+	private static Permission resultsToPermissionWithId(int id, ResultSet results) throws SQLException {
+<span class="nc" id="L555">		Permission p = new Permission();</span>
+<span class="nc" id="L556">		p.setId(id);</span>
+<span class="nc" id="L557">		p.setAddBenchmark(results.getBoolean(&quot;add_bench&quot;));</span>
+<span class="nc" id="L558">		p.setAddSolver(results.getBoolean(&quot;add_solver&quot;));</span>
+<span class="nc" id="L559">		p.setAddSpace(results.getBoolean(&quot;add_space&quot;));</span>
+<span class="nc" id="L560">		p.setAddUser(results.getBoolean(&quot;add_user&quot;));</span>
+<span class="nc" id="L561">		p.setAddJob(results.getBoolean(&quot;add_job&quot;));</span>
+<span class="nc" id="L562">		p.setRemoveBench(results.getBoolean(&quot;remove_bench&quot;));</span>
+<span class="nc" id="L563">		p.setRemoveSolver(results.getBoolean(&quot;remove_solver&quot;));</span>
+<span class="nc" id="L564">		p.setRemoveSpace(results.getBoolean(&quot;remove_space&quot;));</span>
+<span class="nc" id="L565">		p.setRemoveUser(results.getBoolean(&quot;remove_user&quot;));</span>
+<span class="nc" id="L566">		p.setRemoveJob(results.getBoolean(&quot;remove_job&quot;));</span>
+<span class="nc" id="L567">		p.setLeader(results.getBoolean(&quot;is_leader&quot;));</span>
+<span class="nc" id="L568">		return p;</span>
+	}
+
+	/**
+	 * Sets the permissions of a given user in a given space
+	 *
+	 * @param userId  the id of the user to set the permissions of
+	 * @param spaceId the id of the space where the permissions will effect
+	 * @param newPerm the new set of permissions to set
+	 * @return true iff the permissions were successfully set, false otherwise
+	 * @author Todd Elvers
+	 */
+	public static boolean set(int userId, int spaceId, Permission newPerm) {
+<span class="nc" id="L581">		Connection con = null;</span>
+
+		try {
+<span class="nc" id="L584">			con = Common.getConnection();</span>
+<span class="nc" id="L585">			return Permissions.set(userId, spaceId, newPerm, con);</span>
+<span class="nc" id="L586">		} catch (Exception e) {</span>
+<span class="nc" id="L587">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L589">			Common.safeClose(con);</span>
+		}
+
+<span class="nc" id="L592">		log.error(String.format(&quot;Changing permissions failed for user [%d] in space [%d]&quot;, userId, spaceId));</span>
+<span class="nc" id="L593">		return false;</span>
+	}
+
+	/**
+	 * Sets the permissions of a given user in a given space
+	 *
+	 * @param userId  the id of the user to set the permissions of
+	 * @param spaceId the id of the space where the permissions will effect
+	 * @param newPerm the new set of permissions to set
+	 * @param con     The open connection to make the call on
+	 * @return true iff the permissions were successfully set, false otherwise
+	 * @throws Exception
+	 * @author Todd Elvers
+	 */
+	protected static boolean set(int userId, int spaceId, Permission newPerm, Connection con) {
+<span class="nc" id="L608">		PreparedStatement ps = null;</span>
+<span class="nc" id="L609">		int permissionId = add(newPerm, con);</span>
+
+		try {
+<span class="nc" id="L612">			ps = con.prepareStatement(&quot;SELECT starexec.SetUserPermissions2(?, ?, ?)&quot;);</span>
+<span class="nc" id="L613">			ps.setInt(1, userId);</span>
+<span class="nc" id="L614">			ps.setInt(2, spaceId);</span>
+<span class="nc" id="L615">			ps.setInt(3, permissionId);</span>
+
+<span class="nc" id="L617">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L619">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L623">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L625">			log.debug(String.format(&quot;Permissions successfully changed for user [%d] in space [%d]&quot;, userId, spaceId));</span>
+<span class="nc" id="L626">			return true;</span>
+<span class="nc" id="L627">		} catch (Exception e) {</span>
+<span class="nc" id="L628">			log.error(&quot;set&quot;, e);</span>
+		} finally {
+<span class="nc" id="L630">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L632">		return false;</span>
+	}
+
+	/**
+	 * Updates the permission with the given id. Since this will be one step in a
+	 * multi-step process, we use
+	 * transactions.
+	 *
+	 * @param permId the id of the permission to change
+	 * @param perm   a Permission object containing the new permissions
+	 * @param con    The open connection to make the call on
+	 * @throws Exception
+	 * @author Skylar Stark
+	 */
+	protected static void updatePermission(int permId, Permission perm, Connection con) {
+<span class="nc" id="L647">		PreparedStatement ps = null;</span>
+
+		try {
+<span class="nc" id="L650">			ps = con.prepareStatement(&quot;SELECT starexec.UpdatePermissions(?,?,?,?,?,?,?,?,?,?,?)&quot;);</span>
+
+<span class="nc" id="L652">			ps.setInt(1, permId);</span>
+<span class="nc" id="L653">			ps.setBoolean(2, perm.canAddSolver());</span>
+<span class="nc" id="L654">			ps.setBoolean(3, perm.canAddBenchmark());</span>
+<span class="nc" id="L655">			ps.setBoolean(4, perm.canAddUser());</span>
+<span class="nc" id="L656">			ps.setBoolean(5, perm.canAddSpace());</span>
+<span class="nc" id="L657">			ps.setBoolean(6, perm.canAddJob());</span>
+<span class="nc" id="L658">			ps.setBoolean(7, perm.canRemoveSolver());</span>
+<span class="nc" id="L659">			ps.setBoolean(8, perm.canRemoveBench());</span>
+<span class="nc" id="L660">			ps.setBoolean(9, perm.canRemoveSpace());</span>
+<span class="nc" id="L661">			ps.setBoolean(10, perm.canRemoveUser());</span>
+<span class="nc" id="L662">			ps.setBoolean(11, perm.canRemoveJob());</span>
+
+<span class="nc" id="L664">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L665" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L666">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L667" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L670">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L672">			log.info(String.format(&quot;Permission [%d] successfully updated.&quot;, permId));</span>
+<span class="nc" id="L673">		} catch (Exception e) {</span>
+<span class="nc" id="L674">			log.error(&quot;updatePermission&quot;, e);</span>
+		} finally {
+<span class="nc" id="L676">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L678">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

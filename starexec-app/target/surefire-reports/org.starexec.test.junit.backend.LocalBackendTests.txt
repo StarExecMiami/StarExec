@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.starexec.test.junit.backend.LocalBackendTests
+-------------------------------------------------------------------------------
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.484 s -- in org.starexec.test.junit.backend.LocalBackendTests

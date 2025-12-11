@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>HTMLParser.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.command</a> &gt; <span class="el_source">HTMLParser.java</span></div><h1>HTMLParser.java</h1><pre class="source lang-java linenums">package org.starexec.command;
+
+import org.apache.http.Header;
+import org.starexec.util.Validator;
+
+import java.util.Map;
+import java.util.regex.*;
+
+/**
+ * This class reads HTML strings from StarExec and parses out necessary
+ * information from them. HTML parsing is really to be avoided as much as
+ * possible due to how fragile it can be.
+ */
+
+<span class="nc" id="L15">public class HTMLParser {</span>
+
+	/**
+	 * This method encodes a given set of parameters into the given URL to be
+	 * used in HTTP Get requests
+	 *
+	 * @param u The initial URL to be built upon
+	 * @param params a list of name/value pairs to be encoded into the URL
+	 * @return A new URL with the base u and the parameters in params encoded
+	 * @author Eric Burns
+	 */
+
+	public static String URLEncode(String u, Map&lt;String, String&gt; params) {
+<span class="fc" id="L28">		StringBuilder answer = new StringBuilder(u);</span>
+<span class="fc" id="L29">		answer.append(&quot;?&quot;);</span>
+<span class="fc" id="L30">		params.forEach ( (key, value) -&gt; {</span>
+<span class="fc" id="L31">			answer.append(key);</span>
+<span class="fc" id="L32">			answer.append(&quot;=&quot;);</span>
+<span class="fc" id="L33">			answer.append(value);</span>
+<span class="fc" id="L34">			answer.append(&quot;&amp;&quot;);</span>
+<span class="fc" id="L35">		} );</span>
+
+<span class="fc" id="L37">		return answer.substring(0, answer.length() - 1);</span>
+	}
+
+<span class="fc" id="L40">	private static final Pattern extractSpaceName =</span>
+<span class="fc" id="L41">		Pattern.compile(&quot;onclick=\&quot;openSpace[^&gt;]+&gt;([^&lt;]*)&lt;&quot;);</span>
+
+<span class="fc" id="L43">	private static final Pattern extractPrimName =</span>
+<span class="fc" id="L44">		Pattern.compile(&quot;_blank\&quot;&gt;([^&lt;]*)&lt;&quot;);</span>
+
+	/**
+	 * Given a Json string formatted as StarExec does its first line in a table
+	 * extract the name of a primitive
+	 *
+	 * @param jsonString The Json string to test for an name
+	 * @param type The type of primitive that could be present
+	 * @return The name if it exists or null if it does not
+	 */
+	public static String extractNameFromJson(String jsonString, String type) {
+<span class="pc bpc" id="L55" title="1 of 2 branches missed.">		if (jsonString == null) {</span>
+<span class="nc" id="L56">			return null;</span>
+		}
+<span class="fc" id="L58">		Pattern p = null;</span>
+
+		// spaces are formatted differently from any other primitive
+<span class="fc bfc" id="L61" title="All 2 branches covered.">		if (&quot;spaces&quot;.equals(type)) {</span>
+<span class="fc" id="L62">			p = extractSpaceName;</span>
+		} else {
+<span class="fc" id="L64">			p = extractPrimName;</span>
+		}
+
+<span class="fc" id="L67">		Matcher m = p.matcher(jsonString);</span>
+<span class="fc bfc" id="L68" title="All 2 branches covered.">		if ( m.find() ) {</span>
+<span class="fc" id="L69">			return m.group(1);</span>
+		}
+<span class="fc" id="L71">		return null;</span>
+	}
+
+<span class="fc" id="L74">	private static final Pattern extractHiddenValue =</span>
+<span class="fc" id="L75">		Pattern.compile(&quot;value=\&quot;(\\d+)\&quot;[^&gt;]*type=\&quot;hidden\&quot;|type=\&quot;hidden\&quot;[^&gt;]*value=\&quot;(\\d+)\&quot;&quot;);</span>
+
+	/**
+	 * Given a Json string formatted as StarExec does its first line in a table
+	 * extract the ID of a primitive
+	 *
+	 * @param jsonString The Json string to test for an ID
+	 * @return The ID if it exists or null if it does not
+	 */
+	public static Integer extractIDFromJson(String jsonString) {
+<span class="fc bfc" id="L85" title="All 2 branches covered.">		if (jsonString == null) {</span>
+<span class="fc" id="L86">			return null;</span>
+		}
+
+<span class="fc" id="L89">		Matcher m = extractHiddenValue.matcher(jsonString);</span>
+<span class="fc bfc" id="L90" title="All 2 branches covered.">		if ( m.find() ) {</span>
+<span class="fc" id="L91">			String id = m.group(2);</span>
+<span class="pc bpc" id="L92" title="1 of 2 branches missed.">			if (id == null) {</span>
+<span class="fc" id="L93">				id = m.group(1);</span>
+			}
+<span class="pc bpc" id="L95" title="1 of 2 branches missed.">			if (Validator.isValidPosInteger(id)) {</span>
+<span class="fc" id="L96">				return Integer.valueOf(id);</span>
+			}
+		}
+<span class="fc" id="L99">		return null;</span>
+	}
+
+	/**
+	 * Extracts all the values of a comma-separated cookie as a list of strings.
+	 *
+	 * @param headers Array of headers to check for cookies in
+	 * @param cookieName The name of the cookie to look for
+	 * @return A string array, where each value in the array is one value of the
+	 *         comma-separated cookie.
+	 */
+	public static String[] extractMultipartCookie(Header[] headers, String cookieName) {
+<span class="fc" id="L111">		String value = extractCookie(headers, cookieName);</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">		if (value == null) {</span>
+<span class="fc" id="L113">			return null;</span>
+		}
+
+<span class="fc" id="L116">		return value.replace(&quot;\&quot;&quot;, &quot;&quot;).split(&quot;,&quot;);</span>
+	}
+
+	/**
+	 * Given the headers of an HttpResponse and the name of a cookie, check to
+	 * see if that cookie was set and return its value if so
+	 *
+	 * @param headers An array of HTTP headers
+	 * @param cookieName the name of a cookie
+	 * @return The value of the given cookie, or null if it was not present
+	 * @author Eric Burns
+	 */
+
+	public static String extractCookie(Header[] headers, String cookieName) {
+					// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//					System.out.println( &quot;---- now ENTERING HTMLParser.extractCookie() --------\n&quot; );
+					// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="pc bpc" id="L134" title="1 of 4 branches missed.">		if (headers == null || cookieName == null) {</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//						System.out.println( &quot;(headers == null || cookieName == null): &quot; + Boolean.toString( headers == null ) + &quot; || &quot; + Boolean.toString( cookieName == null ) + &quot;\n&quot; );
+//						System.out.println( &quot;---- now EXITING HTMLParser.extractCookie() --------\n&quot; );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc" id="L140">			return null;</span>
+		}
+					// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//					System.out.println( &quot;for Header in parameter headers[]:\n&quot;);
+					// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc bfc" id="L146" title="All 2 branches covered.">		for (Header x : headers) {</span>
+						// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//						System.out.println( &quot;name: &quot; + x.getName() + &quot;, value: &quot; + x.getValue() );
+						// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+			// cookies are parsed in the code below. Note that cookies are in a
+			// form like
+			// Set-Cookie: name=Nicholas; expires=Sat, 02 May 2009 23:38:25 GMT
+			// where all cookies are on a single semicolon-delimited line.
+<span class="fc bfc" id="L155" title="All 2 branches covered.">			if (x.getName().equals(&quot;Set-Cookie&quot;)) {</span>
+							// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//							System.out.println( &quot;\tfound a header with name 'Set-Cookie'!&quot; );
+							// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc" id="L160">				String value = x.getValue().trim();</span>
+							// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//							System.out.println( &quot;\tvalue = &quot; + value );
+							// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc bfc" id="L165" title="All 2 branches covered.">				if (value.contains(cookieName)) {</span>
+								// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//								System.out.println( &quot;\tvalue contains parameter cookieName, &quot; + cookieName );
+								// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc" id="L170">					int begin = value.indexOf(cookieName);</span>
+
+<span class="pc bpc" id="L172" title="1 of 2 branches missed.">					if (begin &lt; 0) { // Doesn't the outer `if` guard against this?</span>
+<span class="nc" id="L173">						return null;</span>
+					}
+<span class="fc" id="L175">					begin += cookieName.length() + 1;</span>
+
+<span class="fc" id="L177">					int end = value.indexOf(';', begin);</span>
+
+					// no semicolon means the cookie is at the end, so use the
+					// entire tail of the string
+<span class="fc bfc" id="L181" title="All 2 branches covered.">					if (end == -1) {</span>
+<span class="fc" id="L182">						end = value.length();</span>
+					}
+								// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//								System.out.println( &quot;\treturning substring of value: &quot; + value.substring(begin, end) + &quot;\n&quot; );
+//								System.out.println( &quot;---- now EXITING HTMLParser.extractCookie() --------\n&quot; );
+								// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc" id="L189">					return value.substring(begin, end);</span>
+				}
+			}
+		}
+					// -- debug -- vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+//					System.out.println( &quot;\nno header with name 'Set-Cookie' was found; returning null\n&quot; );
+//					System.out.println( &quot;---- now EXITING HTMLParser.extractCookie() --------\n&quot; );
+					// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+<span class="fc" id="L198">		return null;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

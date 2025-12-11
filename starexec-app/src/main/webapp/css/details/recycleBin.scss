@@ -1,0 +1,13 @@
+
+
+@media only screen and (max-width: 767px) {
+	body th, body td {
+		text-align: center;
+	}
+
+	/* Mobile spacing adjustment for action field buttons */
+	/* Base button styles come from global components/buttons.scss */
+	#actionField button {
+		margin: 0 5px 5px 0;
+	}
+}

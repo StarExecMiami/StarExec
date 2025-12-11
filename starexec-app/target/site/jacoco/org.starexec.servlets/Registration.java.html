@@ -1,0 +1,359 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Registration.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.servlets</a> &gt; <span class="el_source">Registration.java</span></div><h1>Registration.java</h1><pre class="source lang-java linenums">package org.starexec.servlets;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.Communities;
+import org.starexec.data.database.Users;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.User;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Mail;
+import org.starexec.util.SessionUtil;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import java.io.IOException;
+import java.util.UUID;
+
+/**
+ * Servlet which handles requests for registration
+ *
+ * @author Todd Elvers &amp; Tyler Jensen
+ */
+<span class="nc" id="L29">public class Registration extends HttpServlet {</span>
+<span class="nc" id="L30">	private static final StarLogger log = StarLogger.getLogger(Registration.class);</span>
+
+	// Param strings for processing
+	public static final String USER_COMMUNITY = &quot;cm&quot;;
+	public static final String USER_PASSWORD = &quot;pwd&quot;;
+	public static final String USER_INSTITUTION = &quot;inst&quot;;
+	public static final String USER_EMAIL = &quot;em&quot;;
+	public static final String USER_FIRSTNAME = &quot;fn&quot;;
+	public static final String USER_LASTNAME = &quot;ln&quot;;
+	public static final String USER_MESSAGE = &quot;msg&quot;;
+
+	@Override
+	protected void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L44">		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);</span>
+<span class="nc" id="L45">	}</span>
+
+	@Override
+	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+		try {
+<span class="nc" id="L51">			final String method = &quot;doPost&quot;;</span>
+<span class="nc" id="L52">			log.entry(method);</span>
+<span class="nc" id="L53">			log.debug(&quot;Starting registration process&quot;);</span>
+
+			// Check if admin user is making the request BEFORE processing
+<span class="nc" id="L56">			int userIdOfRequest = -1;</span>
+<span class="nc" id="L57">			HttpSession session = request.getSession(false);</span>
+			try {
+<span class="nc" id="L59">				userIdOfRequest = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L60">				log.debug(&quot;Found user session with ID: &quot; + userIdOfRequest);</span>
+<span class="nc" id="L61">			} catch (Exception e) {</span>
+<span class="nc" id="L62">				log.debug(&quot;No user session found - assuming normal registration&quot;);</span>
+<span class="nc" id="L63">			}</span>
+
+<span class="nc" id="L65">			boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest);</span>
+<span class="nc" id="L66">			log.debug(&quot;Is admin request: &quot; + isAdmin);</span>
+
+			ValidatorStatusCode result;
+			try {
+				// Begin registration for a new user
+<span class="nc" id="L71">				result = register(request);</span>
+<span class="nc" id="L72">			} catch (IOException e) {</span>
+<span class="nc" id="L73">				log.error(&quot;Caught IOException in Registration.doPost while calling register&quot;, e);</span>
+<span class="nc" id="L74">				result = new ValidatorStatusCode(false, &quot;Internal error during registration.&quot;);</span>
+<span class="nc" id="L75">			}</span>
+
+			String redirectUrl;
+<span class="nc bnc" id="L78" title="All 2 branches missed.">			if (isAdmin) {</span>
+<span class="nc" id="L79">				redirectUrl = &quot;secure/admin/addUser.jsp&quot;;</span>
+			} else {
+<span class="nc" id="L81">				redirectUrl = &quot;public/registrationConfirmation.jsp&quot;;</span>
+			}
+
+<span class="nc bnc" id="L84" title="All 2 branches missed.">			if (result.isSuccess()) {</span>
+<span class="nc" id="L85">				log.debug(&quot;Registration successful, redirecting with status: &quot; +</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">				          (result.getMessage() != null ? result.getMessage() : &quot;success&quot;));</span>
+
+				// Preserve session for admin users
+<span class="nc bnc" id="L89" title="All 4 branches missed.">				if (isAdmin &amp;&amp; session != null) {</span>
+<span class="nc" id="L90">					session.setMaxInactiveInterval(30 * 60); // Extend session to 30 minutes</span>
+<span class="nc" id="L91">					log.debug(&quot;Extended admin session after user creation&quot;);</span>
+				}
+
+<span class="nc" id="L94">				String url = Util.docRoot(redirectUrl);</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">				if (&quot;email_failed&quot;.equals(result.getMessage())) {</span>
+<span class="nc" id="L96">					url += &quot;?result=email_failed&quot;;</span>
+				} else {
+<span class="nc" id="L98">					url += &quot;?result=regSuccess&quot;;</span>
+				}
+
+				try {
+<span class="nc" id="L102">					response.sendRedirect(url);</span>
+<span class="nc" id="L103">				} catch (Exception e) {</span>
+<span class="nc" id="L104">					log.error(&quot;Failed to redirect after successful registration&quot;, e);</span>
+<span class="nc" id="L105">					response.setStatus(HttpServletResponse.SC_OK);</span>
+<span class="nc" id="L106">					response.setContentType(&quot;text/html; charset=UTF-8&quot;);</span>
+					// Escape URL to prevent XSS
+<span class="nc" id="L108">					String escapedUrl = url.replace(&quot;\&quot;&quot;, &quot;&amp;quot;&quot;).replace(&quot;&lt;&quot;, &quot;&amp;lt;&quot;).replace(&quot;&gt;&quot;, &quot;&amp;gt;&quot;);</span>
+<span class="nc" id="L109">					response.getWriter().write(&quot;&lt;html&gt;&lt;body&gt;Registration successful. &lt;a href=\&quot;&quot; +</span>
+					                           escapedUrl + &quot;\&quot;&gt;Click here to continue&lt;/a&gt;&lt;/body&gt;&lt;/html&gt;&quot;);
+<span class="nc" id="L111">				}</span>
+<span class="nc" id="L112">			} else {</span>
+<span class="nc" id="L113">				log.debug(&quot;Registration failed with message: &quot; + result.getMessage());</span>
+				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
+				try {
+					// Sanitize cookie value to prevent injection attacks
+<span class="nc" id="L117">					String cookieValue = result.getMessage();</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">					if (cookieValue != null) {</span>
+						// Remove control characters and limit length to prevent cookie injection
+<span class="nc" id="L120">						cookieValue = cookieValue.replaceAll(&quot;[\\r\\n\\x00]&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">						if (cookieValue.length() &gt; 4000) { // HTTP cookie size limit</span>
+<span class="nc" id="L122">							cookieValue = cookieValue.substring(0, 4000);</span>
+						}
+					}
+<span class="nc" id="L125">					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, cookieValue));</span>
+<span class="nc" id="L126">					response.sendRedirect(Util.docRoot(redirectUrl + &quot;?result=regFail&quot;));</span>
+<span class="nc" id="L127">				} catch (Exception e) {</span>
+<span class="nc" id="L128">					log.error(&quot;Failed to redirect after failed registration&quot;, e);</span>
+<span class="nc" id="L129">					response.setStatus(HttpServletResponse.SC_BAD_REQUEST);</span>
+<span class="nc" id="L130">					response.setContentType(&quot;text/html; charset=UTF-8&quot;);</span>
+					// Escape error message and URL to prevent XSS
+<span class="nc" id="L132">					String message = result.getMessage();</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">					if (message == null) {</span>
+<span class="nc" id="L134">						message = &quot;An unknown error occurred.&quot;;</span>
+					}
+<span class="nc" id="L136">					String escapedMessage = message</span>
+<span class="nc" id="L137">							.replace(&quot;&amp;&quot;, &quot;&amp;amp;&quot;)</span>
+<span class="nc" id="L138">							.replace(&quot;&lt;&quot;, &quot;&amp;lt;&quot;)</span>
+<span class="nc" id="L139">							.replace(&quot;&gt;&quot;, &quot;&amp;gt;&quot;)</span>
+<span class="nc" id="L140">							.replace(&quot;\&quot;&quot;, &quot;&amp;quot;&quot;)</span>
+<span class="nc" id="L141">							.replace(&quot;'&quot;, &quot;&amp;#x27;&quot;);</span>
+<span class="nc" id="L142">					String escapedUrl = Util.docRoot(redirectUrl)</span>
+<span class="nc" id="L143">							.replace(&quot;\&quot;&quot;, &quot;&amp;quot;&quot;)</span>
+<span class="nc" id="L144">							.replace(&quot;&lt;&quot;, &quot;&amp;lt;&quot;)</span>
+<span class="nc" id="L145">							.replace(&quot;&gt;&quot;, &quot;&amp;gt;&quot;);</span>
+<span class="nc" id="L146">					response.getWriter().write(&quot;&lt;html&gt;&lt;body&gt;Registration failed: &quot; +</span>
+					                           escapedMessage + &quot;. &lt;a href=\&quot;&quot; + escapedUrl +
+					                           &quot;\&quot;&gt;Click here to try again&lt;/a&gt;&lt;/body&gt;&lt;/html&gt;&quot;);
+<span class="nc" id="L149">				}</span>
+			}
+<span class="nc" id="L151">			log.exit(method);</span>
+<span class="nc" id="L152">		} catch (Exception e) {</span>
+<span class="nc" id="L153">			log.error(&quot;Caught Exception in Registration.doPost&quot;, e);</span>
+			// Don't rethrow exception to avoid 500 error, write a basic HTML response
+			try {
+				// Determine appropriate redirect URL based on user privileges
+<span class="nc" id="L157">				int userIdOfRequest = -1;</span>
+				try {
+<span class="nc" id="L159">					userIdOfRequest = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L160">				} catch (Exception ex) {</span>
+					// No session, assume normal registration
+<span class="nc" id="L162">				}</span>
+
+				String fallbackUrl;
+<span class="nc bnc" id="L165" title="All 2 branches missed.">				if (GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest)) {</span>
+<span class="nc" id="L166">					fallbackUrl = Util.docRoot(&quot;secure/admin/addUser.jsp&quot;);</span>
+				} else {
+<span class="nc" id="L168">					fallbackUrl = Util.docRoot(&quot;public/registration.jsp&quot;);</span>
+				}
+
+<span class="nc" id="L171">				response.setStatus(HttpServletResponse.SC_OK);</span>
+<span class="nc" id="L172">				response.setContentType(&quot;text/html; charset=UTF-8&quot;);</span>
+				// Escape URL to prevent XSS
+<span class="nc" id="L174">				String escapedUrl = fallbackUrl</span>
+<span class="nc" id="L175">						.replace(&quot;\&quot;&quot;, &quot;&amp;quot;&quot;)</span>
+<span class="nc" id="L176">						.replace(&quot;&lt;&quot;, &quot;&amp;lt;&quot;)</span>
+<span class="nc" id="L177">						.replace(&quot;&gt;&quot;, &quot;&amp;gt;&quot;);</span>
+<span class="nc" id="L178">				response.getWriter().write(&quot;&lt;html&gt;&lt;body&gt;An error occurred during registration. &quot; +</span>
+				                           &quot;&lt;a href=\&quot;&quot; + escapedUrl + &quot;\&quot;&gt;Click here to try again&lt;/a&gt;&lt;/body&gt;&lt;/html&gt;&quot;);
+<span class="nc" id="L180">			} catch (Exception ex) {</span>
+<span class="nc" id="L181">				log.error(&quot;Failed even to write error page&quot;, ex);</span>
+<span class="nc" id="L182">			}</span>
+<span class="nc" id="L183">		}</span>
+<span class="nc" id="L184">	}</span>
+
+	/**
+	 * Begins the registration process for a new user by adding them to the database as not-activated &amp; not-approved,
+	 * and sends them an activation email
+	 *
+	 * @param request the servlet containing the incoming POST
+	 * @return 0 if registration was successful, and 1 if the user already exists, and 2 if parameter validation fails
+	 * @author Todd Elvers
+	 */
+	public static ValidatorStatusCode register(HttpServletRequest request) throws IOException {
+
+		// Validate parameters of the new user request
+<span class="nc" id="L197">		ValidatorStatusCode status = validateRequest(request);</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L199">			return status;</span>
+		}
+
+		// Create the user to add to the database
+<span class="nc" id="L203">		User user = new User();</span>
+<span class="nc" id="L204">		user.setFirstName(request.getParameter(Registration.USER_FIRSTNAME));</span>
+<span class="nc" id="L205">		user.setLastName(request.getParameter(Registration.USER_LASTNAME));</span>
+<span class="nc" id="L206">		user.setEmail(request.getParameter(Registration.USER_EMAIL));</span>
+<span class="nc" id="L207">		user.setPassword(request.getParameter(Registration.USER_PASSWORD));</span>
+<span class="nc" id="L208">		user.setInstitution(request.getParameter(Registration.USER_INSTITUTION));</span>
+<span class="nc" id="L209">		user.setPairQuota(R.DEFAULT_PAIR_QUOTA);</span>
+<span class="nc" id="L210">		user.setDiskQuota(R.DEFAULT_DISK_QUOTA);</span>
+<span class="nc" id="L211">		user.setRole(&quot;user&quot;);</span>
+<span class="nc" id="L212">		int communityId = Integer.parseInt(request.getParameter(Registration.USER_COMMUNITY));</span>
+
+<span class="nc" id="L214">		int userIdOfRequest = -1;</span>
+		try {
+<span class="nc" id="L216">			userIdOfRequest = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L217">		} catch (Exception e) {</span>
+			//this occurs when someone tries to register, as they have no user ID
+<span class="nc" id="L219">			userIdOfRequest = -1;</span>
+<span class="nc" id="L220">		}</span>
+
+
+<span class="nc" id="L223">		boolean adminCreated = GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest);</span>
+
+<span class="nc bnc" id="L225" title="All 2 branches missed.">		if (adminCreated) {</span>
+<span class="nc" id="L226">			int id = Users.add(user);</span>
+<span class="nc" id="L227">			boolean success = Users.associate(id, communityId);</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">			if (success) {</span>
+				// Create a personal subspace for the user like normal registration does
+<span class="nc" id="L230">				user.setId(id); // Set the ID so createPersonalSubspace can use it</span>
+				try {
+<span class="nc" id="L232">					Communities.createPersonalSubspace(communityId, user);</span>
+					// Sanitize user name for logging to prevent log injection
+<span class="nc" id="L234">					String sanitizedName = user.getFullName().replaceAll(&quot;[\\r\\n]&quot;, &quot;_&quot;);</span>
+<span class="nc" id="L235">					log.info(&quot;Created personal subspace for admin-created user: &quot; + sanitizedName);</span>
+<span class="nc" id="L236">				} catch (Exception e) {</span>
+<span class="nc" id="L237">					log.warn(&quot;Failed to create personal subspace for user &quot; + user.getEmail(), e);</span>
+					// Don't fail the registration if personal space creation fails
+<span class="nc" id="L239">				}</span>
+						try {
+<span class="nc" id="L241">				Mail.sendPassword(user, request.getParameter(Registration.USER_PASSWORD));</span>
+<span class="nc" id="L242">			} catch (Exception e) {</span>
+<span class="nc" id="L243">				log.warn(&quot;Failed to send password email to user &quot; + user.getEmail(), e);</span>
+<span class="nc" id="L244">				return new ValidatorStatusCode(true, &quot;email_failed&quot;);</span>
+<span class="nc" id="L245">			}</span>
+<span class="nc" id="L246">				return new ValidatorStatusCode(true);</span>
+			} else {
+<span class="nc" id="L248">				return new ValidatorStatusCode(false, &quot;Internal database error registering user&quot;);</span>
+			}
+		} else {
+			// Generate unique code to safely reference this user's entry in verification hyperlinks
+<span class="nc" id="L252">			String code = UUID.randomUUID().toString();</span>
+
+			// Add user to the database and get the UUID that was created
+<span class="nc" id="L255">			boolean added = Users.register(user, communityId, code, request.getParameter(Registration.USER_MESSAGE));</span>
+		// If the user was successfully added to the database, send an activation email
+<span class="nc bnc" id="L257" title="All 2 branches missed.">		if (added) {</span>
+			// Sanitize user name for logging to prevent log injection
+<span class="nc" id="L259">			String sanitizedName = user.getFullName().replaceAll(&quot;[\\r\\n]&quot;, &quot;_&quot;);</span>
+<span class="nc" id="L260">			log.info(String.format(&quot;Registration was successfully started for user [%s].&quot;, sanitizedName));</span>
+
+				try {
+<span class="nc" id="L263">					Mail.sendActivationCode(user, code);</span>
+<span class="nc" id="L264">				} catch (Exception e) {</span>
+<span class="nc" id="L265">					log.warn(&quot;Failed to send activation email to user &quot; + user.getEmail(), e);</span>
+<span class="nc" id="L266">					return new ValidatorStatusCode(true, &quot;email_failed&quot;);</span>
+<span class="nc" id="L267">				}</span>
+<span class="nc" id="L268">				return new ValidatorStatusCode(true);</span>
+		} else {
+			// Sanitize user name for logging to prevent log injection
+<span class="nc" id="L271">			String sanitizedName = user.getFullName().replaceAll(&quot;[\\r\\n]&quot;, &quot;_&quot;);</span>
+<span class="nc" id="L272">			log.info(String.format(&quot;Registration was unsuccessfully started for user [%s].&quot;, sanitizedName));</span>
+<span class="nc" id="L273">			return new ValidatorStatusCode(false, &quot;Internal database error registering user&quot;);</span>
+		}
+		}
+	}
+
+	/**
+	 * Validates the parameters of a servlet request for user registration
+	 *
+	 * @param request the servlet containing the parameters to validate
+	 * @return true if the request is valid, false otherwise
+	 * @author Todd Elvers
+	 */
+	public static ValidatorStatusCode validateRequest(HttpServletRequest request) {
+		try {
+
+			// Ensure the necessary parameters exist
+<span class="nc bnc" id="L289" title="All 2 branches missed.">			if (!Util.paramExists(Registration.USER_PASSWORD, request)) {</span>
+<span class="nc" id="L290">				return new ValidatorStatusCode(false, &quot;You need to supply a password&quot;);</span>
+			}
+
+<span class="nc bnc" id="L293" title="All 2 branches missed.">			if (!Validator.isValidPosInteger(request.getParameter(Registration.USER_COMMUNITY))) {</span>
+<span class="nc" id="L294">				return new ValidatorStatusCode(false, &quot;The given community id is not a valid integer&quot;);</span>
+			}
+
+
+			// Ensure the parameters are valid values
+<span class="nc bnc" id="L299" title="All 2 branches missed.">			if (!Validator.isValidUserName((String) request.getParameter(Registration.USER_FIRSTNAME))) {</span>
+<span class="nc" id="L300">				return new ValidatorStatusCode(false,</span>
+				                               &quot;The given first name is not valid-- please refer to the help files to &quot; +
+						                               &quot;see the proper format&quot;);
+			}
+
+			// Ensure the parameters are valid values
+<span class="nc bnc" id="L306" title="All 2 branches missed.">			if (!Validator.isValidUserName((String) request.getParameter(Registration.USER_LASTNAME))) {</span>
+<span class="nc" id="L307">				return new ValidatorStatusCode(false,</span>
+				                               &quot;The given last name is not valid-- please refer to the help files to &quot; +
+						                               &quot;see the proper format&quot;);
+			}
+
+			// Ensure the parameters are valid values
+<span class="nc bnc" id="L313" title="All 2 branches missed.">			if (!Validator.isValidEmail((String) request.getParameter(Registration.USER_EMAIL))) {</span>
+<span class="nc" id="L314">				return new ValidatorStatusCode(</span>
+						false,
+						&quot;The given email address is not valid-- please refer to the help files to see the proper &quot; +
+								&quot;format&quot;
+				);
+			}
+
+			// Ensure the parameters are valid values
+<span class="nc bnc" id="L322" title="All 2 branches missed.">			if (!Validator.isValidInstitution((String) request.getParameter(Registration.USER_INSTITUTION))) {</span>
+<span class="nc" id="L323">				return new ValidatorStatusCode(</span>
+						false,
+						&quot;The given institution is not valid-- please refer to the help files to see the proper format&quot;
+				);
+			}
+
+<span class="nc" id="L329">			int userIdOfRequest = -1;</span>
+			try {
+<span class="nc" id="L331">				userIdOfRequest = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L332">			} catch (Exception e) {</span>
+				//this occurs when someone tries to register, as they have no user ID
+<span class="nc" id="L334">			}</span>
+
+			//administrators don't need to provide a message
+<span class="nc bnc" id="L337" title="All 2 branches missed.">			if (!GeneralSecurity.hasAdminWritePrivileges(userIdOfRequest)) {</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">				if (!Validator.isValidRequestMessage(request.getParameter(Registration.USER_MESSAGE))) {</span>
+<span class="nc" id="L339">					return new ValidatorStatusCode(</span>
+							false,
+							&quot;The given request message is not valid-- please refer to the help files to see the proper&quot; +
+									&quot; format&quot;
+					);
+				}
+			}
+
+<span class="nc" id="L347">			boolean notUniqueEmail = Users.getUserByEmail(request.getParameter(Registration.USER_EMAIL));</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">			if (notUniqueEmail) {</span>
+<span class="nc" id="L349">				return new ValidatorStatusCode(false, &quot;The email address you specified has already been registered&quot;);</span>
+			}
+
+<span class="nc" id="L352">			return new ValidatorStatusCode(true);</span>
+<span class="nc" id="L353">		} catch (Exception e) {</span>
+<span class="nc" id="L354">			log.warn(e.getMessage(), e);</span>
+		}
+<span class="nc" id="L356">		return new ValidatorStatusCode(false, &quot;There was an internal error processing your registration request&quot;);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

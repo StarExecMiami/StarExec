@@ -1,0 +1,73 @@
+fieldset {						
+	width: 75%;	
+	margin: 30px auto;
+}
+
+@media only screen and (max-width: 767px) {
+	fieldset {
+		width: 95%;
+	}
+}
+
+fieldset table tr td:first-child {
+	width: 200px;
+	margin: 10px;
+}
+
+tr td,
+tr th {
+	padding: 10px;		
+	vertical-align: middle;
+}
+
+.error {
+	vertical-align: middle;
+}
+
+/* Button positioning for this page's layout */
+/* Base button styles come from global components/buttons.scss */
+.uploadBtn, .saveBtn {
+	float: right;
+	margin-right: 10px;
+}
+
+.cancelBtn {
+	float: right;
+}
+
+#configFile {
+	width: 62%;
+}
+
+#configName {
+	margin-left:1px;
+}
+
+input {
+	width: 60%;
+}
+
+textarea {
+	width: 60%;
+	height: 100px;
+	margin-left: 1px;
+}
+
+@media only screen and (max-width: 767px) {
+	#wrapper input {
+		width: 90%;
+	}
+
+	body #wrapper textarea {
+		width: 90%;
+	}
+
+	body #wrapper #configFile {
+		width: 90%;
+	}
+
+	#wrapper fieldset table tr td:first-child {
+		width: 30%;
+		margin: 0;
+	}
+}

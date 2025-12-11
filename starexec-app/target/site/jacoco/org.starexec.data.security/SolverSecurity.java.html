@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SolverSecurity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.security</a> &gt; <span class="el_source">SolverSecurity.java</span></div><h1>SolverSecurity.java</h1><pre class="source lang-java linenums">package org.starexec.data.security;
+
+import org.starexec.data.database.Permissions;
+import org.starexec.data.database.Solvers;
+import org.starexec.data.database.Spaces;
+import org.starexec.data.database.Users;
+import org.starexec.data.to.Configuration;
+import org.starexec.data.to.Permission;
+import org.starexec.data.to.Solver;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
+
+import java.io.File;
+import java.util.List;
+
+<span class="nc" id="L16">public class SolverSecurity {</span>
+
+	/**
+	 * Checks whether the user can see the build log for the given solver. They must own the solver or be an admin
+	 *
+	 * @param solverId
+	 * @param userId
+	 * @return A validatorStatusCode object
+	 */
+	public static ValidatorStatusCode canUserSeeBuildLog(int solverId, int userId) {
+<span class="nc" id="L26">		Solver s = Solvers.get(solverId);</span>
+<span class="nc bnc" id="L27" title="All 6 branches missed.">		if (s == null || userId != s.getUserId() &amp;&amp; !GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L28">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the build log for this solver&quot;);</span>
+		}
+<span class="nc" id="L30">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can upload a solver with a starexec_build script in the given space. Only
+	 * leaders of communities may do this, and they can only do it in their own community
+	 *
+	 * @param userId
+	 * @param spaceId
+	 * @return
+	 */
+
+	public static ValidatorStatusCode canUserRunStarexecBuild(int userId, int spaceId) {
+<span class="nc" id="L43">		Permission p = Permissions.get(userId, Spaces.getCommunityOfSpace(spaceId));</span>
+<span class="nc bnc" id="L44" title="All 4 branches missed.">		if (p == null || !p.isLeader()) {</span>
+<span class="nc" id="L45">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;You do not have permission to use a starexec_build script. Only community leaders may use build &quot; +
+							&quot;scripts.&quot;
+			);
+		}
+<span class="nc" id="L51">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can add a new configuration to the given solver
+	 *
+	 * @param solverId
+	 * @param userId
+	 * @return
+	 */
+	public static ValidatorStatusCode canUserAddConfiguration(int solverId, int userId) {
+<span class="nc" id="L62">		Solver s = Solvers.get(solverId);</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L64">			return new ValidatorStatusCode(false, &quot;The solver could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L66" title="All 4 branches missed.">		if (!GeneralSecurity.hasAdminWritePrivileges(userId) &amp;&amp; !(s.getUserId() == userId)) {</span>
+<span class="nc" id="L67">			return new ValidatorStatusCode(false, &quot;You do not have permission to add a configuration to this solver&quot;);</span>
+		}
+<span class="nc bnc" id="L69" title="All 2 branches missed.">		if (UploadSecurity.uploadsFrozen()) {</span>
+<span class="nc" id="L70"> 			return new ValidatorStatusCode(false, &quot;Modifying solvers is currently disabled by the system administrator&quot;);</span>
+ 		}
+<span class="nc" id="L72">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks if a user can get an anonymous link for a solver.
+	 *
+	 * @param solverId The id of the solver that we're getting a link for
+	 * @param userId The id of the user trying to get the anonymous link.
+	 * @author Albert Giegeich
+	 */
+	public static ValidatorStatusCode canUserGetAnonymousLink(int solverId, int userId) {
+<span class="nc bnc" id="L83" title="All 2 branches missed.">		if (userOwnsSolverOrIsAdmin(Solvers.get(solverId), userId)) {</span>
+<span class="nc" id="L84">			return new ValidatorStatusCode(true);</span>
+		} else {
+<span class="nc" id="L86">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to get an anonymous link for this solver.&quot;);
+		}
+	}
+
+	/**
+	 * Checks to see whether the given user can view the given solver
+	 *
+	 * @param solverId The ID of the solver being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed or a status code from ValidatorStatusCodes if
+	 * not
+	 */
+	public static ValidatorStatusCode canUserSeeSolver(int solverId, int userId) {
+
+<span class="nc bnc" id="L101" title="All 2 branches missed.">		if (!Permissions.canUserSeeSolver(solverId, userId)) {</span>
+<span class="nc" id="L102">			return new ValidatorStatusCode(false, &quot;You do not have permission to see this solver&quot;);</span>
+		}
+
+<span class="nc" id="L105">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the user can update a solver with the given attributes
+	 *
+	 * @param solverId The ID of the solver that would be updated
+	 * @param name The new name that would be given the solver
+	 * @param description The description that would be given the solver
+	 * @param isDownloadable The boolean value for &quot;downloadable&quot; that would be given the solver
+	 * @param userId The ID of the solver making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+
+	public static ValidatorStatusCode canUserUpdateSolver(
+			int solverId, String name, String description, boolean isDownloadable, int userId
+	) {
+		// Ensure the parameters are valid
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (!Validator.isValidSolverName(name)) {</span>
+<span class="nc" id="L125">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The new name is not in the correct format. Please see the help pages to see the correct format&quot;
+			);
+		}
+
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		if (!Validator.isValidPrimDescription(description)) {</span>
+<span class="nc" id="L132">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The new description is not in the correct format. Please see the help pages to see the correct &quot; +
+							&quot;format&quot;
+			);
+		}
+
+<span class="nc" id="L139">		Solver solver = Solvers.get(solverId);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">		if (solver == null) {</span>
+<span class="nc" id="L141">			return new ValidatorStatusCode(false, &quot;The solver could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L143" title="All 2 branches missed.">		if (!userOwnsSolverOrIsAdmin(solver, userId)) {</span>
+<span class="nc" id="L144">			return new ValidatorStatusCode(false, &quot;You do not have permission to update this solver&quot;);</span>
+		}
+		// Extract new solver details from request
+<span class="nc" id="L147">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can update the given configuration.
+	 *
+	 * @param configId The ID of the config that would be updated
+	 * @param userId The ID of the user making the request
+	 * @param name The new name that will be given to the configuration upon editing
+	 * @param description The new description that will be given to the configuration upon editing
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	public static ValidatorStatusCode canUserUpdateConfiguration(
+			int configId, int userId, String name, String description
+	) {
+		// Ensure the parameters are valid
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (!Validator.isValidConfigurationName(name)) {</span>
+<span class="nc" id="L164">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The new name is not in the correct format. Please see the help pages to see the correct format&quot;
+			);
+		}
+
+<span class="nc" id="L170">		Configuration c = Solvers.getConfiguration(configId);</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">		if (c == null) {</span>
+<span class="nc" id="L172">			return new ValidatorStatusCode(false, &quot;The given configuration could not be found&quot;);</span>
+		}
+<span class="nc" id="L174">		Solver solver = Solvers.getSolverByConfig(configId, false);</span>
+
+		// If the old config and new config names are NOT the same, ensure the file pointed to by
+		// the new config does not already exist on disk
+<span class="nc bnc" id="L178" title="All 2 branches missed.">		if (!c.getName().equals(name)) {</span>
+<span class="nc" id="L179">			File newConfig = new File(Util.getSolverConfigPath(solver.getPath(), name));</span>
+
+<span class="nc bnc" id="L181" title="All 2 branches missed.">			if (newConfig.exists()) {</span>
+<span class="nc" id="L182">				return new ValidatorStatusCode(false, &quot;The solver already has a configuration with the given name&quot;);</span>
+			}
+		}
+
+<span class="nc bnc" id="L186" title="All 2 branches missed.">		if (!Validator.isValidPrimDescription(description)) {</span>
+<span class="nc" id="L187">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The new description is not in the correct format. Please see the help pages to see the correct &quot; +
+							&quot;format&quot;
+			);
+		}
+
+<span class="nc bnc" id="L194" title="All 2 branches missed.">		if (solver == null) {</span>
+<span class="nc" id="L195">			return new ValidatorStatusCode(false, &quot;The solver owning this configuration could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L197" title="All 2 branches missed.">		if (!userOwnsSolverOrIsAdmin(solver, userId)) {</span>
+<span class="nc" id="L198">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to update any configurations associated with this solver&quot;);
+		}
+<span class="nc" id="L201">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can delete all of the given solvers
+	 *
+	 * @param solverIds The IDs of all the solvers to check
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserDeleteSolvers(List&lt;Integer&gt; solverIds, int userId) {
+<span class="nc bnc" id="L213" title="All 2 branches missed.">		for (Integer sid : solverIds) {</span>
+<span class="nc" id="L214">			ValidatorStatusCode status = canUserDeleteSolver(sid, userId);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L216">				return status;</span>
+			}
+<span class="nc" id="L218">		}</span>
+<span class="nc" id="L219">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can restore all of the given solvers
+	 *
+	 * @param solverIds The IDs of all the solvers to check
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRestoreSolvers(List&lt;Integer&gt; solverIds, int userId) {
+<span class="nc bnc" id="L231" title="All 2 branches missed.">		for (Integer sid : solverIds) {</span>
+<span class="nc" id="L232">			ValidatorStatusCode status = canUserRestoreSolver(sid, userId);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L234">				return status;</span>
+			}
+<span class="nc" id="L236">		}</span>
+<span class="nc" id="L237">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can recycle all the orphaned solvers owned by another user.
+	 *
+	 * @param userIdToDelete The user who owns the orphaned solvers that will be recycled
+	 * @param userIdMakingRequest The user who is trying to do the recycling
+	 * @return A ValidatorStatusCode
+	 */
+	public static ValidatorStatusCode canUserRecycleOrphanedSolvers(int userIdToDelete, int userIdMakingRequest) {
+<span class="nc bnc" id="L248" title="All 2 branches missed.">		if (Users.get(userIdToDelete) == null) {</span>
+<span class="nc" id="L249">			return new ValidatorStatusCode(false, &quot;The given user does not exist&quot;);</span>
+		}
+<span class="nc bnc" id="L251" title="All 4 branches missed.">		if (userIdToDelete != userIdMakingRequest &amp;&amp; !GeneralSecurity.hasAdminWritePrivileges(userIdMakingRequest)) {</span>
+<span class="nc" id="L252">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to recycle solvers belonging to another user&quot;);
+		}
+
+<span class="nc" id="L256">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can recycle all of the given solvers
+	 *
+	 * @param solverIds The IDs of all the solvers to check
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRecycleSolvers(List&lt;Integer&gt; solverIds, int userId) {
+<span class="nc bnc" id="L268" title="All 2 branches missed.">		for (Integer sid : solverIds) {</span>
+<span class="nc" id="L269">			ValidatorStatusCode status = canUserRecycleSolver(sid, userId);</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L271">				return status;</span>
+			}
+<span class="nc" id="L273">		}</span>
+<span class="nc" id="L274">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can delete the given solver
+	 *
+	 * @param solverId The ID of the solver to check
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserDeleteSolver(int solverId, int userId) {
+<span class="nc" id="L286">		Solver solver = Solvers.getIncludeDeleted(solverId);</span>
+
+<span class="nc bnc" id="L288" title="All 2 branches missed.">		if (solver == null) {</span>
+<span class="nc" id="L289">			return new ValidatorStatusCode(false, &quot;The given solver could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L291" title="All 2 branches missed.">		if (solver.isDeleted()) {</span>
+<span class="nc" id="L292">			return new ValidatorStatusCode(false, &quot;The given solver has already been deleted&quot;);</span>
+		}
+<span class="nc bnc" id="L294" title="All 2 branches missed.">		if (!userOwnsSolverOrIsAdmin(solver, userId)) {</span>
+<span class="nc" id="L295">			return new ValidatorStatusCode(false, &quot;You do not have permission to delete this solver&quot;);</span>
+		}
+<span class="nc" id="L297">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can recycle the given solver
+	 *
+	 * @param solverId The ID of the solver to check
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRecycleSolver(int solverId, int userId) {
+<span class="nc" id="L309">		Solver solver = Solvers.get(solverId);</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">		if (solver == null) {</span>
+<span class="nc" id="L311">			return new ValidatorStatusCode(false, &quot;The given solver could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		if (!userOwnsSolverOrIsAdmin(solver, userId)) {</span>
+<span class="nc" id="L314">			return new ValidatorStatusCode(false, &quot;You do not have permission to recycle this solver&quot;);</span>
+		}
+<span class="nc" id="L316">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can restore the given solver
+	 *
+	 * @param solverId The ID of the solver to check
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRestoreSolver(int solverId, int userId) {
+
+<span class="nc" id="L329">		Solver solver = Solvers.getIncludeDeleted(solverId);</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">		if (solver == null) {</span>
+<span class="nc" id="L331">			return new ValidatorStatusCode(false, &quot;The given solver could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L333" title="All 2 branches missed.">		if (!userOwnsSolverOrIsAdmin(solver, userId)) {</span>
+<span class="nc" id="L334">			return new ValidatorStatusCode(false, &quot;You do not have permission to restore this solver&quot;);</span>
+		}
+<span class="nc" id="L336">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user either owns the given solver or is an admin
+	 *
+	 * @param solverId
+	 * @param userId
+	 * @return True if the user owns the solver OR is an admin, and false otherwise
+	 */
+	public static boolean userOwnsSolverOrIsAdmin(int solverId, int userId) {
+<span class="nc" id="L347">		return userOwnsSolverOrIsAdmin(Solvers.get(solverId), userId);</span>
+	}
+
+	/**
+	 * Checks to see if the given user either owns the given solver or is an admin
+	 *
+	 * @param solver
+	 * @param userId
+	 * @return True if the user owns the solver OR is an admin, and false otherwise
+	 */
+	public static boolean userOwnsSolverOrIsAdmin(Solver solver, int userId) {
+<span class="nc bnc" id="L358" title="All 6 branches missed.">		return (solver != null &amp;&amp; (solver.getUserId() == userId || GeneralSecurity.hasAdminWritePrivileges(userId)));</span>
+	}
+
+	/**
+	 * Checks whether a user can remove a solver from a space
+	 *
+	 * @param spaceId The ID of the space in question
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveSolver(int spaceId, int userId) {
+<span class="nc" id="L370">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L371" title="All 4 branches missed.">		if (perm == null || !perm.canRemoveSolver()) {</span>
+<span class="nc" id="L372">			return new ValidatorStatusCode(false, &quot;You do not have permission to remove solvers from the given space&quot;);</span>
+		}
+<span class="nc" id="L374">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user is allowed to remove a solver from a space hierarchy. They are allowed if they can
+	 * remove the solver from the root plus ANY SUBSET of subspaces, including the empty subset. Other validation needs
+	 * to be done to make sure solvers are remove from only the correct subspaces
+	 *
+	 * @param rootSpaceId The ID of the space at the root of the hierarchy in question
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveSolverFromHierarchy(int rootSpaceId, int userId) {
+<span class="nc" id="L388">		ValidatorStatusCode status = canUserRemoveSolver(rootSpaceId, userId);</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L390">			return status;</span>
+		}
+
+<span class="nc" id="L393">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can delete all of the given configurations
+	 *
+	 * @param configIds The IDs of the configurations being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed or a status code from ValidatorStatusCodes if
+	 * not
+	 */
+	public static ValidatorStatusCode canUserDeleteConfigurations(List&lt;Integer&gt; configIds, int userId) {
+<span class="nc bnc" id="L405" title="All 2 branches missed.">		for (Integer cid : configIds) {</span>
+<span class="nc" id="L406">			ValidatorStatusCode status = canUserDeleteConfiguration(cid, userId);</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L408">				return status;</span>
+			}
+<span class="nc" id="L410">		}</span>
+<span class="nc" id="L411">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can delete the given configuration
+	 *
+	 * @param configId The ID of the configuration being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed or a status code from ValidatorStatusCodes if
+	 * not
+	 */
+
+	public static ValidatorStatusCode canUserDeleteConfiguration(int configId, int userId) {
+<span class="nc" id="L424">		Configuration config = Solvers.getConfiguration(configId);</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">		if (config == null) {</span>
+<span class="nc" id="L426">			return new ValidatorStatusCode(false, &quot;The given configuration could not be found&quot;);</span>
+		}
+<span class="nc" id="L428">		Solver solver = Solvers.get(config.getSolverId());</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		if (solver == null) {</span>
+<span class="nc" id="L430">			return new ValidatorStatusCode(</span>
+					false, &quot;The solver associated with the given configuration could not be found&quot;);
+		}
+<span class="nc bnc" id="L433" title="All 2 branches missed.">		if (!userOwnsSolverOrIsAdmin(solver, userId)) {</span>
+<span class="nc" id="L434">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to delete configurations attached to this solver&quot;);
+		}
+<span class="nc" id="L437">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user has permission to download the given solver
+	 *
+	 * @param solverId
+	 * @param userId
+	 * @return
+	 */
+	public static ValidatorStatusCode canUserDownloadSolver(int solverId, int userId) {
+<span class="nc" id="L448">		Solver s = Solvers.get(solverId);</span>
+<span class="nc" id="L449">		boolean userHasAdminReadPrivileges = GeneralSecurity.hasAdminReadPrivileges(userId);</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">		if (!Permissions.canUserSeeSolver(s.getId(), userId)) {</span>
+<span class="nc" id="L451">			return new ValidatorStatusCode(false, &quot;You do not have permission to see this solver&quot;);</span>
+		}
+<span class="nc bnc" id="L453" title="All 6 branches missed.">		if (!(s.isDownloadable() || s.getUserId() == userId || userHasAdminReadPrivileges)) {</span>
+<span class="nc" id="L454">			return new ValidatorStatusCode(false, &quot;This solver is not available for download&quot;);</span>
+		}
+
+<span class="nc" id="L457">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the user is allowed to download the Json object representing the solver
+	 *
+	 * @param solverId
+	 * @param userId
+	 * @return
+	 */
+	public static ValidatorStatusCode canGetJsonSolver(int solverId, int userId) {
+<span class="nc bnc" id="L468" title="All 2 branches missed.">		if (!Permissions.canUserSeeSolver(solverId, userId)) {</span>
+<span class="nc" id="L469">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the specified solver&quot;);</span>
+		}
+<span class="nc" id="L471">		Solver s = Solvers.getIncludeDeleted(solverId);</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L473">			return new ValidatorStatusCode(false, &quot;The given solver could not be found&quot;);</span>
+		}
+<span class="nc" id="L475">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the user is allowed to download the Json object representing the solver
+	 *
+	 * @param configId
+	 * @param userId
+	 * @return
+	 */
+	public static ValidatorStatusCode canGetJsonConfiguration(int configId, int userId) {
+<span class="nc" id="L486">		Solver s = Solvers.getSolverByConfig(configId, true);</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L488">			return new ValidatorStatusCode(false, &quot;The given configuration could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L490" title="All 2 branches missed.">		if (!Permissions.canUserSeeSolver(s.getId(), userId)) {</span>
+<span class="nc" id="L491">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the specified solver&quot;);</span>
+		}
+<span class="nc" id="L493">		Configuration c = Solvers.getConfiguration(configId);</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">		if (c == null) {</span>
+<span class="nc" id="L495">			return new ValidatorStatusCode(false, &quot;The given configuration could not be found&quot;);</span>
+		}
+<span class="nc" id="L497">		return new ValidatorStatusCode(true);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

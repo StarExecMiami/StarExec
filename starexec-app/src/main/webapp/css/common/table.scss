@@ -1,0 +1,158 @@
+// =============================================================================
+// TABLE BASE STYLES - Common table functionality
+// =============================================================================
+// This file provides base table styles used across all pages.
+// The unified table component (components/tables.scss) provides dark theme
+// and DataTable styling when loaded via global.scss.
+// =============================================================================
+
+@import "../global/helper";
+@import "../global/colors";
+
+// =============================================================================
+// PROCESSING INDICATOR
+// =============================================================================
+
+.processing {
+	margin-right: 8px;
+	margin-bottom: -4px;
+}
+
+.qtip .processing {
+	margin-top: 45px;
+	text-align: center;
+}
+
+// =============================================================================
+// FORM ELEMENTS IN TABLE CONTEXT
+// =============================================================================
+
+select {
+	width: 95%;
+}
+
+// =============================================================================
+// BASE TABLE STYLES
+// =============================================================================
+
+table {
+	// Use auto layout by default to allow tables to calculate natural widths
+	// table-layout: fixed requires explicit column widths to work properly
+	table-layout: auto;
+	width: 100%;
+	max-width: 100%;
+	// Note: overflow doesn't work on table elements - use wrapper div instead
+	word-wrap: break-word;
+
+	&.tooltipTable {
+		table-layout: auto;
+		word-wrap: normal;
+	}
+
+	// Only use fixed layout when explicitly needed and columns have widths defined
+	&.fixed-layout {
+		table-layout: fixed;
+	}
+}
+
+// =============================================================================
+// CONTENT AREA TABLE STYLING
+// =============================================================================
+// These styles use variables from the design system for consistency
+
+#content {
+	tbody {
+		tr {
+			&:not(.row_selected):not(.noHover):hover {
+				background-color: $accent-red;
+			}
+
+			.dataTables_empty:hover {
+				background-color: $foreground-color;
+			}
+
+			&.odd {
+				background-color: $foreground-color;
+			}
+
+			&.even {
+				background-color: $background-color;
+			}
+		}
+
+		td {
+			padding: 10px;
+		}
+	}
+
+	thead {
+		th {
+			padding: 10px;
+		}
+
+		tr {
+			background-color: $background-color;
+		}
+	}
+}
+
+// =============================================================================
+// ROW SELECTION STATES
+// =============================================================================
+
+tbody tr.row_selected {
+	background-color: $accent-orange !important;
+}
+
+tbody tr.row_selected .dataTables_empty {
+	background-color: $foreground-color;
+}
+
+// =============================================================================
+// TABLE FOOTER / BOTTOM AREA
+// =============================================================================
+
+.bottom {
+	border-top: 1px solid $background-color;
+	padding-top: 10px;
+}
+
+// =============================================================================
+// UTILITY CLASSES
+// =============================================================================
+
+.clear {
+	clear: both;
+}
+
+.dataTables_empty {
+	text-align: center;
+}
+
+// =============================================================================
+// CELL SPECIAL STATES
+// =============================================================================
+
+td {
+	position: relative;
+
+	// Group row styling (light background for contrast)
+	&.group {
+		background-color: #d1cfd0;
+		border-bottom: 2px solid #A19B9E;
+		border-top: 2px solid #A19B9E;
+		color: $background-color;
+	}
+
+	// Details row styling (light background for contrast)
+	&.details {
+		background-color: #d1cfd0;
+		border: 2px solid #A19B9E;
+		color: $background-color;
+	}
+
+	// Statistics column styling
+	.stat {
+		@extend %stat-column;
+	}
+}

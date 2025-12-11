@@ -1,0 +1,375 @@
+/**
+ * Button Component - Dark Mode Styles
+ * Shared button styling for consistent dark mode appearance
+ * WCAG 2.1 AA compliant with proper focus indicators
+ */
+
+// Import dependencies
+@import "../global/colors";
+@import "../global/helper";
+
+/* ========== Button Size Variables ========== */
+// Standardized padding and margin for all buttons
+$btn-padding-y: 0.5em;
+$btn-padding-x: 1em;
+$btn-margin: 0.25em;
+$btn-gap: 0.5em;
+
+// Small button variant
+$btn-sm-padding-y: 0.25em;
+$btn-sm-padding-x: 0.5em;
+
+// Large button variant
+$btn-lg-padding-y: 0.75em;
+$btn-lg-padding-x: 1.5em;
+
+/* ========== Base Button Styles ========== */
+.btn {
+	padding: $btn-padding-y $btn-padding-x;
+	margin: $btn-margin;
+	border: 1px solid transparent;
+	@extend %rounded-corners;
+	font-size: 1em;
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.2s ease;
+	font-family: inherit;
+	line-height: 1.5;
+	text-align: center;
+	display: inline-block;
+	vertical-align: middle;
+	user-select: none;
+	box-sizing: border-box;
+
+	&:focus {
+		outline: 2px solid $accent-orange;
+		outline-offset: 2px;
+	}
+
+	&:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	&:hover:not(:disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+	}
+
+	&:active:not(:disabled) {
+		transform: translateY(0);
+	}
+}
+
+/* ========== Button Size Variants ========== */
+.btn-sm {
+	padding: $btn-sm-padding-y $btn-sm-padding-x;
+	font-size: 0.875em;
+}
+
+.btn-lg {
+	padding: $btn-lg-padding-y $btn-lg-padding-x;
+	font-size: 1.125em;
+}
+
+/* ========== Primary Button (Orange Accent) ========== */
+.btn-primary {
+	background-color: $accent-orange;
+	color: $text-main-color;
+	border-color: $accent-orange;
+
+	&:hover:not(:disabled) {
+		background-color: darken($accent-orange, 15%);
+		border-color: darken($accent-orange, 15%);
+	}
+
+	&:focus {
+		outline-color: $accent-orange;
+	}
+}
+
+/* ========== Secondary Button (Gray) ========== */
+.btn-secondary {
+	background-color: darken($foreground-color, 10%);
+	color: $text-main-color;
+	border-color: $background-color;
+
+	&:hover:not(:disabled) {
+		background-color: darken($foreground-color, 5%);
+		border-color: $accent-orange;
+	}
+
+	&:active:not(:disabled) {
+		background-color: darken($foreground-color, 15%);
+	}
+}
+
+/* ========== Preset/Filter Button ========== */
+.btn-preset {
+	background-color: darken($foreground-color, 10%);
+	color: $text-main-color;
+	border-color: $background-color;
+
+	&:hover:not(:disabled) {
+		background-color: darken($foreground-color, 5%);
+		border-color: $accent-orange;
+	}
+
+	&:active:not(:disabled) {
+		background-color: darken($foreground-color, 15%);
+	}
+}
+
+/* ========== jQuery UI Button Overrides ========== */
+// Override jQuery UI's default light theme colors with our dark theme
+// These rules must be specific enough to override jquery-ui.css
+
+// Standardize jQuery UI button padding and margin
+.ui-button {
+	padding: $btn-padding-y $btn-padding-x !important;
+	margin: $btn-margin !important;
+	box-sizing: border-box !important;
+}
+
+// Reset jQuery UI's color overrides for buttons and links
+.ui-state-default,
+.ui-widget-content .ui-state-default,
+.ui-widget-header .ui-state-default,
+.ui-button,
+a.ui-button,
+a:link.ui-button,
+a:visited.ui-button,
+.ui-state-default a,
+.ui-state-default a:link,
+.ui-state-default a:visited {
+	color: $text-main-color !important;
+	background: darken($foreground-color, 10%) !important;
+	border-color: $background-color !important;
+}
+
+// Hover states - jQuery UI uses .ui-state-hover
+.ui-state-hover,
+.ui-widget-content .ui-state-hover,
+.ui-widget-header .ui-state-hover,
+.ui-button:hover,
+a.ui-button:hover,
+.ui-state-hover a,
+.ui-state-hover a:hover,
+.ui-state-hover a:link,
+.ui-state-hover a:visited {
+	color: $text-main-color !important;
+	background: darken($foreground-color, 5%) !important;
+	border-color: $accent-orange !important;
+}
+
+// Focus states - WCAG 2.1 AA compliant
+.ui-state-focus,
+.ui-widget-content .ui-state-focus,
+.ui-widget-header .ui-state-focus,
+.ui-button:focus,
+a.ui-button:focus,
+.ui-state-focus a,
+.ui-state-focus a:focus,
+.ui-state-focus a:link,
+.ui-state-focus a:visited {
+	color: $text-main-color !important;
+	background: darken($foreground-color, 5%) !important;
+	border-color: $accent-orange !important;
+	outline: 2px solid $accent-orange !important;
+	outline-offset: 2px !important;
+}
+
+// Active/pressed states
+.ui-state-active,
+.ui-widget-content .ui-state-active,
+.ui-widget-header .ui-state-active,
+.ui-button:active,
+a.ui-button:active,
+.ui-button.ui-state-active:hover,
+.ui-state-active a,
+.ui-state-active a:link,
+.ui-state-active a:visited {
+	color: $text-main-color !important;
+	background: darken($foreground-color, 15%) !important;
+	border-color: $accent-orange !important;
+}
+
+// Disabled states
+html .ui-button.ui-state-disabled:hover,
+html .ui-button.ui-state-disabled:active,
+.ui-state-disabled,
+.ui-widget-content .ui-state-disabled,
+.ui-widget-header .ui-state-disabled {
+	color: $text-main-color !important;
+	background: darken($foreground-color, 10%) !important;
+	border-color: $background-color !important;
+	opacity: 0.5 !important;
+	cursor: not-allowed !important;
+}
+
+// Visual focus indicator override
+.ui-visual-focus {
+	box-shadow: 0 0 3px 1px $accent-orange !important;
+}
+
+.ui-button {
+	@extend .btn;
+	
+	// Remove jQuery UI's default styling
+	&.ui-corner-all {
+		@extend %rounded-corners;
+	}
+
+	// Hover transform effect
+	&:hover:not(:disabled):not(.ui-state-disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+	}
+
+	// Active press effect
+	&:active:not(:disabled):not(.ui-state-disabled) {
+		transform: translateY(0);
+	}
+}
+
+/* ========== Legacy jQuery UI Button Classes ========== */
+// These classes are used throughout the application for jQuery UI buttons
+// They now extend the unified button system for consistency
+.btnEdit,
+.btnRun,
+.btnUp,
+.btnDown,
+.btnAdd,
+.btnRemove {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+/* ========== Button Groups ========== */
+.btn-group {
+	display: inline-flex;
+	gap: $btn-gap;
+	flex-wrap: wrap;
+
+	.btn,
+	.ui-button,
+	button {
+		margin: 0;
+	}
+}
+
+/* ========== Form Actions Container ========== */
+.form-actions {
+	display: flex;
+	gap: $btn-gap;
+	flex-wrap: wrap;
+	margin-top: 1.5em;
+
+	.btn,
+	.ui-button,
+	button {
+		margin: 0;
+	}
+}
+
+/* ========== Blue Primary Button (for login/special pages) ========== */
+.btn-blue {
+	background-color: $accent-blue;
+	color: $text-main-color;
+	border-color: $accent-blue;
+
+	&:hover:not(:disabled) {
+		background-color: lighten($accent-blue, 10%);
+		border-color: lighten($accent-blue, 10%);
+	}
+
+	&:active:not(:disabled) {
+		background-color: darken($accent-blue, 10%);
+		border-color: darken($accent-blue, 10%);
+	}
+
+	&:focus {
+		outline-color: $accent-blue;
+	}
+}
+
+/* ========== Danger Button (for destructive actions) ========== */
+.btn-danger {
+	background-color: $accent-red;
+	color: $text-main-color;
+	border-color: $accent-red;
+
+	&:hover:not(:disabled) {
+		background-color: darken($accent-red, 10%);
+		border-color: darken($accent-red, 10%);
+	}
+
+	&:active:not(:disabled) {
+		background-color: darken($accent-red, 15%);
+		border-color: darken($accent-red, 15%);
+	}
+
+	&:focus {
+		outline-color: $accent-red;
+	}
+}
+
+/* ========== Button Layout Utilities ========== */
+// Use these classes to position buttons without generic element selectors
+.btn-right {
+	float: right;
+}
+
+.btn-left {
+	float: left;
+}
+
+.btn-block {
+	display: block;
+	width: 100%;
+}
+
+/* ========== Action Field Button Container ========== */
+// Common pattern for form action areas
+.action-field {
+	display: flex;
+	gap: $btn-gap;
+	flex-wrap: wrap;
+	
+	button,
+	.btn,
+	.ui-button {
+		margin: 0;
+	}
+}
+
+/* ========== Legacy Page-Specific Button Classes ========== */
+// These classes provide consistent styling for existing custom button classes
+// while maintaining backward compatibility
+.uploadBtn,
+.saveBtn,
+.submitBtn {
+	@extend .btn;
+	@extend .btn-primary;
+}
+
+.cancelBtn {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+.compareBtn {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+.selectPrim {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+/* ========== Danger Zone Button (for account deletion etc.) ========== */
+button.danger,
+.btn.danger {
+	@extend .btn-danger;
+}

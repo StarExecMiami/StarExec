@@ -1,0 +1,328 @@
+// Import color palette and utilities
+@import "../global/colors";
+@import "../global/fonts";
+@import "../global/helper";
+
+// ============================================================================
+// Login Container - Main Layout
+// ============================================================================
+
+.login-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - 200px);
+    padding: 20px;
+
+    section {
+        width: 100%;
+        max-width: 400px;
+    }
+}
+
+// ============================================================================
+// Alert Messages - Warnings & Errors
+// ============================================================================
+// Alert message styles are now centralized in components/alert.scss
+// Legacy .warning-message and .error.message classes are automatically
+// handled by alert.scss backwards compatibility rules (@extend .alert)
+//
+// For new markup, use:
+//   <div class="alert alert--warning">...</div>
+//   <div class="alert alert--error">...</div>
+//
+// Existing .warning-message and .error.message markup continues to work
+// through the centralized alert component system
+
+// ============================================================================
+// Login Form - Main Container
+// ============================================================================
+
+.login-form {
+    width: 370px;
+    margin: 50px auto auto;
+
+    #loginFieldset {
+        width: auto;
+        padding: 30px;
+        background-color: $foreground-color;
+        border: 1px solid darken($background-color, 5%);
+        @extend %rounded-corners;
+    }
+
+    legend {
+        margin-left: -10px;
+        padding: 0 10px;
+        color: $text-main-color;
+        font-weight: 600;
+        font-size: 16px;
+    }
+}
+
+// ============================================================================
+// Form Groups - Semantic Form Sections
+// ============================================================================
+
+.form-group {
+    margin-bottom: 15px;
+
+    &:last-of-type {
+        margin-bottom: 25px;
+    }
+}
+
+// Form labels - accessible and semantic
+.form-label {
+    display: block;
+    margin-bottom: 6px;
+    color: $text-main-color;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+// Form inputs - consistent styling
+.form-control {
+    width: 100%;
+    padding: 8px 12px;
+    background-color: $input-background;
+    border: 1px solid $input-background;
+    color: $input-text;
+    font-size: 14px;
+    box-sizing: border-box;
+    @extend %rounded-corners;
+    transition: all 0.2s ease-in-out;
+
+    &::placeholder {
+        color: darken($input-text, 40%);
+        opacity: 0.7;
+    }
+
+    &:focus {
+        outline: none;
+        border-color: $accent-orange;
+        background-color: $input-background-selected;
+        box-shadow: inset 0 0 0 1px $accent-orange;
+    }
+
+    // Error state support
+    &.is-invalid {
+        border-color: $accent-red;
+        background-color: $input-background;
+
+        &:focus {
+            border-color: $accent-red;
+            box-shadow: inset 0 0 0 1px $accent-red;
+        }
+    }
+
+    // Autocomplete styling
+    &:-webkit-autofill {
+        -webkit-box-shadow: inset 0 0 0 1000px $input-background !important;
+        -webkit-text-fill-color: $input-text !important;
+    }
+}
+
+// ============================================================================
+// Form Actions - Buttons
+// ============================================================================
+
+// Import the unified button component
+@import "../components/buttons";
+
+.form-actions {
+    margin-bottom: 20px;
+}
+
+// Login page uses blue primary button, override the default
+// Uses the btn-blue variant from the button component
+.login-form .btn-primary {
+    @extend .btn-blue;
+    width: 100%;
+}
+
+// ============================================================================
+// Visual Separator
+// ============================================================================
+
+.divider {
+    height: 1px;
+    background-color: darken($background-color, 5%);
+    margin: 20px 0;
+}
+
+// ============================================================================
+// Login Links - Helper Links Section
+// ============================================================================
+
+.login-links {
+    margin-top: 0;
+    padding-top: 15px;
+    text-align: center;
+
+    p {
+        margin: 0 0 10px 0;
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+
+    a {
+        color: $text-main-color;
+        text-decoration: none;
+        font-size: 13px;
+        transition: all 0.2s ease-in-out;
+
+        &:hover {
+            text-decoration: underline;
+            color: lighten($text-main-color, 20%);
+        }
+
+        &:focus {
+            outline: 2px solid $accent-orange;
+            outline-offset: 2px;
+            border-radius: 2px;
+        }
+    }
+}
+
+// ============================================================================
+// Accessibility - Screen Reader Only
+// ============================================================================
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+
+// ============================================================================
+// Validation States
+// ============================================================================
+
+.was-validated {
+    // Native HTML5 validation support
+    .form-control:invalid {
+        border-color: $accent-red;
+        background-color: $input-background;
+
+        &:focus {
+            box-shadow: inset 0 0 0 1px $accent-red;
+        }
+    }
+}
+
+// ============================================================================
+// Responsive Design - Tablets (max 767px)
+// ============================================================================
+
+@media only screen and (max-width: 767px) {
+    .login-container {
+        min-height: auto;
+        padding: 10px;
+
+        section {
+            max-width: 100%;
+        }
+    }
+
+    .login-form {
+        width: 100%;
+        margin: 20px auto 0 auto;
+
+        #loginFieldset {
+            width: 100%;
+            padding: 20px;
+        }
+
+        .form-label {
+            font-size: 13px;
+        }
+
+        .form-control {
+            width: 100%;
+            margin-left: 0;
+        }
+
+        .btn-primary {
+            width: 100%;
+        }
+    }
+
+    .form-group:last-of-type {
+        margin-bottom: 15px;
+    }
+}
+
+// ============================================================================
+// Responsive Design - Mobile (max 480px)
+// ============================================================================
+
+@media only screen and (max-width: 480px) {
+    .login-container {
+        padding: 5px;
+
+        section {
+            max-width: 100%;
+            padding: 0;
+        }
+    }
+
+    .login-form {
+        width: 100%;
+        margin: 10px 0 0 0;
+
+        #loginFieldset {
+            width: 100%;
+            padding: 15px;
+        }
+
+        legend {
+            font-size: 14px;
+        }
+
+        .form-control {
+            width: 100%;
+            margin-left: 0;
+            margin-bottom: 3px;
+        }
+
+        .btn-primary {
+            width: 100%;
+        }
+    }
+
+    .warning-message,
+    .error.message,
+    .alert {
+        margin-bottom: 15px;
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+
+    .login-links {
+        margin-top: 15px;
+        padding-top: 10px;
+
+        p {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+        }
+    }
+}
+
+// ============================================================================
+// Print Styles
+// ============================================================================
+
+@media print {
+    .login-container {
+        display: none;
+    }
+}

@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Status.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.command</a> &gt; <span class="el_source">Status.java</span></div><h1>Status.java</h1><pre class="source lang-java linenums">package org.starexec.command;
+
+import java.util.HashMap;
+
+/**
+ * This class defines the codes that are used by StarexecCommand. All codes are
+ * integers-- all codes that indicate errors are less than 0. 0 is the code used
+ * for success.
+ *
+ * @author Eric
+ */
+<span class="nc" id="L12">public class Status {</span>
+	// Error codes for command parsing. The messages below give descriptions of
+	// each code suitable for presenting ot users.
+	public static final int STATUS_SUCCESS = 0;
+	public static final int ERROR_BAD_COMMAND = -1;
+	public static final int ERROR_BAD_ARGS = -2;
+	public static final int ERROR_SERVER = -4; // no error message exists for this
+	                                           // status-- it is used when there is
+	                                           // a server-supplied message
+	public static final int ERROR_BAD_ARCHIVETYPE = -5;
+	public static final int ERROR_FILE_AND_URL = -6;
+	public static final int ERROR_MISSING_PARAM = -7;
+	public static final int ERROR_FILE_NOT_FOUND = -8;
+	public static final int ERROR_INVALID_FILEPATH = -9;
+	public static final int ERROR_ARCHIVE_NOT_FOUND = -10;
+	public static final int ERROR_FILE_EXISTS = -11;
+	public static final int ERROR_BAD_PARENT_SPACE = -12;
+	public static final int ERROR_BAD_CREDENTIALS = -13;
+	public static final int ERROR_COMMAND_NOT_IMPLEMENTED = -14;
+	public static final int ERROR_URL_NOT_ALLOWED = -15;
+	public static final int ERROR_INVALID_ID = -16;
+	public static final int ERROR_INVALID_TIMEOUT = -17;
+	public static final int ERROR_CONNECTION_LOST = -18;
+	public static final int ERROR_BAD_NAME = -19;
+	public static final int ERROR_BAD_DESCRIPTION = -20;
+	public static final int ERROR_BAD_TIME = -21;
+	public static final int ERROR_NOT_LOGGED_IN = -22;
+	public static final int ERROR_CONNECTION_EXISTS = -23;
+	public static final int ERROR_BAD_URL = -24;
+	public static final int ERROR_BAD_INSTITUTION = -25;
+	public static final int ERROR_PERMISSION_DENIED = -26;
+	public static final int ERROR_COMMAND_FILE_TERMINATING = -27;
+	public static final int ERROR_INSUFFICIENT_QUOTA = -28;
+	public static final int ERROR_NAME_NOT_UNIQUE = -29;
+	public static final int ERROR_BAD_TRAVERSAL_TYPE = -30;
+	public static final int ERROR_ID_AND_USER = -31;
+	public static final int ERROR_NO_USER_PRIMS = -32;
+	public static final int ERROR_INTERNAL = -33;
+	public static final int ERROR_INVALID_MEMORY = -34;
+	public static final int ERROR_SEED = -35;
+	public static final int ERROR_JOB_INCOMPLETE = -36;
+	public static final int ERROR_INVALID_RESULTS_INTERVAL = -37;
+	public static final int ERROR_INTERNAL_EXCEPTION = -38;
+
+	// error messages
+<span class="nc" id="L57">	private static final HashMap&lt;Integer, String&gt; messages = new HashMap&lt;&gt;();</span>
+	static {
+<span class="nc" id="L59">		messages.put(STATUS_SUCCESS, &quot;Execution was successful&quot;);</span>
+<span class="nc" id="L60">		messages.put(ERROR_BAD_COMMAND, &quot;Unrecognized command&quot;);</span>
+<span class="nc" id="L61">		messages.put(ERROR_BAD_ARGS, &quot;Parameters must be in the form {key}={value} and there may be no duplicates&quot;);</span>
+<span class="nc" id="L62">		messages.put(ERROR_SERVER, &quot;Error communicating with server&quot;);</span>
+<span class="nc" id="L63">		messages.put(ERROR_BAD_ARCHIVETYPE, &quot;Bad archive type-- only zip files are supported&quot;);</span>
+<span class="nc" id="L64">		messages.put(ERROR_FILE_AND_URL, &quot;An upload should contain either a url or a local file, not both&quot;);</span>
+<span class="nc" id="L65">		messages.put(ERROR_INVALID_FILEPATH, &quot;The given filepath is invalid&quot;);</span>
+<span class="nc" id="L66">		messages.put(ERROR_MISSING_PARAM,</span>
+				&quot;Command is missing a required parameter-- please consult the StarexecCommand reference&quot;);
+<span class="nc" id="L68">		messages.put(ERROR_FILE_NOT_FOUND, &quot;The specified file could not be found&quot;);</span>
+<span class="nc" id="L69">		messages.put(ERROR_ARCHIVE_NOT_FOUND,</span>
+				&quot;You do not have permission to download the requested archive, or the archive does not exist-- please ensure the given ID is correct&quot;);
+<span class="nc" id="L71">		messages.put(ERROR_FILE_EXISTS, &quot;The specified filepath already exists-- use the flag \&quot;ow\&quot; to overwrite.&quot;);</span>
+<span class="nc" id="L72">		messages.put(ERROR_BAD_PARENT_SPACE,</span>
+				&quot;You do not have permission to add subspaces to the given parent space, or the parent space does not exist&quot;);
+<span class="nc" id="L74">		messages.put(ERROR_BAD_CREDENTIALS, &quot;Invalid username and/or password&quot;);</span>
+<span class="nc" id="L75">		messages.put(ERROR_COMMAND_NOT_IMPLEMENTED, &quot;Command not currently implemented&quot;);</span>
+<span class="nc" id="L76">		messages.put(ERROR_URL_NOT_ALLOWED, &quot;URL uploads are not allowed here-- please upload a local archive&quot;);</span>
+<span class="nc" id="L77">		messages.put(ERROR_INVALID_ID, &quot;Invalid ID-- IDs must be positive integers&quot;);</span>
+<span class="nc" id="L78">		messages.put(ERROR_INVALID_TIMEOUT, &quot;Invalid timeout-- Timouts must be positive integers&quot;);</span>
+<span class="nc" id="L79">		messages.put(ERROR_CONNECTION_LOST, &quot;The connection to the server was lost. You must log in again to continue&quot;);</span>
+<span class="nc" id="L80">		messages.put(ERROR_BAD_NAME, &quot;The specified name is invalid&quot;);</span>
+<span class="nc" id="L81">		messages.put(ERROR_BAD_DESCRIPTION, &quot;The specified description is invalid&quot;);</span>
+<span class="nc" id="L82">		messages.put(ERROR_BAD_TIME, &quot;The time should be a positive double, measured in seconds&quot;);</span>
+<span class="nc" id="L83">		messages.put(ERROR_NOT_LOGGED_IN, &quot;You must log in before issuing commands to the server&quot;);</span>
+<span class="nc" id="L84">		messages.put(ERROR_CONNECTION_EXISTS,</span>
+				&quot;You must log out of the existing session before you can start a new one&quot;);
+<span class="nc" id="L86">		messages.put(ERROR_BAD_URL,</span>
+				&quot;The given URL does not point to a valid Starexec instance. Ensure that you are using the correct protocol (http vs https) and that the address ends with a /&quot;);
+<span class="nc" id="L88">		messages.put(ERROR_BAD_INSTITUTION, &quot;The institution given has invalid characters or is too long&quot;);</span>
+<span class="nc" id="L89">		messages.put(ERROR_PERMISSION_DENIED,</span>
+				&quot;You do not have permission to view the contents of the given space, or the space does not exist&quot;);
+<span class="nc" id="L91">		messages.put(ERROR_COMMAND_FILE_TERMINATING,</span>
+				&quot;An error was encountered: the file of commands may not have been completed&quot;);
+<span class="nc" id="L93">		messages.put(ERROR_NAME_NOT_UNIQUE, &quot;All primitives in a given space must have unique names&quot;);</span>
+<span class="nc" id="L94">		messages.put(ERROR_INSUFFICIENT_QUOTA, &quot;You do not have the required disk quota to copy the primitive&quot;);</span>
+<span class="nc" id="L95">		messages.put(ERROR_BAD_TRAVERSAL_TYPE, &quot;The traversal must be either depth-first (&quot; + C.ARG_DEPTHFIRST</span>
+				+ &quot;) or round-robin (&quot; + C.ARG_ROUNDROBIN + &quot;)&quot;);
+<span class="nc" id="L97">		messages.put(ERROR_ID_AND_USER, &quot;Only one of &quot; + C.PARAM_ID + &quot; and &quot; + C.PARAM_USER + &quot; is allowed&quot;);</span>
+<span class="nc" id="L98">		messages.put(ERROR_NO_USER_PRIMS, &quot;User primitives can only be obtained for jobs, solvers, and benchmarks&quot;);</span>
+<span class="nc" id="L99">		messages.put(ERROR_INTERNAL, &quot;Internal error while handling command&quot;);</span>
+<span class="nc" id="L100">		messages.put(ERROR_INVALID_MEMORY, &quot;Memory is measured in gigabytes, and it can not be negative&quot;);</span>
+<span class="nc" id="L101">		messages.put(ERROR_SEED, &quot;Seed values must be integers&quot;);</span>
+<span class="nc" id="L102">		messages.put(ERROR_JOB_INCOMPLETE, &quot;The job is not yet complete&quot;);</span>
+<span class="nc" id="L103">		messages.put(ERROR_INVALID_RESULTS_INTERVAL, &quot;The interval field must be an integer &gt;=0&quot;);</span>
+<span class="nc" id="L104">	}</span>
+
+	public static String getStatusMessage(int code) {
+<span class="nc" id="L107">		return messages.get(code);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EmbeddedFlywayLauncher.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.migration</a> &gt; <span class="el_source">EmbeddedFlywayLauncher.java</span></div><h1>EmbeddedFlywayLauncher.java</h1><pre class="source lang-java linenums">package org.starexec.migration;
+
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+/**
+ * Small embedded Flyway launcher that runs using flyway-core on the application's
+ * classpath (WEB-INF/lib/*). This avoids bundling the Flyway command-line distribution
+ * in the container image.
+ *
+ * Expected environment variables:
+ *   STAREXEC_DB_HOST, STAREXEC_DB_PORT, STAREXEC_DB_NAME, STAREXEC_DB_USER, STAREXEC_DB_PASSWORD
+ *
+ * Optional system properties / args are ignored for now. Exit codes:
+ *   0 = success
+ *   1 = configuration / general error
+ *   2 = connectivity error
+ *   3 = migration failure
+ */
+<span class="nc" id="L23">public class EmbeddedFlywayLauncher {</span>
+    public static void main(String[] args) {
+        // Prefer JVM system properties if provided (entrypoint will pass -Dflyway.*),
+        // otherwise fall back to environment variables.
+<span class="nc" id="L27">        String sysUrl = System.getProperty(&quot;flyway.url&quot;);</span>
+<span class="nc" id="L28">        String sysUser = System.getProperty(&quot;flyway.user&quot;);</span>
+<span class="nc" id="L29">        String sysPass = System.getProperty(&quot;flyway.password&quot;);</span>
+
+<span class="nc" id="L31">        String host = System.getenv(&quot;STAREXEC_DB_HOST&quot;);</span>
+<span class="nc" id="L32">        String port = System.getenv(&quot;STAREXEC_DB_PORT&quot;);</span>
+<span class="nc" id="L33">        String db = System.getenv(&quot;STAREXEC_DB_NAME&quot;);</span>
+<span class="nc" id="L34">        String user = System.getenv(&quot;STAREXEC_DB_USER&quot;);</span>
+<span class="nc" id="L35">        String pass = System.getenv(&quot;STAREXEC_DB_PASSWORD&quot;);</span>
+
+<span class="nc" id="L37">        String migrationsLocation = &quot;/opt/tomcat/webapps/starexec/WEB-INF/classes/db/migration&quot;;</span>
+<span class="nc" id="L38">        Path migrationsPath = Path.of(migrationsLocation);</span>
+<span class="nc bnc" id="L39" title="All 2 branches missed.">        if (!Files.exists(migrationsPath)) {</span>
+<span class="nc" id="L40">            System.err.println(&quot;[EmbeddedFlyway] Migration directory not found: &quot; + migrationsLocation);</span>
+<span class="nc" id="L41">            System.exit(1);</span>
+        }
+
+        // If system property provided, use it directly; otherwise build from envs.
+        String jdbcUrl;
+<span class="nc bnc" id="L46" title="All 4 branches missed.">        if (sysUrl != null &amp;&amp; !sysUrl.isEmpty()) {</span>
+<span class="nc" id="L47">            jdbcUrl = sysUrl;</span>
+            // allow system props to override user/pass too
+<span class="nc bnc" id="L49" title="All 4 branches missed.">            if (sysUser != null &amp;&amp; !sysUser.isEmpty()) user = sysUser;</span>
+<span class="nc bnc" id="L50" title="All 4 branches missed.">            if (sysPass != null &amp;&amp; !sysPass.isEmpty()) pass = sysPass;</span>
+        } else {
+<span class="nc bnc" id="L52" title="All 8 branches missed.">            if (host == null || port == null || db == null || user == null) {</span>
+<span class="nc" id="L53">                System.err.println(&quot;[EmbeddedFlyway] Missing required DB env vars (HOST/PORT/NAME/USER) and no -Dflyway.url provided&quot;);</span>
+<span class="nc" id="L54">                System.exit(1);</span>
+            }
+
+<span class="nc bnc" id="L57" title="All 4 branches missed.">            if (pass == null || pass.isEmpty()) {</span>
+<span class="nc" id="L58">                System.err.println(&quot;[EmbeddedFlyway] Missing STAREXEC_DB_PASSWORD (cannot run migrations)&quot;);</span>
+<span class="nc" id="L59">                System.exit(1);</span>
+            }
+
+<span class="nc" id="L62">            jdbcUrl = String.format(&quot;jdbc:postgresql://%s:%s/%s&quot;, host, port, db);</span>
+        }
+
+        try {
+<span class="nc" id="L66">            Flyway flyway = Flyway.configure()</span>
+<span class="nc" id="L67">                    .dataSource(jdbcUrl, user, pass)</span>
+<span class="nc" id="L68">                    .locations(&quot;filesystem:&quot; + migrationsLocation)</span>
+<span class="nc" id="L69">                    .baselineOnMigrate(true)</span>
+<span class="nc" id="L70">                    .baselineVersion(&quot;1&quot;)</span>
+<span class="nc" id="L71">                    .defaultSchema(&quot;starexec&quot;)  // Use starexec schema for all migrations</span>
+<span class="nc" id="L72">                    .createSchemas(true)  // Create schema if it doesn't exist</span>
+<span class="nc" id="L73">                    .load();</span>
+
+<span class="nc" id="L75">            System.out.println(&quot;[EmbeddedFlyway] Running migrations against: &quot; + jdbcUrl);</span>
+<span class="nc" id="L76">            org.flywaydb.core.api.output.MigrateResult result = flyway.migrate();</span>
+<span class="nc" id="L77">            int migrations = result.migrationsExecuted;</span>
+<span class="nc" id="L78">            System.out.println(&quot;[EmbeddedFlyway] Successfully applied migrations: &quot; + migrations);</span>
+<span class="nc" id="L79">            System.exit(0);</span>
+<span class="nc" id="L80">        } catch (FlywayException fex) {</span>
+<span class="nc" id="L81">            System.err.println(&quot;[EmbeddedFlyway][ERROR] Flyway reported an error: &quot; + fex.getMessage());</span>
+            // connectivity issues often wrap in FlywayException; be conservative
+<span class="nc" id="L83">            System.exit(3);</span>
+<span class="nc" id="L84">        } catch (Exception ex) {</span>
+<span class="nc" id="L85">            System.err.println(&quot;[EmbeddedFlyway][ERROR] Unexpected error: &quot; + ex.getMessage());</span>
+<span class="nc" id="L86">            System.exit(1);</span>
+<span class="nc" id="L87">        }</span>
+<span class="nc" id="L88">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Analytics.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Analytics.java</span></div><h1>Analytics.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.logger.StarLogger;
+
+import java.sql.Date;
+import java.sql.SQLException;
+
+import java.util.Iterator;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * Analytics keeps a record of how often events happen.
+ * A count is kept of how many times an events occurred per day.
+ * A list is kept of unique users that have triggered an event per day.
+ * Events must be added both here and in the `analytics_events` table.
+ */
+<span class="nc" id="L20">public enum Analytics {</span>
+<span class="nc" id="L21">	JOB_ATTRIBUTES,</span>
+<span class="nc" id="L22">	JOB_CREATE,</span>
+<span class="nc" id="L23">	JOB_CREATE_QUICKJOB,</span>
+<span class="nc" id="L24">	JOB_DETAILS,</span>
+<span class="nc" id="L25">	JOB_PAUSE,</span>
+<span class="nc" id="L26">	JOB_RESUME,</span>
+<span class="nc" id="L27">	PAGEVIEW_HELP,</span>
+<span class="nc" id="L28">	PYTHON_API_LOGIN,</span>
+<span class="nc" id="L29">	STAREXEC_DEPLOY,</span>
+<span class="nc" id="L30">	STAREXECCOMMAND_LOGIN;</span>
+
+<span class="nc" id="L32">	private static final StarLogger log = StarLogger.getLogger(Analytics.class);</span>
+
+	private final int id;
+	private final HashMap&lt;Date, Data&gt; events;
+
+	private static final class Data {
+		private final Set&lt;Integer&gt; users;
+<span class="nc" id="L39">		public int count = 0;</span>
+
+<span class="nc" id="L41">		Data() {</span>
+<span class="nc" id="L42">			users = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L43">		}</span>
+
+		void record(Integer user) {
+<span class="nc" id="L46">			++count;</span>
+<span class="nc bnc" id="L47" title="All 2 branches missed.">			if (user != null) {</span>
+<span class="nc" id="L48">				users.add(user);</span>
+			}
+<span class="nc" id="L50">		}</span>
+	}
+
+	/**
+	 * Constructor.
+	 * Retrieves this event `id` from the `analytics_events` table.
+	 * If this event is not found in the table, set the `id` to `-1` and move
+	 * on with life. It is not worth throwing an exception.
+	 */
+<span class="nc" id="L59">	Analytics() {</span>
+<span class="nc" id="L60">		events = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L61">		id = id();</span>
+<span class="nc" id="L62">	}</span>
+
+	/**
+	 * Look up the ID for this event in the DB
+	 * @return ID if found, -1 if not found
+	 */
+	private int id() {
+<span class="nc" id="L69">		int id = -1;</span>
+		try {
+<span class="nc" id="L71">			id = Common.query(</span>
+					&quot;{SELECT * FROM starexec.GetEventId(?)}&quot;,
+<span class="nc" id="L73">					procedure -&gt; procedure.setString(1, this.name()),</span>
+					results -&gt; {
+<span class="nc" id="L75">						results.next();</span>
+<span class="nc" id="L76">						return results.getInt(&quot;event_id&quot;);</span>
+					}
+			);
+<span class="nc" id="L79">		} catch (SQLException e) {</span>
+			/* Cannot access `static log`
+			 * because it has not been initialized yet
+			 */
+<span class="nc" id="L83">			final StarLogger log = StarLogger.getLogger(Analytics.class);</span>
+<span class="nc" id="L84">			log.error(&quot;Event not found in database: &quot; + this.name());</span>
+<span class="nc" id="L85">		}</span>
+<span class="nc" id="L86">		return id;</span>
+	}
+
+	/**
+	 * Record an occurrence of this event initiated by a particular user
+	 * @param userId the user who initiated this event
+	 */
+	public void record(Integer userId) {
+<span class="nc" id="L94">		todaysData().record(userId);</span>
+<span class="nc" id="L95">	}</span>
+
+	/**
+	 * Record an occurrence of this event
+	 * that was not initiated by a particular user
+	 */
+	public void record() {
+<span class="nc" id="L102">		record(null);</span>
+<span class="nc" id="L103">	}</span>
+
+	public static void saveToDB() {
+<span class="nc" id="L106">		Date now = now();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">		for (Analytics event : Analytics.values()) {</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">			if (event.id != -1) {</span>
+<span class="nc" id="L109">				Iterator&lt;Map.Entry&lt;Date, Data&gt;&gt; it = event.events.entrySet().iterator();</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">				while (it.hasNext()) {</span>
+<span class="nc" id="L111">					Map.Entry&lt;Date,Data&gt; kv = it.next();</span>
+<span class="nc" id="L112">					Date date = kv.getKey();</span>
+<span class="nc" id="L113">					Data v = kv.getValue();</span>
+					try {
+<span class="nc" id="L115">						event.saveToDB(date, v.count);</span>
+<span class="nc" id="L116">						v.users.forEach(user -&gt; {</span>
+							try {
+<span class="nc" id="L118">								event.saveUserToDB(date, user);</span>
+<span class="nc" id="L119">							} catch (SQLException e) {</span>
+<span class="nc" id="L120">								log.error(&quot;Cannot record user &quot; + user + &quot; event: &quot; + event.name(), e);</span>
+<span class="nc" id="L121">							}</span>
+<span class="nc" id="L122">						});</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">						if (date.equals(now)) {</span>
+<span class="nc" id="L124">							v.count = 0;</span>
+						} else {
+<span class="nc" id="L126">							it.remove();</span>
+						}
+<span class="nc" id="L128">					} catch (SQLException e) {</span>
+<span class="nc" id="L129">						log.error(&quot;Cannot record event: &quot; + event.name(), e);</span>
+<span class="nc" id="L130">					}</span>
+<span class="nc" id="L131">				}</span>
+			}
+		}
+<span class="nc" id="L134">	}</span>
+
+	private void saveToDB(Date date, int count) throws SQLException {
+<span class="nc" id="L137">		Common.update(</span>
+			&quot;{call starexec.RecordEvent(?,?,?)}&quot;,
+			procedure -&gt; {
+<span class="nc" id="L140">				procedure.setInt(1, id);</span>
+<span class="nc" id="L141">				procedure.setDate(2, date);</span>
+<span class="nc" id="L142">				procedure.setInt(3, count);</span>
+<span class="nc" id="L143">			}</span>
+		);
+<span class="nc" id="L145">	}</span>
+
+	private void saveUserToDB(Date date, int userId) throws SQLException {
+<span class="nc" id="L148">		Common.update(</span>
+			&quot;{call starexec.RecordEventUser(?,?,?)}&quot;,
+			procedure -&gt; {
+<span class="nc" id="L151">				procedure.setInt(1, id);</span>
+<span class="nc" id="L152">				procedure.setDate(2, date);</span>
+<span class="nc" id="L153">				procedure.setInt(3, userId);</span>
+<span class="nc" id="L154">			}</span>
+		);
+<span class="nc" id="L156">	}</span>
+
+	/**
+	 * Get the Data for this event today
+	 * If Data does not already exist for today, create it
+	 * @return Data
+	 */
+	private Data todaysData() {
+<span class="nc" id="L164">		return events.computeIfAbsent(now(), k -&gt; new Data());</span>
+	}
+
+	/**
+	 * @return SQL Date that represents the current date
+	 */
+	private static Date now() {
+<span class="nc" id="L171">		final java.util.Date now = new java.util.Date();</span>
+<span class="nc" id="L172">		long roundedTime = now.getTime() - (now.getTime() % 86400000);</span>
+<span class="nc" id="L173">		return new Date(roundedTime);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

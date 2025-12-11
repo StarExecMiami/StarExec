@@ -1,0 +1,1252 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Download.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.servlets</a> &gt; <span class="el_source">Download.java</span></div><h1>Download.java</h1><pre class="source lang-java linenums">package org.starexec.servlets;
+
+import org.apache.catalina.connector.ClientAbortException;
+import org.starexec.constants.R;
+import org.starexec.data.database.*;
+import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
+import org.starexec.data.security.BenchmarkSecurity;
+import org.starexec.data.security.JobSecurity;
+import org.starexec.data.security.SolverSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.*;
+import org.starexec.data.to.enums.ProcessorType;
+import org.starexec.data.to.pipelines.JoblineStage;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.*;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
+import java.util.*;
+import java.nio.file.Files;
+
+
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+
+/**
+ * Handles requests to download files from starexec
+ *
+ * @author Skylar Stark &amp; Tyler Jensen
+ */
+<span class="nc" id="L38">public class Download extends HttpServlet {</span>
+<span class="nc" id="L39">	private static final StarLogger log = StarLogger.getLogger(Download.class);</span>
+	private static final String PARAM_TYPE = &quot;type&quot;;
+	private static final String PARAM_ID = &quot;id&quot;;
+	private static final String PARAM_ANON_ID = &quot;anonId&quot;;
+	private static final String PARAM_REUPLOAD = &quot;reupload&quot;;
+
+	private static Optional&lt;Solver&gt; handleSolverAndSolverSrc(HttpServletRequest request, HttpServletResponse response)
+			throws IOException, SQLException {
+<span class="nc" id="L47">		final String methodName = &quot;handleSolverAndSolverSrc&quot;;</span>
+		Solver s;
+<span class="nc" id="L49">		String universallyUniqueId = request.getParameter(PARAM_ANON_ID);</span>
+<span class="nc bnc" id="L50" title="All 2 branches missed.">		if (universallyUniqueId == null) {</span>
+<span class="nc" id="L51">			log.debug(methodName, &quot;Was not anonymous download.&quot;);</span>
+<span class="nc" id="L52">			int solverId = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+<span class="nc" id="L53">			log.debug(methodName, &quot;Getting solver with id &quot; + solverId);</span>
+<span class="nc" id="L54">			s = Solvers.get(solverId);</span>
+<span class="nc" id="L55">		} else {</span>
+<span class="nc" id="L56">			log.debug(methodName, &quot;Was anonymous download. UUID: &quot; + universallyUniqueId);</span>
+<span class="nc" id="L57">			Optional&lt;Integer&gt; solverId = AnonymousLinks.getIdOfSolverAssociatedWithLink(universallyUniqueId);</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">			if (solverId.isPresent()) {</span>
+<span class="nc" id="L59">				log.debug(methodName, &quot;Getting solver with id &quot; + solverId.get());</span>
+<span class="nc" id="L60">				s = Solvers.get(solverId.get());</span>
+			} else {
+<span class="nc" id="L62">				log.debug(methodName, &quot;Could not get solver for anonymous download.&quot;);</span>
+<span class="nc" id="L63">				response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Solver not found.&quot;);</span>
+<span class="nc" id="L64">				return Optional.empty();</span>
+			}
+		}
+<span class="nc" id="L67">		String shortName = s.getName();</span>
+<span class="nc" id="L68">		shortName = shortName</span>
+<span class="nc" id="L69">				.replaceAll(&quot;\\s+&quot;, &quot;&quot;); //get rid of all whitespace, which we cannot include in the header correctly</span>
+<span class="nc" id="L70">		response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L71">		return Optional.of(s);</span>
+	}
+
+	/**
+	 * Processes a solver to be downloaded. The solver is archived in a format that is specified by the user, given a
+	 * random name, and placed in a secure folder on the server.
+	 *
+	 * @param s the solver to be downloaded
+	 * @return a file representing the archive to send back to the client
+	 * @author Skylar Stark &amp; Wyatt Kaiser
+	 */
+	private static boolean handleSolver(Solver s, HttpServletResponse response, boolean reupload) throws Exception {
+<span class="nc" id="L83">		String baseName = s.getName();</span>
+<span class="nc" id="L84">		ArchiveUtil.createAndOutputZip(new File(s.getPath()), response.getOutputStream(), baseName, reupload);</span>
+<span class="nc" id="L85">		return true;</span>
+	}
+
+	/**
+	 * Processes a solver source code request to be downloaded. The solver source is archived in a format that is
+	 * specified by the user, given a random name, and placed in a secure folder on the server.
+	 *
+	 * @param s the solver to be downloaded
+	 * @return a file representing the archive to send back to the client
+	 * @author Skylar Stark &amp; Wyatt Kaiser &amp; Andrew Lubinus
+	 */
+	private static boolean handleSolverSource(Solver s, HttpServletResponse response) throws Exception {
+<span class="nc" id="L97">		String baseName = s.getName();</span>
+<span class="nc" id="L98">		ArchiveUtil.createAndOutputZip(new File(s.getPath() + &quot;_src&quot;), response.getOutputStream(), baseName, false);</span>
+<span class="nc" id="L99">		return true;</span>
+	}
+
+	/**
+	 * Handles requests for downloading post processors for a given community
+	 *
+	 * @return a file representing the archive to send back to the client
+	 * @author Eric Burns
+	 */
+
+	private static boolean handleProc(List&lt;Processor&gt; procs, HttpServletResponse response) throws Exception {
+<span class="nc" id="L110">		final String methodName = &quot;handleProc&quot;;</span>
+<span class="nc" id="L111">		log.entry(methodName);</span>
+
+<span class="nc" id="L113">		List&lt;File&gt; files = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">		for (Processor x : procs) {</span>
+<span class="nc" id="L115">			File newProc = new File(x.getFilePath());</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">			if (newProc.exists()) {</span>
+<span class="nc" id="L117">				files.add(newProc);</span>
+			} else {
+<span class="nc" id="L119">				log.warn(methodName, &quot;processor with id = &quot; + x.getId() + &quot; exists in the database but not on disk&quot;);</span>
+			}
+<span class="nc" id="L121">		}</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">		if (files.isEmpty()) {</span>
+<span class="nc" id="L123">			log.warn(methodName, &quot;Didn't find any files on disk.&quot;);</span>
+<span class="nc" id="L124">			return false;</span>
+		}
+
+<span class="nc" id="L127">		log.debug(methodName, &quot;Outputting zip of processors.&quot;);</span>
+<span class="nc" id="L128">		ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), &quot;processors&quot;, true /* uniquify names */);</span>
+<span class="nc" id="L129">		return true;</span>
+	}
+
+	/**
+	 * Processes a benchmark to be downloaded. The benchmark is archived in a format that is specified by the user,
+	 * given a random name, and placed in a secure folder on the server.
+	 *
+	 * @param b the benchmark to be downloaded
+	 * @return a file representing the archive to send back to the client
+	 * @author Skylar Stark
+	 */
+	private static boolean handleBenchmark(Benchmark b, HttpServletResponse response) throws Exception {
+<span class="nc" id="L141">		ArchiveUtil.createAndOutputZip(new File(b.getPath()), response.getOutputStream(), &quot;&quot;, false);</span>
+<span class="nc" id="L142">		return true;</span>
+	}
+
+	/**
+	 * Processes a job xml file to be downloaded.
+	 *
+	 * @param job the job to be downloaded
+	 * @param userId the id of the user making the download request
+	 * @return a file representing the archive to send back to the client
+	 * @throws Exception
+	 * @author Julio Cervantes
+	 */
+	private static boolean handleJobXML(Job job, int userId, HttpServletResponse response) throws Exception {
+
+		// If we can see this
+<span class="nc" id="L157">		List&lt;File&gt; files = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L158">		log.debug(&quot;Permission to download XML granted&quot;);</span>
+
+<span class="nc" id="L160">		JobToXMLer handler = new JobToXMLer();</span>
+<span class="nc" id="L161">		File file = handler.generateXMLfile(job, userId);</span>
+
+<span class="nc" id="L163">		files.add(file);</span>
+
+<span class="nc" id="L165">		String baseFileName = &quot;Job&quot; + job.getId() + &quot;_XML&quot;;</span>
+
+<span class="nc" id="L167">		File schema = new File(R.STAREXEC_ROOT + File.separator + R.JOB_SCHEMA_LOCATION);</span>
+<span class="nc" id="L168">		files.add(schema);</span>
+
+<span class="nc" id="L170">		ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), baseFileName);</span>
+
+<span class="nc" id="L172">		return true;</span>
+	}
+
+	/**
+	 * Processes a space xml file to be downloaded. The xml file and the space hierarchy xml schema is archived in a
+	 * format that is specified by the user, given a random name, and placed in a secure folder on the server.
+	 *
+	 * @param space the space to be downloaded
+	 * @param userId the id of the user making the download request
+	 * @return a file representing the archive to send back to the client
+	 * @throws Exception
+	 * @author Benton McCune
+	 */
+
+	private static boolean handleSpaceXML(
+			Space space, int userId, HttpServletResponse response, boolean includeAttributes, boolean updates, int upid
+	) throws Exception {
+
+		// If we can see this Space
+<span class="nc" id="L191">		List&lt;File&gt; files = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L192">		log.debug(&quot;Permission to download XML granted, includeAttributes = &quot; + includeAttributes);</span>
+<span class="nc" id="L193">		BatchUtil butil = new BatchUtil();</span>
+<span class="nc" id="L194">		File file = butil.generateXMLfile(Spaces.getDetails(space.getId(), userId), userId, includeAttributes, updates,</span>
+		                                  upid
+		);
+
+<span class="nc" id="L198">		files.add(file);</span>
+<span class="nc" id="L199">		String baseFileName = space.getName() + &quot;_XML&quot;;</span>
+
+<span class="nc" id="L201">		File schema = new File(R.STAREXEC_ROOT + &quot;/&quot; + R.SPACE_XML_SCHEMA_RELATIVE_LOC);</span>
+<span class="nc" id="L202">		files.add(schema);</span>
+
+<span class="nc" id="L204">		ArchiveUtil.createAndOutputZip(files, response.getOutputStream(), baseFileName);</span>
+
+<span class="nc" id="L206">		return true;</span>
+	}
+
+	/**
+	 * @param pairIds
+	 * @param userId
+	 * @param response
+	 * @return
+	 * @throws Exception
+	 */
+	private static boolean handlePairOutputs(
+			List&lt;Integer&gt; pairIds, int userId, HttpServletResponse response, Boolean longPath
+	) {
+<span class="nc" id="L219">		List&lt;JobPair&gt; pairs = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L220">		Job j = null;</span>
+<span class="nc" id="L221">		final String methodName = &quot;handlePairOutputs&quot;;</span>
+<span class="nc" id="L222">		log.entry(methodName);</span>
+
+<span class="nc bnc" id="L224" title="All 2 branches missed.">		for (Integer id : pairIds) {</span>
+<span class="nc" id="L225">			JobPair jp = JobPairs.getPair(id);</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">			if (jp == null) {</span>
+<span class="nc" id="L227">				return false;</span>
+			}
+<span class="nc" id="L229">			pairs.add(jp);</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">			if (j == null) {</span>
+<span class="nc" id="L231">				j = Jobs.get(jp.getJobId());</span>
+				//make sure the user can see the job
+<span class="nc bnc" id="L233" title="All 2 branches missed.">				if (!Permissions.canUserSeeJob(j.getId(), userId).isSuccess()) {</span>
+<span class="nc" id="L234">					return false;</span>
+				}
+			} else {
+				//for now, only get pairs if they are part of one job
+<span class="nc bnc" id="L238" title="All 2 branches missed.">				if (j.getId() != jp.getJobId()) {</span>
+<span class="nc" id="L239">					return false;</span>
+				}
+			}
+<span class="nc" id="L242">		}</span>
+
+<span class="nc bnc" id="L244" title="All 2 branches missed.">		if (j == null) {</span>
+<span class="nc" id="L245">			log.error(&quot;Job object is null. Cannot proceed with generating baseName.&quot;);</span>
+<span class="nc" id="L246">			return false;</span>
+		}
+<span class="nc" id="L248">		String baseName = &quot;Job&quot; + String.valueOf(j.getId()) + &quot;_output&quot;;</span>
+
+<span class="nc" id="L250">		Download.addJobPairsToZipOutput(pairs, response, baseName, longPath, null);</span>
+<span class="nc" id="L251">		log.exit(methodName);</span>
+<span class="nc" id="L252">		return true;</span>
+	}
+
+	/**
+	 * Processes a job pair's output to be downloaded.
+	 *
+	 * @param pairId the job pair whose output is to be downloaded
+	 * @param userId the id of the user making the download request
+	 * @param response
+	 * @param longPath directory structure is long version
+	 * @return a boolean for whether or not this succeeded
+	 */
+
+	private static boolean handlePairOutput(int pairId, int userId, HttpServletResponse response, Boolean longPath) {
+		//ArchiveUtil.createAndOutputZip(JobPairs.getOutputPaths(pairId), response.getOutputStream(), &quot;&quot;);
+		//return true;
+<span class="nc" id="L268">		return handlePairOutputs(Collections.singletonList(pairId), userId, response, longPath);</span>
+	}
+
+	/**
+	 * Processes a job csv file to be downloaded. The file contains the information of all the job pairs within the
+	 * specific job, given a random name, and placed in a secure folder on the server.
+	 *
+	 * @param jobId the job needed to be processed.
+	 * @param userId the Id of the user who sends the request for the file.
+	 * @param response the servlet response sent back.
+	 * @return a file representing the archive to send back to the client
+	 * @throws IOException
+	 * @author Ruoyu Zhang
+	 */
+	private static boolean handleJob(
+			Integer jobId, int userId, HttpServletResponse response, Integer since, Boolean returnIds,
+			Boolean onlyCompleted
+	) throws Exception {
+<span class="nc" id="L286">		log.info(&quot;Request for job &quot; + jobId + &quot; csv from user &quot; + userId);</span>
+
+<span class="nc" id="L288">		Job job = Jobs.get(jobId);</span>
+<span class="nc" id="L289">		HashMap&lt;Integer, HashMap&lt;Integer, Properties&gt;&gt; props = null;</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">		if (since == null) {</span>
+<span class="nc" id="L291">			job.setJobPairs(Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), PrimitivesToAnonymize.NONE));</span>
+<span class="nc" id="L292">			props = Jobs.getJobAttributes(jobId);</span>
+		} else {
+<span class="nc" id="L294">			job.setJobPairs(</span>
+<span class="nc" id="L295">					Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), since, PrimitivesToAnonymize.NONE));</span>
+<span class="nc" id="L296">			props = Jobs.getNewJobAttributes(jobId, since);</span>
+<span class="nc" id="L297">			int olderPairs = Jobs.countOlderPairs(jobId, since);</span>
+
+<span class="nc" id="L299">			log.debug(&quot;found this many new job pairs &quot; + job.getJobPairs().size());</span>
+			//we want to find the largest completion ID seen and send that back to the client
+			//so that they know what to ask for next time (mostly for StarexecCommand)
+<span class="nc" id="L302">			int maxCompletion = since;</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">			for (JobPair x : job.getJobPairs()) {</span>
+<span class="nc" id="L304">				log.trace(&quot;found pair id = &quot; + x.getId() + &quot; with completion id = &quot; + x.getCompletionId());</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">				if (x.getCompletionId() &gt; maxCompletion) {</span>
+<span class="nc" id="L306">					maxCompletion = x.getCompletionId();</span>
+				}
+<span class="nc" id="L308">			}</span>
+
+<span class="nc" id="L310">			response.addCookie(new Cookie(&quot;Max-Completion&quot;, String.valueOf(maxCompletion)));</span>
+<span class="nc" id="L311">			response.addCookie(new Cookie(&quot;Pairs-Found&quot;, String.valueOf(job.getJobPairs().size())));</span>
+<span class="nc" id="L312">			response.addCookie(new Cookie(&quot;Older-Pairs&quot;, String.valueOf(olderPairs)));</span>
+<span class="nc" id="L313">			response.addCookie(new Cookie(&quot;Total-Pairs&quot;, String.valueOf(Jobs.getPairCount(jobId))));</span>
+		}
+		// Handle null props gracefully - use empty map if attributes couldn't be loaded
+<span class="nc bnc" id="L316" title="All 2 branches missed.">		if (props == null) {</span>
+<span class="nc" id="L317">			log.warn(&quot;handleJob - Job attributes returned null for jobId=&quot; + jobId + &quot;, using empty properties&quot;);</span>
+<span class="nc" id="L318">			props = new HashMap&lt;&gt;();</span>
+		}
+<span class="nc" id="L320">		Jobs.loadPropertiesIntoPairs(job.getJobPairs(), props);</span>
+<span class="nc" id="L321">		log.debug(&quot;about to create a job CSV with &quot; + job.getJobPairs().size() + &quot; pairs&quot;);</span>
+<span class="nc" id="L322">		String jobFile = CreateJobCSV(job, returnIds, onlyCompleted);</span>
+<span class="nc" id="L323">		ArchiveUtil.createAndOutputZip(new File(jobFile), response.getOutputStream(), &quot;Job&quot;+jobId, false);</span>
+
+<span class="nc" id="L325">		return true;</span>
+	}
+
+	/**
+	 * Create the csv file for a specific job
+	 *
+	 * @param job the job needed to be processed
+	 * @return the file name of the created csv file
+	 * @throws IOException
+	 * @author Ruoyu Zhang
+	 */
+	private static String CreateJobCSV(Job job, Boolean returnIds, Boolean getOnlyCompleted) throws IOException {
+<span class="nc" id="L337">		log.debug(&quot;CreateJobCSV called with returnIds set to &quot; + returnIds);</span>
+<span class="nc" id="L338">		StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L339">		sb.append(R.STAREXEC_ROOT).append(R.DOWNLOAD_FILE_DIR);</span>
+<span class="nc" id="L340">		sb.append(File.separator);</span>
+<span class="nc" id="L341">		int maxStageNumbers = 0;</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">		for (JobPair jp : job) {</span>
+<span class="nc" id="L343">			maxStageNumbers = Math.max(maxStageNumbers, jp.getStages().size());</span>
+<span class="nc" id="L344">		}</span>
+<span class="nc" id="L345">		sb.append(&quot;Job&quot;);</span>
+<span class="nc" id="L346">		sb.append(job.getId());</span>
+<span class="nc" id="L347">		sb.append(&quot;_info&quot;);</span>
+<span class="nc" id="L348">		sb.append(&quot;.csv&quot;);</span>
+<span class="nc" id="L349">		String filename = sb.toString();</span>
+
+<span class="nc" id="L351">		List&lt;JobPair&gt; pairs = job.getJobPairs();</span>
+<span class="nc" id="L352">		Iterator&lt;JobPair&gt; itr = pairs.iterator();</span>
+
+		/* generate the table header */
+<span class="nc" id="L355">		sb.delete(0, sb.length());</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">		if (maxStageNumbers &gt; 1) {</span>
+<span class="nc" id="L357">			sb.append(&quot;stage number,&quot;);</span>
+		}
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (returnIds) {</span>
+<span class="nc" id="L360">			sb.append(</span>
+					&quot;pair id,benchmark,benchmark id,solver,solver id,configuration,configuration id,status,cpu time,&quot; +
+							&quot;wallclock time,memory usage,result&quot;);
+		} else {
+<span class="nc" id="L364">			sb.append(&quot;benchmark,solver,configuration,status,cpu time,wallclock time,memory usage,result&quot;);</span>
+		}
+
+<span class="nc" id="L367">		HashMap&lt;Integer, String&gt; expectedValues = Jobs.getAllAttrsOfNameForJob(job.getId(), R.EXPECTED_RESULT);</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">		for (JobPair jp : pairs) {</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">			if (expectedValues.containsKey(jp.getBench().getId())) {</span>
+<span class="nc" id="L370">				jp.getPrimaryStage().getAttributes().put(R.EXPECTED_RESULT, expectedValues.get(jp.getBench().getId()));</span>
+			}
+<span class="nc" id="L372">		}</span>
+		/* use the attribute names for the first completed job pair (if any) for more headings for the table
+		We will put result first, then expected if it is there; other attributes follow */
+<span class="nc" id="L375">		Set&lt;String&gt; attrNames = job.attributeNames();</span>
+<span class="nc" id="L376">		boolean have_expected = false;</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">		if (attrNames != null) {</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">			if (attrNames.contains(R.EXPECTED_RESULT)) {</span>
+				// we have the expected result attribute
+<span class="nc" id="L380">				have_expected = true;</span>
+<span class="nc" id="L381">				sb.append(&quot;,expected&quot;);</span>
+			}
+<span class="nc bnc" id="L383" title="All 2 branches missed.">			for (String attr : attrNames) {</span>
+<span class="nc bnc" id="L384" title="All 4 branches missed.">				if (!attr.equals(R.STAREXEC_RESULT) &amp;&amp; !attr.equals(R.EXPECTED_RESULT)) {</span>
+					// skip printing result and expected result in the header of the table, since we already included
+					// them
+<span class="nc" id="L387">					sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L388">					sb.append(attr);</span>
+				}
+<span class="nc" id="L390">			}</span>
+		}
+<span class="nc" id="L392">		sb.append(&quot;\r\n&quot;);</span>
+
+<span class="nc bnc" id="L394" title="All 2 branches missed.">		while (itr.hasNext()) {</span>
+<span class="nc" id="L395">			JobPair pair = itr.next();</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">			if (getOnlyCompleted) {</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">				if (pair.getStatus().getCode().incomplete()) {</span>
+<span class="nc" id="L398">					log.debug(&quot;found an incomplete pair to exclude!&quot;);</span>
+<span class="nc" id="L399">					continue;</span>
+				}
+			}
+<span class="nc" id="L402">			pair.sortStages();</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">			for (JoblineStage stage : pair.getStages()) {</span>
+				//users can optionally get only completed pairs
+
+<span class="nc bnc" id="L406" title="All 2 branches missed.">				if (maxStageNumbers &gt; 1) {</span>
+<span class="nc" id="L407">					sb.append(stage.getStageNumber());</span>
+<span class="nc" id="L408">					sb.append(&quot;,&quot;);</span>
+				}
+
+<span class="nc bnc" id="L411" title="All 2 branches missed.">				if (returnIds) {</span>
+<span class="nc" id="L412">					sb.append(pair.getId());</span>
+<span class="nc" id="L413">					sb.append(&quot;,&quot;);</span>
+				}
+<span class="nc bnc" id="L415" title="All 2 branches missed.">				if (pair.getPath() != null) {</span>
+<span class="nc" id="L416">					sb.append(pair.getPath()).append(&quot;/&quot;).append(pair.getBench().getName());</span>
+				} else {
+<span class="nc" id="L418">					sb.append(pair.getBench().getName());</span>
+				}
+<span class="nc" id="L420">				sb.append(&quot;,&quot;);</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">				if (returnIds) {</span>
+<span class="nc" id="L422">					sb.append(pair.getBench().getId());</span>
+<span class="nc" id="L423">					sb.append(&quot;,&quot;);</span>
+				}
+<span class="nc" id="L425">				sb.append(stage.getSolver().getName());</span>
+<span class="nc" id="L426">				sb.append(&quot;,&quot;);</span>
+<span class="nc bnc" id="L427" title="All 2 branches missed.">				if (returnIds) {</span>
+<span class="nc" id="L428">					sb.append(stage.getSolver().getId());</span>
+<span class="nc" id="L429">					sb.append(&quot;,&quot;);</span>
+				}
+<span class="nc" id="L431">				sb.append(stage.getConfiguration().getName());</span>
+<span class="nc" id="L432">				sb.append(&quot;,&quot;);</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">				if (returnIds) {</span>
+<span class="nc" id="L434">					sb.append(stage.getConfiguration().getId());</span>
+<span class="nc" id="L435">					sb.append(&quot;,&quot;);</span>
+				}
+<span class="nc" id="L437">				sb.append(stage.getStatus().toString());</span>
+
+<span class="nc" id="L439">				sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L440">				sb.append((stage.getCpuTime()));</span>
+
+<span class="nc" id="L442">				sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L443">				sb.append((stage.getWallclockTime()));</span>
+
+<span class="nc" id="L445">				sb.append(&quot;,&quot;);</span>
+
+
+<span class="nc" id="L448">				sb.append(stage.getMaxVirtualMemory());</span>
+<span class="nc" id="L449">				sb.append(&quot;,&quot;);</span>
+
+				//escape commas
+<span class="nc bnc" id="L452" title="All 2 branches missed.">				if (stage.getStarexecResult().contains(&quot;,&quot;)) {</span>
+<span class="nc" id="L453">					sb.append(&quot;\&quot;&quot;+stage.getStarexecResult().replaceAll(&quot;\&quot;&quot;,&quot;\&quot;\&quot;&quot;)+&quot;\&quot;&quot;);	</span>
+				} else {
+<span class="nc" id="L455">					sb.append(stage.getStarexecResult());																		}</span>
+
+<span class="nc bnc" id="L457" title="All 2 branches missed.">				if (attrNames != null) {</span>
+					// print out attributes for this job pair
+<span class="nc" id="L459">					Properties props = stage.getAttributes();</span>
+
+<span class="nc bnc" id="L461" title="All 4 branches missed.">					if (have_expected &amp;&amp; props != null) {</span>
+<span class="nc" id="L462">						sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L463">						sb.append(props.getProperty(R.EXPECTED_RESULT, &quot;-&quot;));</span>
+					}
+<span class="nc bnc" id="L465" title="All 2 branches missed.">					if (props != null) {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">						for (String attr : attrNames) {</span>
+<span class="nc bnc" id="L467" title="All 4 branches missed.">							if (!attr.equals(R.STAREXEC_RESULT) &amp;&amp; !attr.equals(R.EXPECTED_RESULT)) {</span>
+								/* we skip printing the starexec-result, and starexec-expected-result attributes,
+								   because we printed them already */
+<span class="nc" id="L470">								sb.append(&quot;,&quot;);</span>
+<span class="nc" id="L471">								sb.append(props.getProperty(attr, &quot;-&quot;));</span>
+							}
+<span class="nc" id="L473">						}</span>
+					}
+				}
+<span class="nc" id="L476">				sb.append(&quot;\r\n&quot;);</span>
+<span class="nc" id="L477">			}</span>
+<span class="nc" id="L478">		}</span>
+<span class="nc" id="L479">		Files.write(new File(filename).toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));</span>
+<span class="nc" id="L480">		return filename;</span>
+	}
+
+	/**
+	 * Puts all the given pairs into a zip archive that is streamed into the http response object. The http output
+	 * stream is closed at the end
+	 *
+	 * @param pairs The pairs to output
+	 * @param response The HTTP response
+	 * @param baseName The top level name to give to the archive
+	 * @param useSpacePath If true, pair output will be in a directory including the pair space path. If false, they
+	 * will simply be in a flat list of directories with job pair IDs
+	 * @param earlyDate Only retrieve files that were modified after the given date, for running job pairs only
+	 */
+	private static void addJobPairsToZipOutput(
+			List&lt;JobPair&gt; pairs, HttpServletResponse response, String baseName, boolean useSpacePath, Long earlyDate
+	) {
+		long lastModified;
+<span class="nc bnc" id="L498" title="All 2 branches missed.">		if (earlyDate != null) {</span>
+<span class="nc" id="L499">			lastModified = earlyDate;</span>
+		} else {
+<span class="nc" id="L501">			lastModified = -1;</span>
+		}
+<span class="nc" id="L503">		ByteArrayOutputStream buffer = new ByteArrayOutputStream();</span>
+<span class="nc" id="L504">		ZipArchiveOutputStream stream = new ZipArchiveOutputStream(buffer);</span>
+		try {
+<span class="nc bnc" id="L506" title="All 2 branches missed.">			for (JobPair p : pairs) {</span>
+<span class="nc" id="L507">				String zipFileNameParent = &quot;&quot;;</span>
+<span class="nc" id="L508">				StringBuilder zipFileName = new StringBuilder(baseName);</span>
+<span class="nc" id="L509">				zipFileName.append(File.separator);</span>
+<span class="nc bnc" id="L510" title="All 2 branches missed.">				if (useSpacePath) {</span>
+<span class="nc" id="L511">					zipFileName.append(p.getBenchPath());</span>
+<span class="nc" id="L512">					zipFileNameParent = zipFileName.toString();</span>
+<span class="nc" id="L513">					zipFileName.append(File.separator);</span>
+<span class="nc" id="L514">					zipFileName.append(p.getId());</span>
+				}
+<span class="nc" id="L516">				List&lt;File&gt; files = JobPairs.getOutputPaths(p);</span>
+<span class="nc" id="L517">				boolean running = p.getStatus().getCode().running();</span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">				for (File file : files) {</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">					if (file.exists()) {</span>
+						long modified;
+						StringBuilder singleFileName;
+<span class="nc bnc" id="L522" title="All 2 branches missed.">						if (file.isDirectory()) {</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">							if (useSpacePath) {</span>
+<span class="nc" id="L524">								singleFileName = new StringBuilder(zipFileNameParent);</span>
+							} else {
+<span class="nc" id="L526">								singleFileName = new StringBuilder(zipFileName);</span>
+							}
+							//means this is adjacent to a stdout file
+<span class="nc bnc" id="L529" title="All 2 branches missed.">							if (files.size() &gt; 1) {</span>
+<span class="nc" id="L530">								singleFileName.append(File.separator);</span>
+<span class="nc" id="L531">								singleFileName.append(p.getId()).append(&quot;_output&quot;);</span>
+							}
+<span class="nc bnc" id="L533" title="All 4 branches missed.">							if (!running || earlyDate == null) {</span>
+<span class="nc" id="L534">								modified = ArchiveUtil.addDirToArchive(stream, file, singleFileName.toString());</span>
+							} else {
+<span class="nc" id="L536">								modified =</span>
+<span class="nc" id="L537">										ArchiveUtil.addDirToArchive(stream, file, singleFileName.toString(),</span>
+<span class="nc" id="L538">										                            earlyDate);</span>
+							}
+						} else {
+<span class="nc" id="L541">							singleFileName = new StringBuilder(zipFileNameParent);</span>
+<span class="nc" id="L542">							singleFileName.append(File.separator);</span>
+<span class="nc" id="L543">							singleFileName.append(file.getName());</span>
+<span class="nc bnc" id="L544" title="All 4 branches missed.">							if (!running || earlyDate == null) {</span>
+<span class="nc" id="L545">								modified = ArchiveUtil.addFileToArchive(stream, file, singleFileName.toString());</span>
+							} else {
+<span class="nc" id="L547">								modified = ArchiveUtil</span>
+<span class="nc" id="L548">										.addFileToArchive(stream, file, singleFileName.toString(), earlyDate);</span>
+							}
+						}
+
+<span class="nc bnc" id="L552" title="All 2 branches missed.">						if (modified &gt; lastModified) {</span>
+<span class="nc" id="L553">							lastModified = modified;</span>
+						}
+<span class="nc" id="L555">					} else {</span>
+						//if we can't find output for the pair, just put an empty file there
+<span class="nc" id="L557">						zipFileName.append(&quot;.txt&quot;);</span>
+<span class="nc" id="L558">						ArchiveUtil.addStringToArchive(stream, &quot;&quot;, zipFileName.toString());</span>
+					}
+<span class="nc" id="L560">				}</span>
+<span class="nc" id="L561">			}</span>
+<span class="nc bnc" id="L562" title="All 4 branches missed.">			if (lastModified == -1 || earlyDate == Long.valueOf(lastModified)) {</span>
+<span class="nc" id="L563">				response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);</span>
+			} else {
+<span class="nc" id="L565">				response.setDateHeader(&quot;Last-Modified&quot;, lastModified);</span>
+<span class="nc" id="L566">				stream.finish();</span>
+<span class="nc" id="L567">				buffer.writeTo(response.getOutputStream());</span>
+			}
+<span class="nc" id="L569">			response.getOutputStream().close();</span>
+<span class="nc" id="L570">			stream.close();</span>
+<span class="nc" id="L571">		} catch (Exception e) {</span>
+<span class="nc" id="L572">			log.error(&quot;addJobPairsToZipOutput&quot;, e);</span>
+<span class="nc" id="L573">		}</span>
+<span class="nc" id="L574">	}</span>
+
+	/**
+	 * Get a zip file which contains the outputs of a job from all its job pairs.
+	 *
+	 * @param jobId The job to be handled
+	 * @param response The servlet response sent back
+	 * @param lastModified The time to use as a cutoff for output for running job pairs
+	 * @return a file representing the archive to send back to the client
+	 * @throws IOException
+	 * @author Ruoyu Zhang
+	 */
+	private static boolean handleJobOutputs(int jobId, HttpServletResponse response, Integer since, Long lastModified)
+			throws Exception {
+<span class="nc" id="L588">		log.debug(&quot;got request to download output for job = &quot; + jobId);</span>
+		// If the user can actually see the job the pair is apart of
+<span class="nc" id="L590">		log.debug(&quot;confirmed user can download job = &quot; + jobId);</span>
+<span class="nc" id="L591">		log.debug(&quot;since: &quot; + since);</span>
+<span class="nc" id="L592">		Boolean jobCopiesBackIncrementally = Jobs.doesJobCopyBackIncrementally(jobId);</span>
+<span class="nc" id="L593">		final String baseName = &quot;Job&quot; + String.valueOf(jobId) + &quot;_output&quot;;</span>
+
+		//if we only want the new job pairs
+<span class="nc bnc" id="L596" title="All 2 branches missed.">		if (since != null) {</span>
+<span class="nc" id="L597">			log.debug(&quot;Getting incremental job output results&quot;);</span>
+<span class="nc" id="L598">			int olderPairs = Jobs.countOlderPairs(jobId, since);</span>
+<span class="nc" id="L599">			List&lt;JobPair&gt; pairs = Jobs.getNewCompletedPairsShallow(jobId, since);</span>
+
+<span class="nc" id="L601">			log.debug(&quot;Found &quot; + pairs.size() + &quot; new pairs&quot;);</span>
+<span class="nc" id="L602">			int maxCompletion = since;</span>
+			// pairsFound is defined as the number of pairs that completed since &quot;since&quot;
+			// it does NOT include running pairs
+<span class="nc" id="L605">			int pairsFound = 0;</span>
+<span class="nc" id="L606">			int runningPairsFound = 0;</span>
+
+<span class="nc" id="L608">			final Iterator&lt;JobPair&gt; it = pairs.iterator();</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">			while (it.hasNext()) {</span>
+<span class="nc" id="L610">				final JobPair x = (JobPair) it.next();</span>
+<span class="nc" id="L611">				log.trace(&quot;found pair id = &quot; + x.getId() + &quot; with completion id = &quot; + x.getCompletionId());</span>
+
+<span class="nc bnc" id="L613" title="All 2 branches missed.">				if (x.getCompletionId() &gt; maxCompletion) {</span>
+<span class="nc" id="L614">					maxCompletion = x.getCompletionId();</span>
+				}
+
+<span class="nc bnc" id="L617" title="All 2 branches missed.">				if (x.getStatus().getCode().finishedRunning()) {</span>
+<span class="nc" id="L618">					++pairsFound;</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">				} else if (jobCopiesBackIncrementally) {</span>
+<span class="nc" id="L620">					++runningPairsFound;</span>
+				} else {
+<span class="nc" id="L622">					it.remove();</span>
+				}
+<span class="nc" id="L624">			}</span>
+
+<span class="nc" id="L626">			log.debug(&quot;Older pairs: &quot; + String.valueOf(olderPairs));</span>
+<span class="nc" id="L627">			log.debug(&quot;Pairs-Found: &quot; + String.valueOf(pairsFound));</span>
+<span class="nc" id="L628">			log.debug(&quot;Total-Pairs : &quot; + String.valueOf(Jobs.getPairCount(jobId)));</span>
+<span class="nc" id="L629">			log.debug(&quot;Max Completion: &quot; + String.valueOf(maxCompletion));</span>
+<span class="nc" id="L630">			response.addCookie(new Cookie(&quot;Older-Pairs&quot;, String.valueOf(olderPairs)));</span>
+<span class="nc" id="L631">			response.addCookie(new Cookie(&quot;Pairs-Found&quot;, String.valueOf(pairsFound)));</span>
+<span class="nc" id="L632">			response.addCookie(new Cookie(&quot;Total-Pairs&quot;, String.valueOf(Jobs.getPairCount(jobId))));</span>
+<span class="nc" id="L633">			response.addCookie(new Cookie(&quot;Max-Completion&quot;, String.valueOf(maxCompletion)));</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">			if (jobCopiesBackIncrementally) {</span>
+<span class="nc" id="L635">				log.debug(&quot;Running Pairs : &quot; + String.valueOf(runningPairsFound));</span>
+<span class="nc" id="L636">				response.addCookie(new Cookie(&quot;Running-Pairs&quot;, String.valueOf(runningPairsFound)));</span>
+			}
+<span class="nc" id="L638">			log.debug(&quot;added the max-completion cookie, starting to write output for job id = &quot; + jobId);</span>
+
+			// get all files in between
+<span class="nc" id="L641">			Download.addJobPairsToZipOutput(pairs, response, baseName, true, lastModified);</span>
+<span class="nc" id="L642">		} else {</span>
+<span class="nc" id="L643">			log.debug(&quot;preparing to create archive for job = &quot; + jobId);</span>
+<span class="nc" id="L644">			ArchiveUtil.createAndOutputZip(new File(Jobs.getDirectory(jobId)), response.getOutputStream(), baseName,</span>
+			                               false
+			);
+		}
+
+<span class="nc" id="L649">		return true;</span>
+	}
+
+	/**
+	 * Using a list of Solvers map each solver name to whether or not that solver name is duplicated in the solver
+	 * list.
+	 *
+	 * @author Albert Giegerich
+	 */
+	private static HashMap&lt;String, Boolean&gt; createNameDuplicateMap(List&lt;String&gt; names) {
+<span class="nc" id="L659">		HashMap&lt;String, Boolean&gt; nameDuplicateMap = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L660" title="All 2 branches missed.">		for (String name : names) {</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">			if (nameDuplicateMap.containsKey(name)) {</span>
+				// If the name already exists in the map there is a duplication so map this name to true.
+<span class="nc" id="L663">				nameDuplicateMap.put(name, true);</span>
+			} else {
+				// This is the first occurence of a solver with this name.
+<span class="nc" id="L666">				nameDuplicateMap.put(name, false);</span>
+			}
+<span class="nc" id="L668">		}</span>
+<span class="nc" id="L669">		return nameDuplicateMap;</span>
+	}
+
+	/**
+	 * Validates the download request to make sure the requested data is of the right format
+	 *
+	 * @return true iff the request is valid
+	 * @author Skylar Stark
+	 */
+	public static ValidatorStatusCode validateRequest(HttpServletRequest request) {
+<span class="nc" id="L679">		final String methodName = &quot;validateRequest&quot;;</span>
+<span class="nc" id="L680">		log.entry(methodName);</span>
+<span class="nc" id="L681">		log.debug(methodName, &quot;Validating download request.&quot;);</span>
+		try {
+<span class="nc bnc" id="L683" title="All 2 branches missed.">			if (!Util.paramExists(PARAM_TYPE, request)) {</span>
+<span class="nc" id="L684">				final String message = &quot;A download type was not specified&quot;;</span>
+<span class="nc" id="L685">				log.debug(methodName, &quot;Download request was invalid: &quot; + message);</span>
+<span class="nc" id="L686">				return new ValidatorStatusCode(false, message);</span>
+			}
+<span class="nc" id="L688">			String type = request.getParameter(PARAM_TYPE);</span>
+<span class="nc" id="L689">			log.debug(methodName, &quot;Download request is of type: &quot; + type);</span>
+
+<span class="nc bnc" id="L691" title="All 6 branches missed.">			if (!(type.equals(R.SOLVER) || type.equals(R.BENCHMARK) || type.equals(R.SPACE_XML) ||</span>
+<span class="nc bnc" id="L692" title="All 6 branches missed.">					type.equals(R.JOB_XML) || type.equals(R.PAIR_OUTPUT) || type.equals(R.JOB) ||</span>
+<span class="nc bnc" id="L693" title="All 6 branches missed.">					type.equals(R.JOB_OUTPUT) || type.equals(R.SPACE) || type.equals(R.PROCESSOR) ||</span>
+<span class="nc bnc" id="L694" title="All 4 branches missed.">					type.equals(R.JOB_OUTPUTS) || type.equals(R.SOLVER_SOURCE) ||</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">					type.equals(R.JOB_PAGE_DOWNLOAD_TYPE))) {</span>
+<span class="nc" id="L696">				final String message = &quot;The supplied download type was not valid&quot;;</span>
+<span class="nc" id="L697">				log.debug(methodName, &quot;Download request was invalid: &quot; + message);</span>
+<span class="nc" id="L698">				return new ValidatorStatusCode(false, message);</span>
+			}
+
+
+<span class="nc bnc" id="L702" title="All 2 branches missed.">			if (type.equals(R.JOB_OUTPUTS)) {</span>
+				//expecting a comma-separated list
+<span class="nc" id="L704">				final String idArrayParam = &quot;id[]&quot;;</span>
+<span class="nc" id="L705">				String ids = request.getParameter(idArrayParam);</span>
+<span class="nc" id="L706">				log.debug(methodName, idArrayParam + &quot; = &quot; + ids);</span>
+<span class="nc bnc" id="L707" title="All 2 branches missed.">				if (!Validator.isValidIntegerList(ids)) {</span>
+<span class="nc" id="L708">					log.debug(methodName, idArrayParam + &quot; was not a valid integer list.&quot;);</span>
+<span class="nc" id="L709">					return new ValidatorStatusCode(</span>
+							false, &quot;The given list of ids contained one or more invalid integers&quot;);
+				}
+<span class="nc" id="L712">			} else {</span>
+<span class="nc" id="L713">				String universallyUniqueId = request.getParameter(PARAM_ANON_ID);</span>
+<span class="nc bnc" id="L714" title="All 2 branches missed.">				if (universallyUniqueId == null) {</span>
+<span class="nc" id="L715">					int userId = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L716">					log.debug(methodName, &quot;Validating download request for user: &quot; + userId);</span>
+<span class="nc" id="L717">					return validateForUser(userId, type, request);</span>
+				} else {
+<span class="nc" id="L719">					log.debug(methodName, &quot;Validating download request for anonymous link: &quot; + universallyUniqueId);</span>
+<span class="nc" id="L720">					return validateForAnonymousLink(universallyUniqueId, type, request);</span>
+				}
+			}
+<span class="nc" id="L723">			return new ValidatorStatusCode(true);</span>
+<span class="nc" id="L724">		} catch (Exception e) {</span>
+<span class="nc" id="L725">			log.warn(e.getMessage(), e);</span>
+		}
+<span class="nc" id="L727">		return new ValidatorStatusCode(false, &quot;Internal error processing download request&quot;);</span>
+	}
+
+	private static ValidatorStatusCode validateForAnonymousLink(
+			String universallyUniqueId, String type, HttpServletRequest request
+	) {
+<span class="nc" id="L733">		return new ValidatorStatusCode(true);</span>
+	}
+
+	private static ValidatorStatusCode validateForUser(int userId, String type, HttpServletRequest request) {
+<span class="nc" id="L737">		final String methodName = &quot;validateForUser&quot;;</span>
+<span class="nc" id="L738">		log.entry(methodName);</span>
+<span class="nc bnc" id="L739" title="All 2 branches missed.">		if (!Validator.isValidPosInteger(request.getParameter(PARAM_ID))) {</span>
+<span class="nc" id="L740">			final String message = &quot;The given id was not a valid integer&quot;;</span>
+<span class="nc" id="L741">			log.debug(methodName, &quot;Download request validation failed: &quot; + message);</span>
+<span class="nc" id="L742">			return new ValidatorStatusCode(false, message);</span>
+		}
+
+<span class="nc" id="L745">		int id = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+<span class="nc" id="L746">		log.debug(methodName, PARAM_ID + &quot; = &quot; + id);</span>
+
+<span class="nc" id="L748">		ValidatorStatusCode status = null;</span>
+<span class="nc bnc" id="L749" title="All 7 branches missed.">		switch (type) {</span>
+		case R.SOLVER:
+		case R.SOLVER_SOURCE:
+<span class="nc" id="L752">			status = SolverSecurity.canUserDownloadSolver(id, userId);</span>
+<span class="nc bnc" id="L753" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L754">				return status;</span>
+			}
+			break;
+		case R.SPACE_XML:
+		case R.SPACE:
+		case R.PROCESSOR:
+<span class="nc bnc" id="L760" title="All 2 branches missed.">			if (!Permissions.canUserSeeSpace(id, userId)) {</span>
+<span class="nc" id="L761">				return new ValidatorStatusCode(false, &quot;You do not have permission to see this space&quot;);</span>
+			}
+			break;
+		case R.JOB:
+		case R.JOB_XML:
+		case R.JOB_OUTPUT: {
+<span class="nc" id="L767">			ValidatorStatusCode canSeeJobStatus = Permissions.canUserSeeJob(id, userId);</span>
+<span class="nc bnc" id="L768" title="All 2 branches missed.">			if (!canSeeJobStatus.isSuccess()) {</span>
+<span class="nc" id="L769">				log.debug(methodName, &quot;User could not see job, returning failure status.&quot;);</span>
+<span class="nc" id="L770">				return canSeeJobStatus;</span>
+			}
+			break;
+		}
+		case R.PAIR_OUTPUT: {
+<span class="nc" id="L775">			int jobId = JobPairs.getPair(id).getJobId();</span>
+<span class="nc" id="L776">			ValidatorStatusCode canSeeJobStatus = Permissions.canUserSeeJob(jobId, userId);</span>
+<span class="nc bnc" id="L777" title="All 2 branches missed.">			if (!canSeeJobStatus.isSuccess()) {</span>
+<span class="nc" id="L778">				return canSeeJobStatus;</span>
+			}
+			break;
+		}
+		case R.BENCHMARK:
+<span class="nc" id="L783">			status = BenchmarkSecurity.canUserDownloadBenchmark(id, userId);</span>
+<span class="nc bnc" id="L784" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L785">				return status;</span>
+			}
+			break;
+		case R.JOB_PAGE_DOWNLOAD_TYPE:
+<span class="nc" id="L789">			status = JobSecurity.canUserSeeJob(id, userId);</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L791">				return status;</span>
+			}
+			break;
+		}
+<span class="nc" id="L795">		return new ValidatorStatusCode(true);</span>
+	}
+
+	@Override
+	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L801">		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);</span>
+<span class="nc" id="L802">	}</span>
+
+	@Override
+	protected void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L807">		final String methodName = &quot;doGet&quot;;</span>
+<span class="nc" id="L808">		log.entry(methodName);</span>
+
+<span class="nc" id="L810">		User u = SessionUtil.getUser(request);</span>
+<span class="nc" id="L811">		log.debug(methodName, &quot;Got download request from user with id: &quot; + u.getId());</span>
+		boolean success;
+<span class="nc" id="L813">		String shortName = null;</span>
+		try {
+<span class="nc" id="L815">			ValidatorStatusCode status = validateRequest(request);</span>
+<span class="nc bnc" id="L816" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L817">				log.debug(&quot;Bad download Request--&quot; + status.getMessage());</span>
+				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
+<span class="nc" id="L819">				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));</span>
+<span class="nc" id="L820">				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());</span>
+<span class="nc" id="L821">				return;</span>
+			}
+
+<span class="nc" id="L824">			Object check = request.getParameter(&quot;token&quot;);</span>
+			//token is used to tell the client when the file has arrived
+<span class="nc bnc" id="L826" title="All 2 branches missed.">			if (check != null) {</span>
+<span class="nc" id="L827">				String token = check.toString();</span>
+<span class="nc" id="L828">				log.debug(methodName, &quot;Adding fileDownloadToken cookie: &quot; + token);</span>
+<span class="nc" id="L829">				Cookie newCookie = new Cookie(&quot;fileDownloadToken&quot;, token);</span>
+<span class="nc" id="L830">				newCookie.setMaxAge(60);</span>
+<span class="nc" id="L831">				response.addCookie(newCookie);</span>
+			}
+
+
+<span class="nc" id="L835">			String paramType = request.getParameter(PARAM_TYPE);</span>
+<span class="nc" id="L836">			log.debug(methodName, &quot;Param type was: &quot; + paramType);</span>
+<span class="nc bnc" id="L837" title="All 2 branches missed.">			if (paramType.equals(R.SOLVER)) {</span>
+<span class="nc" id="L838">				log.debug(methodName, &quot;Handling &quot; + R.SOLVER);</span>
+<span class="nc" id="L839">				Optional&lt;Solver&gt; os = handleSolverAndSolverSrc(request, response);</span>
+<span class="nc bnc" id="L840" title="All 2 branches missed.">				if (os.isPresent()) {</span>
+<span class="nc" id="L841">					Solver s = os.get();</span>
+
+<span class="nc" id="L843">					boolean reupload = false;</span>
+<span class="nc bnc" id="L844" title="All 2 branches missed.">					if (Util.paramExists(PARAM_REUPLOAD, request)) {</span>
+<span class="nc" id="L845">						reupload = Boolean.parseBoolean(request.getParameter(PARAM_REUPLOAD));</span>
+<span class="nc" id="L846">						log.debug(&quot;Reupload parameter was: &quot; + reupload);</span>
+					}
+<span class="nc" id="L848">					success = handleSolver(s, response, reupload);</span>
+<span class="nc" id="L849">				} else {</span>
+					// handleSolverAndSolverSrc already sent the response.
+<span class="nc" id="L851">					return;</span>
+				}
+<span class="nc bnc" id="L853" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.SOLVER_SOURCE)) {</span>
+<span class="nc" id="L854">				log.debug(methodName, &quot;Handling solverSrc&quot;);</span>
+<span class="nc" id="L855">				Optional&lt;Solver&gt; os = handleSolverAndSolverSrc(request, response);</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">				if (os.isPresent()) {</span>
+<span class="nc" id="L857">					Solver s = os.get();</span>
+<span class="nc" id="L858">					success = handleSolverSource(s, response);</span>
+<span class="nc" id="L859">				} else {</span>
+					// handleSolverAndSolverSrc already sent the response.
+<span class="nc" id="L861">					return;</span>
+				}
+<span class="nc bnc" id="L863" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.BENCHMARK)) {</span>
+<span class="nc" id="L864">				log.debug(methodName, &quot;Handling &quot; + R.BENCHMARK);</span>
+<span class="nc" id="L865">				Benchmark b = null;</span>
+<span class="nc" id="L866">				String universallyUniqueId = request.getParameter(PARAM_ANON_ID);</span>
+<span class="nc bnc" id="L867" title="All 2 branches missed.">				if (universallyUniqueId == null) {</span>
+<span class="nc" id="L868">					log.debug(methodName, &quot;Was not anonymous download.&quot;);</span>
+<span class="nc" id="L869">					int benchId = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+<span class="nc" id="L870">					log.debug(methodName, &quot;Getting benchmark with id: &quot; + benchId);</span>
+<span class="nc" id="L871">					b = Benchmarks.get(benchId);</span>
+<span class="nc" id="L872">				} else {</span>
+<span class="nc" id="L873">					log.debug(methodName, &quot;Getting benchmark from anonymous link UUID: &quot; + universallyUniqueId);</span>
+<span class="nc" id="L874">					Optional&lt;Integer&gt; benchId = AnonymousLinks.getIdOfBenchmarkAssociatedWithLink(universallyUniqueId);</span>
+<span class="nc bnc" id="L875" title="All 2 branches missed.">					if (benchId.isPresent()) {</span>
+<span class="nc" id="L876">						b = Benchmarks.get(benchId.get());</span>
+					} else {
+<span class="nc" id="L878">						log.debug(methodName, &quot;Could not find benchmark with UUID.&quot;);</span>
+<span class="nc" id="L879">						response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Benchmark not found.&quot;);</span>
+<span class="nc" id="L880">						return;</span>
+					}
+				}
+
+<span class="nc" id="L884">				shortName = b.getName();</span>
+<span class="nc" id="L885">				shortName = shortName.replaceAll(&quot;\\s+&quot;, &quot;&quot;);</span>
+<span class="nc" id="L886">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L887">				success = handleBenchmark(b, response);</span>
+<span class="nc bnc" id="L888" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.PAIR_OUTPUT)) {</span>
+<span class="nc" id="L889">				log.debug(methodName, &quot;Handling &quot; + R.PAIR_OUTPUT);</span>
+<span class="nc" id="L890">				Boolean longPath = Boolean.parseBoolean(request.getParameter(&quot;longpath&quot;));</span>
+<span class="nc" id="L891">				log.debug(&quot;Long path value = &quot; + longPath);</span>
+<span class="nc" id="L892">				int id = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+<span class="nc" id="L893">				shortName = &quot;Pair_&quot; + id;</span>
+<span class="nc" id="L894">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L895">				success = handlePairOutput(id, u.getId(), response, longPath);</span>
+<span class="nc bnc" id="L896" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_OUTPUTS)) {</span>
+<span class="nc" id="L897">				log.debug(methodName, &quot;Handling &quot; + R.JOB_OUTPUTS);</span>
+
+<span class="nc" id="L899">				List&lt;Integer&gt; ids = Validator.convertToIntList(request.getParameter(&quot;id[]&quot;));</span>
+<span class="nc" id="L900">				shortName = &quot;Pair_Output&quot;;</span>
+<span class="nc" id="L901">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L902">				success = handlePairOutputs(ids, u.getId(), response, true);</span>
+<span class="nc bnc" id="L903" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.SPACE_XML)) {</span>
+<span class="nc" id="L904">				log.debug(methodName, &quot;Handling &quot; + R.SPACE_XML);</span>
+<span class="nc" id="L905">				Space space = Spaces.get(Integer.parseInt(request.getParameter(PARAM_ID)));</span>
+<span class="nc" id="L906">				shortName = space.getName() + &quot;_XML&quot;;</span>
+<span class="nc" id="L907">				shortName = shortName.replaceAll(&quot;\\s+&quot;, &quot;&quot;);</span>
+<span class="nc" id="L908">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L909">				boolean includeAttributes = false;</span>
+<span class="nc" id="L910">				boolean updates = false;</span>
+<span class="nc" id="L911">				int upid = -1;</span>
+<span class="nc" id="L912">				final String includeattrsParam = &quot;includeattrs&quot;;</span>
+<span class="nc bnc" id="L913" title="All 2 branches missed.">				if (Util.paramExists(includeattrsParam, request)) {</span>
+<span class="nc" id="L914">					includeAttributes = Boolean.parseBoolean(request.getParameter(includeattrsParam));</span>
+<span class="nc" id="L915">					log.debug(methodName, includeattrsParam + &quot; = &quot; + includeAttributes);</span>
+				}
+<span class="nc" id="L917">				final String updatesParam = &quot;updates&quot;;</span>
+<span class="nc" id="L918">				final String upidParam = &quot;upid&quot;;</span>
+<span class="nc bnc" id="L919" title="All 2 branches missed.">				if (Util.paramExists(updatesParam, request)) {</span>
+<span class="nc" id="L920">					updates = Boolean.parseBoolean(request.getParameter(updatesParam));</span>
+<span class="nc" id="L921">					log.debug(methodName, updatesParam + &quot; = &quot; + updates);</span>
+<span class="nc" id="L922">					upid = Integer.parseInt(request.getParameter(upidParam));</span>
+<span class="nc" id="L923">					log.debug(methodName, upidParam + &quot; = &quot; + upid);</span>
+				}
+
+<span class="nc" id="L926">				success = handleSpaceXML(space, u.getId(), response, includeAttributes, updates, upid);</span>
+<span class="nc bnc" id="L927" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_XML)) {</span>
+<span class="nc" id="L928">				log.debug(methodName, &quot;Handling &quot; + R.JOB_XML);</span>
+<span class="nc" id="L929">				Job job = Jobs.get(Integer.parseInt(request.getParameter(PARAM_ID)));</span>
+
+<span class="nc" id="L931">				shortName = &quot;Job&quot; + job.getId() + &quot;_XML&quot;;</span>
+<span class="nc" id="L932">				shortName = shortName.replaceAll(&quot;\\s+&quot;, &quot;&quot;);</span>
+<span class="nc" id="L933">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L934">				success = handleJobXML(job, u.getId(), response);</span>
+
+				// this next condition is for the CSV file
+<span class="nc bnc" id="L937" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.JOB)) {</span>
+<span class="nc" id="L938">				log.debug(methodName, &quot;Handling &quot; + R.JOB);</span>
+<span class="nc" id="L939">				Integer jobId = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+
+<span class="nc" id="L941">				final String getCompletedParam = &quot;getcompleted&quot;;</span>
+<span class="nc" id="L942">				String getCompleted = request.getParameter(getCompletedParam);</span>
+<span class="nc" id="L943">				Boolean complete = false;</span>
+<span class="nc bnc" id="L944" title="All 2 branches missed.">				if (getCompleted != null) {</span>
+<span class="nc" id="L945">					log.debug(methodName, getCompleted + &quot; was present.&quot;);</span>
+<span class="nc" id="L946">					complete = Boolean.parseBoolean(getCompleted);</span>
+				}
+
+<span class="nc" id="L949">				final String returnIdsParam = &quot;returnids&quot;;</span>
+<span class="nc" id="L950">				String returnids = request.getParameter(returnIdsParam);</span>
+<span class="nc" id="L951">				Boolean ids = false;</span>
+<span class="nc bnc" id="L952" title="All 2 branches missed.">				if (returnids != null) {</span>
+<span class="nc" id="L953">					log.debug(methodName, returnIdsParam + &quot; was present.&quot;);</span>
+<span class="nc" id="L954">					ids = Boolean.parseBoolean(returnids);</span>
+				}
+
+<span class="nc" id="L957">				final String sinceParam = &quot;since&quot;;</span>
+<span class="nc" id="L958">				String lastSeen = request.getParameter(sinceParam);</span>
+<span class="nc" id="L959">				Integer since = null;</span>
+<span class="nc bnc" id="L960" title="All 2 branches missed.">				if (lastSeen != null) {</span>
+<span class="nc" id="L961">					since = Integer.parseInt(lastSeen);</span>
+				}
+
+<span class="nc" id="L964">				log.debug(methodName, &quot;getCompleted = &quot; + complete);</span>
+<span class="nc" id="L965">				log.debug(methodName, &quot;returnids = &quot; + ids);</span>
+<span class="nc" id="L966">				log.debug(methodName, sinceParam + &quot; = &quot; + since);</span>
+
+<span class="nc" id="L968">				shortName = &quot;Job&quot; + jobId + &quot;_info&quot;;</span>
+<span class="nc" id="L969">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L970">				success = handleJob(jobId, u.getId(), response, since, ids, complete);</span>
+<span class="nc bnc" id="L971" title="All 2 branches missed.">			} else if (request.getParameter(PARAM_TYPE).equals(R.SPACE)) {</span>
+<span class="nc" id="L972">				log.debug(methodName, &quot;Handling &quot; + R.SPACE);</span>
+<span class="nc" id="L973">				Space space = Spaces.getDetails(Integer.parseInt(request.getParameter(PARAM_ID)), u.getId());</span>
+
+				// we will  look for these attributes, but if they aren't there then the default should be
+				//to get both solvers and benchmarks
+<span class="nc" id="L977">				final String includeSolversParam = &quot;includesolvers&quot;;</span>
+<span class="nc" id="L978">				boolean includeSolvers = true;</span>
+<span class="nc bnc" id="L979" title="All 2 branches missed.">				if (Util.paramExists(includeSolversParam, request)) {</span>
+<span class="nc" id="L980">					log.debug(includeSolversParam + &quot; was present&quot;);</span>
+<span class="nc" id="L981">					includeSolvers = Boolean.parseBoolean(request.getParameter(includeSolversParam));</span>
+				}
+<span class="nc" id="L983">				log.debug(methodName, includeSolversParam + &quot; = &quot; + includeSolvers);</span>
+
+<span class="nc" id="L985">				final String includeBenchmarksParam = &quot;includebenchmarks&quot;;</span>
+<span class="nc" id="L986">				boolean includeBenchmarks = true;</span>
+<span class="nc bnc" id="L987" title="All 2 branches missed.">				if (Util.paramExists(includeBenchmarksParam, request)) {</span>
+<span class="nc" id="L988">					log.debug(methodName, includeBenchmarksParam + &quot; was present&quot;);</span>
+<span class="nc" id="L989">					includeBenchmarks = Boolean.parseBoolean(request.getParameter(includeBenchmarksParam));</span>
+				}
+<span class="nc" id="L991">				log.debug(methodName, includeBenchmarksParam + &quot; = &quot; + includeBenchmarks);</span>
+
+<span class="nc" id="L993">				final String useIdDirectoriesParam = &quot;useIdDirectories&quot;;</span>
+<span class="nc" id="L994">				boolean useIdDirectories = Boolean.parseBoolean(request.getParameter(useIdDirectoriesParam));</span>
+<span class="nc" id="L995">				log.debug(methodName, useIdDirectoriesParam + &quot; = &quot; + useIdDirectoriesParam);</span>
+
+<span class="nc" id="L997">				shortName = space.getName();</span>
+<span class="nc" id="L998">				shortName = shortName.replaceAll(&quot;\\s+&quot;, &quot;&quot;);</span>
+
+<span class="nc" id="L1000">				final String hierarchyParam = &quot;hierarchy&quot;;</span>
+<span class="nc" id="L1001">				boolean hierarchy = request.getParameter(hierarchyParam).equals(&quot;true&quot;);</span>
+<span class="nc bnc" id="L1002" title="All 2 branches missed.">				if (hierarchy) {</span>
+<span class="nc" id="L1003">					shortName = shortName + &quot;_Hierarchy&quot;;</span>
+				}
+<span class="nc" id="L1005">				log.debug(hierarchyParam + &quot; = &quot; + hierarchy);</span>
+
+<span class="nc" id="L1007">				response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L1008">				success = handleSpace(space, u.getId(), response, hierarchy, includeBenchmarks, includeSolvers,</span>
+				                      useIdDirectories
+				);
+<span class="nc" id="L1011">			} else {</span>
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">				if (request.getParameter(PARAM_TYPE).equals(R.PROCESSOR)) {</span>
+<span class="nc" id="L1013">					log.debug(methodName, &quot;Handling &quot; + R.PROCESSOR);</span>
+<span class="nc" id="L1014">					List&lt;Processor&gt; proc = null;</span>
+<span class="nc" id="L1015">					shortName = &quot;Processor&quot;;</span>
+<span class="nc" id="L1016">					response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+
+<span class="nc" id="L1018">					final Integer id = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+<span class="nc" id="L1019">					final ProcessorType type = ProcessorType.valueOf(request.getParameter(&quot;procClass&quot;).toUpperCase());</span>
+<span class="nc" id="L1020">					log.debug(methodName, &quot;download request is for &quot; + type.toString());</span>
+<span class="nc" id="L1021">					proc = Processors.getByCommunity(id, type);</span>
+
+<span class="nc bnc" id="L1023" title="All 2 branches missed.">					if (!proc.isEmpty()) {</span>
+<span class="nc" id="L1024">						success = handleProc(proc, response);</span>
+					} else {
+<span class="nc" id="L1026">						log.debug(methodName, &quot;Could not find any processors to download.&quot;);</span>
+<span class="nc" id="L1027">						response.sendError(HttpServletResponse.SC_NO_CONTENT, &quot;There are no processors to download&quot;);</span>
+<span class="nc" id="L1028">						return;</span>
+					}
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">				} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_OUTPUT)) {</span>
+<span class="nc" id="L1031">					log.debug(methodName, &quot;Handling &quot; + R.JOB_OUTPUT);</span>
+<span class="nc" id="L1032">					int jobId = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+
+<span class="nc" id="L1034">					final String sinceParam = &quot;since&quot;;</span>
+<span class="nc" id="L1035">					String lastSeen = request.getParameter(sinceParam);</span>
+<span class="nc" id="L1036">					Integer since = null;</span>
+<span class="nc bnc" id="L1037" title="All 2 branches missed.">					if (lastSeen != null) {</span>
+<span class="nc" id="L1038">						log.debug(methodName, sinceParam + &quot; was present.&quot;);</span>
+<span class="nc" id="L1039">						since = Integer.parseInt(lastSeen);</span>
+					}
+<span class="nc" id="L1041">					log.debug(methodName, sinceParam + &quot; = &quot; + since);</span>
+
+
+<span class="nc" id="L1044">					final String lastTimestampParam = &quot;lastTimestamp&quot;;</span>
+<span class="nc" id="L1045">					String lastMod = request.getParameter(lastTimestampParam);</span>
+<span class="nc" id="L1046">					Long lastModified = null;</span>
+<span class="nc bnc" id="L1047" title="All 2 branches missed.">					if (lastMod != null) {</span>
+<span class="nc" id="L1048">						log.debug(methodName + lastTimestampParam + &quot; was present.&quot;);</span>
+<span class="nc" id="L1049">						lastModified = Long.parseLong(lastMod);</span>
+					}
+<span class="nc" id="L1051">					log.debug(methodName, lastTimestampParam + &quot; = &quot; + lastModified);</span>
+
+<span class="nc" id="L1053">					shortName = &quot;Job&quot; + jobId + &quot;_output&quot;;</span>
+<span class="nc" id="L1054">					response.addHeader(&quot;Content-Disposition&quot;, &quot;attachment; filename=&quot; + shortName + &quot;.zip&quot;);</span>
+<span class="nc" id="L1055">					success = handleJobOutputs(jobId, response, since, lastModified);</span>
+<span class="nc bnc" id="L1056" title="All 2 branches missed.">				} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_PAGE_DOWNLOAD_TYPE)) {</span>
+<span class="nc" id="L1057">					log.debug(methodName, &quot;Handling &quot; + R.JOB_PAGE_DOWNLOAD_TYPE);</span>
+<span class="nc" id="L1058">					int jobId = Integer.parseInt(request.getParameter(PARAM_ID));</span>
+<span class="nc" id="L1059">					DoJobPage.handleJobPage(jobId, request, response);</span>
+					// Just set success to true, handleJobPage will throw an exception if it is unsuccessful.
+<span class="nc" id="L1061">					success = true;</span>
+<span class="nc" id="L1062">				} else {</span>
+<span class="nc" id="L1063">					final String message = &quot;invalid download type specified: &quot; + request.getParameter(PARAM_TYPE);</span>
+<span class="nc" id="L1064">					log.debug(methodName, message);</span>
+<span class="nc" id="L1065">					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, message);</span>
+<span class="nc" id="L1066">					return;</span>
+				}
+			}
+
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">			if (success) {</span>
+<span class="nc" id="L1071">				log.debug(methodName, &quot;Successfully processed file for download.&quot;);</span>
+<span class="nc" id="L1072">				response.getOutputStream().close();</span>
+			} else {
+<span class="nc" id="L1074">				log.debug(methodName, &quot;Failed to process file for download.&quot;);</span>
+<span class="nc" id="L1075">				response.sendError(</span>
+						HttpServletResponse.SC_INTERNAL_SERVER_ERROR, &quot;failed to process file for download.&quot;);
+			}
+<span class="nc" id="L1078">		} catch (ClientAbortException e) {</span>
+			/* The client has closed the connection, either intentionally or due
+			 * to a connection timeout. This is not serious, and not worth a
+			 * full stack trace. No need to send any message to client, because
+			 * connection has been closed. */
+<span class="nc" id="L1083">			log.info(&quot;doGet&quot;,</span>
+					&quot;Caught ClientAbortException\n\t&quot; +
+<span class="nc" id="L1085">					&quot;URL: &quot; + request.getRequestURL() + &quot;?&quot; + request.getQueryString() + &quot;\n\t&quot; +</span>
+<span class="nc" id="L1086">					&quot;User Agent: &quot; + request.getHeader(&quot;User-Agent&quot;)</span>
+			);
+<span class="nc" id="L1088">			response.getOutputStream().close();</span>
+<span class="nc" id="L1089">		} catch (Exception e) {</span>
+<span class="nc" id="L1090">			log.warn(&quot;Caught Exception in Download.doGet&quot;+ e.getMessage());</span>
+<span class="nc" id="L1091">			response.getOutputStream().close();</span>
+			//this won't work because we have already opened the response output stream
+			//response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+		} finally {
+<span class="nc" id="L1095">			log.exit(methodName);</span>
+		}
+<span class="nc" id="L1097">	}</span>
+
+	/**
+	 * Handles download of a single space or a hierarchy, return the name of compressed file containing the space.
+	 *
+	 * @param space The space needed to be downloaded
+	 * @param uid The id of the user making the request
+	 * @param hierarchy True if downloading a hierarchy, false for a single space
+	 * @param response The servlet response sent back
+	 * @param includeBenchmarks Whether to include benchmarks in the directory
+	 * @param includeSolvers Whether to include solvers in the directory
+	 * @param useIdDirectories whether to put each primitive in a directory that has the name of it's id.
+	 * @return a file representing the archive to send back to the client
+	 * @throws ClientAbortException
+	 * @author Ruoyu Zhang + Eric Burns + Albert Giegerich
+	 */
+
+	private boolean handleSpace(
+			Space space, int uid, HttpServletResponse response, boolean hierarchy, boolean includeBenchmarks,
+			boolean includeSolvers, boolean useIdDirectories
+	) throws ClientAbortException {
+<span class="nc" id="L1118">		final String methodName = &quot;handleSpace&quot;;</span>
+		// If we can see this space AND the space is downloadable...
+		try {
+			//String baseFileName=space.getName();
+<span class="nc" id="L1122">			ZipArchiveOutputStream stream = new ZipArchiveOutputStream(response.getOutputStream());</span>
+
+<span class="nc" id="L1124">			storeSpaceHierarchy(space, uid, space.getName(), includeBenchmarks, includeSolvers, hierarchy, stream,</span>
+			                    useIdDirectories
+			);
+<span class="nc" id="L1127">			stream.close();</span>
+
+<span class="nc" id="L1129">			return true;</span>
+<span class="nc" id="L1130">		} catch (ClientAbortException e) {</span>
+<span class="nc" id="L1131">			throw e;</span>
+<span class="nc" id="L1132">		} catch (Exception e) {</span>
+<span class="nc" id="L1133">			log.error(methodName, e);</span>
+		}
+<span class="nc" id="L1135">		return false;</span>
+	}
+
+	/**
+	 * Store a space and possibly all its subspaces into the specified directory with their hierarchy
+	 *
+	 * @param space The space needed to be stored
+	 * @param uid The user who make the request
+	 * @param dest The destination directory
+	 * @param includeBenchmarks -- Whether to include benchmarks in the directory
+	 * @param includeSolvers Whether to include solvers in the directory
+	 * @param recursive Whether to include subspaces or not
+	 * @param useIdDirectories set to true if we want every primitive to be contained in a directory that is named
+	 * after
+	 * the primitives id.
+	 * @throws IOException
+	 * @author Ruoyu Zhang + Eric Burns + Albert Giegerich
+	 */
+	private void storeSpaceHierarchy(
+			Space space, int uid, String dest, boolean includeBenchmarks, boolean includeSolvers, boolean recursive,
+			ZipArchiveOutputStream stream, boolean useIdDirectories
+	) throws Exception {
+<span class="nc" id="L1157">		final String method = &quot;storeSpaceHierarchy&quot;;</span>
+<span class="nc" id="L1158">		log.info(&quot;storing space &quot; + space.getName() + &quot;to&quot; + dest);</span>
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">		if (Permissions.canUserSeeSpace(space.getId(), uid)) {</span>
+<span class="nc" id="L1160">			ArchiveUtil.addStringToArchive(stream, space.getDescription(), dest + File.separator + R.DESC_PATH);</span>
+
+<span class="nc bnc" id="L1162" title="All 2 branches missed.">			if (includeBenchmarks) {</span>
+<span class="nc" id="L1163">				List&lt;Benchmark&gt; benchList = Benchmarks.getBySpace(space.getId());</span>
+
+				// Get a list of the names of the benchmarks in benchList
+<span class="nc" id="L1166">				List&lt;String&gt; benchNameList = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L1167" title="All 2 branches missed.">				for (Benchmark bench : benchList) {</span>
+<span class="nc" id="L1168">					benchNameList.add(bench.getName());</span>
+<span class="nc" id="L1169">				}</span>
+				// Create a map that maps names of benchmarks to whether or not that name is a duplicate in the list.
+<span class="nc" id="L1171">				HashMap&lt;String, Boolean&gt; benchmarkNameDuplicateMap = createNameDuplicateMap(benchNameList);</span>
+
+<span class="nc bnc" id="L1173" title="All 2 branches missed.">				for (Benchmark b : benchList) {</span>
+<span class="nc bnc" id="L1174" title="All 4 branches missed.">					if (b.isDownloadable() || b.getUserId() == uid) {</span>
+<span class="nc" id="L1175">						File benchmarkFile = new File(b.getPath());</span>
+						/*ArchiveUtil.addFileToArchive(stream, benchmarkFile, dest+File.separator+b.getId()+File
+						.separator+b.getName());*/
+						String zipFileName;
+<span class="nc bnc" id="L1179" title="All 2 branches missed.">						if (useIdDirectories) {</span>
+<span class="nc" id="L1180">							zipFileName = dest + File.separator + b.getId() + File.separator + b.getName();</span>
+						} else {
+<span class="nc" id="L1182">							boolean isDuplicate = benchmarkNameDuplicateMap.get(b.getName());</span>
+<span class="nc" id="L1183">							zipFileName = dest + File.separator;</span>
+<span class="nc bnc" id="L1184" title="All 2 branches missed.">							if (isDuplicate) {</span>
+<span class="nc" id="L1185">								zipFileName += &quot;__starexex_disambiguate&quot; + File.separator + b.getId() + File.separator;</span>
+							}
+<span class="nc" id="L1187">							zipFileName += b.getName();</span>
+						}
+<span class="nc" id="L1189">						ArchiveUtil.addFileToArchive(stream, benchmarkFile, zipFileName);</span>
+					}
+<span class="nc" id="L1191">				}</span>
+			}
+
+<span class="nc bnc" id="L1194" title="All 2 branches missed.">			if (includeSolvers) {</span>
+<span class="nc" id="L1195">				List&lt;Solver&gt; solverList = null;</span>
+				//if we're getting a full hierarchy and the solver path is
+				//not yet set, we want to store all solvers now
+<span class="nc bnc" id="L1198" title="All 2 branches missed.">				if (recursive) {</span>
+<span class="nc" id="L1199">					solverList = Solvers.getBySpaceHierarchy(space.getId(), uid);</span>
+				} else {
+<span class="nc" id="L1201">					solverList = Solvers.getBySpace(space.getId());</span>
+				}
+
+				// Create a list of the names of the solvers in solverList
+<span class="nc" id="L1205">				List&lt;String&gt; solverNames = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">				for (Solver solver : solverList) {</span>
+<span class="nc" id="L1207">					solverNames.add(solver.getName());</span>
+<span class="nc" id="L1208">				}</span>
+				// Create a map that maps the names of solvers to whether or not they are duplicates in solverList.
+<span class="nc" id="L1210">				HashMap&lt;String, Boolean&gt; solverNameDuplicateMap = createNameDuplicateMap(solverNames);</span>
+
+
+<span class="nc" id="L1213">				log.debug(method + &quot;: Number of solvers in space=&quot; + solverList.size());</span>
+<span class="nc bnc" id="L1214" title="All 2 branches missed.">				for (Solver s : solverList) {</span>
+<span class="nc bnc" id="L1215" title="All 4 branches missed.">					if (s.isDownloadable() || s.getUserId() == uid) {</span>
+<span class="nc" id="L1216">						File solverFile = new File(s.getPath());</span>
+						String zipFileName;
+						// Use a different file structure based on whether we're using id directories or not
+<span class="nc bnc" id="L1219" title="All 2 branches missed.">						if (useIdDirectories) {</span>
+<span class="nc" id="L1220">							zipFileName = dest + File.separator + &quot;solvers&quot; + File.separator + s.getId();</span>
+						} else {
+<span class="nc" id="L1222">							boolean isDuplicate = solverNameDuplicateMap.get(s.getName());</span>
+<span class="nc" id="L1223">							zipFileName = dest + File.separator + &quot;solvers&quot; + File.separator;</span>
+<span class="nc bnc" id="L1224" title="All 2 branches missed.">							if (isDuplicate) {</span>
+								// Since the id directory is not being used we have to check to see if there are
+								// solvers with the same name. Append their unique ids if there are.
+<span class="nc" id="L1227">								zipFileName += &quot;__starexec_disambiguate&quot; + File.separator + s.getId() + File.separator;</span>
+							}
+<span class="nc" id="L1229">							zipFileName += s.getName();</span>
+						}
+<span class="nc" id="L1231">						ArchiveUtil.addDirToArchive(stream, solverFile, zipFileName);</span>
+					}
+<span class="nc" id="L1233">				}</span>
+			}
+
+			//if we aren't getting subspaces, we're done
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">			if (!recursive) {</span>
+<span class="nc" id="L1238">				return;</span>
+			}
+
+<span class="nc" id="L1241">			List&lt;Space&gt; subspaceList = Spaces.getSubSpaces(space.getId(), uid);</span>
+<span class="nc bnc" id="L1242" title="All 2 branches missed.">			if (subspaceList != null) {</span>
+<span class="nc bnc" id="L1243" title="All 2 branches missed.">				for (Space s : subspaceList) {</span>
+<span class="nc" id="L1244">					String subDir = dest + File.separator + s.getName();</span>
+					//include solvers is always false except at the top level
+<span class="nc" id="L1246">					storeSpaceHierarchy(s, uid, subDir, includeBenchmarks, false, recursive, stream, useIdDirectories);</span>
+<span class="nc" id="L1247">				}</span>
+			}
+		}
+<span class="nc" id="L1250">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

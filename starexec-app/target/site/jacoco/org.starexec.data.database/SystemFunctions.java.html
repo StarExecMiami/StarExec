@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SystemFunctions.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">SystemFunctions.java</span></div><h1>SystemFunctions.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.data.to.AnalyticsResults;
+import org.starexec.logger.StarLogger;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Date;
+import java.util.List;
+
+/**
+ * Thin DAO wrappers for miscellaneous system-level SQL functions.
+ */
+<span class="nc" id="L16">public class SystemFunctions {</span>
+<span class="nc" id="L17">    private static final StarLogger log = StarLogger.getLogger(SystemFunctions.class);</span>
+
+    public static void rebuildSolver(int solverId) throws SQLException {
+<span class="nc" id="L20">        final String method = &quot;rebuildSolver&quot;;</span>
+<span class="nc" id="L21">        Connection con = null;</span>
+<span class="nc" id="L22">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L24">            con = Common.getConnection();</span>
+<span class="nc" id="L25">            ps = con.prepareStatement(&quot;SELECT starexec.RebuildSolver(?)&quot;);</span>
+<span class="nc" id="L26">            ps.setInt(1, solverId);</span>
+<span class="nc" id="L27">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L28">        } catch (SQLException e) {</span>
+<span class="nc" id="L29">            throw e;</span>
+<span class="nc" id="L30">        } catch (Exception e) {</span>
+<span class="nc" id="L31">            log.error(method, e.getMessage(), e);</span>
+<span class="nc" id="L32">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L34">            Common.safeClose(ps);</span>
+<span class="nc" id="L35">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L37">    }</span>
+
+    public static boolean freezePrimitives() throws SQLException {
+<span class="nc" id="L40">        final String method = &quot;freezePrimitives&quot;;</span>
+<span class="nc" id="L41">        Connection con = null;</span>
+<span class="nc" id="L42">        PreparedStatement ps = null;</span>
+<span class="nc" id="L43">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L45">            con = Common.getConnection();</span>
+<span class="nc" id="L46">            ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetFreezePrimitives()&quot;);</span>
+<span class="nc" id="L47">            results = ps.executeQuery();</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">            if (results.next()) {</span>
+<span class="nc" id="L49">                return results.getBoolean(&quot;freeze_primitives&quot;);</span>
+            }
+<span class="nc" id="L51">            return false;</span>
+<span class="nc" id="L52">        } catch (SQLException e) {</span>
+<span class="nc" id="L53">            throw e;</span>
+<span class="nc" id="L54">        } catch (Exception e) {</span>
+<span class="nc" id="L55">            log.error(method, e.getMessage(), e);</span>
+<span class="nc" id="L56">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L58">            Common.safeClose(results);</span>
+<span class="nc" id="L59">            Common.safeClose(ps);</span>
+<span class="nc" id="L60">            Common.safeClose(con);</span>
+        }
+    }
+
+    public static void setReadOnly(boolean readOnly) throws SQLException {
+<span class="nc" id="L65">        final String method = &quot;setReadOnly&quot;;</span>
+<span class="nc" id="L66">        Connection con = null;</span>
+<span class="nc" id="L67">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L69">            con = Common.getConnection();</span>
+<span class="nc" id="L70">            ps = con.prepareStatement(&quot;SELECT starexec.SetReadOnly(?)&quot;);</span>
+<span class="nc" id="L71">            ps.setBoolean(1, readOnly);</span>
+<span class="nc" id="L72">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L73">        } catch (SQLException e) {</span>
+<span class="nc" id="L74">            throw e;</span>
+<span class="nc" id="L75">        } catch (Exception e) {</span>
+<span class="nc" id="L76">            log.error(method, e.getMessage(), e);</span>
+<span class="nc" id="L77">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L79">            Common.safeClose(ps);</span>
+<span class="nc" id="L80">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L82">    }</span>
+
+    public static boolean getReadOnly() throws SQLException {
+<span class="nc" id="L85">        final String method = &quot;getReadOnly&quot;;</span>
+<span class="nc" id="L86">        Connection con = null;</span>
+<span class="nc" id="L87">        PreparedStatement ps = null;</span>
+<span class="nc" id="L88">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L90">            con = Common.getConnection();</span>
+<span class="nc" id="L91">            ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetReadOnly()&quot;);</span>
+<span class="nc" id="L92">            results = ps.executeQuery();</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            if (results.next()) {</span>
+<span class="nc" id="L94">                return results.getBoolean(&quot;read_only&quot;);</span>
+            }
+<span class="nc" id="L96">            return false;</span>
+<span class="nc" id="L97">        } catch (SQLException e) {</span>
+<span class="nc" id="L98">            throw e;</span>
+<span class="nc" id="L99">        } catch (Exception e) {</span>
+<span class="nc" id="L100">            log.error(method, e.getMessage(), e);</span>
+<span class="nc" id="L101">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L103">            Common.safeClose(results);</span>
+<span class="nc" id="L104">            Common.safeClose(ps);</span>
+<span class="nc" id="L105">            Common.safeClose(con);</span>
+        }
+    }
+
+    public static void setFreezePrimitives(boolean frozen) throws SQLException {
+<span class="nc" id="L110">        final String method = &quot;setFreezePrimitives&quot;;</span>
+<span class="nc" id="L111">        Connection con = null;</span>
+<span class="nc" id="L112">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L114">            con = Common.getConnection();</span>
+<span class="nc" id="L115">            ps = con.prepareStatement(&quot;SELECT starexec.SetFreezePrimitives(?)&quot;);</span>
+<span class="nc" id="L116">            ps.setBoolean(1, frozen);</span>
+<span class="nc" id="L117">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L118">        } catch (SQLException e) {</span>
+<span class="nc" id="L119">            throw e;</span>
+<span class="nc" id="L120">        } catch (Exception e) {</span>
+<span class="nc" id="L121">            log.error(method, e.getMessage(), e);</span>
+<span class="nc" id="L122">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L124">            Common.safeClose(ps);</span>
+<span class="nc" id="L125">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L127">    }</span>
+
+    public static List&lt;AnalyticsResults&gt; getAnalyticsForDateRange(Date start, Date end) throws SQLException {
+<span class="nc" id="L130">        final String method = &quot;getAnalyticsForDateRange&quot;;</span>
+<span class="nc" id="L131">        Connection con = null;</span>
+<span class="nc" id="L132">        PreparedStatement ps = null;</span>
+<span class="nc" id="L133">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L135">            con = Common.getConnection();</span>
+<span class="nc" id="L136">            ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAnalyticsForDateRange(?, ?)&quot;);</span>
+<span class="nc" id="L137">            ps.setDate(1, start);</span>
+<span class="nc" id="L138">            ps.setDate(2, end);</span>
+<span class="nc" id="L139">            results = ps.executeQuery();</span>
+<span class="nc" id="L140">            return AnalyticsResults.listFromResults(results);</span>
+<span class="nc" id="L141">        } catch (SQLException e) {</span>
+<span class="nc" id="L142">            throw e;</span>
+<span class="nc" id="L143">        } catch (Exception e) {</span>
+<span class="nc" id="L144">            log.error(method, e.getMessage(), e);</span>
+<span class="nc" id="L145">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L147">            Common.safeClose(results);</span>
+<span class="nc" id="L148">            Common.safeClose(ps);</span>
+<span class="nc" id="L149">            Common.safeClose(con);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

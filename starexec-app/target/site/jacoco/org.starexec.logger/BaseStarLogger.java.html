@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BaseStarLogger.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.logger</a> &gt; <span class="el_source">BaseStarLogger.java</span></div><h1>BaseStarLogger.java</h1><pre class="source lang-java linenums">package org.starexec.logger;
+
+import ch.qos.logback.classic.Level;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Created by agieg on 2/10/2017.
+ */
+public abstract class BaseStarLogger {
+    protected final Logger log;
+    protected final String name;
+    private static final String methodSeparator = &quot; - &quot;;
+
+<span class="fc" id="L15">    protected BaseStarLogger(Class&lt;?&gt; clazz) {</span>
+
+<span class="fc" id="L17">        log = LoggerFactory.getLogger(clazz);</span>
+<span class="fc" id="L18">        this.name = clazz.getName();</span>
+<span class="fc" id="L19">    }</span>
+
+<span class="nc" id="L21">    protected BaseStarLogger(String name) {</span>
+<span class="nc" id="L22">        log = LoggerFactory.getLogger(name);</span>
+<span class="nc" id="L23">        this.name = name;</span>
+<span class="nc" id="L24">    }</span>
+
+<span class="nc" id="L26">    protected BaseStarLogger(Logger log) {</span>
+<span class="nc" id="L27">        this.log = log;</span>
+<span class="nc" id="L28">        this.name = log.getName();</span>
+<span class="nc" id="L29">    }</span>
+
+    public static void turnOffLogging() {
+<span class="nc" id="L32">	((ch.qos.logback.classic.Logger)LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).setLevel(Level.OFF);</span>
+<span class="nc" id="L33">    }</span>
+
+    public String getName() {
+<span class="nc" id="L36">        return log.getName();</span>
+    }
+
+    public void setLevel(StarLevel level) {
+<span class="nc" id="L40">        ((ch.qos.logback.classic.Logger)log).setLevel(level.get());</span>
+<span class="nc" id="L41">    }</span>
+
+    public void entry(String method) {
+<span class="nc" id="L44">        log.debug(prefix(method) + &quot;Entering method &quot; + method + &quot;.&quot;);</span>
+<span class="nc" id="L45">    }</span>
+    public void exit(String method) {
+<span class="nc" id="L47">        log.debug(prefix(method)+&quot;Leaving method &quot;+method+&quot;.&quot;);</span>
+<span class="nc" id="L48">    }</span>
+
+    public void debug(final String message) {
+<span class="fc" id="L51">        log(StarLevel.DEBUG, null, message, null);</span>
+<span class="fc" id="L52">    }</span>
+    public void debug(final String method, final String message) {
+<span class="nc" id="L54">        log(StarLevel.DEBUG, method, message, null);</span>
+<span class="nc" id="L55">    }</span>
+    public void debug(final String message, final Throwable t) {
+<span class="nc" id="L57">        log(StarLevel.DEBUG, null, message, t);</span>
+<span class="nc" id="L58">    }</span>
+    public void debug(final String method, final String message, final Throwable t) {
+<span class="nc" id="L60">        log(StarLevel.DEBUG, method, message, t);</span>
+<span class="nc" id="L61">    }</span>
+
+    public void info(final String method, final String message) {
+<span class="nc" id="L64">        log(StarLevel.INFO, method, message, null);</span>
+<span class="nc" id="L65">    }</span>
+    public void info(final String message) {
+<span class="fc" id="L67">        log(StarLevel.INFO, null, message, null);</span>
+<span class="fc" id="L68">    }</span>
+    public void info(final String message, final Throwable t) {
+<span class="nc" id="L70">        log(StarLevel.INFO, null, message, t);</span>
+<span class="nc" id="L71">    }</span>
+    public void info(final String method, final String message, final Throwable t) {
+<span class="nc" id="L73">        log(StarLevel.INFO, method, message, t);</span>
+<span class="nc" id="L74">    }</span>
+
+    public void trace(final String method, final String message) {
+<span class="nc" id="L77">        log(StarLevel.TRACE, method, message, null);</span>
+<span class="nc" id="L78">    }</span>
+    public void trace(final String message) {
+<span class="nc" id="L80">        log(StarLevel.TRACE, null, message, null);</span>
+<span class="nc" id="L81">    }</span>
+    public void trace(final String message, final Throwable t) {
+<span class="nc" id="L83">        log(StarLevel.TRACE, null, message, t);</span>
+<span class="nc" id="L84">    }</span>
+    public void trace(final String method, final String message, final Throwable t) {
+<span class="nc" id="L86">        log(StarLevel.TRACE, method, message, t);</span>
+<span class="nc" id="L87">    }</span>
+
+
+    public void warn(final String method, final String message) {
+<span class="nc" id="L91">        log(StarLevel.WARN, method, message, null);</span>
+<span class="nc" id="L92">    }</span>
+    public void warn(final String message) {
+<span class="fc" id="L94">        log(StarLevel.WARN, null, message, null);</span>
+<span class="fc" id="L95">    }</span>
+    public void warn(final String method, final String message, final Throwable t) {
+<span class="nc" id="L97">        log(StarLevel.WARN, method, message, t);</span>
+<span class="nc" id="L98">    }</span>
+    public void warn(final String message, final Throwable t) {
+<span class="nc" id="L100">        log(StarLevel.WARN, null, message, t);</span>
+<span class="nc" id="L101">    }</span>
+
+    public void error(final String method, final String message) {
+<span class="nc" id="L104">        log(StarLevel.ERROR, method, message, null);</span>
+<span class="nc" id="L105">    }</span>
+    public void error(final String message) {
+<span class="fc" id="L107">        log(StarLevel.ERROR, null, message, null);</span>
+<span class="fc" id="L108">    }</span>
+    public void error(final String method, final String message, final Throwable t) {
+<span class="nc" id="L110">        log(StarLevel.ERROR, method, message, t);</span>
+<span class="nc" id="L111">    }</span>
+    public void error(final String message, final Throwable t) {
+<span class="fc" id="L113">        log(StarLevel.ERROR, null, message, t);</span>
+<span class="fc" id="L114">    }</span>
+
+    public void fatal(final String method, final String message, final Throwable t) {
+<span class="nc" id="L117">        log(StarLevel.ERROR, method, message, t);</span>
+<span class="nc" id="L118">    }</span>
+    public void fatal(final String method, final String message) {
+<span class="nc" id="L120">        log(StarLevel.ERROR, method, message, null);</span>
+<span class="nc" id="L121">    }</span>
+    public void fatal(final String message) {
+<span class="nc" id="L123">        log(StarLevel.ERROR, null, message, null);</span>
+<span class="nc" id="L124">    }</span>
+    public void fatal(final String message, final Throwable t) {
+<span class="nc" id="L126">        log(StarLevel.ERROR, null, message, t);</span>
+<span class="nc" id="L127">    }</span>
+
+    protected void sendToLogger(StarLevel level, String message, Throwable t) {
+<span class="pc bpc" id="L130" title="4 of 8 branches missed.">        switch (level) {</span>
+            case ERROR:
+<span class="fc bfc" id="L132" title="All 2 branches covered.">                if (t != null) { log.error(message, t); } else { log.error(message); }</span>
+<span class="fc" id="L133">                break;</span>
+            case WARN:
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">                if (t != null) { log.warn(message, t); } else { log.warn(message); }</span>
+<span class="fc" id="L136">                break;</span>
+            case INFO:
+<span class="pc bpc" id="L138" title="1 of 2 branches missed.">                if (t != null) { log.info(message, t); } else { log.info(message); }</span>
+<span class="fc" id="L139">                break;</span>
+            case DEBUG:
+<span class="pc bpc" id="L141" title="1 of 2 branches missed.">                if (t != null) { log.debug(message, t); } else { log.debug(message); }</span>
+<span class="fc" id="L142">                break;</span>
+            case TRACE:
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                if (t != null) { log.trace(message, t); } else { log.trace(message); }</span>
+<span class="nc" id="L145">                break;</span>
+            case OFF:
+                // Do nothing
+<span class="nc" id="L148">                break;</span>
+            case ALL:
+<span class="nc bnc" id="L150" title="All 2 branches missed.">                if (t != null) { log.trace(message, t); } else { log.trace(message); }</span>
+                break;
+        }
+<span class="fc" id="L153">    }</span>
+
+    protected String getMessage(final String method, final String message, final Throwable t) {
+        String base;
+<span class="pc bpc" id="L157" title="2 of 4 branches missed.">        if (message != null &amp;&amp; !message.trim().isEmpty()) {</span>
+<span class="fc" id="L158">            base = message.trim();</span>
+<span class="nc bnc" id="L159" title="All 6 branches missed.">        } else if (t != null &amp;&amp; t.getMessage() != null &amp;&amp; !t.getMessage().trim().isEmpty()) {</span>
+<span class="nc" id="L160">            base = t.getMessage().trim();</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">        } else if (t != null) {</span>
+<span class="nc" id="L162">            base = t.getClass().getName();</span>
+        } else {
+<span class="nc" id="L164">            base = &quot;&lt;no message&gt;&quot;;</span>
+        }
+<span class="pc bpc" id="L166" title="1 of 2 branches missed.">        if (method != null) {</span>
+<span class="nc" id="L167">            return prefix(method) + base;</span>
+        }
+<span class="fc" id="L169">        return base;</span>
+    }
+
+    protected abstract void log(StarLevel level, String method, String message, Throwable t);
+
+    /**
+     * Builds the prefix that appears at the beginning of each message.
+     */
+    protected static String prefix(String method) {
+<span class="nc" id="L178">        return method+methodSeparator;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

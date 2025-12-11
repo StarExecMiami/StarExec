@@ -1,0 +1,517 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Cluster.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Cluster.java</span></div><h1>Cluster.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.constants.R;
+import org.starexec.data.to.Job;
+import org.starexec.data.to.Queue;
+import org.starexec.data.to.WorkerNode;
+import org.starexec.logger.StarLogger;
+
+import java.sql.SQLException;
+import java.sql.PreparedStatement;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Handles all database interaction for cluster resources (queues and worker nodes)
+ */
+
+<span class="nc" id="L21">public class Cluster {</span>
+<span class="nc" id="L22">	private static final StarLogger log = StarLogger.getLogger(Cluster.class);</span>
+
+	/**
+	 * Gets the worker nodes from BACKEND and adds them to the database if they don't already exist. This must be done
+	 * BEFORE queues have been loaded as the queues will make associations to the nodes.
+	 */
+	public static synchronized void loadWorkerNodes() {
+
+<span class="nc" id="L30">		log.info(&quot;Loading worker nodes into the db&quot;);</span>
+		try {
+
+			// Set all nodes as inactive (we will update them to active as we see them)
+<span class="nc" id="L34">			Cluster.setNodeStatus(R.NODE_STATUS_INACTIVE);</span>
+
+<span class="nc" id="L36">			String[] lines = R.BACKEND.getWorkerNodes();</span>
+<span class="nc bnc" id="L37" title="All 2 branches missed.">			for (String name : lines) {</span>
+<span class="nc" id="L38">				log.trace(&quot;Updating info for node &quot; + name);</span>
+				// In the database, update the attributes for the node
+<span class="nc" id="L40">				Cluster.addNodeIfNotExists(name);</span>
+				// Set the node as active (because we just saw it!)
+<span class="nc" id="L42">				Cluster.setNodeStatus(name, R.NODE_STATUS_ACTIVE);</span>
+			}
+<span class="nc" id="L44">		} catch (Exception e) {</span>
+<span class="nc" id="L45">			log.warn(e.getMessage(), e);</span>
+<span class="nc" id="L46">		}</span>
+<span class="nc" id="L47">		log.info(&quot;Completed loading info for worker nodes into db&quot;);</span>
+<span class="nc" id="L48">	}</span>
+
+	/**
+	 * Loads the list of active queues on the system, loads their attributes into the database as well as their
+	 * associations to worker nodes that belong to each queue.
+	 */
+	public synchronized static void loadQueueDetails() {
+<span class="nc" id="L55">		log.info(&quot;Loading queue details into the db&quot;);</span>
+		try {
+
+			// Set all queues as inactive (we will set them as active when we see them)
+<span class="nc" id="L59">			Queues.setStatus(R.QUEUE_STATUS_INACTIVE);</span>
+
+<span class="nc" id="L61">			String[] queueNames = R.BACKEND.getQueues();</span>
+
+<span class="nc bnc" id="L63" title="All 2 branches missed.">			for (String name : queueNames) {</span>
+				// adds queue if it does not already exist: max timeouts are used by
+				// default for queues that don't exist
+<span class="nc" id="L66">				Queues.add(name, R.DEFAULT_MAX_TIMEOUT, R.DEFAULT_MAX_TIMEOUT);</span>
+
+				// Set the queue as active since we just saw it
+<span class="nc" id="L69">				Queues.setStatus(name, R.QUEUE_STATUS_ACTIVE);</span>
+			}
+			//Adds all the associations to the db
+<span class="nc" id="L72">			Cluster.setQueueAssociationsInDb();</span>
+<span class="nc" id="L73">		} catch (Exception e) {</span>
+<span class="nc" id="L74">			log.warn(e.getMessage(), e);</span>
+<span class="nc" id="L75">		}</span>
+<span class="nc" id="L76">		log.info(&quot;Completed loading the queue details into the db&quot;);</span>
+<span class="nc" id="L77">	}</span>
+
+	/**
+	 * Extracts queue-node association from BACKEND and puts it into the db.
+	 *
+	 * @author Benton McCune
+	 */
+	public static void setQueueAssociationsInDb() {
+<span class="nc" id="L85">		Queues.clearQueueAssociations();</span>
+<span class="nc" id="L86">		Map&lt;String, String&gt; assoc = R.BACKEND.getNodeQueueAssociations();</span>
+
+<span class="nc bnc" id="L88" title="All 2 branches missed.">		for (String node : assoc.keySet()) {</span>
+<span class="nc" id="L89">			Queues.associate(assoc.get(node), node);</span>
+<span class="nc" id="L90">		}</span>
+<span class="nc" id="L91">	}</span>
+
+	/**
+	 * Gets a worker node with detailed information (Id and name along with all attributes)
+	 *
+	 * @param con The connection to make the query with
+	 * @param id The id of the node to get detailed information for
+	 * @return A node object containing all of its attributes
+	 * @author Tyler Jensen
+	 */
+	protected static WorkerNode getNodeDetails(Connection con, int id) {
+<span class="nc" id="L102">		PreparedStatement ps = null;</span>
+<span class="nc" id="L103">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L105">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetNodeDetails(?)&quot;);</span>
+<span class="nc" id="L106">			ps.setInt(1, id);</span>
+<span class="nc" id="L107">			results = ps.executeQuery();</span>
+<span class="nc" id="L108">			WorkerNode node = new WorkerNode();</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L110">				node.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L111">				node.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L112">				node.setStatus(results.getString(&quot;status&quot;));</span>
+			}
+
+<span class="nc" id="L115">			return node;</span>
+<span class="nc" id="L116">		} catch (Exception e) {</span>
+<span class="nc" id="L117">			log.error(&quot;getNodeDetails&quot;, e);</span>
+		} finally {
+<span class="nc" id="L119">			Common.safeClose(results);</span>
+<span class="nc" id="L120">			Common.safeClose(ps);</span>
+		}
+
+<span class="nc" id="L123">		return null;</span>
+	}
+
+	/**
+	 * Gets a worker node with detailed information (Id and name aint with all attributes)
+	 *
+	 * @param id The id of the node to get detailed information for
+	 * @return A node object containing all of its attributes
+	 * @author Tyler Jensen
+	 */
+	public static WorkerNode getNodeDetails(int id) {
+<span class="nc" id="L134">		Connection con = null;</span>
+
+		try {
+<span class="nc" id="L137">			con = Common.getConnection();</span>
+<span class="nc" id="L138">			return Cluster.getNodeDetails(con, id);</span>
+<span class="nc" id="L139">		} catch (Exception e) {</span>
+<span class="nc" id="L140">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L142">			Common.safeClose(con);</span>
+		}
+
+<span class="nc" id="L145">		return null;</span>
+	}
+
+	/**
+	 * Gets all nodes in the cluster that belong to the queue
+	 *
+	 * @param id The id of the queue to get nodes for
+	 * @return A list of nodes that belong to the queue
+	 * @author Tyler Jensen
+	 */
+	public static List&lt;WorkerNode&gt; getNodesForQueue(int id) {
+<span class="nc" id="L156">		Connection con = null;</span>
+<span class="nc" id="L157">		PreparedStatement ps = null;</span>
+<span class="nc" id="L158">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L160">			con = Common.getConnection();</span>
+<span class="nc" id="L161">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetNodesForQueue(?)&quot;);</span>
+<span class="nc" id="L162">			ps.setInt(1, id);</span>
+<span class="nc" id="L163">			results = ps.executeQuery();</span>
+<span class="nc" id="L164">			List&lt;WorkerNode&gt; nodes = new LinkedList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L166" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L167">				WorkerNode n = new WorkerNode();</span>
+<span class="nc" id="L168">				n.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L169">				n.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L170">				n.setStatus(results.getString(&quot;status&quot;));</span>
+<span class="nc" id="L171">				nodes.add(n);</span>
+<span class="nc" id="L172">			}</span>
+
+<span class="nc" id="L174">			return nodes;</span>
+<span class="nc" id="L175">		} catch (Exception e) {</span>
+<span class="nc" id="L176">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L178">			Common.safeClose(con);</span>
+<span class="nc" id="L179">			Common.safeClose(ps);</span>
+<span class="nc" id="L180">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L183">		return null;</span>
+	}
+
+	/**
+	 * Updates the status of ALL worker nodes with the given status
+	 *
+	 * @param status The status to set for all nodes
+	 * @return True if the operation was a success, false otherwise.
+	 */
+	public static boolean setNodeStatus(String status) {
+<span class="nc" id="L193">		return Cluster.setNodeStatus(null, status);</span>
+	}
+
+	/**
+	 * Updates the status of the given node with the given status
+	 *
+	 * @param name the name of the node to set the status for
+	 * @param status the status to set for the node
+	 * @return True if the operation was a success, false otherwise.
+	 */
+	public static boolean setNodeStatus(String name, String status) {
+<span class="nc" id="L204">		Connection con = null;</span>
+<span class="nc" id="L205">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L207">			con = Common.getConnection();</span>
+
+<span class="nc bnc" id="L209" title="All 2 branches missed.">			if (name == null) {</span>
+				// If no name was supplied, apply to all nodes
+<span class="nc" id="L211">				ps = con.prepareStatement(&quot;SELECT starexec.UpdateAllNodeStatus(?)&quot;);</span>
+<span class="nc" id="L212">				ps.setString(1, status);</span>
+			} else {
+<span class="nc" id="L214">				ps = con.prepareStatement(&quot;SELECT starexec.UpdateNodeStatus(?, ?)&quot;);</span>
+<span class="nc" id="L215">				ps.setString(1, name);</span>
+<span class="nc" id="L216">				ps.setString(2, status);</span>
+			}
+<span class="nc" id="L218">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L220">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L224">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L226">			return true;</span>
+<span class="nc" id="L227">		} catch (Exception e) {</span>
+<span class="nc" id="L228">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L230">			Common.safeClose(con);</span>
+<span class="nc" id="L231">			Common.safeClose(ps);</span>
+		}
+
+<span class="nc bnc" id="L234" title="All 2 branches missed.">		log.debug(String.format(&quot;Status for node [%s] failed to be updated.&quot;, (name == null) ? &quot;ALL&quot; : name));</span>
+<span class="nc" id="L235">		return false;</span>
+	}
+
+	/**
+	 * Removes a node from the database. This does not do anything to the backend.
+	 *
+	 * @param nodeId The ID of the node to remove
+	 */
+	public static void deleteNode(int nodeId) {
+<span class="nc" id="L244">		Connection con = null;</span>
+<span class="nc" id="L245">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L247">			con = Common.getConnection();</span>
+
+<span class="nc" id="L249">			ps = con.prepareStatement(&quot;SELECT starexec.DeleteNode(?)&quot;);</span>
+
+			// First, add the node (PostgreSQL will ignore this if it already exists)
+<span class="nc" id="L252">			ps.setInt(1, nodeId);</span>
+<span class="nc" id="L253">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L255">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L259">				Common.safeClose(rs);</span>
+			}
+
+			// Done, commit the changes
+<span class="nc" id="L263">		} catch (Exception e) {</span>
+<span class="nc" id="L264">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L266">			Common.safeClose(con);</span>
+<span class="nc" id="L267">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L269">	}</span>
+
+	/**
+	 * Takes in a node name and adds it to the database if it doesn't already exist
+	 *
+	 * @param name The name of the worker node to update/add
+	 * @author Tyler Jensen
+	 */
+	public static void addNodeIfNotExists(String name) {
+<span class="nc" id="L278">		Connection con = null;</span>
+<span class="nc" id="L279">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L281">			con = Common.getConnection();</span>
+
+<span class="nc" id="L283">			ps = con.prepareStatement(&quot;SELECT starexec.AddNode(?)&quot;);</span>
+
+			// First, add the node (PostgreSQL will ignore this if it already exists)
+<span class="nc" id="L286">			ps.setString(1, name);</span>
+<span class="nc" id="L287">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L288" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L289">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L293">				Common.safeClose(rs);</span>
+			}
+
+			// Done, commit the changes
+<span class="nc" id="L297">			return;</span>
+<span class="nc" id="L298">		} catch (Exception e) {</span>
+<span class="nc" id="L299">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L301">			Common.safeClose(con);</span>
+<span class="nc" id="L302">			Common.safeClose(ps);</span>
+		}
+
+<span class="nc" id="L305">		log.debug(String.format(&quot;Node [%s] failed to be updated.&quot;, name));</span>
+<span class="nc" id="L306">	}</span>
+
+	/**
+	 * Gets all the jobs running on the given queue
+	 *
+	 * @param queueId The ID of the queue to check
+	 * @return The list of jobs running, or null on error
+	 */
+	public static List&lt;Job&gt; getJobsRunningOnQueue(int queueId) {
+<span class="nc" id="L315">		Connection con = null;</span>
+<span class="nc" id="L316">		PreparedStatement ps = null;</span>
+<span class="nc" id="L317">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L319">			con = Common.getConnection();</span>
+
+<span class="nc" id="L321">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetJobsRunningOnQueue(?)&quot;);</span>
+<span class="nc" id="L322">			ps.setInt(1, queueId);</span>
+
+<span class="nc" id="L324">			results = ps.executeQuery();</span>
+<span class="nc" id="L325">			List&lt;Job&gt; jobs = new LinkedList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L327" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L328">				Job j = new Job();</span>
+<span class="nc" id="L329">				j.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L330">				j.setUserId(results.getInt(&quot;user_id&quot;));</span>
+<span class="nc" id="L331">				j.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L332">				int queue_Id = results.getInt(&quot;queue_id&quot;);</span>
+<span class="nc" id="L333">				Queue queue = Queues.get(queue_Id);</span>
+<span class="nc" id="L334">				j.setQueue(queue);</span>
+<span class="nc" id="L335">				jobs.add(j);</span>
+<span class="nc" id="L336">			}</span>
+
+<span class="nc" id="L338">			return jobs;</span>
+<span class="nc" id="L339">		} catch (Exception e) {</span>
+<span class="nc" id="L340">			log.error(&quot;getJobsRunningOnQueue&quot;, e);</span>
+		} finally {
+<span class="nc" id="L342">			Common.safeClose(con);</span>
+<span class="nc" id="L343">			Common.safeClose(ps);</span>
+<span class="nc" id="L344">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L346">		return null;</span>
+	}
+
+	/**
+	 * Gets all nodes in the system
+	 *
+	 * @return A list of nodes, or null on error
+	 */
+	public static List&lt;WorkerNode&gt; getAllNodes() {
+<span class="nc" id="L355">		log.debug(&quot;Starting getAllNodes...&quot;);</span>
+<span class="nc" id="L356">		Connection con = null;</span>
+<span class="nc" id="L357">		PreparedStatement ps = null;</span>
+<span class="nc" id="L358">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L360">			con = Common.getConnection();</span>
+
+<span class="nc" id="L362">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAllNodes()&quot;);</span>
+<span class="nc" id="L363">			results = ps.executeQuery();</span>
+<span class="nc" id="L364">			List&lt;WorkerNode&gt; nodes = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L366">				WorkerNode n = new WorkerNode();</span>
+<span class="nc" id="L367">				n.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L368">				n.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L369">				n.setStatus(results.getString(&quot;status&quot;));</span>
+<span class="nc" id="L370">				nodes.add(n);</span>
+<span class="nc" id="L371">			}</span>
+<span class="nc" id="L372">			return nodes;</span>
+<span class="nc" id="L373">		} catch (Exception e) {</span>
+<span class="nc" id="L374">			log.error(&quot;getAllNodes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L376">			Common.safeClose(con);</span>
+<span class="nc" id="L377">			Common.safeClose(ps);</span>
+<span class="nc" id="L378">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L380">		return null;</span>
+	}
+
+	/**
+	 * Gets all of the nodes that are NOT associated with the given queue
+	 *
+	 * @param queueId The ID of the queue
+	 * @return The list of nodes not attached to the given queue, or null on error
+	 */
+	public static List&lt;WorkerNode&gt; getNonAttachedNodes(int queueId) {
+<span class="nc" id="L390">		log.debug(&quot;Starting getNonAttachedNodes...&quot;);</span>
+<span class="nc" id="L391">		Connection con = null;</span>
+<span class="nc" id="L392">		PreparedStatement ps = null;</span>
+<span class="nc" id="L393">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L395">			con = Common.getConnection();</span>
+
+<span class="nc" id="L397">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetNonAttachedNodes(?)&quot;);</span>
+<span class="nc" id="L398">			ps.setInt(1, queueId);</span>
+<span class="nc" id="L399">			results = ps.executeQuery();</span>
+<span class="nc" id="L400">			List&lt;WorkerNode&gt; nodes = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L402">				WorkerNode n = new WorkerNode();</span>
+<span class="nc" id="L403">				n.setId(results.getInt(&quot;node_id&quot;));</span>
+<span class="nc" id="L404">				n.setName(results.getString(&quot;node_name&quot;));</span>
+<span class="nc" id="L405">				n.setStatus(results.getString(&quot;node_status&quot;));</span>
+<span class="nc" id="L406">				Queue q = new Queue();</span>
+<span class="nc" id="L407">				q.setName(results.getString(&quot;queue_name&quot;));</span>
+<span class="nc" id="L408">				q.setId(results.getInt(&quot;queue_id&quot;));</span>
+
+				//we are displaying this data in a table, so we don't want a null name
+<span class="nc bnc" id="L411" title="All 2 branches missed.">				if (q.getName() == null) {</span>
+<span class="nc" id="L412">					q.setName(&quot;None&quot;);</span>
+				}
+<span class="nc" id="L414">				n.setQueue(q);</span>
+<span class="nc" id="L415">				nodes.add(n);</span>
+<span class="nc" id="L416">			}</span>
+<span class="nc" id="L417">			return nodes;</span>
+<span class="nc" id="L418">		} catch (Exception e) {</span>
+<span class="nc" id="L419">			log.error(&quot;getNonAttachedNodes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L421">			Common.safeClose(con);</span>
+<span class="nc" id="L422">			Common.safeClose(ps);</span>
+<span class="nc" id="L423">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L425">		return null;</span>
+	}
+
+	/**
+	 * Gets the queue that owns the given node
+	 *
+	 * @param nodeId The node to check
+	 * @return The queue, or null if none exists or on error.
+	 */
+	public static Queue getQueueForNode(int nodeId) {
+<span class="nc" id="L435">		Connection con = null;</span>
+<span class="nc" id="L436">		PreparedStatement ps = null;</span>
+<span class="nc" id="L437">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L439">			con = Common.getConnection();</span>
+
+<span class="nc" id="L441">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetQueueForNode(?)&quot;);</span>
+<span class="nc" id="L442">			ps.setInt(1, nodeId);</span>
+<span class="nc" id="L443">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L445">				Queue q = new Queue();</span>
+<span class="nc" id="L446">				q.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L447">				q.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L448">				q.setStatus(results.getString(&quot;status&quot;));</span>
+<span class="nc" id="L449">				return q;</span>
+			}
+<span class="nc" id="L451">		} catch (Exception e) {</span>
+<span class="nc" id="L452">			log.error(&quot;getQueueForNode&quot;, e);</span>
+		} finally {
+<span class="nc" id="L454">			Common.safeClose(con);</span>
+<span class="nc" id="L455">			Common.safeClose(ps);</span>
+<span class="nc" id="L456">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L458">		return null;</span>
+	}
+
+	/**
+	 * Retrieves the ID of a node given its name.
+	 *
+	 * @param nodeName The name of the node to check
+	 * @return The ID of the node, or -1 if it couldn't be found
+	 */
+	public static int getNodeIdByName(String nodeName) {
+<span class="nc" id="L468">		Connection con = null;</span>
+<span class="nc" id="L469">		PreparedStatement ps = null;</span>
+<span class="nc" id="L470">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L472">			con = Common.getConnection();</span>
+<span class="nc" id="L473">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetNodeIdByName(?)&quot;);</span>
+<span class="nc" id="L474">			ps.setString(1, nodeName);</span>
+<span class="nc" id="L475">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L476" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L477">				return results.getInt(&quot;id&quot;);</span>
+			}
+<span class="nc" id="L479">		} catch (Exception e) {</span>
+<span class="nc" id="L480">			log.error(&quot;getNodeIdByName&quot;, e);</span>
+		} finally {
+<span class="nc" id="L482">			Common.safeClose(con);</span>
+<span class="nc" id="L483">			Common.safeClose(ps);</span>
+<span class="nc" id="L484">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L486">		return -1;</span>
+	}
+
+	/**
+	 * Gets the name of a node given its ID
+	 *
+	 * @param id The id of the node to get the name of
+	 * @return The string name of the node, or null if it could not be found
+	 */
+	public static String getNodeNameById(int id) {
+<span class="nc" id="L496">		Connection con = null;</span>
+<span class="nc" id="L497">		PreparedStatement ps = null;</span>
+<span class="nc" id="L498">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L500">			con = Common.getConnection();</span>
+<span class="nc" id="L501">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetNodeNameById(?)&quot;);</span>
+<span class="nc" id="L502">			ps.setInt(1, id);</span>
+<span class="nc" id="L503">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L505">				return results.getString(&quot;name&quot;);</span>
+			}
+<span class="nc" id="L507">		} catch (Exception e) {</span>
+<span class="nc" id="L508">			log.error(&quot;getNodeNameById&quot;, e);</span>
+		} finally {
+<span class="nc" id="L510">			Common.safeClose(con);</span>
+<span class="nc" id="L511">			Common.safeClose(ps);</span>
+<span class="nc" id="L512">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L514">		return null;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

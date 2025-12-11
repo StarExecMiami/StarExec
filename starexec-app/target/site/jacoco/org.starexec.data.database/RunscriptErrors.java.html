@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RunscriptErrors.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">RunscriptErrors.java</span></div><h1>RunscriptErrors.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.logger.StarLogger;
+import org.starexec.constants.R;
+import org.starexec.data.to.RunscriptError;
+
+import java.sql.Date;
+import java.sql.SQLException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.List;
+import java.util.ArrayList;
+
+/**
+ *
+ */
+public class RunscriptErrors {
+	private RunscriptErrors() {} // Class cannot be instantiated
+
+	// private static final StarLogger log = StarLogger.getLogger(Analytics.class);
+
+	public static int getCount(Date begin, Date end) throws SQLException {
+<span class="nc" id="L24">		Connection con = null;</span>
+<span class="nc" id="L25">		PreparedStatement ps = null;</span>
+<span class="nc" id="L26">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L28">			con = Common.getConnection();</span>
+<span class="nc" id="L29">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetRunscriptErrorsCount(?,?)&quot;);</span>
+<span class="nc" id="L30">			ps.setDate(1, begin);</span>
+<span class="nc" id="L31">			ps.setDate(2, end);</span>
+<span class="nc" id="L32">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L33" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L34">				return results.getInt(&quot;count&quot;);</span>
+			} else {
+<span class="nc" id="L36">				return 0;</span>
+			}
+		} finally {
+<span class="nc" id="L39">			Common.safeClose(results);</span>
+<span class="nc" id="L40">			Common.safeClose(ps);</span>
+<span class="nc" id="L41">			Common.safeClose(con);</span>
+		}
+	}
+
+	public static List&lt;RunscriptError&gt; getInRange(Date begin, Date end) throws SQLException {
+<span class="nc" id="L46">		Connection con = null;</span>
+<span class="nc" id="L47">		PreparedStatement ps = null;</span>
+<span class="nc" id="L48">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L50">			con = Common.getConnection();</span>
+<span class="nc" id="L51">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetRunscriptErrors(?,?)&quot;);</span>
+<span class="nc" id="L52">			ps.setDate(1, begin);</span>
+<span class="nc" id="L53">			ps.setDate(2, end);</span>
+<span class="nc" id="L54">			results = ps.executeQuery();</span>
+<span class="nc" id="L55">			final List&lt;RunscriptError&gt; l = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L57">				java.util.Date time = results.getTimestamp(&quot;time&quot;);</span>
+<span class="nc" id="L58">				String node = results.getString(&quot;node&quot;);</span>
+<span class="nc" id="L59">				int jobPair = results.getInt(&quot;job_pair_id&quot;);</span>
+<span class="nc" id="L60">				l.add(new RunscriptError(time, node, jobPair));</span>
+<span class="nc" id="L61">			}</span>
+<span class="nc" id="L62">			return l;</span>
+		} finally {
+<span class="nc" id="L64">			Common.safeClose(results);</span>
+<span class="nc" id="L65">			Common.safeClose(ps);</span>
+<span class="nc" id="L66">			Common.safeClose(con);</span>
+		}
+	}
+
+	public static String getUrl(Date begin, Date end) {
+<span class="nc" id="L71">		return R.STAREXEC_ROOT</span>
+			+ &quot;secure/admin/jobpairErrors.jsp?start=&quot;
+<span class="nc" id="L73">			+ begin.toString()</span>
+			+ &quot;&amp;end=&quot;
+<span class="nc" id="L75">			+ end.toString();</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

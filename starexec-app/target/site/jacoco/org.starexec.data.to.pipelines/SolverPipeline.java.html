@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SolverPipeline.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to.pipelines</a> &gt; <span class="el_source">SolverPipeline.java</span></div><h1>SolverPipeline.java</h1><pre class="source lang-java linenums">package org.starexec.data.to.pipelines;
+
+import org.starexec.data.to.Identifiable;
+import org.starexec.data.to.Nameable;
+import org.starexec.data.to.pipelines.PipelineDependency.PipelineInputType;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Class represents the top level of a solver pipeline
+ *
+ * @author Eric
+ */
+
+public class SolverPipeline extends Identifiable implements Nameable {
+	private int userId;
+	private String name;
+<span class="nc" id="L20">	private List&lt;PipelineStage&gt; stages = null;</span>
+	private Timestamp uploadDate;
+	private int primaryStageId;
+			//what is the id of the primary stage? Before addition to the database, stores primary stage NUMBER
+
+<span class="nc" id="L25">	public SolverPipeline() {</span>
+<span class="nc" id="L26">		stages = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L27">	}</span>
+
+	public int getUserId() {
+<span class="nc" id="L30">		return userId;</span>
+	}
+
+	public void setUserId(int id) {
+<span class="nc" id="L34">		this.userId = id;</span>
+<span class="nc" id="L35">	}</span>
+
+	public String getName() {
+<span class="nc" id="L38">		return name;</span>
+	}
+
+	public void setName(String name) {
+<span class="nc" id="L42">		this.name = name;</span>
+<span class="nc" id="L43">	}</span>
+
+	public Timestamp getUploadDate() {
+<span class="nc" id="L46">		return uploadDate;</span>
+	}
+
+	public void setUploadDate(Timestamp uploadDate) {
+<span class="nc" id="L50">		this.uploadDate = uploadDate;</span>
+<span class="nc" id="L51">	}</span>
+
+	public List&lt;PipelineStage&gt; getStages() {
+<span class="nc" id="L54">		return stages;</span>
+	}
+
+	public void setStages(List&lt;PipelineStage&gt; stages) {
+<span class="nc" id="L58">		this.stages = stages;</span>
+<span class="nc" id="L59">	}</span>
+
+	public void addStage(PipelineStage stage) {
+<span class="nc" id="L62">		this.stages.add(stage);</span>
+<span class="nc" id="L63">	}</span>
+
+	/**
+	 * Returns the number of benchmark inputs expected by this pipeline. This method requires that all stages and
+	 * dependencies are populated to work properly.
+	 *
+	 * @return
+	 */
+	public int getRequiredNumberOfInputs() {
+<span class="nc" id="L72">		int inputs = 0;</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">		for (PipelineStage stage : stages) {</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">			for (PipelineDependency dep : stage.getDependencies()) {</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">				if (dep.getType() == PipelineInputType.BENCHMARK) {</span>
+<span class="nc" id="L76">					inputs = Math.max(inputs, dep.getDependencyId());</span>
+				}
+<span class="nc" id="L78">			}</span>
+<span class="nc" id="L79">		}</span>
+
+<span class="nc" id="L81">		return inputs;</span>
+	}
+
+	public boolean usesDependencies() {
+<span class="nc bnc" id="L85" title="All 2 branches missed.">		for (PipelineStage stage : stages) {</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">			if (!stage.getDependencies().isEmpty()) {</span>
+<span class="nc" id="L87">				return true;</span>
+			}
+<span class="nc" id="L89">		}</span>
+
+<span class="nc" id="L91">		return false;</span>
+	}
+
+	public int getPrimaryStageNumber() {
+<span class="nc" id="L95">		return primaryStageId;</span>
+	}
+
+	public void setPrimaryStageNumber(int primaryStageId) {
+<span class="nc" id="L99">		this.primaryStageId = primaryStageId;</span>
+<span class="nc" id="L100">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

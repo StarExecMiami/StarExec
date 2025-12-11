@@ -1,0 +1,273 @@
+GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+StarExec Application,org.starexec.app,JobSpaceService,123,0,14,0,29,0,12,0,5,0
+StarExec Application,org.starexec.app,RESTHelpers.PermissionDetails,18,0,0,0,7,0,1,0,1,0
+StarExec Application,org.starexec.app,SessionFilter,317,0,52,0,82,0,34,0,8,0
+StarExec Application,org.starexec.app,Starexec,252,0,16,0,84,0,13,0,5,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},9,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},6,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},15,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},10,0,2,0,4,0,3,0,2,0
+StarExec Application,org.starexec.app,RESTHelpers.SpacePermPair,9,0,0,0,4,0,1,0,1,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},11,0,0,0,5,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},31,0,2,0,10,0,3,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},94,0,14,0,34,0,9,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},6,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},13,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},6,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},6,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},9,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},9,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},6,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},52,0,2,0,18,0,3,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},6,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},18,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},74,0,6,0,28,0,6,0,3,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},7,0,0,0,4,0,2,0,2,0
+StarExec Application,org.starexec.app,PeriodicTasks.new RobustRunnable() {...},29,0,4,0,10,0,4,0,2,0
+StarExec Application,org.starexec.app,RESTServices.SimpleMatrixElement,15,0,0,0,6,0,1,0,1,0
+StarExec Application,org.starexec.app,RESTServices,8882,255,976,23,2071,54,690,5,179,4
+StarExec Application,org.starexec.app,RESTServices.MatrixJson,9,0,0,0,4,0,1,0,1,0
+StarExec Application,org.starexec.app,PeriodicTasks,211,0,6,0,51,0,7,0,4,0
+StarExec Application,org.starexec.app,PeriodicTasks.PeriodicTask,303,0,0,0,44,0,22,0,22,0
+StarExec Application,org.starexec.app,RESTHelpers.CommunityDetails,18,0,0,0,7,0,1,0,1,0
+StarExec Application,org.starexec.app,RESTHelpers,4662,0,325,0,1043,0,253,0,87,0
+StarExec Application,org.starexec.data.to.pipelines,PipelineStage,49,0,0,0,20,0,12,0,12,0
+StarExec Application,org.starexec.data.to.pipelines,SolverPipeline,109,0,10,0,34,0,19,0,14,0
+StarExec Application,org.starexec.data.to.pipelines,PipelineDependency.PipelineInputType,36,0,3,0,10,0,6,0,4,0
+StarExec Application,org.starexec.data.to.pipelines,JoblineStage,103,89,6,0,39,30,28,10,25,10
+StarExec Application,org.starexec.data.to.pipelines,StageAttributes.SaveResultsOption,61,0,8,0,18,0,11,0,5,0
+StarExec Application,org.starexec.data.to.pipelines,PipelineDependency,31,0,0,0,13,0,9,0,9,0
+StarExec Application,org.starexec.data.to.pipelines,StageAttributes,123,0,0,0,50,0,25,0,25,0
+StarExec Application,org.starexec.data.to.pipelines,PairStageProcessorTriple,24,0,0,0,10,0,7,0,7,0
+StarExec Application,org.starexec.util.dataStructures,TreeNode.new Iterator() {...},39,0,2,0,7,0,5,0,4,0
+StarExec Application,org.starexec.util.dataStructures,TreeNode,119,0,10,0,32,0,17,0,12,0
+StarExec Application,org.starexec.data.to,AnalyticsResults,54,0,2,0,17,0,5,0,4,0
+StarExec Application,org.starexec.data.to,Permission,170,199,20,4,44,57,22,19,12,17
+StarExec Application,org.starexec.data.to,BenchmarkUploadStatus,101,0,0,0,44,0,29,0,29,0
+StarExec Application,org.starexec.data.to,Processor,89,25,5,1,31,9,22,3,19,3
+StarExec Application,org.starexec.data.to,Queue,75,22,0,0,26,7,18,2,18,2
+StarExec Application,org.starexec.data.to,SolverBuildStatus.SolverBuildStatusCode,61,0,5,0,12,0,8,0,4,0
+StarExec Application,org.starexec.data.to,Syntax,15,0,0,0,6,0,1,0,1,0
+StarExec Application,org.starexec.data.to,JobPair,364,128,38,4,119,41,76,9,56,8
+StarExec Application,org.starexec.data.to,ErrorLog,24,0,0,0,9,0,4,0,4,0
+StarExec Application,org.starexec.data.to,SolverComparison,96,0,14,0,16,0,14,0,7,0
+StarExec Application,org.starexec.data.to,JSTreeAttribute,30,0,4,0,9,0,3,0,1,0
+StarExec Application,org.starexec.data.to,Website.WebsiteType,45,0,4,0,11,0,7,0,4,0
+StarExec Application,org.starexec.data.to,QueueGraphData,119,0,8,0,29,0,13,0,9,0
+StarExec Application,org.starexec.data.to,Report,36,0,0,0,13,0,5,0,5,0
+StarExec Application,org.starexec.data.to,DefaultSettings,506,0,42,0,136,0,58,0,37,0
+StarExec Application,org.starexec.data.to,Website,46,0,0,0,14,0,10,0,10,0
+StarExec Application,org.starexec.data.to,Space,150,36,4,0,55,9,34,1,32,1
+StarExec Application,org.starexec.data.to,DefaultSettings.SettingType,36,0,3,0,10,0,6,0,4,0
+StarExec Application,org.starexec.data.to,MigrationStat,36,0,0,0,16,0,8,0,8,0
+StarExec Application,org.starexec.data.to,SpaceXMLUploadStatus,94,0,0,0,40,0,27,0,27,0
+StarExec Application,org.starexec.data.to,JSTreeItem,50,0,0,0,13,0,5,0,5,0
+StarExec Application,org.starexec.data.to,RunscriptError,20,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.data.to,SolverBuildStatus,64,0,12,0,23,0,19,0,10,0
+StarExec Application,org.starexec.data.to,Solver,87,31,1,1,36,12,25,5,24,5
+StarExec Application,org.starexec.data.to,JobSpace,31,0,0,0,14,0,9,0,9,0
+StarExec Application,org.starexec.data.to,Configuration,36,22,2,0,11,9,7,4,6,4
+StarExec Application,org.starexec.data.to,Benchmark,82,46,2,0,34,17,23,6,22,6
+StarExec Application,org.starexec.data.to,Conflict,18,0,0,0,7,0,1,0,1,0
+StarExec Application,org.starexec.data.to,Status,77,6,10,0,16,2,14,1,9,1
+StarExec Application,org.starexec.data.to,CommunityRequest,147,0,6,0,43,0,18,0,15,0
+StarExec Application,org.starexec.data.to,Status.StatusCode,26,364,7,29,7,44,10,22,4,10
+StarExec Application,org.starexec.data.to,WorkerNode,57,22,0,0,19,7,11,2,11,2
+StarExec Application,org.starexec.data.to,SolverStats,262,0,0,0,80,0,41,0,41,0
+StarExec Application,org.starexec.data.to,NodeClass,10,0,0,0,4,0,3,0,3,0
+StarExec Application,org.starexec.data.to,BenchmarkDependency,56,0,0,0,21,0,8,0,8,0
+StarExec Application,org.starexec.data.to,Status.StatCompleteness,0,15,0,0,0,2,0,1,0,1
+StarExec Application,org.starexec.data.to,Job,378,77,26,0,124,27,74,6,61,6
+StarExec Application,org.starexec.data.to,Identifiable,10,13,0,0,3,5,1,3,1,3
+StarExec Application,org.starexec.data.to,User,114,7,4,0,43,3,29,2,27,2
+StarExec Application,org.starexec.data.to,JobStatus,78,0,0,0,9,0,4,0,4,0
+StarExec Application,org.starexec.data.to,Solver.ExecutableType,54,0,5,0,12,0,8,0,4,0
+StarExec Application,org.starexec.backend.exception,BackendCommunicationException,49,0,2,0,13,0,7,0,6,0
+StarExec Application,org.starexec.backend.exception,BackendResourceException.ResourceType,70,0,0,0,13,0,3,0,3,0
+StarExec Application,org.starexec.backend.exception,BackendResourceException,319,0,20,0,45,0,23,0,13,0
+StarExec Application,org.starexec.backend.exception,BackendTransientException,109,0,16,0,32,0,15,0,7,0
+StarExec Application,org.starexec.backend.exception,BackendLogicException,235,0,36,0,48,0,26,0,8,0
+StarExec Application,org.starexec.servlets,LogoutServlet,17,0,2,0,6,0,3,0,2,0
+StarExec Application,org.starexec.servlets,Download,2830,0,285,0,669,0,168,0,23,0
+StarExec Application,org.starexec.servlets,UploadSpaceXML,310,0,20,0,70,0,17,0,7,0
+StarExec Application,org.starexec.servlets,UploadPicture,487,0,36,0,116,0,26,0,7,0
+StarExec Application,org.starexec.servlets,CssPropertiesServlet,36,0,0,0,11,0,2,0,2,0
+StarExec Application,org.starexec.servlets,DoJobPage,609,0,15,0,157,0,19,0,11,0
+StarExec Application,org.starexec.servlets,CreateJob,1356,0,210,0,306,0,116,0,10,0
+StarExec Application,org.starexec.servlets,AddSpace,697,0,86,0,148,0,48,0,5,0
+StarExec Application,org.starexec.servlets,SaveConfiguration,256,0,24,0,64,0,18,0,6,0
+StarExec Application,org.starexec.servlets,ProcessorManager,563,0,55,0,127,0,39,0,10,0
+StarExec Application,org.starexec.servlets,UploadBenchmark,1518,0,106,0,327,0,68,0,15,0
+StarExec Application,org.starexec.servlets,Verify,266,0,29,0,83,0,23,0,8,0
+StarExec Application,org.starexec.servlets,UploadConfiguration,509,0,90,0,115,0,52,0,7,0
+StarExec Application,org.starexec.servlets,GetPicture,547,0,41,0,123,0,28,0,6,0
+StarExec Application,org.starexec.servlets,BenchmarkProcessor,212,0,24,0,50,0,17,0,5,0
+StarExec Application,org.starexec.servlets,UploadSolver,1229,0,144,0,276,0,83,0,10,0
+StarExec Application,org.starexec.servlets,CreateQueue,292,0,30,0,69,0,20,0,5,0
+StarExec Application,org.starexec.servlets,RebuildSolver,195,0,10,0,57,0,9,0,4,0
+StarExec Application,org.starexec.servlets,AddSettingProfile,585,0,86,0,156,0,51,0,8,0
+StarExec Application,org.starexec.servlets,PasswordReset,222,0,24,0,61,0,17,0,5,0
+StarExec Application,org.starexec.servlets,CommunityRequester,181,0,16,0,51,0,14,0,6,0
+StarExec Application,org.starexec.servlets,AddJobPairs,379,0,36,0,94,0,23,0,5,0
+StarExec Application,org.starexec.servlets,Registration,597,0,46,0,169,0,29,0,6,0
+StarExec Application,org.starexec.servlets,MoveNodes,154,0,10,0,38,0,9,0,4,0
+StarExec Application,org.starexec.servlets,AssocCommunities,63,0,4,0,21,0,6,0,4,0
+StarExec Application,org.starexec.servlets,UploadJobXML,417,0,30,0,92,0,22,0,7,0
+StarExec Application,org.starexec.servlets,InvalidPath,11,0,0,0,5,0,3,0,3,0
+StarExec Application,org.starexec.data.security,BenchmarkSecurity,87,341,14,70,20,70,12,45,4,11
+StarExec Application,org.starexec.data.security,JobSecurity,767,0,144,0,167,0,100,0,28,0
+StarExec Application,org.starexec.data.security,UploadSecurity,55,0,6,0,15,0,7,0,4,0
+StarExec Application,org.starexec.data.security,QueueSecurity,144,0,26,0,32,0,20,0,7,0
+StarExec Application,org.starexec.data.security,UserSecurity,245,0,56,0,51,0,37,0,7,0
+StarExec Application,org.starexec.data.security,ValidatorStatusCode,28,51,0,0,11,22,5,7,5,7
+StarExec Application,org.starexec.data.security,SettingSecurity,424,0,96,0,94,0,54,0,6,0
+StarExec Application,org.starexec.data.security,WebsiteSecurity,200,0,41,0,41,0,28,0,6,0
+StarExec Application,org.starexec.data.security,ProcessorSecurity,162,0,32,0,36,0,21,0,5,0
+StarExec Application,org.starexec.data.security,SolverSecurity,646,0,116,0,140,0,82,0,24,0
+StarExec Application,org.starexec.data.security,SpaceSecurity,1785,4,338,0,399,1,209,1,40,1
+StarExec Application,org.starexec.data.security,GeneralSecurity,256,4,42,0,61,1,35,1,13,1
+StarExec Application,org.starexec.config,EnvironmentConfig,156,281,25,3,44,77,32,62,18,62
+StarExec Application,org.starexec.data.to.enums,ProcessorType,15,46,5,0,7,5,6,2,2,2
+StarExec Application,org.starexec.data.to.enums,CopyPrimitivesOption,66,0,14,0,10,0,14,0,7,0
+StarExec Application,org.starexec.data.to.enums,Primitive,125,0,9,0,19,0,12,0,4,0
+StarExec Application,org.starexec.data.to.enums,JobXmlType,27,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.data.to.enums,BenchmarkingFramework,0,15,0,0,0,2,0,1,0,1
+StarExec Application,org.starexec.data.to.enums,ConfigXmlAttribute,25,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.data.to.compare,SolverComparisonComparator,197,15,23,0,52,6,17,1,4,1
+StarExec Application,org.starexec.data.to.compare,SolverComparator,6,38,1,5,3,10,1,4,0,2
+StarExec Application,org.starexec.data.to.compare,BenchmarkComparator,6,30,1,3,3,8,1,3,0,2
+StarExec Application,org.starexec.data.to.compare,NameableComparators,15,0,0,0,5,0,3,0,3,0
+StarExec Application,org.starexec.data.to.compare,JoblineStageComparator,9,0,0,0,2,0,2,0,2,0
+StarExec Application,org.starexec.data.to.compare,JobPairComparator,50,126,7,12,19,35,7,10,0,5
+StarExec Application,org.starexec.command,ArgumentParser,1437,0,150,0,342,0,110,0,35,0
+StarExec Application,org.starexec.command,HTMLParser,7,184,5,25,3,52,6,17,1,7
+StarExec Application,org.starexec.command,PollJobData,24,0,0,0,8,0,2,0,2,0
+StarExec Application,org.starexec.command,C,84,0,0,0,9,0,1,0,1,0
+StarExec Application,org.starexec.command,Connection,4300,0,241,0,889,0,233,0,109,0
+StarExec Application,org.starexec.command,Shell,68,0,4,0,22,0,5,0,3,0
+StarExec Application,org.starexec.command,JsonHandler,67,38,4,2,22,6,7,2,5,1
+StarExec Application,org.starexec.command,CommandParser,1974,0,295,0,524,0,197,0,24,0
+StarExec Application,org.starexec.command,MessagePrinter,78,0,16,0,25,0,11,0,3,0
+StarExec Application,org.starexec.command,Status,236,0,0,0,41,0,3,0,3,0
+StarExec Application,org.starexec.command,CommandValidator,1751,0,223,0,316,0,147,0,33,0
+StarExec Application,org.starexec.command,CommandLogger,23,0,2,0,7,0,4,0,3,0
+StarExec Application,org.starexec.util,CsrfUtil,12,119,2,18,5,34,3,15,1,7
+StarExec Application,org.starexec.util,RobustRunnable,38,0,0,0,11,0,3,0,3,0
+StarExec Application,org.starexec.util,ResultSetColumnValidator.ColumnAccess,18,0,0,0,7,0,1,0,1,0
+StarExec Application,org.starexec.util,SessionUtil,240,4,36,0,73,1,29,1,11,1
+StarExec Application,org.starexec.util,ArchiveUtil,1344,0,118,0,350,0,79,0,20,0
+StarExec Application,org.starexec.util,LoggingManager,19,0,2,0,8,0,4,0,3,0
+StarExec Application,org.starexec.util,Hash,24,45,1,3,8,6,3,3,2,2
+StarExec Application,org.starexec.util,Validator,348,38,77,1,73,5,72,2,33,2
+StarExec Application,org.starexec.util,ResultSetColumnValidator,1289,0,138,0,270,0,92,0,23,0
+StarExec Application,org.starexec.util,JobToXMLer,815,0,56,0,166,0,38,0,10,0
+StarExec Application,org.starexec.util,BenchmarkURLGenerator,18,0,0,0,5,0,2,0,2,0
+StarExec Application,org.starexec.util,JspHelpers,1193,0,108,0,314,0,66,0,12,0
+StarExec Application,org.starexec.util,DOMHelper,55,0,10,0,13,0,9,0,4,0
+StarExec Application,org.starexec.util,JobUtil,1838,0,198,0,481,0,112,0,13,0
+StarExec Application,org.starexec.util,DataTablesQuery,88,27,4,0,30,12,15,7,13,7
+StarExec Application,org.starexec.util,Mail,991,0,40,0,227,0,37,0,17,0
+StarExec Application,org.starexec.util,BenchmarkTooltipGenerator,16,0,0,0,5,0,2,0,2,0
+StarExec Application,org.starexec.util,Util,2069,387,178,24,555,88,152,30,58,23
+StarExec Application,org.starexec.util,BatchUtil,1992,0,185,0,474,0,110,0,16,0
+StarExec Application,org.starexec.util,SystemTestStatus,18,0,0,0,9,0,6,0,6,0
+StarExec Application,org.starexec.util,Util.new ThreadFactory() {...},0,23,0,0,0,6,0,2,0,2
+StarExec Application,org.starexec.util,Timer,15,0,0,0,6,0,3,0,3,0
+StarExec Application,org.starexec.util,PaginationQueryBuilder,0,40,0,2,0,12,0,4,0,3
+StarExec Application,org.starexec.util,PartWrapper,97,0,6,0,21,0,11,0,8,0
+StarExec Application,org.starexec.util,PasswordHasher,3,36,0,6,1,12,1,6,1,3
+StarExec Application,org.starexec.util,NamedParameterStatement,243,0,16,0,58,0,25,0,17,0
+StarExec Application,org.starexec.util,XMLUtil,184,0,0,0,52,0,5,0,5,0
+StarExec Application,org.starexec.util,BatchUtil.Update,39,0,0,0,3,0,2,0,2,0
+StarExec Application,org.starexec.util,ArchiveUtil.ArchiveType,25,0,0,0,6,0,2,0,2,0
+StarExec Application,org.starexec.backend,AdaptivePollInterval,46,434,5,25,10,95,5,27,0,17
+StarExec Application,org.starexec.backend,LocalJobMonitor,675,99,72,4,190,31,53,6,15,6
+StarExec Application,org.starexec.backend,PodmanBackend,1796,452,167,21,450,140,103,28,17,20
+StarExec Application,org.starexec.backend,LocalJobMonitor.RunSolverStats,74,0,0,0,17,0,2,0,2,0
+StarExec Application,org.starexec.backend,LocalBackend.new ThreadFactory() {...},0,26,0,0,0,6,0,2,0,2
+StarExec Application,org.starexec.backend,ContainerJobMonitor.RunsolverStats,80,0,0,0,19,0,2,0,2,0
+StarExec Application,org.starexec.backend,KubernetesNativeBackend,393,0,24,0,104,0,36,0,24,0
+StarExec Application,org.starexec.backend,OARBackend,453,0,18,0,101,0,29,0,20,0
+StarExec Application,org.starexec.backend,GridEngineBackend,816,0,36,0,220,0,40,0,22,0
+StarExec Application,org.starexec.backend,LocalBackend.LocalJob.JobState,0,39,0,0,0,7,0,1,0,1
+StarExec Application,org.starexec.backend,ProcessTerminationManager,261,0,22,0,80,0,20,0,9,0
+StarExec Application,org.starexec.backend,PodmanBackend.CompletedContainerInfo,15,0,0,0,6,0,1,0,1,0
+StarExec Application,org.starexec.backend,BackendInitializer,73,0,6,0,28,0,9,0,6,0
+StarExec Application,org.starexec.backend,KubernetesBackend,1154,0,82,0,231,0,66,0,25,0
+StarExec Application,org.starexec.backend,KubernetesBackend.LocalJob,48,0,2,0,12,0,3,0,2,0
+StarExec Application,org.starexec.backend,ContainerJobMonitor,753,0,88,0,222,0,63,0,19,0
+StarExec Application,org.starexec.backend,ProcessTerminationManager.TerminationConfig,39,0,0,0,9,0,4,0,4,0
+StarExec Application,org.starexec.backend,LocalBackend.LocalJob,92,76,10,2,14,16,7,2,1,2
+StarExec Application,org.starexec.backend,KubernetesBackend.new RobustRunnable() {...},14,0,0,0,4,0,2,0,2,0
+StarExec Application,org.starexec.backend,KubernetesJobMonitor,134,0,8,0,46,0,14,0,10,0
+StarExec Application,org.starexec.backend,LocalBackend,653,918,88,68,155,221,85,30,14,23
+StarExec Application,org.starexec.logger,BaseStarLogger,262,100,22,12,66,28,43,12,27,8
+StarExec Application,org.starexec.logger,StarLevel,3,60,0,0,1,11,1,2,1,2
+StarExec Application,org.starexec.logger,StarLogger,21,61,2,8,4,15,6,7,4,4
+StarExec Application,org.starexec.logger,NonSavingStarLogger,9,19,0,0,3,5,2,3,2,3
+StarExec Application,org.starexec.util.matrixView,Matrix,671,0,36,0,147,0,40,0,22,0
+StarExec Application,org.starexec.util.matrixView,MatrixViewUtil,73,0,6,0,20,0,6,0,3,0
+StarExec Application,org.starexec.util.matrixView,MatrixElement,40,0,0,0,14,0,7,0,7,0
+StarExec Application,org.starexec.data.to.tuples,ConfigAttrMapPair,11,0,0,0,4,0,1,0,1,0
+StarExec Application,org.starexec.data.to.tuples,AttributesTableData,132,0,16,0,25,0,17,0,9,0
+StarExec Application,org.starexec.data.to.tuples,UploadSolverResult.UploadSolverStatus,46,0,0,0,8,0,2,0,2,0
+StarExec Application,org.starexec.data.to.tuples,HtmlStatusCodePair,9,0,0,0,4,0,1,0,1,0
+StarExec Application,org.starexec.data.to.tuples,AttributesTableRow,43,0,0,0,17,0,11,0,11,0
+StarExec Application,org.starexec.data.to.tuples,UploadSolverResult,18,0,0,0,7,0,1,0,1,0
+StarExec Application,org.starexec.data.to.tuples,PairIdJobId,2,45,1,5,1,8,1,5,0,3
+StarExec Application,org.starexec.data.to.tuples,TimePair,15,0,0,0,6,0,3,0,3,0
+StarExec Application,org.starexec.data.to.tuples,JobCount,9,0,0,0,4,0,1,0,1,0
+StarExec Application,org.starexec.data.to.tuples,SolverConfig,52,0,8,0,11,0,7,0,3,0
+StarExec Application,org.starexec.constants,PaginationQueries,261,0,2,0,43,0,5,0,4,0
+StarExec Application,org.starexec.constants,R,147,240,12,12,42,90,22,4,11,1
+StarExec Application,org.starexec.constants,Web,203,0,0,0,11,0,2,0,2,0
+StarExec Application,org.starexec.constants,R.DefaultSettingAttribute,63,0,0,0,11,0,1,0,1,0
+StarExec Application,org.starexec.constants,DB,7,0,0,0,2,0,1,0,1,0
+StarExec Application,org.starexec.migration,EmbeddedFlywayLauncher,165,0,26,0,46,0,15,0,2,0
+StarExec Application,org.starexec.data.database,Reports,354,0,18,0,104,0,20,0,11,0
+StarExec Application,org.starexec.data.database,Jobs,10803,12,692,1,2962,4,538,2,185,2
+StarExec Application,org.starexec.data.database,ErrorLogs,250,24,6,0,83,10,13,2,10,2
+StarExec Application,org.starexec.data.database,Queues,1755,0,97,0,594,0,101,0,49,0
+StarExec Application,org.starexec.data.database,Analytics,283,0,8,0,69,0,20,0,16,0
+StarExec Application,org.starexec.data.database,Common.new InvocationHandler() {...},77,0,16,0,18,0,10,0,2,0
+StarExec Application,org.starexec.data.database,Uploads,1684,4,76,0,525,1,81,1,39,1
+StarExec Application,org.starexec.data.database,Cluster,804,0,40,0,256,0,38,0,18,0
+StarExec Application,org.starexec.data.database,Statistics,2002,0,110,0,415,0,71,0,16,0
+StarExec Application,org.starexec.data.database,Notifications,211,0,4,0,73,0,8,0,6,0
+StarExec Application,org.starexec.data.database,StatusMessage,176,0,10,0,55,0,9,0,4,0
+StarExec Application,org.starexec.data.database,Benchmarks,5093,4,376,0,1388,1,296,1,107,1
+StarExec Application,org.starexec.data.database,AnonymousLinks.PrimitivesToAnonymize,21,0,0,0,2,0,1,0,1,0
+StarExec Application,org.starexec.data.database,Requests,927,0,16,0,287,0,32,0,24,0
+StarExec Application,org.starexec.data.database,PairsRerun,114,0,0,0,44,0,6,0,6,0
+StarExec Application,org.starexec.data.database,Settings,1295,0,102,0,391,0,84,0,33,0
+StarExec Application,org.starexec.data.database,Permissions,1043,43,80,0,299,14,57,2,17,2
+StarExec Application,org.starexec.data.database,SystemFunctions,274,0,4,0,101,0,10,0,8,0
+StarExec Application,org.starexec.data.database,ResultSetUtils,204,0,24,0,37,0,21,0,9,0
+StarExec Application,org.starexec.data.database,Solvers,4805,0,264,0,1314,0,228,0,95,0
+StarExec Application,org.starexec.data.database,Communities,924,0,54,0,246,0,46,0,19,0
+StarExec Application,org.starexec.data.database,RunscriptErrors,111,0,4,0,36,0,5,0,3,0
+StarExec Application,org.starexec.data.database,Syntaxes,115,0,8,0,37,0,10,0,6,0
+StarExec Application,org.starexec.data.database,JobPairs,4134,0,294,0,1193,0,228,0,78,0
+StarExec Application,org.starexec.data.database,Processors,832,4,42,0,251,1,41,1,20,1
+StarExec Application,org.starexec.data.database,AnonymousLinks,1029,0,66,0,312,0,68,0,33,0
+StarExec Application,org.starexec.data.database,Users.CacheEntry,20,0,2,0,5,0,3,0,2,0
+StarExec Application,org.starexec.data.database,Common,701,26,60,4,242,16,60,5,28,5
+StarExec Application,org.starexec.data.database,Websites,397,0,22,0,118,0,24,0,11,0
+StarExec Application,org.starexec.data.database,Pipelines,644,0,30,0,189,0,26,0,11,0
+StarExec Application,org.starexec.data.database,Statistics.new Comparator() {...},22,0,6,0,8,0,5,0,2,0
+StarExec Application,org.starexec.data.database,Users,2918,12,190,0,846,3,165,1,69,1
+StarExec Application,org.starexec.data.database,Logins,82,0,6,0,31,0,7,0,4,0
+StarExec Application,org.starexec.data.database,Spaces,5029,4,322,0,1409,1,271,1,110,1
+StarExec Application,org.starexec.data.database,Analytics.Data,25,0,2,0,8,0,3,0,2,0
+StarExec Application,org.starexec.jobs,ClearCacheManager,150,0,10,0,33,0,9,0,4,0
+StarExec Application,org.starexec.jobs,LoadBalanceMonitor.UserLoadData,48,79,10,6,10,21,9,7,2,6
+StarExec Application,org.starexec.jobs,LoadBalanceMonitor,247,224,27,27,54,44,23,20,7,9
+StarExec Application,org.starexec.jobs,JobManager.SchedulingState,12,0,0,0,5,0,1,0,1,0
+StarExec Application,org.starexec.jobs,JobManager,3188,0,228,0,743,0,148,0,34,0
+StarExec Application,org.starexec.jobs,ProcessingManager,34,0,6,0,12,0,5,0,2,0
+StarExec Application,org.starexec.exceptions,RESTException,46,0,0,0,11,0,4,0,4,0
+StarExec Application,org.starexec.exceptions,StarExecValidationException,9,0,0,0,4,0,2,0,2,0
+StarExec Application,org.starexec.exceptions,StarExecSecurityException,9,0,0,0,4,0,2,0,2,0
+StarExec Application,org.starexec.exceptions,StarExecDatabaseException,9,0,0,0,4,0,2,0,2,0
+StarExec Application,org.starexec.exceptions,BenchmarkDependencyMissingException,40,0,2,0,14,0,5,0,4,0
+StarExec Application,org.starexec.exceptions,StarExecException,9,0,0,0,4,0,2,0,2,0

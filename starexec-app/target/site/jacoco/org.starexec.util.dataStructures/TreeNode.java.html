@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TreeNode.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.util.dataStructures</a> &gt; <span class="el_source">TreeNode.java</span></div><h1>TreeNode.java</h1><pre class="source lang-java linenums">package org.starexec.util.dataStructures;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+
+public class TreeNode&lt;T&gt; implements Iterable&lt;TreeNode&lt;T&gt;&gt; {
+	private final T data;
+	private TreeNode&lt;T&gt; parent;
+	private final List&lt;TreeNode&lt;T&gt;&gt; children;
+
+	/**
+	 * Basic constructor that makes a new TreeNode.
+	 * @param nodeData the data to be contained in the TreeNode
+	 * @author Albert Giegerich
+	 */
+<span class="nc" id="L18">	public TreeNode(T nodeData) {</span>
+<span class="nc" id="L19">		data = nodeData;</span>
+<span class="nc" id="L20">		parent = null;</span>
+<span class="nc" id="L21">		children = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L22">	}</span>
+
+	/**
+	 * @return The data in the TreeNode.
+	 */
+	public T getData() {
+<span class="nc" id="L28">		return data;</span>
+	}
+
+	/**
+	 * @return the parent of the TreeNode
+	 */
+	public TreeNode&lt;T&gt; getParent() {
+<span class="nc" id="L35">		return parent;</span>
+	}
+
+	/**
+	 * @return the number of children that the TreeNode has
+	 * @author Albert Giegerich
+	 */
+	public int getNumberOfChildren() {
+<span class="nc" id="L43">		return children.size();</span>
+	}
+
+	/**
+	 * @param indexOfChildToGet the index of the child in this TreeNode's list to get
+	 * @return the child at indexOfChildToGet
+	 * @author Albert Giegerich
+	 */
+	public TreeNode&lt;T&gt; getChild(int indexOfChildToGet) {
+		try {
+<span class="nc" id="L53">			return children.get(indexOfChildToGet);</span>
+<span class="nc" id="L54">		} catch (IndexOutOfBoundsException e) {</span>
+<span class="nc" id="L55">			throw new IndexOutOfBoundsException(&quot;The TreeNode has less than &quot;+(indexOfChildToGet+1)+&quot; children.&quot;);</span>
+		}
+	}
+
+	/**
+	 * @param child the child to find and index for
+	 * @return the index of the input child
+	 * @author Albert Giegerich
+	 */
+	public int getIndexOfChild(TreeNode&lt;T&gt; child) {
+<span class="nc" id="L65">		return children.indexOf(child);</span>
+	}
+
+	/**
+	 * Adds a child to the list of children.
+	 * @param newChild the child to be added to the list of children.
+	 * @throws NullPointerException if the new child is null.
+	 * @author Albert Giegerich
+	 */
+	public void addChild(TreeNode&lt;T&gt; newChild) {
+<span class="nc bnc" id="L75" title="All 2 branches missed.">		if (newChild == null) {</span>
+<span class="nc" id="L76">			throw new NullPointerException(&quot;The new child to add cannot be null.&quot;);</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">		} else if (!this.hasChild(newChild)) {</span>
+<span class="nc" id="L78">			children.add(newChild);</span>
+<span class="nc" id="L79">			newChild.setParent(this);</span>
+		}
+<span class="nc" id="L81">	}</span>
+
+	/**
+	 * Removes a child from the list of children.
+	 * @param childToDelete the child to be deleted from the list of children
+	 * @author Albert Giegerich
+	 */
+	public boolean removeChild(TreeNode&lt;T&gt; childToDelete) {
+<span class="nc" id="L89">		boolean childRemoved  = children.remove(childToDelete);</span>
+<span class="nc" id="L90">		childToDelete.setParent(null);</span>
+<span class="nc" id="L91">		return childRemoved;</span>
+	}
+
+
+	/**
+	 * Deletes a child given it's index.
+	 * @param indexOfChildToDelete the index of the child in the list of children to delete
+	 * @return the child that was deleted
+	 * @throws IndexOutOfBoundsException if the index of the child to be deleted is out of bounds.
+	 * @author Albert Giegerich
+	 */
+	public TreeNode&lt;T&gt; removeChild(int indexOfChildToDelete) {
+		try {
+<span class="nc" id="L104">			TreeNode&lt;T&gt; child = children.remove(indexOfChildToDelete);</span>
+<span class="nc" id="L105">			child.setParent(null);</span>
+<span class="nc" id="L106">			return child;</span>
+<span class="nc" id="L107">		} catch (IndexOutOfBoundsException e) {</span>
+<span class="nc" id="L108">			throw new IndexOutOfBoundsException(&quot;The TreeNode has less than &quot;+(indexOfChildToDelete+1)+&quot; children.&quot;);</span>
+		}
+	}
+
+	
+	/**
+	 * Checks if the input TreeNode is a child of this TreeNode
+	 * @param possibleChild the TreeNode to test if it is a child.
+	 * @return true if possibleChild is a child of this TreeNode
+	 */
+	public boolean hasChild(TreeNode&lt;T&gt; possibleChild) {
+<span class="nc bnc" id="L119" title="All 4 branches missed.">		return possibleChild != null &amp;&amp; children.contains(possibleChild);</span>
+	}
+
+	@Override
+	public Iterator&lt;TreeNode&lt;T&gt;&gt; iterator() {
+<span class="nc" id="L124">		return new Iterator&lt;TreeNode&lt;T&gt;&gt;() {</span>
+<span class="nc" id="L125">			private int currentIndex = 0;</span>
+
+			@Override
+			public boolean hasNext() {
+<span class="nc bnc" id="L129" title="All 2 branches missed.">				return currentIndex &lt; getNumberOfChildren();</span>
+			}
+
+			@Override
+			public TreeNode&lt;T&gt; next() {
+<span class="nc" id="L134">				TreeNode&lt;T&gt; child = children.get(currentIndex);</span>
+<span class="nc" id="L135">				currentIndex += 1;</span>
+<span class="nc" id="L136">				return child;</span>
+			}
+
+			@Override
+			public void remove() {
+<span class="nc" id="L141">				throw new UnsupportedOperationException();</span>
+			}
+		};
+	}
+
+	/**
+	 * Sets the parent of this TreeNode.
+	 * @param newParent the new parent of this TreeNode
+	 */
+	private void setParent(TreeNode&lt;T&gt; newParent) {
+<span class="nc" id="L151">		parent = newParent;</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">		if (newParent != null) {</span>
+<span class="nc" id="L153">			newParent.addChild(this);</span>
+		}
+<span class="nc" id="L155">	}</span>
+
+	
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

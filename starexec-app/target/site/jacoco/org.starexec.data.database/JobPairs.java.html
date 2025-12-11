@@ -1,0 +1,2857 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JobPairs.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">JobPairs.java</span></div><h1>JobPairs.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import com.google.common.collect.ImmutableSet;
+import java.io.File;
+import java.io.IOException;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.sql.*;
+import java.util.*;
+import java.util.Map.Entry;
+import org.apache.commons.io.FileUtils;
+import org.starexec.constants.R;
+import org.starexec.data.to.*;
+import org.starexec.data.to.Status.StatusCode;
+import org.starexec.data.to.enums.ConfigXmlAttribute;
+import org.starexec.data.to.pipelines.JoblineStage;
+import org.starexec.data.to.pipelines.PairStageProcessorTriple;
+import org.starexec.data.to.tuples.ConfigAttrMapPair;
+import org.starexec.data.to.tuples.PairIdJobId;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+/**
+ * Contains handles on database queries for retrieving and updating job pairs.
+ */
+<span class="nc" id="L29">public class JobPairs {</span>
+
+<span class="nc" id="L31">    private static final StarLogger log = StarLogger.getLogger(JobPairs.class);</span>
+
+    private static void addJobPairInputs(List&lt;JobPair&gt; pairs, Connection con) {
+<span class="nc" id="L34">        final String methodName = &quot;addJobPairInputs&quot;;</span>
+<span class="nc" id="L35">        PreparedStatement ps = null;</span>
+<span class="nc" id="L36">        int batchCounter = 0;</span>
+<span class="nc" id="L37">        int totalPairsSubmitted = 0;</span>
+        try {
+<span class="nc" id="L39">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.AddJobPairInput(?, ?, ?)&quot;
+            );
+
+<span class="nc bnc" id="L43" title="All 2 branches missed.">            for (JobPair pair : pairs) {</span>
+<span class="nc bnc" id="L44" title="All 2 branches missed.">                for (int i = 0; i &lt; pair.getBenchInputs().size(); i++) {</span>
+<span class="nc" id="L45">                    ps.setInt(1, pair.getId());</span>
+<span class="nc" id="L46">                    ps.setInt(2, i + 1);</span>
+<span class="nc" id="L47">                    ps.setInt(3, pair.getBenchInputs().get(i));</span>
+
+<span class="nc" id="L49">                    ps.addBatch();</span>
+<span class="nc" id="L50">                    batchCounter++;</span>
+<span class="nc" id="L51">                    final int batchSize = 1000;</span>
+<span class="nc bnc" id="L52" title="All 2 branches missed.">                    if (batchCounter &gt; batchSize) {</span>
+<span class="nc" id="L53">                        totalPairsSubmitted += batchSize;</span>
+<span class="nc" id="L54">                        log.debug(</span>
+                            methodName,
+                            &quot;Submitting batch of &quot; +
+                                batchSize +
+                                &quot; inputs. Total pairs submitted: &quot; +
+                                totalPairsSubmitted
+                        );
+<span class="nc" id="L61">                        ps.executeBatch();</span>
+<span class="nc" id="L62">                        batchCounter = 0;</span>
+                    }
+                }
+<span class="nc" id="L65">            }</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">            if (batchCounter &gt; 0) {</span>
+<span class="nc" id="L67">                totalPairsSubmitted += batchCounter;</span>
+<span class="nc" id="L68">                log.debug(</span>
+                    methodName,
+                    &quot;Submitting final batch of &quot; +
+                        batchCounter +
+                        &quot; inputs. Total pairs submitted: &quot; +
+                        totalPairsSubmitted
+                );
+<span class="nc" id="L75">                ps.executeBatch();</span>
+            }
+<span class="nc" id="L77">        } catch (Exception e) {</span>
+<span class="nc" id="L78">            log.error(</span>
+                methodName,
+                &quot;Exception occurred while adding job pair inputs.&quot;,
+                e
+            );
+        } finally {
+<span class="nc" id="L84">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L86">    }</span>
+
+    public static Optional&lt;
+        String
+    &gt; populateConfigIdsToSolversMapAndJobPairsForJobXMLUpload(
+        final String rootName,
+        final int userId,
+        final Map&lt;Integer, Benchmark&gt; accessibleCachedBenchmarks,
+        final HashMap&lt;Integer, Solver&gt; configIdsToSolvers,
+        final Job job,
+        final int spaceId,
+        final HashSet&lt;String&gt; jobRootPaths,
+        final ConfigAttrMapPair configAttrMapPair,
+        final NodeList jobPairs
+    ) {
+<span class="nc" id="L101">        final String methodName = &quot;populateJobPairsForJobXMLUpload&quot;;</span>
+<span class="nc" id="L102">        Connection con = null;</span>
+
+        // Benchmarks the user can see that we've already seen.
+        try {
+<span class="nc" id="L106">            con = Common.getConnection();</span>
+
+            // we now iterate through all the job pair elements and add them all to the job
+<span class="nc" id="L109">            final int jobPairsLength = jobPairs.getLength();</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">            for (int i = 0; i &lt; jobPairsLength; i++) {</span>
+<span class="nc" id="L111">                final Node jobPairNode = jobPairs.item(i);</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">                if (jobPairNode.getNodeType() == Node.ELEMENT_NODE) {</span>
+<span class="nc" id="L113">                    final Element jobPairElement = (Element) jobPairNode;</span>
+<span class="nc" id="L114">                    final JobPair jobPair = new JobPair();</span>
+<span class="nc" id="L115">                    final int benchmarkId = Integer.parseInt(</span>
+<span class="nc" id="L116">                        jobPairElement.getAttribute(&quot;bench-id&quot;)</span>
+                    );
+<span class="nc" id="L118">                    final int configId = getConfigIdFromElement(</span>
+                        jobPairElement,
+                        configAttrMapPair
+                    );
+                    // final int configId =
+                    // Integer.parseInt(jobPairElement.getAttribute(&quot;config-id&quot;));
+<span class="nc" id="L124">                    String path = jobPairElement.getAttribute(&quot;job-space-path&quot;);</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">                    if (path.isEmpty()) {</span>
+<span class="nc" id="L126">                        path = rootName;</span>
+                    }
+<span class="nc" id="L128">                    jobPair.setPath(path);</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">                    if (path.contains(R.JOB_PAIR_PATH_DELIMITER)) {</span>
+<span class="nc" id="L130">                        jobRootPaths.add(</span>
+<span class="nc" id="L131">                            path.substring(</span>
+                                0,
+<span class="nc" id="L133">                                path.indexOf(R.JOB_PAIR_PATH_DELIMITER)</span>
+                            )
+                        );
+                    } else {
+<span class="nc" id="L137">                        jobRootPaths.add(path);</span>
+                    }
+
+<span class="nc" id="L140">                    Benchmark b = null;</span>
+                    // permissions check on the benchmark for this job pair
+<span class="nc bnc" id="L142" title="All 2 branches missed.">                    if (accessibleCachedBenchmarks.containsKey(benchmarkId)) {</span>
+<span class="nc" id="L143">                        b = accessibleCachedBenchmarks.get(benchmarkId);</span>
+                    } else {
+<span class="nc" id="L145">                        b = Benchmarks.get(con, benchmarkId, false);</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                        if (b == null) {</span>
+<span class="nc" id="L147">                            Benchmark errorBench = Benchmarks.get(</span>
+                                con,
+                                benchmarkId,
+                                true,
+                                true
+                            );
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                            if (errorBench == null) {</span>
+<span class="nc" id="L154">                                return Optional.of(</span>
+                                    &quot;Found null reference to benchmark: &quot; +
+                                        benchmarkId
+                                );
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                            } else if (errorBench.isDeleted()) {</span>
+<span class="nc" id="L159">                                return Optional.of(</span>
+<span class="nc" id="L160">                                    errorBench.getName() +</span>
+                                        &quot; has been deleted by it's user.&quot;
+                                );
+<span class="nc bnc" id="L163" title="All 2 branches missed.">                            } else if (errorBench.isRecycled()) {</span>
+<span class="nc" id="L164">                                return Optional.of(</span>
+<span class="nc" id="L165">                                    errorBench.getName() +</span>
+                                        &quot; has been recycled by it's user.&quot;
+                                );
+                            } else {
+<span class="nc" id="L169">                                return Optional.of(</span>
+                                    &quot;Unknown problem with benchmark: &quot; +
+                                        benchmarkId
+                                );
+                            }
+                        }
+<span class="nc" id="L175">                        if (</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                            !Permissions.canUserSeeBench(</span>
+                                con,
+                                benchmarkId,
+                                userId
+                            )
+                        ) {
+<span class="nc" id="L182">                            return Optional.of(</span>
+                                &quot;You do not have permission to see benchmark &quot; +
+                                    benchmarkId
+                            );
+                        }
+
+                        // Cache the benchmark
+<span class="nc" id="L189">                        accessibleCachedBenchmarks.put(benchmarkId, b);</span>
+                    }
+<span class="nc" id="L191">                    jobPair.setBench(b);</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                    if (!configIdsToSolvers.containsKey(configId)) {</span>
+                        // permissions check on the solver for the pair. Configurations do
+                        // not have permissions by themselves-- their permissions are identical to the
+                        // solver
+                        // permissions
+<span class="nc" id="L197">                        Solver s = Solvers.getSolverByConfig(</span>
+                            con,
+                            configId,
+                            true
+                        );
+<span class="nc bnc" id="L202" title="All 2 branches missed.">                        if (s == null) {</span>
+<span class="nc" id="L203">                            return Optional.of(</span>
+                                &quot;Found null reference to solver referenced by config id: &quot; +
+                                    configId
+                            );
+                        }
+<span class="nc bnc" id="L208" title="All 4 branches missed.">                        if (s.isDeleted() || s.isRecycled()) {</span>
+<span class="nc" id="L209">                            return Optional.of(</span>
+                                &quot;This solver associated with config &quot; +
+                                    configId +
+                                    &quot; has been deleted or recycled, solverId: &quot; +
+<span class="nc" id="L213">                                    s.getId()</span>
+                            );
+                        }
+
+<span class="nc" id="L217">                        if (</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">                            !Permissions.canUserSeeSolver(</span>
+                                con,
+<span class="nc" id="L220">                                s.getId(),</span>
+                                userId
+                            )
+                        ) {
+<span class="nc" id="L224">                            return Optional.of(</span>
+                                &quot;You do not have permission to see the solver &quot; +
+<span class="nc" id="L226">                                    s.getId()</span>
+                            );
+                        }
+
+<span class="nc" id="L230">                        s.addConfiguration(</span>
+<span class="nc" id="L231">                            Solvers.getConfiguration(con, configId)</span>
+                        );
+<span class="nc" id="L233">                        configIdsToSolvers.put(configId, s);</span>
+                    }
+<span class="nc" id="L235">                    Solver s = configIdsToSolvers.get(configId);</span>
+
+                    // JobPair elements are for pairs with exactly one stage, so we create a stage
+                    // to house the solver and benchmark
+<span class="nc" id="L239">                    JoblineStage stage = new JoblineStage();</span>
+<span class="nc" id="L240">                    stage.setStageNumber(1);</span>
+<span class="nc" id="L241">                    stage.setSolver(s);</span>
+<span class="nc" id="L242">                    stage.setConfiguration(s.getConfigurations().get(0));</span>
+
+<span class="nc" id="L244">                    jobPair.addStage(stage);</span>
+                    // the primary stage is the one we just added
+<span class="nc" id="L246">                    jobPair.setPrimaryStageNumber(jobPair.getStages().size());</span>
+<span class="nc" id="L247">                    jobPair.setSpace(Spaces.get(spaceId, con));</span>
+
+<span class="nc" id="L249">                    job.addJobPair(jobPair);</span>
+                }
+            }
+<span class="nc" id="L252">            return Optional.empty();</span>
+<span class="nc" id="L253">        } catch (SQLException e) {</span>
+<span class="nc" id="L254">            log.error(methodName, e);</span>
+<span class="nc" id="L255">            return Optional.empty();</span>
+        } finally {
+<span class="nc" id="L257">            Common.safeClose(con);</span>
+        }
+    }
+
+    public static Integer getConfigIdFromElement(
+        Element element,
+        ConfigAttrMapPair configAttrMapPair
+    ) {
+<span class="nc" id="L265">        String attribute = element.getAttribute(</span>
+            configAttrMapPair.attribute.attribute
+        );
+<span class="nc bnc" id="L268" title="All 2 branches missed.">        if (configAttrMapPair.attribute == ConfigXmlAttribute.NAME) {</span>
+            // The attribute should be the config name.
+<span class="nc" id="L270">            Map&lt;String, Integer&gt; configNameToId =</span>
+                configAttrMapPair.configNameToId;
+<span class="nc bnc" id="L272" title="All 2 branches missed.">            if (configNameToId.containsKey(attribute)) {</span>
+<span class="nc" id="L273">                return configNameToId.get(attribute);</span>
+            } else {
+<span class="nc" id="L275">                throw new IllegalStateException(</span>
+                    &quot;There is no config with the name, &quot; +
+                        attribute +
+                        &quot;, in the uploaded solver.&quot;
+                );
+            }
+        } else {
+            // The attribute should be the id of the config.
+<span class="nc" id="L283">            return Integer.parseInt(attribute);</span>
+        }
+    }
+
+    /**
+     * Retrieves all the inputs to the given pair from the jobpair_inputs table.
+     * Inputs will be ordered by their input
+     * numbers (in other words, first input, second input, and so on)
+     *
+     * @param pairId
+     * @param con    An open database connection to make calls on
+     * @return A list of strings pointing to the inputs for this pair, or null on
+     *         error.
+     */
+    public static List&lt;String&gt; getJobPairInputPaths(
+        int pairId,
+        Connection con
+    ) {
+<span class="nc" id="L301">        PreparedStatement ps = null;</span>
+<span class="nc" id="L302">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L304">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairInputPaths(?)&quot;
+            );
+<span class="nc" id="L307">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L308">            results = ps.executeQuery();</span>
+<span class="nc" id="L309">            List&lt;String&gt; benchmarkPaths = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L311">                benchmarkPaths.add(results.getString(&quot;path&quot;));</span>
+            }
+<span class="nc" id="L313">            return benchmarkPaths;</span>
+<span class="nc" id="L314">        } catch (Exception e) {</span>
+<span class="nc" id="L315">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L317">            Common.safeClose(ps);</span>
+<span class="nc" id="L318">            Common.safeClose(results);</span>
+        }
+<span class="nc" id="L320">        return null;</span>
+    }
+
+    /**
+     * Adds all the jobline stages for all of the given pairs to the database
+     *
+     * @param pairs The pairs to add the stages of
+     * @param con   The open connection to make the call on
+     */
+    private static void addJobPairStages(List&lt;JobPair&gt; pairs, Connection con) {
+<span class="nc" id="L330">        final String methodName = &quot;addJobPairStages&quot;;</span>
+<span class="nc" id="L331">        PreparedStatement ps = null;</span>
+<span class="nc" id="L332">        int totalPairsSubmitted = 0;</span>
+        try {
+<span class="nc" id="L334">            int batchCounter = 0;</span>
+<span class="nc" id="L335">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.AddJobPairStage(?, ?, ?, ?, ?, ?, ?, ?, ?)&quot;
+            );
+
+<span class="nc bnc" id="L339" title="All 2 branches missed.">            for (JobPair pair : pairs) {</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">                for (JoblineStage stage : pair.getStages()) {</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">                    if (stage.isNoOp()) {</span>
+<span class="nc" id="L342">                        continue;</span>
+                    }
+
+<span class="nc" id="L345">                    ps.setInt(1, pair.getId());</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">                    if (stage.getStageId() != null) {</span>
+<span class="nc" id="L347">                        ps.setInt(2, stage.getStageId());</span>
+                    } else {
+<span class="nc" id="L349">                        ps.setNull(2, java.sql.Types.INTEGER);</span>
+                    }
+<span class="nc" id="L351">                    ps.setInt(3, stage.getStageNumber());</span>
+<span class="nc" id="L352">                    ps.setBoolean(</span>
+                        4,
+<span class="nc" id="L354">                        Objects.equals(</span>
+<span class="nc" id="L355">                            pair.getPrimaryStageNumber(),</span>
+<span class="nc" id="L356">                            stage.getStageNumber()</span>
+                        )
+                    );
+<span class="nc" id="L359">                    ps.setInt(5, stage.getSolver().getId());</span>
+<span class="nc" id="L360">                    ps.setString(6, stage.getSolver().getName());</span>
+<span class="nc" id="L361">                    ps.setInt(7, stage.getConfiguration().getId());</span>
+<span class="nc" id="L362">                    ps.setString(8, stage.getConfiguration().getName());</span>
+<span class="nc" id="L363">                    ps.setInt(9, pair.getJobSpaceId());</span>
+                    // Update the pair's ID so it can be used outside this method
+<span class="nc" id="L365">                    ps.addBatch();</span>
+
+<span class="nc" id="L367">                    batchCounter++;</span>
+<span class="nc" id="L368">                    final int batchSize = 1000;</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">                    if (batchCounter &gt; batchSize) {</span>
+<span class="nc" id="L370">                        totalPairsSubmitted += batchSize;</span>
+<span class="nc" id="L371">                        log.debug(</span>
+                            methodName,
+                            &quot;Submitting batch of &quot; +
+                                batchSize +
+                                &quot;, total pairs submitted: &quot; +
+                                totalPairsSubmitted
+                        );
+<span class="nc" id="L378">                        ps.executeBatch();</span>
+<span class="nc" id="L379">                        batchCounter = 0;</span>
+                    }
+<span class="nc" id="L381">                }</span>
+<span class="nc" id="L382">            }</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">            if (batchCounter &gt; 0) {</span>
+<span class="nc" id="L384">                totalPairsSubmitted += batchCounter;</span>
+<span class="nc" id="L385">                log.debug(</span>
+                    methodName,
+                    &quot;Submitting batch of &quot; +
+                        batchCounter +
+                        &quot;, total pairs submitted: &quot; +
+                        totalPairsSubmitted
+                );
+<span class="nc" id="L392">                ps.executeBatch();</span>
+            }
+<span class="nc" id="L394">        } catch (Exception e) {</span>
+<span class="nc" id="L395">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L397">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L399">    }</span>
+
+    public static void addJobPairs(int jobId, List&lt;JobPair&gt; pairs) {
+<span class="nc" id="L402">        final String methodName = &quot;addJobPairs&quot;;</span>
+
+<span class="nc" id="L404">        Connection con = null;</span>
+        try {
+<span class="nc" id="L406">            con = Common.getConnection();</span>
+<span class="nc" id="L407">            Common.beginTransaction(con);</span>
+<span class="nc" id="L408">            log.entry(methodName);</span>
+<span class="nc" id="L409">            boolean success = incrementTotalJobPairsForJob(</span>
+                jobId,
+<span class="nc" id="L411">                pairs.size(),</span>
+                con
+            );
+<span class="nc bnc" id="L414" title="All 2 branches missed.">            if (!success) {</span>
+<span class="nc" id="L415">                log.error(</span>
+                    methodName,
+                    &quot;Failed to increment total job pairs for jobId: &quot; + jobId
+                );
+<span class="nc" id="L419">                return;</span>
+            }
+<span class="nc" id="L421">            log.debug(</span>
+                methodName,
+                &quot;Successfully incremented total job pairs for jobId: &quot; + jobId
+            );
+
+<span class="nc" id="L426">            addJobPairs(con, jobId, pairs);</span>
+<span class="nc" id="L427">            log.exit(methodName);</span>
+<span class="nc" id="L428">        } catch (SQLException e) {</span>
+<span class="nc" id="L429">            log.error(</span>
+                methodName,
+                &quot;SQL Exception occurred while adding job pairs for jobId: &quot; +
+                    jobId,
+                e
+            );
+        } finally {
+<span class="nc" id="L436">            Common.endTransaction(con);</span>
+<span class="nc" id="L437">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L439">    }</span>
+
+    /**
+     * Adds a job pair record to the database. This is a helper method for the
+     * Jobs.add method
+     *
+     * @param con The connection the update will take place on
+     * @return True if the operation was successful
+     */
+    protected static boolean addJobPairs(
+        Connection con,
+        int jobId,
+        List&lt;JobPair&gt; pairs
+    ) {
+<span class="nc" id="L453">        final String methodName = &quot;addJobPairs&quot;;</span>
+<span class="nc" id="L454">        log.entry(methodName);</span>
+<span class="nc" id="L455">        PreparedStatement stmt = null;</span>
+<span class="nc" id="L456">        ResultSet rs = null;</span>
+        try {
+<span class="nc" id="L458">            stmt = con.prepareStatement(</span>
+                &quot;SELECT AddJobPair(?, ?, ?, ?, ?, ?, ?)&quot;
+            );
+<span class="nc" id="L461">            int pairsProcessed = 0;</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">            for (JobPair pair : pairs) {</span>
+<span class="nc" id="L463">                pair.setJobId(jobId);</span>
+<span class="nc" id="L464">                stmt.setInt(1, jobId);</span>
+<span class="nc" id="L465">                stmt.setInt(2, pair.getBench().getId());</span>
+<span class="nc" id="L466">                stmt.setShort(</span>
+                    3,
+<span class="nc" id="L468">                    (short) StatusCode.STATUS_PENDING_SUBMIT.getVal()</span>
+                );
+
+<span class="nc" id="L471">                stmt.setString(4, pair.getPath());</span>
+<span class="nc" id="L472">                stmt.setInt(5, pair.getJobSpaceId());</span>
+
+<span class="nc" id="L474">                stmt.setString(6, pair.getBench().getName());</span>
+                // The function will return the pair's new ID
+<span class="nc" id="L476">                stmt.setInt(7, pair.getPrimaryStageNumber());</span>
+<span class="nc" id="L477">                rs = stmt.executeQuery();</span>
+<span class="nc" id="L478">                rs.next();</span>
+
+                // Update the pair's ID so it can be used outside this method
+<span class="nc" id="L481">                int newPairId = rs.getInt(1);</span>
+<span class="nc" id="L482">                pair.setId(newPairId);</span>
+<span class="nc" id="L483">                pairsProcessed += 1;</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">                if (pairsProcessed % 1000 == 0) {</span>
+<span class="nc" id="L485">                    log.debug(methodName, &quot;Pairs Processed: &quot; + pairsProcessed);</span>
+                }
+<span class="nc" id="L487">            }</span>
+<span class="nc" id="L488">            log.debug(methodName, &quot;Pairs Processed: &quot; + pairsProcessed);</span>
+
+<span class="nc" id="L490">            log.debug(methodName, &quot;Adding job pair stages.&quot;);</span>
+<span class="nc" id="L491">            addJobPairStages(pairs, con);</span>
+<span class="nc" id="L492">            log.debug(methodName, &quot;Adding job pair inputs.&quot;);</span>
+<span class="nc" id="L493">            addJobPairInputs(pairs, con);</span>
+<span class="nc" id="L494">            return true;</span>
+<span class="nc" id="L495">        } catch (Exception e) {</span>
+<span class="nc" id="L496">            log.error(</span>
+                methodName,
+                &quot;Exception occurred while adding job pairs to the database.&quot;,
+                e
+            );
+        } finally {
+<span class="nc" id="L502">            Common.safeClose(rs);</span>
+<span class="nc" id="L503">            Common.safeClose(stmt);</span>
+        }
+<span class="nc" id="L505">        return false;</span>
+    }
+
+    /**
+     * Finds the standard output of a job pair and returns it as a string. Null is
+     * returned if the output doesn't exist
+     * or cannot be found
+     *
+     * @param pairId      The pair to get output for
+     * @param stageNumber The stage to get pair info for
+     * @param limit       The maximum number of lines to return
+     * @return All console output from a job pair run for the given pair
+     */
+    public static Optional&lt;String&gt; getStdOut(
+        int pairId,
+        int stageNumber,
+        int limit
+    ) throws IOException {
+<span class="nc" id="L523">        String stdoutPath = JobPairs.getStdout(pairId, stageNumber);</span>
+<span class="nc" id="L524">        return Util.readFileLimited(new File(stdoutPath), limit);</span>
+    }
+
+    /**
+     * Returns all pairs that are waiting on post processing. Returns a hashmap
+     * mapping job pair IDs to post processors
+     *
+     * @return A list of triples containing pair id, stage number, post processor id
+     *         that represents all stages that
+     *         need to be processed.
+     */
+    public static List&lt;PairStageProcessorTriple&gt; getAllPairsForProcessing() {
+<span class="nc" id="L536">        Connection con = null;</span>
+<span class="nc" id="L537">        PreparedStatement ps = null;</span>
+<span class="nc" id="L538">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L540">            con = Common.getConnection();</span>
+<span class="nc" id="L541">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetPairsToBeProcessed(?)&quot;
+            );
+<span class="nc" id="L544">            ps.setInt(1, StatusCode.STATUS_PROCESSING.getVal());</span>
+<span class="nc" id="L545">            results = ps.executeQuery();</span>
+<span class="nc" id="L546">            List&lt;PairStageProcessorTriple&gt; list = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L548">                PairStageProcessorTriple next = new PairStageProcessorTriple();</span>
+<span class="nc" id="L549">                next.setPairId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L550">                next.setStageNumber(results.getInt(&quot;stageNumber&quot;));</span>
+<span class="nc" id="L551">                next.setProcessorId(results.getInt(&quot;post_processor&quot;));</span>
+<span class="nc" id="L552">                list.add(next);</span>
+<span class="nc" id="L553">            }</span>
+<span class="nc" id="L554">            return list;</span>
+<span class="nc" id="L555">        } catch (Exception e) {</span>
+<span class="nc" id="L556">            log.error(&quot;getAllPairsForProcessing&quot;, e);</span>
+        } finally {
+<span class="nc" id="L558">            Common.safeClose(con);</span>
+<span class="nc" id="L559">            Common.safeClose(ps);</span>
+<span class="nc" id="L560">            Common.safeClose(results);</span>
+        }
+<span class="nc" id="L562">        return null;</span>
+    }
+
+    /**
+     * Updates the total_pairs column for the given job by summing it with the given
+     * increment
+     *
+     * @param jobId     The ID of the job to update
+     * @param increment The amount to change total_pairs by. Note that if this is
+     *                  negative it means the total_pairs
+     *                  column will decrease
+     * @param con       The open connection to make the call on
+     * @return true on success and false otherwise
+     */
+    public static boolean incrementTotalJobPairsForJob(
+        int jobId,
+        int increment,
+        Connection con
+    ) {
+<span class="nc" id="L581">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L583">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.IncrementTotalJobPairsForJob(?, ?)&quot;
+            );
+<span class="nc" id="L586">            ps.setInt(1, jobId);</span>
+<span class="nc" id="L587">            ps.setInt(2, increment);</span>
+<span class="nc" id="L588">            boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">            if (hasResultSet) {</span>
+<span class="nc" id="L590">                ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">                while (rs.next()) {</span>
+                    // consume the result set
+                }
+<span class="nc" id="L594">                Common.safeClose(rs);</span>
+            }
+<span class="nc" id="L596">            return true;</span>
+<span class="nc" id="L597">        } catch (SQLException e) {</span>
+<span class="nc bnc" id="L598" title="All 2 branches missed.">            if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L599">                log.warn(&quot;Job &quot; + jobId + &quot; not found&quot;);</span>
+            } else {
+<span class="nc" id="L601">                log.error(&quot;incrementTotalJobPairsForJob&quot;, e.getMessage(), e);</span>
+            }
+        } finally {
+<span class="nc" id="L604">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L606">        return false;</span>
+    }
+
+    /**
+     * Deletes a list of job pairs. All pairs are expected to belong to the same job
+     *
+     * @param jobPairs the job pairs to delete.
+     * @author Albert Giegerich
+     */
+    public static void deleteJobPairs(List&lt;JobPair&gt; jobPairs)
+        throws SQLException {
+<span class="nc" id="L617">        final String methodName = &quot;deleteJobPairs&quot;;</span>
+<span class="nc" id="L618">        Connection con = null;</span>
+
+        try {
+<span class="nc" id="L621">            con = Common.getConnection();</span>
+<span class="nc" id="L622">            Common.beginTransaction(con);</span>
+<span class="nc" id="L623">            log.debug(&quot;beginning to delete pairs&quot;);</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">            for (JobPair pair : jobPairs) {</span>
+<span class="nc" id="L625">                deleteJobPair(con, pair);</span>
+<span class="nc" id="L626">                log.debug(&quot;pair deleted&quot;);</span>
+<span class="nc" id="L627">            }</span>
+<span class="nc" id="L628">        } catch (SQLException e) {</span>
+<span class="nc" id="L629">            log.debug(methodName, &quot;Caught an SQLException, database failed.&quot;);</span>
+<span class="nc" id="L630">            Common.doRollback(con);</span>
+<span class="nc" id="L631">            throw e;</span>
+        } finally {
+<span class="nc" id="L633">            Common.endTransaction(con);</span>
+<span class="nc" id="L634">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L636">    }</span>
+
+    // Deletes a given JobPair
+    private static void deleteJobPair(Connection con, JobPair pairToDelete)
+        throws SQLException {
+<span class="nc bnc" id="L641" title="All 2 branches missed.">        if (pairToDelete == null) {</span>
+<span class="nc" id="L642">            throw new NullPointerException(&quot;Input JobPair was null.&quot;);</span>
+        }
+
+<span class="nc" id="L645">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L647">            ps = con.prepareStatement(&quot;SELECT starexec.DeleteJobPair(?)&quot;);</span>
+<span class="nc" id="L648">            ps.setInt(1, pairToDelete.getId());</span>
+<span class="nc" id="L649">            boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L650" title="All 2 branches missed.">            if (hasResultSet) {</span>
+<span class="nc" id="L651">                ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L652" title="All 2 branches missed.">                while (rs.next()) {</span>
+                    // consume the result set
+                }
+<span class="nc" id="L655">                Common.safeClose(rs);</span>
+            }
+        } finally {
+<span class="nc" id="L658">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L660">    }</span>
+
+    /**
+     * Post processes the given pair with the given processor ID, add the properties
+     * to the pair attributes table, and
+     * removes the pair from the processing job pairs table
+     *
+     * @param pairId      The ID of the pair to process
+     * @param stageNumber
+     * @param processorId The ID of the processor to use
+     */
+    public static void postProcessPair(
+        int pairId,
+        int stageNumber,
+        int processorId
+    ) {
+<span class="nc" id="L676">        Connection con = null;</span>
+        try {
+<span class="nc" id="L678">            Properties props = runPostProcessorOnPair(</span>
+                pairId,
+                stageNumber,
+                processorId
+            );
+<span class="nc" id="L683">            con = Common.getConnection();</span>
+<span class="nc" id="L684">            Common.beginTransaction(con);</span>
+<span class="nc" id="L685">            JobPairs.addJobPairAttributes(pairId, stageNumber, props, con);</span>
+<span class="nc" id="L686">            JobPairs.setPairStatus(</span>
+                pairId,
+<span class="nc" id="L688">                StatusCode.STATUS_COMPLETE.getVal(),</span>
+                con
+            );
+<span class="nc" id="L691">            JobPairs.setPairStageStatus(</span>
+                pairId,
+<span class="nc" id="L693">                StatusCode.STATUS_COMPLETE.getVal(),</span>
+                stageNumber,
+                con
+            );
+<span class="nc" id="L697">            Common.endTransaction(con);</span>
+<span class="nc" id="L698">        } catch (Exception e) {</span>
+<span class="nc" id="L699">            Common.doRollback(con);</span>
+<span class="nc" id="L700">            log.error(&quot;postProcessPair&quot;, e);</span>
+        } finally {
+<span class="nc" id="L702">            Common.endTransaction(con);</span>
+<span class="nc" id="L703">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L705">    }</span>
+
+    /**
+     * Runs the given post processor on the given pair stage and returns the
+     * properties that were obtained
+     *
+     * @param pairId      The ID of the pair in question
+     * @param processorId The ID of the processor in question
+     * @return The properties on success, or null otherwise
+     */
+    private static Properties runPostProcessorOnPair(
+        int pairId,
+        int stageNumber,
+        int processorId
+    ) {
+        try {
+<span class="nc" id="L721">            JobPair pair = JobPairs.getPairDetailed(pairId);</span>
+<span class="nc" id="L722">            File output = new File(JobPairs.getFilePath(pair, stageNumber));</span>
+<span class="nc" id="L723">            Processor p = Processors.get(processorId);</span>
+            // Run the processor on the benchmark file
+<span class="nc" id="L725">            List&lt;File&gt; files = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L726">            files.add(new File(p.getFilePath()));</span>
+<span class="nc" id="L727">            files.add(new File(pair.getBench().getPath()));</span>
+<span class="nc" id="L728">            files.add(output);</span>
+<span class="nc" id="L729">            File sandbox = Util.copyFilesToNewSandbox(files);</span>
+<span class="nc" id="L730">            String benchPath = new File(</span>
+                sandbox,
+<span class="nc" id="L732">                new File(pair.getBench().getPath()).getName()</span>
+<span class="nc" id="L733">            ).getAbsolutePath();</span>
+<span class="nc" id="L734">            String outputPath = new File(</span>
+                sandbox,
+<span class="nc" id="L736">                output.getName()</span>
+<span class="nc" id="L737">            ).getAbsolutePath();</span>
+<span class="nc" id="L738">            File working = new File(</span>
+                sandbox,
+<span class="nc" id="L740">                new File(p.getFilePath()).getName()</span>
+            );
+
+<span class="nc" id="L743">            String[] procCmd = new String[3];</span>
+<span class="nc" id="L744">            procCmd[0] = &quot;./&quot; + R.PROCESSOR_RUN_SCRIPT;</span>
+
+<span class="nc" id="L746">            procCmd[1] = outputPath;</span>
+
+<span class="nc" id="L748">            procCmd[2] = benchPath;</span>
+<span class="nc" id="L749">            String propstr = Util.executeSandboxCommand(procCmd, null, working);</span>
+<span class="nc" id="L750">            FileUtils.deleteQuietly(sandbox);</span>
+
+            // Load results into a properties file
+<span class="nc" id="L753">            Properties prop = new Properties();</span>
+<span class="nc" id="L754">            prop.load(new StringReader(propstr));</span>
+
+<span class="nc" id="L756">            return prop;</span>
+<span class="nc" id="L757">        } catch (Exception e) {</span>
+<span class="nc" id="L758">            log.error(&quot;runPostProcessorOnPair&quot;, e);</span>
+        }
+<span class="nc" id="L760">        return null;</span>
+    }
+
+    /**
+     * Adds a new attribute to a job pair
+     *
+     * @param con    The connection to make the update on
+     * @param pairId The id of the job pair the attribute is for
+     * @param key    The key of the attribute
+     * @param val    The value of the attribute
+     * @author Tyler Jensen
+     */
+    protected static void addJobPairAttr(
+        Connection con,
+        int pairId,
+        int stageId,
+        String key,
+        String val
+    ) {
+<span class="nc" id="L779">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L781">            ps = con.prepareStatement(&quot;CALL starexec.AddJobAttr(?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L782">            ps.setInt(1, pairId);</span>
+
+<span class="nc" id="L784">            ps.setString(2, key);</span>
+<span class="nc" id="L785">            ps.setString(3, val);</span>
+<span class="nc" id="L786">            ps.setInt(4, stageId);</span>
+<span class="nc" id="L787">            boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">            if (hasResultSet) {</span>
+<span class="nc" id="L789">                ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">                while (rs.next()) {</span>
+                    // consume the result set
+                }
+<span class="nc" id="L793">                Common.safeClose(rs);</span>
+            }
+<span class="nc" id="L795">        } catch (Exception e) {</span>
+<span class="nc" id="L796">            log.error(&quot;addJobPairAttr&quot;, e);</span>
+        } finally {
+<span class="nc" id="L798">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L800">    }</span>
+
+    /**
+     * Adds the list of attributes to the given job pair. If old attributes have the
+     * same keys as new ones, the old
+     * ones
+     * are replaced
+     *
+     * @param pairId     The ID of the pair to add attributes to
+     * @param stageId    The ID of the stage to add attributes for.
+     * @param attributes The key/value attributes
+     * @param con        The open connection to make the call on
+     * @return True on success, false on error
+     */
+    public static boolean addJobPairAttributes(
+        int pairId,
+        int stageId,
+        Properties attributes,
+        Connection con
+    ) {
+        try {
+            // For each attribute (key, value)...
+<span class="nc" id="L822">            log.info(</span>
+                &quot;Adding &quot; +
+<span class="nc" id="L824">                    attributes.entrySet().size() +</span>
+                    &quot; attributes to job pair &quot; +
+                    pairId
+            );
+<span class="nc bnc" id="L828" title="All 2 branches missed.">            for (Entry&lt;Object, Object&gt; keyVal : attributes.entrySet()) {</span>
+                // Add the attribute to the database
+<span class="nc" id="L830">                JobPairs.addJobPairAttr(</span>
+                    con,
+                    pairId,
+                    stageId,
+<span class="nc" id="L834">                    (String) keyVal.getKey(),</span>
+<span class="nc" id="L835">                    (String) keyVal.getValue()</span>
+                );
+<span class="nc" id="L837">            }</span>
+
+<span class="nc" id="L839">            return true;</span>
+<span class="nc" id="L840">        } catch (Exception e) {</span>
+<span class="nc" id="L841">            log.error(&quot;addJobPairAttributes&quot;, e);</span>
+        }
+<span class="nc" id="L843">        return false;</span>
+    }
+
+    /**
+     * Adds a set of attributes to a job pair
+     *
+     * @param pairId     The id of the job pair the attribute is for
+     * @param stageId    the ID of the stage to add attributes to
+     * @param attributes The attributes to add to the job pair
+     * @return True if the operation was a success, false otherwise
+     * @author Tyler Jensen
+     */
+    public static boolean addJobPairAttributes(
+        int pairId,
+        int stageId,
+        Properties attributes
+    ) {
+<span class="nc" id="L860">        Connection con = null;</span>
+        try {
+<span class="nc" id="L862">            con = Common.getConnection();</span>
+<span class="nc" id="L863">            return addJobPairAttributes(pairId, stageId, attributes, con);</span>
+<span class="nc" id="L864">        } catch (Exception e) {</span>
+<span class="nc" id="L865">            log.error(&quot;error adding Job Attributes = &quot; + e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L867">            Common.safeClose(con);</span>
+        }
+
+<span class="nc" id="L870">        return false;</span>
+    }
+
+    /**
+     * Filters job pairs based on their status codes
+     *
+     * @param pairs
+     * @param type
+     * @return
+     */
+    protected static List&lt;JobPair&gt; filterPairsByType(
+        List&lt;JobPair&gt; pairs,
+        String type,
+        int stageNumber
+    ) {
+<span class="nc" id="L885">        log.debug(&quot;filtering pairs by type with type = &quot; + type);</span>
+<span class="nc" id="L886">        List&lt;JobPair&gt; filteredPairs = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L888" title="All 8 branches missed.">        switch (type) {</span>
+            case &quot;incomplete&quot;:
+<span class="nc bnc" id="L890" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L891">                    if (</span>
+                        jp
+<span class="nc" id="L893">                            .getStageFromNumber(stageNumber)</span>
+<span class="nc" id="L894">                            .getStatus()</span>
+<span class="nc" id="L895">                            .getCode()</span>
+<span class="nc bnc" id="L896" title="All 2 branches missed.">                            .statIncomplete()</span>
+                    ) {
+<span class="nc" id="L898">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L900">                }</span>
+<span class="nc" id="L901">                break;</span>
+            case &quot;resource&quot;:
+<span class="nc bnc" id="L903" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L904">                    if (</span>
+                        jp
+<span class="nc" id="L906">                            .getStageFromNumber(stageNumber)</span>
+<span class="nc" id="L907">                            .getStatus()</span>
+<span class="nc" id="L908">                            .getCode()</span>
+<span class="nc bnc" id="L909" title="All 2 branches missed.">                            .resource()</span>
+                    ) {
+<span class="nc" id="L911">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L913">                }</span>
+<span class="nc" id="L914">                break;</span>
+            case &quot;failed&quot;:
+<span class="nc bnc" id="L916" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L917">                    if (</span>
+                        jp
+<span class="nc" id="L919">                            .getStageFromNumber(stageNumber)</span>
+<span class="nc" id="L920">                            .getStatus()</span>
+<span class="nc" id="L921">                            .getCode()</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">                            .failed()</span>
+                    ) {
+<span class="nc" id="L924">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L926">                }</span>
+<span class="nc" id="L927">                break;</span>
+            case &quot;solved&quot;:
+<span class="nc bnc" id="L929" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L930">                    JoblineStage stage = jp.getStageFromNumber(stageNumber);</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">                    if (JobPairs.isPairCorrect(stage) == 0) {</span>
+<span class="nc" id="L932">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L934">                }</span>
+<span class="nc" id="L935">                break;</span>
+            case &quot;wrong&quot;:
+<span class="nc bnc" id="L937" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L938">                    JoblineStage stage = jp.getStageFromNumber(stageNumber);</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">                    if (JobPairs.isPairCorrect(stage) == 1) {</span>
+<span class="nc" id="L940">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L942">                }</span>
+<span class="nc" id="L943">                break;</span>
+            case &quot;unknown&quot;:
+<span class="nc bnc" id="L945" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L946">                    JoblineStage stage = jp.getStageFromNumber(stageNumber);</span>
+<span class="nc bnc" id="L947" title="All 2 branches missed.">                    if (JobPairs.isPairCorrect(stage) == 2) {</span>
+<span class="nc" id="L948">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L950">                }</span>
+<span class="nc" id="L951">                break;</span>
+            case &quot;complete&quot;:
+<span class="nc bnc" id="L953" title="All 2 branches missed.">                for (JobPair jp : pairs) {</span>
+<span class="nc" id="L954">                    if (</span>
+                        jp
+<span class="nc" id="L956">                            .getStageFromNumber(stageNumber)</span>
+<span class="nc" id="L957">                            .getStatus()</span>
+<span class="nc" id="L958">                            .getCode()</span>
+<span class="nc bnc" id="L959" title="All 2 branches missed.">                            .statComplete()</span>
+                    ) {
+<span class="nc" id="L961">                        filteredPairs.add(jp);</span>
+                    }
+<span class="nc" id="L963">                }</span>
+<span class="nc" id="L964">                break;</span>
+            default:
+<span class="nc" id="L966">                filteredPairs = pairs;</span>
+                break;
+        }
+<span class="nc" id="L969">        return filteredPairs;</span>
+    }
+
+    /**
+     * Checks whether a given stage is correct
+     *
+     * @param stage
+     * @return -1 == pair is not complete (as in, does not have STATUS_COMPLETE) 0
+     *         == pair is correct 1 == pair is
+     *         incorrect 2 == pair is unknown
+     */
+    public static int isPairCorrect(JoblineStage stage) {
+<span class="nc" id="L981">        StatusCode statusCode = stage.getStatus().getCode();</span>
+
+<span class="nc bnc" id="L983" title="All 2 branches missed.">        if (statusCode.getVal() == StatusCode.STATUS_COMPLETE.getVal()) {</span>
+<span class="nc bnc" id="L984" title="All 2 branches missed.">            if (stage.getAttributes() != null) {</span>
+<span class="nc" id="L985">                Properties attrs = stage.getAttributes();</span>
+                // log.debug(&quot;expected = &quot;+attrs.get(R.EXPECTED_RESULT));
+                // log.debug(&quot;actual = &quot;+attrs.get(R.STAREXEC_RESULT));
+<span class="nc" id="L988">                if (</span>
+<span class="nc bnc" id="L989" title="All 2 branches missed.">                    attrs.containsKey(R.STAREXEC_RESULT) &amp;&amp;</span>
+<span class="nc bnc" id="L990" title="All 2 branches missed.">                    attrs.get(R.STAREXEC_RESULT).equals(R.STAREXEC_UNKNOWN)</span>
+                ) {
+                    // don't know the result, so don't mark as correct or incorrect.
+<span class="nc" id="L993">                    return 2;</span>
+<span class="nc" id="L994">                } else if (</span>
+<span class="nc bnc" id="L995" title="All 2 branches missed.">                    attrs.containsKey(R.EXPECTED_RESULT) &amp;&amp;</span>
+<span class="nc bnc" id="L996" title="All 2 branches missed.">                    !attrs.get(R.EXPECTED_RESULT).equals(R.STAREXEC_UNKNOWN)</span>
+                ) {
+<span class="nc" id="L998">                    if (</span>
+<span class="nc bnc" id="L999" title="All 2 branches missed.">                        !attrs.containsKey(R.STAREXEC_RESULT) ||</span>
+                        !attrs
+<span class="nc" id="L1001">                            .get(R.STAREXEC_RESULT)</span>
+<span class="nc bnc" id="L1002" title="All 2 branches missed.">                            .equals(attrs.get(R.EXPECTED_RESULT))</span>
+                    ) {
+                        // the absence of a result, or a nonmatching result, is counted as wrong
+<span class="nc" id="L1005">                        return 1;</span>
+                    } else {
+<span class="nc" id="L1007">                        return 0;</span>
+                    }
+                } else {
+                    // if the attributes don't have an expected result, we will mark as unknown
+<span class="nc" id="L1011">                    return 2;</span>
+                }
+            } else {
+<span class="nc" id="L1014">                return 0;</span>
+            }
+        } else {
+<span class="nc" id="L1017">            return -1;</span>
+        }
+    }
+
+    /**
+     * Filters a list of solver comparisons against a given query
+     *
+     * @param comparisons
+     * @param searchQuery
+     * @return
+     */
+    protected static List&lt;SolverComparison&gt; filterComparisons(
+        List&lt;SolverComparison&gt; comparisons,
+        String searchQuery
+    ) {
+        // no filtering is necessary if there's no query
+<span class="nc bnc" id="L1033" title="All 2 branches missed.">        if (Util.isNullOrEmpty(searchQuery)) {</span>
+<span class="nc" id="L1034">            return comparisons;</span>
+        }
+
+<span class="nc" id="L1037">        searchQuery = searchQuery.toLowerCase();</span>
+<span class="nc" id="L1038">        List&lt;SolverComparison&gt; filteredComparisons = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">        for (SolverComparison c : comparisons) {</span>
+            try {
+<span class="nc" id="L1041">                if (</span>
+                    c
+<span class="nc" id="L1043">                        .getBenchmark()</span>
+<span class="nc" id="L1044">                        .getName()</span>
+<span class="nc" id="L1045">                        .toLowerCase()</span>
+<span class="nc bnc" id="L1046" title="All 2 branches missed.">                        .contains(searchQuery)</span>
+                ) {
+<span class="nc" id="L1048">                    filteredComparisons.add(c);</span>
+                }
+<span class="nc" id="L1050">            } catch (Exception e) {</span>
+<span class="nc" id="L1051">                log.error(e.getMessage(), e);</span>
+<span class="nc" id="L1052">            }</span>
+<span class="nc" id="L1053">        }</span>
+
+<span class="nc" id="L1055">        return filteredComparisons;</span>
+    }
+
+    /**
+     * Filters a list of job pairs against some search query. The query is compared
+     * to solver, benchmark, and config
+     * names, as well as integer status code and result. The job pair is not
+     * filtered if the query is a
+     * case-insensitive
+     * substring of any of those names
+     *
+     * @param pairs       The pairs to filter
+     * @param searchQuery The query
+     * @return A filtered list of job pairs
+     * @author Eric Burns
+     */
+
+    protected static List&lt;JobPair&gt; filterPairs(
+        List&lt;JobPair&gt; pairs,
+        String searchQuery,
+        int stageNumber
+    ) {
+        // no filtering is necessary if there's no query
+<span class="nc bnc" id="L1078" title="All 2 branches missed.">        if (Util.isNullOrEmpty(searchQuery)) {</span>
+<span class="nc" id="L1079">            return pairs;</span>
+        }
+
+<span class="nc" id="L1082">        searchQuery = searchQuery.toLowerCase();</span>
+<span class="nc" id="L1083">        List&lt;JobPair&gt; filteredPairs = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">        for (JobPair jp : pairs) {</span>
+<span class="nc" id="L1085">            JoblineStage stage = jp.getStageFromNumber(stageNumber);</span>
+            try {
+<span class="nc" id="L1087">                if (</span>
+                    jp
+<span class="nc" id="L1089">                        .getBench()</span>
+<span class="nc" id="L1090">                        .getName()</span>
+<span class="nc" id="L1091">                        .toLowerCase()</span>
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">                        .contains(searchQuery) ||</span>
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">                    String.valueOf(stage.getStatus().getCode().getVal()).equals(</span>
+                        searchQuery
+                    ) ||
+                    stage
+<span class="nc" id="L1097">                        .getSolver()</span>
+<span class="nc" id="L1098">                        .getName()</span>
+<span class="nc" id="L1099">                        .toLowerCase()</span>
+<span class="nc bnc" id="L1100" title="All 2 branches missed.">                        .contains(searchQuery) ||</span>
+                    stage
+<span class="nc" id="L1102">                        .getConfiguration()</span>
+<span class="nc" id="L1103">                        .getName()</span>
+<span class="nc" id="L1104">                        .toLowerCase()</span>
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">                        .contains(searchQuery) ||</span>
+<span class="nc bnc" id="L1106" title="All 2 branches missed.">                    stage.getStarexecResult().contains(searchQuery)</span>
+                ) {
+<span class="nc" id="L1108">                    filteredPairs.add(jp);</span>
+                }
+<span class="nc" id="L1110">            } catch (Exception e) {</span>
+<span class="nc" id="L1111">                log.warn(&quot;filterPairs&quot;, &quot;JobPair: &quot; + jp.getId(), e);</span>
+<span class="nc" id="L1112">            }</span>
+<span class="nc" id="L1113">        }</span>
+
+<span class="nc" id="L1115">        return filteredPairs;</span>
+    }
+
+    /**
+     * Retrieves all attributes (key/value) of the given job pair. Returns a mapping
+     * of those attributes to stages
+     * based
+     * on the jobpair_stage_data.stage_number
+     *
+     * @param con    The connection to make the query on
+     * @param pairId The id of the pair to get the attributes of
+     * @return The properties object which holds all the pair's attributes
+     * @author Tyler Jensen
+     */
+    protected static HashMap&lt;Integer, Properties&gt; getAttributes(
+        Connection con,
+        int pairId
+    ) {
+<span class="nc" id="L1133">        PreparedStatement ps = null;</span>
+<span class="nc" id="L1134">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L1136">            HashMap&lt;Integer, Properties&gt; props = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L1137">            ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetPairAttrs(?)&quot;);</span>
+<span class="nc" id="L1138">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L1139">            results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L1141" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L1142">                int joblineStageNumber = results.getInt(&quot;stage_number&quot;);</span>
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">                if (!props.containsKey(joblineStageNumber)) {</span>
+<span class="nc" id="L1144">                    props.put(joblineStageNumber, new Properties());</span>
+                }
+<span class="nc" id="L1146">                props</span>
+<span class="nc" id="L1147">                    .get(joblineStageNumber)</span>
+<span class="nc" id="L1148">                    .put(</span>
+<span class="nc" id="L1149">                        results.getString(&quot;attr_key&quot;),</span>
+<span class="nc" id="L1150">                        results.getString(&quot;attr_value&quot;)</span>
+                    );
+<span class="nc" id="L1152">            }</span>
+
+<span class="nc" id="L1154">            return props;</span>
+<span class="nc" id="L1155">        } catch (Exception e) {</span>
+<span class="nc" id="L1156">            log.error(&quot;getAttributes&quot;, e);</span>
+        } finally {
+<span class="nc" id="L1158">            Common.safeClose(results);</span>
+<span class="nc" id="L1159">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L1161">        return null;</span>
+    }
+
+    /**
+     * Retrieves all attributes (key/value) of the given job pair
+     *
+     * @param pairId The id of the pair to get the attributes of
+     * @return The properties object which holds all the pair's attributes
+     * @author Tyler Jensen
+     */
+    public static HashMap&lt;Integer, Properties&gt; getAttributes(int pairId) {
+<span class="nc" id="L1172">        Connection con = null;</span>
+<span class="nc" id="L1173">        log.debug(&quot;Calling JobPairs.getAttributes for an individual pair&quot;);</span>
+        try {
+<span class="nc" id="L1175">            con = Common.getConnection();</span>
+<span class="nc" id="L1176">            return getAttributes(con, pairId);</span>
+<span class="nc" id="L1177">        } catch (Exception e) {</span>
+<span class="nc" id="L1178">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L1180">            Common.safeClose(con);</span>
+        }
+
+<span class="nc" id="L1183">        return null;</span>
+    }
+
+    /**
+     * Gets the path to the output file for this pair.
+     *
+     * @param pairId The id of the pair to get the filepath for
+     * @return The string path, or null on failure
+     * @author Eric Burns
+     */
+
+    public static String getLogPath(int pairId) {
+<span class="nc" id="L1195">        return getLogFilePath(getFilePathInfo(pairId));</span>
+    }
+
+    /**
+     * Populates a job pair with just enough information to find the file path. The
+     * pair will be returned with a single
+     * primary stage set with a solver name and config name
+     *
+     * @param pairId
+     * @return
+     */
+    private static JobPair getFilePathInfo(int pairId) {
+<span class="nc" id="L1207">        Connection con = null;</span>
+<span class="nc" id="L1208">        PreparedStatement ps = null;</span>
+<span class="nc" id="L1209">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L1211">            con = Common.getConnection();</span>
+<span class="nc" id="L1212">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.getJobPairFilePathInfo(?)&quot;
+            );
+<span class="nc" id="L1215">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L1216">            results = ps.executeQuery();</span>
+<span class="nc bnc" id="L1217" title="All 2 branches missed.">            if (results.next()) {</span>
+<span class="nc" id="L1218">                JobPair pair = new JobPair();</span>
+
+<span class="nc" id="L1220">                pair.addStage(new JoblineStage());</span>
+
+<span class="nc" id="L1222">                pair.setPrimaryStageNumber(results.getInt(&quot;stage_number&quot;));</span>
+<span class="nc" id="L1223">                pair</span>
+<span class="nc" id="L1224">                    .getStages()</span>
+<span class="nc" id="L1225">                    .get(0)</span>
+<span class="nc" id="L1226">                    .setStageNumber(pair.getPrimaryStageNumber());</span>
+<span class="nc" id="L1227">                Solver s = pair.getPrimarySolver();</span>
+<span class="nc" id="L1228">                s.setName(results.getString(&quot;solver_name&quot;));</span>
+<span class="nc" id="L1229">                Benchmark b = pair.getBench();</span>
+<span class="nc" id="L1230">                b.setName(results.getString(&quot;bench_name&quot;));</span>
+<span class="nc" id="L1231">                Configuration c = pair.getPrimaryConfiguration();</span>
+<span class="nc" id="L1232">                c.setName(results.getString(&quot;config_name&quot;));</span>
+<span class="nc" id="L1233">                pair.setJobId(results.getInt(&quot;job_id&quot;));</span>
+<span class="nc" id="L1234">                pair.setPath(results.getString(&quot;path&quot;));</span>
+<span class="nc" id="L1235">                pair.setJobSpaceId(results.getInt(&quot;job_space_id&quot;));</span>
+
+<span class="nc" id="L1237">                pair.setId(pairId);</span>
+<span class="nc" id="L1238">                return pair;</span>
+            }
+<span class="nc" id="L1240">        } catch (Exception e) {</span>
+<span class="nc" id="L1241">            log.debug(&quot;getFilePathInfo&quot;, e);</span>
+        } finally {
+<span class="nc" id="L1243">            Common.safeClose(con);</span>
+<span class="nc" id="L1244">            Common.safeClose(ps);</span>
+<span class="nc" id="L1245">            Common.safeClose(results);</span>
+        }
+<span class="nc" id="L1247">        return null;</span>
+    }
+
+    /**
+     * Gets the path to the directory containing all output files for this job. For
+     * jobs created before solver
+     * pipelines, returns the single output file for the job
+     *
+     * @param pairId The id of the pair to get the filepath for
+     * @return The string path, or null on failure
+     * @author Eric Burns
+     */
+
+    public static String getStdout(int pairId) {
+<span class="nc" id="L1261">        return getPairStdout(getFilePathInfo(pairId));</span>
+    }
+
+    /**
+     * Returns a list of files representing paths to both a pair's standard output
+     * and additional output directories
+     * . If
+     * the given file is a directory, it is returned alone. Otherwise, it is
+     * interpreted as the single stdout file and
+     * the additional directory is returned as well if it exists.
+     *
+     * @param pairId
+     * @param stdout
+     * @return
+     */
+    private static List&lt;File&gt; getOutputPathsFromStdout(
+        int pairId,
+        File stdout
+    ) {
+<span class="nc" id="L1280">        List&lt;File&gt; files = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1281">        files.add(stdout);</span>
+        // if we need the other directory
+<span class="nc bnc" id="L1283" title="All 2 branches missed.">        if (!stdout.isDirectory()) {</span>
+<span class="nc" id="L1284">            File otherOutput = new File(</span>
+<span class="nc" id="L1285">                stdout.getParentFile(),</span>
+                pairId + &quot;_output&quot;
+            );
+<span class="nc bnc" id="L1288" title="All 2 branches missed.">            if (otherOutput.exists()) {</span>
+<span class="nc" id="L1289">                files.add(otherOutput);</span>
+            }
+        }
+<span class="nc" id="L1292">        return files;</span>
+    }
+
+    /**
+     * Returns a list of files representing paths to both a pair's standard output
+     * and additional output directories
+     * . If
+     * these two things are contained in a single top level directory, as they are
+     * when joblines are used, only that
+     * directory is returned. No extra output dir is returned if extra outputs are
+     * not used.
+     *
+     * @param pairId The pair to get output for
+     * @return Paths to all output for this job. has no output yet
+     */
+    public static List&lt;File&gt; getOutputPaths(int pairId) {
+<span class="nc" id="L1308">        File stdout = new File(getStdout(pairId));</span>
+<span class="nc" id="L1309">        return getOutputPathsFromStdout(pairId, stdout);</span>
+    }
+
+    /**
+     * Same as getOutputPaths(pairId), except the given pair is expected to have all
+     * relevant fields populated and will
+     * not need to be retrieved from the database
+     *
+     * @param pair
+     * @return See getOutputPaths(pairId)
+     */
+    public static List&lt;File&gt; getOutputPaths(JobPair pair) {
+<span class="nc" id="L1321">        File stdout = new File(getPairStdout(pair));</span>
+<span class="nc" id="L1322">        return getOutputPathsFromStdout(pair.getId(), stdout);</span>
+    }
+
+    /**
+     * Gets the path to the output file for the given job pair and stage
+     *
+     * @param pairId
+     * @param stageNumber
+     * @return The absolute file path to the output for the given stage of the given
+     *         pair
+     */
+
+    public static String getStdout(int pairId, int stageNumber) {
+<span class="nc" id="L1335">        return getFilePath(getFilePathInfo(pairId), stageNumber);</span>
+    }
+
+    /**
+     * Removes a specific pair from the job_pair_completion table
+     *
+     * @param pairId The ID of the pair being removed
+     */
+
+    public static void removePairFromCompletedTable(int pairId) {
+<span class="nc" id="L1345">        Connection con = null;</span>
+<span class="nc" id="L1346">        PreparedStatement ps = null;</span>
+
+        try {
+<span class="nc" id="L1349">            con = Common.getConnection();</span>
+<span class="nc" id="L1350">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.RemovePairFromCompletedTable(?)&quot;
+            );
+<span class="nc" id="L1353">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L1354">            boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L1355" title="All 2 branches missed.">            if (hasResultSet) {</span>
+<span class="nc" id="L1356">                ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L1357" title="All 2 branches missed.">                while (rs.next()) {</span>
+                    // consume the result set
+                }
+<span class="nc" id="L1360">                Common.safeClose(rs);</span>
+            }
+<span class="nc" id="L1362">        } catch (SQLException e) {</span>
+            // Check if this is a &quot;not found&quot; error (SQLSTATE P0002)
+<span class="nc bnc" id="L1364" title="All 2 branches missed.">            if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L1365">                log.debug(</span>
+                    &quot;Completion record for pair &quot; +
+                        pairId +
+                        &quot; not found (job may still be running or was never marked complete). &quot; +
+                        &quot;This is expected if the pair is still executing. Continuing anyway.&quot;
+                );
+                // This is not an error - the pair might still be executing, or completion wasn't tracked
+<span class="nc" id="L1372">                return;</span>
+            }
+            // Other SQL errors should be logged as warnings
+<span class="nc" id="L1375">            log.warn(</span>
+                &quot;SQL error removing pair &quot; +
+                    pairId +
+                    &quot; from completion table: &quot; +
+<span class="nc" id="L1379">                    e.getMessage() +</span>
+                    &quot; (SQLSTATE: &quot; +
+<span class="nc" id="L1381">                    e.getSQLState() +</span>
+                    &quot;)&quot;,
+                e
+            );
+<span class="nc" id="L1385">        } catch (Exception e) {</span>
+<span class="nc" id="L1386">            log.error(</span>
+                &quot;Unexpected error removing pair &quot; +
+                    pairId +
+                    &quot; from completion table: &quot; +
+<span class="nc" id="L1390">                    e.getMessage(),</span>
+                e
+            );
+        } finally {
+<span class="nc" id="L1394">            Common.safeClose(con);</span>
+<span class="nc" id="L1395">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L1397">    }</span>
+
+    /**
+     * Returns the log of a job pair by reading in the physical log file into a
+     * string.
+     *
+     * @param pairId The id of the pair to get the log for
+     * @return The log of the job run
+     */
+    public static String getJobLog(int pairId) {
+        try {
+<span class="nc" id="L1408">            String logPath = JobPairs.getLogPath(pairId);</span>
+
+<span class="nc" id="L1410">            File logFile = new File(logPath);</span>
+
+<span class="nc bnc" id="L1412" title="All 2 branches missed.">            if (logFile.exists()) {</span>
+<span class="nc" id="L1413">                return FileUtils.readFileToString(</span>
+                    logFile,
+                    StandardCharsets.UTF_8
+                );
+            }
+<span class="nc" id="L1418">        } catch (Exception e) {</span>
+<span class="nc" id="L1419">            log.warn(e.getMessage(), e);</span>
+<span class="nc" id="L1420">        }</span>
+
+<span class="nc" id="L1422">        return null;</span>
+    }
+
+    /**
+     * Returns the absolute path to where the log for a pair is stored given the
+     * pair.
+     *
+     * @param pair
+     * @return The absolute path to the log file for the given pair, or null if it
+     *         could not be found
+     */
+    public static String getLogFilePath(JobPair pair) {
+        try {
+<span class="nc" id="L1435">            File file = new File(Jobs.getLogDirectory(pair.getJobId()));</span>
+<span class="nc" id="L1436">            file = new File(file, String.valueOf(pair.getJobSpaceId()));</span>
+            // Add pair-specific subdirectory to prevent concurrent pair registration conflicts
+            // This ensures each pair from the same job has a unique parent directory
+            // for LocalJobMonitor tracking (prevents one-to-one map overwrite issues)
+            //
+            // SECURITY NOTE: pair.getId() returns a primitive int (from Identifiable base class)
+            // which is a database-assigned primary key. This is inherently safe from path
+            // injection attacks as it cannot contain path traversal characters like &quot;../&quot;.
+            // No additional sanitization is required.
+<span class="nc" id="L1445">            file = new File(file, &quot;pair_&quot; + pair.getId());</span>
+<span class="nc" id="L1446">            file = new File(file, pair.getId() + &quot;.txt&quot;);</span>
+<span class="nc" id="L1447">            log.trace(&quot;found this log path &quot; + file.getAbsolutePath());</span>
+<span class="nc" id="L1448">            return file.getAbsolutePath();</span>
+<span class="nc" id="L1449">        } catch (Exception e) {</span>
+<span class="nc" id="L1450">            log.error(&quot;getLogFilePath&quot;, e);</span>
+        }
+<span class="nc" id="L1452">        return null;</span>
+    }
+
+    /**
+     * Retrieves the output of a single stage of the given job pair. Requires that
+     * the jobId, path, solver name, config
+     * name, and bench names of the PRIMARY STAGE be populated. The fields do NOT
+     * need to be populated for given stage,
+     * ONLY the primary stage
+     *
+     * @param pair
+     * @param stageNumber A number &gt;=1 representing the stage of this pair
+     * @return The absolute file path to the output file for the given stage of the
+     *         given pair
+     */
+    public static String getFilePath(JobPair pair, int stageNumber) {
+<span class="nc" id="L1468">        String path = getPairStdout(pair); // this is the path to the top level directory of the pair</span>
+
+<span class="nc" id="L1470">        File f = new File(path);</span>
+<span class="nc bnc" id="L1471" title="All 2 branches missed.">        if (f.isDirectory()) {</span>
+            // means this is a job created after stages were implemented
+<span class="nc" id="L1473">            return new File(f, stageNumber + &quot;.txt&quot;).getAbsolutePath();</span>
+        } else {
+            // if we get down here, it means that this pair did NOT use stages.
+<span class="nc" id="L1476">            return path;</span>
+        }
+    }
+
+    /**
+     * Gets the path to the directory that contains all the output files for every
+     * stage in this pair. For old pairs
+     * that do not have stages, simply returns the path to the single output file
+     * for this pair. Requires that the
+     * jobId, path, solver name, config name, and bench names be populated for the
+     * PRIMARY STAGES
+     *
+     * @param pair The pair to get the filepath for
+     * @return The string path, or null on failure
+     * @author Eric Burns
+     */
+
+    // Note that this function tries several things due to supporting several layers
+    // of backwards compatibility
+    public static String getPairStdout(JobPair pair) {
+        try {
+<span class="nc bnc" id="L1497" title="All 4 branches missed.">            if (pair == null || pair.getBenchPath() == null) {</span>
+<span class="nc" id="L1498">                log.warn(&quot;getPairStdout: pair or benchPath is null&quot;);</span>
+<span class="nc" id="L1499">                return null;</span>
+            }
+<span class="nc" id="L1501">            final String path = Util.normalizeFilePath(pair.getBenchPath());</span>
+<span class="nc" id="L1502">            String jobDir = Jobs.getDirectory(pair.getJobId());</span>
+<span class="nc bnc" id="L1503" title="All 2 branches missed.">            if (jobDir == null) {</span>
+<span class="nc" id="L1504">                log.warn(</span>
+<span class="nc" id="L1505">                    &quot;getPairStdout: jobDir is null for jobId &quot; + pair.getJobId()</span>
+                );
+<span class="nc" id="L1507">                return null;</span>
+            }
+<span class="nc" id="L1509">            File file = new File(jobDir, path);</span>
+
+<span class="nc bnc" id="L1511" title="All 2 branches missed.">            if (!file.exists()) {</span>
+                // if the job output could not be found
+<span class="nc" id="L1513">                if (</span>
+<span class="nc bnc" id="L1514" title="All 2 branches missed.">                    pair.getPrimarySolver() == null ||</span>
+<span class="nc bnc" id="L1515" title="All 2 branches missed.">                    pair.getPrimaryConfiguration() == null ||</span>
+<span class="nc bnc" id="L1516" title="All 2 branches missed.">                    pair.getBench() == null</span>
+                ) {
+<span class="nc" id="L1518">                    log.warn(</span>
+                        &quot;getPairStdout: solver, config, or bench is null for pair &quot; +
+<span class="nc" id="L1520">                            pair.getId()</span>
+                    );
+<span class="nc" id="L1522">                    return null;</span>
+                }
+                // Also check that the names are not null before creating File objects
+<span class="nc" id="L1525">                String solverName = pair.getPrimarySolver().getName();</span>
+<span class="nc" id="L1526">                String configName = pair.getPrimaryConfiguration().getName();</span>
+<span class="nc" id="L1527">                String benchName = pair.getBench().getName();</span>
+<span class="nc bnc" id="L1528" title="All 6 branches missed.">                if (</span>
+                    solverName == null ||
+                    configName == null ||
+                    benchName == null
+                ) {
+<span class="nc" id="L1533">                    log.warn(</span>
+                        &quot;getPairStdout: solverName, configName, or benchName is null. solver=&quot; +
+                            solverName +
+                            &quot;, config=&quot; +
+                            configName +
+                            &quot;, bench=&quot; +
+                            benchName
+                    );
+<span class="nc" id="L1541">                    return null;</span>
+                }
+<span class="nc" id="L1543">                File testFile = new File(file, solverName);</span>
+<span class="nc" id="L1544">                testFile = new File(testFile, configName);</span>
+<span class="nc" id="L1545">                testFile = new File(testFile, benchName);</span>
+<span class="nc bnc" id="L1546" title="All 2 branches missed.">                if (testFile.exists()) {</span>
+                    // check the alternate path some pairs are still stored at
+<span class="nc" id="L1548">                    FileUtils.copyFile(testFile, file);</span>
+<span class="nc bnc" id="L1549" title="All 2 branches missed.">                    if (file.exists()) {</span>
+<span class="nc" id="L1550">                        testFile.delete();</span>
+                    }
+                }
+<span class="nc bnc" id="L1553" title="All 2 branches missed.">            } else if (file.isFile()) {</span>
+                // if it is a file, we have already got the full path
+<span class="nc" id="L1555">                return file.getAbsolutePath();</span>
+            }
+
+            // before solver pipelines, pairs were stored as a single file titled
+            // &lt;pairid&gt;.txt . If that file exists,
+            // returns it
+<span class="nc" id="L1561">            File testFile = new File(file, pair.getId() + &quot;.txt&quot;);</span>
+
+<span class="nc bnc" id="L1563" title="All 2 branches missed.">            if (testFile.exists()) {</span>
+<span class="nc" id="L1564">                return testFile.getAbsolutePath();</span>
+            }
+
+            // otherwise, this is a modern job, and we return a directory with the name of
+            // the pair id
+
+<span class="nc" id="L1570">            file = new File(file, String.valueOf(pair.getId()));</span>
+
+<span class="nc" id="L1572">            return file.getAbsolutePath();</span>
+<span class="nc" id="L1573">        } catch (Exception e) {</span>
+<span class="nc" id="L1574">            log.error(&quot;getPairStdout&quot;, e);</span>
+        }
+<span class="nc" id="L1576">        return null;</span>
+    }
+
+    /**
+     * Gets the job pair with the given id non-recursively (Worker node, status,
+     * benchmark and solver will NOT be
+     * populated). Only the primary stage is created! To get all the stages, you
+     * need to call getPairDetailed
+     *
+     * @param pairId The id of the pair to get
+     * @return The job pair object with the given id.
+     * @author Tyler Jensen
+     */
+    public static JobPair getPair(int pairId) {
+<span class="nc" id="L1590">        Connection con = null;</span>
+<span class="nc" id="L1591">        PreparedStatement ps = null;</span>
+<span class="nc" id="L1592">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L1594">            con = Common.getConnection();</span>
+<span class="nc" id="L1595">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairById(?)&quot;
+            );
+<span class="nc" id="L1598">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L1599">            results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L1601" title="All 2 branches missed.">            if (results.next()) {</span>
+<span class="nc" id="L1602">                JobPair jp = JobPairs.resultToPair(results);</span>
+<span class="nc" id="L1603">                jp.addStage(new JoblineStage()); // just add an empty stage that we can populate below</span>
+<span class="nc" id="L1604">                jp</span>
+<span class="nc" id="L1605">                    .getStages()</span>
+<span class="nc" id="L1606">                    .get(0)</span>
+<span class="nc" id="L1607">                    .setStageNumber(jp.getPrimaryStageNumber());</span>
+
+<span class="nc" id="L1609">                jp.getNode().setId(results.getInt(&quot;node_id&quot;));</span>
+<span class="nc" id="L1610">                jp.getStatus().setCode(results.getInt(&quot;status_code&quot;));</span>
+<span class="nc" id="L1611">                jp.getBench().setId(results.getInt(&quot;bench_id&quot;));</span>
+<span class="nc" id="L1612">                jp.getBench().setName(results.getString(&quot;bench_name&quot;));</span>
+<span class="nc" id="L1613">                jp</span>
+<span class="nc" id="L1614">                    .getPrimarySolver()</span>
+<span class="nc" id="L1615">                    .getConfigurations()</span>
+<span class="nc" id="L1616">                    .add(new Configuration(results.getInt(&quot;config_id&quot;)));</span>
+<span class="nc" id="L1617">                jp.getPrimarySolver().setId(results.getInt(&quot;solver_id&quot;));</span>
+<span class="nc" id="L1618">                jp.getPrimarySolver().setName(results.getString(&quot;solver_name&quot;));</span>
+<span class="nc" id="L1619">                jp</span>
+<span class="nc" id="L1620">                    .getPrimarySolver()</span>
+<span class="nc" id="L1621">                    .getConfigurations()</span>
+<span class="nc" id="L1622">                    .get(0)</span>
+<span class="nc" id="L1623">                    .setName(results.getString(&quot;config_name&quot;));</span>
+<span class="nc" id="L1624">                if (</span>
+<span class="nc bnc" id="L1625" title="All 2 branches missed.">                    !jp.getStages().isEmpty() &amp;&amp;</span>
+<span class="nc bnc" id="L1626" title="All 2 branches missed.">                    !jp.getPrimarySolver().getConfigurations().isEmpty()</span>
+                ) {
+<span class="nc" id="L1628">                    jp</span>
+<span class="nc" id="L1629">                        .getStages()</span>
+<span class="nc" id="L1630">                        .get(0)</span>
+<span class="nc" id="L1631">                        .setConfiguration(</span>
+<span class="nc" id="L1632">                            jp.getPrimarySolver().getConfigurations().get(0)</span>
+                        );
+                }
+<span class="nc" id="L1635">                return jp;</span>
+            } else {
+<span class="nc" id="L1637">                log.warn(&quot;getPair&quot;, &quot;Pair not found: &quot; + pairId);</span>
+            }
+<span class="nc" id="L1639">            Common.safeClose(results);</span>
+<span class="nc" id="L1640">        } catch (Exception e) {</span>
+<span class="nc" id="L1641">            log.error(&quot;getPair&quot;, e);</span>
+        } finally {
+<span class="nc" id="L1643">            Common.safeClose(con);</span>
+<span class="nc" id="L1644">            Common.safeClose(ps);</span>
+<span class="nc" id="L1645">            Common.safeClose(results);</span>
+        }
+
+<span class="nc" id="L1648">        return null;</span>
+    }
+
+    /**
+     * Gets the job pair with the given id recursively (Worker node, status,
+     * benchmark and solver WILL be populated)
+     *
+     * @param con    The connection to make the query on
+     * @param pairId The id of the pair to get
+     * @return The job pair object with the given id.
+     * @author Tyler Jensen
+     */
+    protected static JobPair getPairDetailed(Connection con, int pairId) {
+<span class="nc" id="L1661">        PreparedStatement ps = null;</span>
+<span class="nc" id="L1662">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L1664">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairById(?)&quot;
+            );
+<span class="nc" id="L1667">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L1668">            results = ps.executeQuery();</span>
+
+<span class="nc" id="L1670">            JobPair jp = null;</span>
+            // first, we get the top level info from the job_pairs table
+<span class="nc bnc" id="L1672" title="All 2 branches missed.">            if (results.next()) {</span>
+<span class="nc" id="L1673">                jp = JobPairs.resultToPair(results);</span>
+<span class="nc" id="L1674">                jp.setCompletionId(results.getInt(&quot;completion_id&quot;));</span>
+<span class="nc" id="L1675">                jp.setNode(</span>
+<span class="nc" id="L1676">                    Cluster.getNodeDetails(con, results.getInt(&quot;node_id&quot;))</span>
+                );
+<span class="nc" id="L1678">                jp.setBench(</span>
+<span class="nc" id="L1679">                    Benchmarks.get(con, results.getInt(&quot;bench_id&quot;), true)</span>
+                );
+
+<span class="nc" id="L1682">                Status s = new Status();</span>
+<span class="nc" id="L1683">                s.setCode(results.getInt(&quot;status_code&quot;));</span>
+<span class="nc" id="L1684">                jp.setStatus(s);</span>
+<span class="nc" id="L1685">                jp.setJobSpaceName(results.getString(&quot;job_space_name&quot;));</span>
+<span class="nc" id="L1686">            } else {</span>
+                // couldn't find the pair for some reason
+<span class="nc" id="L1688">                return null;</span>
+            }
+
+<span class="nc" id="L1691">            populateJobPairStagesDetailed(jp, con);</span>
+
+<span class="nc" id="L1693">            return jp;</span>
+<span class="nc" id="L1694">        } catch (Exception e) {</span>
+<span class="nc" id="L1695">            log.error(&quot;getPairDetailed&quot;, e);</span>
+        } finally {
+<span class="nc" id="L1697">            Common.safeClose(results);</span>
+<span class="nc" id="L1698">            Common.safeClose(ps);</span>
+        }
+
+<span class="nc" id="L1701">        return null;</span>
+    }
+
+    private static void populateJobPairStagesDetailed(
+        JobPair jp,
+        Connection con
+    ) throws SQLException {
+<span class="nc" id="L1708">        PreparedStatement ps = null;</span>
+<span class="nc" id="L1709">        ResultSet results = null;</span>
+
+        try {
+<span class="nc" id="L1712">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairStagesById(?)&quot;
+            );
+<span class="nc" id="L1715">            ps.setInt(1, jp.getId());</span>
+<span class="nc" id="L1716">            results = ps.executeQuery();</span>
+            // next, we get data at the stage level
+<span class="nc bnc" id="L1718" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L1719">                JoblineStage stage = resultToStage(results);</span>
+<span class="nc" id="L1720">                int configId = results.getInt(&quot;config_id&quot;);</span>
+<span class="nc" id="L1721">                int solverId = results.getInt(&quot;solver_id&quot;);</span>
+<span class="nc" id="L1722">                String configName = results.getString(&quot;config_name&quot;);</span>
+<span class="nc" id="L1723">                String solverName = results.getString(&quot;solver_name&quot;);</span>
+                // means this stage has no configuration
+<span class="nc bnc" id="L1725" title="All 2 branches missed.">                if (configId == -1) {</span>
+<span class="nc" id="L1726">                    stage.setNoOp(true);</span>
+<span class="nc bnc" id="L1727" title="All 2 branches missed.">                } else if (configId &gt; 0) {</span>
+<span class="nc" id="L1728">                    Solver solver = Solvers.getSolverByConfig(</span>
+                        con,
+                        configId,
+                        true
+                    );
+<span class="nc" id="L1733">                    Configuration c = Solvers.getConfiguration(configId);</span>
+
+                    // this can happen if the pair references a deleted solver
+<span class="nc bnc" id="L1736" title="All 2 branches missed.">                    if (solver == null) {</span>
+<span class="nc" id="L1737">                        solver = new Solver();</span>
+<span class="nc" id="L1738">                        solver.setId(solverId);</span>
+<span class="nc" id="L1739">                        solver.setName(solverName);</span>
+                    }
+
+<span class="nc bnc" id="L1742" title="All 2 branches missed.">                    if (c == null) {</span>
+<span class="nc" id="L1743">                        c = new Configuration();</span>
+<span class="nc" id="L1744">                        c.setId(configId);</span>
+<span class="nc" id="L1745">                        c.setName(configName);</span>
+                    }
+
+<span class="nc" id="L1748">                    stage.setSolver(solver);</span>
+<span class="nc" id="L1749">                    stage.setConfiguration(c);</span>
+<span class="nc" id="L1750">                    stage.getSolver().addConfiguration(c);</span>
+                }
+<span class="nc" id="L1752">                jp.addStage(stage);</span>
+<span class="nc" id="L1753">            }</span>
+            // last, we get attributes for everything
+<span class="nc" id="L1755">            HashMap&lt;Integer, Properties&gt; attrs = getAttributes(jp.getId());</span>
+<span class="nc bnc" id="L1756" title="All 2 branches missed.">            for (JoblineStage stage : jp.getStages()) {</span>
+<span class="nc bnc" id="L1757" title="All 2 branches missed.">                if (attrs.containsKey(stage.getStageNumber())) {</span>
+<span class="nc" id="L1758">                    stage.setAttributes(attrs.get(stage.getStageNumber()));</span>
+                }
+<span class="nc" id="L1760">            }</span>
+        } finally {
+<span class="nc" id="L1762">            Common.safeClose(ps);</span>
+<span class="nc" id="L1763">            Common.safeClose(results);</span>
+        }
+<span class="nc" id="L1765">    }</span>
+
+    /**
+     * Gets the job pair with the given id recursively (Worker node, status,
+     * benchmark and solver WILL be populated)
+     *
+     * @param pairId The id of the pair to get
+     * @return The job pair object with the given id.
+     * @author Tyler Jensen
+     */
+    public static JobPair getPairDetailed(int pairId) {
+<span class="nc" id="L1776">        Connection con = null;</span>
+
+        try {
+<span class="nc" id="L1779">            con = Common.getConnection();</span>
+<span class="nc" id="L1780">            return getPairDetailed(con, pairId);</span>
+<span class="nc" id="L1781">        } catch (Exception e) {</span>
+<span class="nc" id="L1782">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L1784">            Common.safeClose(con);</span>
+        }
+
+<span class="nc" id="L1787">        return null;</span>
+    }
+
+    public static List&lt;JobPair&gt; getPairsInJobContainingBenchmark(
+        int jobId,
+        int benchmarkId
+    ) throws SQLException {
+<span class="nc" id="L1794">        java.sql.Connection con = null;</span>
+<span class="nc" id="L1795">        java.sql.PreparedStatement ps = null;</span>
+<span class="nc" id="L1796">        java.sql.ResultSet results = null;</span>
+        try {
+<span class="nc" id="L1798">            con = Common.getConnection();</span>
+<span class="nc" id="L1799">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairsInJobContainingBenchmark(?, ?)&quot;
+            );
+<span class="nc" id="L1802">            ps.setInt(1, jobId);</span>
+<span class="nc" id="L1803">            ps.setInt(2, benchmarkId);</span>
+<span class="nc" id="L1804">            results = ps.executeQuery();</span>
+<span class="nc" id="L1805">            List&lt;JobPair&gt; jobPairs = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1806" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L1807">                JobPair pair = resultToPair(results);</span>
+<span class="nc" id="L1808">                populateJobPairStagesDetailed(pair, con);</span>
+<span class="nc" id="L1809">                jobPairs.add(pair);</span>
+<span class="nc" id="L1810">            }</span>
+<span class="nc" id="L1811">            return jobPairs;</span>
+        } finally {
+<span class="nc" id="L1813">            Common.safeClose(results);</span>
+<span class="nc" id="L1814">            Common.safeClose(ps);</span>
+<span class="nc" id="L1815">            Common.safeClose(con);</span>
+        }
+    }
+
+    public static List&lt;JobPair&gt; getPairsInJobContainingSolver(
+        int jobId,
+        int solverId
+    ) throws SQLException {
+<span class="nc" id="L1823">        java.sql.Connection con = null;</span>
+<span class="nc" id="L1824">        java.sql.PreparedStatement ps = null;</span>
+<span class="nc" id="L1825">        java.sql.ResultSet results = null;</span>
+        try {
+<span class="nc" id="L1827">            con = Common.getConnection();</span>
+<span class="nc" id="L1828">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairsInJobContainingSolver(?, ?)&quot;
+            );
+<span class="nc" id="L1831">            ps.setInt(1, jobId);</span>
+<span class="nc" id="L1832">            ps.setInt(2, solverId);</span>
+<span class="nc" id="L1833">            results = ps.executeQuery();</span>
+<span class="nc" id="L1834">            List&lt;JobPair&gt; jobPairs = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1835" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L1836">                JobPair pairFromResults = resultToPair(results);</span>
+<span class="nc" id="L1837">                populateJobPairStagesDetailed(pairFromResults, con);</span>
+<span class="nc" id="L1838">                jobPairs.add(pairFromResults);</span>
+<span class="nc" id="L1839">            }</span>
+<span class="nc" id="L1840">            return jobPairs;</span>
+        } finally {
+<span class="nc" id="L1842">            Common.safeClose(results);</span>
+<span class="nc" id="L1843">            Common.safeClose(ps);</span>
+<span class="nc" id="L1844">            Common.safeClose(con);</span>
+        }
+    }
+
+    /**
+     * Extracts query information into a JoblineStage. Does NOT get deep information
+     * like solver and configuration
+     *
+     * @param result
+     * @return
+     * @throws Exception
+     */
+    protected static JoblineStage resultToStage(ResultSet result)
+        throws SQLException {
+<span class="nc" id="L1858">        JoblineStage stage = new JoblineStage();</span>
+
+<span class="nc" id="L1860">        stage.setStageNumber(</span>
+<span class="nc" id="L1861">            getIntSafe(</span>
+                result,
+                &quot;jobpair_stage_data.stage_number&quot;,
+                &quot;stage_number&quot;
+            )
+        );
+<span class="nc" id="L1867">        stage.setWallclockTime(</span>
+<span class="nc" id="L1868">            getDoubleSafe(result, &quot;jobpair_stage_data.wallclock&quot;, &quot;wallclock&quot;)</span>
+        );
+<span class="nc" id="L1870">        stage.setCpuUsage(</span>
+<span class="nc" id="L1871">            getDoubleSafe(result, &quot;jobpair_stage_data.cpu&quot;, &quot;cpu&quot;)</span>
+        );
+<span class="nc" id="L1873">        stage.setUserTime(</span>
+<span class="nc" id="L1874">            getDoubleSafe(result, &quot;jobpair_stage_data.user_time&quot;, &quot;user_time&quot;)</span>
+        );
+<span class="nc" id="L1876">        stage.setSystemTime(</span>
+<span class="nc" id="L1877">            getDoubleSafe(</span>
+                result,
+                &quot;jobpair_stage_data.system_time&quot;,
+                &quot;system_time&quot;
+            )
+        );
+<span class="nc" id="L1883">        stage.setMaxVirtualMemory(</span>
+<span class="nc" id="L1884">            getDoubleSafe(result, &quot;jobpair_stage_data.max_vmem&quot;, &quot;max_vmem&quot;)</span>
+        );
+<span class="nc" id="L1886">        stage.setMaxResidenceSetSize(</span>
+<span class="nc" id="L1887">            getDoubleSafe(</span>
+                result,
+                &quot;jobpair_stage_data.max_res_set&quot;,
+                &quot;max_res_set&quot;
+            )
+        );
+<span class="nc" id="L1893">        stage.setStageId(</span>
+<span class="nc" id="L1894">            getIntSafe(result, &quot;jobpair_stage_data.stage_id&quot;, &quot;stage_id&quot;)</span>
+        );
+<span class="nc" id="L1896">        stage</span>
+<span class="nc" id="L1897">            .getStatus()</span>
+<span class="nc" id="L1898">            .setCode(</span>
+<span class="nc" id="L1899">                getIntSafe(</span>
+                    result,
+                    &quot;jobpair_stage_data.status_code&quot;,
+                    &quot;status_code&quot;
+                )
+            );
+<span class="nc" id="L1905">        return stage;</span>
+    }
+
+    /**
+     * Helper method to extract information from a query for job pairs
+     *
+     * @param result The resultset that is the results from querying for job pairs
+     * @return A job pair object populated with data from the result set
+     */
+    protected static JobPair resultToPair(ResultSet result)
+        throws SQLException {
+<span class="nc" id="L1916">        JobPair jp = new JobPair();</span>
+
+<span class="nc" id="L1918">        jp.setId(getIntSafe(result, &quot;job_pairs.id&quot;, &quot;id&quot;));</span>
+<span class="nc" id="L1919">        jp.setJobId(getIntSafe(result, &quot;job_pairs.job_id&quot;, &quot;job_id&quot;));</span>
+<span class="nc" id="L1920">        jp.setBackendExecId(getIntSafe(result, &quot;job_pairs.sge_id&quot;, &quot;sge_id&quot;));</span>
+<span class="nc" id="L1921">        jp.setQueueSubmitTime(</span>
+<span class="nc" id="L1922">            getTimestampSafe(result, &quot;job_pairs.queuesub_time&quot;, &quot;queuesub_time&quot;)</span>
+        );
+<span class="nc" id="L1924">        jp.setStartTime(</span>
+<span class="nc" id="L1925">            getTimestampSafe(result, &quot;job_pairs.start_time&quot;, &quot;start_time&quot;)</span>
+        );
+<span class="nc" id="L1927">        jp.setEndTime(</span>
+<span class="nc" id="L1928">            getTimestampSafe(result, &quot;job_pairs.end_time&quot;, &quot;end_time&quot;)</span>
+        );
+        // Populate basic benchmark info.
+<span class="nc" id="L1931">        jp.getBench().setId(getIntSafe(result, &quot;bench_id&quot;, &quot;bench_id&quot;));</span>
+<span class="nc" id="L1932">        jp</span>
+<span class="nc" id="L1933">            .getBench()</span>
+<span class="nc" id="L1934">            .setName(getStringSafe(result, &quot;bench_name&quot;, &quot;bench_name&quot;));</span>
+
+<span class="nc" id="L1936">        jp.getNode().setId(getIntSafe(result, &quot;job_pairs.node_id&quot;, &quot;node_id&quot;));</span>
+<span class="nc" id="L1937">        jp</span>
+<span class="nc" id="L1938">            .getStatus()</span>
+<span class="nc" id="L1939">            .setCode(</span>
+<span class="nc" id="L1940">                getIntSafe(result, &quot;job_pairs.status_code&quot;, &quot;status_code&quot;)</span>
+            );
+
+<span class="nc" id="L1943">        jp.setPath(getStringSafe(result, &quot;job_pairs.path&quot;, &quot;path&quot;));</span>
+<span class="nc" id="L1944">        jp.setJobSpaceId(</span>
+<span class="nc" id="L1945">            getIntSafe(result, &quot;job_pairs.job_space_id&quot;, &quot;job_space_id&quot;)</span>
+        );
+<span class="nc" id="L1947">        jp.setPrimaryStageNumber(</span>
+<span class="nc" id="L1948">            getIntSafe(</span>
+                result,
+                &quot;job_pairs.primary_jobpair_data&quot;,
+                &quot;primary_jobpair_data&quot;
+            )
+        );
+<span class="nc" id="L1954">        jp.setSandboxNum(</span>
+<span class="nc" id="L1955">            getIntSafe(result, &quot;job_pairs.sandbox_num&quot;, &quot;sandbox_num&quot;)</span>
+        );
+        // log.debug(&quot;getting job pair from result set for id &quot; + jp.getId());
+<span class="nc" id="L1958">        return jp;</span>
+    }
+
+    /**
+     * Helper getters that try multiple column labels (prefixed and unprefixed) and
+     * do safe conversions.
+     */
+    private static boolean columnExists(ResultSet rs, String col)
+        throws SQLException {
+<span class="nc" id="L1967">        ResultSetMetaData md = rs.getMetaData();</span>
+<span class="nc" id="L1968">        int cols = md.getColumnCount();</span>
+<span class="nc bnc" id="L1969" title="All 2 branches missed.">        for (int i = 1; i &lt;= cols; i++) {</span>
+<span class="nc" id="L1970">            if (</span>
+<span class="nc bnc" id="L1971" title="All 2 branches missed.">                col.equalsIgnoreCase(md.getColumnLabel(i)) ||</span>
+<span class="nc bnc" id="L1972" title="All 2 branches missed.">                col.equalsIgnoreCase(md.getColumnName(i))</span>
+<span class="nc" id="L1973">            ) return true;</span>
+        }
+<span class="nc" id="L1975">        return false;</span>
+    }
+
+    private static int getIntSafe(ResultSet rs, String... cols)
+        throws SQLException {
+<span class="nc bnc" id="L1980" title="All 2 branches missed.">        for (String c : cols) {</span>
+<span class="nc bnc" id="L1981" title="All 2 branches missed.">            if (columnExists(rs, c)) return rs.getInt(c);</span>
+        }
+<span class="nc" id="L1983">        throw new SQLException(</span>
+<span class="nc" id="L1984">            &quot;None of the columns found: &quot; + Arrays.toString(cols)</span>
+        );
+    }
+
+    private static long getLongSafe(ResultSet rs, String... cols)
+        throws SQLException {
+<span class="nc bnc" id="L1990" title="All 2 branches missed.">        for (String c : cols) {</span>
+<span class="nc bnc" id="L1991" title="All 2 branches missed.">            if (columnExists(rs, c)) return rs.getLong(c);</span>
+        }
+<span class="nc" id="L1993">        throw new SQLException(</span>
+<span class="nc" id="L1994">            &quot;None of the columns found: &quot; + Arrays.toString(cols)</span>
+        );
+    }
+
+    private static String getStringSafe(ResultSet rs, String... cols)
+        throws SQLException {
+<span class="nc bnc" id="L2000" title="All 2 branches missed.">        for (String c : cols) {</span>
+<span class="nc bnc" id="L2001" title="All 2 branches missed.">            if (columnExists(rs, c)) return rs.getString(c);</span>
+        }
+<span class="nc" id="L2003">        return null;</span>
+    }
+
+    private static Timestamp getTimestampSafe(ResultSet rs, String... cols)
+        throws SQLException {
+<span class="nc bnc" id="L2008" title="All 2 branches missed.">        for (String c : cols) {</span>
+<span class="nc bnc" id="L2009" title="All 2 branches missed.">            if (columnExists(rs, c)) return rs.getTimestamp(c);</span>
+        }
+<span class="nc" id="L2011">        return null;</span>
+    }
+
+    private static double getDoubleSafe(ResultSet rs, String... cols)
+        throws SQLException {
+<span class="nc bnc" id="L2016" title="All 2 branches missed.">        for (String c : cols) {</span>
+<span class="nc bnc" id="L2017" title="All 2 branches missed.">            if (columnExists(rs, c)) {</span>
+                try {
+<span class="nc" id="L2019">                    return rs.getDouble(c);</span>
+<span class="nc" id="L2020">                } catch (SQLException e) {</span>
+<span class="nc" id="L2021">                    Object o = rs.getObject(c);</span>
+<span class="nc bnc" id="L2022" title="All 2 branches missed.">                    if (o instanceof Number) return ((Number) o).doubleValue();</span>
+<span class="nc" id="L2023">                    throw e;</span>
+                }
+            }
+        }
+<span class="nc" id="L2027">        throw new SQLException(</span>
+<span class="nc" id="L2028">            &quot;None of the columns found: &quot; + Arrays.toString(cols)</span>
+        );
+    }
+
+    /**
+     * Sets the status of a given job pair stage to the given status
+     *
+     * @param pairId      The ID of the pair to update
+     * @param stageNumber The number of the stage to update
+     * @param statusCode  The code to give the stage
+     * @param con         An open database connection to make the call on
+     * @return True on success and false on error
+     */
+    public static boolean setPairStageStatus(
+        int pairId,
+        int statusCode,
+        int stageNumber,
+        Connection con
+    ) {
+<span class="nc" id="L2047">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2049">            ps = con.prepareStatement(</span>
+                &quot;CALL starexec.UpdatePairStageStatus(?, ?, ?)&quot;
+            );
+<span class="nc" id="L2052">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L2053">            ps.setInt(2, stageNumber);</span>
+<span class="nc" id="L2054">            ps.setShort(3, (short) statusCode);</span>
+
+<span class="nc" id="L2056">            ps.execute();</span>
+            try {
+<span class="nc" id="L2058">                Common.safeClose(ps.getResultSet());</span>
+<span class="nc" id="L2059">            } catch (SQLException ignore) {}</span>
+
+<span class="nc" id="L2061">            return true;</span>
+<span class="nc" id="L2062">        } catch (Exception e) {</span>
+<span class="nc" id="L2063">            log.debug(&quot;setPairStageStatus&quot;, e);</span>
+        } finally {
+<span class="nc" id="L2065">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2067">        return false;</span>
+    }
+
+    /**
+     * Sets the status code of every stage that comes after the given stage to the
+     * given value
+     *
+     * @param pairId
+     * @param statusCode
+     * @param stageNumber
+     * @param con
+     * @return True on success and false otherwise
+     */
+    public static boolean setLaterPairStageStatus(
+        int pairId,
+        int statusCode,
+        int stageNumber,
+        Connection con
+    ) {
+<span class="nc" id="L2086">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2088">            ps = con.prepareStatement(</span>
+                &quot;CALL starexec.UpdateLaterStageStatuses(?, ?, ?)&quot;
+            );
+<span class="nc" id="L2091">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L2092">            ps.setInt(2, stageNumber);</span>
+<span class="nc" id="L2093">            ps.setShort(3, (short) statusCode);</span>
+
+<span class="nc" id="L2095">            ps.execute();</span>
+<span class="nc" id="L2096">            return true;</span>
+<span class="nc" id="L2097">        } catch (Exception e) {</span>
+<span class="nc" id="L2098">            log.debug(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2100">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2102">        return false;</span>
+    }
+
+    /**
+     * Sets the status code of every stage that comes after the given stage to the
+     * given value
+     *
+     * @param pairId
+     * @param statusCode
+     * @param stageNumber
+     * @return True on success and false on error
+     */
+
+    public static boolean setLaterPairStageStatus(
+        int pairId,
+        int statusCode,
+        int stageNumber
+    ) {
+<span class="nc" id="L2120">        Connection con = null;</span>
+        try {
+<span class="nc" id="L2122">            con = Common.getConnection();</span>
+
+<span class="nc" id="L2124">            return setLaterPairStageStatus(</span>
+                pairId,
+                statusCode,
+                stageNumber,
+                con
+            );
+<span class="nc" id="L2130">        } catch (Exception e) {</span>
+<span class="nc" id="L2131">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2133">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L2135">        return false;</span>
+    }
+
+    /**
+     * Sets the status code of every stage for the given pair to the given code
+     *
+     * @param pairId
+     * @param statusCode
+     * @return True on success and false otherwise
+     */
+    public static boolean setAllPairStageStatus(int pairId, int statusCode) {
+<span class="nc" id="L2146">        return setLaterPairStageStatus(pairId, statusCode, -1);</span>
+    }
+
+    /**
+     * Assigns a given status code to a job pair and all of its stages
+     *
+     * @param pairId
+     * @param statusCode
+     * @return True on success and false otherwise
+     */
+    public static boolean setStatusForPairAndStages(
+        int pairId,
+        int statusCode
+    ) {
+<span class="nc" id="L2160">        Connection con = null;</span>
+        try {
+<span class="nc" id="L2162">            con = Common.getConnection();</span>
+<span class="nc" id="L2163">            return (</span>
+<span class="nc bnc" id="L2164" title="All 2 branches missed.">                setPairStatus(pairId, statusCode, con) &amp;&amp;</span>
+<span class="nc bnc" id="L2165" title="All 2 branches missed.">                setAllPairStageStatus(pairId, statusCode, con)</span>
+            );
+<span class="nc" id="L2167">        } catch (Exception e) {</span>
+<span class="nc" id="L2168">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2170">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L2172">        return false;</span>
+    }
+
+    /**
+     * Sets the status code of every stage for the given pair to the given code
+     *
+     * @param pairId
+     * @param statusCode
+     * @param con        An open database connection to make calls on
+     * @return True on success and false on error
+     */
+    public static boolean setAllPairStageStatus(
+        int pairId,
+        int statusCode,
+        Connection con
+    ) {
+<span class="nc" id="L2188">        return setLaterPairStageStatus(pairId, statusCode, -1, con);</span>
+    }
+
+    /**
+     * Sets the disk_size for the given job pair to 0, updating the
+     * jobpair_stage_data, jobs, and users tables
+     *
+     * @param jobPairId
+     */
+    public static void setJobPairDiskSizeToZero(int jobPairId) {
+<span class="nc" id="L2198">        Connection con = null;</span>
+<span class="nc" id="L2199">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2201">            con = Common.getConnection();</span>
+<span class="nc" id="L2202">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.RemoveJobPairDiskSize(?)&quot;
+            );
+<span class="nc" id="L2205">            ps.setInt(1, jobPairId);</span>
+<span class="nc" id="L2206">            boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L2207" title="All 2 branches missed.">            if (hasResultSet) {</span>
+<span class="nc" id="L2208">                ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L2209" title="All 2 branches missed.">                while (rs.next()) {</span>
+                    // consume the result set
+                }
+<span class="nc" id="L2212">                Common.safeClose(rs);</span>
+            }
+<span class="nc" id="L2214">        } catch (Exception e) {</span>
+<span class="nc" id="L2215">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2217">            Common.safeClose(con);</span>
+<span class="nc" id="L2218">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2220">    }</span>
+
+    /**
+     * Gets pair ids, node ids, and job ids, that have been enqueued longer than a
+     * given amount of time.
+     *
+     * @param minutes if a pair has been enqueued longer than this number of minutes
+     *                it will be returned with its node
+     *                and job ids.
+     * @return the pair ids and their node ids and jobs ids that have been enqueued
+     *         longer than the given amount of
+     *         time.
+     * @throws SQLException if something goes wrong in the database.
+     */
+    public static ImmutableSet&lt;PairIdJobId&gt; getPairsEnqueuedLongerThan(
+        int minutes
+    ) throws SQLException {
+<span class="nc" id="L2237">        java.sql.Connection con = null;</span>
+<span class="nc" id="L2238">        java.sql.PreparedStatement ps = null;</span>
+<span class="nc" id="L2239">        java.sql.ResultSet results = null;</span>
+        try {
+<span class="nc" id="L2241">            con = Common.getConnection();</span>
+<span class="nc" id="L2242">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetPairsEnqueuedLongerThan(?)&quot;
+            );
+<span class="nc" id="L2245">            ps.setInt(1, minutes);</span>
+<span class="nc" id="L2246">            results = ps.executeQuery();</span>
+<span class="nc" id="L2247">            Set&lt;PairIdJobId&gt; brokenPairs = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L2248" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L2249">                brokenPairs.add(</span>
+                    new PairIdJobId(
+<span class="nc" id="L2251">                        results.getInt(&quot;pair_id&quot;),</span>
+<span class="nc" id="L2252">                        results.getInt(&quot;job_id&quot;)</span>
+                    )
+                );
+            }
+<span class="nc" id="L2256">            return ImmutableSet.copyOf(brokenPairs);</span>
+        } finally {
+<span class="nc" id="L2258">            Common.safeClose(results);</span>
+<span class="nc" id="L2259">            Common.safeClose(ps);</span>
+<span class="nc" id="L2260">            Common.safeClose(con);</span>
+        }
+    }
+
+    /**
+     * Gets nodes that may have had pairs enqueued longer than the given amount of
+     * time without setting them to
+     * &quot;running&quot;. The SQL procedure gets the queues for pairs that have been
+     * enqueued for the amount of time without
+     * being set to running and then gets the nodes from that queue that haven't
+     * been running jobs in that time.
+     *
+     * @param minutes the time that nodes must have been idle for to qualify as
+     *                broken.
+     * @return the ids of the identified nodes.
+     * @throws SQLException if there is a database error.
+     */
+    public static ImmutableSet&lt;
+        Integer
+    &gt; getNodesThatMayHavePairsEnqueuedLongerThan(int minutes)
+        throws SQLException {
+<span class="nc" id="L2281">        java.sql.Connection con = null;</span>
+<span class="nc" id="L2282">        java.sql.PreparedStatement ps = null;</span>
+<span class="nc" id="L2283">        java.sql.ResultSet results = null;</span>
+        try {
+<span class="nc" id="L2285">            con = Common.getConnection();</span>
+<span class="nc" id="L2286">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetNodesThatMayHavePairsEnqueuedLongerThan(?)&quot;
+            );
+<span class="nc" id="L2289">            ps.setInt(1, minutes);</span>
+<span class="nc" id="L2290">            results = ps.executeQuery();</span>
+<span class="nc" id="L2291">            Set&lt;Integer&gt; potentiallyBrokenNodes = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L2292" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L2293">                potentiallyBrokenNodes.add(results.getInt(&quot;node_id&quot;));</span>
+            }
+<span class="nc" id="L2295">            return ImmutableSet.copyOf(potentiallyBrokenNodes);</span>
+        } finally {
+<span class="nc" id="L2297">            Common.safeClose(results);</span>
+<span class="nc" id="L2298">            Common.safeClose(ps);</span>
+<span class="nc" id="L2299">            Common.safeClose(con);</span>
+        }
+    }
+
+    /**
+     * Sets the status of a given job pair to the given status
+     *
+     * @param pairId
+     * @param statusCode
+     * @param con
+     * @return True on success and false on error
+     */
+    public static boolean setPairStatus(
+        int pairId,
+        int statusCode,
+        Connection con
+    ) {
+<span class="nc" id="L2316">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2318">            ps = con.prepareStatement(&quot;CALL starexec.UpdatePairStatus(?, ?)&quot;);</span>
+<span class="nc" id="L2319">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L2320">            ps.setShort(2, (short) statusCode);</span>
+
+<span class="nc" id="L2322">            Common.executeAndDrain(ps);</span>
+
+<span class="nc" id="L2324">            return true;</span>
+<span class="nc" id="L2325">        } catch (Exception e) {</span>
+<span class="nc" id="L2326">            log.debug(&quot;setPairStatus&quot;, e);</span>
+        } finally {
+<span class="nc" id="L2328">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2330">        return false;</span>
+    }
+
+    /**
+     * Updates the status code for a given stage of a specific pair.
+     *
+     * @param pairId      the id of the pair to update the status of
+     * @param stageNumber The stage to update
+     * @param statusCode  the status code to set for the pair
+     * @return True if the operation was a success, false otherwise
+     */
+    public static boolean setPairStatus(
+        int pairId,
+        int stageNumber,
+        int statusCode
+    ) {
+<span class="nc" id="L2346">        Connection con = null;</span>
+
+        try {
+<span class="nc" id="L2349">            con = Common.getConnection();</span>
+<span class="nc" id="L2350">            return setPairStageStatus(pairId, statusCode, stageNumber, con);</span>
+<span class="nc" id="L2351">        } catch (Exception e) {</span>
+<span class="nc" id="L2352">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2354">            Common.safeClose(con);</span>
+        }
+
+<span class="nc" id="L2357">        return false;</span>
+    }
+
+    /**
+     * Updates the status_code for a pair. If the pair is being set to enqueued,
+     * also sets the pair's queue_sub_time
+     * . If
+     * the pair is being set to a completed status, the pair's completion entry is
+     * updated.
+     *
+     * @param pairId     the id of the pair to update the status of
+     * @param statusCode the status code to set for the pair
+     * @return True if the operation was a success, false otherwise
+     */
+    public static boolean setPairStatus(int pairId, int statusCode) {
+<span class="nc" id="L2372">        Connection con = null;</span>
+
+        try {
+<span class="nc" id="L2375">            con = Common.getConnection();</span>
+<span class="nc" id="L2376">            return setPairStatus(pairId, statusCode, con);</span>
+<span class="nc" id="L2377">        } catch (Exception e) {</span>
+<span class="nc" id="L2378">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2380">            Common.safeClose(con);</span>
+        }
+
+<span class="nc" id="L2383">        return false;</span>
+    }
+
+    /**
+     * Reads all data for a specific queue from the jobpair_time_delta table and
+     * then clears the data from that queue
+     * all inside a single transaction.
+     *
+     * @param queueID The ID of the queue to get data for. If this is -1, gets and
+     *                clears all data
+     * @return A HashMap mapping userIds to their time delta values.
+     */
+
+    public static HashMap&lt;Integer, Integer&gt; getAndClearTimeDeltas(int queueID) {
+<span class="nc" id="L2397">        Connection con = null;</span>
+<span class="nc" id="L2398">        PreparedStatement ps = null;</span>
+<span class="nc" id="L2399">        PreparedStatement psClear = null;</span>
+<span class="nc" id="L2400">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L2402">            con = Common.getConnection();</span>
+<span class="nc" id="L2403">            Common.beginTransaction(con);</span>
+
+<span class="nc" id="L2405">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobpairTimeDeltaData(?)&quot;
+            );
+<span class="nc" id="L2408">            ps.setInt(1, queueID);</span>
+<span class="nc" id="L2409">            results = ps.executeQuery();</span>
+<span class="nc" id="L2410">            HashMap&lt;Integer, Integer&gt; data = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L2411" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L2412">                data.put(</span>
+<span class="nc" id="L2413">                    results.getInt(&quot;user_id&quot;),</span>
+<span class="nc" id="L2414">                    results.getInt(&quot;time_delta&quot;)</span>
+                );
+            }
+<span class="nc" id="L2417">            Common.safeClose(ps);</span>
+<span class="nc" id="L2418">            psClear = con.prepareStatement(</span>
+                &quot;SELECT starexec.ClearJobpairTimeDeltaData(?)&quot;
+            );
+<span class="nc" id="L2421">            psClear.setInt(1, queueID);</span>
+<span class="nc" id="L2422">            Common.executeAndDrain(psClear);</span>
+
+<span class="nc" id="L2424">            Common.endTransaction(con);</span>
+<span class="nc" id="L2425">            return data;</span>
+<span class="nc" id="L2426">        } catch (Exception e) {</span>
+<span class="nc" id="L2427">            log.error(e.getMessage(), e);</span>
+<span class="nc" id="L2428">            Common.doRollback(con);</span>
+<span class="nc" id="L2429">            return null;</span>
+        } finally {
+<span class="nc" id="L2431">            Common.safeClose(con);</span>
+<span class="nc" id="L2432">            Common.safeClose(ps);</span>
+<span class="nc" id="L2433">            Common.safeClose(psClear);</span>
+<span class="nc" id="L2434">            Common.safeClose(results);</span>
+        }
+    }
+
+    /**
+     * Update's a job pair's backend execution ID (SGE, OAR, or so on)
+     *
+     * @param pairId The id of the pair to update
+     * @param execId The backend id to set for the pair
+     * @return True if the operation was a success, false otherwise.
+     */
+    public static boolean updateBackendExecId(int pairId, int execId) {
+<span class="nc" id="L2446">        Connection con = null;</span>
+<span class="nc" id="L2447">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2449">            con = Common.getConnection();</span>
+<span class="nc" id="L2450">            ps = con.prepareStatement(&quot;SELECT starexec.SetBackendExecId(?, ?)&quot;);</span>
+
+<span class="nc" id="L2452">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L2453">            ps.setInt(2, execId);</span>
+<span class="nc" id="L2454">            Common.executeAndDrain(ps);</span>
+
+<span class="nc" id="L2456">            return true;</span>
+<span class="nc" id="L2457">        } catch (Exception e) {</span>
+<span class="nc" id="L2458">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2460">            Common.safeClose(con);</span>
+<span class="nc" id="L2461">            Common.safeClose(ps);</span>
+        }
+
+<span class="nc" id="L2464">        return false;</span>
+    }
+
+    /**
+     * Updates job pair run solver statistics (CPU time, wallclock, memory, etc.)
+     *
+     * @param pairId The ID of the job pair
+     * @param nodeName The name of the node where job ran (hostname)
+     * @param wallClock Wallclock time in seconds
+     * @param cpu Total CPU time in seconds
+     * @param userTime User time in seconds
+     * @param systemTime System time in seconds
+     * @param maxVmem Maximum virtual memory in KB
+     * @param maxResSet Maximum resident set size in KB
+     * @param stageNumber The stage number (usually 1 for single-stage jobs)
+     * @param diskSize Disk size used in KB
+     * @return True if successful, false otherwise
+     */
+    public static boolean updateRunSolverStats(
+        int pairId,
+        String nodeName,
+        double wallClock,
+        double cpu,
+        double userTime,
+        double systemTime,
+        double maxVmem,
+        long maxResSet,
+        int stageNumber,
+        long diskSize
+    ) {
+<span class="nc" id="L2494">        Connection con = null;</span>
+<span class="nc" id="L2495">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2497">            con = Common.getConnection();</span>
+<span class="nc" id="L2498">            ps = con.prepareStatement(</span>
+                &quot;CALL starexec.UpdatePairRunSolverStats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)&quot;
+            );
+
+<span class="nc" id="L2502">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L2503">            ps.setString(2, nodeName);</span>
+<span class="nc" id="L2504">            ps.setDouble(3, wallClock);</span>
+<span class="nc" id="L2505">            ps.setDouble(4, cpu);</span>
+<span class="nc" id="L2506">            ps.setDouble(5, userTime);</span>
+<span class="nc" id="L2507">            ps.setDouble(6, systemTime);</span>
+<span class="nc" id="L2508">            ps.setDouble(7, maxVmem);</span>
+<span class="nc" id="L2509">            ps.setLong(8, maxResSet);</span>
+<span class="nc" id="L2510">            ps.setInt(9, stageNumber);</span>
+<span class="nc" id="L2511">            ps.setLong(10, diskSize);</span>
+
+<span class="nc" id="L2513">            Common.executeAndDrain(ps);</span>
+
+<span class="nc" id="L2515">            return true;</span>
+<span class="nc" id="L2516">        } catch (Exception e) {</span>
+<span class="nc" id="L2517">            log.error(&quot;Error updating run solver stats for pair &quot; + pairId, e);</span>
+        } finally {
+<span class="nc" id="L2519">            Common.safeClose(con);</span>
+<span class="nc" id="L2520">            Common.safeClose(ps);</span>
+        }
+
+<span class="nc" id="L2523">        return false;</span>
+    }
+
+    /**
+     * Updates the database to give the job pair with the given ID the given job
+     * space.
+     *
+     * @param jobPairId  The ID of the job pair in question
+     * @param jobSpaceId The job space ID of the pair
+     * @param con        The open connection to perform the update on
+     * @throws Exception
+     * @author Eric Burns
+     */
+
+    public static void UpdateJobSpaces(
+        int jobPairId,
+        int jobSpaceId,
+        Connection con
+    ) {
+<span class="nc" id="L2542">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2544">            ps = con.prepareStatement(&quot;SELECT starexec.UpdateJobSpaceId(?, ?)&quot;);</span>
+<span class="nc" id="L2545">            ps.setInt(1, jobPairId);</span>
+<span class="nc" id="L2546">            ps.setInt(2, jobSpaceId);</span>
+<span class="nc" id="L2547">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L2548">        } catch (Exception e) {</span>
+<span class="nc" id="L2549">            log.error(&quot;UpdateJobSpaces&quot;, e);</span>
+        } finally {
+<span class="nc" id="L2551">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2553">    }</span>
+
+    /**
+     * Calls buildJobSpaceIdtoJobPairMapForJob, and then rounds all cpu and
+     * wallclock times before returning results
+     *
+     * @param job
+     * @return Identical to buildJobSpaceIdtoJobPairMapForJob, but with rounded
+     *         times
+     */
+    public static Map&lt;
+        Integer,
+        List&lt;JobPair&gt;
+    &gt; buildJobSpaceIdToJobPairMapWithWallCpuTimesRounded(Job job) {
+<span class="nc" id="L2567">        Map&lt;Integer, List&lt;JobPair&gt;&gt; outputMap =</span>
+<span class="nc" id="L2568">            buildJobSpaceIdToJobPairMapForJob(job);</span>
+<span class="nc" id="L2569">        roundWallclockAndCpuTimesInJobSpaceIdToJobPairMap(outputMap);</span>
+<span class="nc" id="L2570">        return outputMap;</span>
+    }
+
+    private static void roundWallclockAndCpuTimesInJobSpaceIdToJobPairMap(
+        Map&lt;Integer, List&lt;JobPair&gt;&gt; jobSpaceIdToJobPairMap
+    ) {
+<span class="nc bnc" id="L2576" title="All 2 branches missed.">        for (Integer jobSpaceId : jobSpaceIdToJobPairMap.keySet()) {</span>
+<span class="nc" id="L2577">            List&lt;JobPair&gt; jobPairs = jobSpaceIdToJobPairMap.get(jobSpaceId);</span>
+<span class="nc bnc" id="L2578" title="All 2 branches missed.">            for (JobPair jp : jobPairs) {</span>
+<span class="nc" id="L2579">                jp.setPrimaryWallclockTime(</span>
+<span class="nc" id="L2580">                    Math.round(jp.getPrimaryWallclockTime() * 100) / 100.0</span>
+                );
+<span class="nc" id="L2582">                jp.setPrimaryCpuTime(</span>
+<span class="nc" id="L2583">                    Math.round(jp.getPrimaryCpuTime() * 100) / 100.0</span>
+                );
+<span class="nc" id="L2585">            }</span>
+<span class="nc" id="L2586">        }</span>
+<span class="nc" id="L2587">    }</span>
+
+    /**
+     * Builds a mapping of job space IDs to JobPairs in that JobSpace given the
+     * JobSpaces and JobPairs
+     *
+     * @param job The job to work on
+     * @return The mapping of job space IDs to in that job space
+     * @author Albert Giegerich
+     */
+    public static Map&lt;Integer, List&lt;JobPair&gt;&gt; buildJobSpaceIdToJobPairMapForJob(
+        Job job
+    ) {
+<span class="nc" id="L2600">        int jobId = job.getId();</span>
+<span class="nc" id="L2601">        int primaryJobSpaceId = job.getPrimarySpace();</span>
+<span class="nc" id="L2602">        List&lt;JobSpace&gt; jobSpaces = Spaces.getSubSpacesForJob(</span>
+            primaryJobSpaceId,
+            true
+        );
+<span class="nc" id="L2606">        jobSpaces.add(Spaces.getJobSpace(job.getPrimarySpace()));</span>
+<span class="nc" id="L2607">        List&lt;JobPair&gt; allJobPairsInJob = Jobs.getDetailed(</span>
+            jobId,
+            0
+<span class="nc" id="L2610">        ).getJobPairs();</span>
+<span class="nc" id="L2611">        Map&lt;Integer, List&lt;JobPair&gt;&gt; jobSpaceIdToJobPairMap = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L2612" title="All 2 branches missed.">        for (JobSpace js : jobSpaces) {</span>
+<span class="nc" id="L2613">            List&lt;JobPair&gt; jobPairsAssociatedWithJs = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2614" title="All 2 branches missed.">            for (JobPair jp : allJobPairsInJob) {</span>
+<span class="nc bnc" id="L2615" title="All 2 branches missed.">                if (jp.getJobSpaceId() == js.getId()) {</span>
+<span class="nc" id="L2616">                    jobPairsAssociatedWithJs.add(jp);</span>
+                }
+<span class="nc" id="L2618">            }</span>
+<span class="nc bnc" id="L2619" title="All 2 branches missed.">            if (!jobPairsAssociatedWithJs.isEmpty()) {</span>
+<span class="nc" id="L2620">                jobSpaceIdToJobPairMap.put(</span>
+<span class="nc" id="L2621">                    js.getId(),</span>
+                    jobPairsAssociatedWithJs
+                );
+            }
+<span class="nc" id="L2625">        }</span>
+<span class="nc" id="L2626">        return jobSpaceIdToJobPairMap;</span>
+    }
+
+    /**
+     * Given a list of JobPair objects that have their jobSpaceIds set, updates the
+     * database to reflect these new job
+     * space ids
+     *
+     * @param jobPairs The pairs to update
+     * @param con      An open connection to make calls on
+     * @author Eric Burns
+     */
+
+    public static void updateJobSpaces(List&lt;JobPair&gt; jobPairs, Connection con) {
+        try {
+<span class="nc bnc" id="L2641" title="All 2 branches missed.">            for (JobPair jp : jobPairs) {</span>
+<span class="nc" id="L2642">                UpdateJobSpaces(jp.getId(), jp.getJobSpaceId(), con);</span>
+<span class="nc" id="L2643">            }</span>
+<span class="nc" id="L2644">        } catch (Exception e) {</span>
+<span class="nc" id="L2645">            log.error(e.getMessage(), e);</span>
+<span class="nc" id="L2646">        }</span>
+<span class="nc" id="L2647">    }</span>
+
+    /**
+     * Kills the given job pair and updates the status for the pair to
+     *
+     * @param pairId
+     * @param execId
+     */
+    public static void killPair(int pairId, int execId) {
+        try {
+<span class="nc" id="L2657">            R.BACKEND.killPair(execId);</span>
+<span class="nc" id="L2658">            JobPairs.setJobPairDiskSizeToZero(pairId);</span>
+<span class="nc" id="L2659">            JobPairs.UpdateStatus(</span>
+                pairId,
+<span class="nc" id="L2661">                Status.StatusCode.STATUS_KILLED.getVal()</span>
+            );
+<span class="nc" id="L2663">        } catch (Exception e) {</span>
+<span class="nc" id="L2664">            log.error(e.getMessage(), e);</span>
+<span class="nc" id="L2665">        }</span>
+<span class="nc" id="L2666">    }</span>
+
+    /**
+     * Updates the status of the given job pair, replacing its current status code
+     * with the given one
+     *
+     * @param jobPairId   The ID of the job pair in question
+     * @param status_code The new status code to assign to the job pair
+     */
+    public static void UpdateStatus(int jobPairId, int status_code) {
+<span class="nc" id="L2676">        Connection con = null;</span>
+<span class="nc" id="L2677">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2679">            con = Common.getConnection();</span>
+<span class="nc" id="L2680">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.UpdateJobPairStatus(?, ?)&quot;
+            );
+<span class="nc" id="L2683">            ps.setInt(1, jobPairId);</span>
+<span class="nc" id="L2684">            ps.setInt(2, status_code);</span>
+<span class="nc" id="L2685">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L2686">        } catch (Exception e) {</span>
+<span class="nc" id="L2687">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2689">            Common.safeClose(con);</span>
+<span class="nc" id="L2690">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2692">    }</span>
+
+    /**
+     * Gets all job pairs in the database that have the given status code. This
+     * should really only be called for rare
+     * codes like 2-5, as otherwise it may read a very large number of pairs and be
+     * very slow.
+     *
+     * @param statusCode
+     * @return A list of all pairs with the given status code
+     */
+    public static List&lt;JobPair&gt; getPairsByStatus(int statusCode) {
+<span class="nc" id="L2704">        Connection con = null;</span>
+<span class="nc" id="L2705">        PreparedStatement ps = null;</span>
+<span class="nc" id="L2706">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L2708">            List&lt;JobPair&gt; pairs = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L2709">            con = Common.getConnection();</span>
+<span class="nc" id="L2710">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairsWithStatus(?)&quot;
+            );
+<span class="nc" id="L2713">            ps.setInt(1, statusCode);</span>
+<span class="nc" id="L2714">            results = ps.executeQuery();</span>
+<span class="nc bnc" id="L2715" title="All 2 branches missed.">            if (results.next()) {</span>
+<span class="nc" id="L2716">                JobPair p = JobPairs.resultToPair(results);</span>
+<span class="nc" id="L2717">                p.getStatus().setCode(statusCode);</span>
+<span class="nc" id="L2718">                pairs.add(p);</span>
+            }
+<span class="nc" id="L2720">            return pairs;</span>
+<span class="nc" id="L2721">        } catch (Exception e) {</span>
+<span class="nc" id="L2722">            log.error(&quot;getPairsByStatus&quot;, e);</span>
+        } finally {
+<span class="nc" id="L2724">            Common.safeClose(con);</span>
+<span class="nc" id="L2725">            Common.safeClose(ps);</span>
+<span class="nc" id="L2726">            Common.safeClose(results);</span>
+        }
+
+<span class="nc" id="L2729">        return null;</span>
+    }
+
+    /**
+     * Gets all job pairs in the database that have the given status code. This
+     * should really only be called for rare
+     * codes like 2-5, as otherwise it may read a very large number of pairs and be
+     * very slow.
+     *
+     * @param statusCode
+     * @return A list of all pairs with the given status code
+     */
+    public static List&lt;Integer&gt; getPairIdsByStatusNotRerunAfterDate(
+        StatusCode statusCode,
+        Timestamp timestamp
+    ) throws SQLException {
+<span class="nc" id="L2745">        final String methodName = &quot;getPairIdsByStatusNotRerunAfterDate&quot;;</span>
+<span class="nc" id="L2746">        Connection con = null;</span>
+<span class="nc" id="L2747">        PreparedStatement ps = null;</span>
+<span class="nc" id="L2748">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L2750">            con = Common.getConnection();</span>
+<span class="nc" id="L2751">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetJobPairIdsWithStatusNotRerunAfterDate(?, ?)&quot;
+            );
+<span class="nc" id="L2754">            ps.setInt(1, statusCode.getVal());</span>
+<span class="nc" id="L2755">            ps.setObject(2, timestamp);</span>
+<span class="nc" id="L2756">            results = ps.executeQuery();</span>
+
+<span class="nc" id="L2758">            List&lt;Integer&gt; pairIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2759" title="All 2 branches missed.">            while (results.next()) {</span>
+<span class="nc" id="L2760">                pairIds.add(results.getInt(&quot;id&quot;));</span>
+            }
+<span class="nc" id="L2762">            return pairIds;</span>
+<span class="nc" id="L2763">        } catch (SQLException e) {</span>
+<span class="nc" id="L2764">            throw e;</span>
+<span class="nc" id="L2765">        } catch (Exception e) {</span>
+<span class="nc" id="L2766">            log.error(methodName, e.getMessage(), e);</span>
+<span class="nc" id="L2767">            throw new SQLException(e);</span>
+        } finally {
+<span class="nc" id="L2769">            Common.safeClose(results);</span>
+<span class="nc" id="L2770">            Common.safeClose(ps);</span>
+<span class="nc" id="L2771">            Common.safeClose(con);</span>
+        }
+    }
+
+    /**
+     * Sets the status code for a given pair and all of its stages to
+     * ERROR_SUBMIT_FAIL if and only if the pair's
+     * status
+     * code in the database matches the status code set in the given pair. This
+     * check is done to prevent a race
+     * condition in which a pair that is actually not stuck (hence its status code
+     * has changed since the pair was read)
+     * but is still set to the error status code.
+     *
+     * @param p The JobPair to affect. Must have ID and status code set
+     */
+    public static void setBrokenPairStatus(JobPair p) {
+<span class="nc" id="L2788">        Connection con = null;</span>
+<span class="nc" id="L2789">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2791">            con = Common.getConnection();</span>
+<span class="nc" id="L2792">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.SetBrokenPairStatus(?, ?, ?)&quot;
+            );
+<span class="nc" id="L2795">            ps.setInt(1, p.getId());</span>
+<span class="nc" id="L2796">            ps.setInt(2, p.getStatus().getCode().getVal());</span>
+<span class="nc" id="L2797">            ps.setInt(3, Status.StatusCode.ERROR_SUBMIT_FAIL.getVal());</span>
+<span class="nc" id="L2798">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L2799">        } catch (Exception e) {</span>
+<span class="nc" id="L2800">            log.error(&quot;setBrokenPairStatus&quot;, e);</span>
+        } finally {
+<span class="nc" id="L2802">            Common.safeClose(con);</span>
+<span class="nc" id="L2803">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2805">    }</span>
+
+    /**
+     * Gets all job pairs are currently under the jurisdiction of the backend. These
+     * are the pairs with status codes
+     * 2-5.
+     *
+     * @return The list of job pairs. Stages will not be populated
+     */
+    public static List&lt;JobPair&gt; getPairsInBackend() {
+<span class="nc" id="L2815">        List&lt;JobPair&gt; pairs = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L2816">        List&lt;JobPair&gt; enqueuedPairs = getPairsByStatus(</span>
+<span class="nc" id="L2817">            Status.StatusCode.STATUS_ENQUEUED.getVal()</span>
+        );
+<span class="nc bnc" id="L2819" title="All 2 branches missed.">        if (enqueuedPairs != null) {</span>
+<span class="nc" id="L2820">            pairs.addAll(enqueuedPairs);</span>
+        }
+<span class="nc" id="L2822">        List&lt;JobPair&gt; runningPairs = getPairsByStatus(</span>
+<span class="nc" id="L2823">            Status.StatusCode.STATUS_RUNNING.getVal()</span>
+        );
+<span class="nc bnc" id="L2825" title="All 2 branches missed.">        if (runningPairs != null) {</span>
+<span class="nc" id="L2826">            pairs.addAll(runningPairs);</span>
+        }
+<span class="nc" id="L2828">        return pairs;</span>
+    }
+
+    /**
+     * Updates a job pair's node_id in the database.
+     *
+     * @param pairId
+     * @param nodeId
+     * @return True on success and false otherwise
+     */
+    public static boolean updatePairExecutionHost(int pairId, int nodeId) {
+<span class="nc" id="L2839">        Connection con = null;</span>
+<span class="nc" id="L2840">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L2842">            con = Common.getConnection();</span>
+<span class="nc" id="L2843">            ps = con.prepareStatement(&quot;SELECT starexec.UpdatePairNodeId(?, ?)&quot;);</span>
+<span class="nc" id="L2844">            ps.setInt(1, pairId);</span>
+<span class="nc" id="L2845">            ps.setInt(2, nodeId);</span>
+<span class="nc" id="L2846">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L2847">            return true;</span>
+<span class="nc" id="L2848">        } catch (Exception e) {</span>
+<span class="nc" id="L2849">            log.error(e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L2851">            Common.safeClose(con);</span>
+<span class="nc" id="L2852">            Common.safeClose(ps);</span>
+        }
+<span class="nc" id="L2854">        return false;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

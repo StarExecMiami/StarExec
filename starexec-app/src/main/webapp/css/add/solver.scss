@@ -1,0 +1,41 @@
+fieldset {						
+	width: 75%;	
+	margin: 50px auto 0 auto;
+}
+
+@media only screen and (max-width: 767px) {
+	fieldset {
+		width: 95%;
+	}
+	input[type="text"], textarea, input[type="file"] {
+		width: 100%;
+	}
+}
+
+fieldset table {
+	width: 100%;
+}
+
+#uploadFile {
+	border: none;
+}
+
+input[type="text"], textarea, input[type="file"] {
+	width: 60%;
+}
+
+#fileLoc {
+	width: 62%;
+}
+
+#btnUpload {	
+	float: right;
+}
+
+tbody tr td:first-child {
+	width: 30%;
+}
+
+td, .error {
+	vertical-align: middle;
+}

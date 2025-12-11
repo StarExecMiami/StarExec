@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UploadPicture.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.servlets</a> &gt; <span class="el_source">UploadPicture.java</span></div><h1>UploadPicture.java</h1><pre class="source lang-java linenums">package org.starexec.servlets;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.Users;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.PartWrapper;
+import org.starexec.util.SessionUtil;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
+
+import javax.imageio.ImageIO;
+import javax.servlet.ServletException;
+import javax.servlet.annotation.MultipartConfig;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.awt.*;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
+
+/**
+ * This class is to handle the upload of a picture. Notice that this upload will go straight into the file system
+ * instead of the database. When a picture is uploaded, the original picture is stored along with a shrunk one for the
+ * thumbnail.
+ *
+ * @author Ruoyu Zhang
+ */
+// SECURITY: Limit picture uploads to 10MB to prevent DoS attacks
+@MultipartConfig(
+	fileSizeThreshold = 1024 * 1024,        // 1MB buffer in memory
+	maxFileSize = 10L * 1024L * 1024L,      // 10MB max per file
+	maxRequestSize = 10L * 1024L * 1024L    // 10MB max per request
+)
+<span class="nc" id="L40">public class UploadPicture extends HttpServlet {</span>
+<span class="nc" id="L41">	private static final StarLogger log = StarLogger.getLogger(UploadPicture.class);</span>
+
+	// Request attributes
+	private static final String PICTURE_FILE = &quot;f&quot;;
+	private static final String TYPE = &quot;type&quot;;
+	private static final String ID = &quot;Id&quot;;
+
+	/**
+	 * UploadPicture doesn't handle doGet request
+	 */
+	protected void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L53">		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED, &quot;Wrong type of request.&quot;);</span>
+<span class="nc" id="L54">	}</span>
+
+	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L58">		int userIdOfCaller = SessionUtil.getUserId(request);</span>
+		try {
+			// Extract data from the multipart request
+<span class="nc" id="L61">			HashMap&lt;String, Object&gt; form = Util.parseMultipartRequest(request);</span>
+
+<span class="nc" id="L63">			String rawUserIdOfOwner = (String) form.get(UploadPicture.ID);</span>
+<span class="nc" id="L64">			int userIdOfOwner = 0;</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">			if (Validator.isValidPosInteger(rawUserIdOfOwner)) {</span>
+<span class="nc" id="L66">				userIdOfOwner = Integer.parseInt(rawUserIdOfOwner);</span>
+			} else {
+<span class="nc" id="L68">				response.sendError(HttpServletResponse.SC_BAD_REQUEST, &quot;User id for request was not an integer.&quot;);</span>
+<span class="nc" id="L69">				return;</span>
+			}
+
+
+<span class="nc bnc" id="L73" title="All 2 branches missed.">			boolean callerIsOwner = (userIdOfOwner == userIdOfCaller);</span>
+<span class="nc" id="L74">			boolean callerIsAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdOfCaller);</span>
+<span class="nc bnc" id="L75" title="All 6 branches missed.">			if (!(callerIsOwner || callerIsAdmin) || Users.isPublicUser(userIdOfCaller)) {</span>
+<span class="nc" id="L76">				response.sendError(HttpServletResponse.SC_FORBIDDEN, &quot;You cannot change this user's picture.&quot;);</span>
+<span class="nc" id="L77">				return;</span>
+			}
+
+<span class="nc" id="L80">			ValidatorStatusCode status = this.isRequestValid(form);</span>
+			// If the request is valid
+<span class="nc bnc" id="L82" title="All 2 branches missed.">			if (status.isSuccess()) {</span>
+				try {
+<span class="nc" id="L84">					String redirectUrl = this.handleUploadRequest(userIdOfCaller, form);</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">					if (redirectUrl != null) {</span>
+<span class="nc" id="L86">						response.sendRedirect(redirectUrl);</span>
+					} else {
+<span class="nc" id="L88">						log.error(&quot;Picture upload failed: handleUploadRequest returned null for user &quot; + userIdOfCaller);</span>
+<span class="nc" id="L89">						response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, &quot;Picture upload failed. Please check server logs.&quot;));</span>
+<span class="nc" id="L90">						response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, &quot;Picture upload failed&quot;);</span>
+					}
+<span class="nc" id="L92">				} catch (Exception e) {</span>
+<span class="nc" id="L93">					log.error(&quot;Failed to upload picture for user &quot; + userIdOfCaller + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L94">					response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, &quot;Picture upload failed: &quot; + e.getMessage()));</span>
+<span class="nc" id="L95">					response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, &quot;Picture upload failed: &quot; + e.getMessage());</span>
+<span class="nc" id="L96">				}</span>
+			} else {
+				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
+<span class="nc" id="L99">				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));</span>
+				// Or else the request was invalid, send bad request error
+<span class="nc" id="L101">				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());</span>
+			}
+<span class="nc" id="L103">		} catch (Exception e) {</span>
+<span class="nc" id="L104">			log.warn(&quot;Caught Exception in UploadPicture.doPost&quot;, e);</span>
+<span class="nc" id="L105">		}</span>
+<span class="nc" id="L106">	}</span>
+
+	/**
+	 * Upload the picture to the file system and return the redirection string.
+	 *
+	 * @param userId The user uploading picture.
+	 * @param form the form submitted for the upload.
+	 * @return the redirection string.
+	 * @throws Exception
+	 * @author Ruoyu Zhang
+	 */
+	private String handleUploadRequest(int userId, HashMap&lt;String, Object&gt; form) throws Exception {
+<span class="nc" id="L118">		PartWrapper item = (PartWrapper) form.get(UploadPicture.PICTURE_FILE);</span>
+<span class="nc" id="L119">		String fileName = &quot;&quot;;</span>
+<span class="nc" id="L120">		String redir = Util.docRoot(&quot;secure/edit/account.jsp&quot;);</span>
+
+<span class="nc" id="L122">		String type = (String) form.get(UploadPicture.TYPE);</span>
+<span class="nc" id="L123">		String id = (String) form.get(UploadPicture.ID);</span>
+<span class="nc" id="L124">		StringBuilder sb = new StringBuilder();</span>
+
+<span class="nc" id="L126">		log.info(&quot;Starting picture upload for userId=&quot; + userId + &quot; type=&quot; + type + &quot; id=&quot; + id);</span>
+
+<span class="nc bnc" id="L128" title="All 4 branches missed.">		switch (type) {</span>
+			case &quot;user&quot;:
+<span class="nc" id="L130">				sb.delete(0, sb.length());</span>
+<span class="nc" id="L131">				sb.append(&quot;/users/Pic&quot;);</span>
+<span class="nc" id="L132">				sb.append(id);</span>
+<span class="nc" id="L133">				fileName = sb.toString();</span>
+<span class="nc" id="L134">				redir = Util.docRoot(&quot;secure/edit/account.jsp&quot;);</span>
+<span class="nc" id="L135">				break;</span>
+			case R.SOLVER:
+<span class="nc" id="L137">				sb.delete(0, sb.length());</span>
+<span class="nc" id="L138">				sb.append(&quot;/solvers/Pic&quot;);</span>
+<span class="nc" id="L139">				sb.append(id);</span>
+<span class="nc" id="L140">				fileName = sb.toString();</span>
+
+<span class="nc" id="L142">				sb.delete(0, sb.length());</span>
+<span class="nc" id="L143">				sb.append(Util.docRoot(&quot;secure/details/solver.jsp?id=&quot;));</span>
+<span class="nc" id="L144">				sb.append(id);</span>
+<span class="nc" id="L145">				redir = sb.toString();</span>
+<span class="nc" id="L146">				break;</span>
+			case &quot;benchmark&quot;:
+<span class="nc" id="L148">				sb.delete(0, sb.length());</span>
+<span class="nc" id="L149">				sb.append(&quot;/benchmarks/Pic&quot;);</span>
+<span class="nc" id="L150">				sb.append(id);</span>
+<span class="nc" id="L151">				fileName = sb.toString();</span>
+
+<span class="nc" id="L153">				sb.delete(0, sb.length());</span>
+<span class="nc" id="L154">				sb.append(Util.docRoot(&quot;secure/details/benchmark.jsp?id=&quot;));</span>
+<span class="nc" id="L155">				sb.append(id);</span>
+<span class="nc" id="L156">				redir = sb.toString();</span>
+				break;
+		}
+
+<span class="nc" id="L160">		sb.delete(0, sb.length());</span>
+<span class="nc" id="L161">		sb.append(R.getPicturePath());</span>
+<span class="nc" id="L162">		sb.append(File.separator);</span>
+<span class="nc" id="L163">		sb.append(fileName);</span>
+<span class="nc" id="L164">		sb.append(&quot;_org.jpg&quot;);</span>
+<span class="nc" id="L165">		String filenameupload = sb.toString();</span>
+
+<span class="nc" id="L167">		log.debug(&quot;Picture file path: &quot; + filenameupload);</span>
+
+		// Ensure parent directories exist with proper error handling
+<span class="nc" id="L170">		File archiveFile = new File(filenameupload);</span>
+<span class="nc" id="L171">		File parentDir = archiveFile.getParentFile();</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">		if (!parentDir.exists()) {</span>
+<span class="nc" id="L173">			log.debug(&quot;Creating parent directory: &quot; + parentDir.getAbsolutePath());</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">			if (!parentDir.mkdirs()) {</span>
+<span class="nc" id="L175">				throw new IOException(&quot;Failed to create directory: &quot; + parentDir.getAbsolutePath());</span>
+			}
+		}
+
+<span class="nc" id="L179">		log.debug(&quot;Writing picture file: &quot; + archiveFile.getAbsolutePath());</span>
+<span class="nc" id="L180">		item.write(archiveFile);</span>
+<span class="nc" id="L181">		log.debug(&quot;Picture file written successfully&quot;);</span>
+
+<span class="nc" id="L183">		sb.delete(0, sb.length());</span>
+<span class="nc" id="L184">		sb.append(R.getPicturePath());</span>
+<span class="nc" id="L185">		sb.append(File.separator);</span>
+<span class="nc" id="L186">		sb.append(fileName);</span>
+<span class="nc" id="L187">		sb.append(&quot;_thn.jpg&quot;);</span>
+<span class="nc" id="L188">		String fileNameThumbnail = sb.toString();</span>
+
+<span class="nc" id="L190">		log.debug(&quot;Thumbnail file path: &quot; + fileNameThumbnail);</span>
+<span class="nc" id="L191">		log.debug(&quot;Creating thumbnail with dimensions 320x320&quot;);</span>
+<span class="nc" id="L192">		scale(filenameupload, 320, 320, fileNameThumbnail);</span>
+<span class="nc" id="L193">		log.debug(&quot;Thumbnail created successfully&quot;);</span>
+
+<span class="nc" id="L195">		log.info(&quot;Picture upload completed successfully for userId=&quot; + userId);</span>
+<span class="nc" id="L196">		return redir;</span>
+	}
+
+	/**
+	 * Validates a picture upload request to determine if it can be acted on or not.
+	 *
+	 * @param form A list of form items contained in the request
+	 * @return True if the request is valid to act on, false otherwise
+	 * @author Ruoyu Zhang
+	 */
+	private ValidatorStatusCode isRequestValid(HashMap&lt;String, Object&gt; form) {
+		try {
+<span class="nc bnc" id="L208" title="All 2 branches missed.">			if (!form.containsKey(PICTURE_FILE)) {</span>
+<span class="nc" id="L209">				return new ValidatorStatusCode(false, &quot;No picture was supplied&quot;);</span>
+			}
+<span class="nc bnc" id="L211" title="All 2 branches missed.">			if (!Validator.isValidPosInteger((String) form.get(ID))) {</span>
+<span class="nc" id="L212">				return new ValidatorStatusCode(false, &quot;The supplied ID is not a valid integer&quot;);</span>
+			}
+<span class="nc" id="L214">			String type = (String) form.get(TYPE);</span>
+<span class="nc bnc" id="L215" title="All 8 branches missed.">			if (type == null || (!type.equals(R.SOLVER) &amp;&amp; !type.equals(&quot;user&quot;) &amp;&amp; !type.equals(&quot;benchmark&quot;))) {</span>
+<span class="nc" id="L216">				return new ValidatorStatusCode(false, &quot;The supplied image type is not valid&quot;);</span>
+			}
+
+<span class="nc" id="L219">			return new ValidatorStatusCode(true);</span>
+<span class="nc" id="L220">		} catch (Exception e) {</span>
+<span class="nc" id="L221">			log.warn(e.getMessage(), e);</span>
+		}
+
+<span class="nc" id="L224">		return new ValidatorStatusCode(false, &quot;Internal error handling picture upload request&quot;);</span>
+	}
+
+	/**
+	 * Scale the source file into a shrunk one with the width and height specified in the parameter.
+	 *
+	 * @param srcFile The original source file need to shrink
+	 * @param destWidth The width of the shrunk picture.
+	 * @param destHeight The height of the shrunk picture.
+	 * @param destFile The file of the shrunk picture.
+	 * @throws IOException
+	 * @author Ruoyu Zhang
+	 */
+	public static void scale(String srcFile, int destWidth, int destHeight, String destFile) throws IOException {
+
+<span class="nc" id="L239">		BufferedImage src = ImageIO.read(new File(srcFile));</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">		if (src == null) {</span>
+<span class="nc" id="L241">			throw new IOException(&quot;Uploaded file is not a valid image or is not in a supported format&quot;);</span>
+		}
+
+<span class="nc" id="L244">		BufferedImage dest = new BufferedImage(destWidth, destHeight, BufferedImage.TYPE_INT_RGB);</span>
+<span class="nc" id="L245">		Graphics2D g = dest.createGraphics();</span>
+<span class="nc" id="L246">		AffineTransform at = AffineTransform</span>
+<span class="nc" id="L247">				.getScaleInstance((double) destWidth / src.getWidth(), (double) destHeight / src.getHeight());</span>
+
+<span class="nc" id="L249">		g.drawRenderedImage(src, at);</span>
+<span class="nc" id="L250">		ImageIO.write(dest, &quot;JPG&quot;, new File(destFile));</span>
+<span class="nc" id="L251">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

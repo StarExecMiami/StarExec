@@ -1,0 +1,803 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KubernetesNativeBackend.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.backend</a> &gt; <span class="el_source">KubernetesNativeBackend.java</span></div><h1>KubernetesNativeBackend.java</h1><pre class="source lang-java linenums">/*
+ * KubernetesNativeBackend - Next-generation Kubernetes-native job execution
+ *
+ * ============================================================================
+ * SCAFFOLDING FOR FUTURE DEVELOPMENT - December 2025
+ * ============================================================================
+ *
+ * This backend is designed for true Kubernetes-native job execution where each
+ * StarExec job pair runs as a Kubernetes Job resource. Unlike the legacy
+ * KubernetesBackend (which runs scripts locally and uses kubectl for management),
+ * this backend:
+ *
+ * 1. Creates Kubernetes Job resources for each job pair
+ * 2. Uses the Kubernetes Java client (fabric8io/kubernetes-client) for API access
+ * 3. Monitors job completion via Kubernetes watch/informers
+ * 4. Supports horizontal scaling across multiple nodes natively
+ * 5. Leverages Kubernetes features: resource limits, node selectors, tolerations
+ *
+ * Architecture:
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │                       KubernetesNativeBackend                                │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │  KubernetesClient (fabric8io)                                         │  │
+ * │  │    - In-cluster config (ServiceAccount) or kubeconfig                 │  │
+ * │  │    - Connection pooling handled by client                             │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * │                                    ↓                                         │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │  Job Creation                                                         │  │
+ * │  │    - Creates K8s Job with starexec/job-runner image                   │  │
+ * │  │    - Mounts PVC for data directory                                    │  │
+ * │  │    - Sets resource limits (memory, CPU)                               │  │
+ * │  │    - Uses node selectors for queue assignment                         │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * │                                    ↓                                         │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │  KubernetesJobMonitor (Watch/Informer pattern)                        │  │
+ * │  │    - Watches for Job completion events                                │  │
+ * │  │    - Parses output files from PVC                                     │  │
+ * │  │    - Updates database via JobPairs API                                │  │
+ * │  │    - Cleans up completed Job resources                                │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * │                                    ↓                                         │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │  Queue Abstraction via Labels                                         │  │
+ * │  │    - Queue = Node label (starexec/queue=&lt;name&gt;)                       │  │
+ * │  │    - Job targets queue via nodeSelector                               │  │
+ * │  │    - Supports affinity/anti-affinity rules                            │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * Dependencies (add to pom.xml):
+ *   &lt;dependency&gt;
+ *     &lt;groupId&gt;io.fabric8&lt;/groupId&gt;
+ *     &lt;artifactId&gt;kubernetes-client&lt;/artifactId&gt;
+ *     &lt;version&gt;6.10.0&lt;/version&gt;
+ *   &lt;/dependency&gt;
+ *
+ * Configuration (environment variables):
+ *   STAREXEC_K8S_NAMESPACE       - Kubernetes namespace (default: starexec)
+ *   STAREXEC_K8S_JOB_IMAGE       - Job runner image (default: starexec/job-runner:latest)
+ *   STAREXEC_K8S_DATA_PVC        - PVC name for data volume (default: starexec-data)
+ *   STAREXEC_K8S_SERVICE_ACCOUNT - ServiceAccount for jobs (default: starexec-job)
+ *   STAREXEC_K8S_QUEUE_LABEL     - Label key for queue assignment (default: starexec/queue)
+ *
+ * Future TODOs:
+ *   - [ ] Add fabric8 kubernetes-client dependency to pom.xml
+ *   - [ ] Implement KubernetesJobMonitor with Watch pattern
+ *   - [ ] Add Helm chart templates for RBAC (ServiceAccount, Role, RoleBinding)
+ *   - [ ] Add PVC templates for shared data volume
+ *   - [ ] Implement job priority and preemption support
+ *   - [ ] Add metrics export for Prometheus
+ *   - [ ] Support for GPU jobs (nvidia.com/gpu resources)
+ *
+ * @author StarExec Team
+ * @since 2.0.0
+ */
+
+package org.starexec.backend;
+
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import org.starexec.config.EnvironmentConfig;
+import org.starexec.logger.StarLogger;
+
+/**
+ * Kubernetes-native backend for StarExec job execution.
+ *
+ * &lt;p&gt;This backend creates Kubernetes Job resources for each StarExec job pair,
+ * enabling true horizontal scaling across a Kubernetes cluster.&lt;/p&gt;
+ *
+ * &lt;p&gt;&lt;b&gt;Status: SCAFFOLDING&lt;/b&gt; - Core structure in place, implementation pending.&lt;/p&gt;
+ */
+public class KubernetesNativeBackend implements Backend {
+
+<span class="nc" id="L97">    private static final StarLogger log = StarLogger.getLogger(</span>
+        KubernetesNativeBackend.class
+    );
+
+    // =========================================================================
+    // Configuration Constants
+    // =========================================================================
+
+    /** Default Kubernetes namespace for StarExec jobs */
+    private static final String DEFAULT_NAMESPACE = &quot;starexec&quot;;
+
+    /** Label key used to identify StarExec queues on nodes */
+    private static final String DEFAULT_QUEUE_LABEL = &quot;starexec/queue&quot;;
+
+    /** Label prefix for StarExec-managed resources */
+    private static final String LABEL_PREFIX = &quot;starexec.org/&quot;;
+
+    /** Annotation key for execution ID */
+    private static final String EXEC_ID_LABEL = LABEL_PREFIX + &quot;exec-id&quot;;
+
+    /** Annotation key for job pair ID */
+    private static final String PAIR_ID_LABEL = LABEL_PREFIX + &quot;pair-id&quot;;
+
+    /** Default queue name for nodes without queue label */
+    private static final String DEFAULT_QUEUE_NAME = &quot;default&quot;;
+
+    // =========================================================================
+    // Runtime State
+    // =========================================================================
+
+    /** Maps StarExec execution IDs to Kubernetes Job names */
+<span class="nc" id="L128">    private final Map&lt;Integer, String&gt; execIdToJobName =</span>
+        new ConcurrentHashMap&lt;&gt;();
+
+    /** Execution ID generator */
+<span class="nc" id="L132">    private int nextExecId = 1;</span>
+
+    /** Lock for ID generation */
+<span class="nc" id="L135">    private final Object idLock = new Object();</span>
+
+    /** Kubernetes client instance - TODO: Initialize with fabric8 client */
+    // private KubernetesClient kubernetesClient;
+
+    /** Job monitor thread - TODO: Implement with Watch/Informer */
+    // private KubernetesJobMonitor jobMonitor;
+
+    /** Flag indicating if backend is initialized */
+<span class="nc" id="L144">    private volatile boolean initialized = false;</span>
+
+    // =========================================================================
+    // Configuration (loaded from environment)
+    // =========================================================================
+
+    private String namespace;
+    private String jobImage;
+    private String dataPvcName;
+    private String serviceAccountName;
+    private String queueLabelKey;
+
+    // =========================================================================
+    // Constructor
+    // =========================================================================
+
+<span class="nc" id="L160">    public KubernetesNativeBackend() {</span>
+<span class="nc" id="L161">        log.info(&quot;KubernetesNativeBackend instantiated (scaffolding version)&quot;);</span>
+<span class="nc" id="L162">    }</span>
+
+    // =========================================================================
+    // Backend Interface Implementation
+    // =========================================================================
+
+    /**
+     * Initialize the Kubernetes backend.
+     *
+     * &lt;p&gt;This method:&lt;/p&gt;
+     * &lt;ul&gt;
+     *   &lt;li&gt;Loads configuration from environment variables&lt;/li&gt;
+     *   &lt;li&gt;Creates the Kubernetes client (in-cluster or kubeconfig)&lt;/li&gt;
+     *   &lt;li&gt;Validates cluster connectivity&lt;/li&gt;
+     *   &lt;li&gt;Starts the job monitor&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param BACKEND_ROOT Ignored for Kubernetes backend
+     */
+    @Override
+    public void initialize(String BACKEND_ROOT) {
+<span class="nc" id="L183">        log.info(&quot;Initializing KubernetesNativeBackend...&quot;);</span>
+
+        // Load configuration from environment
+<span class="nc" id="L186">        loadConfiguration();</span>
+
+        // TODO: Initialize Kubernetes client
+        // try {
+        //     kubernetesClient = new KubernetesClientBuilder().build();
+        //     log.info(&quot;Connected to Kubernetes cluster: &quot; + kubernetesClient.getMasterUrl());
+        // } catch (Exception e) {
+        //     log.error(&quot;Failed to initialize Kubernetes client&quot;, e);
+        //     throw new RuntimeException(&quot;Kubernetes initialization failed&quot;, e);
+        // }
+
+        // TODO: Validate namespace exists
+        // ensureNamespaceExists();
+
+        // TODO: Start job monitor
+        // jobMonitor = new KubernetesJobMonitor(kubernetesClient, namespace);
+        // jobMonitor.start();
+
+<span class="nc" id="L204">        initialized = true;</span>
+<span class="nc" id="L205">        log.info(</span>
+            &quot;KubernetesNativeBackend initialized (scaffolding - not fully functional)&quot;
+        );
+<span class="nc" id="L208">        log.warn(</span>
+            &quot;⚠️  This backend is a SCAFFOLDING implementation. Full K8s integration pending.&quot;
+        );
+<span class="nc" id="L211">    }</span>
+
+    /**
+     * Load configuration from environment variables.
+     */
+    private void loadConfiguration() {
+<span class="nc" id="L217">        namespace = getEnv(&quot;STAREXEC_K8S_NAMESPACE&quot;, DEFAULT_NAMESPACE);</span>
+<span class="nc" id="L218">        jobImage = getEnv(</span>
+            &quot;STAREXEC_K8S_JOB_IMAGE&quot;,
+<span class="nc" id="L220">            EnvironmentConfig.getContainerJobImage()</span>
+        );
+<span class="nc" id="L222">        dataPvcName = getEnv(&quot;STAREXEC_K8S_DATA_PVC&quot;, &quot;starexec-data&quot;);</span>
+<span class="nc" id="L223">        serviceAccountName = getEnv(</span>
+            &quot;STAREXEC_K8S_SERVICE_ACCOUNT&quot;,
+            &quot;starexec-job&quot;
+        );
+<span class="nc" id="L227">        queueLabelKey = getEnv(&quot;STAREXEC_K8S_QUEUE_LABEL&quot;, DEFAULT_QUEUE_LABEL);</span>
+
+<span class="nc" id="L229">        log.info(</span>
+            &quot;K8s Configuration: namespace=&quot; +
+                namespace +
+                &quot;, image=&quot; +
+                jobImage +
+                &quot;, pvc=&quot; +
+                dataPvcName
+        );
+<span class="nc" id="L237">    }</span>
+
+    /**
+     * Helper to get environment variable with default.
+     */
+    private String getEnv(String key, String defaultValue) {
+<span class="nc" id="L243">        String value = System.getenv(key);</span>
+<span class="nc bnc" id="L244" title="All 4 branches missed.">        return (value != null &amp;&amp; !value.isEmpty()) ? value : defaultValue;</span>
+    }
+
+    /**
+     * Clean up resources when shutting down.
+     */
+    @Override
+    public void destroyIf() {
+<span class="nc" id="L252">        log.info(&quot;Shutting down KubernetesNativeBackend...&quot;);</span>
+
+        // TODO: Stop job monitor
+        // if (jobMonitor != null) {
+        //     jobMonitor.stop();
+        // }
+
+        // TODO: Close Kubernetes client
+        // if (kubernetesClient != null) {
+        //     kubernetesClient.close();
+        // }
+
+<span class="nc" id="L264">        initialized = false;</span>
+<span class="nc" id="L265">        log.info(&quot;KubernetesNativeBackend shut down&quot;);</span>
+<span class="nc" id="L266">    }</span>
+
+    /**
+     * Check if an execution code indicates an error.
+     *
+     * @param execCode The execution code to check
+     * @return true if the code indicates an error (negative value)
+     */
+    @Override
+    public boolean isError(int execCode) {
+<span class="nc bnc" id="L276" title="All 2 branches missed.">        return execCode &lt; 0;</span>
+    }
+
+    /**
+     * Submit a job script for execution as a Kubernetes Job.
+     *
+     * &lt;p&gt;This method creates a Kubernetes Job resource that:&lt;/p&gt;
+     * &lt;ul&gt;
+     *   &lt;li&gt;Runs the job-runner container image&lt;/li&gt;
+     *   &lt;li&gt;Mounts the data PVC at the appropriate path&lt;/li&gt;
+     *   &lt;li&gt;Passes the script path and working directory as arguments&lt;/li&gt;
+     *   &lt;li&gt;Sets resource limits based on configuration&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param scriptPath Path to the job script (relative to data volume)
+     * @param workingDirectoryPath Working directory for the job
+     * @param logPath Path for job output logs
+     * @return Execution ID (positive) or -1 on error
+     */
+    @Override
+    public int submitScript(
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath
+    ) {
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        if (!initialized) {</span>
+<span class="nc" id="L302">            log.error(&quot;Backend not initialized&quot;);</span>
+<span class="nc" id="L303">            return -1;</span>
+        }
+
+<span class="nc" id="L306">        int execId = generateExecId();</span>
+<span class="nc" id="L307">        String jobName = generateJobName(execId);</span>
+
+<span class="nc" id="L309">        log.info(</span>
+            &quot;Submitting K8s Job: execId=&quot; +
+                execId +
+                &quot;, jobName=&quot; +
+                jobName +
+                &quot;, script=&quot; +
+                scriptPath
+        );
+
+        // TODO: Create Kubernetes Job resource
+        // Job job = new JobBuilder()
+        //     .withNewMetadata()
+        //         .withName(jobName)
+        //         .withNamespace(namespace)
+        //         .addToLabels(EXEC_ID_LABEL, String.valueOf(execId))
+        //     .endMetadata()
+        //     .withNewSpec()
+        //         .withBackoffLimit(0)  // No retries
+        //         .withTtlSecondsAfterFinished(3600)  // Cleanup after 1 hour
+        //         .withNewTemplate()
+        //             .withNewSpec()
+        //                 .withServiceAccountName(serviceAccountName)
+        //                 .withRestartPolicy(&quot;Never&quot;)
+        //                 .addNewContainer()
+        //                     .withName(&quot;job-runner&quot;)
+        //                     .withImage(jobImage)
+        //                     .withArgs(scriptPath, workingDirectoryPath, logPath)
+        //                     .addNewVolumeMount()
+        //                         .withName(&quot;data&quot;)
+        //                         .withMountPath(&quot;/app/data&quot;)
+        //                     .endVolumeMount()
+        //                     .withNewResources()
+        //                         .addToLimits(&quot;memory&quot;, new Quantity(&quot;2Gi&quot;))
+        //                         .addToLimits(&quot;cpu&quot;, new Quantity(&quot;1&quot;))
+        //                     .endResources()
+        //                 .endContainer()
+        //                 .addNewVolume()
+        //                     .withName(&quot;data&quot;)
+        //                     .withNewPersistentVolumeClaim()
+        //                         .withClaimName(dataPvcName)
+        //                     .endPersistentVolumeClaim()
+        //                 .endVolume()
+        //             .endSpec()
+        //         .endTemplate()
+        //     .endSpec()
+        //     .build();
+        //
+        // kubernetesClient.batch().v1().jobs()
+        //     .inNamespace(namespace)
+        //     .resource(job)
+        //     .create();
+
+        // Track the job
+<span class="nc" id="L362">        execIdToJobName.put(execId, jobName);</span>
+
+<span class="nc" id="L364">        log.info(</span>
+            &quot;K8s Job submitted: &quot; +
+                jobName +
+                &quot; (scaffolding - job not actually created)&quot;
+        );
+<span class="nc" id="L369">        return execId;</span>
+    }
+
+    /**
+     * Generate a unique execution ID.
+     */
+    private int generateExecId() {
+<span class="nc" id="L376">        synchronized (idLock) {</span>
+<span class="nc" id="L377">            int id = nextExecId++;</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">            if (nextExecId &lt; 0) {</span>
+<span class="nc" id="L379">                nextExecId = 1; // Wrap around</span>
+            }
+<span class="nc" id="L381">            return id;</span>
+        }
+    }
+
+    /**
+     * Generate a Kubernetes-compliant job name from execution ID.
+     */
+    private String generateJobName(int execId) {
+<span class="nc" id="L389">        return String.format(</span>
+            &quot;starexec-job-%d-%d&quot;,
+<span class="nc" id="L391">            execId,</span>
+<span class="nc" id="L392">            System.currentTimeMillis() % 100000</span>
+        );
+    }
+
+    /**
+     * Kill a specific job by execution ID.
+     *
+     * @param execId The execution ID of the job to kill
+     * @return true if successful, false otherwise
+     */
+    @Override
+    public boolean killPair(int execId) {
+<span class="nc" id="L404">        String jobName = execIdToJobName.get(execId);</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">        if (jobName == null) {</span>
+<span class="nc" id="L406">            log.warn(&quot;No job found for execId: &quot; + execId);</span>
+<span class="nc" id="L407">            return false;</span>
+        }
+
+<span class="nc" id="L410">        log.info(&quot;Killing K8s Job: execId=&quot; + execId + &quot;, jobName=&quot; + jobName);</span>
+
+        // TODO: Delete the Kubernetes Job
+        // try {
+        //     kubernetesClient.batch().v1().jobs()
+        //         .inNamespace(namespace)
+        //         .withName(jobName)
+        //         .withPropagationPolicy(DeletionPropagation.FOREGROUND)
+        //         .delete();
+        //     execIdToJobName.remove(execId);
+        //     return true;
+        // } catch (Exception e) {
+        //     log.error(&quot;Failed to kill job: &quot; + jobName, e);
+        //     return false;
+        // }
+
+<span class="nc" id="L426">        execIdToJobName.remove(execId);</span>
+<span class="nc" id="L427">        log.info(&quot;K8s Job killed (scaffolding): &quot; + jobName);</span>
+<span class="nc" id="L428">        return true;</span>
+    }
+
+    /**
+     * Kill all running jobs.
+     *
+     * @return true if successful, false otherwise
+     */
+    @Override
+    public boolean killAll() {
+<span class="nc" id="L438">        log.info(&quot;Killing all K8s Jobs in namespace: &quot; + namespace);</span>
+
+        // TODO: Delete all jobs with StarExec labels
+        // try {
+        //     kubernetesClient.batch().v1().jobs()
+        //         .inNamespace(namespace)
+        //         .withLabel(EXEC_ID_LABEL)
+        //         .withPropagationPolicy(DeletionPropagation.FOREGROUND)
+        //         .delete();
+        //     execIdToJobName.clear();
+        //     return true;
+        // } catch (Exception e) {
+        //     log.error(&quot;Failed to kill all jobs&quot;, e);
+        //     return false;
+        // }
+
+<span class="nc" id="L454">        execIdToJobName.clear();</span>
+<span class="nc" id="L455">        log.info(&quot;All K8s Jobs killed (scaffolding)&quot;);</span>
+<span class="nc" id="L456">        return true;</span>
+    }
+
+    /**
+     * Get status of all running jobs.
+     *
+     * @return Status string describing running jobs
+     */
+    @Override
+    public String getRunningJobsStatus() {
+<span class="nc" id="L466">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L467">        sb.append(&quot;=== Kubernetes Jobs Status ===\n&quot;);</span>
+<span class="nc" id="L468">        sb.append(&quot;Namespace: &quot;).append(namespace).append(&quot;\n&quot;);</span>
+<span class="nc" id="L469">        sb</span>
+<span class="nc" id="L470">            .append(&quot;Tracked Jobs: &quot;)</span>
+<span class="nc" id="L471">            .append(execIdToJobName.size())</span>
+<span class="nc" id="L472">            .append(&quot;\n\n&quot;);</span>
+
+        // TODO: Query actual job status from Kubernetes
+        // JobList jobs = kubernetesClient.batch().v1().jobs()
+        //     .inNamespace(namespace)
+        //     .withLabel(EXEC_ID_LABEL)
+        //     .list();
+        //
+        // for (Job job : jobs.getItems()) {
+        //     sb.append(job.getMetadata().getName())
+        //       .append(&quot;: &quot;)
+        //       .append(getJobStatus(job))
+        //       .append(&quot;\n&quot;);
+        // }
+
+<span class="nc bnc" id="L487" title="All 2 branches missed.">        for (Map.Entry&lt;Integer, String&gt; entry : execIdToJobName.entrySet()) {</span>
+<span class="nc" id="L488">            sb</span>
+<span class="nc" id="L489">                .append(&quot;ExecID &quot;)</span>
+<span class="nc" id="L490">                .append(entry.getKey())</span>
+<span class="nc" id="L491">                .append(&quot;: &quot;)</span>
+<span class="nc" id="L492">                .append(entry.getValue())</span>
+<span class="nc" id="L493">                .append(&quot; (status unknown - scaffolding)\n&quot;);</span>
+<span class="nc" id="L494">        }</span>
+
+<span class="nc" id="L496">        return sb.toString();</span>
+    }
+
+    /**
+     * Get all active execution IDs.
+     *
+     * @return Set of active execution IDs
+     */
+    @Override
+    public Set&lt;Integer&gt; getActiveExecutionIds() throws IOException {
+        // TODO: Query Kubernetes for actual running jobs
+        // Set&lt;Integer&gt; activeIds = new HashSet&lt;&gt;();
+        // JobList jobs = kubernetesClient.batch().v1().jobs()
+        //     .inNamespace(namespace)
+        //     .withLabel(EXEC_ID_LABEL)
+        //     .list();
+        //
+        // for (Job job : jobs.getItems()) {
+        //     String execIdStr = job.getMetadata().getLabels().get(EXEC_ID_LABEL);
+        //     if (execIdStr != null) {
+        //         activeIds.add(Integer.parseInt(execIdStr));
+        //     }
+        // }
+        // return activeIds;
+
+<span class="nc" id="L521">        return new HashSet&lt;&gt;(execIdToJobName.keySet());</span>
+    }
+
+    // =========================================================================
+    // Node and Queue Management
+    // =========================================================================
+
+    /**
+     * Get all worker nodes in the Kubernetes cluster.
+     *
+     * &lt;p&gt;Returns nodes that are labeled for StarExec workloads.&lt;/p&gt;
+     *
+     * @return Array of node names
+     */
+    @Override
+    public String[] getWorkerNodes() {
+<span class="nc" id="L537">        log.debug(&quot;Getting worker nodes from Kubernetes cluster&quot;);</span>
+
+        // TODO: Query Kubernetes for nodes with StarExec labels
+        // NodeList nodes = kubernetesClient.nodes()
+        //     .withLabel(&quot;starexec.org/worker&quot;, &quot;true&quot;)
+        //     .list();
+        //
+        // return nodes.getItems().stream()
+        //     .map(n -&gt; n.getMetadata().getName())
+        //     .toArray(String[]::new);
+
+        // Scaffolding: return empty array
+<span class="nc" id="L549">        log.warn(&quot;getWorkerNodes: returning empty (scaffolding)&quot;);</span>
+<span class="nc" id="L550">        return new String[0];</span>
+    }
+
+    /**
+     * Get all queues (derived from node labels).
+     *
+     * @return Array of queue names
+     */
+    @Override
+    public String[] getQueues() {
+<span class="nc" id="L560">        log.debug(&quot;Getting queues from Kubernetes node labels&quot;);</span>
+
+        // TODO: Collect unique queue labels from nodes
+        // Set&lt;String&gt; queues = new HashSet&lt;&gt;();
+        // queues.add(DEFAULT_QUEUE_NAME);
+        //
+        // NodeList nodes = kubernetesClient.nodes()
+        //     .withLabel(&quot;starexec.org/worker&quot;, &quot;true&quot;)
+        //     .list();
+        //
+        // for (Node node : nodes.getItems()) {
+        //     String queue = node.getMetadata().getLabels().get(queueLabelKey);
+        //     if (queue != null) {
+        //         queues.add(queue);
+        //     }
+        // }
+        // return queues.toArray(new String[0]);
+
+<span class="nc" id="L578">        log.warn(&quot;getQueues: returning default only (scaffolding)&quot;);</span>
+<span class="nc" id="L579">        return new String[] { DEFAULT_QUEUE_NAME };</span>
+    }
+
+    /**
+     * Get mapping of nodes to queues.
+     *
+     * @return Map of node name to queue name
+     */
+    @Override
+    public Map&lt;String, String&gt; getNodeQueueAssociations() {
+<span class="nc" id="L589">        Map&lt;String, String&gt; associations = new HashMap&lt;&gt;();</span>
+
+        // TODO: Build map from node labels
+        // NodeList nodes = kubernetesClient.nodes()
+        //     .withLabel(&quot;starexec.org/worker&quot;, &quot;true&quot;)
+        //     .list();
+        //
+        // for (Node node : nodes.getItems()) {
+        //     String nodeName = node.getMetadata().getName();
+        //     String queue = node.getMetadata().getLabels()
+        //         .getOrDefault(queueLabelKey, DEFAULT_QUEUE_NAME);
+        //     associations.put(nodeName, queue);
+        // }
+
+<span class="nc" id="L603">        log.warn(&quot;getNodeQueueAssociations: returning empty (scaffolding)&quot;);</span>
+<span class="nc" id="L604">        return associations;</span>
+    }
+
+    /**
+     * Clear any error states on nodes.
+     *
+     * &lt;p&gt;For Kubernetes, this could uncordon nodes or clear taints.&lt;/p&gt;
+     *
+     * @return true if successful
+     */
+    @Override
+    public boolean clearNodeErrorStates() {
+<span class="nc" id="L616">        log.info(&quot;clearNodeErrorStates called (no-op in scaffolding)&quot;);</span>
+
+        // TODO: Uncordon nodes or remove error taints
+        // NodeList nodes = kubernetesClient.nodes()
+        //     .withLabel(&quot;starexec.org/worker&quot;, &quot;true&quot;)
+        //     .list();
+        //
+        // for (Node node : nodes.getItems()) {
+        //     if (node.getSpec().getUnschedulable() != null &amp;&amp;
+        //         node.getSpec().getUnschedulable()) {
+        //         kubernetesClient.nodes()
+        //             .withName(node.getMetadata().getName())
+        //             .uncordon();
+        //     }
+        // }
+
+<span class="nc" id="L632">        return true;</span>
+    }
+
+    /**
+     * Delete a queue by removing labels from nodes.
+     *
+     * @param queueName Name of the queue to delete
+     */
+    @Override
+    public void deleteQueue(String queueName) {
+<span class="nc bnc" id="L642" title="All 2 branches missed.">        if (DEFAULT_QUEUE_NAME.equals(queueName)) {</span>
+<span class="nc" id="L643">            log.warn(&quot;Cannot delete default queue&quot;);</span>
+<span class="nc" id="L644">            return;</span>
+        }
+
+<span class="nc" id="L647">        log.info(&quot;Deleting queue: &quot; + queueName + &quot; (scaffolding - no-op)&quot;);</span>
+
+        // TODO: Remove queue label from all nodes with this queue
+        // NodeList nodes = kubernetesClient.nodes()
+        //     .withLabel(queueLabelKey, queueName)
+        //     .list();
+        //
+        // for (Node node : nodes.getItems()) {
+        //     kubernetesClient.nodes()
+        //         .withName(node.getMetadata().getName())
+        //         .edit(n -&gt; new NodeBuilder(n)
+        //             .editMetadata()
+        //                 .removeFromLabels(queueLabelKey)
+        //             .endMetadata()
+        //             .build());
+        // }
+<span class="nc" id="L663">    }</span>
+
+    /**
+     * Create a new queue by labeling nodes.
+     *
+     * @param newQueueName Name for the new queue
+     * @param nodeNames Nodes to assign to the queue
+     * @param sourceQueueNames Previous queue assignments (ignored)
+     * @return true if successful
+     */
+    @Override
+    public boolean createQueue(
+        String newQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames
+    ) {
+<span class="nc" id="L679">        return createQueueWithSlots(</span>
+            newQueueName,
+            nodeNames,
+            sourceQueueNames,
+            null
+        );
+    }
+
+    /**
+     * Create a queue with slot configuration.
+     *
+     * @param newQueueName Name for the new queue
+     * @param nodeNames Nodes to assign
+     * @param sourceQueueNames Previous assignments (ignored)
+     * @param slots Number of slots (stored as annotation)
+     * @return true if successful
+     */
+    @Override
+    public boolean createQueueWithSlots(
+        String newQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames,
+        Integer slots
+    ) {
+<span class="nc bnc" id="L703" title="All 4 branches missed.">        if (nodeNames == null || nodeNames.length == 0) {</span>
+<span class="nc" id="L704">            log.warn(&quot;No nodes specified for queue creation&quot;);</span>
+<span class="nc" id="L705">            return false;</span>
+        }
+
+<span class="nc" id="L708">        log.info(</span>
+            &quot;Creating queue '&quot; +
+                newQueueName +
+                &quot;' with &quot; +
+                nodeNames.length +
+                &quot; nodes, &quot; +
+                slots +
+                &quot; slots (scaffolding)&quot;
+        );
+
+        // TODO: Label nodes with queue name
+        // for (String nodeName : nodeNames) {
+        //     Map&lt;String, String&gt; labels = new HashMap&lt;&gt;();
+        //     labels.put(queueLabelKey, newQueueName);
+        //     if (slots != null) {
+        //         labels.put(&quot;starexec.org/slots&quot;, String.valueOf(slots));
+        //     }
+        //
+        //     kubernetesClient.nodes()
+        //         .withName(nodeName)
+        //         .edit(n -&gt; new NodeBuilder(n)
+        //             .editMetadata()
+        //                 .addToLabels(labels)
+        //             .endMetadata()
+        //             .build());
+        // }
+
+<span class="nc" id="L735">        return true;</span>
+    }
+
+    /**
+     * Move nodes between queues.
+     *
+     * @param destQueueName Destination queue
+     * @param nodeNames Nodes to move
+     * @param sourceQueueNames Source queues (ignored)
+     */
+    @Override
+    public void moveNodes(
+        String destQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames
+    ) {
+<span class="nc bnc" id="L751" title="All 4 branches missed.">        if (nodeNames == null || nodeNames.length == 0) {</span>
+<span class="nc" id="L752">            return;</span>
+        }
+
+<span class="nc" id="L755">        log.info(</span>
+            &quot;Moving &quot; +
+                nodeNames.length +
+                &quot; nodes to queue '&quot; +
+                destQueueName +
+                &quot;' (scaffolding)&quot;
+        );
+
+        // TODO: Update queue labels on nodes
+        // for (String nodeName : nodeNames) {
+        //     if (DEFAULT_QUEUE_NAME.equals(destQueueName)) {
+        //         // Remove queue label
+        //         kubernetesClient.nodes()
+        //             .withName(nodeName)
+        //             .edit(n -&gt; new NodeBuilder(n)
+        //                 .editMetadata()
+        //                     .removeFromLabels(queueLabelKey)
+        //                 .endMetadata()
+        //                 .build());
+        //     } else {
+        //         // Set queue label
+        //         kubernetesClient.nodes()
+        //             .withName(nodeName)
+        //             .edit(n -&gt; new NodeBuilder(n)
+        //                 .editMetadata()
+        //                     .addToLabels(queueLabelKey, destQueueName)
+        //                 .endMetadata()
+        //                 .build());
+        //     }
+        // }
+<span class="nc" id="L785">    }</span>
+
+    /**
+     * Move a single node to a queue.
+     *
+     * @param nodeName Node to move
+     * @param queueName Destination queue
+     */
+    @Override
+    public void moveNode(String nodeName, String queueName) {
+<span class="nc" id="L795">        moveNodes(queueName, new String[] { nodeName }, null);</span>
+<span class="nc" id="L796">    }</span>
+
+    @Override
+    public void clearPairTracking(int pairId) {
+        // KubernetesNativeBackend does not track pair state - no-op
+<span class="nc" id="L801">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

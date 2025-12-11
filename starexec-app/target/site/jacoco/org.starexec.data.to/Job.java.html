@@ -1,0 +1,520 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Job.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to</a> &gt; <span class="el_source">Job.java</span></div><h1>Job.java</h1><pre class="source lang-java linenums">package org.starexec.data.to;
+
+import com.google.gson.annotations.Expose;
+import org.jfree.util.Log;
+import org.starexec.constants.R;
+import org.starexec.data.database.Jobs;
+import org.starexec.data.to.Status.StatusCode;
+import org.starexec.data.to.enums.BenchmarkingFramework;
+import org.starexec.data.to.pipelines.JoblineStage;
+import org.starexec.data.to.pipelines.StageAttributes;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
+
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.*;
+
+/**
+ * Represents a job in the database
+ *
+ * @author Tyler Jensen
+ */
+public class Job extends Identifiable implements Iterable&lt;JobPair&gt;, Nameable {
+<span class="fc" id="L24">	private static final StarLogger log = StarLogger.getLogger(Jobs.class);</span>
+
+<span class="fc" id="L26">	private int userId = -1;</span>
+<span class="fc" id="L27">	private User user = null; // this is populated for the JobManager</span>
+	@Expose private String name;
+<span class="fc" id="L29">	@Expose private String description = &quot;no description&quot;;</span>
+<span class="fc" id="L30">	private Queue queue = null;</span>
+<span class="fc" id="L31">	private long seed = 0;</span>
+
+<span class="fc" id="L33">	private int cpuTimeout = -1;</span>
+<span class="fc" id="L34">	private int wallclockTimeout = -1;</span>
+<span class="fc" id="L35">	private int killDelay = 0;</span>
+<span class="fc" id="L36">	private int softTimeLimit = 0;</span>
+	private long maxMemory;        //maximum memory the pair can use, in bytes
+	private BenchmarkingFramework benchmarkingFramework;
+
+	@Expose private Timestamp createTime;
+	@Expose private Timestamp completeTime;
+	// this is the root JOB SPACE for this job. It is NOT a space from the spaces table.
+	//Exception: Before a job is created, this field is used to store the space the job was created in
+	@Expose private int primarySpace;
+	private List&lt;JobPair&gt; jobPairs;
+	private HashMap&lt;String, Integer&gt; liteJobPairStats;
+
+	private boolean deleted;
+			// if true, this job has been deleted on disk and exists only in the database so we can see space
+			// associations
+	private boolean paused; // if true, this job is currently paused
+	private Boolean readOnly;
+
+	private boolean buildJob;
+	//a list of all the stage attributes for this job, in no particular order
+	private List&lt;StageAttributes&gt; stageAttributes;
+
+	// Whether to suppress the timestamp produced by runsolver for this job.
+	private boolean suppressTimestamp;
+
+<span class="fc" id="L61">	private boolean usingDependencies = false;</span>
+<span class="fc" id="L62">	private boolean isHighPriority = false;</span>
+
+	private int totalPairs; // number of pairs this job owns
+	private long diskSize; // in bytes
+	private String outputBenchmarksPath;
+
+<span class="fc" id="L68">	public Job() {</span>
+<span class="fc" id="L69">		jobPairs = new LinkedList&lt;&gt;();</span>
+
+<span class="fc" id="L71">		queue = new Queue();</span>
+<span class="fc" id="L72">		setStageAttributes(new ArrayList&lt;&gt;());</span>
+<span class="fc" id="L73">		setSuppressTimestamp(false); // false is default</span>
+<span class="fc" id="L74">		setBuildJob(false); //false is default</span>
+<span class="fc" id="L75">	}</span>
+
+	/**
+	 * @return the user id of the user who created the job
+	 */
+	public int getUserId() {
+<span class="nc" id="L81">		return userId;</span>
+	}
+
+	/**
+	 * @param userId the user id to set as the creator
+	 */
+	public void setUserId(int userId) {
+<span class="nc" id="L88">		this.userId = userId;</span>
+<span class="nc" id="L89">	}</span>
+
+	/**
+	 * @return The root job space for this job
+	 */
+	public int getPrimarySpace() {
+<span class="nc" id="L95">		return primarySpace;</span>
+	}
+
+	public boolean isHighPriority() {
+<span class="nc" id="L99">		return isHighPriority;</span>
+	}
+
+	public void setHighPriority() {
+<span class="nc" id="L103">		isHighPriority = true;</span>
+<span class="nc" id="L104">	}</span>
+
+	public void setLowPriority() {
+<span class="nc" id="L107">		isHighPriority = false;</span>
+<span class="nc" id="L108">	}</span>
+
+	public BenchmarkingFramework getBenchmarkingFramework() {
+<span class="nc" id="L111">		return benchmarkingFramework;</span>
+	}
+
+	public void setBenchmarkingFramework(BenchmarkingFramework benchmarkingFramework) {
+<span class="nc" id="L115">		this.benchmarkingFramework = benchmarkingFramework;</span>
+<span class="nc" id="L116">	}</span>
+
+	public String getOutputBenchmarksPath() {
+<span class="nc" id="L119">		return outputBenchmarksPath;</span>
+	}
+
+	public void setOutputBenchmarksPath(String path) {
+<span class="nc" id="L123">		outputBenchmarksPath = path;</span>
+<span class="nc" id="L124">	}</span>
+
+	/**
+	 * Sets the root job space for this job
+	 *
+	 * @param space The ID of the space
+	 */
+
+	public void setPrimarySpace(int space) {
+<span class="nc" id="L133">		this.primarySpace = space;</span>
+<span class="nc" id="L134">	}</span>
+
+	/**
+	 * @return the user defined name for the job
+	 */
+	public String getName() {
+<span class="nc" id="L140">		return name;</span>
+	}
+
+	/**
+	 * @param name the name to set for the job
+	 */
+	public void setName(String name) {
+<span class="nc" id="L147">		this.name = name;</span>
+<span class="nc" id="L148">	}</span>
+
+	/**
+	 * @return the date the job was created
+	 */
+	public Timestamp getCreateTime() {
+<span class="nc" id="L154">		return this.createTime;</span>
+	}
+
+	/**
+	 * @param created the creation date to set for the job
+	 */
+	public void setCreateTime(Timestamp created) {
+<span class="nc" id="L161">		this.createTime = created;</span>
+<span class="nc" id="L162">	}</span>
+
+	/**
+	 * @return the user defined description of the job
+	 */
+	public String getDescription() {
+<span class="nc" id="L168">		return description;</span>
+	}
+
+	/**
+	 * @param description the description for the job
+	 */
+	public void setDescription(String description) {
+<span class="nc bnc" id="L175" title="All 2 branches missed.">		if (!Util.isNullOrEmpty(description)) {</span>
+<span class="nc" id="L176">			this.description = description;</span>
+		}
+<span class="nc" id="L178">	}</span>
+
+	/**
+	 * @return the list of job pairs belonging to this job
+	 */
+	public List&lt;JobPair&gt; getJobPairs() {
+<span class="nc" id="L184">		return jobPairs;</span>
+	}
+
+	/**
+	 * @param jobPairs the list of job pairs belonging to this job
+	 */
+	public void setJobPairs(List&lt;JobPair&gt; jobPairs) {
+<span class="nc" id="L191">		this.jobPairs = jobPairs;</span>
+<span class="nc" id="L192">	}</span>
+
+	/**
+	 * @return all the attribute names for every completed job pair in this job
+	 */
+	public Set&lt;String&gt; attributeNames() {
+<span class="nc bnc" id="L198" title="All 4 branches missed.">		if (jobPairs == null || jobPairs.isEmpty()) {</span>
+<span class="nc" id="L199">			return null;</span>
+		}
+<span class="nc" id="L201">		Set&lt;String&gt; attrs = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		for (JobPair pair : jobPairs) {</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">			for (JoblineStage stage : pair.getStages()) {</span>
+<span class="nc" id="L204">				Properties props = stage.getAttributes();</span>
+
+<span class="nc bnc" id="L206" title="All 2 branches missed.">				if (pair.getStatus().getCode() == StatusCode.STATUS_COMPLETE) {</span>
+<span class="nc" id="L207">					attrs.addAll(props.stringPropertyNames());</span>
+				}
+<span class="nc" id="L209">			}</span>
+<span class="nc" id="L210">		}</span>
+<span class="nc" id="L211">		Log.debug(&quot;Returning &quot; + attrs.size() + &quot; unique attr names&quot;);</span>
+<span class="nc" id="L212">		return attrs;</span>
+	}
+
+	public void addJobPairs(Collection&lt;JobPair&gt; pairs) {
+<span class="nc" id="L216">		jobPairs.addAll(pairs);</span>
+<span class="nc" id="L217">	}</span>
+
+	/**
+	 * @param jobPair the job pair to add to the job
+	 */
+	public void addJobPair(JobPair jobPair) {
+<span class="nc" id="L223">		jobPairs.add(jobPair);</span>
+<span class="nc" id="L224">	}</span>
+
+	/**
+	 * @return the queue this job is intended to run on
+	 */
+	public Queue getQueue() {
+<span class="nc" id="L230">		return queue;</span>
+	}
+
+	/**
+	 * @param queue the queue to set for this job
+	 */
+	public void setQueue(Queue queue) {
+<span class="fc" id="L237">		this.queue = queue;</span>
+<span class="fc" id="L238">	}</span>
+
+	@Override
+	public Iterator&lt;JobPair&gt; iterator() {
+<span class="nc" id="L242">		return this.jobPairs.iterator();</span>
+	}
+
+	/**
+	 * @param ljps the job pair statistics to store in this object
+	 */
+	public void setLiteJobPairStats(HashMap&lt;String, Integer&gt; ljps) {
+<span class="nc" id="L249">		this.liteJobPairStats = ljps;</span>
+<span class="nc" id="L250">	}</span>
+
+	/**
+	 * @return the job pair statistics stored in this object
+	 */
+	public HashMap&lt;String, Integer&gt; getLiteJobPairStats() {
+<span class="nc" id="L256">		return liteJobPairStats;</span>
+	}
+
+	public void setDeleted(boolean deleted) {
+<span class="nc" id="L260">		this.deleted = deleted;</span>
+<span class="nc" id="L261">	}</span>
+
+	public boolean isDeleted() {
+<span class="nc" id="L264">		return deleted;</span>
+	}
+
+	public boolean isReadOnly() {
+<span class="nc bnc" id="L268" title="All 2 branches missed.">		if (readOnly == null) readOnly = Jobs.isReadOnly(this.getId());</span>
+<span class="nc" id="L269">		log.info(&quot;isReadOnly&quot;, &quot;Job: &quot;+this.getId()+&quot;     isReadOnly: &quot;+readOnly);</span>
+<span class="nc" id="L270">		return readOnly;</span>
+	}
+
+	public void setPaused(boolean paused) {
+<span class="nc" id="L274">		this.paused = paused;</span>
+<span class="nc" id="L275">	}</span>
+
+	public boolean isPaused() {
+<span class="nc" id="L278">		return paused;</span>
+	}
+
+	public void setSeed(long seed) {
+<span class="nc" id="L282">		this.seed = seed;</span>
+<span class="nc" id="L283">	}</span>
+
+	public long getSeed() {
+<span class="nc" id="L286">		return seed;</span>
+	}
+
+	/**
+	 * @param completeTime the completeTime to set
+	 */
+	public void setCompleteTime(Timestamp completeTime) {
+<span class="nc" id="L293">		this.completeTime = completeTime;</span>
+<span class="nc" id="L294">	}</span>
+
+	/**
+	 * @return the completeTime
+	 */
+	public Timestamp getCompleteTime() {
+<span class="nc" id="L300">		return completeTime;</span>
+	}
+
+	public int getCpuTimeout() {
+<span class="nc" id="L304">		return cpuTimeout;</span>
+	}
+
+	public void setCpuTimeout(int cpuTimeout) {
+<span class="nc" id="L308">		this.cpuTimeout = cpuTimeout;</span>
+<span class="nc" id="L309">	}</span>
+
+	public int getWallclockTimeout() {
+<span class="nc" id="L312">		return wallclockTimeout;</span>
+	}
+
+	public void setWallclockTimeout(int wallclockTimeout) {
+<span class="nc" id="L316">		this.wallclockTimeout = wallclockTimeout;</span>
+<span class="nc" id="L317">	}</span>
+
+	public long getMaxMemory() {
+<span class="nc" id="L320">		return maxMemory;</span>
+	}
+
+	public void setMaxMemory(long maxMemory) {
+<span class="nc" id="L324">		this.maxMemory = maxMemory;</span>
+<span class="nc" id="L325">	}</span>
+
+	public List&lt;StageAttributes&gt; getStageAttributes() {
+<span class="nc" id="L328">		return stageAttributes;</span>
+	}
+
+	public void setStageAttributes(List&lt;StageAttributes&gt; stageAttributes) {
+<span class="fc" id="L332">		this.stageAttributes = stageAttributes;</span>
+<span class="fc" id="L333">	}</span>
+
+	public void addStageAttributes(StageAttributes attrs) {
+<span class="nc" id="L336">		this.stageAttributes.add(attrs);</span>
+<span class="nc" id="L337">	}</span>
+
+	public boolean containsStageOneAttributes() {
+<span class="nc bnc" id="L340" title="All 2 branches missed.">		for (StageAttributes attrs : this.stageAttributes) {</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">			if (attrs.getStageNumber() == 1) {</span>
+<span class="nc" id="L342">				return true;</span>
+			}
+<span class="nc" id="L344">		}</span>
+<span class="nc" id="L345">		return false;</span>
+	}
+
+	/**
+	 * Returns the StageAttributes object for the given stage number. If there is no such object, generates one using
+	 * the defaults from this job object.
+	 *
+	 * @param stageNumber
+	 * @return
+	 */
+	public StageAttributes getStageAttributesByStageNumber(int stageNumber) {
+<span class="nc bnc" id="L356" title="All 2 branches missed.">		for (StageAttributes attrs : stageAttributes) {</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">			if (attrs.getStageNumber() == stageNumber) {</span>
+<span class="nc" id="L358">				return attrs;</span>
+			}
+<span class="nc" id="L360">		}</span>
+
+<span class="nc" id="L362">		StageAttributes attrs = new StageAttributes();</span>
+<span class="nc" id="L363">		attrs.setStageNumber(stageNumber);</span>
+<span class="nc" id="L364">		attrs.setCpuTimeout(cpuTimeout);</span>
+<span class="nc" id="L365">		attrs.setWallclockTimeout(wallclockTimeout);</span>
+<span class="nc" id="L366">		attrs.setJobId(this.getId());</span>
+<span class="nc" id="L367">		attrs.setMaxMemory(maxMemory);</span>
+<span class="nc" id="L368">		return attrs;</span>
+	}
+
+	/**
+	 * Sets the suppress timestamps boolean for this job.
+	 *
+	 * @param suppressTimestamp whether to suppress timestamps produced by runsolver for this job.
+	 * @author Albert Giegerich
+	 */
+	public void setSuppressTimestamp(boolean suppressTimestamp) {
+<span class="fc" id="L378">		this.suppressTimestamp = suppressTimestamp;</span>
+<span class="fc" id="L379">	}</span>
+
+	/**
+	 * Gets whether or not the timestamp is suppressed for this job.
+	 *
+	 * @return Whether or not the timestamp is suppressed for this job.
+	 * @author Albert Giegerich
+	 */
+	public boolean timestampIsSuppressed() {
+<span class="nc" id="L388">		return suppressTimestamp;</span>
+	}
+
+	public boolean isUsingDependencies() {
+<span class="nc" id="L392">		return usingDependencies;</span>
+	}
+
+	public void setUsingDependencies(boolean usingDependencies) {
+<span class="nc" id="L396">		this.usingDependencies = usingDependencies;</span>
+<span class="nc" id="L397">	}</span>
+
+	/**
+	 * Gets whether or not this is a buildjob
+	 *
+	 * @return Whether or not the job is a build job
+	 * @author Andrew Lubinus
+	 */
+
+	public boolean isBuildJob() {
+<span class="nc" id="L407">		return buildJob;</span>
+	}
+
+	/**
+	 * Sets whether or not this is a build job
+	 *
+	 * @param buildJob boolean representing if this a build job or not
+	 * @author Andrew Lubinus
+	 */
+
+	public void setBuildJob(boolean buildJob) {
+<span class="fc" id="L418">		this.buildJob = buildJob;</span>
+<span class="fc" id="L419">	}</span>
+
+	/**
+	 * Gets the name of the root space for this job. Doing this requires that at least one job pair is populated and
+	 * that it has the correct path info set.
+	 *
+	 * @return the root space name, or null if it cannot be found
+	 */
+	public String getRootSpaceName() {
+<span class="nc bnc" id="L428" title="All 2 branches missed.">		if (getJobPairs().isEmpty()) {</span>
+<span class="nc" id="L429">			return null;</span>
+		}
+<span class="nc" id="L431">		String rootName = getJobPairs().get(0).getPath();</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">		if (rootName.contains(R.JOB_PAIR_PATH_DELIMITER)) {</span>
+<span class="nc" id="L433">			rootName = rootName.substring(0, rootName.indexOf(R.JOB_PAIR_PATH_DELIMITER));</span>
+		}
+<span class="nc" id="L435">		return rootName;</span>
+	}
+
+	/**
+	 * @return the totalPairs
+	 */
+	public int getTotalPairs() {
+<span class="nc" id="L442">		return totalPairs;</span>
+	}
+
+	/**
+	 * @param totalPairs the totalPairs to set
+	 */
+	public void setTotalPairs(int totalPairs) {
+<span class="nc" id="L449">		this.totalPairs = totalPairs;</span>
+<span class="nc" id="L450">	}</span>
+
+	/**
+	 * @return the user
+	 */
+	public User getUser() {
+<span class="nc" id="L456">		return user;</span>
+	}
+
+	/**
+	 * @param user the user to set
+	 */
+	public void setUser(User user) {
+<span class="nc" id="L463">		this.user = user;</span>
+<span class="nc" id="L464">	}</span>
+
+	/**
+	 * @return the diskSize
+	 */
+	public long getDiskSize() {
+<span class="nc" id="L470">		return diskSize;</span>
+	}
+
+	/**
+	 * @param diskSize the diskSize to set
+	 */
+	public void setDiskSize(long diskSize) {
+<span class="nc" id="L477">		this.diskSize = diskSize;</span>
+<span class="nc" id="L478">	}</span>
+
+	/**
+	 * @return Human readable description of this job's status
+	 */
+	public String getStatus() {
+<span class="nc" id="L484">		final int id = getId();</span>
+		try {
+<span class="nc" id="L486">			return Jobs.getJobStatus(id).toString();</span>
+<span class="nc" id="L487">		} catch (SQLException e) {</span>
+<span class="nc" id="L488">			return &quot;&quot;;</span>
+		}
+	}
+
+	public void setKillDelay(int killDelay) {
+<span class="nc" id="L493">		this.killDelay = killDelay;</span>
+<span class="nc" id="L494">	}</span>
+
+	/**
+	 * If non-zero, process will receive SIGTERM, and then SIGKILL after the delay specified. Note that this option
+	 * only
+	 * applies to RunSolver
+	 *
+	 * @return delay in seconds
+	 */
+	public int getKillDelay() {
+<span class="nc" id="L504">		return killDelay;</span>
+	}
+
+	public void setSoftTimeLimit(int softTimeLimit) {
+<span class="nc" id="L508">		this.softTimeLimit = softTimeLimit;</span>
+<span class="nc" id="L509">	}</span>
+
+	/**
+	 * If non-zero, SIGTERM will be sent this many seconds after Job starts. SIGKILL will be sent after other timeouts.
+	 *
+	 * @return softTimeLimit in seconds
+	 */
+	public int getSoftTimeLimit() {
+<span class="nc" id="L517">		return softTimeLimit;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

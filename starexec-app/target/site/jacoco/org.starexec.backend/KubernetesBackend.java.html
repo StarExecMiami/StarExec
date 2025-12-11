@@ -1,0 +1,692 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>KubernetesBackend.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.backend</a> &gt; <span class="el_source">KubernetesBackend.java</span></div><h1>KubernetesBackend.java</h1><pre class="source lang-java linenums">/*
+ * This assumes the head node is able to talk to an existing kubernetes cluster
+ * using kubectl. See https://kubernetes.io/docs/tasks/tools/install-kubectl/
+ *
+ * The head node itself needn't be a kubernetes node I believe.
+ * LocalBackend is where a lot of this code comes from, but I didn't
+ * want to extend it directly since kubernetes isn't local.
+ *
+ */
+
+package org.starexec.backend;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import org.starexec.constants.R;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.RobustRunnable;
+import org.starexec.util.Util;
+
+<span class="nc" id="L21">public class KubernetesBackend implements Backend {</span>
+
+<span class="nc" id="L23">    private static final StarLogger log = StarLogger.getLogger(</span>
+        KubernetesBackend.class
+    );
+
+    // You can set this to any desired number
+    // (Should be &gt;= num compute nodes in cluster, so they can all be used concurrently)
+    // However, because the k8s backend runs the runscript/jobscript locally on the head node (which then dispatches the actual heavy jobs via k8s),
+    // this needs to be low enough that the head node can handle it.
+    // Think about &quot;ulimit -Sn&quot; which shows the max number of subprocesses a user/process can make.
+    private static final int MAX_CONCURRENT_JOBS = 50;
+
+    // Label key used to identify a &quot;queue&quot; in Kubernetes.
+    // If you want something else (like &quot;starexec-queue&quot; or &quot;starexecQueue&quot;),
+    // just change this constant.
+    private static final String QUEUE_LABEL_KEY = &quot;starexecQueue&quot;;
+    private static final String DEFAULT_QUEUE_NAME = &quot;default&quot;;
+
+<span class="nc" id="L40">    private final Map&lt;Integer, LocalJob&gt; activeIds = new HashMap&lt;&gt;();</span>
+
+    /**
+     * An ordered queue of all jobs that have been
+     * submitted to the backend and have not yet completed.
+     * Jobs are kept in this queue until they are finished executing,
+     * meaning that the running job will be the head of the queue
+     */
+<span class="nc" id="L48">    final java.util.Queue&lt;LocalJob&gt; jobsToRun = new ArrayDeque&lt;&gt;();</span>
+<span class="nc" id="L49">    private int curID = 1;</span>
+
+<span class="nc" id="L51">    private static class LocalJob {</span>
+
+<span class="nc" id="L53">        public int execId = 0;</span>
+<span class="nc" id="L54">        public String scriptPath = &quot;&quot;;</span>
+<span class="nc" id="L55">        public String workingDirectoryPath = &quot;&quot;;</span>
+<span class="nc" id="L56">        public String logPath = &quot;&quot;;</span>
+        public Process process;
+
+        @Override
+        public String toString() {
+<span class="nc" id="L61">            StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L62">            sb.append(scriptPath).append(&quot; &quot;);</span>
+<span class="nc" id="L63">            sb.append(execId).append(&quot; &quot;);</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">            if (process != null) {</span>
+<span class="nc" id="L65">                sb.append(&quot;running&quot;);</span>
+            } else {
+<span class="nc" id="L67">                sb.append(&quot;pending&quot;);</span>
+            }
+<span class="nc" id="L69">            return sb.toString();</span>
+        }
+    }
+
+    /**
+     * Generates a new ID that is unique among all jobs currently enqueued/ running
+     *
+     * @return
+     * @throws Exception
+     */
+    private int generateExecId() throws Exception {
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        if (activeIds.size() == Integer.MAX_VALUE) {</span>
+<span class="nc" id="L81">            throw new Exception(</span>
+                &quot;Cannot support more that Integer.MAX_VALUE pairs&quot;
+            );
+        }
+        while (true) {
+<span class="nc" id="L86">            curID = (curID + 1) % Integer.MAX_VALUE;</span>
+            // make sure the ID is not 0 when we return it
+<span class="nc" id="L88">            curID = Math.max(curID, 1);</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">            if (!activeIds.containsKey(curID)) {</span>
+<span class="nc" id="L90">                return curID;</span>
+            }
+        }
+    }
+
+    @Override
+    public boolean isError(int execCode) {
+<span class="nc bnc" id="L97" title="All 2 branches missed.">        return execCode &lt;= 0;</span>
+    }
+
+    private synchronized void runJob(LocalJob j) {
+        try {
+<span class="nc" id="L102">            ProcessBuilder builder = new ProcessBuilder(j.scriptPath);</span>
+<span class="nc" id="L103">            builder.redirectErrorStream(true);</span>
+<span class="nc" id="L104">            builder.directory(new File(j.workingDirectoryPath));</span>
+<span class="nc" id="L105">            builder.redirectOutput(new File(j.logPath));</span>
+
+            // Start the job in a separate thread so it doesn't block the main loop
+<span class="nc" id="L108">            Thread jobThread = new Thread(() -&gt; {</span>
+                try {
+<span class="nc" id="L110">                    j.process = builder.start();</span>
+<span class="nc" id="L111">                    j.process.waitFor(); // Wait for the job to complete</span>
+<span class="nc" id="L112">                    log.info(&quot;Job &quot; + j.execId + &quot; completed&quot;);</span>
+<span class="nc" id="L113">                } catch (Exception e) {</span>
+<span class="nc" id="L114">                    log.error(</span>
+<span class="nc" id="L115">                        &quot;Error running job &quot; + j.execId + &quot;: &quot; + e.getMessage(),</span>
+                        e
+                    );
+<span class="nc" id="L118">                }</span>
+<span class="nc" id="L119">            });</span>
+
+<span class="nc" id="L121">            jobThread.start(); // Start the thread to run the job</span>
+<span class="nc" id="L122">        } catch (Exception e) {</span>
+<span class="nc" id="L123">            log.error(</span>
+<span class="nc" id="L124">                &quot;Error starting job &quot; + j.execId + &quot;: &quot; + e.getMessage(),</span>
+                e
+            );
+<span class="nc" id="L127">        }</span>
+<span class="nc" id="L128">    }</span>
+
+    private void runJobsForever() {
+        while (true) {
+            try {
+<span class="nc" id="L133">                log.info(&quot;activeIds.size(): &quot; + activeIds.size());</span>
+<span class="nc" id="L134">                log.info(&quot;jobsToRun.size(): &quot; + jobsToRun.size());</span>
+<span class="nc" id="L135">                removeInactiveJobs();</span>
+
+                // Sleep for a while if there are no jobs to run
+<span class="nc bnc" id="L138" title="All 2 branches missed.">                if (jobsToRun.isEmpty()) {</span>
+<span class="nc" id="L139">                    Thread.sleep(R.JOB_SUBMISSION_PERIOD * 1000);</span>
+<span class="nc" id="L140">                    continue;</span>
+                }
+
+                // Check if the number of currently running jobs is below the limit
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                if (activeIds.size() &lt; MAX_CONCURRENT_JOBS) {</span>
+                    // Peek the job queue but don't remove the job yet
+<span class="nc" id="L146">                    LocalJob job = jobsToRun.peek();</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                    if (job != null) {</span>
+                        // Start the job and let it run asynchronously
+<span class="nc" id="L149">                        runJob(job);</span>
+                        // Remove the job from the queue after it's started
+<span class="nc" id="L151">                        jobsToRun.poll();</span>
+                    }
+                }
+
+                // Sleep for a short time before checking the job queue again
+<span class="nc" id="L156">                Thread.sleep(200);</span>
+<span class="nc" id="L157">            } catch (Exception e) {</span>
+<span class="nc" id="L158">                log.error(&quot;Error in job execution loop: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L159">            }</span>
+        }
+    }
+
+    /**
+     * Removes jobs from activeIds whose local process has finished (i.e. the process is no longer alive).
+     * This method assumes that once the local process started by the script at j.scriptPath completes,
+     * the corresponding k8s job is either finished or detached.
+     */
+    public synchronized void removeInactiveJobs() {
+<span class="nc" id="L169">        Iterator&lt;Map.Entry&lt;Integer, LocalJob&gt;&gt; iterator = activeIds</span>
+<span class="nc" id="L170">            .entrySet()</span>
+<span class="nc" id="L171">            .iterator();</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        while (iterator.hasNext()) {</span>
+<span class="nc" id="L173">            Map.Entry&lt;Integer, LocalJob&gt; entry = iterator.next();</span>
+<span class="nc" id="L174">            LocalJob job = entry.getValue();</span>
+            // Only check jobs that have a process (i.e. have been started).
+<span class="nc bnc" id="L176" title="All 4 branches missed.">            if (job.process != null &amp;&amp; !job.process.isAlive()) {</span>
+<span class="nc" id="L177">                log.info(&quot;Removing inactive job: &quot; + job.execId);</span>
+<span class="nc" id="L178">                iterator.remove();</span>
+            }
+<span class="nc" id="L180">        }</span>
+<span class="nc" id="L181">    }</span>
+
+    @Override
+    public synchronized int submitScript(
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath
+    ) {
+        try {
+<span class="nc" id="L190">            LocalJob j = new LocalJob();</span>
+<span class="nc" id="L191">            j.execId = generateExecId();</span>
+<span class="nc" id="L192">            j.scriptPath = scriptPath;</span>
+<span class="nc" id="L193">            j.workingDirectoryPath = workingDirectoryPath;</span>
+<span class="nc" id="L194">            j.logPath = logPath;</span>
+<span class="nc" id="L195">            activeIds.put(j.execId, j);</span>
+<span class="nc" id="L196">            jobsToRun.add(j);</span>
+<span class="nc" id="L197">            return j.execId;</span>
+<span class="nc" id="L198">        } catch (Exception e) {</span>
+<span class="nc" id="L199">            log.error(e.getMessage(), e);</span>
+        }
+<span class="nc" id="L201">        return -1;</span>
+    }
+
+    @Override
+    public synchronized boolean killPair(int execId) {
+        try {
+<span class="nc bnc" id="L207" title="All 2 branches missed.">            if (activeIds.containsKey(execId)) {</span>
+<span class="nc" id="L208">                LocalJob job = activeIds.get(execId);</span>
+
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                if (job.process != null) {</span>
+<span class="nc" id="L211">                    job.process.destroyForcibly();</span>
+                }
+<span class="nc" id="L213">                jobsToRun.remove(job);</span>
+<span class="nc" id="L214">                activeIds.remove(execId);</span>
+            }
+<span class="nc" id="L216">            return true;</span>
+<span class="nc" id="L217">        } catch (Exception e) {</span>
+<span class="nc" id="L218">            log.debug(e.getMessage(), e);</span>
+<span class="nc" id="L219">            return false;</span>
+        }
+    }
+
+    @Override
+    public synchronized boolean killAll() {
+        try {
+<span class="nc bnc" id="L226" title="All 2 branches missed.">            while (!jobsToRun.isEmpty()) {</span>
+<span class="nc" id="L227">                LocalJob j = jobsToRun.poll();</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                if (j.process != null) {</span>
+<span class="nc" id="L229">                    j.process.destroyForcibly();</span>
+                }
+<span class="nc" id="L231">                activeIds.remove(j.execId);</span>
+<span class="nc" id="L232">            }</span>
+<span class="nc" id="L233">            return true;</span>
+<span class="nc" id="L234">        } catch (Exception e) {</span>
+<span class="nc" id="L235">            log.debug(e.getMessage(), e);</span>
+<span class="nc" id="L236">            return false;</span>
+        }
+    }
+
+    @Override
+    public synchronized String getRunningJobsStatus() {
+<span class="nc" id="L242">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">        for (LocalJob j : jobsToRun) {</span>
+<span class="nc" id="L244">            sb.append(j.toString());</span>
+<span class="nc" id="L245">            sb.append(&quot;\n&quot;);</span>
+<span class="nc" id="L246">        }</span>
+<span class="nc" id="L247">        return sb.toString();</span>
+    }
+
+    @Override
+    public Set&lt;Integer&gt; getActiveExecutionIds() throws IOException {
+        // we don't want to return the keyset of activeIds, since
+        // changes to that set are reflected in the map, meaning returning it
+        // makes activeIds externally mutable
+<span class="nc" id="L255">        Set&lt;Integer&gt; newSet = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L256">        newSet.addAll(activeIds.keySet());</span>
+<span class="nc" id="L257">        return newSet;</span>
+    }
+
+    // Assume these fields/consts exist, as in previous examples:
+    //   private static final String QUEUE_LABEL_KEY = &quot;starexecQueue&quot;;
+    //   private static final String DEFAULT_QUEUE_NAME = &quot;default&quot;;
+    //
+    // Also assume:
+    //   - Util.executeCommand(String[] cmd) throws IOException, returning a single String (stdout).
+    //   - log.info(String message) logs a string.
+    //   - We must catch or handle IOException internally (no throws in method signatures).
+
+    /**
+     * Return the names of all worker nodes in the K8s cluster,
+     * but only those labeled &quot;nodegroup=computenodes&quot;.
+     */
+    @Override
+    public String[] getWorkerNodes() {
+<span class="nc" id="L275">        String[] cmd = {</span>
+            &quot;kubectl&quot;,
+            &quot;get&quot;,
+            &quot;nodes&quot;,
+            &quot;-l&quot;,
+            &quot;nodegroup=computenodes&quot;, // &lt;=== Filter here
+            &quot;-o&quot;,
+            &quot;custom-columns=NAME:.metadata.name&quot;,
+            &quot;--no-headers&quot;,
+        };
+
+        try {
+<span class="nc" id="L287">            String output = Util.executeCommand(cmd);</span>
+<span class="nc" id="L288">            String[] lines = output.split(&quot;\\r?\\n&quot;);</span>
+<span class="nc" id="L289">            List&lt;String&gt; nodes = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            for (String line : lines) {</span>
+<span class="nc" id="L292">                String trimmed = line.trim();</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">                if (!trimmed.isEmpty()) {</span>
+<span class="nc" id="L294">                    nodes.add(trimmed);</span>
+                }
+            }
+<span class="nc" id="L297">            return nodes.toArray(new String[0]);</span>
+<span class="nc" id="L298">        } catch (IOException e) {</span>
+<span class="nc" id="L299">            log.info(&quot;IOException in getWorkerNodes: &quot; + e.getMessage());</span>
+<span class="nc" id="L300">            return new String[0];</span>
+        }
+    }
+
+    /**
+     * Return the names of all queues known to the system,
+     * but only considering nodes labeled &quot;nodegroup=computenodes&quot;.
+     * We gather &quot;starexecQueue=...&quot; labels from these nodes.
+     * Plus we always include DEFAULT_QUEUE_NAME to represent unlabeled queue membership.
+     */
+    @Override
+    public String[] getQueues() {
+        // Only fetch nodes with nodegroup=computenodes
+<span class="nc" id="L313">        String[] cmd = {</span>
+            &quot;kubectl&quot;,
+            &quot;get&quot;,
+            &quot;nodes&quot;,
+            &quot;-l&quot;,
+            &quot;nodegroup=computenodes&quot;,
+            &quot;--show-labels&quot;,
+            &quot;--no-headers&quot;,
+        };
+
+<span class="nc" id="L323">        Set&lt;String&gt; queueNames = new HashSet&lt;&gt;();</span>
+        try {
+<span class="nc" id="L325">            String output = Util.executeCommand(cmd);</span>
+<span class="nc" id="L326">            String[] lines = output.split(&quot;\\r?\\n&quot;);</span>
+
+<span class="nc bnc" id="L328" title="All 2 branches missed.">            for (String line : lines) {</span>
+<span class="nc" id="L329">                String[] parts = line.split(&quot;\\s+&quot;);</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">                if (parts.length &lt; 1) {</span>
+<span class="nc" id="L331">                    continue;</span>
+                }
+<span class="nc" id="L333">                String labelsPart = parts[parts.length - 1]; // The last column is the label list</span>
+<span class="nc" id="L334">                String[] labels = labelsPart.split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">                for (String label : labels) {</span>
+<span class="nc" id="L336">                    label = label.trim();</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">                    if (label.startsWith(QUEUE_LABEL_KEY + &quot;=&quot;)) {</span>
+<span class="nc" id="L338">                        String queue = label.substring(label.indexOf('=') + 1);</span>
+<span class="nc" id="L339">                        queueNames.add(queue);</span>
+                    }
+                }
+            }
+<span class="nc" id="L343">        } catch (IOException e) {</span>
+<span class="nc" id="L344">            log.info(&quot;IOException in getQueues: &quot; + e.getMessage());</span>
+            // We'll proceed with an empty set
+<span class="nc" id="L346">        }</span>
+
+        // There's always a default queue for unlabeled nodes
+<span class="nc" id="L349">        queueNames.add(DEFAULT_QUEUE_NAME);</span>
+
+<span class="nc" id="L351">        return queueNames.toArray(new String[0]);</span>
+    }
+
+    /**
+     * Return a map of node -&gt; queue, but only for nodes labeled &quot;nodegroup=computenodes&quot;.
+     * If a node has no queue label, it is in DEFAULT_QUEUE_NAME.
+     */
+    @Override
+    public Map&lt;String, String&gt; getNodeQueueAssociations() {
+<span class="nc" id="L360">        Map&lt;String, String&gt; nodeQueueMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L361">        String[] cmd = {</span>
+            &quot;kubectl&quot;,
+            &quot;get&quot;,
+            &quot;nodes&quot;,
+            &quot;-l&quot;,
+            &quot;nodegroup=computenodes&quot;,
+            &quot;--show-labels&quot;,
+            &quot;--no-headers&quot;,
+        };
+
+        try {
+<span class="nc" id="L372">            String output = Util.executeCommand(cmd);</span>
+<span class="nc" id="L373">            String[] lines = output.split(&quot;\\r?\\n&quot;);</span>
+
+<span class="nc bnc" id="L375" title="All 2 branches missed.">            for (String line : lines) {</span>
+<span class="nc" id="L376">                String[] parts = line.split(&quot;\\s+&quot;);</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">                if (parts.length &lt; 1) {</span>
+<span class="nc" id="L378">                    continue;</span>
+                }
+<span class="nc" id="L380">                String nodeName = parts[0];</span>
+<span class="nc" id="L381">                String labelsPart = parts[parts.length - 1];</span>
+<span class="nc" id="L382">                String[] labels = labelsPart.split(&quot;,&quot;);</span>
+
+                // Default to default queue if we don't see a starexecQueue label
+<span class="nc" id="L385">                String queueName = DEFAULT_QUEUE_NAME;</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">                for (String label : labels) {</span>
+<span class="nc" id="L387">                    label = label.trim();</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">                    if (label.startsWith(QUEUE_LABEL_KEY + &quot;=&quot;)) {</span>
+<span class="nc" id="L389">                        queueName = label.substring(label.indexOf('=') + 1);</span>
+<span class="nc" id="L390">                        break;</span>
+                    }
+                }
+<span class="nc" id="L393">                nodeQueueMap.put(nodeName, queueName);</span>
+            }
+<span class="nc" id="L395">        } catch (IOException e) {</span>
+<span class="nc" id="L396">            log.info(</span>
+<span class="nc" id="L397">                &quot;IOException in getNodeQueueAssociations: &quot; + e.getMessage()</span>
+            );
+            // Return whatever we have so far (or empty if none).
+<span class="nc" id="L400">        }</span>
+
+<span class="nc" id="L402">        return nodeQueueMap;</span>
+    }
+
+    /**
+     * Clears node error states. For now, do nothing or uncordon any nodes if desired.
+     */
+    @Override
+    public boolean clearNodeErrorStates() {
+<span class="nc" id="L410">        log.info(</span>
+            &quot;clearNodeErrorStates() called, but not implemented. Doing nothing.&quot;
+        );
+<span class="nc" id="L413">        return true;</span>
+    }
+
+    /**
+     * Delete a queue by removing its label from all nodes labeled nodegroup=computenodes
+     * that have starexecQueue=&lt;queueName&gt;. If the queue is the default queue, do nothing.
+     */
+    @Override
+    public void deleteQueue(String queueName) {
+<span class="nc bnc" id="L422" title="All 2 branches missed.">        if (DEFAULT_QUEUE_NAME.equals(queueName)) {</span>
+<span class="nc" id="L423">            log.info(&quot;Cannot delete the default queue; doing nothing.&quot;);</span>
+<span class="nc" id="L424">            return;</span>
+        }
+
+        // First, list nodes that have nodegroup=computenodes and starexecQueue=queueName
+<span class="nc" id="L428">        String labelSelector =</span>
+            &quot;nodegroup=computenodes,&quot; + QUEUE_LABEL_KEY + &quot;=&quot; + queueName;
+<span class="nc" id="L430">        String[] getCmd = {</span>
+            &quot;kubectl&quot;,
+            &quot;get&quot;,
+            &quot;nodes&quot;,
+            &quot;-l&quot;,
+            labelSelector,
+            &quot;-o&quot;,
+            &quot;custom-columns=NAME:.metadata.name&quot;,
+            &quot;--no-headers&quot;,
+        };
+
+        try {
+<span class="nc" id="L442">            String output = Util.executeCommand(getCmd);</span>
+<span class="nc" id="L443">            String[] lines = output.split(&quot;\\r?\\n&quot;);</span>
+<span class="nc" id="L444">            int numNodes = 0;</span>
+
+<span class="nc bnc" id="L446" title="All 2 branches missed.">            for (String node : lines) {</span>
+<span class="nc" id="L447">                String trimmed = node.trim();</span>
+<span class="nc bnc" id="L448" title="All 2 branches missed.">                if (!trimmed.isEmpty()) {</span>
+<span class="nc" id="L449">                    String[] removeLabelCmd = {</span>
+                        &quot;kubectl&quot;,
+                        &quot;label&quot;,
+                        &quot;node&quot;,
+                        trimmed,
+                        QUEUE_LABEL_KEY + &quot;-&quot;,
+                    };
+<span class="nc" id="L456">                    Util.executeCommand(removeLabelCmd);</span>
+<span class="nc" id="L457">                    numNodes++;</span>
+                }
+            }
+<span class="nc" id="L460">            log.info(</span>
+                &quot;Deleted queue '&quot; +
+                    queueName +
+                    &quot;' from &quot; +
+                    numNodes +
+                    &quot; node(s).&quot;
+            );
+<span class="nc" id="L467">        } catch (IOException e) {</span>
+<span class="nc" id="L468">            log.info(</span>
+                &quot;IOException in deleteQueue for '&quot; +
+                    queueName +
+                    &quot;': &quot; +
+<span class="nc" id="L472">                    e.getMessage()</span>
+            );
+<span class="nc" id="L474">        }</span>
+<span class="nc" id="L475">    }</span>
+
+    /**
+     * Create a queue for the nodes labeled nodegroup=computenodes, by labeling
+     * them with starexecQueue=&lt;newQueueName&gt;. If newQueueName is default, do nothing.
+     */
+    @Override
+    public boolean createQueue(
+        String newQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames
+    ) {
+<span class="nc bnc" id="L487" title="All 2 branches missed.">        if (DEFAULT_QUEUE_NAME.equals(newQueueName)) {</span>
+<span class="nc" id="L488">            log.info(&quot;createQueue called for default queue. Nothing to do.&quot;);</span>
+<span class="nc" id="L489">            return true;</span>
+        }
+<span class="nc bnc" id="L491" title="All 4 branches missed.">        if (nodeNames == null || nodeNames.length == 0) {</span>
+<span class="nc" id="L492">            log.info(&quot;No nodes specified; no queue created.&quot;);</span>
+<span class="nc" id="L493">            return false;</span>
+        }
+
+        // Label the requested nodes, but only consider them valid if they also have nodegroup=computenodes
+        try {
+<span class="nc bnc" id="L498" title="All 2 branches missed.">            for (String node : nodeNames) {</span>
+                // You could either check in code that this node is labeled nodegroup=computenodes
+                // or rely on your architecture to ensure these nodeNames are correct.
+<span class="nc" id="L501">                String[] cmd = {</span>
+                    &quot;kubectl&quot;,
+                    &quot;label&quot;,
+                    &quot;node&quot;,
+                    node,
+                    QUEUE_LABEL_KEY + &quot;=&quot; + newQueueName,
+                    &quot;--overwrite&quot;,
+                };
+<span class="nc" id="L509">                Util.executeCommand(cmd);</span>
+            }
+<span class="nc" id="L511">            log.info(</span>
+                &quot;Created queue '&quot; +
+                    newQueueName +
+                    &quot;', labeling &quot; +
+                    nodeNames.length +
+                    &quot; node(s).&quot;
+            );
+<span class="nc" id="L518">            return true;</span>
+<span class="nc" id="L519">        } catch (IOException e) {</span>
+<span class="nc" id="L520">            log.info(</span>
+                &quot;IOException in createQueue for '&quot; +
+                    newQueueName +
+                    &quot;': &quot; +
+<span class="nc" id="L524">                    e.getMessage()</span>
+            );
+<span class="nc" id="L526">            return false;</span>
+        }
+    }
+
+    /**
+     * Create a queue with slots for the nodes labeled nodegroup=computenodes.
+     * If it's the default queue, do nothing. Otherwise, label them with
+     * starexecQueue + possibly starexecSlots.
+     */
+    @Override
+    public boolean createQueueWithSlots(
+        String newQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames,
+        Integer slots
+    ) {
+<span class="nc bnc" id="L542" title="All 2 branches missed.">        if (DEFAULT_QUEUE_NAME.equals(newQueueName)) {</span>
+<span class="nc" id="L543">            log.info(</span>
+                &quot;createQueueWithSlots called for default queue. Nothing to do.&quot;
+            );
+<span class="nc" id="L546">            return true;</span>
+        }
+
+<span class="nc bnc" id="L549" title="All 2 branches missed.">        if (!createQueue(newQueueName, nodeNames, sourceQueueNames)) {</span>
+<span class="nc" id="L550">            return false;</span>
+        }
+
+<span class="nc bnc" id="L553" title="All 2 branches missed.">        if (slots != null) {</span>
+            try {
+<span class="nc bnc" id="L555" title="All 2 branches missed.">                for (String node : nodeNames) {</span>
+<span class="nc" id="L556">                    String[] cmd = {</span>
+                        &quot;kubectl&quot;,
+                        &quot;label&quot;,
+                        &quot;node&quot;,
+                        node,
+                        &quot;starexecSlots=&quot; + slots,
+                        &quot;--overwrite&quot;,
+                    };
+<span class="nc" id="L564">                    Util.executeCommand(cmd);</span>
+                }
+<span class="nc" id="L566">                log.info(</span>
+                    &quot;Set 'starexecSlots=&quot; +
+                        slots +
+                        &quot;' for queue '&quot; +
+                        newQueueName +
+                        &quot;' on &quot; +
+                        nodeNames.length +
+                        &quot; node(s).&quot;
+                );
+<span class="nc" id="L575">            } catch (IOException e) {</span>
+<span class="nc" id="L576">                log.info(</span>
+                    &quot;IOException in createQueueWithSlots for '&quot; +
+                        newQueueName +
+                        &quot;': &quot; +
+<span class="nc" id="L580">                        e.getMessage()</span>
+                );
+<span class="nc" id="L582">                return false;</span>
+<span class="nc" id="L583">            }</span>
+        }
+<span class="nc" id="L585">        return true;</span>
+    }
+
+    /**
+     * Move the given nodes from one queue to another, ignoring any node that
+     * is NOT labeled nodegroup=computenodes. If destQueueName is empty, do nothing.
+     * If destQueueName is default, remove the starexecQueue label.
+     */
+    @Override
+    public void moveNodes(
+        String destQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames
+    ) {
+<span class="nc bnc" id="L599" title="All 4 branches missed.">        if (nodeNames == null || nodeNames.length == 0) {</span>
+<span class="nc" id="L600">            log.info(&quot;moveNodes called with no node names; doing nothing.&quot;);</span>
+<span class="nc" id="L601">            return;</span>
+        }
+<span class="nc bnc" id="L603" title="All 4 branches missed.">        if (destQueueName == null || destQueueName.trim().isEmpty()) {</span>
+<span class="nc" id="L604">            log.info(&quot;No destination queue specified; doing nothing.&quot;);</span>
+<span class="nc" id="L605">            return;</span>
+        }
+
+        try {
+<span class="nc bnc" id="L609" title="All 2 branches missed.">            for (String node : nodeNames) {</span>
+                // Optionally check if this node is labeled nodegroup=computenodes first.
+                // If you'd like, do:
+                //  kubectl get node &lt;node&gt; --show-labels
+                //  and parse it. For brevity, we're skipping that.
+
+                // Remove the queue label
+<span class="nc" id="L616">                String[] removeLabelCmd = {</span>
+                    &quot;kubectl&quot;,
+                    &quot;label&quot;,
+                    &quot;node&quot;,
+                    node,
+                    QUEUE_LABEL_KEY + &quot;-&quot;,
+                };
+<span class="nc" id="L623">                Util.executeCommand(removeLabelCmd);</span>
+
+                // If the destination is NOT default, label the node with the new queue
+<span class="nc bnc" id="L626" title="All 2 branches missed.">                if (!DEFAULT_QUEUE_NAME.equals(destQueueName)) {</span>
+<span class="nc" id="L627">                    String[] addLabelCmd = {</span>
+                        &quot;kubectl&quot;,
+                        &quot;label&quot;,
+                        &quot;node&quot;,
+                        node,
+                        QUEUE_LABEL_KEY + &quot;=&quot; + destQueueName,
+                        &quot;--overwrite&quot;,
+                    };
+<span class="nc" id="L635">                    Util.executeCommand(addLabelCmd);</span>
+                }
+            }
+<span class="nc" id="L638">            log.info(</span>
+                &quot;Moved &quot; +
+                    nodeNames.length +
+                    &quot; node(s) to queue '&quot; +
+                    destQueueName +
+                    &quot;'.&quot;
+            );
+<span class="nc" id="L645">        } catch (IOException e) {</span>
+<span class="nc" id="L646">            log.info(</span>
+                &quot;IOException in moveNodes to '&quot; +
+                    destQueueName +
+                    &quot;': &quot; +
+<span class="nc" id="L650">                    e.getMessage()</span>
+            );
+<span class="nc" id="L652">        }</span>
+<span class="nc" id="L653">    }</span>
+
+    /**
+     * Move a single node. Convenience wrapper around moveNodes().
+     */
+    @Override
+    public void moveNode(String nodeName, String queueName) {
+<span class="nc" id="L660">        moveNodes(queueName, new String[] { nodeName }, null);</span>
+<span class="nc" id="L661">    }</span>
+
+    @Override
+    public void clearPairTracking(int pairId) {
+        // KubernetesBackend does not track pair state - no-op
+<span class="nc" id="L666">    }</span>
+
+    @Override
+    public void destroyIf() {
+        // no deconstruction needed
+<span class="nc" id="L671">    }</span>
+
+    /**
+     * BACKEND_ROOT is not meaningful for this backend and will be ignored.
+     * Initialization creates the execution loop for local jobs
+     */
+    @Override
+    public void initialize(String BACKEND_ROOT) {
+<span class="nc" id="L679">        final Runnable runLocalJobsRunnable = new RobustRunnable(</span>
+            &quot;runLocalJobsRunnable&quot;
+<span class="nc" id="L681">        ) {</span>
+            @Override
+            protected void dorun() {
+<span class="nc" id="L684">                log.info(&quot;initializing local job execution&quot;);</span>
+<span class="nc" id="L685">                runJobsForever();</span>
+<span class="nc" id="L686">            }</span>
+        };
+<span class="nc" id="L688">        new Thread(runLocalJobsRunnable).start();</span>
+<span class="nc" id="L689">        log.debug(&quot;returning from k8s backend initialization&quot;);</span>
+<span class="nc" id="L690">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

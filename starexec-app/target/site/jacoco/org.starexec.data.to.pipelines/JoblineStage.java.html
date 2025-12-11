@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JoblineStage.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to.pipelines</a> &gt; <span class="el_source">JoblineStage.java</span></div><h1>JoblineStage.java</h1><pre class="source lang-java linenums">package org.starexec.data.to.pipelines;
+
+import org.starexec.constants.R;
+import org.starexec.data.to.Configuration;
+import org.starexec.data.to.Solver;
+import org.starexec.data.to.Status;
+import org.starexec.logger.StarLogger;
+
+import java.util.List;
+import java.util.Properties;
+
+/**
+ * This class represents the set of results for a single stage of a jobline
+ *
+ * @author Eric
+ */
+public class JoblineStage {
+<span class="fc" id="L18">	private static final StarLogger log = StarLogger.getLogger(JoblineStage.class);</span>
+
+<span class="fc" id="L20">	private Solver solver = null;</span>
+<span class="fc" id="L21">	private Integer stageId = null; // This is the ID of the PipelineStage that this JoblineStage refers to</span>
+<span class="fc" id="L22">	private Integer jobpairId = null;</span>
+	private double wallclockTime;
+	private double cpuTime;
+	private double userTime;
+	private double systemTime;
+<span class="fc" id="L27">	private Status status = null;</span>
+	private double maxVirtualMemory;
+	private double maxResidenceSetSize;
+<span class="fc" id="L30">	private Configuration configuration = null;</span>
+<span class="fc" id="L31">	private boolean noOp = false;</span>
+<span class="fc" id="L32">	private Properties attributes = null;</span>
+<span class="fc" id="L33">	private Integer stageNumber = null; //which stage is this? 1,2... etc.</span>
+
+	private List&lt;PipelineDependency&gt; dependencies;
+
+	// the standard output of this pair. This is only populated for a short time in pair.jsp
+<span class="fc" id="L38">	private String output = null;</span>
+
+<span class="fc" id="L40">	public JoblineStage() {</span>
+<span class="fc" id="L41">		this.setSolver(new Solver());</span>
+<span class="fc" id="L42">		this.setConfiguration(new Configuration());</span>
+<span class="fc" id="L43">		status = new Status();</span>
+<span class="fc" id="L44">		this.attributes = new Properties();</span>
+<span class="fc" id="L45">	}</span>
+
+	public Configuration getConfiguration() {
+<span class="fc" id="L48">		return configuration;</span>
+	}
+
+	public void setConfiguration(Configuration configuration) {
+<span class="fc" id="L52">		this.configuration = configuration;</span>
+
+		// print status
+<span class="fc" id="L55">		log.debug( &quot;in JoblineStage.setConfiguration(): current configId = &quot; + configuration.getId() +</span>
+<span class="fc" id="L56">				&quot;; current deleted status = &quot; + configuration.isDeleted() );</span>
+<span class="fc" id="L57">	}</span>
+
+	public double getMaxResidenceSetSize() {
+<span class="nc" id="L60">		return maxResidenceSetSize;</span>
+	}
+
+	public void setMaxResidenceSetSize(double maxResidenceSetSize) {
+<span class="nc" id="L64">		this.maxResidenceSetSize = maxResidenceSetSize;</span>
+<span class="nc" id="L65">	}</span>
+
+	public double getMaxVirtualMemory() {
+<span class="nc" id="L68">		return maxVirtualMemory;</span>
+	}
+
+	public void setMaxVirtualMemory(double maxVirtualMemory) {
+<span class="nc" id="L72">		this.maxVirtualMemory = maxVirtualMemory;</span>
+<span class="nc" id="L73">	}</span>
+
+	public double getSystemTime() {
+<span class="nc" id="L76">		return systemTime;</span>
+	}
+
+	public void setSystemTime(double systemTime) {
+<span class="nc" id="L80">		this.systemTime = systemTime;</span>
+<span class="nc" id="L81">	}</span>
+
+	public double getUserTime() {
+<span class="nc" id="L84">		return userTime;</span>
+	}
+
+	public void setUserTime(double userTime) {
+<span class="nc" id="L88">		this.userTime = userTime;</span>
+<span class="nc" id="L89">	}</span>
+
+	public double getCpuTime() {
+<span class="fc" id="L92">		return cpuTime;</span>
+	}
+
+	public void setCpuUsage(double cpuTime) {
+<span class="fc" id="L96">		this.cpuTime = cpuTime;</span>
+<span class="fc" id="L97">	}</span>
+
+	public double getWallclockTime() {
+<span class="fc" id="L100">		return wallclockTime;</span>
+	}
+
+	public void setWallclockTime(double wallclockTime) {
+<span class="fc" id="L104">		this.wallclockTime = wallclockTime;</span>
+<span class="fc" id="L105">	}</span>
+
+	public Solver getSolver() {
+<span class="fc" id="L108">		return solver;</span>
+	}
+
+	public void setSolver(Solver solver) {
+<span class="fc" id="L112">		this.solver = solver;</span>
+<span class="fc" id="L113">	}</span>
+
+	public Integer getStageId() {
+<span class="nc" id="L116">		return stageId;</span>
+	}
+
+	public void setStageId(Integer stageId) {
+<span class="nc" id="L120">		this.stageId = stageId;</span>
+<span class="nc" id="L121">	}</span>
+
+	public Integer getJobpairId() {
+<span class="nc" id="L124">		return jobpairId;</span>
+	}
+
+	public void setJobpairId(Integer jobpairId) {
+<span class="nc" id="L128">		this.jobpairId = jobpairId;</span>
+<span class="nc" id="L129">	}</span>
+
+	public Status getStatus() {
+<span class="nc" id="L132">		return status;</span>
+	}
+
+	public void setStatus(Status status) {
+<span class="nc" id="L136">		this.status = status;</span>
+<span class="nc" id="L137">	}</span>
+
+	public boolean isNoOp() {
+<span class="nc" id="L140">		return noOp;</span>
+	}
+
+	public void setNoOp(boolean noOp) {
+<span class="nc" id="L144">		this.noOp = noOp;</span>
+<span class="nc" id="L145">	}</span>
+
+	/**
+	 * @return the attributes for this job pair
+	 */
+	public Properties getAttributes() {
+<span class="nc" id="L151">		return attributes;</span>
+	}
+
+	/**
+	 * @param attributes the attributes to set for this job pair
+	 */
+	public void setAttributes(Properties attributes) {
+<span class="nc" id="L158">		this.attributes = attributes;</span>
+<span class="nc" id="L159">	}</span>
+
+	/**
+	 * @return the starexec-result value from attributes list
+	 */
+	public String getStarexecResult() {
+<span class="nc" id="L165">		Properties prop = this.getAttributes();</span>
+<span class="nc bnc" id="L166" title="All 6 branches missed.">		return (prop != null &amp;&amp; prop.containsKey(R.STAREXEC_RESULT) &amp;&amp; prop.get(R.STAREXEC_RESULT) != null) ?</span>
+<span class="nc" id="L167">		       prop.getProperty(R.STAREXEC_RESULT) : &quot;--&quot;;</span>
+	}
+
+	public Integer getStageNumber() {
+<span class="nc" id="L171">		return stageNumber;</span>
+	}
+
+	public void setStageNumber(Integer stageNumber) {
+<span class="nc" id="L175">		this.stageNumber = stageNumber;</span>
+<span class="nc" id="L176">	}</span>
+
+	public String getOutput() {
+<span class="nc" id="L179">		return output;</span>
+	}
+
+	public void setOutput(String output) {
+<span class="nc" id="L183">		this.output = output;</span>
+<span class="nc" id="L184">	}</span>
+
+	public List&lt;PipelineDependency&gt; getDependencies() {
+<span class="nc" id="L187">		return dependencies;</span>
+	}
+
+	public void setDependencies(List&lt;PipelineDependency&gt; dependencies) {
+<span class="nc" id="L191">		this.dependencies = dependencies;</span>
+<span class="nc" id="L192">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

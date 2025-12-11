@@ -1,0 +1,563 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Processors.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Processors.java</span></div><h1>Processors.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import java.io.File;
+import java.lang.NumberFormatException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
+import org.apache.commons.io.FileUtils;
+import org.starexec.constants.R;
+import org.starexec.data.to.Processor;
+import org.starexec.data.to.enums.ProcessorType;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
+
+/**
+ * Handles all database interaction for bench, pre and post processors
+ */
+<span class="nc" id="L22">public class Processors {</span>
+
+<span class="fc" id="L24">    private static final StarLogger log = StarLogger.getLogger(</span>
+        Processors.class
+    );
+
+    /**
+     * Given a result set where the current row points to a  processor, return the processor
+     *
+     * @param results
+     * @param prefix The table alias given to the processor table in this query. Empty means no prefix.
+     * @return The processor if it exists
+     * @throws SQLException If the ResultSet does not contain a required processor attribute
+     */
+    public static Processor resultSetToProcessor(
+        ResultSet results,
+        String prefix
+    ) throws SQLException {
+<span class="nc" id="L40">        Integer id = ResultSetUtils.getInt(</span>
+            results,
+<span class="nc" id="L42">            columnCandidates(prefix, &quot;id&quot;)</span>
+        );
+<span class="nc bnc" id="L44" title="All 2 branches missed.">        if (id == null) {</span>
+<span class="nc" id="L45">            return null;</span>
+        }
+<span class="nc" id="L47">        Processor t = new Processor();</span>
+<span class="nc" id="L48">        t.setId(id);</span>
+<span class="nc" id="L49">        t.setCommunityId(readRequiredInt(results, prefix, &quot;community&quot;));</span>
+<span class="nc" id="L50">        t.setDescription(</span>
+<span class="nc" id="L51">            ResultSetUtils.getString(</span>
+                results,
+<span class="nc" id="L53">                columnCandidates(prefix, &quot;description&quot;)</span>
+            )
+        );
+<span class="nc" id="L56">        t.setName(</span>
+<span class="nc" id="L57">            ResultSetUtils.getString(results, columnCandidates(prefix, &quot;name&quot;))</span>
+        );
+<span class="nc" id="L59">        t.setFilePath(</span>
+<span class="nc" id="L60">            ResultSetUtils.getString(results, columnCandidates(prefix, &quot;path&quot;))</span>
+        );
+<span class="nc" id="L62">        Long diskSize = ResultSetUtils.getLong(</span>
+            results,
+<span class="nc" id="L64">            columnCandidates(prefix, &quot;disk_size&quot;)</span>
+        );
+<span class="nc bnc" id="L66" title="All 2 branches missed.">        t.setDiskSize(diskSize == null ? 0L : diskSize);</span>
+<span class="nc" id="L67">        t.setType(</span>
+<span class="nc" id="L68">            ProcessorType.valueOf(</span>
+<span class="nc" id="L69">                readRequiredInt(results, prefix, &quot;processor_type&quot;)</span>
+            )
+        );
+<span class="nc" id="L72">        Integer timeLimit = ResultSetUtils.getInt(</span>
+            results,
+<span class="nc" id="L74">            columnCandidates(prefix, &quot;time_limit&quot;)</span>
+        );
+<span class="nc bnc" id="L76" title="All 2 branches missed.">        t.setTimeLimit(timeLimit == null ? 0 : timeLimit);</span>
+<span class="nc" id="L77">        Integer syntaxId = ResultSetUtils.getInt(</span>
+            results,
+<span class="nc" id="L79">            columnCandidates(prefix, &quot;syntax_id&quot;)</span>
+        );
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        t.setSyntax(syntaxId == null ? 0 : syntaxId);</span>
+
+<span class="nc" id="L83">        return t;</span>
+    }
+
+    private static int readRequiredInt(
+        ResultSet results,
+        String prefix,
+        String column
+    ) throws SQLException {
+<span class="nc" id="L91">        Integer value = ResultSetUtils.getInt(</span>
+            results,
+<span class="nc" id="L93">            columnCandidates(prefix, column)</span>
+        );
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (value == null) {</span>
+<span class="nc" id="L96">            throw new SQLException(</span>
+                &quot;Column &quot; + column + &quot; is null in result set&quot;
+            );
+        }
+<span class="nc" id="L100">        return value;</span>
+    }
+
+    private static String[] columnCandidates(String prefix, String column) {
+<span class="nc" id="L104">        List&lt;String&gt; names = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (!Util.isNullOrEmpty(prefix)) {</span>
+<span class="nc" id="L106">            names.add(prefix + &quot;.&quot; + column);</span>
+<span class="nc" id="L107">            names.add(prefix + &quot;_&quot; + column);</span>
+<span class="nc" id="L108">            names.add(prefix + column);</span>
+        }
+<span class="nc" id="L110">        names.add(column);</span>
+<span class="nc" id="L111">        names.add(column.replace('.', '_'));</span>
+<span class="nc" id="L112">        return names.toArray(new String[0]);</span>
+    }
+
+    private static Processor resultSetToProcessor(ResultSet results)
+        throws SQLException {
+<span class="nc" id="L117">        results.next();</span>
+<span class="nc" id="L118">        return resultSetToProcessor(results, null);</span>
+    }
+
+    /**
+     * @param results
+     * @return a List of Processors from results
+     */
+    private static List&lt;Processor&gt; resultSetToProcessors(ResultSet results)
+        throws SQLException {
+<span class="nc" id="L127">        List&lt;Processor&gt; processors = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        while (results.next()) {</span>
+<span class="nc" id="L129">            processors.add(resultSetToProcessor(results, null));</span>
+        }
+<span class="nc" id="L131">        return processors;</span>
+    }
+
+    /**
+     * Inserts a processor into the database
+     *
+     * @param processor The processor to add to the database
+     * @return The positive integer ID of the new processor if successful, -1 otherwise
+     * @author Tyler Jensen
+     */
+    public static int add(Processor processor) {
+<span class="nc" id="L142">        Connection con = null;</span>
+<span class="nc" id="L143">        PreparedStatement stmt = null;</span>
+<span class="nc" id="L144">        ResultSet rs = null;</span>
+        try {
+<span class="nc" id="L146">            con = Common.getConnection();</span>
+<span class="nc" id="L147">            Common.beginTransaction(con);</span>
+
+<span class="nc" id="L149">            stmt = con.prepareStatement(</span>
+                &quot;SELECT AddProcessor(?, ?, ?, ?, ?, ?, ?)&quot;
+            );
+<span class="nc" id="L152">            stmt.setString(1, processor.getName());</span>
+<span class="nc" id="L153">            stmt.setString(2, processor.getDescription());</span>
+<span class="nc" id="L154">            stmt.setString(3, processor.getFilePath());</span>
+<span class="nc" id="L155">            stmt.setInt(4, processor.getCommunityId());</span>
+<span class="nc" id="L156">            stmt.setShort(5, (short) processor.getType().getVal());</span>
+<span class="nc" id="L157">            stmt.setLong(</span>
+                6,
+<span class="nc" id="L159">                FileUtils.sizeOf(new File(processor.getFilePath()))</span>
+            );
+<span class="nc" id="L161">            stmt.setShort(7, (short) processor.getTimeLimit());</span>
+
+<span class="nc" id="L163">            rs = stmt.executeQuery();</span>
+<span class="nc" id="L164">            rs.next();</span>
+<span class="nc" id="L165">            int procId = rs.getInt(1);</span>
+
+<span class="nc" id="L167">            Common.endTransaction(con);</span>
+<span class="nc" id="L168">            log.debug(</span>
+                &quot;the new processor has the ID = &quot; +
+                    procId +
+                    &quot; and community id = &quot; +
+<span class="nc" id="L172">                    processor.getCommunityId()</span>
+            );
+<span class="nc" id="L174">            return procId;</span>
+<span class="nc" id="L175">        } catch (SQLException e) {</span>
+<span class="nc" id="L176">            log.error(e.getMessage(), e);</span>
+<span class="nc" id="L177">            Common.doRollback(con);</span>
+        } finally {
+<span class="nc" id="L179">            Common.safeClose(con);</span>
+<span class="nc" id="L180">            Common.safeClose(rs);</span>
+<span class="nc" id="L181">            Common.safeClose(stmt);</span>
+        }
+<span class="nc" id="L183">        return -1;</span>
+    }
+
+    /**
+     * Deletes a given processor from a space
+     *
+     * @param processorId the id of the processor to delete
+     * @return True if the operation was a success, false otherwise
+     * @author Todd Elvers
+     */
+    public static boolean delete(int processorId) {
+<span class="nc" id="L194">        final String method = &quot;delete&quot;;</span>
+        String message;
+
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        if (processorId == R.NO_TYPE_PROC_ID) {</span>
+<span class="nc" id="L198">            log.debug(method, &quot;Cannot delete 'no type' processor&quot;);</span>
+<span class="nc" id="L199">            return false; // the no type processor is required for the system</span>
+        }
+<span class="nc bnc" id="L201" title="All 2 branches missed.">        if (!processorExists(processorId)) {</span>
+<span class="nc" id="L202">            log.debug(method, &quot;Cannot find processor id: &quot; + processorId);</span>
+<span class="nc" id="L203">            return true;</span>
+        }
+        try {
+            // Get processor_path of processor via PostgreSQL function that returns TEXT
+<span class="nc" id="L207">            Connection con = null;</span>
+<span class="nc" id="L208">            PreparedStatement ps = null;</span>
+<span class="nc" id="L209">            ResultSet rs = null;</span>
+<span class="nc" id="L210">            File processorFile = null;</span>
+            try {
+<span class="nc" id="L212">                con = Common.getConnection();</span>
+<span class="nc" id="L213">                ps = con.prepareStatement(&quot;SELECT starexec.DeleteProcessor(?)&quot;);</span>
+<span class="nc" id="L214">                ps.setInt(1, processorId);</span>
+<span class="nc" id="L215">                rs = ps.executeQuery();</span>
+<span class="nc" id="L216">                String path = null;</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                if (rs.next()) {</span>
+<span class="nc" id="L218">                    path = rs.getString(1);</span>
+                }
+<span class="nc bnc" id="L220" title="All 2 branches missed.">                processorFile = new File(path == null ? &quot;&quot; : path);</span>
+            } finally {
+<span class="nc" id="L222">                Common.safeClose(rs);</span>
+<span class="nc" id="L223">                Common.safeClose(ps);</span>
+<span class="nc" id="L224">                Common.safeClose(con);</span>
+            }
+<span class="nc" id="L226">            message = String.format(</span>
+                &quot;Removal of processor [id=%d] was successful.&quot;,
+<span class="nc" id="L228">                processorId</span>
+            );
+<span class="nc" id="L230">            log.debug(method, message);</span>
+
+            // Try and delete file referenced by processor_path and its parent directory
+<span class="nc bnc" id="L233" title="All 2 branches missed.">            if (processorFile.exists()) {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                if (processorFile.delete()) {</span>
+<span class="nc" id="L235">                    message = String.format(</span>
+                        &quot;File [%s] was deleted at [%s] because it was not inter referenced &quot; +
+                            &quot;anywhere.&quot;,
+<span class="nc" id="L238">                        processorFile.getName(),</span>
+<span class="nc" id="L239">                        processorFile.getAbsolutePath()</span>
+                    );
+<span class="nc" id="L241">                    log.debug(method, message);</span>
+                }
+<span class="nc bnc" id="L243" title="All 2 branches missed.">                if (processorFile.getParentFile() != null) {</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">                    if (processorFile.getParentFile().delete()) {</span>
+<span class="nc" id="L245">                        message = String.format(</span>
+                            &quot;Directory [%s] was deleted because it was empty.&quot;,
+<span class="nc" id="L247">                            processorFile.getParentFile().getAbsolutePath()</span>
+                        );
+<span class="nc" id="L249">                        log.debug(method, message);</span>
+                    }
+                }
+            }
+<span class="nc" id="L253">            return true;</span>
+<span class="nc" id="L254">        } catch (SQLException e) {</span>
+<span class="nc" id="L255">            log.debug(</span>
+                method,
+<span class="nc" id="L257">                String.format(</span>
+                    &quot;Removal of processor [id=%d] failed.&quot;,
+<span class="nc" id="L259">                    processorId</span>
+                ),
+                e
+            );
+        }
+<span class="nc" id="L264">        return false;</span>
+    }
+
+    /**
+     * @param processorId The id of the bench processor to retrieve
+     * @return The corresponding processor
+     * @author Tyler Jensen
+     */
+    public static Processor get(int processorId) {
+<span class="nc" id="L273">        Connection con = null;</span>
+        try {
+<span class="nc" id="L275">            con = Common.getConnection();</span>
+<span class="nc" id="L276">            return get(processorId, con);</span>
+<span class="nc" id="L277">        } catch (Exception e) {</span>
+<span class="nc" id="L278">            log.error(&quot;get&quot;, e.getMessage(), e);</span>
+<span class="nc" id="L279">            return null;</span>
+        } finally {
+<span class="nc" id="L281">            Common.safeClose(con);</span>
+        }
+    }
+
+    /**
+     * @param processorId The id of the bench processor to retrieve
+     * @return The corresponding processor
+     * @author Tyler Jensen
+     */
+    public static Processor get(int processorId, Connection con)
+        throws NumberFormatException, SQLException {
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        if (processorId == 0) {</span>
+<span class="nc" id="L293">            return null;</span>
+        }
+<span class="nc" id="L295">        PreparedStatement ps = null;</span>
+<span class="nc" id="L296">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L298">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetProcessorById(?)&quot;
+            );
+<span class="nc" id="L301">            ps.setInt(1, processorId);</span>
+<span class="nc" id="L302">            results = ps.executeQuery();</span>
+<span class="nc" id="L303">            return Processors.resultSetToProcessor(results);</span>
+        } finally {
+<span class="nc" id="L305">            Common.safeClose(results);</span>
+<span class="nc" id="L306">            Common.safeClose(ps);</span>
+        }
+    }
+
+    /**
+     * Gets the list of processors
+     *
+     * @param type The type of processors to filter by
+     * @return the list of processors
+     * @author Todd Elvers
+     */
+    public static List&lt;Processor&gt; getAll(ProcessorType type) {
+<span class="nc" id="L318">        Connection con = null;</span>
+<span class="nc" id="L319">        PreparedStatement ps = null;</span>
+<span class="nc" id="L320">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L322">            con = Common.getConnection();</span>
+<span class="nc" id="L323">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetAllProcessors(?)&quot;
+            );
+<span class="nc" id="L326">            ps.setShort(1, (short) type.getVal());</span>
+<span class="nc" id="L327">            results = ps.executeQuery();</span>
+<span class="nc" id="L328">            return Processors.resultSetToProcessors(results);</span>
+<span class="nc" id="L329">        } catch (SQLException e) {</span>
+<span class="nc" id="L330">            log.error(&quot;getAll&quot;, e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L332">            Common.safeClose(results);</span>
+<span class="nc" id="L333">            Common.safeClose(ps);</span>
+<span class="nc" id="L334">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L336">        return null;</span>
+    }
+
+    /**
+     * @return the system NoType benchmark processor, which is applied when the user has no processor.
+     */
+    public static Processor getNoTypeProcessor() {
+<span class="nc" id="L343">        return Processors.get(R.NO_TYPE_PROC_ID);</span>
+    }
+
+    /**
+     * @param communityId The id of the community to retrieve all processors for
+     * @param type The type of processors to get for the community
+     * @return A list of all processors of the given type that the community owns
+     * @author Tyler Jensen
+     */
+    public static List&lt;Processor&gt; getByCommunity(
+        int communityId,
+        ProcessorType type
+    ) {
+<span class="nc" id="L356">        Connection con = null;</span>
+<span class="nc" id="L357">        PreparedStatement ps = null;</span>
+<span class="nc" id="L358">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L360">            con = Common.getConnection();</span>
+<span class="nc" id="L361">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetProcessorsByCommunity(?,?)&quot;
+            );
+<span class="nc" id="L364">            ps.setInt(1, communityId);</span>
+<span class="nc" id="L365">            ps.setShort(2, (short) type.getVal());</span>
+<span class="nc" id="L366">            results = ps.executeQuery();</span>
+<span class="nc" id="L367">            return Processors.resultSetToProcessors(results);</span>
+<span class="nc" id="L368">        } catch (SQLException e) {</span>
+<span class="nc" id="L369">            log.error(&quot;getByCommunity&quot;, e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L371">            Common.safeClose(results);</span>
+<span class="nc" id="L372">            Common.safeClose(ps);</span>
+<span class="nc" id="L373">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L375">        return null;</span>
+    }
+
+    /**
+     * Gets all processors that a user can see because they share a community
+     *
+     * @param userId the user to retrieve post processors for
+     * @param type The type of processors to get
+     * @return A list of all unique processors of the given type that the user can see
+     * @author Eric Burns
+     */
+    public static List&lt;Processor&gt; getByUser(int userId, ProcessorType type) {
+<span class="nc" id="L387">        Connection con = null;</span>
+<span class="nc" id="L388">        PreparedStatement ps = null;</span>
+<span class="nc" id="L389">        ResultSet results = null;</span>
+        try {
+<span class="nc" id="L391">            con = Common.getConnection();</span>
+<span class="nc" id="L392">            ps = con.prepareStatement(</span>
+                &quot;SELECT * FROM starexec.GetProcessorsByUser(?,?)&quot;
+            );
+<span class="nc" id="L395">            ps.setInt(1, userId);</span>
+<span class="nc" id="L396">            ps.setShort(2, (short) type.getVal());</span>
+<span class="nc" id="L397">            results = ps.executeQuery();</span>
+<span class="nc" id="L398">            return Processors.resultSetToProcessors(results);</span>
+<span class="nc" id="L399">        } catch (SQLException e) {</span>
+<span class="nc" id="L400">            log.error(&quot;getByUser&quot;, e.getMessage(), e);</span>
+        } finally {
+<span class="nc" id="L402">            Common.safeClose(results);</span>
+<span class="nc" id="L403">            Common.safeClose(ps);</span>
+<span class="nc" id="L404">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L406">        return null;</span>
+    }
+
+    /**
+     * Updates the description of a processor with the given processor id
+     *
+     * @param processorId the id of the processor to update
+     * @param newDesc the new description to update the processor with
+     * @return True if the operation was a success, false otherwise
+     * @author Tyler Jensen
+     */
+    public static boolean updateDescription(int processorId, String newDesc) {
+<span class="nc" id="L418">        Connection con = null;</span>
+<span class="nc" id="L419">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L421">            con = Common.getConnection();</span>
+<span class="nc" id="L422">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.UpdateProcessorDescription(?,?)&quot;
+            );
+<span class="nc" id="L425">            ps.setInt(1, processorId);</span>
+<span class="nc" id="L426">            ps.setString(2, newDesc);</span>
+<span class="nc" id="L427">            Common.executeAndDrain(ps);</span>
+<span class="nc" id="L428">            return true;</span>
+<span class="nc" id="L429">        } catch (SQLException e) {</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">            if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L431">                log.warn(&quot;Processor &quot; + processorId + &quot; not found&quot;);</span>
+            } else {
+<span class="nc" id="L433">                log.error(&quot;updateDescription&quot;, e.getMessage(), e);</span>
+            }
+        } finally {
+<span class="nc" id="L436">            Common.safeClose(ps);</span>
+<span class="nc" id="L437">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L439">        return false;</span>
+    }
+
+    /**
+     * Makes sure that a processor with the given id exists.
+     *
+     * @param processorId The id of a processor.
+     * @return true if the the processor exists, otherwise false.
+     * @author Albert Giegerich
+     */
+    public static boolean processorExists(int processorId) {
+<span class="nc" id="L450">        Processor processor = Processors.get(processorId);</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">        return (processor != null);</span>
+    }
+
+    /**
+     * Updates the file path of a processor with the given processor id
+     *
+     * @param processorId the id of the processor to update
+     * @param newPath the new path to the directory containing this processor
+     * @return True if the operation was a success, false otherwise
+     * @author Eric Burns
+     */
+    public static boolean updateFilePath(int processorId, String newPath) {
+<span class="nc" id="L463">        Connection con = null;</span>
+<span class="nc" id="L464">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L466">            con = Common.getConnection();</span>
+<span class="nc" id="L467">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.UpdateProcessorFilePath(?,?)&quot;
+            );
+<span class="nc" id="L470">            ps.setInt(1, processorId);</span>
+<span class="nc" id="L471">            ps.setString(2, newPath);</span>
+<span class="nc" id="L472">            ps.execute();</span>
+<span class="nc" id="L473">            return true;</span>
+<span class="nc" id="L474">        } catch (SQLException e) {</span>
+<span class="nc bnc" id="L475" title="All 2 branches missed.">            if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L476">                log.warn(&quot;Processor &quot; + processorId + &quot; not found&quot;);</span>
+            } else {
+<span class="nc" id="L478">                log.error(&quot;updateFilePath&quot;, e.getMessage(), e);</span>
+            }
+        } finally {
+<span class="nc" id="L481">            Common.safeClose(ps);</span>
+<span class="nc" id="L482">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L484">        return false;</span>
+    }
+
+    /**
+     * Updates the name of a processor with the given processor id
+     *
+     * @param processorId the id of the processor to update
+     * @param newName the new name to update the processor with
+     * @return True if the operation was a success, false otherwise
+     * @author Tyler Jensen
+     */
+    public static boolean updateName(int processorId, String newName) {
+<span class="nc" id="L496">        Connection con = null;</span>
+<span class="nc" id="L497">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L499">            con = Common.getConnection();</span>
+<span class="nc" id="L500">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.UpdateProcessorName(?,?)&quot;
+            );
+<span class="nc" id="L503">            ps.setInt(1, processorId);</span>
+<span class="nc" id="L504">            ps.setString(2, newName);</span>
+<span class="nc" id="L505">            ps.execute();</span>
+<span class="nc" id="L506">            return true;</span>
+<span class="nc" id="L507">        } catch (SQLException e) {</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">            if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L509">                log.warn(&quot;Processor &quot; + processorId + &quot; not found&quot;);</span>
+            } else {
+<span class="nc" id="L511">                log.error(&quot;updateName&quot;, e.getMessage(), e);</span>
+            }
+        } finally {
+<span class="nc" id="L514">            Common.safeClose(ps);</span>
+<span class="nc" id="L515">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L517">        return false;</span>
+    }
+
+    public static boolean updateTimeLimit(int processorId, int timeLimit) {
+<span class="nc" id="L521">        Connection con = null;</span>
+<span class="nc" id="L522">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L524">            con = Common.getConnection();</span>
+<span class="nc" id="L525">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.UpdateProcessorTimeLimit(?,?)&quot;
+            );
+<span class="nc" id="L528">            ps.setInt(1, processorId);</span>
+<span class="nc" id="L529">            ps.setShort(2, (short) timeLimit);</span>
+<span class="nc" id="L530">            ps.execute();</span>
+<span class="nc" id="L531">            return true;</span>
+<span class="nc" id="L532">        } catch (SQLException e) {</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">            if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L534">                log.warn(&quot;Processor &quot; + processorId + &quot; not found&quot;);</span>
+            } else {
+<span class="nc" id="L536">                log.error(&quot;updateTimeLimit&quot;, e.getMessage(), e);</span>
+            }
+        } finally {
+<span class="nc" id="L539">            Common.safeClose(ps);</span>
+<span class="nc" id="L540">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L542">        return false;</span>
+    }
+
+    public static void updateSyntax(int processorId, int syntaxId)
+        throws SQLException {
+<span class="nc" id="L547">        Connection con = null;</span>
+<span class="nc" id="L548">        PreparedStatement ps = null;</span>
+        try {
+<span class="nc" id="L550">            con = Common.getConnection();</span>
+<span class="nc" id="L551">            ps = con.prepareStatement(</span>
+                &quot;SELECT starexec.UpdateProcessorSyntax(?,?)&quot;
+            );
+<span class="nc" id="L554">            ps.setInt(1, processorId);</span>
+<span class="nc" id="L555">            ps.setInt(2, syntaxId);</span>
+<span class="nc" id="L556">            ps.execute();</span>
+        } finally {
+<span class="nc" id="L558">            Common.safeClose(ps);</span>
+<span class="nc" id="L559">            Common.safeClose(con);</span>
+        }
+<span class="nc" id="L561">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

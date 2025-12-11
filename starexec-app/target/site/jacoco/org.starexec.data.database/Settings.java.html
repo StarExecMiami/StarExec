@@ -1,0 +1,797 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Settings.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Settings.java</span></div><h1>Settings.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.DefaultSettings;
+import org.starexec.data.to.DefaultSettings.SettingType;
+import org.starexec.data.to.Space;
+import org.starexec.data.to.enums.BenchmarkingFramework;
+import org.starexec.logger.StarLogger;
+
+import java.sql.PreparedStatement;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+
+<span class="nc" id="L17">public class Settings {</span>
+<span class="nc" id="L18">	private static final StarLogger log = StarLogger.getLogger(Settings.class);</span>
+
+	public static int addNewSettingsProfile(DefaultSettings settings) {
+<span class="nc" id="L21">		Connection con = null;</span>
+<span class="nc" id="L22">			PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L24">			con = Common.getConnection();</span>
+<span class="nc" id="L25">				ps = con.prepareStatement(&quot;SELECT starexec.CreateDefaultSettings(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L26">				ps.setInt(1, settings.getPrimId());</span>
+<span class="nc" id="L27">				ps.setObject(2, settings.getPostProcessorId());</span>
+<span class="nc" id="L28">				ps.setInt(3, settings.getCpuTimeout());</span>
+<span class="nc" id="L29">				ps.setInt(4, settings.getWallclockTimeout());</span>
+<span class="nc" id="L30">				ps.setBoolean(5, settings.isDependenciesEnabled());</span>
+<span class="nc" id="L31">				ps.setLong(6, settings.getMaxMemory()); //memory initialized to 1 gigabyte</span>
+<span class="nc" id="L32">				ps.setObject(7, settings.getSolverId());</span>
+<span class="nc" id="L33">				ps.setObject(8, settings.getBenchProcessorId());</span>
+<span class="nc" id="L34">				ps.setObject(9, settings.getPreProcessorId());</span>
+<span class="nc" id="L35">				ps.setInt(10, settings.getType().getValue());</span>
+<span class="nc" id="L36">				ps.setString(11, settings.getName());</span>
+<span class="nc" id="L37">				ps.setString(12, settings.getBenchmarkingFramework().toString());</span>
+<span class="nc" id="L38">				ResultSet rs = ps.executeQuery();</span>
+<span class="nc bnc" id="L39" title="All 2 branches missed.">				if (rs.next()) {</span>
+<span class="nc" id="L40">					settings.setId(rs.getInt(1));</span>
+				}
+
+<span class="nc bnc" id="L43" title="All 2 branches missed.">			for (Integer benchId : settings.getBenchIds()) {</span>
+<span class="nc" id="L44">				addDefaultBenchmark(settings.getId(), benchId);</span>
+<span class="nc" id="L45">			}</span>
+
+<span class="nc" id="L47">			return settings.getId();</span>
+<span class="nc" id="L48">			} catch (Exception e) {</span>
+<span class="nc" id="L49">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L51">				Common.safeClose(con);</span>
+<span class="nc" id="L52">				Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L54">		return -1;</span>
+	}
+
+	/**
+	 * Adds a default benchmark for a given setting.
+	 *
+	 * @param settingId the id of the setting to add a default benchmark to.
+	 * @param benchId the id of the benchmark to add to the setting.
+	 * @throws SQLException on database error.
+	 */
+	public static void addDefaultBenchmark(final int settingId, final int benchId) throws SQLException {
+<span class="nc" id="L65">		Connection con = null;</span>
+<span class="nc" id="L66">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L68">			con = Common.getConnection();</span>
+<span class="nc" id="L69">			ps = con.prepareStatement(&quot;SELECT starexec.AddDefaultBenchmark(?, ?)&quot;);</span>
+<span class="nc" id="L70">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L71">			ps.setInt(2, benchId);</span>
+<span class="nc" id="L72">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L74">			Common.safeClose(ps);</span>
+<span class="nc" id="L75">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L77">	}</span>
+
+	/**
+	 * Deletes a default benchmark from a setting.
+	 *
+	 * @param settingId the id of the DefaultSetting
+	 * @param benchId the id of the benchmark to delete.s
+	 * @throws SQLException on database error.
+	 */
+	public static void deleteDefaultBenchmark(final int settingId, final int benchId) throws SQLException {
+<span class="nc" id="L87">		Connection con = null;</span>
+<span class="nc" id="L88">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L90">			con = Common.getConnection();</span>
+<span class="nc" id="L91">			ps = con.prepareStatement(&quot;SELECT starexec.DeleteDefaultBenchmark(?, ?)&quot;);</span>
+<span class="nc" id="L92">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L93">			ps.setInt(2, benchId);</span>
+<span class="nc" id="L94">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L96">			Common.safeClose(ps);</span>
+<span class="nc" id="L97">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L99">	}</span>
+
+	/**
+	 * Deletes all the default benchmarks for a given setting.
+	 *
+	 * @param settingId the id of the setting for which to delete all default benchmarks.
+	 * @throws SQLException on database error.
+	 */
+	protected static void deleteAllDefaultBenchmarks(final int settingId) throws SQLException {
+<span class="nc" id="L108">		Connection con = null;</span>
+<span class="nc" id="L109">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L111">			con = Common.getConnection();</span>
+<span class="nc" id="L112">			ps = con.prepareStatement(&quot;SELECT starexec.DeleteAllDefaultBenchmarks(?)&quot;);</span>
+<span class="nc" id="L113">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L114">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L116">			Common.safeClose(ps);</span>
+<span class="nc" id="L117">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L119">	}</span>
+
+	/**
+	 * Deletes all the default benchmarks for a given setting using a Connection.
+	 *
+	 * @param con the database connections to use to call the procedure.
+	 * @param settingId the id of the setting for which to delete all default benchmarks.
+	 * @throws SQLException on database error.
+	 */
+	protected static void deleteAllDefaultBenchmarks(final Connection con, final int settingId) throws SQLException {
+<span class="nc" id="L129">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L131">			ps = con.prepareStatement(&quot;SELECT starexec.DeleteAllDefaultBenchmarks(?)&quot;);</span>
+<span class="nc" id="L132">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L133">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L135">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L137">	}</span>
+
+	/**
+	 * Adds a default benchmark for a given setting using a connection.
+	 *
+	 * @param con the database connection to use for the update.
+	 * @param settingId the id of the setting to add a default benchmark to.
+	 * @param benchId the id of the benchmark to add to the setting.
+	 * @throws SQLException on database error.
+	 */
+	protected static void addDefaultBenchmark(
+			final Connection con, final int settingId, final int benchId
+	) throws SQLException {
+<span class="nc" id="L150">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L152">			ps = con.prepareStatement(&quot;SELECT starexec.AddDefaultBenchmark(?, ?)&quot;);</span>
+<span class="nc" id="L153">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L154">			ps.setInt(2, benchId);</span>
+<span class="nc" id="L155">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L157">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L159">	}</span>
+
+	/**
+	 * Gets all the default benchmarks for a given setting.
+	 *
+	 * @param settingId the id of the setting to get the default benchmarks for.
+	 * @return all the default benchmarks for a setting.
+	 * @throws SQLException on database error.
+	 */
+	public static List&lt;Benchmark&gt; getDefaultBenchmarks(final int settingId) throws SQLException {
+<span class="nc" id="L169">		Connection con = null;</span>
+<span class="nc" id="L170">		PreparedStatement ps = null;</span>
+<span class="nc" id="L171">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L173">			con = Common.getConnection();</span>
+<span class="nc" id="L174">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetDefaultBenchmarksForSetting(?)&quot;);</span>
+<span class="nc" id="L175">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L176">			results = ps.executeQuery();</span>
+<span class="nc" id="L177">			return Settings.resultsToBenchmarks(results);</span>
+		} finally {
+<span class="nc" id="L179">			Common.safeClose(results);</span>
+<span class="nc" id="L180">			Common.safeClose(ps);</span>
+<span class="nc" id="L181">			Common.safeClose(con);</span>
+		}
+	}
+
+	/**
+	 * Gets all the default benchmarks for a given setting using a Connection.
+	 *
+	 * @param con the connection to the database to use for the query.
+	 * @param settingId the id of the setting to get the default benchmarks for.
+	 * @return all the default benchmarks for a setting.
+	 * @throws SQLException on database error.
+	 */
+	protected static List&lt;Benchmark&gt; getDefaultBenchmarks(Connection con, final int settingId) throws SQLException {
+<span class="nc" id="L194">		PreparedStatement ps = null;</span>
+<span class="nc" id="L195">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L197">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetDefaultBenchmarksForSetting(?)&quot;);</span>
+<span class="nc" id="L198">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L199">			results = ps.executeQuery();</span>
+<span class="nc" id="L200">			return Settings.resultsToBenchmarks(results);</span>
+		} finally {
+<span class="nc" id="L202">			Common.safeClose(results);</span>
+<span class="nc" id="L203">			Common.safeClose(ps);</span>
+		}
+	}
+
+	private static List&lt;Benchmark&gt; resultsToBenchmarks(ResultSet results) throws SQLException {
+<span class="nc" id="L208">		List&lt;Benchmark&gt; benchmarks = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L210" title="All 2 branches missed.">		while (results.next()) {</span>
+<span class="nc" id="L211">			benchmarks.add(Benchmarks.resultToBenchmark(results));</span>
+		}
+
+<span class="nc" id="L214">		return benchmarks;</span>
+	}
+
+	/**
+	 * Gets the default benchmark ids for a given default setting.
+	 *
+	 * @param settingId the id of the setting to get the default benchmark ids for.
+	 * @return a list of benchmark ids.
+	 * @throws SQLException on database error.
+	 */
+	public static List&lt;Integer&gt; getDefaultBenchmarkIds(final int settingId) throws SQLException {
+<span class="nc" id="L225">		Connection con = null;</span>
+<span class="nc" id="L226">		PreparedStatement ps = null;</span>
+<span class="nc" id="L227">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L229">			con = Common.getConnection();</span>
+<span class="nc" id="L230">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetDefaultBenchmarkIdsForSetting(?)&quot;);</span>
+<span class="nc" id="L231">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L232">			results = ps.executeQuery();</span>
+<span class="nc" id="L233">			return Settings.resultsToBenchmarkIds(results);</span>
+		} finally {
+<span class="nc" id="L235">			Common.safeClose(results);</span>
+<span class="nc" id="L236">			Common.safeClose(ps);</span>
+<span class="nc" id="L237">			Common.safeClose(con);</span>
+		}
+	}
+
+	/**
+	 * Gets the default benchmark ids for a given default setting.
+	 *
+	 * @param settingId the id of the setting to get the default benchmark ids for.
+	 * @return a list of benchmark ids.
+	 * @throws SQLException on database error.
+	 */
+	public static List&lt;Integer&gt; getDefaultBenchmarkIds(Connection con, final int settingId) throws SQLException {
+<span class="nc" id="L249">		PreparedStatement ps = null;</span>
+<span class="nc" id="L250">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L252">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetDefaultBenchmarkIdsForSetting(?)&quot;);</span>
+<span class="nc" id="L253">			ps.setInt(1, settingId);</span>
+<span class="nc" id="L254">			results = ps.executeQuery();</span>
+<span class="nc" id="L255">			return Settings.resultsToBenchmarkIds(results);</span>
+		} finally {
+<span class="nc" id="L257">			Common.safeClose(results);</span>
+<span class="nc" id="L258">			Common.safeClose(ps);</span>
+		}
+	}
+
+	private static List&lt;Integer&gt; resultsToBenchmarkIds(ResultSet results) throws SQLException {
+<span class="nc" id="L263">		List&lt;Integer&gt; benchmarkIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		while (results.next()) {</span>
+<span class="nc" id="L265">			benchmarkIds.add(results.getInt(&quot;default_bench_id&quot;));</span>
+		}
+<span class="nc" id="L267">		return benchmarkIds;</span>
+	}
+
+	/**
+	 * Given a DefaultSettings object with all of its fields set, including id, updates the default settings profile in
+	 * the database with all of the new fields. Does not update name, prim id, or type, which are immutable
+	 *
+	 * @param settings
+	 * @return
+	 */
+	public static boolean updateDefaultSettings(DefaultSettings settings) {
+<span class="nc" id="L278">		Connection con = null;</span>
+<span class="nc" id="L279">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L281">			con = Common.getConnection();</span>
+<span class="nc" id="L282">			Common.beginTransaction(con);</span>
+
+<span class="nc" id="L284">			ps = con.prepareStatement(&quot;SELECT starexec.UpdateDefaultSettings(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L285">			ps.setObject(1, settings.getPostProcessorId());</span>
+<span class="nc" id="L286">			ps.setInt(2, settings.getCpuTimeout());</span>
+<span class="nc" id="L287">			ps.setInt(3, settings.getWallclockTimeout());</span>
+<span class="nc" id="L288">			ps.setBoolean(4, settings.isDependenciesEnabled());</span>
+<span class="nc" id="L289">			ps.setLong(5, settings.getMaxMemory()); //memory initialized to 1 gigabyte</span>
+<span class="nc" id="L290">			ps.setObject(6, settings.getSolverId());</span>
+<span class="nc" id="L291">			ps.setObject(7, settings.getBenchProcessorId());</span>
+<span class="nc" id="L292">			ps.setObject(8, settings.getPreProcessorId());</span>
+<span class="nc" id="L293">			ps.setString(9, settings.getBenchmarkingFramework().toString());</span>
+<span class="nc" id="L294">			ps.setInt(10, settings.getId());</span>
+<span class="nc" id="L295">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L297">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L301">				Common.safeClose(rs);</span>
+			}
+
+<span class="nc" id="L304">			Settings.deleteAllDefaultBenchmarks(con, settings.getId());</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">			for (Integer bid : settings.getBenchIds()) {</span>
+<span class="nc" id="L306">				Settings.addDefaultBenchmark(con, settings.getId(), bid);</span>
+<span class="nc" id="L307">			}</span>
+
+<span class="nc" id="L309">			Common.endTransaction(con);</span>
+<span class="nc" id="L310">			return true;</span>
+<span class="nc" id="L311">		} catch (Exception e) {</span>
+<span class="nc" id="L312">			Common.doRollback(con);</span>
+<span class="nc" id="L313">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L315">			Common.safeClose(con);</span>
+<span class="nc" id="L316">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L318">		return false;</span>
+	}
+
+	/**
+	 * Given an open ResultSet currently pointing to a row containing a DefaultSettings object, returns the object
+	 *
+	 * @param results
+	 * @return
+	 */
+	protected static DefaultSettings resultsToSettings(ResultSet results) throws SQLException {
+<span class="nc" id="L328">		final String methodName = &quot;resultsToSettings&quot;;</span>
+		try {
+<span class="nc" id="L330">			DefaultSettings settings = new DefaultSettings();</span>
+<span class="nc" id="L331">			settings.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L332">			settings.setPreProcessorId(results.getInt(&quot;pre_processor&quot;));</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">			if (results.wasNull()) {</span>
+<span class="nc" id="L334">				settings.setPreProcessorId(null);</span>
+			}
+<span class="nc" id="L336">			settings.setWallclockTimeout(results.getInt(&quot;clock_timeout&quot;));</span>
+<span class="nc" id="L337">			settings.setCpuTimeout(results.getInt(&quot;cpu_timeout&quot;));</span>
+<span class="nc" id="L338">			settings.setPostProcessorId(results.getInt(&quot;post_processor&quot;));</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">			if (results.wasNull()) {</span>
+<span class="nc" id="L340">				settings.setPostProcessorId(null);</span>
+			}
+<span class="nc" id="L342">			settings.setDependenciesEnabled(results.getBoolean(&quot;dependencies_enabled&quot;));</span>
+<span class="nc" id="L343">			settings.setSolverId(results.getInt(&quot;defaultSolver&quot;));</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">			if (results.wasNull()) {</span>
+<span class="nc" id="L345">				settings.setSolverId(null);</span>
+			}
+<span class="nc" id="L347">			settings.setBenchProcessorId(results.getInt(&quot;benchProcessor&quot;));</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">			if (results.wasNull()) {</span>
+<span class="nc" id="L349">				settings.setBenchProcessorId(null);</span>
+			}
+<span class="nc" id="L351">			settings.setMaxMemory(results.getLong(&quot;maximumMemory&quot;));</span>
+<span class="nc" id="L352">			settings.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L353">			settings.setPrimId(results.getInt(&quot;primId&quot;));</span>
+<span class="nc" id="L354">			settings.setType(results.getInt(&quot;settingType&quot;));</span>
+<span class="nc" id="L355">			settings.setBenchmarkingFramework(</span>
+<span class="nc" id="L356">					BenchmarkingFramework.valueOf(results.getString(&quot;benchmarkingFramework&quot;)));</span>
+<span class="nc" id="L357">			return settings;</span>
+<span class="nc" id="L358">		} catch (SQLException e) {</span>
+<span class="nc" id="L359">			log.error(methodName, &quot;Caught SQL exception while getting results. Throwing...&quot;, e);</span>
+<span class="nc" id="L360">			throw e;</span>
+		}
+	}
+
+	/**
+	 * Given the ID of a primitive and the type of that primitive (user or community), returns all of the
+	 * defaultsettings profiles associated with that primitive
+	 *
+	 * @param id
+	 * @param type
+	 * @return
+	 */
+	public static List&lt;DefaultSettings&gt; getDefaultSettingsByPrimIdAndType(int id, SettingType type) {
+
+<span class="nc" id="L374">		Connection con = null;</span>
+
+		try {
+<span class="nc" id="L377">			con = Common.getConnection();</span>
+<span class="nc" id="L378">			return getDefaultSettingsByPrimIdAndType(con, id, type);</span>
+<span class="nc" id="L379">		} catch (Exception e) {</span>
+<span class="nc" id="L380">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L382">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L384">		return null; //error;</span>
+	}
+
+	protected static List&lt;DefaultSettings&gt; getDefaultSettingsByPrimIdAndType(Connection con, int id, SettingType
+			type) {
+
+<span class="nc" id="L390">		PreparedStatement ps = null;</span>
+<span class="nc" id="L391">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L394">			List&lt;DefaultSettings&gt; settings = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L395">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetDefaultSettingsByIdAndType(?,?)&quot;);</span>
+<span class="nc" id="L396">			ps.setInt(1, id);</span>
+<span class="nc" id="L397">			ps.setInt(2, type.getValue());</span>
+<span class="nc" id="L398">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L400">				DefaultSettings setting = resultsToSettings(results);</span>
+<span class="nc" id="L401">				setting.setBenchIds(Settings.getDefaultBenchmarkIds(con, setting.getId()));</span>
+<span class="nc" id="L402">				settings.add(setting);</span>
+<span class="nc" id="L403">			}</span>
+<span class="nc" id="L404">			return settings;</span>
+<span class="nc" id="L405">		} catch (Exception e) {</span>
+<span class="nc" id="L406">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L408">			Common.safeClose(ps);</span>
+<span class="nc" id="L409">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L411">		return null; //error;</span>
+	}
+
+	/**
+	 * Returns every DefaultSettings profile a user has access to, either by community or individually
+	 *
+	 * @param userId
+	 * @return
+	 */
+	public static List&lt;DefaultSettings&gt; getDefaultSettingsVisibleByUser(int userId) {
+<span class="nc" id="L421">		List&lt;DefaultSettings&gt; listOfDefaultSettings = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L422">		List&lt;Space&gt; comms = Communities.getAllCommunitiesUserIsIn(userId);</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (comms != null) {</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">			for (Space comm : comms) {</span>
+<span class="nc" id="L425">				DefaultSettings s = Communities.getDefaultSettings(comm.getId());</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">				if (s != null) {</span>
+<span class="nc" id="L427">					listOfDefaultSettings.add(s);</span>
+				}
+<span class="nc" id="L429">			}</span>
+		}
+<span class="nc" id="L431">		List&lt;DefaultSettings&gt; userSettings = Settings.getDefaultSettingsOwnedByUser(userId);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">		if (userSettings != null) {</span>
+<span class="nc" id="L433">			listOfDefaultSettings.addAll(userSettings);</span>
+		}
+<span class="nc" id="L435">		return listOfDefaultSettings;</span>
+	}
+
+	public static List&lt;DefaultSettings&gt; getDefaultSettingsVisibleByUser(Connection con, int userId) {
+<span class="nc" id="L439">		List&lt;DefaultSettings&gt; listOfDefaultSettings = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L440">		List&lt;Space&gt; comms = Communities.getAllCommunitiesUserIsIn(con, userId);</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">		if (comms != null) {</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">			for (Space comm : comms) {</span>
+<span class="nc" id="L443">				DefaultSettings s = Communities.getDefaultSettings(con, comm.getId());</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">				if (s != null) {</span>
+<span class="nc" id="L445">					listOfDefaultSettings.add(s);</span>
+				}
+<span class="nc" id="L447">			}</span>
+		}
+<span class="nc" id="L449">		List&lt;DefaultSettings&gt; userSettings = Settings.getDefaultSettingsOwnedByUser(con, userId);</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">		if (userSettings != null) {</span>
+<span class="nc" id="L451">			listOfDefaultSettings.addAll(userSettings);</span>
+		}
+<span class="nc" id="L453">		return listOfDefaultSettings;</span>
+	}
+
+	/**
+	 * Gets all of the defaultSettings profiles that this user has
+	 *
+	 * @param userId
+	 * @return
+	 */
+	public static List&lt;DefaultSettings&gt; getDefaultSettingsOwnedByUser(int userId) {
+<span class="nc" id="L463">		return getDefaultSettingsByPrimIdAndType(userId, SettingType.USER);</span>
+	}
+
+	protected static List&lt;DefaultSettings&gt; getDefaultSettingsOwnedByUser(Connection con, int userId) {
+<span class="nc" id="L467">		return getDefaultSettingsByPrimIdAndType(con, userId, SettingType.USER);</span>
+	}
+
+	/**
+	 * Checks whether the given user has access to the given solver through a settings profile
+	 *
+	 * @param userId
+	 * @param solverId
+	 * @return
+	 */
+	public static boolean canUserSeeSolverInSettings(int userId, int solverId) {
+		// final String methodName = &quot;canUserSeeSolverInSettings&quot;;
+<span class="nc" id="L479">		Connection con = null;</span>
+		try {
+<span class="nc" id="L481">			con = Common.getConnection();</span>
+<span class="nc" id="L482">			return canUserSeeSolverInSettings(con, userId, solverId);</span>
+<span class="nc" id="L483">		} catch (Exception e) {</span>
+<span class="nc" id="L484">			log.error(&quot;Caught exception&quot;, e);</span>
+		} finally {
+<span class="nc" id="L486">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L488">		return false;</span>
+	}
+
+	public static boolean canUserSeeSolverInSettings(Connection con, int userId, int solverId) {
+<span class="nc" id="L492">		List&lt;DefaultSettings&gt; settings = Settings.getDefaultSettingsVisibleByUser(con, userId);</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">		for (DefaultSettings s : settings) {</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">			if (s.getSolverId() == null) {</span>
+<span class="nc" id="L495">				continue;</span>
+			}
+<span class="nc bnc" id="L497" title="All 2 branches missed.">			if (s.getSolverId() == solverId) {</span>
+<span class="nc" id="L498">				return true;</span>
+			}
+<span class="nc" id="L500">		}</span>
+<span class="nc" id="L501">		return false;</span>
+	}
+
+	/**
+	 * Checks whether the given user has access to the given benchmark through a settings profile
+	 *
+	 * @param userId
+	 * @param benchId
+	 * @return
+	 */
+	public static boolean canUserSeeBenchmarkInSettings(int userId, int benchId) {
+<span class="nc" id="L512">		List&lt;DefaultSettings&gt; settings = Settings.getDefaultSettingsVisibleByUser(userId);</span>
+<span class="nc bnc" id="L513" title="All 2 branches missed.">		for (DefaultSettings s : settings) {</span>
+<span class="nc bnc" id="L514" title="All 2 branches missed.">			if (s.getBenchIds().isEmpty()) {</span>
+<span class="nc" id="L515">				continue;</span>
+			}
+<span class="nc bnc" id="L517" title="All 2 branches missed.">			if (s.getBenchIds().contains(benchId)) {</span>
+<span class="nc" id="L518">				return true;</span>
+			}
+<span class="nc" id="L520">		}</span>
+<span class="nc" id="L521">		return false;</span>
+	}
+
+	public static boolean canUserSeeBenchmarkInSettings(Connection con, int userId, int benchId) {
+<span class="nc" id="L525">		List&lt;DefaultSettings&gt; settings = Settings.getDefaultSettingsVisibleByUser(con, userId);</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">		for (DefaultSettings s : settings) {</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">			if (s.getBenchIds().isEmpty()) {</span>
+<span class="nc" id="L528">				continue;</span>
+			}
+<span class="nc bnc" id="L530" title="All 2 branches missed.">			if (s.getBenchIds().contains(benchId)) {</span>
+<span class="nc" id="L531">				return true;</span>
+			}
+<span class="nc" id="L533">		}</span>
+<span class="nc" id="L534">		return false;</span>
+	}
+
+	/**
+	 * Deletes the DefaultSettings profile with the given ID
+	 *
+	 * @param id
+	 * @return True on success and false otherwise
+	 */
+	public static boolean deleteProfile(int id) {
+<span class="nc" id="L544">		Connection con = null;</span>
+<span class="nc" id="L545">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L547">			con = Common.getConnection();</span>
+<span class="nc" id="L548">			ps = con.prepareStatement(&quot;SELECT starexec.DeleteDefaultSettings(?)&quot;);</span>
+<span class="nc" id="L549">			ps.setInt(1, id);</span>
+<span class="nc" id="L550">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L551" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L552">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L553" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L556">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L558">			return true;</span>
+<span class="nc" id="L559">		} catch (SQLException e) {</span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L561">				log.warn(&quot;Settings profile &quot; + id + &quot; not found&quot;);</span>
+			} else {
+<span class="nc" id="L563">				log.error(&quot;deleteProfile&quot;, e.getMessage(), e);</span>
+			}
+		} finally {
+<span class="nc" id="L566">			Common.safeClose(con);</span>
+<span class="nc" id="L567">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L569">		return false; //error;</span>
+	}
+
+	/**
+	 * Gets the DefaultSettings profile with the given id
+	 *
+	 * @param id
+	 * @return
+	 */
+	public static DefaultSettings getProfileById(int id) throws SQLException {
+<span class="nc" id="L579">		final String methodName = &quot;getProfileById&quot;;</span>
+<span class="nc" id="L580">		Connection con = null;</span>
+<span class="nc" id="L581">		PreparedStatement ps = null;</span>
+<span class="nc" id="L582">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L584">			con = Common.getConnection();</span>
+<span class="nc" id="L585">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.getProfileById(?)&quot;);</span>
+<span class="nc" id="L586">			ps.setInt(1, id);</span>
+<span class="nc" id="L587">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L589">				DefaultSettings settings = resultsToSettings(results);</span>
+<span class="nc" id="L590">				settings.setBenchIds(Settings.getDefaultBenchmarkIds(con, settings.getId()));</span>
+<span class="nc" id="L591">				return settings;</span>
+			}
+<span class="nc" id="L593">		} catch (SQLException e) {</span>
+<span class="nc" id="L594">			log.error(methodName, &quot;SQLException caught while querying database.&quot;, e);</span>
+<span class="nc" id="L595">			throw e;</span>
+		} finally {
+<span class="nc" id="L597">			Common.safeClose(con);</span>
+<span class="nc" id="L598">			Common.safeClose(ps);</span>
+<span class="nc" id="L599">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L601">		return null;</span>
+	}
+
+	/**
+	 * Updates the maximum memory setting of the given settings object
+	 *
+	 * @param id
+	 * @param bytes
+	 * @return
+	 */
+	public static boolean setDefaultMaxMemory(int id, long bytes) {
+<span class="nc" id="L612">		Connection con = null;</span>
+<span class="nc" id="L613">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L615">			con = Common.getConnection();</span>
+<span class="nc" id="L616">			ps = con.prepareStatement(&quot;SELECT starexec.SetMaximumMemorySetting(?, ?)&quot;);</span>
+<span class="nc" id="L617">			ps.setInt(1, id);</span>
+<span class="nc" id="L618">			ps.setLong(2, bytes);</span>
+<span class="nc" id="L619">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L621">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L622" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L625">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L627">		} catch (SQLException e) {</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L629">				log.warn(&quot;Settings profile &quot; + id + &quot; not found&quot;);</span>
+			} else {
+<span class="nc" id="L631">				log.error(&quot;setDefaultMaxMemory&quot;, e.getMessage(), e);</span>
+			}
+<span class="nc" id="L633">			return false;</span>
+		} finally {
+<span class="nc" id="L635">			Common.safeClose(con);</span>
+<span class="nc" id="L636">			Common.safeClose(ps);</span>
+		}
+
+<span class="nc" id="L639">		return true;</span>
+	}
+
+	/**
+	 * Sets the default settings profile for a given user. This is the profile that will show up initially on job
+	 * creation
+	 *
+	 * @param userId The ID of the user having their default updated
+	 * @param settingId The setting ID to use
+	 * @return True on success and false on error
+	 */
+	public static boolean setDefaultProfileForUser(int userId, int settingId) {
+<span class="nc" id="L651">		Connection con = null;</span>
+<span class="nc" id="L652">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L654">			con = Common.getConnection();</span>
+<span class="nc" id="L655">			ps = con.prepareStatement(&quot;SELECT starexec.SetDefaultProfileForUser(?,?)&quot;);</span>
+<span class="nc" id="L656">			ps.setInt(1, userId);</span>
+<span class="nc" id="L657">			ps.setInt(2, settingId);</span>
+<span class="nc" id="L658">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L660">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L664">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L666">			return true;</span>
+<span class="nc" id="L667">		} catch (SQLException e) {</span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L669">				log.warn(&quot;User &quot; + userId + &quot; or settings profile &quot; + settingId + &quot; not found&quot;);</span>
+			} else {
+<span class="nc" id="L671">				log.error(&quot;setDefaultProfileForUser&quot;, e.getMessage(), e);</span>
+			}
+		} finally {
+<span class="nc" id="L674">			Common.safeClose(con);</span>
+<span class="nc" id="L675">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L677">		return false;</span>
+	}
+
+	/**
+	 * Clears the default settings profile for a given user by setting it to NULL.
+	 * This allows users to reset their default without deleting the profile.
+	 *
+	 * @param userId The ID of the user whose default profile should be cleared
+	 * @return true if the operation was successful, false otherwise
+	 */
+	public static boolean clearDefaultProfileForUser(int userId) {
+<span class="nc" id="L688">		Connection con = null;</span>
+<span class="nc" id="L689">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L691">			con = Common.getConnection();</span>
+			// Direct UPDATE to NULL - no procedure call needed
+<span class="nc" id="L693">			ps = con.prepareStatement(&quot;UPDATE starexec.users SET default_settings_profile = NULL WHERE id = ?&quot;);</span>
+<span class="nc" id="L694">			ps.setInt(1, userId);</span>
+<span class="nc" id="L695">			int rowsUpdated = ps.executeUpdate();</span>
+<span class="nc bnc" id="L696" title="All 2 branches missed.">			if (rowsUpdated &gt; 0) {</span>
+<span class="nc" id="L697">				log.debug(&quot;Cleared default profile for user &quot; + userId);</span>
+<span class="nc" id="L698">				return true;</span>
+			} else {
+<span class="nc" id="L700">				log.warn(&quot;User &quot; + userId + &quot; not found when clearing default profile&quot;);</span>
+<span class="nc" id="L701">				return false;</span>
+			}
+<span class="nc" id="L703">		} catch (SQLException e) {</span>
+<span class="nc" id="L704">			log.error(&quot;Error clearing default profile for user &quot; + userId, e);</span>
+<span class="nc" id="L705">			return false;</span>
+		} finally {
+<span class="nc" id="L707">			Common.safeClose(con);</span>
+<span class="nc" id="L708">			Common.safeClose(ps);</span>
+		}
+	}
+
+	/**
+	 * Gets the default settings profile for a given user. This is the profile that will show up initially on job
+	 * creation
+	 *
+	 * @param userId
+	 * @return The id of the settings profile a user has as their default, OR null if the user has no default settings
+	 * profile. -1 is returned on error
+	 */
+	public static Integer getDefaultProfileForUser(int userId) {
+<span class="nc" id="L721">		Connection con = null;</span>
+<span class="nc" id="L722">		PreparedStatement ps = null;</span>
+<span class="nc" id="L723">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L725">			con = Common.getConnection();</span>
+<span class="nc" id="L726">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetDefaultProfileForUser(?)&quot;);</span>
+<span class="nc" id="L727">			ps.setInt(1, userId);</span>
+<span class="nc" id="L728">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L729" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L730">				int result = results.getInt(&quot;default_settings_profile&quot;);</span>
+				//a value of 0 means the field is null in SQL
+<span class="nc bnc" id="L732" title="All 2 branches missed.">				if (result == 0) {</span>
+<span class="nc" id="L733">					return null;</span>
+				}
+<span class="nc" id="L735">				return result;</span>
+			}
+<span class="nc" id="L737">		} catch (Exception e) {</span>
+<span class="nc" id="L738">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L740">			Common.safeClose(con);</span>
+<span class="nc" id="L741">			Common.safeClose(ps);</span>
+<span class="nc" id="L742">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L744">		return -1;</span>
+	}
+
+	/**
+	 * Set the default settings for a community given by the id.
+	 *
+	 * @param id The ID of the DefaultSettings object
+	 * @param num Indicates which attribute needs to be set 1 = post_processor_id 2 = cpu_timeout 3 = wallclock_timeout
+	 * 4 = dependencies_enabled 5 = default_benchmark_id 6 = pre_processor_id 7 = default_solver_id 8 =
+	 * bench_processor_id
+	 * @param setting The new value of the setting
+	 * @return True if the operation is successful
+	 * @author Ruoyu Zhang
+	 */
+	public static boolean updateSettingsProfile(int id, int num, long setting) {
+<span class="nc" id="L759">		Connection con = null;</span>
+<span class="nc" id="L760">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L762">			con = Common.getConnection();</span>
+<span class="nc" id="L763">			ps = con.prepareStatement(&quot;SELECT starexec.SetDefaultSettingsById(?, ?, ?)&quot;);</span>
+<span class="nc" id="L764">			ps.setInt(1, id);</span>
+<span class="nc" id="L765">			ps.setInt(2, num);</span>
+			//if we are setting one of the IDs and it is -1, this means there is no setting
+			//and we should use null
+<span class="nc bnc" id="L768" title="All 12 branches missed.">			if ((num == 1 || num == 5 || num == 6 || num == 7 || num == 8) &amp;&amp; setting == -1) {</span>
+<span class="nc" id="L769">				ps.setObject(3, null);</span>
+			} else {
+<span class="nc" id="L771">				ps.setInt(3, (int) setting);</span>
+			}
+
+<span class="nc" id="L774">			boolean hasResultSet = ps.execute();</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">			if (hasResultSet) {</span>
+<span class="nc" id="L776">				ResultSet rs = ps.getResultSet();</span>
+<span class="nc bnc" id="L777" title="All 2 branches missed.">				while (rs.next()) {</span>
+					// consume the result set
+				}
+<span class="nc" id="L780">				Common.safeClose(rs);</span>
+			}
+<span class="nc" id="L782">			return true;</span>
+<span class="nc" id="L783">		} catch (SQLException e) {</span>
+<span class="nc bnc" id="L784" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L785">				log.warn(&quot;Settings profile &quot; + id + &quot; not found&quot;);</span>
+			} else {
+<span class="nc" id="L787">				log.error(&quot;updateSettingsProfile&quot;, e.getMessage(), e);</span>
+			}
+		} finally {
+<span class="nc" id="L790">			Common.safeClose(con);</span>
+<span class="nc" id="L791">			Common.safeClose(ps);</span>
+		}
+
+<span class="nc" id="L794">		return false;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

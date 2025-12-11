@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ValidatorStatusCode.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.security</a> &gt; <span class="el_source">ValidatorStatusCode.java</span></div><h1>ValidatorStatusCode.java</h1><pre class="source lang-java linenums">package org.starexec.data.security;
+
+import com.google.gson.annotations.Expose;
+
+public class ValidatorStatusCode {
+
+	@Expose private boolean success;
+	@Expose private String message;
+	@Expose private int statusCode;
+	@Expose private String devMessage;
+
+<span class="nc" id="L12">	public ValidatorStatusCode(boolean success, String message, String devMessage) {</span>
+<span class="nc" id="L13">		setSuccess(success);</span>
+<span class="nc" id="L14">		setMessage(message);</span>
+<span class="nc" id="L15">		setDevMessage(devMessage);</span>
+<span class="nc" id="L16">		setStatusCode(0);</span>
+<span class="nc" id="L17">	}</span>
+
+<span class="fc" id="L19">	public ValidatorStatusCode(boolean s, String m, int sc) {</span>
+<span class="fc" id="L20">		setSuccess(s);</span>
+<span class="fc" id="L21">		setMessage(m);</span>
+<span class="fc" id="L22">		setStatusCode(sc);</span>
+<span class="fc" id="L23">	}</span>
+
+<span class="fc" id="L25">	public ValidatorStatusCode(boolean s, String m) {</span>
+<span class="fc" id="L26">		setSuccess(s);</span>
+<span class="fc" id="L27">		setMessage(m);</span>
+<span class="fc" id="L28">		setStatusCode(0);</span>
+<span class="fc" id="L29">	}</span>
+
+<span class="fc" id="L31">	public ValidatorStatusCode(boolean s) {</span>
+<span class="fc" id="L32">		success = s;</span>
+<span class="fc" id="L33">		message = &quot;&quot;;</span>
+<span class="fc" id="L34">		setStatusCode(0);</span>
+<span class="fc" id="L35">	}</span>
+
+	public void setDevMessage(String message) {
+<span class="nc" id="L38">		this.devMessage = message;</span>
+<span class="nc" id="L39">	}</span>
+
+	public String getDevMessage() {
+<span class="nc" id="L42">		return this.devMessage;</span>
+	}
+
+	/**
+	 * @param message the message to set
+	 */
+	public void setMessage(String message) {
+<span class="fc" id="L49">		this.message = message;</span>
+<span class="fc" id="L50">	}</span>
+
+	/**
+	 * @return the message
+	 */
+	public String getMessage() {
+<span class="nc" id="L56">		return message;</span>
+	}
+
+	/**
+	 * @param success the success to set
+	 */
+	public void setSuccess(boolean success) {
+<span class="fc" id="L63">		this.success = success;</span>
+<span class="fc" id="L64">	}</span>
+
+	/**
+	 * @return the success
+	 */
+	public boolean isSuccess() {
+<span class="fc" id="L70">		return success;</span>
+	}
+
+	/**
+	 * @param statusCode the statusCode to set
+	 */
+	public void setStatusCode(int statusCode) {
+<span class="fc" id="L77">		this.statusCode = statusCode;</span>
+<span class="fc" id="L78">	}</span>
+
+	/**
+	 * @return the statusCode
+	 */
+	public int getStatusCode() {
+<span class="nc" id="L84">		return statusCode;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

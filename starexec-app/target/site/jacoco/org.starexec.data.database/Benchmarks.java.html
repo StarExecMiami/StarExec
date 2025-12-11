@@ -1,0 +1,2917 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Benchmarks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Benchmarks.java</span></div><h1>Benchmarks.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.apache.commons.io.FileUtils;
+import org.starexec.constants.PaginationQueries;
+import org.starexec.constants.DB;
+import org.starexec.constants.R;
+import org.starexec.data.to.*;
+import org.starexec.data.to.compare.BenchmarkComparator;
+import org.starexec.exceptions.StarExecException;
+import org.starexec.exceptions.StarExecValidationException;
+import org.starexec.exceptions.StarExecDatabaseException;
+import org.starexec.logger.StarLogger;
+import org.starexec.servlets.UploadBenchmark;
+import org.starexec.util.*;
+import org.starexec.util.Timer;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.StringReader;
+import java.sql.Array;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import org.postgresql.util.PSQLException;
+import java.util.*;
+import java.util.function.Supplier;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * Handles all database interaction for benchmarks.
+ */
+<span class="nc" id="L33">public class Benchmarks {</span>
+<span class="fc" id="L34">	private static final StarLogger log = StarLogger.getLogger(Benchmarks.class);</span>
+	private static final int MAX_ATTRIBUTE_LENGTH = 128;
+	private static final String GET_BENCHMARKS_BY_IDS_SQL =
+			&quot;SELECT b.id AS bench_id, &quot; +
+			&quot;b.user_id AS bench_user_id, &quot; +
+			&quot;b.name AS bench_name, &quot; +
+			&quot;b.bench_type AS bench_bench_type, &quot; +
+			&quot;b.uploaded AS bench_uploaded, &quot; +
+			&quot;b.path AS bench_path, &quot; +
+			&quot;b.downloadable AS bench_downloadable, &quot; +
+			&quot;b.disk_size AS bench_disk_size, &quot; +
+			&quot;b.description AS bench_description, &quot; +
+			&quot;b.deleted AS bench_deleted, &quot; +
+			&quot;b.recycled AS bench_recycled, &quot; +
+			&quot;p.id AS types_id, &quot; +
+			&quot;p.community AS types_community, &quot; +
+			&quot;p.name AS types_name, &quot; +
+			&quot;p.description AS types_description, &quot; +
+			&quot;p.path AS types_path, &quot; +
+			&quot;p.disk_size AS types_disk_size, &quot; +
+			&quot;p.processor_type AS types_processor_type, &quot; +
+			&quot;p.time_limit AS types_time_limit, &quot; +
+			&quot;p.syntax_id AS types_syntax_id &quot; +
+			&quot;FROM starexec.benchmarks b &quot; +
+			&quot;LEFT OUTER JOIN processors p ON b.bench_type = p.id &quot; +
+			&quot;WHERE b.id = ANY (?) AND b.deleted = false AND b.recycled = false&quot;;
+	private static final String GET_BENCHMARK_ATTRS_BY_IDS_SQL =
+			&quot;SELECT bench_id, attr_key, attr_value &quot; +
+			&quot;FROM starexec.bench_attributes WHERE bench_id = ANY (?)&quot;;
+	public static boolean deleteAndRemoveBenchmark(int id) {
+<span class="nc" id="L64">		Benchmark b = Benchmarks.getIncludeDeletedAndRecycled(id, false);</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">		if (b == null) {</span>
+<span class="nc" id="L66">			return true;</span>
+		}
+
+<span class="nc" id="L69">		boolean success = true;</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">		if (!b.isDeleted()) {</span>
+			try {
+<span class="nc" id="L72">				success = Benchmarks.delete(id);</span>
+<span class="nc" id="L73">			} catch (StarExecDatabaseException e) {</span>
+<span class="nc" id="L74">				log.error(&quot;Failed to delete benchmark &quot; + id, e);</span>
+<span class="nc" id="L75">				return false;</span>
+<span class="nc" id="L76">			}</span>
+		}
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (!success) {</span>
+<span class="nc" id="L79">			log.warn(&quot;there was an error deleting benchmark with id = &quot; + id);</span>
+<span class="nc" id="L80">			return false;</span>
+		}
+<span class="nc" id="L82">		Connection con = null;</span>
+		try {
+<span class="nc" id="L84">			con = Common.getConnection();</span>
+<span class="nc" id="L85">			return Benchmarks.removeBenchmarkFromDatabase(id, con);</span>
+<span class="nc" id="L86">		} catch (StarExecDatabaseException e) {</span>
+<span class="nc" id="L87">			log.error(&quot;Failed to remove benchmark from database: &quot; + id, e);</span>
+<span class="nc" id="L88">			return false;</span>
+<span class="nc" id="L89">		} catch (Exception e) {</span>
+<span class="nc" id="L90">			log.error(&quot;deleteAndRemoveBenchmark&quot;, e);</span>
+		} finally {
+<span class="nc" id="L92">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L94">		return false;</span>
+	}
+
+	/**
+	 * Recycles all benchmarks that are owned by the given user in the given collection
+	 *
+	 * @param benchmarks The benchmarks to potentially recycle
+	 * @param userId The user who owns the benchmarks to recycle
+	 * @return True on success and false on any error
+	 */
+	public static boolean recycleAllOwnedByUser(Collection&lt;Benchmark&gt; benchmarks, int userId) {
+<span class="nc" id="L105">		boolean success = true;</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		for (Benchmark b : benchmarks) {</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">			if (b.getUserId() == userId) {</span>
+<span class="nc bnc" id="L108" title="All 4 branches missed.">				success = success &amp;&amp; Benchmarks.recycle(b.getId());</span>
+			}
+<span class="nc" id="L110">		}</span>
+<span class="nc" id="L111">		return success;</span>
+	}
+
+	/**
+	 * Adds the given attributes to the given benchmark
+	 *
+	 * @param attrs The attrs to add. Old attributes sharing keys will be overwritten
+	 * @param benchmark The benchmark to add attributes to
+	 * @param statusId The ID of a benchmark status upload object, or null if we aren't using one
+	 */
+	public static void addAttributeSetToDbIfValid(Map&lt;String, String&gt; attrs, Benchmark benchmark, Integer
+			statusId) {
+<span class="nc" id="L123">		Connection con = null;</span>
+		try {
+<span class="nc" id="L125">			con = Common.getConnection();</span>
+<span class="nc" id="L126">			addAttributeSetToDbIfValid(con, attrs, benchmark, statusId);</span>
+<span class="nc" id="L127">		} catch (Exception e) {</span>
+<span class="nc" id="L128">			log.error(&quot;addAttributeSetToDbIfValid&quot;, e);</span>
+		} finally {
+<span class="nc" id="L130">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L132">	}</span>
+
+	/**
+	 * Add the given set of benchmark attributes to the database, if isBenchValid() returns true for the attrs.
+	 *
+	 * @param con the db Connection to use
+	 * @param attrs the attributes
+	 * @param benchmark the Benchmark
+	 * @param statusId the id of the upload page, or null if there isn't one
+	 * @return True on success and false otherwise
+	 */
+	private static boolean addAttributeSetToDbIfValid(
+			Connection con, Map&lt;String, String&gt; attrs, Benchmark benchmark, Integer statusId
+	) {
+<span class="nc bnc" id="L146" title="All 2 branches missed.">		if (!Benchmarks.isBenchValid(attrs)) {</span>
+<span class="nc" id="L147">			Uploads.setBenchmarkErrorMessage(</span>
+<span class="nc" id="L148">					statusId, (&quot;The benchmark processor did not validate the benchmark &quot; + benchmark.getName() + &quot; (&quot; +</span>
+							R.VALID_BENCHMARK_ATTRIBUTE + &quot; was not true).&quot;));
+<span class="nc" id="L150">			return false;</span>
+		}
+
+		// Discard the valid attribute, we don't need it
+<span class="nc" id="L154">		attrs.remove(R.VALID_BENCHMARK_ATTRIBUTE);</span>
+<span class="nc" id="L155">		log.info(&quot;bench is valid.  Adding &quot; + attrs.entrySet().size() + &quot; attributes&quot;);</span>
+		// For each attribute (key, value)...
+<span class="nc" id="L157">		int count = 0;</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">		for (String key : attrs.keySet()) {</span>
+<span class="nc" id="L159">			String val = attrs.get(key);</span>
+<span class="nc bnc" id="L160" title="All 4 branches missed.">			if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {</span>
+<span class="nc" id="L161">				log.warn(&quot;addAttributeSetToDbIfValid&quot;, &quot;Skipping empty attribute for benchmark &quot; + benchmark.getId() +</span>
+					&quot; (key='&quot; + key + &quot;', val='&quot; + val + &quot;')&quot;);
+<span class="nc" id="L163">				continue;</span>
+			}
+			// Add the attribute to the database
+<span class="nc" id="L166">			count++;</span>
+<span class="nc" id="L167">			log.debug(&quot;Adding att number &quot; + count + &quot; &quot; + key + &quot;, &quot; + val + &quot; to bench &quot; + benchmark.getId());</span>
+
+<span class="nc bnc" id="L169" title="All 2 branches missed.">			if (!Benchmarks.addBenchAttr(con, benchmark.getId(), key, val)) {</span>
+<span class="nc" id="L170">				Uploads.setBenchmarkErrorMessage(</span>
+					statusId, &quot;Problem adding the following attribute-value pair to the db, for benchmark &quot; +
+<span class="nc" id="L172">						benchmark.getId() + &quot;: &quot; + key + &quot;, &quot; + val);</span>
+<span class="nc" id="L173">				return false;</span>
+			}
+<span class="nc" id="L175">		}</span>
+<span class="nc" id="L176">		return true;</span>
+	}
+
+	/**
+	 * Adds an attribute to an existing benchmark
+	 *
+	 * @param benchId The ID of the benchmark
+	 * @param key The attribute key. Will overwrite any other attribute with the same key.
+	 * @param val The attribute val
+	 */
+	public static void addBenchAttr(int benchId, String key, String val) {
+<span class="nc" id="L187">		Connection con = null;</span>
+		try {
+<span class="nc" id="L189">			con = Common.getConnection();</span>
+<span class="nc" id="L190">			addBenchAttr(con, benchId, key, val);</span>
+<span class="nc" id="L191">		} catch (Exception e) {</span>
+<span class="nc" id="L192">			log.error(&quot;addBenchAttr&quot;, e);</span>
+		} finally {
+<span class="nc" id="L194">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L196">	}</span>
+
+	/**
+	 * Adds a new attribute to a benchmark
+	 *
+	 * @param con The connection to make the insertion on
+	 * @param benchId The id of the benchmark the attribute is for
+	 * @param key The key of the attribute
+	 * @param val The value of the attribute
+	 * @return True if the operation was a success, false otherwise
+	 * @author Tyler Jensen
+	 */
+	private static boolean addBenchAttr(Connection con, int benchId, String key, String val) {
+<span class="nc" id="L209">		Supplier&lt;String&gt; trace = () -&gt;</span>
+<span class="nc" id="L210">				&quot;\n\tbenchId :&quot; + benchId +</span>
+				&quot;\n\tkey:     &quot; + key +
+				&quot;\n\tval:     &quot; + val;
+<span class="nc bnc" id="L213" title="All 4 branches missed.">		if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {</span>
+<span class="nc" id="L214">			log.warn(&quot;addBenchAttr&quot;, &quot;key or value was empty&quot; + trace.get());</span>
+<span class="nc" id="L215">			return false;</span>
+		}
+<span class="nc bnc" id="L217" title="All 2 branches missed.">		if (key.length() &gt; MAX_ATTRIBUTE_LENGTH) {</span>
+<span class="nc" id="L218">			log.warn(&quot;addBenchAttr&quot;, &quot;key exceeds max length&quot; + trace.get());</span>
+<span class="nc" id="L219">			return false;</span>
+		}
+<span class="nc bnc" id="L221" title="All 2 branches missed.">		if (val.length() &gt; MAX_ATTRIBUTE_LENGTH) {</span>
+<span class="nc" id="L222">			log.warn(&quot;addBenchAttr&quot;, &quot;val exceeds max length&quot; + trace.get());</span>
+<span class="nc" id="L223">			return false;</span>
+		}
+<span class="nc" id="L225">		try (PreparedStatement procedure = con.prepareStatement(&quot;SELECT starexec.AddBenchAttr(?, ?, ?)&quot;)) {</span>
+<span class="nc" id="L226">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L227">			procedure.setString(2, key);</span>
+<span class="nc" id="L228">			procedure.setString(3, val);</span>
+<span class="nc" id="L229">			procedure.execute();</span>
+<span class="nc" id="L230">			return true;</span>
+<span class="nc" id="L231">		} catch (SQLException e) {</span>
+<span class="nc" id="L232">			log.error(&quot;addBenchAttr&quot;, e);</span>
+<span class="nc" id="L233">			return false;</span>
+		}
+	}
+
+	/**
+	 * Adds the benchmark dependency to starexec db
+	 *
+	 * @param primaryBenchId the bench that is dependent on another bench
+	 * @param secondaryBenchId e.g. the axiom
+	 * @param includePath the path that will be used locally at execution time
+	 * @param con db connection
+	 * @return
+	 * @author Benton McCune
+	 */
+	private static Boolean addBenchDependency(
+			int primaryBenchId, Integer secondaryBenchId, String includePath, Connection con
+	) {
+<span class="nc" id="L250">		PreparedStatement procedure = null;</span>
+		try {
+			// Setup normal information for the benchmark dependency
+<span class="nc" id="L253">			procedure = con.prepareStatement(&quot;SELECT starexec.AddBenchDependency(?, ?, ?)&quot;);</span>
+<span class="nc" id="L254">			procedure.setInt(1, primaryBenchId);</span>
+<span class="nc" id="L255">			procedure.setInt(2, secondaryBenchId);</span>
+<span class="nc" id="L256">			procedure.setString(3, includePath);</span>
+
+			// Execute procedure and get back the benchmark's id
+<span class="nc" id="L259">			procedure.execute();</span>
+<span class="nc" id="L260">			return true;</span>
+<span class="nc" id="L261">		} catch (Exception e) {</span>
+<span class="nc" id="L262">			log.error(&quot;addBenchDependency&quot;,</span>
+				    &quot;\tprimaryBenchId:   &quot; + primaryBenchId
+				+ &quot;\n\tsecondaryBenchId: &quot; + secondaryBenchId
+				+ &quot;\n\tincludePath:      &quot; + includePath,
+				e
+			);
+		} finally {
+<span class="nc" id="L269">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L271">		return false;</span>
+	}
+
+	/**
+	 * Adds the benchmark dependency to starexec db
+	 *
+	 * @param primaryBenchId the bench that is dependent on another bench
+	 * @param secondaryBenchId e.g. the axiom
+	 * @param includePath the path that will be used locally at execution time
+	 * @return true on success and false otherwise
+	 * @author Benton McCune
+	 */
+	public static Boolean addBenchDependency(int primaryBenchId, Integer secondaryBenchId, String includePath) {
+<span class="nc" id="L284">		Connection con = null;</span>
+		try {
+<span class="nc" id="L286">			con = Common.getConnection();</span>
+<span class="nc" id="L287">			return addBenchDependency(primaryBenchId, secondaryBenchId, includePath, con);</span>
+<span class="nc" id="L288">		} catch (Exception e) {</span>
+<span class="nc" id="L289">			log.error(&quot;addBenchDependency&quot;, e);</span>
+		} finally {
+<span class="nc" id="L291">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L293">		return false;</span>
+	}
+
+	/**
+	 * Add a benchmark.
+	 *
+	 * @param bench the benchmark to be added
+	 * @param statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @return benchmark returns the benchmark added (not typically needed)
+	 * @author Benton McCune
+	 */
+	public static Benchmark add(Benchmark bench, Integer statusId) {
+<span class="nc" id="L305">		Connection con = null;</span>
+		try {
+<span class="nc" id="L307">			con = Common.getConnection();</span>
+<span class="nc" id="L308">			return add(bench, statusId, con);</span>
+<span class="nc" id="L309">		} catch (Exception e) {</span>
+<span class="nc" id="L310">			log.debug(&quot;add&quot;, e);</span>
+		} finally {
+<span class="nc" id="L312">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L314">		return null;</span>
+	}
+
+	/**
+	 * Add a benchmark.
+	 *
+	 * @param benchmark the benchmark to be added
+	 * @param statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @return benchmark returns the benchmark added (not typically needed)
+	 * @throws Exception
+	 * @author Benton McCune
+	 */
+	protected static Benchmark add(Benchmark benchmark, Integer statusId, Connection con) {
+<span class="nc" id="L327">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L328">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L331">			Common.beginTransaction(con);</span>
+
+<span class="nc" id="L333">			Map&lt;String, String&gt; attrs = benchmark.getAttributes();</span>
+			// Setup normal information for the benchmark
+<span class="nc" id="L335">			procedure = con.prepareStatement(&quot;SELECT AddBenchmark(?, ?, ?, ?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L336">			procedure.setString(1, benchmark.getName());</span>
+<span class="nc" id="L337">			procedure.setString(2, benchmark.getPath());</span>
+<span class="nc" id="L338">			procedure.setBoolean(3, benchmark.isDownloadable());</span>
+<span class="nc" id="L339">			procedure.setInt(4, benchmark.getUserId());</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">			procedure.setInt(5, Benchmarks.isBenchValid(attrs) ? benchmark.getType().getId() : R.NO_TYPE_PROC_ID);</span>
+<span class="nc" id="L341">			procedure.setLong(6, FileUtils.sizeOf(new File(benchmark.getPath())));</span>
+<span class="nc" id="L342">			procedure.setString(7, benchmark.getDescription());</span>
+<span class="nc" id="L343">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L345" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L346">				benchmark.setId(results.getInt(1));</span>
+			}
+
+			// If the benchmark is valid according to its processor...
+
+<span class="nc bnc" id="L351" title="All 2 branches missed.">			if (!addAttributeSetToDbIfValid(con, attrs, benchmark, statusId)) {</span>
+<span class="nc" id="L352">				return null;</span>
+			}
+
+			//do previously validated dependencies here
+<span class="nc bnc" id="L356" title="All 2 branches missed.">			for (BenchmarkDependency d : benchmark.getDependencies()) {</span>
+<span class="nc" id="L357">				Benchmarks.addBenchDependency(benchmark.getId(), d.getSecondaryBench().getId(), d.getDependencyPath(),</span>
+				                              con
+				);
+<span class="nc" id="L360">			}</span>
+<span class="nc" id="L361">			Common.endTransaction(con);// benchmarks should be in db now</span>
+<span class="nc" id="L362">			return benchmark;</span>
+<span class="nc" id="L363">		} catch (Exception e) {</span>
+<span class="nc" id="L364">			log.error(&quot;add&quot;, e);</span>
+<span class="nc" id="L365">			Common.doRollback(con);</span>
+<span class="nc" id="L366">			return null;</span>
+		} finally {
+<span class="nc" id="L368">			Common.safeClose(procedure);</span>
+		}
+	}
+
+	/**
+	 * Adds a single benchmark to the database under the given spaceId
+	 *
+	 * @param benchmark The benchmark to add to the database
+	 * @param spaceId The id of the space the benchmark will belong to
+	 * @param statusId the id for the upload page for adding this benchmark, if there is an upload page for this
+	 * action.
+	 * Otherwise, null
+	 * @return The new benchmark ID on success, -1 otherwise
+	 * @throws Exception Any database error that gets thrown
+	 * @author Tyler Jensen
+	 */
+	public static int addAndAssociate(Benchmark benchmark, Integer spaceId, Integer statusId) throws SQLException {
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		if (Benchmarks.isBenchValid(benchmark.getAttributes())) {</span>
+<span class="nc" id="L386">			Connection con = null;</span>
+			try {
+<span class="nc" id="L388">				con = Common.getConnection();</span>
+
+				// Add benchmark to database
+<span class="nc" id="L391">				int benchId = Benchmarks.add(benchmark, statusId, con).getId();</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">				if (benchId &gt;= 0) {</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">					if (spaceId != null) {</span>
+<span class="nc" id="L394">						Benchmarks.associate(benchId, spaceId, con);</span>
+					}
+<span class="nc" id="L396">					log.debug(&quot;bench successfully added&quot;);</span>
+<span class="nc" id="L397">					return benchId;</span>
+				}
+<span class="nc" id="L399">			} catch (SQLException e) {</span>
+<span class="nc" id="L400">				log.error(&quot;addAndAssociate&quot;, &quot;rethrowing exception&quot;, e);</span>
+<span class="nc" id="L401">				throw e;</span>
+			} finally {
+<span class="nc" id="L403">				Common.safeClose(con);</span>
+			}
+		}
+<span class="nc" id="L406">		log.debug(&quot;Add called on invalid benchmark, no additions will be made to the database&quot;);</span>
+<span class="nc" id="L407">		Uploads.setBenchmarkErrorMessage(</span>
+<span class="nc" id="L408">				statusId, &quot;Benchmark validation failed for benchmark &quot; + benchmark.getName() + &quot;.&quot;);</span>
+
+<span class="nc" id="L410">		return -1;</span>
+	}
+
+	/**
+	 * Adds a list of benchmarks to the database and associates them with the given space ID
+	 *
+	 * @param benchmarks
+	 * @param spaceId
+	 * @param statusId
+	 * @return
+	 * @throws Exception
+	 */
+	protected static List&lt;Integer&gt; addAndAssociate(List&lt;Benchmark&gt; benchmarks, Integer spaceId, Integer statusId)
+	throws SQLException, StarExecException {
+<span class="nc" id="L424">		ArrayList&lt;Integer&gt; benchmarkIds = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L425">		log.info(&quot;in add (list) method (no con parameter )- adding &quot; + benchmarks.size() + &quot; benchmarks to space &quot; +</span>
+				         spaceId);
+<span class="nc" id="L427">		int incrementCounter = 0;</span>
+<span class="nc" id="L428">		Timer timer = new Timer();</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">		for (Benchmark b : benchmarks) {</span>
+<span class="nc" id="L430">			int id = Benchmarks.addAndAssociate(b, spaceId, statusId);</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">			if (id &lt; 0) {</span>
+<span class="nc" id="L432">				String message = (&quot;failed to add bench &quot; + b.getName());</span>
+<span class="nc" id="L433">				Uploads.setBenchmarkErrorMessage(statusId, message);</span>
+				//Note - this does not occur when Benchmark fails validation even though those benchmarks not added
+<span class="nc" id="L435">				throw new StarExecValidationException(String.format(&quot;Failed to add benchmark [%s] to space [%d]&quot;, b.getName(), spaceId));</span>
+			}
+
+<span class="nc" id="L438">			benchmarkIds.add(id);</span>
+<span class="nc" id="L439">			incrementCounter++;</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">			if (timer.getTime() &gt; R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {</span>
+<span class="nc" id="L441">				Uploads.incrementCompletedBenchmarks(statusId, incrementCounter);</span>
+<span class="nc" id="L442">				incrementCounter = 0;</span>
+<span class="nc" id="L443">				timer.reset();</span>
+			}
+<span class="nc" id="L445">		}</span>
+<span class="nc" id="L446">		Uploads.incrementCompletedBenchmarks(statusId, incrementCounter);</span>
+
+<span class="nc" id="L448">		log.info(String.format(&quot;[%d] new benchmarks added to space [%d]&quot;, benchmarks.size(), spaceId));</span>
+<span class="nc" id="L449">		return benchmarkIds;</span>
+	}
+
+	/**
+	 * Runs the given benchmark processor on the list of benchmarks before adding them to the database and associates
+	 * them with the given spaceId. The benchmark types are also processed based on the type of the first benchmark
+	 * only. This method will also introduced dependencies if the benchmark processor produces the right attributes.
+	 *
+	 * @param benchmarks The list of benchmarks to add
+	 * @param spaceId The space the benchmarks will belong to. If null, it is not added to a space
+	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
+	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @return True if the operation was a success, false otherwise
+	 */
+	public static List&lt;Integer&gt; processAndAdd(
+			List&lt;Benchmark&gt; benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId
+	) {
+<span class="nc" id="L467">		return processAndAdd(benchmarks, spaceId, depRootSpaceId, linked, statusId, true);</span>
+	}
+
+	/**
+	 * Runs the given benchmark processor on the list of benchmarks before adding them to the database and associates
+	 * them with the given spaceId. The benchmark types are also processed based on the type of the first benchmark
+	 * only. This method will also introduced dependencies if the benchmark processor produces the right attributes.
+	 *
+	 * @param benchmarks The list of benchmarks to add
+	 * @param spaceId The space the benchmarks will belong to. If null, it is not added to a space
+	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
+	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @param usesDeps if set to true check dependencies, otherwise ignore dependency related messages
+	 */
+	public static List&lt;Integer&gt; processAndAdd(
+			List&lt;Benchmark&gt; benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId,
+			Boolean usesDeps
+	) {
+<span class="nc" id="L486">		Connection con = null;</span>
+		try {
+<span class="nc" id="L488">			con = Common.getConnection();</span>
+<span class="nc" id="L489">			return processAndAdd(benchmarks, spaceId, depRootSpaceId, linked, statusId, usesDeps, con);</span>
+<span class="nc" id="L490">		} catch (StarExecException e) {</span>
+<span class="nc" id="L491">			log.debug(&quot;processAndAdd&quot;, e);</span>
+<span class="nc" id="L492">			return null;</span>
+<span class="nc" id="L493">		} catch (Exception e) {</span>
+<span class="nc" id="L494">			log.error(&quot;processAndAdd&quot;, e);</span>
+<span class="nc" id="L495">			return null;</span>
+		} finally {
+<span class="nc" id="L497">			Common.safeClose(con);</span>
+		}
+	}
+
+	/**
+	 * Runs the given benchmark processor on the list of benchmarks before adding them to the database and associates
+	 * them with the given spaceId. The benchmark types are also processed based on the type of the first benchmark
+	 * only. This method will also introduced dependencies if the benchmark processor produces the right attributes.
+	 *
+	 * @param benchmarks The list of benchmarks to add
+	 * @param spaceId The space the benchmarks will belong to. If null, it is not added to a space
+	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
+	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @param usesDeps if set to true check dependencies, otherwise ignore dependency related messages
+	 * @return True if the operation was a success, false otherwise
+	 * @author Benton McCune
+	 */
+	public static List&lt;Integer&gt; processAndAdd(
+			List&lt;Benchmark&gt; benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId,
+			Boolean usesDeps, Connection con
+	) throws IOException, SQLException, StarExecException {
+<span class="nc bnc" id="L519" title="All 2 branches missed.">		if (!benchmarks.isEmpty()) {</span>
+<span class="nc" id="L520">			log.info(&quot;Adding (with deps) &quot; + benchmarks.size() + &quot; to Space &quot; + spaceId);</span>
+			// Get the processor of the first benchmark (they should all have the same processor)
+<span class="nc" id="L522">			Processor p = Processors.get(benchmarks.get(0).getType().getId());</span>
+
+<span class="nc" id="L524">			log.info(&quot;About to attach attributes to &quot; + benchmarks.size());</span>
+
+<span class="nc" id="L526">			Benchmarks.attachBenchAttrs(benchmarks, p, statusId);</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">			if (usesDeps) {</span>
+<span class="nc" id="L528">				boolean success = Benchmarks.validateDependencies(benchmarks, depRootSpaceId, linked, statusId);</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">				if (!success) {</span>
+<span class="nc" id="L530">					Uploads.setBenchmarkErrorMessage(</span>
+							statusId,
+							&quot;Benchmark dependencies failed to validate. Please check your processor output&quot;
+					);
+<span class="nc" id="L534">				return null;</span>
+				}
+			}
+
+			// Next add them to the database (must happen AFTER they are processed and have dependencies
+			// validated);
+<span class="nc" id="L540">			return Benchmarks.addAndAssociate(benchmarks, spaceId, statusId);</span>
+		} else {
+<span class="nc" id="L542">			log.info(&quot;No benches to add with this call to addWithDeps from space &quot; + spaceId);</span>
+<span class="nc" id="L543">			return new ArrayList&lt;&gt;();</span>
+		}
+	}
+
+	/**
+	 * Associates a single benchmark with a single space.
+	 *
+	 * @param benchId The ID of the benchmark to put in a space.
+	 * @param spaceId The ID of the space to add the benchmark to
+	 * @return True on success and false otherwise
+	 * @author Albert Giegerich
+	 */
+	public static boolean associate(int benchId, int spaceId) {
+		try {
+<span class="nc" id="L557">			return Common.runInTransaction(con -&gt; {</span>
+<span class="nc bnc" id="L558" title="All 2 branches missed.">				if (!associate(benchId, spaceId, con)) {</span>
+<span class="nc" id="L559">					throw new SQLException(String.format(&quot;AssociateBench failed for benchId=%d, spaceId=%d&quot;, benchId, spaceId));</span>
+				}
+<span class="nc" id="L561">				return true;</span>
+			});
+<span class="nc" id="L563">		} catch (SQLException e) {</span>
+<span class="nc" id="L564">			log.error(&quot;associate&quot;, e);</span>
+<span class="nc" id="L565">			return false;</span>
+		}
+	}
+
+	/**
+	 * Associates a single benchmark with a single space
+	 *
+	 * @param benchId The ID of the benchmark to put in a space.
+	 * @param spaceId The ID of the space to add the benchmark to
+	 * @param con The open connection to make the SQL call on
+	 * @return True on success and false otherwise
+	 */
+	public static boolean associate(int benchId, int spaceId, Connection con) {
+<span class="nc" id="L578">		PreparedStatement procedure = null;</span>
+
+		try {
+<span class="nc" id="L581">			procedure = con.prepareStatement(&quot;SELECT starexec.AssociateBench(?, ?)&quot;);</span>
+<span class="nc" id="L582">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L583">			procedure.setInt(2, spaceId);</span>
+<span class="nc" id="L584">			procedure.execute();</span>
+
+<span class="nc" id="L586">			return true;</span>
+<span class="nc" id="L587">		} catch (Exception e) {</span>
+<span class="nc" id="L588">			log.error(&quot;associate&quot;, e);</span>
+		} finally {
+<span class="nc" id="L590">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L592">		return false;</span>
+	}
+
+	/**
+	 * Associates the benchmarks with the given ids to the given space
+	 *
+	 * @param benchIds The list of benchmark ids to associate with the space
+	 * @param spaceId The id of the space the benchmarks will be associated with
+	 * @return True if the operation was a success, false otherwise
+	 * @author Tyler Jensen
+	 */
+	public static boolean associate(List&lt;Integer&gt; benchIds, int spaceId) {
+		try {
+<span class="nc" id="L605">			Common.runInTransaction(con -&gt; {</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">				for (int benchId : benchIds) {</span>
+<span class="nc bnc" id="L607" title="All 2 branches missed.">					if (!associate(benchId, spaceId, con)) {</span>
+<span class="nc" id="L608">						throw new SQLException(String.format(&quot;AssociateBench failed for benchId=%d, spaceId=%d&quot;, benchId, spaceId));</span>
+					}
+<span class="nc" id="L610">				}</span>
+<span class="nc" id="L611">			});</span>
+<span class="nc" id="L612">			return true;</span>
+<span class="nc" id="L613">		} catch (SQLException e) {</span>
+<span class="nc" id="L614">			log.error(&quot;associate&quot;, e);</span>
+<span class="nc" id="L615">			return false;</span>
+		}
+	}
+
+	/**
+	 * Given a set of benchmarks and a processor, this method runs each benchmark through the processor and adds a
+	 * hashmap of attributes to the benchmark that are given from the processor. Attributes are NOT added to the
+	 * database! They are just added to the benchmark objects themselves.
+	 *
+	 * @param benchmarks The set of benchmarks to get attributes for
+	 * @param p The processor to run each benchmark on
+	 * @param statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @return True if the operation is successful and false otherwise
+	 */
+	public static Boolean attachBenchAttrs(List&lt;Benchmark&gt; benchmarks, Processor p, Integer statusId)
+			throws IOException, StarExecException {
+		// if we are using the no_type processor, we do not need to actually execute anything-- just validate every
+		// benchmark.
+<span class="nc bnc" id="L633" title="All 2 branches missed.">		if (p.getId() == Processors.getNoTypeProcessor().getId()) {</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">			for (Benchmark b : benchmarks) {</span>
+<span class="nc" id="L635">				Map&lt;String, String&gt; prop = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L636">				prop.put(R.VALID_BENCHMARK_ATTRIBUTE, &quot;true&quot;);</span>
+<span class="nc" id="L637">				b.setAttributes(prop);</span>
+<span class="nc" id="L638">			}</span>
+<span class="nc" id="L639">			Uploads.incrementValidatedBenchmarks(statusId, benchmarks.size());</span>
+<span class="nc" id="L640">			return true;</span>
+		}
+
+<span class="nc" id="L643">		log.info(&quot;Beginning processing for &quot; + benchmarks.size() + &quot; benchmarks&quot;);</span>
+<span class="nc" id="L644">		int count = benchmarks.size();</span>
+		// For each benchmark in the list to process...
+<span class="nc" id="L646">		int validatedCounter = 0; //stores the number of benchmarks that have been validated since the last update</span>
+<span class="nc" id="L647">		int failedCounter = 0; //stores the TOTAL number of benchmarks that failed</span>
+<span class="nc" id="L648">		Timer timer = new Timer();</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">		for (Benchmark b : benchmarks) {</span>
+<span class="nc" id="L650">			List&lt;File&gt; files = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L651">			files.add(new File(p.getFilePath()));</span>
+<span class="nc" id="L652">			files.add(new File(b.getPath()));</span>
+<span class="nc" id="L653">			File sandbox = Util.copyFilesToNewSandbox(files);</span>
+<span class="nc" id="L654">			String benchPath = new File(sandbox, new File(b.getPath()).getName()).getAbsolutePath();</span>
+<span class="nc" id="L655">			File working = new File(sandbox, new File(p.getFilePath()).getName());</span>
+			// Run the processor on the benchmark file
+<span class="nc" id="L657">			log.info(&quot;executing - &quot; + p.getExecutablePath() + &quot; \&quot;&quot; + b.getPath() + &quot;\&quot;&quot;);</span>
+<span class="nc" id="L658">			String[] procCmd = new String[2];</span>
+
+<span class="nc" id="L660">			procCmd[0] = &quot;./&quot; + R.PROCESSOR_RUN_SCRIPT;</span>
+<span class="nc" id="L661">			procCmd[1] = benchPath;</span>
+<span class="nc" id="L662">			String propstr = null;</span>
+<span class="nc" id="L663">			propstr = Util.executeSandboxCommand(procCmd, null, working);</span>
+
+<span class="nc" id="L665">			checkProcessorOutput(propstr);</span>
+
+<span class="nc" id="L667">			FileUtils.deleteQuietly(sandbox);</span>
+			// Load results into a properties file
+<span class="nc" id="L669">			Properties prop = new Properties();</span>
+
+<span class="nc" id="L671">			prop.load(new StringReader(propstr));</span>
+
+<span class="nc" id="L673">			log.debug(&quot;read this string from the processor: &quot; + propstr);</span>
+<span class="nc" id="L674">			log.debug(&quot;read &quot; + prop.size() + &quot; properties&quot;);</span>
+
+			// Attach the attributes to the benchmark
+<span class="nc" id="L677">			Map&lt;String, String&gt; attrs = new HashMap&lt;&gt;();</span>
+
+<span class="nc bnc" id="L679" title="All 2 branches missed.">			for (Object o : prop.keySet()) {</span>
+<span class="nc" id="L680">				attrs.put((String) o, (String) prop.get(o));</span>
+<span class="nc" id="L681">			}</span>
+<span class="nc" id="L682">			b.setAttributes(attrs);</span>
+<span class="nc" id="L683">			count--;</span>
+<span class="nc bnc" id="L684" title="All 2 branches missed.">			if (Benchmarks.isBenchValid(attrs)) {</span>
+<span class="nc" id="L685">				validatedCounter++;</span>
+<span class="nc bnc" id="L686" title="All 2 branches missed.">				if (timer.getTime() &gt; R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {</span>
+<span class="nc" id="L687">					Uploads.incrementValidatedBenchmarks(statusId, validatedCounter);</span>
+<span class="nc" id="L688">					validatedCounter = 0;</span>
+<span class="nc" id="L689">					timer.reset();</span>
+				}
+			} else {
+<span class="nc" id="L692">				failedCounter++;</span>
+<span class="nc" id="L693">				Uploads.incrementFailedBenchmarks(statusId, 1);</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">				if (failedCounter &lt; R.MAX_FAILED_VALIDATIONS) {</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">					if (propstr.length() &gt; DB.TEXT_FIELD_LEN) {</span>
+<span class="nc" id="L696">						propstr = propstr.substring(0, DB.TEXT_FIELD_LEN);</span>
+					}
+<span class="nc" id="L698">					Uploads.addFailedBenchmark(statusId, b.getName(), propstr);</span>
+<span class="nc" id="L699">					String message = b.getName() + &quot; failed validation&quot;;</span>
+<span class="nc" id="L700">					log.debug(message);</span>
+<span class="nc" id="L701">					Uploads.setBenchmarkErrorMessage(statusId, message);</span>
+<span class="nc" id="L702">				} else {</span>
+<span class="nc" id="L703">					String message = &quot;Major Benchmark Validation Errors - examine your validator&quot;;</span>
+<span class="nc" id="L704">					log.warn(message + &quot;, status id = &quot; + statusId);</span>
+<span class="nc" id="L705">					Uploads.setBenchmarkErrorMessage(statusId, message);</span>
+				}
+			}
+<span class="nc" id="L708">			log.info(b.getName() + &quot; processed. &quot; + count + &quot; more benchmarks to go.&quot;);</span>
+<span class="nc" id="L709">		}</span>
+<span class="nc bnc" id="L710" title="All 2 branches missed.">		if (validatedCounter &gt; 0) {</span>
+<span class="nc" id="L711">			Uploads.incrementValidatedBenchmarks(statusId, validatedCounter);</span>
+		}
+<span class="nc" id="L713">		return true;</span>
+	}
+
+	/**
+	 * Checks the processors output string for errors.
+	 */
+	private static void checkProcessorOutput(String processorOutput) throws StarExecException {
+<span class="nc" id="L720">		final String method = &quot;checkProcessorOutput&quot;;</span>
+<span class="nc" id="L721">		log.entry(method);</span>
+<span class="nc bnc" id="L722" title="All 2 branches missed.">		if (processorOutput.contains(&quot;command not found&quot;)) {</span>
+<span class="nc" id="L723">			throw new StarExecException(</span>
+<span class="nc" id="L724">					String.format(&quot;Processor used a command that StarExec does not recognize.%nProcessor Output:%s&quot;,</span>
+					              processorOutput
+					));
+		}
+<span class="nc" id="L728">	}</span>
+
+	/**
+	 * Permanently removes a benchmark from the database
+	 *
+	 * @param benchId The ID of the benchmark to remove
+	 * @param con The open connection to make the SQL call on
+	 * @return True on success and false otherwise
+	 */
+	private static boolean removeBenchmarkFromDatabase(int benchId, Connection con) throws StarExecDatabaseException {
+<span class="nc" id="L738">		log.debug(&quot;got request permanently remove this benchmark from the database &quot; + benchId);</span>
+<span class="nc" id="L739">		PreparedStatement procedure = null;</span>
+		try {
+<span class="nc" id="L741">			procedure = con.prepareStatement(&quot;CALL starexec.RemoveBenchmarkFromDatabase(?)&quot;);</span>
+<span class="nc" id="L742">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L743">			procedure.execute();</span>
+<span class="nc" id="L744">			return true;</span>
+<span class="nc" id="L745">		} catch (PSQLException e) {</span>
+<span class="nc bnc" id="L746" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L747">				throw new StarExecDatabaseException(&quot;Benchmark not found: &quot; + benchId, e);</span>
+			}
+<span class="nc" id="L749">			log.error(&quot;removeBenchmarkFromDatabase&quot;, e);</span>
+<span class="nc" id="L750">		} catch (Exception e) {</span>
+<span class="nc" id="L751">			log.error(&quot;removeBenchmarkFromDatabase&quot;, e);</span>
+		} finally {
+<span class="nc" id="L753">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L755">		return false;</span>
+	}
+
+	/**
+	 * Removes all benchmark database entries where the benchmark has been deleted AND has been orphaned
+	 *
+	 * @return True on success, false on error
+	 */
+	public static boolean cleanOrphanedDeletedBenchmarks() {
+<span class="nc" id="L764">		Connection con = null;</span>
+<span class="nc" id="L765">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L766">		ResultSet results = null;</span>
+
+		//will contain the id of every benchmark that is associated with either a space or a pair
+<span class="nc" id="L769">		HashSet&lt;Integer&gt; parentedBenchmarks = new HashSet&lt;&gt;();</span>
+		try {
+<span class="nc" id="L771">			con = Common.getConnection();</span>
+
+<span class="nc" id="L773">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarksAssociatedWithSpaces()&quot;);</span>
+<span class="nc" id="L774">			results = procedure.executeQuery();</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L776">				parentedBenchmarks.add(results.getInt(&quot;id&quot;));</span>
+			}
+<span class="nc" id="L778">			Common.safeClose(procedure);</span>
+<span class="nc" id="L779">			Common.safeClose(results);</span>
+
+<span class="nc" id="L781">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarksAssociatedWithPairs()&quot;);</span>
+<span class="nc" id="L782">			results = procedure.executeQuery();</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L784">				parentedBenchmarks.add(results.getInt(&quot;id&quot;));</span>
+			}
+<span class="nc" id="L786">			Common.safeClose(procedure);</span>
+<span class="nc" id="L787">			Common.safeClose(results);</span>
+<span class="nc" id="L788">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetDeletedBenchmarks()&quot;);</span>
+<span class="nc" id="L789">			results = procedure.executeQuery();</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L791">				Benchmark b = resultToBenchmark(results);</span>
+<span class="nc bnc" id="L792" title="All 2 branches missed.">				if (new File(b.getPath()).exists()) {</span>
+<span class="nc" id="L793">					log.warn(&quot;a deleted benchmark still exists on disk! id = &quot; + b.getId());</span>
+<span class="nc bnc" id="L794" title="All 2 branches missed.">					if (!Util.safeDeleteFileAndEmptyParents(b.getPath(), R.getBenchmarkPath())) {</span>
+<span class="nc" id="L795">						log.warn(&quot;the benchmark could not be deleted! Not removing benchmark from the database&quot;);</span>
+<span class="nc" id="L796">						continue;</span>
+					}
+				}
+				// the benchmark has been deleted AND it is not associated with any spaces or job pairs
+<span class="nc bnc" id="L800" title="All 2 branches missed.">				if (!parentedBenchmarks.contains(b.getId())) {</span>
+					try {
+<span class="nc" id="L802">						removeBenchmarkFromDatabase(b.getId(), con);</span>
+<span class="nc" id="L803">					} catch (StarExecDatabaseException e) {</span>
+<span class="nc" id="L804">						log.error(&quot;Failed to remove orphaned benchmark from database: &quot; + b.getId(), e);</span>
+						// Continue with other benchmarks
+<span class="nc" id="L806">					}</span>
+				}
+<span class="nc" id="L808">			}</span>
+<span class="nc" id="L809">			return true;</span>
+<span class="nc" id="L810">		} catch (Exception e) {</span>
+<span class="nc" id="L811">			log.error(&quot;cleanOrphanedDeletedBenchmarks&quot;, e);</span>
+		} finally {
+<span class="nc" id="L813">			Common.safeClose(con);</span>
+<span class="nc" id="L814">			Common.safeClose(procedure);</span>
+<span class="nc" id="L815">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L817">		return false;</span>
+	}
+
+	/**
+	 * Copies a list of benchmarks into a new space, making the given user the new owner.
+	 *
+	 * @param benchmarks The benchmarks to copy
+	 * @param userId The Id of the new owner
+	 * @param spaceId The ID of the space to associate the new benchmarks with
+	 * @return A list of IDs of all the new benchmarks. Ids will be returned in the same order as their copies in the
+	 * input list of benchmarks.
+	 */
+	public static List&lt;Integer&gt; copyBenchmarks(List&lt;Benchmark&gt; benchmarks, int userId, int spaceId) {
+<span class="nc" id="L830">		List&lt;Integer&gt; ids = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L831" title="All 2 branches missed.">		for (Benchmark b : benchmarks) {</span>
+<span class="nc" id="L832">			ids.add(copyBenchmark(b, userId, spaceId));</span>
+<span class="nc" id="L833">		}</span>
+<span class="nc" id="L834">		return ids;</span>
+	}
+
+	/**
+	 * Makes a deep copy of an existing benchmark, gives it a new user, and places it into a space
+	 *
+	 * @param b The existing benchmark to copy
+	 * @param userId The userID that the new benchmark will be given
+	 * @param spaceId The space ID of the space to place the new benchmark in to
+	 * @return The ID of the new benchmark, or -1 on failure
+	 * @author Eric Burns
+	 */
+	public static int copyBenchmark(Benchmark b, int userId, int spaceId) {
+		try {
+<span class="nc" id="L848">			log.debug(&quot;Copying benchmark &quot; + b.getName() + &quot; to new user id= &quot; + String.valueOf(userId));</span>
+<span class="nc" id="L849">			Benchmark newBenchmark = new Benchmark();</span>
+<span class="nc" id="L850">			newBenchmark.setAttributes(b.getAttributes());</span>
+<span class="nc" id="L851">			newBenchmark.setType(b.getType());</span>
+
+<span class="nc" id="L853">			newBenchmark.setDescription(b.getDescription());</span>
+<span class="nc" id="L854">			newBenchmark.setName(b.getName());</span>
+<span class="nc" id="L855">			newBenchmark.setUserId(userId);</span>
+<span class="nc" id="L856">			newBenchmark.setUploadDate(b.getUploadDate());</span>
+<span class="nc" id="L857">			newBenchmark.setDiskSize(b.getDiskSize());</span>
+<span class="nc" id="L858">			newBenchmark.setDownloadable(b.isDownloadable());</span>
+
+<span class="nc bnc" id="L860" title="All 2 branches missed.">			if (newBenchmark.getAttributes() == null) {</span>
+<span class="nc" id="L861">				newBenchmark.setAttributes(new HashMap&lt;&gt;());</span>
+			}
+
+			//this benchmark must be valid, since it is just a copy of
+			//an old benchmark that already passed validation
+<span class="nc" id="L866">			newBenchmark.getAttributes().put(R.VALID_BENCHMARK_ATTRIBUTE, &quot;true&quot;);</span>
+<span class="nc" id="L867">			File benchmarkFile = new File(b.getPath());</span>
+
+<span class="nc" id="L869">			File uniqueDir = UploadBenchmark.getDirectoryForBenchmarkUpload(userId, String.valueOf(b.getId()));</span>
+<span class="nc" id="L870">			uniqueDir.mkdirs();</span>
+<span class="nc" id="L871">			newBenchmark.setPath(uniqueDir.getAbsolutePath() + File.separator + benchmarkFile.getName());</span>
+
+<span class="nc" id="L873">			FileUtils.copyFileToDirectory(benchmarkFile, uniqueDir);</span>
+<span class="nc" id="L874">			int benchId = Benchmarks.addAndAssociate(newBenchmark, spaceId, null);</span>
+<span class="nc bnc" id="L875" title="All 2 branches missed.">			if (benchId &lt; 0) {</span>
+<span class="nc" id="L876">				log.error(&quot;Benchmark being copied could not be successfully added to the database&quot;);</span>
+<span class="nc" id="L877">				return benchId;</span>
+			}
+<span class="nc" id="L879">			log.debug(&quot;Benchmark added successfully to the database, now adding dependency associations&quot;);</span>
+<span class="nc" id="L880">			List&lt;BenchmarkDependency&gt; deps = Benchmarks.getBenchDependencies(b.getId());</span>
+
+<span class="nc bnc" id="L882" title="All 2 branches missed.">			for (BenchmarkDependency dep : deps) {</span>
+<span class="nc" id="L883">				Benchmarks.addBenchDependency(benchId, dep.getSecondaryBench().getId(), dep.getDependencyPath());</span>
+<span class="nc" id="L884">			}</span>
+
+<span class="nc" id="L886">			log.debug(&quot;Benchmark copied successfully, return new benchmark ID = &quot; + benchId);</span>
+<span class="nc" id="L887">			return benchId;</span>
+<span class="nc" id="L888">		} catch (Exception e) {</span>
+<span class="nc" id="L889">			log.error(&quot;copyBenchmark&quot;, e);</span>
+<span class="nc" id="L890">			return -1;</span>
+		}
+	}
+
+	/**
+	 * Sets a benchmark to 'deleted' in the database and actually removes in on disk Deletes a benchmark from the
+	 * database (cascading deletes handle all dependencies)
+	 *
+	 * @param id the id of the benchmark to delete
+	 * @return True if the operation was a success, false otherwise
+	 * @author Todd Elvers
+	 */
+	public static boolean delete(int id) throws StarExecDatabaseException {
+<span class="nc" id="L903">		Connection con = null;</span>
+<span class="nc" id="L904">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L905">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L908">			con = Common.getConnection();</span>
+
+<span class="nc" id="L910">			procedure = con.prepareStatement(&quot;SELECT starexec.SetBenchmarkToDeletedById(?) AS removed_path&quot;);</span>
+<span class="nc" id="L911">			procedure.setInt(1, id);</span>
+<span class="nc" id="L912">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L914" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L915">				String removed = results.getString(&quot;removed_path&quot;);</span>
+<span class="nc" id="L916">				return Util.safeDeleteFileAndEmptyParents(removed, R.getBenchmarkPath());</span>
+			}
+<span class="nc" id="L918">			return false;</span>
+<span class="nc" id="L919">		} catch (PSQLException e) {</span>
+<span class="nc bnc" id="L920" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L921">				throw new StarExecDatabaseException(&quot;Benchmark not found: &quot; + id, e);</span>
+			}
+<span class="nc" id="L923">			log.error(&quot;delete&quot;, e);</span>
+<span class="nc" id="L924">			Common.doRollback(con);</span>
+<span class="nc" id="L925">		} catch (Exception e) {</span>
+<span class="nc" id="L926">			log.error(&quot;delete&quot;, e);</span>
+<span class="nc" id="L927">			Common.doRollback(con);</span>
+		} finally {
+<span class="nc" id="L929">			Common.safeClose(con);</span>
+<span class="nc" id="L930">			Common.safeClose(results);</span>
+<span class="nc" id="L931">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L933">		log.debug(String.format(&quot;Deletion of benchmark [id=%d] failed.&quot;, id));</span>
+<span class="nc" id="L934">		return false;</span>
+	}
+
+	private static Benchmark constructBenchmark(File f, int typeId, boolean downloadable, int userId) {
+<span class="nc" id="L938">		Benchmark b = new Benchmark();</span>
+<span class="nc" id="L939">		Processor t = new Processor();</span>
+<span class="nc" id="L940">		t.setId(typeId);</span>
+<span class="nc" id="L941">		b.setPath(f.getAbsolutePath());</span>
+<span class="nc" id="L942">		b.setName(f.getName());</span>
+<span class="nc" id="L943">		b.setType(t);</span>
+<span class="nc" id="L944">		b.setUserId(userId);</span>
+<span class="nc" id="L945">		b.setDownloadable(downloadable);</span>
+<span class="nc" id="L946">		return b;</span>
+	}
+
+	/**
+	 * Creates a space named after the directory and finds any benchmarks within the directory. Then the process
+	 * recursively adds any subspaces found (other directories) until all directories under the original one are
+	 * traversed. Also extracts the description file(if there is one) and sets it as the description for the space.
+	 * *New* deletes .git directory (if present) and does not add .gitignore .gitattributes .gitmodules and
+	 * README.md files as benchmarks.
+	 *
+	 * @param directory The directory to extract data from
+	 * @param typeId The bench type id to set for all the found benchmarks
+	 * @param userId The user is of the owner of all the benchmarks found
+	 * @param downloadable Whether or now to mark any found benchmarks as downloadable
+	 * @param perm The default permissions to set for this space
+	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @return A single space containing all subspaces and benchmarks based on the file structure of the given
+	 * directory.
+	 * @throws Exception Any exception with the description file, with an error message contained
+	 * @author Wyatt Kaiser, Steve Fiolic
+	 */
+	public static Space extractSpacesAndBenchmarks(
+			File directory, int typeId, int userId, boolean downloadable, Permission perm, Integer statusId
+	) throws IOException, StarExecException {
+		// Create a space for the current directory and set it's name
+<span class="nc" id="L971">            log.info(&quot;Extracting Spaces and Benchmarks for &quot; + userId + &quot; in &quot; + directory.getName());</span>
+<span class="nc" id="L972">		Space space = new Space();</span>
+<span class="nc" id="L973">		space.setName(directory.getName());</span>
+<span class="nc" id="L974">		space.setPermission(perm);</span>
+<span class="nc" id="L975">		String spaceDescription = &quot;&quot;;</span>
+
+		// Search for description file within the directory...
+<span class="nc" id="L978">		File descriptionFile = new File(directory, R.BENCHMARK_DESC_PATH);</span>
+<span class="nc bnc" id="L979" title="All 2 branches missed.">		if (descriptionFile.exists()) {</span>
+<span class="nc" id="L980">			spaceDescription = FileUtils.readFileToString(descriptionFile, StandardCharsets.UTF_8);</span>
+		}
+
+<span class="nc" id="L983">		space.setDescription(spaceDescription);</span>
+<span class="nc" id="L984">		int benchCounter = 0;</span>
+<span class="nc" id="L985">		int spaceCounter = 0;</span>
+<span class="nc" id="L986">		Timer spaceTimer = new Timer();</span>
+<span class="nc" id="L987">		Timer benchTimer = new Timer();</span>
+<span class="nc bnc" id="L988" title="All 2 branches missed.">		for (File f : directory.listFiles()) {</span>
+
+			// If it's a sub-directory
+<span class="nc bnc" id="L991" title="All 2 branches missed.">			if (f.isDirectory()) {</span>
+<span class="nc bnc" id="L992" title="All 2 branches missed.">        if (f.getName().equals(&quot;.git&quot;)){</span>
+<span class="nc" id="L993">          FileUtils.deleteDirectory(f);</span>
+        }
+        else{
+  				// Recursively extract spaces/benchmarks from that directory
+<span class="nc" id="L997">  				space.getSubspaces()</span>
+<span class="nc" id="L998">  				     .add(Benchmarks.extractSpacesAndBenchmarks(f, typeId, userId, downloadable, perm, statusId));</span>
+<span class="nc" id="L999">  				spaceCounter++;</span>
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">  				if (spaceTimer.getTime() &gt; R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {</span>
+<span class="nc" id="L1001">  					Uploads.incrementTotalSpaces(statusId, spaceCounter);//for upload status page</span>
+<span class="nc" id="L1002">  					spaceCounter = 0;</span>
+<span class="nc" id="L1003">  					spaceTimer.reset();</span>
+  				}
+        }
+			}
+
+<span class="nc bnc" id="L1008" title="All 4 branches missed.">      else if ((!f.getName().equals(R.BENCHMARK_DESC_PATH)) &amp;&amp; (!f.getName().equals(&quot;README.md&quot;)) &amp;&amp;</span>
+<span class="nc bnc" id="L1009" title="All 4 branches missed.">              (!f.getName().equals(&quot;.gitattributes&quot;)) &amp;&amp; (!f.getName().equals(&quot;.gitignore&quot;)) &amp;&amp;</span>
+<span class="nc bnc" id="L1010" title="All 4 branches missed.">							(!f.getName().equals(&quot;.gitmodules&quot;)) &amp;&amp; (!f.getName().equals(&quot;.git&quot;)))</span>
+
+       { //Not a description file, readme, .gitattributes, .gitmodules, and .gitignore
+
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">				if (Validator.isValidBenchName(f.getName())) {</span>
+<span class="nc" id="L1015">					space.addBenchmark(constructBenchmark(f, typeId, downloadable, userId));</span>
+<span class="nc" id="L1016">					benchCounter++;</span>
+<span class="nc bnc" id="L1017" title="All 2 branches missed.">					if (benchTimer.getTime() &gt; R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {</span>
+<span class="nc" id="L1018">						Uploads.incrementTotalBenchmarks(statusId, benchCounter);//for upload status page</span>
+<span class="nc" id="L1019">						benchCounter = 0;</span>
+<span class="nc" id="L1020">						benchTimer.reset();</span>
+					}
+				}
+        else {
+<span class="nc" id="L1024">					String msg = &quot;\&quot;&quot; + f.getName() + &quot;\&quot; is not accepted as a legal benchmark name.&quot;;</span>
+<span class="nc" id="L1025">					Uploads.setBenchmarkErrorMessage(statusId, msg);</span>
+<span class="nc" id="L1026">					throw new StarExecException(msg);</span>
+				}
+			}
+		}
+<span class="nc" id="L1030">		Uploads.incrementTotalBenchmarks(statusId, benchCounter);//for upload status page</span>
+<span class="nc" id="L1031">		Uploads.incrementTotalSpaces(statusId, spaceCounter);//for upload status page</span>
+
+<span class="nc" id="L1033">		return space;</span>
+	}
+
+	/**
+	 * Returns the bench id of the axiom file that is being looked for, -1 if not found or too many by that name
+	 *
+	 * @param spaceId the dependent bench root space
+	 * @param includePath the path that will be used to drill down and find bench
+	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @param userId the ID of the user that owns the benchmarks with these dependencies
+	 * @return benchId
+	 * @author Benton McCune
+	 */
+	private static Integer findDependentBench(Integer spaceId, String includePath, Boolean linked, Integer userId) {
+<span class="nc" id="L1047">		Connection con = null;</span>
+		try {
+<span class="nc" id="L1049">			con = Common.getConnection();</span>
+<span class="nc" id="L1050">			return findDependentBench(spaceId, includePath, linked, userId, con);</span>
+<span class="nc" id="L1051">		} catch (Exception e) {</span>
+<span class="nc" id="L1052">			log.error(&quot;findDependentBench&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1054">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L1056">		return -1;</span>
+	}
+
+	private static Integer findDependentBench(
+			Integer spaceId, String includePath, Boolean linked, Integer userId, Connection con
+	) {
+<span class="nc" id="L1062">		log.debug(&quot;findDependentBench called with: spaceId=&quot; + spaceId + &quot;, includePath=&quot; + includePath + &quot;, linked=&quot; + linked + &quot;, userId=&quot; + userId);</span>
+
+<span class="nc bnc" id="L1064" title="All 2 branches missed.">		if (includePath == null) {</span>
+<span class="nc" id="L1065">			log.warn(&quot;includePath is null&quot;);</span>
+<span class="nc" id="L1066">			return -1;</span>
+		}
+
+<span class="nc" id="L1069">		String[] spaces = includePath.split(&quot;/&quot;);</span>
+<span class="nc" id="L1070">		log.debug(&quot;Split includePath: &quot; + Arrays.toString(spaces));</span>
+<span class="nc" id="L1071">		log.debug(&quot;Length of spaces string array = &quot; + spaces.length);</span>
+
+<span class="nc bnc" id="L1073" title="All 2 branches missed.">		if (spaces.length == 0) {</span>
+<span class="nc" id="L1074">			log.warn(&quot;No elements in includePath after split&quot;);</span>
+<span class="nc" id="L1075">			return -1;</span>
+		}
+
+<span class="nc bnc" id="L1078" title="All 4 branches missed.">		int index = (linked != null &amp;&amp; linked) ? 1 : 0;</span>
+<span class="nc" id="L1079">		log.debug(&quot;Index to start searching: &quot; + index);</span>
+
+<span class="nc" id="L1081">		Integer currentSpaceId = spaceId;</span>
+<span class="nc" id="L1082">		log.debug(&quot;Initial currentSpaceId: &quot; + currentSpaceId);</span>
+
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">		if (index &gt;= spaces.length) {</span>
+<span class="nc" id="L1085">			log.warn(&quot;Index &quot; + index + &quot; is out of bounds for spaces array of length &quot; + spaces.length);</span>
+<span class="nc" id="L1086">			return -1;</span>
+		}
+
+<span class="nc bnc" id="L1089" title="All 6 branches missed.">		while ((index &lt; (spaces.length - 1)) &amp;&amp; (currentSpaceId != null &amp;&amp; currentSpaceId &gt; -1)) {</span>
+<span class="nc" id="L1090">			log.info(&quot;Looking for SubSpace '&quot; + spaces[index] + &quot;' in Space &quot; + currentSpaceId);</span>
+<span class="nc" id="L1091">			Integer nextSpaceId = Spaces.getSubSpaceIDbyName(currentSpaceId, userId, spaces[index], con);</span>
+<span class="nc" id="L1092">			log.info(&quot;Returned with subspace id: &quot; + nextSpaceId + &quot; for name: &quot; + spaces[index]);</span>
+<span class="nc bnc" id="L1093" title="All 4 branches missed.">			if (nextSpaceId == null || nextSpaceId &lt;= -1) {</span>
+<span class="nc" id="L1094">				log.warn(&quot;Subspace not found for name: &quot; + spaces[index] + &quot; in space: &quot; + currentSpaceId);</span>
+<span class="nc" id="L1095">				return -1;</span>
+			}
+<span class="nc" id="L1097">			currentSpaceId = nextSpaceId;</span>
+<span class="nc" id="L1098">			index++;</span>
+<span class="nc" id="L1099">		}</span>
+
+<span class="nc bnc" id="L1101" title="All 6 branches missed.">		if (currentSpaceId != null &amp;&amp; currentSpaceId &gt; 1 &amp;&amp; index &lt; spaces.length) {</span>
+<span class="nc" id="L1102">			log.info(&quot;Looking for Benchmark '&quot; + spaces[index] + &quot;' in Space &quot; + currentSpaceId);</span>
+			try {
+<span class="nc" id="L1104">				Integer benchId = getBenchIdByName(currentSpaceId, spaces[index], con);</span>
+<span class="nc" id="L1105">				log.info(&quot;Returned with bench id: &quot; + benchId + &quot; for name: &quot; + spaces[index]);</span>
+<span class="nc" id="L1106">				return benchId;</span>
+<span class="nc" id="L1107">			} catch (SQLException e) {</span>
+<span class="nc" id="L1108">				log.error(&quot;findDependentBench&quot;, e);</span>
+<span class="nc" id="L1109">				return -1;</span>
+			}
+		}
+
+<span class="nc" id="L1113">		log.warn(&quot;Invalid currentSpaceId (&quot; + currentSpaceId + &quot;) or index (&quot; + index + &quot;) out of bounds for spaces array&quot;);</span>
+<span class="nc" id="L1114">		return -1;</span>
+	}
+
+	/**
+	 * @param con The connection to query with
+	 * @param benchId The id of the benchmark to retrieve
+	 * @param includeDeleted If true, deleted benchmarks may be returned. If false, will not return a deleted benchmark
+	 * @return A benchmark object representing the benchmark with the given ID
+	 * @throws Exception
+	 * @author Tyler Jensen
+	 */
+	protected static Benchmark get(Connection con, int benchId, boolean includeDeleted) {
+<span class="nc" id="L1126">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1127">		ResultSet results = null;</span>
+
+		try {
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">				if (includeDeleted) {</span>
+<span class="nc" id="L1131">					procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(?)&quot;);</span>
+				} else {
+<span class="nc" id="L1133">					procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarkById(?)&quot;);</span>
+				}
+<span class="nc" id="L1135">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L1136">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L1139">				Benchmark b = resultToBenchmarkWithPrefix(results, &quot;bench&quot;);</span>
+
+<span class="nc" id="L1141">				Processor t = Processors.resultSetToProcessor(results, &quot;types&quot;);</span>
+
+<span class="nc" id="L1143">				b.setType(t);</span>
+<span class="nc" id="L1144">				Common.safeClose(results);</span>
+<span class="nc" id="L1145">				return b;</span>
+			}
+<span class="nc" id="L1147">		} catch (Exception e) {</span>
+<span class="nc" id="L1148">			log.error(&quot;get&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1150">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1151">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1153">		return null;</span>
+	}
+
+    /**
+     * @param con The connection to query with
+     * @param benchId The id of the benchmark to retrieve
+     * @return A Benchmark containing just the path to the benchmark
+     * @author Aaron Stump
+     */
+	protected static Benchmark getSkeletal(Connection con, int benchId) {
+<span class="nc" id="L1163">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1164">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L1167">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarkPathById(?)&quot;);</span>
+<span class="nc" id="L1168">		    procedure.setInt(1, benchId);</span>
+<span class="nc" id="L1169">		    results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L1171" title="All 2 branches missed.">		    if (results.next()) {</span>
+<span class="nc" id="L1172">			Benchmark b = new Benchmark();</span>
+<span class="nc" id="L1173">			b.setId(benchId);</span>
+<span class="nc" id="L1174">			b.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L1175">			b.setPath(results.getString(&quot;path&quot;));</span>
+<span class="nc" id="L1176">			Common.safeClose(results);</span>
+<span class="nc" id="L1177">			return b;</span>
+		    }
+<span class="nc" id="L1179">		} catch (Exception e) {</span>
+<span class="nc" id="L1180">			log.error(&quot;getSkeletal&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1182">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1183">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1185">		return null;</span>
+	}
+
+	/**
+	 * Retrieves a benchmark without attributes. Will not return a &quot;deleted&quot; benchmark
+	 *
+	 * @param benchId The id of the benchmark to retrieve
+	 * @return A benchmark object representing the benchmark with the given ID
+	 * @author Tyler Jensen
+	 */
+	public static Benchmark get(int benchId) {
+<span class="nc" id="L1196">		return Benchmarks.get(benchId, false, false);</span>
+	}
+
+	/**
+	 * @param benchId The id of the benchmark to retrieve
+	 * @param includeAttrs Whether or not to to get this benchmark's attributes
+	 * @param includeDeleted If true, may return a deleted benchmark. If false, deleted benchmarks will be ignored
+	 * @return A benchmark object representing the benchmark with the given ID
+	 * @author Tyler Jensen
+	 */
+	public static Benchmark get(int benchId, boolean includeAttrs, boolean includeDeleted) {
+<span class="nc" id="L1207">		Connection con = null;</span>
+
+		try {
+<span class="nc" id="L1210">			con = Common.getConnection();</span>
+<span class="nc" id="L1211">			return get(con, benchId, includeAttrs, includeDeleted);</span>
+<span class="nc" id="L1212">		} catch (Exception e) {</span>
+<span class="nc" id="L1213">			log.error(&quot;get&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1215">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L1217">		return null;</span>
+	}
+
+	protected static Benchmark get(Connection con, int benchId, boolean includeAttrs, boolean includeDeleted) {
+
+		try {
+<span class="nc" id="L1223">			Benchmark b = Benchmarks.get(con, benchId, includeDeleted);</span>
+<span class="nc bnc" id="L1224" title="All 2 branches missed.">			if (b == null) {</span>
+<span class="nc" id="L1225">				return null;</span>
+			}
+<span class="nc bnc" id="L1227" title="All 2 branches missed.">			if (includeAttrs) {</span>
+<span class="nc" id="L1228">				b.setAttributes(Benchmarks.getAttributes(con, benchId));</span>
+			}
+<span class="nc" id="L1230">			return b;</span>
+<span class="nc" id="L1231">		} catch (Exception e) {</span>
+<span class="nc" id="L1232">			log.error(&quot;get&quot;, e);</span>
+		}
+<span class="nc" id="L1234">		return null;</span>
+	}
+
+	/**
+	 * Gets a list of benchmarks given a list of benchmark IDs
+	 *
+	 * @param benchIds The IDs of the benchmarks to retrieve.
+	 * @return The benchmarks on success or null on failure. Attributes are not returned
+	 */
+	public static List&lt;Benchmark&gt; get(List&lt;Integer&gt; benchIds) {
+<span class="nc" id="L1244">		return get(benchIds, false);</span>
+	}
+
+	/**
+	 * @param benchIds A list of ids to get benchmarks for
+	 * @param includeAttrs True to include attributes for all the given benchmarks, false if attributes should not be
+	 * included
+	 * @return A list of benchmark object representing the benchmarks with the given IDs
+	 * @author Tyler Jensen
+	 */
+	public static List&lt;Benchmark&gt; get(List&lt;Integer&gt; benchIds, boolean includeAttrs) {
+<span class="nc bnc" id="L1255" title="All 4 branches missed.">		if (benchIds == null || benchIds.isEmpty()) {</span>
+<span class="nc" id="L1256">			return Collections.emptyList();</span>
+		}
+<span class="nc" id="L1258">		Connection con = null;</span>
+		try {
+<span class="nc" id="L1260">			con = Common.getConnection();</span>
+<span class="nc" id="L1261">			Map&lt;Integer, Benchmark&gt; benchmarksById = fetchBenchmarksByIds(con, benchIds);</span>
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">			if (benchmarksById.isEmpty()) {</span>
+<span class="nc" id="L1263">				return Collections.emptyList();</span>
+			}
+<span class="nc bnc" id="L1265" title="All 2 branches missed.">			if (includeAttrs) {</span>
+<span class="nc" id="L1266">				Map&lt;Integer, Map&lt;String, String&gt;&gt; attrsById = fetchAttributesForBenchIds(con, benchmarksById.keySet());</span>
+<span class="nc bnc" id="L1267" title="All 2 branches missed.">				for (Map.Entry&lt;Integer, Map&lt;String, String&gt;&gt; entry : attrsById.entrySet()) {</span>
+<span class="nc" id="L1268">					Benchmark benchmark = benchmarksById.get(entry.getKey());</span>
+<span class="nc bnc" id="L1269" title="All 2 branches missed.">					if (benchmark != null) {</span>
+<span class="nc" id="L1270">						benchmark.setAttributes(entry.getValue());</span>
+					}
+<span class="nc" id="L1272">				}</span>
+			}
+<span class="nc" id="L1274">			List&lt;Benchmark&gt; ordered = new ArrayList&lt;&gt;(benchIds.size());</span>
+<span class="nc bnc" id="L1275" title="All 2 branches missed.">			for (Integer id : benchIds) {</span>
+<span class="nc" id="L1276">				Benchmark benchmark = benchmarksById.get(id);</span>
+<span class="nc bnc" id="L1277" title="All 2 branches missed.">				if (benchmark != null) {</span>
+<span class="nc" id="L1278">					ordered.add(benchmark);</span>
+				}
+<span class="nc" id="L1280">			}</span>
+<span class="nc" id="L1281">			return ordered;</span>
+<span class="nc" id="L1282">		} catch (SQLException e) {</span>
+<span class="nc" id="L1283">			log.error(&quot;get&quot;, e);</span>
+<span class="nc" id="L1284">			return Collections.emptyList();</span>
+		} finally {
+<span class="nc" id="L1286">			Common.safeClose(con);</span>
+		}
+	}
+
+	private static Map&lt;Integer, Benchmark&gt; fetchBenchmarksByIds(Connection con, List&lt;Integer&gt; benchIds) throws SQLException {
+<span class="nc bnc" id="L1291" title="All 2 branches missed.">		if (benchIds.isEmpty()) {</span>
+<span class="nc" id="L1292">			return Collections.emptyMap();</span>
+		}
+<span class="nc" id="L1294">		Array sqlArray = null;</span>
+<span class="nc" id="L1295">		try (PreparedStatement ps = con.prepareStatement(GET_BENCHMARKS_BY_IDS_SQL)) {</span>
+<span class="nc" id="L1296">			sqlArray = con.createArrayOf(&quot;integer&quot;, benchIds.toArray(new Integer[0]));</span>
+<span class="nc" id="L1297">			ps.setArray(1, sqlArray);</span>
+<span class="nc" id="L1298">			try (ResultSet results = ps.executeQuery()) {</span>
+<span class="nc" id="L1299">				Map&lt;Integer, Benchmark&gt; benchmarksById = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L1300" title="All 2 branches missed.">				while (results.next()) {</span>
+<span class="nc" id="L1301">					Benchmark benchmark = resultToBenchmarkWithPrefix(results, &quot;bench&quot;);</span>
+<span class="nc" id="L1302">					Processor t = Processors.resultSetToProcessor(results, &quot;types&quot;);</span>
+<span class="nc" id="L1303">					benchmark.setType(t);</span>
+<span class="nc" id="L1304">					benchmarksById.put(benchmark.getId(), benchmark);</span>
+<span class="nc" id="L1305">				}</span>
+<span class="nc" id="L1306">				return benchmarksById;</span>
+			}
+		} finally {
+<span class="nc bnc" id="L1309" title="All 2 branches missed.">			if (sqlArray != null) {</span>
+<span class="nc" id="L1310">				sqlArray.free();</span>
+			}
+		}
+	}
+
+	private static Map&lt;Integer, Map&lt;String, String&gt;&gt; fetchAttributesForBenchIds(Connection con,
+	                                                                    Collection&lt;Integer&gt; benchIds) throws SQLException {
+<span class="nc bnc" id="L1317" title="All 4 branches missed.">		if (benchIds == null || benchIds.isEmpty()) {</span>
+<span class="nc" id="L1318">			return Collections.emptyMap();</span>
+		}
+<span class="nc" id="L1320">		Array sqlArray = null;</span>
+<span class="nc" id="L1321">		try (PreparedStatement ps = con.prepareStatement(GET_BENCHMARK_ATTRS_BY_IDS_SQL)) {</span>
+<span class="nc" id="L1322">			sqlArray = con.createArrayOf(&quot;integer&quot;, benchIds.toArray(new Integer[0]));</span>
+<span class="nc" id="L1323">			ps.setArray(1, sqlArray);</span>
+<span class="nc" id="L1324">			try (ResultSet results = ps.executeQuery()) {</span>
+<span class="nc" id="L1325">				Map&lt;Integer, Map&lt;String, String&gt;&gt; attrsById = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L1326" title="All 2 branches missed.">				while (results.next()) {</span>
+<span class="nc" id="L1327">					int benchId = results.getInt(&quot;bench_id&quot;);</span>
+<span class="nc" id="L1328">					Map&lt;String, String&gt; attrs = attrsById.computeIfAbsent(benchId, ignored -&gt; new HashMap&lt;&gt;());</span>
+<span class="nc" id="L1329">					attrs.put(results.getString(&quot;attr_key&quot;), results.getString(&quot;attr_value&quot;));</span>
+<span class="nc" id="L1330">				}</span>
+<span class="nc" id="L1331">				return attrsById;</span>
+			}
+		} finally {
+<span class="nc bnc" id="L1334" title="All 2 branches missed.">			if (sqlArray != null) {</span>
+<span class="nc" id="L1335">				sqlArray.free();</span>
+			}
+		}
+	}
+
+	/**
+	 * Returns a list of benchmarks owned by a given user
+	 *
+	 * @param userId the id of the user who is the owner of the benchmarks we are to retrieve
+	 * @return a list of benchmarks owned by a given user, may be empty
+	 * @author Todd Elvers
+	 */
+	public static List&lt;Benchmark&gt; getByOwner(int userId) {
+<span class="nc" id="L1348">		Connection con = null;</span>
+<span class="nc" id="L1349">		ResultSet results = null;</span>
+<span class="nc" id="L1350">		PreparedStatement procedure = null;</span>
+		try {
+<span class="nc" id="L1352">			con = Common.getConnection();</span>
+<span class="nc" id="L1353">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarksByOwner(?)&quot;);</span>
+<span class="nc" id="L1354">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L1355">			results = procedure.executeQuery();</span>
+<span class="nc" id="L1356">			return resultsToBenchmarkWithType(results);</span>
+<span class="nc" id="L1357">		} catch (Exception e) {</span>
+<span class="nc" id="L1358">			log.error(&quot;getByOwner&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1360">			Common.safeClose(con);</span>
+<span class="nc" id="L1361">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1362">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L1365">		log.debug(String.format(&quot;Getting the benchmarks owned by user %d failed.&quot;, userId));</span>
+<span class="nc" id="L1366">		return null;</span>
+	}
+
+	/**
+	 * Gets all benchmarks in a given job.
+	 *
+	 * @param jobId The job to get the benchmarks from.
+	 * @return The list of benchmarks in the job.
+	 * @throws SQLException if something goes wrong with the database.
+	 */
+	public static List&lt;Benchmark&gt; getByJob(int jobId) throws SQLException {
+<span class="nc" id="L1377">		log.debug(&quot;Inside benchmarks.getByJob&quot;);</span>
+<span class="nc" id="L1378">	return Common.query(&quot;SELECT * FROM starexec.GetBenchmarksByJob(?)&quot;, procedure -&gt; {</span>
+<span class="nc" id="L1379">			log.debug(&quot;Setting GetBenchmarksByJob parameter.&quot;);</span>
+<span class="nc" id="L1380">			procedure.setInt(1, jobId);</span>
+<span class="nc" id="L1381">		}, results -&gt; {</span>
+<span class="nc" id="L1382">			List&lt;Benchmark&gt; benchmarks = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1383">			log.debug(&quot;Compiling result for GetBenchmarksByJob&quot;);</span>
+<span class="nc bnc" id="L1384" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1385">				log.debug(&quot;GetBenchmarksByJob results.next() called&quot;);</span>
+<span class="nc" id="L1386">				benchmarks.add(resultToBenchmark(results));</span>
+			}
+<span class="nc" id="L1388">			return benchmarks;</span>
+		});
+	}
+
+	/**
+	 * Gets the IDs of every space that is associated with the given benchmark
+	 *
+	 * @param benchId The benchmark in question
+	 * @return A list of space IDs that are associated with this benchmark
+	 * @author Eric Burns
+	 */
+	public static List&lt;Integer&gt; getAssociatedSpaceIds(int benchId) {
+<span class="nc" id="L1400">	Connection con = null;</span>
+<span class="nc" id="L1401">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1402">	ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1404">			con = Common.getConnection();</span>
+<span class="nc" id="L1405">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetAssociatedSpaceIdsByBenchmark(?)&quot;);</span>
+<span class="nc" id="L1406">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L1407">			results = procedure.executeQuery();</span>
+<span class="nc" id="L1408">			List&lt;Integer&gt; ids = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1409" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1410">				ids.add(results.getInt(&quot;space_id&quot;));</span>
+			}
+<span class="nc" id="L1412">			return ids;</span>
+<span class="nc" id="L1413">		} catch (Exception e) {</span>
+<span class="nc" id="L1414">			log.error(&quot;getAssociatedSpaceIds&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1416">			Common.safeClose(con);</span>
+<span class="nc" id="L1417">			Common.safeClose(results);</span>
+<span class="nc" id="L1418">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L1420">		return null;</span>
+	}
+
+	/**
+	 * Retrieves all attributes (key/value) of the given benchmark
+	 *
+	 * @param con The connection to make the query on
+	 * @param benchId The id of the benchmark to get the attributes of
+	 * @return The properties object which holds all the benchmark's attributes. Null on error.
+	 * @throws Exception
+	 * @author Tyler Jensen
+	 */
+	protected static Map&lt;String, String&gt; getAttributes(Connection con, int benchId) {
+<span class="nc" id="L1433">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L1434">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L1437">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchAttrs(?)&quot;);</span>
+<span class="nc" id="L1438">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L1439">			results = procedure.executeQuery();</span>
+
+<span class="nc" id="L1441">			Map&lt;String, String&gt; prop = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L1442" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1443">				prop.put(results.getString(&quot;attr_key&quot;), results.getString(&quot;attr_value&quot;));</span>
+			}
+<span class="nc" id="L1445">			return prop;</span>
+<span class="nc" id="L1446">		} catch (Exception e) {</span>
+<span class="nc" id="L1447">			log.error(&quot;getAttributes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1449">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1450">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1452">		return Collections.emptyMap();</span>
+	}
+
+	/**
+	 * Retrieves all attributes (key/value) of the given benchmark
+	 *
+	 * @param benchId The id of the benchmark to get the attributes of
+	 * @return The properties object which holds all the benchmark's attributes
+	 * @author Tyler Jensen
+	 */
+	public static Map&lt;String, String&gt; getAttributes(int benchId) {
+<span class="nc" id="L1463">		Connection con = null;</span>
+		try {
+<span class="nc" id="L1465">			con = Common.getConnection();</span>
+<span class="nc" id="L1466">			return Benchmarks.getAttributes(con, benchId);</span>
+<span class="nc" id="L1467">		} catch (Exception e) {</span>
+<span class="nc" id="L1468">			log.error(&quot;getAttributes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1470">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L1472">		return Collections.emptyMap();</span>
+	}
+
+	/**
+	 * Returns a list of benchmark dependencies that have the input benchmark as the primary benchmark
+	 *
+	 * @param benchmarkId the id of the primary benchmark
+	 * @return a list of benchmark dependencies for a given benchmark, may be empty
+	 * @author Benton McCune
+	 */
+	public static List&lt;BenchmarkDependency&gt; getBenchDependencies(int benchmarkId) {
+<span class="nc" id="L1483">	Connection con = null;</span>
+<span class="nc" id="L1484">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1485">	ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L1488">			con = Common.getConnection();</span>
+<span class="nc" id="L1489">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetPathsForBenchmarkDependencies(?)&quot;);</span>
+<span class="nc" id="L1490">			procedure.setInt(1, benchmarkId);</span>
+<span class="nc" id="L1491">			results = procedure.executeQuery();</span>
+<span class="nc" id="L1492">			List&lt;BenchmarkDependency&gt; dependencies = new LinkedList&lt;&gt;();</span>
+
+<span class="nc" id="L1494">			Benchmark primary = Benchmarks.getSkeletal(con,benchmarkId);</span>
+
+<span class="nc bnc" id="L1496" title="All 2 branches missed.">			while (results.next()) {</span>
+				// Build benchmark dependency object
+<span class="nc" id="L1498">				BenchmarkDependency benchD = new BenchmarkDependency();</span>
+<span class="nc" id="L1499">				benchD.setPrimaryBench(primary);</span>
+<span class="nc" id="L1500">				Benchmark secondary = new Benchmark();</span>
+<span class="nc" id="L1501">				secondary.setId(results.getInt(&quot;id&quot;));</span>
+<span class="nc" id="L1502">				secondary.setName(results.getString(&quot;name&quot;));</span>
+<span class="nc" id="L1503">				secondary.setPath(results.getString(&quot;path&quot;));</span>
+<span class="nc" id="L1504">				benchD.setSecondaryBench(secondary);</span>
+<span class="nc" id="L1505">				benchD.setDependencyPath(results.getString(&quot;include_path&quot;));</span>
+
+				// Add benchmark dependency object to list of dependencies
+<span class="nc" id="L1508">				dependencies.add(benchD);</span>
+<span class="nc" id="L1509">			}</span>
+
+<span class="nc" id="L1511">			log.debug(</span>
+<span class="nc" id="L1512">					String.format(&quot;%d dependencies were returned as being needed by benchmark %d.&quot;, dependencies</span>
+<span class="nc" id="L1513">							              .size(), benchmarkId</span>
+					));
+
+<span class="nc" id="L1516">			return dependencies;</span>
+<span class="nc" id="L1517">		} catch (Exception e) {</span>
+<span class="nc" id="L1518">			log.error(&quot;getBenchDependencies&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1520">			Common.safeClose(con);</span>
+<span class="nc" id="L1521">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1522">			Common.safeClose(results);</span>
+		}
+
+<span class="nc" id="L1525">		log.debug(String.format(&quot;Getting the dependencies of benchmark %d failed.&quot;, benchmarkId));</span>
+<span class="nc" id="L1526">		return null;</span>
+	}
+
+	/**
+	 * returns the benchId of a benchmark with a specific name in a given space (-1 if not found or more than one)
+	 *
+	 * @param spaceId space that bench should be in
+	 * @param benchName name of bench
+	 * @return benchId
+	 * @author Benton McCune
+	 */
+	public static Integer getBenchIdByName(Integer spaceId, String benchName) {
+<span class="nc" id="L1538">		log.debug(&quot;getBenchIdByName&quot;, &quot;Looking for Benchmark &quot; + benchName + &quot; in Space &quot; + spaceId);</span>
+<span class="nc" id="L1539">		Connection con = null;</span>
+		try {
+<span class="nc" id="L1541">			con = Common.getConnection();</span>
+<span class="nc" id="L1542">			return getBenchIdByName(spaceId, benchName, con);</span>
+<span class="nc" id="L1543">		} catch (Exception e) {</span>
+<span class="nc" id="L1544">			log.error(&quot;getBenchIdByName&quot;, e);</span>
+<span class="nc" id="L1545">			return -1;</span>
+		} finally {
+<span class="nc" id="L1547">			Common.safeClose(con);</span>
+		}
+	}
+
+	private static Integer getBenchIdByName(Integer spaceId, String benchName, Connection con) throws SQLException {
+<span class="nc" id="L1552">		try (PreparedStatement procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchByName(?,?)&quot;)) {</span>
+<span class="nc" id="L1553">			procedure.setInt(1, spaceId);</span>
+<span class="nc" id="L1554">			procedure.setString(2, benchName);</span>
+<span class="nc" id="L1555">			try (ResultSet results = procedure.executeQuery()) {</span>
+<span class="nc" id="L1556">				int benchId = -1;</span>
+<span class="nc" id="L1557">				int count = 0;</span>
+
+<span class="nc bnc" id="L1559" title="All 2 branches missed.">				while (results.next()) {</span>
+<span class="nc" id="L1560">					count++;</span>
+<span class="nc bnc" id="L1561" title="All 2 branches missed.">					if (count == 1) {</span>
+<span class="nc" id="L1562">						benchId = results.getInt(&quot;id&quot;);</span>
+<span class="nc" id="L1563">						log.debug(&quot;Bench Id = &quot; + benchId);</span>
+					} else {
+<span class="nc" id="L1565">						log.debug(&quot;Multiple benchmarks found with name: &quot; + benchName);</span>
+<span class="nc" id="L1566">						return -1;</span>
+					}
+				}
+
+<span class="nc" id="L1570">				log.debug(&quot;# of Benchmarks with this name = &quot; + count);</span>
+<span class="nc bnc" id="L1571" title="All 2 branches missed.">				return count == 1 ? benchId : -1;</span>
+<span class="nc bnc" id="L1572" title="All 2 branches missed.">			}</span>
+<span class="nc bnc" id="L1573" title="All 2 branches missed.">		}</span>
+	}
+
+	/**
+	 * Get the total count of the benchmarks belong to a specific user
+	 *
+	 * @param userId Id of the user we are looking for
+	 * @return The count of the benchmarks
+	 * @author Wyatt Kaiser
+	 */
+	public static int getBenchmarkCountByUser(int userId) {
+<span class="nc" id="L1584">	Connection con = null;</span>
+<span class="nc" id="L1585">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1586">	ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1588">			con = Common.getConnection();</span>
+<span class="nc" id="L1589">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarkCountByUser(?)&quot;);</span>
+<span class="nc" id="L1590">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L1591">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L1593" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L1594">				return results.getInt(&quot;benchCount&quot;);</span>
+			}
+<span class="nc" id="L1596">		} catch (Exception e) {</span>
+<span class="nc" id="L1597">			log.error(&quot;getBenchmarkCountByUser&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1599">			Common.safeClose(con);</span>
+<span class="nc" id="L1600">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1601">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1603">		return 0;</span>
+	}
+
+	/**
+	 * Get the total count of the benchmarks belonging to a specific user that match the given query
+	 *
+	 * @param userId Id of the user we are looking for
+	 * @param query The query to match the benchmarks on
+	 * @return The count of the benchmarks
+	 * @author Eric Burns
+	 */
+	public static int getBenchmarkCountByUser(int userId, String query) {
+<span class="nc" id="L1615">	Connection con = null;</span>
+<span class="nc" id="L1616">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1617">	ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1619">			con = Common.getConnection();</span>
+<span class="nc" id="L1620">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarkCountByUserWithQuery(?, ?)&quot;);</span>
+<span class="nc" id="L1621">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L1622">			procedure.setString(2, query);</span>
+<span class="nc" id="L1623">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L1625" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L1626">				return results.getInt(&quot;benchCount&quot;);</span>
+			}
+<span class="nc" id="L1628">		} catch (Exception e) {</span>
+<span class="nc" id="L1629">			log.error(&quot;getBenchmarkCountByUser&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1631">			Common.safeClose(con);</span>
+<span class="nc" id="L1632">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1633">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1635">		return 0;</span>
+	}
+
+	/**
+	 * Get next page of the benchmarks belong to a specific user
+	 *
+	 * @param query a DataTablesQuery object
+	 * @param userId Id of the user we are looking for
+	 * @param recycled Whether to get recycled or non-recycled benchmarks
+	 * @return a list of benchmarks belong to the user
+	 * @author Wyatt Kaiser
+	 */
+	public static List&lt;Benchmark&gt; getBenchmarksByUserForNextPage(DataTablesQuery query, int userId, boolean recycled) {
+<span class="nc" id="L1648">		Connection con = null;</span>
+<span class="nc" id="L1649">		NamedParameterStatement procedure = null;</span>
+<span class="nc" id="L1650">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1652">			con = Common.getConnection();</span>
+<span class="nc" id="L1653">			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries.GET_BENCHMARKS_BY_USER_QUERY,</span>
+<span class="nc" id="L1654">			                                                            getBenchmarkOrderColumn(query.getSortColumn()),</span>
+			                                                            query
+			);
+
+<span class="nc" id="L1658">			procedure = new NamedParameterStatement(con, builder.getSQL());</span>
+<span class="nc" id="L1659">			procedure.setInt(&quot;userId&quot;, userId);</span>
+<span class="nc" id="L1660">			procedure.setString(&quot;query&quot;, query.getSearchQuery());</span>
+<span class="nc" id="L1661">			procedure.setBoolean(&quot;recycled&quot;, recycled);</span>
+
+<span class="nc" id="L1663">			results = procedure.executeQuery();</span>
+<span class="nc" id="L1664">			List&lt;Benchmark&gt; benchmarks = new LinkedList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L1666" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1667">				Benchmark b = new Benchmark();</span>
+<span class="nc" id="L1668">				b.setId(readRequiredInt(results, null, &quot;id&quot;));</span>
+<span class="nc" id="L1669">				b.setUserId(readRequiredInt(results, null, &quot;user_id&quot;));</span>
+<span class="nc" id="L1670">				String name = ResultSetUtils.getString(results, columnCandidates(null, &quot;name&quot;));</span>
+<span class="nc" id="L1671">				b.setName(name);</span>
+<span class="nc" id="L1672">				String description = ResultSetUtils.getString(results, columnCandidates(null, &quot;description&quot;));</span>
+<span class="nc" id="L1673">				b.setDescription(description);</span>
+<span class="nc" id="L1674">				Boolean deleted = ResultSetUtils.getBoolean(results, columnCandidates(null, &quot;deleted&quot;));</span>
+<span class="nc" id="L1675">				b.setDeleted(Boolean.TRUE.equals(deleted));</span>
+<span class="nc" id="L1676">				Boolean recycledFlag = ResultSetUtils.getBoolean(results, columnCandidates(null, &quot;recycled&quot;));</span>
+<span class="nc" id="L1677">				b.setRecycled(Boolean.TRUE.equals(recycledFlag));</span>
+<span class="nc bnc" id="L1678" title="All 4 branches missed.">				if (b.isDeleted() &amp;&amp; b.getName() != null) {</span>
+<span class="nc" id="L1679">					b.setName(b.getName() + &quot; (deleted)&quot;);</span>
+				}
+
+<span class="nc" id="L1682">				Processor t = new Processor();</span>
+<span class="nc" id="L1683">				t.setDescription(ResultSetUtils.getString(results, &quot;benchTypeDescription&quot;, &quot;bench_type_description&quot;));</span>
+<span class="nc" id="L1684">				t.setName(ResultSetUtils.getString(results, &quot;benchTypeName&quot;, &quot;bench_type_name&quot;));</span>
+<span class="nc" id="L1685">				b.setType(t);</span>
+<span class="nc" id="L1686">				benchmarks.add(b);</span>
+<span class="nc" id="L1687">			}</span>
+<span class="nc" id="L1688">			return benchmarks;</span>
+<span class="nc" id="L1689">		} catch (Exception e) {</span>
+<span class="nc" id="L1690">			log.error(&quot;getBenchmarksByUserForNextPage&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1692">			Common.safeClose(con);</span>
+<span class="nc" id="L1693">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1694">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1696">		return null;</span>
+	}
+
+	private static String getBenchmarkOrderColumn(int indexOfColumn) {
+<span class="nc bnc" id="L1700" title="All 4 branches missed.">		switch (indexOfColumn) {</span>
+		case 0:
+<span class="nc" id="L1702">			return &quot;benchmarks.name&quot;;</span>
+		case 1:
+<span class="nc" id="L1704">			return &quot;processors.name&quot;;</span>
+		case 2:
+<span class="nc" id="L1706">			return &quot;bench_assoc.order_id&quot;;</span>
+		}
+<span class="nc" id="L1708">		return &quot;benchmarks.name&quot;;</span>
+	}
+
+	/**
+	 * Retrieves benchmarks for the next page of a table on the space explorer
+	 *
+	 * @param query A DataTablesQuery object
+	 * @param spaceId The ID of the space the benchmarks to retrieve are in
+	 * @return A list of benchmarks on success or null on failure
+	 */
+	public static List&lt;Benchmark&gt; getBenchmarksForNextPage(DataTablesQuery query, int spaceId) {
+<span class="nc" id="L1719">		Connection con = null;</span>
+<span class="nc" id="L1720">		NamedParameterStatement procedure = null;</span>
+<span class="nc" id="L1721">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1723">			con = Common.getConnection();</span>
+
+<span class="nc" id="L1725">			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries</span>
+					                                                            .GET_BENCHMARKS_IN_SPACE_QUERY,
+<span class="nc" id="L1727">			                                                            getBenchmarkOrderColumn(query.getSortColumn()),</span>
+			                                                            query
+			);
+
+<span class="nc" id="L1731">			procedure = new NamedParameterStatement(con, builder.getSQL());</span>
+<span class="nc" id="L1732">			procedure.setInt(&quot;spaceId&quot;, spaceId);</span>
+<span class="nc" id="L1733">			procedure.setString(&quot;query&quot;, query.getSearchQuery());</span>
+
+<span class="nc" id="L1735">			results = procedure.executeQuery();</span>
+<span class="nc" id="L1736">			List&lt;Benchmark&gt; benchmarks = new LinkedList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L1738" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1739">				Benchmark b = new Benchmark();</span>
+<span class="nc" id="L1740">				b.setId(readRequiredInt(results, null, &quot;id&quot;));</span>
+<span class="nc" id="L1741">				b.setUserId(readRequiredInt(results, null, &quot;user_id&quot;));</span>
+<span class="nc" id="L1742">				String name = ResultSetUtils.getString(results, columnCandidates(null, &quot;name&quot;));</span>
+<span class="nc" id="L1743">				b.setName(name);</span>
+<span class="nc" id="L1744">				String description = ResultSetUtils.getString(results, columnCandidates(null, &quot;description&quot;));</span>
+<span class="nc" id="L1745">				b.setDescription(description);</span>
+<span class="nc" id="L1746">				Boolean deleted = ResultSetUtils.getBoolean(results, columnCandidates(null, &quot;deleted&quot;));</span>
+<span class="nc" id="L1747">				b.setDeleted(Boolean.TRUE.equals(deleted));</span>
+<span class="nc" id="L1748">				Boolean recycledFlag = ResultSetUtils.getBoolean(results, columnCandidates(null, &quot;recycled&quot;));</span>
+<span class="nc" id="L1749">				b.setRecycled(Boolean.TRUE.equals(recycledFlag));</span>
+<span class="nc bnc" id="L1750" title="All 4 branches missed.">				if (b.isDeleted() &amp;&amp; b.getName() != null) {</span>
+<span class="nc" id="L1751">					b.setName(b.getName() + &quot; (deleted)&quot;);</span>
+<span class="nc bnc" id="L1752" title="All 4 branches missed.">				} else if (b.isRecycled() &amp;&amp; b.getName() != null) {</span>
+<span class="nc" id="L1753">					b.setName(b.getName() + &quot; (in trash)&quot;);</span>
+				}
+
+<span class="nc" id="L1756">				Processor t = new Processor();</span>
+<span class="nc" id="L1757">				t.setDescription(ResultSetUtils.getString(results, &quot;benchTypeDescription&quot;, &quot;bench_type_description&quot;));</span>
+<span class="nc" id="L1758">				t.setName(ResultSetUtils.getString(results, &quot;benchTypeName&quot;, &quot;bench_type_name&quot;));</span>
+<span class="nc" id="L1759">				b.setType(t);</span>
+<span class="nc" id="L1760">				benchmarks.add(b);</span>
+<span class="nc" id="L1761">			}</span>
+<span class="nc" id="L1762">			return benchmarks;</span>
+<span class="nc" id="L1763">		} catch (Exception e) {</span>
+<span class="nc" id="L1764">			log.error(&quot;getBenchmarksForNextPage&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1766">			Common.safeClose(con);</span>
+<span class="nc" id="L1767">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1768">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1770">		return null;</span>
+	}
+
+	/**
+	 * @param spaceId The id of the space to get benchmarks for
+	 * @return A list of all benchmarks belonging to the space
+	 * @author Tyler Jensen
+	 */
+	public static List&lt;Benchmark&gt; getBySpace(int spaceId) {
+<span class="nc" id="L1779">	Connection con = null;</span>
+<span class="nc" id="L1780">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L1781">	ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L1784">			con = Common.getConnection();</span>
+<span class="nc" id="L1785">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetSpaceBenchmarksById(?)&quot;);</span>
+<span class="nc" id="L1786">			procedure.setInt(1, spaceId);</span>
+<span class="nc" id="L1787">			results = procedure.executeQuery();</span>
+<span class="nc" id="L1788">			List&lt;Benchmark&gt; benchmarks = new LinkedList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L1790" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1791">				Benchmark b = resultToBenchmarkWithPrefix(results, &quot;bench&quot;);</span>
+<span class="nc" id="L1792">				Processor t = Processors.resultSetToProcessor(results, &quot;types&quot;);</span>
+
+<span class="nc" id="L1794">				b.setType(t);</span>
+<span class="nc" id="L1795">				benchmarks.add(b);</span>
+<span class="nc" id="L1796">			}</span>
+<span class="nc" id="L1797">			return benchmarks;</span>
+<span class="nc" id="L1798">		} catch (Exception e) {</span>
+<span class="nc" id="L1799">			log.error(&quot;getBySpace&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1801">			Common.safeClose(con);</span>
+<span class="nc" id="L1802">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1803">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1805">		return null;</span>
+	}
+
+	/**
+	 * Retrieves the contents of a benchmark file from disk as a string
+	 *
+	 * @param b The benchmark to get the contents of (must have a valid path)
+	 * @param limit the maximum number of lines to return, or no limit if less than 0
+	 * @return The file contents as a string
+	 */
+	public static Optional&lt;String&gt; getContents(Benchmark b, int limit) throws IOException {
+<span class="nc" id="L1816">		File file = new File(b.getPath());</span>
+<span class="nc" id="L1817">		return Util.readFileLimited(file, limit);</span>
+	}
+
+	/**
+	 * Retrieves the contents of a benchmark file from disk as a string
+	 *
+	 * @param benchId The id of the benchmark to get the contents of
+	 * @param limit the maximum number of lines to return
+	 * @return The file contents as a string
+	 */
+	public static Optional&lt;String&gt; getContents(int benchId, int limit) throws IOException {
+<span class="nc" id="L1828">		return Benchmarks.getContents(Benchmarks.get(benchId), limit);</span>
+	}
+
+	/**
+	 * Gets the number of Benchmarks in a given space
+	 *
+	 * @param spaceId the id of the space to count the Benchmarks in
+	 * @return the number of Benchmarks
+	 * @author Todd Elvers
+	 */
+	public static int getCountInSpace(int spaceId) {
+<span class="nc" id="L1839">		return getCountInSpace(spaceId, &quot;&quot;);</span>
+	}
+
+	/**
+	 * Gets the number of Benchmarks in a given space that match a given query
+	 *
+	 * @param spaceId the id of the space to count the Benchmarks in
+	 * @param query The query to match the spaces on
+	 * @return the number of Benchmarks
+	 * @author Eric Burns
+	 */
+	public static int getCountInSpace(int spaceId, String query) {
+<span class="nc" id="L1851">		Connection con = null;</span>
+<span class="nc" id="L1852">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L1853">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1855">			con = Common.getConnection();</span>
+			// function returns a result-set/table; call it as a table to match the authoritative signature
+<span class="nc" id="L1857">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarkCountInSpaceWithQuery(?, ?)&quot;);</span>
+<span class="nc" id="L1858">			procedure.setInt(1, spaceId);</span>
+<span class="nc" id="L1859">			procedure.setString(2, query);</span>
+<span class="nc" id="L1860">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L1862" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L1863">				return results.getInt(&quot;benchCount&quot;);</span>
+			}
+<span class="nc" id="L1865">		} catch (Exception e) {</span>
+<span class="nc" id="L1866">			log.error(&quot;getCountInSpace&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1868">			Common.safeClose(con);</span>
+<span class="nc" id="L1869">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1870">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1872">		return 0;</span>
+	}
+
+	/**
+	 * Retrieves a benchmark. If the benchmark is deleted, it will still be returned
+	 *
+	 * @param benchId The id of the benchmark to retrieve
+	 * @param includeAttrs True if attributes for the benchmark should also be included and false otherwise
+	 * @return A benchmark object representing the benchmark with the given ID
+	 * @author Tyler Jensen
+	 */
+	public static Benchmark getIncludeDeletedAndRecycled(int benchId, boolean includeAttrs) {
+<span class="nc" id="L1884">		return Benchmarks.get(benchId, includeAttrs, true);</span>
+	}
+
+	public static Benchmark getIncludeDeletedAndRecycled(Connection con, int benchId, boolean includeAttrs) {
+<span class="nc" id="L1888">		return Benchmarks.get(con, benchId, includeAttrs, true);</span>
+	}
+
+	/**
+	 * Gets the number of recycled benchmarks a user owns
+	 *
+	 * @param userId The ID of the user to count benchmarks before
+	 * @return The integer count of recycled benchmarks
+	 */
+	public static int getRecycledBenchmarkCountByUser(int userId) {
+<span class="nc" id="L1898">		return getRecycledBenchmarkCountByUser(userId, &quot;&quot;);</span>
+	}
+
+	/**
+	 * Gets the number of recycled benchmarks a user has that match the given query
+	 *
+	 * @param userId The ID of the user in question
+	 * @param query The string query to match on
+	 * @return The number of benchmarks, or -1 on failure
+	 * @author Eric Burns
+	 */
+	public static int getRecycledBenchmarkCountByUser(int userId, String query) {
+<span class="nc" id="L1910">		Connection con = null;</span>
+<span class="nc" id="L1911">		ResultSet results = null;</span>
+<span class="nc" id="L1912">		PreparedStatement procedure = null;</span>
+		try {
+<span class="nc" id="L1914">			con = Common.getConnection();</span>
+			// function returns a result-set/table; call it as a table to match the authoritative signature
+<span class="nc" id="L1916">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetRecycledBenchmarkCountByUser(?,?)&quot;);</span>
+<span class="nc" id="L1917">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L1918">			procedure.setString(2, query);</span>
+<span class="nc" id="L1919">			results = procedure.executeQuery();</span>
+<span class="nc bnc" id="L1920" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L1921">				return results.getInt(&quot;benchCount&quot;);</span>
+			}
+<span class="nc" id="L1923">		} catch (Exception e) {</span>
+<span class="nc" id="L1924">			log.error(&quot;getRecycledBenchmarkCountByUser&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1926">			Common.safeClose(con);</span>
+<span class="nc" id="L1927">			Common.safeClose(results);</span>
+<span class="nc" id="L1928">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L1930">		return -1;</span>
+	}
+
+	/**
+	 * Retrieves all attributes (key/value) of the given benchmark in order
+	 *
+	 * @param con The connection to make the query on
+	 * @param benchId The id of the benchmark to get the attributes of
+	 * @return The properties object which holds all the benchmark's attributes
+	 * @throws Exception
+	 * @author Wyatt Kaiser
+	 */
+	protected static TreeMap&lt;String, String&gt; getSortedAttributes(Connection con, int benchId) {
+<span class="nc" id="L1943">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L1944">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L1947">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchAttrs(?)&quot;);</span>
+<span class="nc" id="L1948">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L1949">			results = procedure.executeQuery();</span>
+
+<span class="nc" id="L1951">			TreeMap&lt;String, String&gt; sortedMap = new TreeMap&lt;&gt;();</span>
+<span class="nc bnc" id="L1952" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L1953">				sortedMap.put(results.getString(&quot;attr_key&quot;), results.getString(&quot;attr_value&quot;));</span>
+			}
+<span class="nc" id="L1955">			return sortedMap;</span>
+<span class="nc" id="L1956">		} catch (Exception e) {</span>
+<span class="nc" id="L1957">			log.error(&quot;getSortedAttributes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1959">			Common.safeClose(procedure);</span>
+<span class="nc" id="L1960">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L1962">		return null;</span>
+	}
+
+	/**
+	 * Retrieves all attributes (key/value of the given benchmark in alphabetic order
+	 *
+	 * @param benchId the id of the benchmark to get the attributes of
+	 * @return The properties object which holds all the benchmark's attributes
+	 * @author Wyatt Kaiser
+	 */
+	public static TreeMap&lt;String, String&gt; getSortedAttributes(int benchId) {
+<span class="nc" id="L1973">		Connection con = null;</span>
+		try {
+<span class="nc" id="L1975">			con = Common.getConnection();</span>
+<span class="nc" id="L1976">			return Benchmarks.getSortedAttributes(con, benchId);</span>
+<span class="nc" id="L1977">		} catch (Exception e) {</span>
+<span class="nc" id="L1978">			log.error(&quot;getSortedAttributes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L1980">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L1982">		return null;</span>
+	}
+
+	/**
+	 * Returns whether a benchmark with the given ID is present in the database with the &quot;deleted&quot; column set to true
+	 *
+	 * @param benchId The ID of the benchmark to check
+	 * @param con the open connection to make the SQL call on
+	 * @return True if the benchmark exists in the database with the &quot;deleted&quot; column set to true, and false otherwise
+	 * @author Eric Burns
+	 */
+	protected static boolean isBenchmarkDeleted(Connection con, int benchId) {
+<span class="nc" id="L1994">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L1995">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L1997">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.IsBenchmarkDeleted(?)&quot;);</span>
+<span class="nc" id="L1998">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L1999">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2000">			boolean deleted = false;</span>
+<span class="nc bnc" id="L2001" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L2002">				deleted = results.getBoolean(&quot;benchDeleted&quot;);</span>
+			}
+<span class="nc" id="L2004">			return deleted;</span>
+<span class="nc" id="L2005">		} catch (Exception e) {</span>
+<span class="nc" id="L2006">			log.error(&quot;isBenchmarkDeleted&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2008">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2009">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2011">		return false;</span>
+	}
+
+	/**
+	 * Returns whether a benchmark with the given ID is present in the database with the &quot;deleted&quot; column set to true
+	 *
+	 * @param benchId The ID of the benchmark to check
+	 * @return True if the benchmark exists in the database with the &quot;deleted&quot; column set to true, and false otherwise
+	 * @author Eric Burns
+	 */
+	public static boolean isBenchmarkDeleted(int benchId) {
+<span class="nc" id="L2022">		Connection con = null;</span>
+		try {
+<span class="nc" id="L2024">			con = Common.getConnection();</span>
+<span class="nc" id="L2025">			return isBenchmarkDeleted(con, benchId);</span>
+<span class="nc" id="L2026">		} catch (Exception e) {</span>
+<span class="nc" id="L2027">			log.error(&quot;isBenchmarkDeleted&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2029">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L2031">		return false;</span>
+	}
+
+	/**
+	 * Returns whether a benchmark with the given ID is present in the database with the &quot;recycled&quot; column set to true
+	 *
+	 * @param benchId The ID of the benchmark to check
+	 * @param con the open connection to make the SQL call on
+	 * @return True if the benchmark exists in the database with the &quot;recycled&quot; column set to true, and false otherwise
+	 * @author Eric Burns
+	 */
+	protected static boolean isBenchmarkRecycled(Connection con, int benchId) {
+<span class="nc" id="L2043">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2044">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2046">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.IsBenchmarkRecycled(?)&quot;);</span>
+<span class="nc" id="L2047">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L2048">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2049">			boolean deleted = false;</span>
+<span class="nc bnc" id="L2050" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L2051">				deleted = results.getBoolean(&quot;recycled&quot;);</span>
+			}
+<span class="nc" id="L2053">			return deleted;</span>
+<span class="nc" id="L2054">		} catch (Exception e) {</span>
+<span class="nc" id="L2055">			log.error(&quot;isBenchmarkRecycled&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2057">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2058">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2060">		return false;</span>
+	}
+
+	/**
+	 * Returns whether a benchmark with the given ID is present in the database with the &quot;recycled&quot; column set to true
+	 *
+	 * @param benchId The ID of the benchmark to check
+	 * @return True if the benchmark exists in the database with the &quot;recycled&quot; column set to true, and false otherwise
+	 * @author Eric Burns
+	 */
+	public static boolean isBenchmarkRecycled(int benchId) {
+<span class="nc" id="L2071">		Connection con = null;</span>
+		try {
+<span class="nc" id="L2073">			con = Common.getConnection();</span>
+<span class="nc" id="L2074">			return isBenchmarkRecycled(con, benchId);</span>
+<span class="nc" id="L2075">		} catch (Exception e) {</span>
+<span class="nc" id="L2076">			log.error(&quot;isBenchmarkRecycled&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2078">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L2080">		return false;</span>
+	}
+
+	/**
+	 * Makes sure that a benchmark with the gived id exists.
+	 *
+	 * @param benchmarkId The id of a benchmark.
+	 * @return true if the benchmark exists, otherwise false.
+	 * @author Albert Giegerich
+	 */
+	public static boolean benchmarkExists(int benchmarkId) {
+<span class="nc" id="L2091">		Benchmark benchmark = Benchmarks.get(benchmarkId);</span>
+<span class="nc bnc" id="L2092" title="All 2 branches missed.">		return (benchmark != null);</span>
+	}
+
+	/**
+	 * Internal helper method to determine if a benchmark is valid according to its attributes
+	 *
+	 * @param attrs The attributes of a benchmark
+	 * @return True if the attributes are of a valid benchmark, false otherwise
+	 */
+	private static boolean isBenchValid(Map&lt;String, String&gt; attrs) {
+		// A benchmark is valid if it has attributes and it has the special R.VALID_BENCHMARK_ATTRIBUTE attribute
+<span class="nc bnc" id="L2103" title="All 4 branches missed.">		return (attrs != null &amp;&amp; Boolean.parseBoolean(attrs.getOrDefault(R.VALID_BENCHMARK_ATTRIBUTE, &quot;false&quot;)));</span>
+	}
+
+	/**
+	 * Determines whether the benchmark with the given ID is public. It is public if it is in at least one public space
+	 * or if it is the default benchmark for some community
+	 *
+	 * @param benchId The ID of the benchmark in question
+	 * @return True if the benchmark exists and is in a public space, false otherwise.
+	 */
+	public static boolean isPublic(int benchId) {
+<span class="nc" id="L2114">		Connection con = null;</span>
+		try {
+<span class="nc" id="L2116">			con = Common.getConnection();</span>
+<span class="nc" id="L2117">			return Benchmarks.isPublic(con, benchId);</span>
+<span class="nc" id="L2118">		} catch (Exception e) {</span>
+<span class="nc" id="L2119">			log.error(&quot;isPublic&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2121">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L2123">		return false;</span>
+	}
+
+	protected static boolean isPublic(Connection con, int benchId) {
+<span class="nc" id="L2127">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2128">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2130">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.IsBenchPublic(?)&quot;);</span>
+<span class="nc" id="L2131">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L2132">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2133">			boolean publicSpace = false;</span>
+<span class="nc bnc" id="L2134" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc bnc" id="L2135" title="All 2 branches missed.">				publicSpace = (results.getInt(&quot;benchPublic&quot;) &gt; 0);</span>
+			}
+		
+<span class="nc bnc" id="L2138" title="All 2 branches missed.">			if (publicSpace) {</span>
+<span class="nc" id="L2139">				return true;</span>
+			}
+		
+<span class="nc" id="L2142">			Common.safeClose(results);</span>
+<span class="nc" id="L2143">			Common.safeClose(procedure);</span>
+			//if the benchmark is in no public spaces, check to see if it is the default benchmark for some community
+<span class="nc" id="L2145">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.IsBenchACommunityDefault(?)&quot;);</span>
+<span class="nc" id="L2146">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L2147">			results = procedure.executeQuery();</span>
+<span class="nc bnc" id="L2148" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc bnc" id="L2149" title="All 2 branches missed.">				return (results.getInt(&quot;benchDefault&quot;) &gt; 0);</span>
+			}
+<span class="nc" id="L2151">		} catch (Exception e) {</span>
+<span class="nc" id="L2152">			log.error(&quot;isPublic&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2154">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2155">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2157">		return false;</span>
+	}
+
+	/**
+	 * Sets the &quot;recycled&quot; flag in the database to true. Indicates the user has moved the benchmark to the recycle bin,
+	 * from which in can be deleted
+	 *
+	 * @param id the id of the benchmark to recycled
+	 * @return True if the operation was a success, false otherwise
+	 * @author Eric Burns
+	 */
+	public static boolean recycle(int id) {
+<span class="nc" id="L2169">		return setRecycledState(id, true);</span>
+	}
+
+	/**
+	 * Sets the &quot;recycled&quot; flag in the database to false. Indicates the user has removed the benchmark from the recycle
+	 * bin
+	 *
+	 * @param id the id of the benchmark to be removed from the recycle bin
+	 * @return True if the operation was a success, false otherwise
+	 * @author Eric Burns
+	 */
+	public static boolean restore(int id) {
+<span class="nc" id="L2181">		return setRecycledState(id, false);</span>
+	}
+
+	/**
+	 * Restores all benchmarks a user has that have been recycled to normal
+	 *
+	 * @param userId The userId in question
+	 * @return True on success, false otherwise
+	 * @author Eric Burns
+	 */
+	public static boolean restoreRecycledBenchmarks(int userId) {
+<span class="nc" id="L2192">		Connection con = null;</span>
+<span class="nc" id="L2193">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2194">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2196">			con = Common.getConnection();</span>
+
+<span class="nc" id="L2198">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2199">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetRecycledBenchmarkIds(?)&quot;);</span>
+<span class="nc" id="L2200">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L2201">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L2203" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L2204">				Benchmarks.restore(results.getInt(&quot;id&quot;));</span>
+			}
+<span class="nc" id="L2206">			return true;</span>
+<span class="nc" id="L2207">		} catch (Exception e) {</span>
+<span class="nc" id="L2208">			log.error(&quot;restoreRecycledBenchmarks&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2210">			Common.safeClose(con);</span>
+<span class="nc" id="L2211">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2212">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2214">		return false;</span>
+	}
+
+	public static Benchmark resultToBenchmark(ResultSet results) throws SQLException {
+<span class="nc" id="L2218">		return resultToBenchmarkWithPrefix(results, null);</span>
+	}
+
+	/**
+	 * Creates a Benchmark object from a SQL resultset
+	 *
+	 * @param results The resultset pointed at the row containing benchmark data
+	 * @param prefix Optional table alias to consider when resolving column names
+	 * @return A Benchmark object
+	 * @throws SQLException when required columns are not present
+	 */
+	public static Benchmark resultToBenchmarkWithPrefix(ResultSet results, String prefix) throws SQLException {
+<span class="nc" id="L2230">		Benchmark b = new Benchmark();</span>
+<span class="nc" id="L2231">		b.setId(readRequiredInt(results, prefix, &quot;id&quot;));</span>
+<span class="nc" id="L2232">		b.setUserId(readRequiredInt(results, prefix, &quot;user_id&quot;));</span>
+<span class="nc" id="L2233">		b.setName(ResultSetUtils.getString(results, columnCandidates(prefix, &quot;name&quot;)));</span>
+<span class="nc" id="L2234">		b.setUploadDate(ResultSetUtils.getTimestamp(results, columnCandidates(prefix, &quot;uploaded&quot;)));</span>
+<span class="nc" id="L2235">		b.setPath(ResultSetUtils.getString(results, columnCandidates(prefix, &quot;path&quot;)));</span>
+<span class="nc" id="L2236">		b.setDescription(ResultSetUtils.getString(results, columnCandidates(prefix, &quot;description&quot;)));</span>
+<span class="nc" id="L2237">		Boolean downloadable = ResultSetUtils.getBoolean(results, columnCandidates(prefix, &quot;downloadable&quot;));</span>
+<span class="nc" id="L2238">		b.setDownloadable(Boolean.TRUE.equals(downloadable));</span>
+<span class="nc" id="L2239">		Long diskSize = ResultSetUtils.getLong(results, columnCandidates(prefix, &quot;disk_size&quot;));</span>
+<span class="nc bnc" id="L2240" title="All 2 branches missed.">		b.setDiskSize(diskSize == null ? 0L : diskSize);</span>
+<span class="nc" id="L2241">		Boolean recycled = ResultSetUtils.getBoolean(results, columnCandidates(prefix, &quot;recycled&quot;));</span>
+<span class="nc" id="L2242">		b.setRecycled(Boolean.TRUE.equals(recycled));</span>
+<span class="nc" id="L2243">		Boolean deleted = ResultSetUtils.getBoolean(results, columnCandidates(prefix, &quot;deleted&quot;));</span>
+<span class="nc" id="L2244">		b.setDeleted(Boolean.TRUE.equals(deleted));</span>
+<span class="nc" id="L2245">		return b;</span>
+	}
+
+	private static int readRequiredInt(ResultSet results, String prefix, String column) throws SQLException {
+<span class="nc" id="L2249">		Integer value = ResultSetUtils.getInt(results, columnCandidates(prefix, column));</span>
+<span class="nc bnc" id="L2250" title="All 2 branches missed.">		if (value == null) {</span>
+<span class="nc" id="L2251">			throw new SQLException(&quot;Column &quot; + column + &quot; is null in result set&quot;);</span>
+		}
+<span class="nc" id="L2253">		return value;</span>
+	}
+
+	private static String[] columnCandidates(String prefix, String column) {
+<span class="nc" id="L2257">		List&lt;String&gt; names = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2258" title="All 2 branches missed.">		if (!Util.isNullOrEmpty(prefix)) {</span>
+<span class="nc" id="L2259">			names.add(prefix + &quot;.&quot; + column);</span>
+<span class="nc" id="L2260">			names.add(prefix + &quot;_&quot; + column);</span>
+<span class="nc" id="L2261">			names.add(prefix + column);</span>
+		}
+<span class="nc" id="L2263">		names.add(column);</span>
+<span class="nc bnc" id="L2264" title="All 2 branches missed.">		if (column.contains(&quot;.&quot;)) {</span>
+<span class="nc" id="L2265">			names.add(column.replace('.', '_'));</span>
+		}
+<span class="nc" id="L2267">		return names.toArray(new String[0]);</span>
+	}
+
+	/**
+	 * Deletes all benchmarks that this user has in their recycle bin from both the database and from disk
+	 *
+	 * @param userId The userId in question
+	 * @return True on success, false otherwise
+	 * @author Eric Burns
+	 */
+	public static boolean setRecycledBenchmarksToDeleted(int userId) {
+<span class="nc" id="L2278">		Connection con = null;</span>
+<span class="nc" id="L2279">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2280">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2282">			con = Common.getConnection();</span>
+<span class="nc" id="L2283">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetRecycledBenchmarkPaths(?)&quot;);</span>
+<span class="nc" id="L2284">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L2285">			results = procedure.executeQuery();</span>
+
+<span class="nc bnc" id="L2287" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L2288">				Util.safeDeleteDirectory(results.getString(&quot;path&quot;));</span>
+			}
+<span class="nc" id="L2290">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2291">			procedure = con.prepareStatement(&quot;SELECT starexec.SetRecycledBenchmarksToDeleted(?)&quot;);</span>
+<span class="nc" id="L2292">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L2293">			procedure.execute();</span>
+
+<span class="nc" id="L2295">			return true;</span>
+<span class="nc" id="L2296">		} catch (Exception e) {</span>
+<span class="nc" id="L2297">			log.error(&quot;setRecycledBenchmarksToDeleted&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2299">			Common.safeClose(con);</span>
+<span class="nc" id="L2300">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2301">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2303">		return false;</span>
+	}
+
+	/**
+	 * Sets the &quot;recycled&quot; flag in the database to the given value.
+	 *
+	 * @param id the id of the benchmark to recycled
+	 * @param state True to set as recycled, false to remove recycled tag
+	 * @return True if the operation was a success, false otherwise
+	 * @author Eric Burns
+	 */
+	private static boolean setRecycledState(int id, boolean state) {
+<span class="nc" id="L2315">		Connection con = null;</span>
+<span class="nc" id="L2316">		PreparedStatement procedure = null;</span>
+
+		try {
+<span class="nc" id="L2319">			con = Common.getConnection();</span>
+<span class="nc" id="L2320">			procedure = con.prepareStatement(&quot;SELECT starexec.SetBenchmarkRecycledValue(?, ?)&quot;);</span>
+<span class="nc" id="L2321">			procedure.setInt(1, id);</span>
+<span class="nc" id="L2322">			procedure.setBoolean(2, state);</span>
+<span class="nc" id="L2323">			procedure.execute();</span>
+<span class="nc" id="L2324">			return true;</span>
+<span class="nc" id="L2325">		} catch (Exception e) {</span>
+<span class="nc" id="L2326">			log.error(&quot;setRecycledState&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2328">			Common.safeClose(con);</span>
+<span class="nc" id="L2329">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L2331">		return false;</span>
+	}
+
+	/**
+	 * Updates the details of a benchmark. This ONLY updates the database: it does not handle actually executing the
+	 * given processor!
+	 *
+	 * @param id the id of the benchmark to update
+	 * @param name the new name to apply to the benchmark
+	 * @param description the new description to apply to the benchmark
+	 * @param isDownloadable boolean indicating whether or not this benchmark is downloadable
+	 * @param benchTypeId the new benchmark type to apply to the benchmark
+	 * @return True if the operation was a success, false otherwise
+	 * @author Todd Elvers
+	 */
+	public static boolean updateDetails(
+			int id, String name, String description, boolean isDownloadable, int benchTypeId
+	) throws StarExecDatabaseException {
+<span class="nc" id="L2349">		Connection con = null;</span>
+<span class="nc" id="L2350">		PreparedStatement procedure = null;</span>
+		try {
+<span class="nc" id="L2352">			con = Common.getConnection();</span>
+<span class="nc" id="L2353">			procedure = con.prepareStatement(&quot;SELECT starexec.UpdateBenchmarkDetails(?, ?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L2354">			procedure.setInt(1, id);</span>
+<span class="nc" id="L2355">			procedure.setString(2, name);</span>
+<span class="nc" id="L2356">			procedure.setString(3, description);</span>
+<span class="nc" id="L2357">			procedure.setBoolean(4, isDownloadable);</span>
+<span class="nc" id="L2358">			procedure.setInt(5, benchTypeId);</span>
+<span class="nc" id="L2359">			procedure.execute();</span>
+<span class="nc" id="L2360">			log.debug(String.format(&quot;Benchmark [id=%d] was successfully updated.&quot;, id));</span>
+<span class="nc" id="L2361">			return true;</span>
+<span class="nc" id="L2362">		} catch (PSQLException e) {</span>
+<span class="nc bnc" id="L2363" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L2364">				throw new StarExecDatabaseException(&quot;Benchmark not found: &quot; + id, e);</span>
+			}
+<span class="nc" id="L2366">			log.error(&quot;updateDetails&quot;, e);</span>
+<span class="nc" id="L2367">			Common.doRollback(con);</span>
+<span class="nc" id="L2368">		} catch (Exception e) {</span>
+<span class="nc" id="L2369">			log.error(&quot;updateDetails&quot;, e);</span>
+<span class="nc" id="L2370">			Common.doRollback(con);</span>
+		} finally {
+<span class="nc" id="L2372">			Common.safeClose(con);</span>
+<span class="nc" id="L2373">			Common.safeClose(procedure);</span>
+		}
+
+<span class="nc" id="L2376">		log.debug(String.format(&quot;Benchmark [id=%d] failed to be updated.&quot;, id));</span>
+<span class="nc" id="L2377">		return false;</span>
+	}
+
+	/**
+	 * Validates the dependencies for a list of benchmarks (usually all benches of a single space)
+	 *
+	 * @param benchmarks The list of benchmarks that might have dependencies
+	 * @param spaceId the id of the space where the axiom benchmarks lie
+	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @return the data structure that has information about dependencies
+	 * @author Eric Burns
+	 */
+	private static boolean validateDependencies(List&lt;Benchmark&gt; benchmarks, Integer spaceId, Boolean linked, Integer statusID) {
+<span class="nc" id="L2390">		Map&lt;String, Integer&gt; dependencyOwners = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L2391" title="All 2 branches missed.">		for (Benchmark benchmark : benchmarks) {</span>
+<span class="nc bnc" id="L2392" title="All 2 branches missed.">			for (String includePath : getDependencyIncludePaths(benchmark)) {</span>
+<span class="nc" id="L2393">				dependencyOwners.putIfAbsent(includePath, benchmark.getUserId());</span>
+<span class="nc" id="L2394">			}</span>
+<span class="nc" id="L2395">		}</span>
+
+<span class="nc" id="L2397">		Map&lt;String, BenchmarkDependency&gt; resolvedDependencies = resolveDependencyBatch(spaceId, linked, dependencyOwners);</span>
+<span class="nc bnc" id="L2398" title="All 2 branches missed.">		for (Benchmark benchmark : benchmarks) {</span>
+<span class="nc" id="L2399">			String out = validateIndBenchDependencies(benchmark, resolvedDependencies);</span>
+<span class="nc bnc" id="L2400" title="All 2 branches missed.">			if (!&quot;true&quot;.equals(out)) {</span>
+<span class="nc" id="L2401">				log.warn(&quot;Dependent benchs not found for Bench &quot; + benchmark.getName());</span>
+<span class="nc" id="L2402">				Uploads.addFailedBenchmark(statusID, benchmark.getName(), &quot;Dependancy check failed for this benchmark. Failed search for &quot; + out + &quot;.&quot;);</span>
+<span class="nc" id="L2403">				return false;</span>
+			}
+<span class="nc" id="L2405">		}</span>
+<span class="nc" id="L2406">		return true;</span>
+	}
+
+	/**
+	 * Validates the dependencies for a benchmark. Adds the dependencies to the benchmark as well
+	 *
+	 * @param bench The benchmark that might have dependencies
+	 * @param resolvedDependencies pre-resolved dependency map keyed by include path
+	 * @return &quot;true&quot; if the dependencies are valid, the name of the failed dependency if otherwise
+	 * @author Benton McCune
+	 */
+	private static String  validateIndBenchDependencies(
+			Benchmark bench, Map&lt;String, BenchmarkDependency&gt; resolvedDependencies
+	) {
+<span class="nc" id="L2420">		String includePath = &quot;&quot;;</span>
+		try {
+<span class="nc" id="L2422">			List&lt;String&gt; includePaths = getDependencyIncludePaths(bench);</span>
+<span class="nc" id="L2423">			log.info(&quot;validateIndBenchDependencies&quot;, &quot;# of dependencies = &quot; + includePaths.size());</span>
+<span class="nc bnc" id="L2424" title="All 2 branches missed.">			for (String path : includePaths) {</span>
+<span class="nc" id="L2425">				includePath = path;</span>
+<span class="nc" id="L2426">				log.debug(&quot;validateIndBenchDependencies&quot;, &quot;Dependency Path is &quot; + includePath);</span>
+<span class="nc" id="L2427">				BenchmarkDependency dependency = resolvedDependencies.get(includePath);</span>
+<span class="nc bnc" id="L2428" title="All 2 branches missed.">				if (dependency == null) {</span>
+<span class="nc" id="L2429">					log.warn(&quot;validateIndBenchDependencies&quot;, &quot;Dependent Bench not found for &quot; + bench.getName());</span>
+<span class="nc" id="L2430">					return includePath;</span>
+				}
+<span class="nc" id="L2432">				bench.addDependency(dependency);</span>
+<span class="nc" id="L2433">			}</span>
+<span class="nc" id="L2434">		} catch (Exception e) {</span>
+<span class="nc" id="L2435">			log.error(&quot;validateIndBenchDependencies&quot;, &quot;validate dependency failed on bench &quot; + bench.getName(), e);</span>
+<span class="nc" id="L2436">			return includePath;</span>
+<span class="nc" id="L2437">		}</span>
+<span class="nc" id="L2438">		return &quot;true&quot;;</span>
+	}
+
+	private static Map&lt;String, BenchmarkDependency&gt; resolveDependencyBatch(
+			Integer spaceId, Boolean linked, Map&lt;String, Integer&gt; dependencyOwners
+	) {
+<span class="nc" id="L2444">		Map&lt;String, BenchmarkDependency&gt; resolved = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L2445" title="All 2 branches missed.">		if (dependencyOwners.isEmpty()) {</span>
+<span class="nc" id="L2446">			return resolved;</span>
+		}
+<span class="nc" id="L2448">		Connection con = null;</span>
+		try {
+<span class="nc" id="L2450">			con = Common.getConnection();</span>
+<span class="nc bnc" id="L2451" title="All 2 branches missed.">			for (Map.Entry&lt;String, Integer&gt; entry : dependencyOwners.entrySet()) {</span>
+<span class="nc" id="L2452">				String includePath = entry.getKey();</span>
+<span class="nc" id="L2453">				Integer userId = entry.getValue();</span>
+<span class="nc" id="L2454">				int depBenchId = findDependentBench(spaceId, includePath, linked, userId, con);</span>
+<span class="nc bnc" id="L2455" title="All 2 branches missed.">				if (depBenchId &gt; 0) {</span>
+<span class="nc" id="L2456">					resolved.put(includePath, new BenchmarkDependency(0, depBenchId, includePath));</span>
+				}
+<span class="nc" id="L2458">			}</span>
+<span class="nc" id="L2459">		} catch (Exception e) {</span>
+<span class="nc" id="L2460">			log.error(&quot;resolveDependencyBatch&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2462">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L2464">		return resolved;</span>
+	}
+
+	private static List&lt;String&gt; getDependencyIncludePaths(Benchmark bench) {
+<span class="nc" id="L2468">		Map&lt;String, String&gt; atts = bench.getAttributes();</span>
+<span class="nc" id="L2469">		List&lt;String&gt; includePaths = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2470" title="All 4 branches missed.">		if (atts == null || atts.isEmpty()) {</span>
+<span class="nc" id="L2471">			return includePaths;</span>
+		}
+<span class="nc" id="L2473">		int numberDependencies = parseDependencyCount(atts.getOrDefault(&quot;starexec-dependencies&quot;, &quot;0&quot;));</span>
+<span class="nc bnc" id="L2474" title="All 2 branches missed.">		for (int i = 1; i &lt;= numberDependencies; i++) {</span>
+<span class="nc" id="L2475">			String includePath = atts.getOrDefault(&quot;starexec-dependency-&quot; + i, &quot;&quot;);</span>
+<span class="nc bnc" id="L2476" title="All 2 branches missed.">			if (!includePath.isEmpty()) {</span>
+<span class="nc" id="L2477">				includePaths.add(includePath);</span>
+			}
+		}
+<span class="nc" id="L2480">		return includePaths;</span>
+	}
+
+	private static int parseDependencyCount(String rawValue) {
+		try {
+<span class="nc" id="L2485">			return Integer.parseInt(rawValue);</span>
+<span class="nc" id="L2486">		} catch (NumberFormatException e) {</span>
+<span class="nc" id="L2487">			return 0;</span>
+		}
+	}
+
+	/**
+	 * Gets rid of all the attributes a benchmark currently has in the database
+	 *
+	 * @param benchId The ID of the benchmark in question
+	 * @return True on success, false on error
+	 * @author Eric Burns
+	 */
+	public static boolean clearAttributes(int benchId) {
+<span class="nc" id="L2499">		Connection con = null;</span>
+		try {
+<span class="nc" id="L2501">			con = Common.getConnection();</span>
+<span class="nc" id="L2502">			return clearAttributes(benchId, con);</span>
+<span class="nc" id="L2503">		} catch (Exception e) {</span>
+<span class="nc" id="L2504">			log.error(&quot;clearAttributes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2506">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L2508">		return false;</span>
+	}
+
+	/**
+	 * Gets rid of all the attributes a benchmark currently has in the database
+	 *
+	 * @param benchId The ID of the benchmark in question
+	 * @param con The connection to make the call on
+	 * @return True on success, false on error
+	 * @author Eric Burns
+	 */
+	private static boolean clearAttributes(int benchId, Connection con) {
+<span class="nc" id="L2520">		PreparedStatement procedure = null;</span>
+		try {
+<span class="nc" id="L2522">			procedure = con.prepareStatement(&quot;SELECT starexec.ClearBenchAttributes(?)&quot;);</span>
+<span class="nc" id="L2523">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L2524">			procedure.execute();</span>
+<span class="nc" id="L2525">			return true;</span>
+<span class="nc" id="L2526">		} catch (Exception e) {</span>
+<span class="nc" id="L2527">			log.error(&quot;clearAttributes&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2529">			Common.safeClose(procedure);</span>
+		}
+<span class="nc" id="L2531">		return false;</span>
+	}
+
+	/**
+	 * Re-process benchmarks in the given space.  Regular users can only re-process benchmarks they own. Community
+	 * leaders can reprocess any benchmarks.
+	 *
+	 * @param spaceId the ID of the space in which to look for benchmarks to re-process
+	 * @param p the Processor to apply
+	 * @param hierarchy whether to process the hierarchy rooted at the space with the given ID, or just that space
+	 * @param userId the ID of the user requesting re-processing
+	 * @param clearOldAttrs true iff we should drop the old attributes we had from any earlier processing
+	 * @return The ID of an UploadStatus object for tracking progress of this request
+	 * @author Eric Burns
+	 */
+	public static Integer process(int spaceId, Processor p, boolean hierarchy, int userId, boolean clearOldAttrs) {
+<span class="nc" id="L2547">		Integer statusId = Uploads.createBenchmarkUploadStatus(spaceId, userId);</span>
+<span class="nc" id="L2548">		Uploads.benchmarkFileUploadComplete(statusId);</span>
+<span class="nc" id="L2549">		Uploads.fileExtractComplete(statusId);</span>
+<span class="nc" id="L2550">		Uploads.processingBegun(statusId);</span>
+<span class="nc" id="L2551">		final int s = spaceId;</span>
+<span class="nc" id="L2552">		final Processor proc = p;</span>
+<span class="nc" id="L2553">		final boolean h = hierarchy;</span>
+<span class="nc" id="L2554">		final int u = userId;</span>
+<span class="nc" id="L2555">		final boolean c = clearOldAttrs;</span>
+<span class="nc" id="L2556">		final Integer st = statusId;</span>
+<span class="nc" id="L2557">		int comm = Spaces.getCommunityOfSpace(spaceId);</span>
+<span class="nc" id="L2558">		Permission perm = Permissions.get(userId, comm);</span>
+
+<span class="nc bnc" id="L2560" title="All 4 branches missed.">		final boolean l = perm != null &amp;&amp; perm.isLeader();</span>
+		//It will delay the redirect until this method is finished which is why a new thread is used
+<span class="nc" id="L2562">		Util.threadPoolExecute(() -&gt; {</span>
+			try {
+<span class="nc" id="L2564">				process(s, proc, h, u, c, st, l);</span>
+<span class="nc" id="L2565">				Uploads.benchmarkEverythingComplete(st);</span>
+<span class="nc" id="L2566">			} catch (Exception e) {</span>
+<span class="nc" id="L2567">				log.error(&quot;process&quot;, e);</span>
+<span class="nc" id="L2568">			}</span>
+<span class="nc" id="L2569">		});</span>
+<span class="nc" id="L2570">		return statusId;</span>
+	}
+
+	/**
+	 * Runs the given benchmark processor on all benchmarks in the given space (hierarchy)
+	 *
+	 * @param spaceId The ID of the relevant space
+	 * @param p The benchmark processor to use
+	 * @param hierarchy True if we want to run on the hierarchy, false otherwise
+	 * @param statusId The ID of the UploadStatus object associated with this process, or null if one does not yet
+	 * exist
+	 * @param userId The ID of the user making this processing request
+	 * @param clearOldAttrs If true, all existing benchmark attributes will be removed for every benchmark being
+	 * processed. If false, old attributes are not cleared, but will be overwritten by new attributes with the same
+	 * names
+	 * @param isCommunityLeader True if the user is a community leader for this community and false otherwise
+	 * @return The status ID on success, -1 otherwise
+	 * @author Eric Burns
+	 */
+	private static boolean process(
+			int spaceId, Processor p, boolean hierarchy, int userId, boolean clearOldAttrs, Integer statusId,
+			boolean isCommunityLeader
+	) {
+<span class="nc" id="L2593">		Connection con = null;</span>
+
+<span class="nc" id="L2595">		log.info(&quot;Processing benchmarks in space &quot; + spaceId);</span>
+<span class="nc bnc" id="L2596" title="All 2 branches missed.">		if (isCommunityLeader) {</span>
+<span class="nc" id="L2597">			log.debug(&quot;User &quot; + userId + &quot; is a community leader, so they can process any benchmarks&quot;);</span>
+		}
+
+		try {
+
+<span class="nc" id="L2602">			con = Common.getConnection();</span>
+<span class="nc" id="L2603">			List&lt;Benchmark&gt; benchmarks = Benchmarks.getBySpace(spaceId);</span>
+<span class="nc" id="L2604">			boolean success = Benchmarks.attachBenchAttrs(benchmarks, p, statusId);</span>
+
+<span class="nc bnc" id="L2606" title="All 2 branches missed.">			if (!success) {</span>
+<span class="nc" id="L2607">				log.error(&quot;there was an error running the processor on each benchmark&quot;);</span>
+<span class="nc" id="L2608">				return false;</span>
+			}
+<span class="nc" id="L2610">			int incrementCounter = 0;</span>
+<span class="nc" id="L2611">			Timer timer = new Timer();</span>
+<span class="nc bnc" id="L2612" title="All 2 branches missed.">			for (Benchmark b : benchmarks) {</span>
+				//only work on the benchmarks the given user owns if they are not a community leader
+<span class="nc bnc" id="L2614" title="All 4 branches missed.">				if (!isCommunityLeader &amp;&amp; b.getUserId() != userId) {</span>
+<span class="nc" id="L2615">					log.debug(&quot;Skipping benchmark &quot; + b.getName());</span>
+<span class="nc" id="L2616">					continue;</span>
+				}
+<span class="nc bnc" id="L2618" title="All 2 branches missed.">				if (clearOldAttrs) {</span>
+<span class="nc" id="L2619">					Benchmarks.clearAttributes(b.getId(), con);</span>
+				}
+
+<span class="nc" id="L2622">				Map&lt;String, String&gt; attrs = b.getAttributes();</span>
+<span class="nc bnc" id="L2623" title="All 2 branches missed.">				if (!addAttributeSetToDbIfValid(con, attrs, b, statusId)) {</span>
+<span class="nc" id="L2624">					return false;</span>
+				}
+				//updates the type of the benchmark with the new processor
+				try {
+<span class="nc" id="L2628">					Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), b.isDownloadable(), p.getId());</span>
+<span class="nc" id="L2629">				} catch (StarExecDatabaseException e) {</span>
+<span class="nc" id="L2630">					log.error(&quot;Failed to update benchmark details for benchmark &quot; + b.getId(), e);</span>
+<span class="nc" id="L2631">					return false;</span>
+<span class="nc" id="L2632">				}</span>
+
+<span class="nc" id="L2634">				incrementCounter++;</span>
+<span class="nc bnc" id="L2635" title="All 2 branches missed.">				if (timer.getTime() &gt; R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {</span>
+<span class="nc" id="L2636">					Uploads.incrementCompletedBenchmarks(statusId, incrementCounter);</span>
+<span class="nc" id="L2637">					incrementCounter = 0;</span>
+<span class="nc" id="L2638">					timer.reset();</span>
+				}
+<span class="nc" id="L2640">			}</span>
+<span class="nc bnc" id="L2641" title="All 2 branches missed.">			if (incrementCounter &gt; 0) {</span>
+<span class="nc" id="L2642">				Uploads.incrementCompletedBenchmarks(statusId, incrementCounter);</span>
+			}
+<span class="nc" id="L2644">			success = true;</span>
+<span class="nc bnc" id="L2645" title="All 2 branches missed.">			if (hierarchy) {</span>
+<span class="nc" id="L2646">				List&lt;Space&gt; spaces = Spaces.getSubSpaceHierarchy(spaceId, userId);</span>
+<span class="nc bnc" id="L2647" title="All 2 branches missed.">				for (Space s : spaces) {</span>
+<span class="nc bnc" id="L2648" title="All 2 branches missed.">					success = success &amp;&amp;</span>
+<span class="nc bnc" id="L2649" title="All 2 branches missed.">							Benchmarks.process(s.getId(), p, false, userId, clearOldAttrs, statusId,</span>
+							                   isCommunityLeader);
+<span class="nc" id="L2651">				}</span>
+			}
+<span class="nc" id="L2653">			return success;</span>
+<span class="nc" id="L2654">		} catch (Exception e) {</span>
+<span class="nc" id="L2655">			log.error(&quot;process&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2657">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L2659">		return false;</span>
+	}
+
+	/**
+	 * Returns the ID of every benchmark a user owns that is orphaned
+	 *
+	 * @param userId The ID of the user who owns all the benchmarks to be returned
+	 * @return A list of orphaned benchmark IDs owned by the given user, or null on error.
+	 */
+	public static List&lt;Integer&gt; getOrphanedBenchmarks(int userId) {
+<span class="nc" id="L2669">	Connection con = null;</span>
+<span class="nc" id="L2670">	PreparedStatement procedure = null;</span>
+<span class="nc" id="L2671">	ResultSet results = null;</span>
+<span class="nc" id="L2672">		List&lt;Integer&gt; ids = new ArrayList&lt;&gt;();</span>
+
+		try {
+<span class="nc" id="L2675">			con = Common.getConnection();</span>
+<span class="nc" id="L2676">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetOrphanedBenchmarkIds(?)&quot;);</span>
+<span class="nc" id="L2677">			procedure.setInt(1, userId);</span>
+<span class="nc" id="L2678">			results = procedure.executeQuery();</span>
+<span class="nc bnc" id="L2679" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L2680">				ids.add(results.getInt(&quot;id&quot;));</span>
+			}
+<span class="nc" id="L2682">			return ids;</span>
+<span class="nc" id="L2683">		} catch (Exception e) {</span>
+<span class="nc" id="L2684">			log.error(&quot;getOrphanedBenchmarks&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2686">			Common.safeClose(con);</span>
+<span class="nc" id="L2687">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2688">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2690">		return null;</span>
+	}
+
+	/**
+	 * Recycles all of the benchmarks a user has that are not in any spaces
+	 *
+	 * @param userId The ID of the user who will have their benchmarks recycled
+	 * @return True on success or false otherwise
+	 */
+	public static boolean recycleOrphanedBenchmarks(int userId) {
+<span class="nc" id="L2700">		List&lt;Integer&gt; ids = getOrphanedBenchmarks(userId);</span>
+		//on error
+<span class="nc bnc" id="L2702" title="All 2 branches missed.">		if (ids == null) {</span>
+<span class="nc" id="L2703">			return false;</span>
+		}
+
+		try {
+<span class="nc" id="L2707">			boolean success = true;</span>
+<span class="nc bnc" id="L2708" title="All 2 branches missed.">			for (Integer id : ids) {</span>
+<span class="nc bnc" id="L2709" title="All 4 branches missed.">				success = success &amp;&amp; Benchmarks.recycle(id);</span>
+<span class="nc" id="L2710">			}</span>
+<span class="nc" id="L2711">			return success;</span>
+<span class="nc" id="L2712">		} catch (Exception e) {</span>
+<span class="nc" id="L2713">			log.error(&quot;recycleOrphanedBenchmarks&quot;, e);</span>
+		}
+<span class="nc" id="L2715">		return false;</span>
+	}
+
+	/**
+	 * Gets every Benchmark that shares a space with the given user
+	 *
+	 * @param userId The ID of the user
+	 * @return The list of Benchmarks, or null on error
+	 */
+	public static List&lt;Benchmark&gt; getBenchmarksInSharedSpaces(int userId) {
+<span class="nc" id="L2725">		Connection con = null;</span>
+<span class="nc" id="L2726">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2727">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2729">			con = Common.getConnection();</span>
+<span class="nc" id="L2730">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBenchmarksInSharedSpaces(?)&quot;);</span>
+<span class="nc" id="L2731">			procedure.setInt(1, userId);</span>
+
+<span class="nc" id="L2733">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2734">			return resultsToBenchmarkWithType(results);</span>
+<span class="nc" id="L2735">		} catch (Exception e) {</span>
+<span class="nc" id="L2736">			log.error(&quot;getBenchmarksInSharedSpaces&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2738">			Common.safeClose(con);</span>
+<span class="nc" id="L2739">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2740">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2742">		return null; //error</span>
+	}
+
+	/**
+	 * @return a list of all Benchmarks that reside in a public space
+	 * @author Benton McCune
+	 */
+	public static List&lt;Benchmark&gt; getPublicBenchmarks() {
+<span class="nc" id="L2750">		Connection con = null;</span>
+<span class="nc" id="L2751">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2752">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2754">			con = Common.getConnection();</span>
+<span class="nc" id="L2755">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetPublicBenchmarks()&quot;);</span>
+<span class="nc" id="L2756">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2757">			return resultsToBenchmarkWithType(results);</span>
+<span class="nc" id="L2758">		} catch (Exception e) {</span>
+<span class="nc" id="L2759">			log.error(&quot;getPublicBenchmarks&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2761">			Common.safeClose(con);</span>
+<span class="nc" id="L2762">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2763">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2765">		return null;</span>
+	}
+
+	private static List&lt;Benchmark&gt; resultsToBenchmarkWithType(ResultSet results) throws SQLException {
+<span class="nc" id="L2769">		List&lt;Benchmark&gt; benchmarks = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2770" title="All 2 branches missed.">		while (results.next()) {</span>
+<span class="nc" id="L2771">			Benchmark s = resultToBenchmark(results);</span>
+<span class="nc" id="L2772">			Processor t = Processors.resultSetToProcessor(results, &quot;types&quot;);</span>
+<span class="nc" id="L2773">			s.setType(t);</span>
+<span class="nc" id="L2774">			benchmarks.add(s);</span>
+<span class="nc" id="L2775">		}</span>
+<span class="nc" id="L2776">		return benchmarks;</span>
+	}
+
+	/**
+	 * Retrieves a list of every Benchmark the given user is allowed to use. Used for quick jobs. Benchmarks a user can
+	 * see include Benchmarks they own, Benchmarks in public spaces, and Benchmarks in spaces the user is also in
+	 *
+	 * @param userId The user to get benchmarks for
+	 * @return A list of benchmarks that the given user can see
+	 */
+	public static List&lt;Benchmark&gt; getByUser(int userId) {
+		try {
+			//will stores Benchmarks according to their IDs, used to remove duplicates
+<span class="nc" id="L2789">			HashMap&lt;Integer, Benchmark&gt; uniqueBenchmarks = new HashMap&lt;&gt;();</span>
+			
+<span class="nc" id="L2791">			List&lt;Benchmark&gt; ownedBenchmarks = getByOwner(userId);</span>
+<span class="nc bnc" id="L2792" title="All 2 branches missed.">			if (ownedBenchmarks != null) {</span>
+<span class="nc bnc" id="L2793" title="All 2 branches missed.">				for (Benchmark s : ownedBenchmarks) {</span>
+<span class="nc" id="L2794">					uniqueBenchmarks.put(s.getId(), s);</span>
+<span class="nc" id="L2795">				}</span>
+			}
+			
+<span class="nc" id="L2798">			List&lt;Benchmark&gt; publicBenchmarks = Benchmarks.getPublicBenchmarks();</span>
+<span class="nc bnc" id="L2799" title="All 2 branches missed.">			if (publicBenchmarks != null) {</span>
+<span class="nc bnc" id="L2800" title="All 2 branches missed.">				for (Benchmark s : publicBenchmarks) {</span>
+<span class="nc" id="L2801">					uniqueBenchmarks.put(s.getId(), s);</span>
+<span class="nc" id="L2802">				}</span>
+			}
+			
+<span class="nc" id="L2805">			List&lt;Benchmark&gt; sharedBenchmarks = Benchmarks.getBenchmarksInSharedSpaces(userId);</span>
+<span class="nc bnc" id="L2806" title="All 2 branches missed.">			if (sharedBenchmarks != null) {</span>
+<span class="nc bnc" id="L2807" title="All 2 branches missed.">				for (Benchmark s : sharedBenchmarks) {</span>
+<span class="nc" id="L2808">					uniqueBenchmarks.put(s.getId(), s);</span>
+<span class="nc" id="L2809">				}</span>
+			}
+<span class="nc" id="L2811">			List&lt;Benchmark&gt; benchmarks = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L2812">			benchmarks.addAll(uniqueBenchmarks.values());</span>
+<span class="nc" id="L2813">			return benchmarks;</span>
+<span class="nc" id="L2814">		} catch (Exception e) {</span>
+<span class="nc" id="L2815">			log.error(&quot;getByUser&quot;, e);</span>
+		}
+<span class="nc" id="L2817">		return null;</span>
+	}
+
+	/**
+	 * Filters a list of benchmarks using the given query
+	 *
+	 * @param searchQuery Query for the Benchmarks. Not case sensitive
+	 * @return A subset of the given Benchmarks where, for every Benchmark returned, either the name or the description
+	 * includes the search query.
+	 */
+	protected static List&lt;Benchmark&gt; filterBenchmarks(List&lt;Benchmark&gt; benchmarks, String searchQuery) {
+		//no filtering is necessary if there's no query
+<span class="nc bnc" id="L2829" title="All 2 branches missed.">		if (Util.isNullOrEmpty(searchQuery)) {</span>
+<span class="nc" id="L2830">			return benchmarks;</span>
+		}
+
+<span class="nc" id="L2833">		searchQuery = searchQuery.toLowerCase();</span>
+<span class="nc" id="L2834">		List&lt;Benchmark&gt; filteredBenchmarks = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L2835" title="All 2 branches missed.">		for (Benchmark b : benchmarks) {</span>
+<span class="nc" id="L2836">			log.debug(&quot;benchmark name &quot; + b.getName());</span>
+			try {
+<span class="nc bnc" id="L2838" title="All 2 branches missed.">				if (b.getName().toLowerCase().contains(searchQuery) ||</span>
+<span class="nc bnc" id="L2839" title="All 2 branches missed.">						b.getDescription().toLowerCase().contains(searchQuery)) {</span>
+<span class="nc" id="L2840">					filteredBenchmarks.add(b);</span>
+				}
+<span class="nc" id="L2842">			} catch (Exception e) {</span>
+<span class="nc" id="L2843">				log.error(&quot;filterBenchmarks&quot;, e);</span>
+<span class="nc" id="L2844">			}</span>
+<span class="nc" id="L2845">		}</span>
+<span class="nc" id="L2846">		return filteredBenchmarks;</span>
+	}
+
+	/**
+	 * Returns the Benchmarks needed to populate a DataTables page for a given user. Benchmarks include all Benchmarks
+	 * the user can see
+	 *
+	 * @param query DataTablesQuery object containing parameters for this search
+	 * @param userId ID of user to get Benchmarks for
+	 * @param totals Size 2 array that, on return, will contain the total number of records as the first element and
+	 * the
+	 * total number of elements after filtering as the second element
+	 * @return The list of benchmarks to display in the table
+	 */
+	public static List&lt;Benchmark&gt; getBenchmarksForNextPageByUser(DataTablesQuery query, int userId, int[] totals) {
+<span class="nc" id="L2861">		List&lt;Benchmark&gt; benchmarks = Benchmarks.getByUser(userId);</span>
+
+<span class="nc" id="L2863">		totals[0] = benchmarks.size();</span>
+<span class="nc" id="L2864">		benchmarks = Benchmarks.filterBenchmarks(benchmarks, query.getSearchQuery());</span>
+
+<span class="nc" id="L2866">		totals[1] = benchmarks.size();</span>
+<span class="nc" id="L2867">		BenchmarkComparator compare = new BenchmarkComparator(query.getSortColumn(), query.isSortASC());</span>
+<span class="nc" id="L2868">		return Util.handlePagination(benchmarks, compare, query.getStartingRecord(), query.getNumRecords());</span>
+	}
+
+	public static List&lt;Benchmark&gt; getBrokenBenchDependencies(int benchId) throws SQLException {
+<span class="nc" id="L2872">		Connection con = null;</span>
+<span class="nc" id="L2873">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2874">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2876">			con = Common.getConnection();</span>
+<span class="nc" id="L2877">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBrokenBenchDependencies(?)&quot;);</span>
+<span class="nc" id="L2878">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L2879">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2880">			List&lt;Benchmark&gt; benchmarks = new LinkedList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L2882" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L2883">				Benchmark s = get(results.getInt(&quot;id&quot;), true, true);</span>
+<span class="nc" id="L2884">				benchmarks.add(s);</span>
+<span class="nc" id="L2885">			}</span>
+<span class="nc" id="L2886">			return benchmarks;</span>
+<span class="nc" id="L2887">		} catch (SQLException e) {</span>
+<span class="nc" id="L2888">			log.error(&quot;getBrokenBenchDependencies&quot;, &quot;rethrowing exception&quot;, e);</span>
+<span class="nc" id="L2889">			throw e;</span>
+		} finally {
+<span class="nc" id="L2891">			Common.safeClose(con);</span>
+<span class="nc" id="L2892">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2893">			Common.safeClose(results);</span>
+		}
+	}
+
+	public static Boolean benchHasBrokenDependencies(int benchId) {
+<span class="nc" id="L2898">		Connection con = null;</span>
+<span class="nc" id="L2899">		PreparedStatement procedure = null;</span>
+<span class="nc" id="L2900">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L2902">			con = Common.getConnection();</span>
+<span class="nc" id="L2903">			procedure = con.prepareStatement(&quot;SELECT * FROM starexec.GetBrokenBenchDependencies(?)&quot;);</span>
+<span class="nc" id="L2904">			procedure.setInt(1, benchId);</span>
+<span class="nc" id="L2905">			results = procedure.executeQuery();</span>
+<span class="nc" id="L2906">			return results.isBeforeFirst();</span>
+<span class="nc" id="L2907">		} catch (Exception e) {</span>
+<span class="nc" id="L2908">			log.error(&quot;benchHasBrokenDependencies&quot;, e);</span>
+		} finally {
+<span class="nc" id="L2910">			Common.safeClose(con);</span>
+<span class="nc" id="L2911">			Common.safeClose(procedure);</span>
+<span class="nc" id="L2912">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L2914">		return null;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

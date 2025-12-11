@@ -1,0 +1,546 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JspHelpers.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.util</a> &gt; <span class="el_source">JspHelpers.java</span></div><h1>JspHelpers.java</h1><pre class="source lang-java linenums">package org.starexec.util;
+
+import org.apache.commons.lang3.tuple.Triple;
+import org.starexec.app.RESTHelpers;
+import org.starexec.constants.R;
+import org.starexec.constants.Web;
+import org.starexec.data.database.*;
+import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
+import org.starexec.data.security.BenchmarkSecurity;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.security.JobSecurity;
+import org.starexec.data.security.SolverSecurity;
+import org.starexec.data.to.*;
+import org.starexec.data.to.Queue;
+import org.starexec.data.to.Website.WebsiteType;
+import org.starexec.data.to.enums.ProcessorType;
+import org.starexec.logger.StarLogger;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.sql.SQLException;
+import java.util.*;
+
+/**
+ * Contains helper methods for JSP pages.
+ */
+public class JspHelpers {
+<span class="nc" id="L29">	private static final StarLogger log = StarLogger.getLogger(JspHelpers.class);</span>
+
+<span class="nc" id="L31">	private JspHelpers() {</span>
+<span class="nc" id="L32">		throw new UnsupportedOperationException(&quot;You may not create an instance of JspHelpers.&quot;);</span>
+	}
+
+	public static void handleJobPage(HttpServletRequest request, HttpServletResponse response)
+			throws IOException, SQLException {
+<span class="nc" id="L37">		String localJobPageParameter = request.getParameter(Web.LOCAL_JOB_PAGE_PARAMETER);</span>
+<span class="nc bnc" id="L38" title="All 4 branches missed.">		boolean isLocalJobPage = (localJobPageParameter != null) &amp;&amp; localJobPageParameter.equals(&quot;true&quot;);</span>
+<span class="nc" id="L39">		String jobUuid = request.getParameter(&quot;anonId&quot;);</span>
+<span class="nc bnc" id="L40" title="All 2 branches missed.">		boolean isAnonymousPage = (jobUuid != null);</span>
+
+<span class="nc" id="L42">		Integer jobId = null;</span>
+<span class="nc" id="L43">		Integer userId = null;</span>
+<span class="nc" id="L44">		PrimitivesToAnonymize primitivesToAnonymize = PrimitivesToAnonymize.NONE;</span>
+
+		// Set the user id and the job id.
+<span class="nc bnc" id="L47" title="All 2 branches missed.">		if (isAnonymousPage) {</span>
+<span class="nc" id="L48">			Optional&lt;Integer&gt; potentialJobId = AnonymousLinks.getIdOfJobAssociatedWithLink(jobUuid);</span>
+<span class="nc" id="L49">			Optional&lt;PrimitivesToAnonymize&gt; potentialPrimitivesToAnonymize = AnonymousLinks</span>
+<span class="nc" id="L50">					.getPrimitivesToAnonymizeForJob(jobUuid);</span>
+<span class="nc bnc" id="L51" title="All 4 branches missed.">			if (potentialJobId.isPresent() &amp;&amp; potentialPrimitivesToAnonymize.isPresent()) {</span>
+<span class="nc" id="L52">				jobId = potentialJobId.get();</span>
+<span class="nc" id="L53">				primitivesToAnonymize = potentialPrimitivesToAnonymize.get();</span>
+<span class="nc" id="L54">				Job tempJob = Jobs.get(jobId);</span>
+				// Give the anonymous user the ability to view the job as if they were the
+				// owning user.
+				// This won't affect the user id in the session and therefore won't cause any
+				// security issues.
+<span class="nc" id="L59">				userId = tempJob.getUserId();</span>
+<span class="nc" id="L60">			} else {</span>
+<span class="nc" id="L61">				response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Job does not exist.&quot;);</span>
+<span class="nc" id="L62">				return;</span>
+			}
+<span class="nc" id="L64">		} else {</span>
+<span class="nc" id="L65">			jobId = Integer.parseInt(request.getParameter(&quot;id&quot;));</span>
+<span class="nc" id="L66">			userId = SessionUtil.getUserId(request);</span>
+		}
+
+<span class="nc" id="L69">		Job j = null;</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">		if (Permissions.canUserSeeJob(jobId, userId).isSuccess()) {</span>
+<span class="nc" id="L71">			List&lt;Processor&gt; ListOfPostProcessors = Processors.getByUser(userId, ProcessorType.POST);</span>
+<span class="nc" id="L72">			j = Jobs.get(jobId);</span>
+
+<span class="nc" id="L74">			boolean queueExists = true;</span>
+<span class="nc" id="L75">			boolean queueIsEmpty = false;</span>
+
+<span class="nc bnc" id="L77" title="All 2 branches missed.">			if (j.getQueue() == null) {</span>
+<span class="nc" id="L78">				queueExists = false;</span>
+			} else {
+<span class="nc" id="L80">				Queue q = j.getQueue();</span>
+<span class="nc" id="L81">				List&lt;WorkerNode&gt; nodes = Cluster.getNodesForQueue(q.getId());</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">				if (nodes.isEmpty()) {</span>
+<span class="nc" id="L83">					queueIsEmpty = true;</span>
+				}
+
+			}
+
+<span class="nc" id="L88">			int jobSpaceId = j.getPrimarySpace();</span>
+
+<span class="nc bnc" id="L90" title="All 2 branches missed.">			if (jobSpaceId &gt; 0) {</span>
+<span class="nc" id="L91">				j = Jobs.get(jobId);</span>
+<span class="nc" id="L92">				JobStatus status = Jobs.getJobStatus(jobId);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">				boolean isPaused = (status == JobStatus.PAUSED);</span>
+<span class="nc" id="L94">				boolean isAdminPaused = Jobs.isSystemPaused();</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">				boolean isKilled = (status == JobStatus.KILLED);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">				boolean isRunning = (status == JobStatus.RUNNING);</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">				boolean isProcessing = (status == JobStatus.PROCESSING);</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">				boolean isComplete = (status == JobStatus.COMPLETE);</span>
+<span class="nc" id="L99">				boolean isPublicUser = Users.isPublicUser(userId);</span>
+<span class="nc" id="L100">				boolean isUserSubscribedToJob = Notifications.isUserSubscribedToJob(userId, jobId);</span>
+<span class="nc" id="L101">				int wallclock = j.getWallclockTimeout();</span>
+<span class="nc" id="L102">				int cpu = j.getCpuTimeout();</span>
+<span class="nc" id="L103">				long memory = j.getMaxMemory();</span>
+<span class="nc" id="L104">				JobSpace jobSpace = Spaces.getJobSpace(jobSpaceId);</span>
+
+<span class="nc" id="L106">				String jobSpaceTreeJson = RESTHelpers.getJobSpacesTreeJson(j.getId(), userId);</span>
+<span class="nc" id="L107">				List&lt;JobSpace&gt; jobSpaces = Spaces.getSubSpacesForJob(jobSpaceId, true);</span>
+<span class="nc" id="L108">				jobSpaces.add(jobSpace);</span>
+<span class="nc" id="L109">				request.setAttribute(&quot;jobSpaces&quot;, jobSpaces);</span>
+
+				// Determine which pipeline stage to display; default to 1 if not provided or
+				// invalid.
+<span class="nc" id="L113">				int selectedStageNumber = 1;</span>
+<span class="nc" id="L114">				String stageParam = request.getParameter(&quot;stage&quot;);</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">				if (stageParam == null) {</span>
+<span class="nc" id="L116">					stageParam = request.getParameter(&quot;stageNumber&quot;);</span>
+				}
+<span class="nc bnc" id="L118" title="All 2 branches missed.">				if (stageParam != null) {</span>
+					try {
+<span class="nc" id="L120">						int parsed = Integer.parseInt(stageParam);</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">						if (parsed &gt; 0) {</span>
+							try {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">								if (j.getStageAttributesByStageNumber(parsed) != null) {</span>
+<span class="nc" id="L124">									selectedStageNumber = parsed;</span>
+								}
+<span class="nc" id="L126">							} catch (Exception ignored) {</span>
+<span class="nc" id="L127">							}</span>
+						}
+<span class="nc" id="L129">					} catch (NumberFormatException ignored) {</span>
+<span class="nc" id="L130">					}</span>
+				}
+<span class="nc" id="L132">				request.setAttribute(&quot;selectedStageNumber&quot;, selectedStageNumber);</span>
+
+<span class="nc bnc" id="L134" title="All 2 branches missed.">				if (isLocalJobPage) {</span>
+<span class="nc" id="L135">					Map&lt;Integer, String&gt; jobSpaceIdToSubspaceJsonMap = RESTHelpers</span>
+<span class="nc" id="L136">							.getJobSpaceIdToSubspaceJsonMap(j.getId(), jobSpaces);</span>
+<span class="nc" id="L137">					request.setAttribute(&quot;jobSpaceIdToSubspaceJsonMap&quot;, jobSpaceIdToSubspaceJsonMap);</span>
+
+<span class="nc" id="L139">					Map&lt;Integer, String&gt; jobSpaceIdToCpuTimeSolverStatsJsonMapExcludeUnknowns = RESTHelpers</span>
+<span class="nc" id="L140">							.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, false, false);</span>
+<span class="nc" id="L141">					request.setAttribute(&quot;jobSpaceIdToCpuTimeSolverStatsJsonMapExcludeUnknowns&quot;,</span>
+							jobSpaceIdToCpuTimeSolverStatsJsonMapExcludeUnknowns);
+
+<span class="nc" id="L144">					Map&lt;Integer, String&gt; jobSpaceIdToWallclockTimeSolverStatsJsonMapExcludeUnknowns = RESTHelpers</span>
+<span class="nc" id="L145">							.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, true, false);</span>
+					// used to creat the panels for subspace summaries
+<span class="nc" id="L147">					request.setAttribute(&quot;jobSpaceIdToWallclockTimeSolverStatsJsonMapExcludeUnknowns&quot;,</span>
+							jobSpaceIdToWallclockTimeSolverStatsJsonMapExcludeUnknowns);
+<span class="nc" id="L149">					Map&lt;Integer, String&gt; jobSpaceIdToCpuTimeSolverStatsJsonMapIncludeUnknowns = RESTHelpers</span>
+<span class="nc" id="L150">							.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, false, true);</span>
+<span class="nc" id="L151">					request.setAttribute(&quot;jobSpaceIdToCpuTimeSolverStatsJsonMapIncludeUnknowns&quot;,</span>
+							jobSpaceIdToCpuTimeSolverStatsJsonMapIncludeUnknowns);
+
+<span class="nc" id="L154">					Map&lt;Integer, String&gt; jobSpaceIdToWallclockTimeSolverStatsJsonMapIncludeUnknowns = RESTHelpers</span>
+<span class="nc" id="L155">							.getJobSpaceIdToSolverStatsJsonMap(jobSpaces, selectedStageNumber, true, true);</span>
+					// used to creat the panels for subspace summaries
+<span class="nc" id="L157">					request.setAttribute(&quot;jobSpaceIdToWallclockTimeSolverStatsJsonMapIncludeUnknowns&quot;,</span>
+							jobSpaceIdToWallclockTimeSolverStatsJsonMapIncludeUnknowns);
+<span class="nc" id="L159">					Map&lt;Integer, List&lt;JobPair&gt;&gt; jobSpaceIdToPairMap = JobPairs</span>
+<span class="nc" id="L160">							.buildJobSpaceIdToJobPairMapWithWallCpuTimesRounded(j);</span>
+<span class="nc" id="L161">					request.setAttribute(&quot;jobSpaceIdToPairMap&quot;, jobSpaceIdToPairMap);</span>
+				}
+
+<span class="nc" id="L164">				String primitivesToAnonymizeName = AnonymousLinks.getPrimitivesToAnonymizeName(primitivesToAnonymize);</span>
+<span class="nc" id="L165">				request.setAttribute(&quot;primitivesToAnonymize&quot;, primitivesToAnonymizeName);</span>
+<span class="nc" id="L166">				request.setAttribute(&quot;isAnonymousPage&quot;, isAnonymousPage);</span>
+<span class="nc" id="L167">				request.setAttribute(&quot;jobSpaceTreeJson&quot;, jobSpaceTreeJson);</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				request.setAttribute(&quot;initialSpaceName&quot;, isAnonymousPage ? &quot;&quot; : jobSpace.getName());</span>
+<span class="nc" id="L169">				Processor selectedStagePostProc = j.getStageAttributesByStageNumber(selectedStageNumber)</span>
+<span class="nc" id="L170">						.getPostProcessor();</span>
+<span class="nc" id="L171">				Processor selectedStagePreProc = j.getStageAttributesByStageNumber(selectedStageNumber)</span>
+<span class="nc" id="L172">						.getPreProcessor();</span>
+<span class="nc" id="L173">				request.setAttribute(&quot;firstPostProc&quot;, selectedStagePostProc);</span>
+<span class="nc" id="L174">				request.setAttribute(&quot;firstPreProc&quot;, selectedStagePreProc);</span>
+
+<span class="nc" id="L176">				request.setAttribute(&quot;queues&quot;, Queues.getUserQueues(userId));</span>
+<span class="nc" id="L177">				request.setAttribute(&quot;jobspace&quot;, jobSpace);</span>
+<span class="nc" id="L178">				request.setAttribute(&quot;job&quot;, j);</span>
+<span class="nc" id="L179">				request.setAttribute(&quot;isPaused&quot;, isPaused);</span>
+<span class="nc" id="L180">				request.setAttribute(&quot;isAdminPaused&quot;, isAdminPaused);</span>
+<span class="nc" id="L181">				request.setAttribute(&quot;isKilled&quot;, isKilled);</span>
+<span class="nc" id="L182">				request.setAttribute(&quot;isRunning&quot;, isRunning);</span>
+<span class="nc" id="L183">				request.setAttribute(&quot;isComplete&quot;, isComplete);</span>
+<span class="nc" id="L184">				request.setAttribute(&quot;queueIsEmpty&quot;, queueIsEmpty);</span>
+<span class="nc" id="L185">				request.setAttribute(&quot;isProcessing&quot;, isProcessing);</span>
+<span class="nc" id="L186">				request.setAttribute(&quot;isPublicUser&quot;, isPublicUser);</span>
+<span class="nc" id="L187">				request.setAttribute(&quot;isUserSubscribedToJob&quot;, isUserSubscribedToJob);</span>
+<span class="nc" id="L188">				request.setAttribute(&quot;postProcs&quot;, ListOfPostProcessors);</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">				request.setAttribute(&quot;pageTitle&quot;, isAnonymousPage ? &quot;Anonymous Job&quot; : j.getName());</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">				request.setAttribute(&quot;initialSpaceName&quot;, isAnonymousPage ? &quot;&quot; : jobSpace.getName());</span>
+<span class="nc" id="L191">				Processor stage1PostProc = j.getStageAttributesByStageNumber(1).getPostProcessor();</span>
+<span class="nc" id="L192">				Processor stage1PreProc = j.getStageAttributesByStageNumber(1).getPreProcessor();</span>
+<span class="nc" id="L193">				request.setAttribute(&quot;firstPostProc&quot;, stage1PostProc);</span>
+<span class="nc" id="L194">				request.setAttribute(&quot;firstPreProc&quot;, stage1PreProc);</span>
+
+<span class="nc" id="L196">				request.setAttribute(&quot;queues&quot;, Queues.getUserQueues(userId));</span>
+<span class="nc" id="L197">				request.setAttribute(&quot;queueExists&quot;, queueExists);</span>
+<span class="nc" id="L198">				request.setAttribute(&quot;userId&quot;, userId);</span>
+<span class="nc" id="L199">				request.setAttribute(&quot;cpu&quot;, cpu);</span>
+<span class="nc" id="L200">				request.setAttribute(&quot;wallclock&quot;, wallclock);</span>
+<span class="nc" id="L201">				request.setAttribute(&quot;maxMemory&quot;, Util.bytesToGigabytes(memory));</span>
+<span class="nc" id="L202">				request.setAttribute(&quot;seed&quot;, j.getSeed());</span>
+<span class="nc" id="L203">				request.setAttribute(&quot;diskUsage&quot;, Util.byteCountToDisplaySize(j.getDiskSize()));</span>
+<span class="nc" id="L204">				request.setAttribute(&quot;buildJob&quot;, j.isBuildJob());</span>
+<span class="nc" id="L205">				request.setAttribute(&quot;isHighPriority&quot;, j.isHighPriority());</span>
+
+				String starexecUrl;
+<span class="nc" id="L208">				String forwardedHost = request.getHeader(&quot;X-Forwarded-Host&quot;);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">				if (forwardedHost != null) {</span>
+					// When behind a proxy or in Docker/Podman
+<span class="nc" id="L211">					String scheme = request.getHeader(&quot;X-Forwarded-Proto&quot;);</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">					if (scheme == null) {</span>
+<span class="nc" id="L213">						scheme = R.STAREXEC_URL_PREFIX;</span>
+					}
+<span class="nc" id="L215">					starexecUrl = String.format(&quot;%s://%s/%s/&quot;, scheme, forwardedHost, R.STAREXEC_APPNAME);</span>
+<span class="nc" id="L216">				} else {</span>
+					// Direct access - include port if non-standard
+<span class="nc" id="L218">					String port = &quot;&quot;;</span>
+<span class="nc" id="L219">					boolean isHttp = R.STAREXEC_URL_PREFIX.equalsIgnoreCase(&quot;http&quot;);</span>
+<span class="nc" id="L220">					boolean isHttps = R.STAREXEC_URL_PREFIX.equalsIgnoreCase(&quot;https&quot;);</span>
+<span class="nc bnc" id="L221" title="All 8 branches missed.">					if ((isHttp &amp;&amp; R.PROXY_PORT != 80) || (isHttps &amp;&amp; R.PROXY_PORT != 443)) {</span>
+<span class="nc" id="L222">						port = &quot;:&quot; + R.PROXY_PORT;</span>
+					}
+<span class="nc" id="L224">					starexecUrl = String.format(&quot;%s://%s%s/%s/&quot;, R.STAREXEC_URL_PREFIX, R.STAREXEC_SERVERNAME, port,</span>
+							R.STAREXEC_APPNAME);
+				}
+<span class="nc" id="L227">				request.setAttribute(&quot;starexecUrl&quot;, starexecUrl);</span>
+<span class="nc" id="L228">			} else {</span>
+<span class="nc" id="L229">				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,</span>
+						&quot;The details for this job could not be obtained&quot;);
+			}
+
+<span class="nc" id="L233">		} else {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">			if (Jobs.isJobDeleted(jobId)) {</span>
+<span class="nc" id="L235">				response.sendError(HttpServletResponse.SC_NOT_FOUND,</span>
+						&quot;This job has been deleted. You likely want to remove it from your spaces&quot;);
+			} else {
+<span class="nc" id="L238">				response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Job does not exist or is restricted&quot;);</span>
+			}
+		}
+<span class="nc" id="L241">	}</span>
+
+	/**
+	 * Handles request/response logic for details/solver.jsp for an anonymous page.
+	 * 
+	 * @param uniqueId The UUID of the anonymous solver link.
+	 * @author Albert Giegerich
+	 */
+	public static void handleAnonymousSolverPage(String uniqueId, HttpServletRequest request,
+			HttpServletResponse response)
+			throws IOException, SQLException {
+<span class="nc" id="L252">		final String methodName = &quot;handleAnonymousSolverPage&quot;;</span>
+<span class="nc" id="L253">		log.entry(methodName);</span>
+		try {
+<span class="nc" id="L255">			Optional&lt;Integer&gt; solverId = AnonymousLinks.getIdOfSolverAssociatedWithLink(uniqueId);</span>
+<span class="nc" id="L256">			Optional&lt;PrimitivesToAnonymize&gt; primitivesToAnonymize = AnonymousLinks</span>
+<span class="nc" id="L257">					.getPrimitivesToAnonymizeForSolver(uniqueId);</span>
+
+<span class="nc bnc" id="L259" title="All 4 branches missed.">			if (primitivesToAnonymize.isPresent() &amp;&amp; solverId.isPresent()) {</span>
+<span class="nc" id="L260">				Solver solver = Solvers.get(solverId.get());</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">				if (solver == null) {</span>
+<span class="nc" id="L262">					handleNullSolver(solverId.get(), response);</span>
+<span class="nc" id="L263">					return;</span>
+				}
+<span class="nc" id="L265">				setSolverPageRequestAttributes(true, AnonymousLinks.areSolversAnonymized(primitivesToAnonymize.get()),</span>
+						solver, request);
+<span class="nc" id="L267">			} else {</span>
+<span class="nc" id="L268">				response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Page not found.&quot;);</span>
+			}
+<span class="nc" id="L270">		} catch (IOException e) {</span>
+<span class="nc" id="L271">			log.error(methodName, &quot;Caught an IOException while handling anonymous solver page: &quot; + e.getMessage());</span>
+<span class="nc" id="L272">			throw e;</span>
+<span class="nc" id="L273">		} catch (SQLException e) {</span>
+<span class="nc" id="L274">			log.error(methodName, &quot;Caught a SQLException while handling anonymous solver page: &quot; + e.getMessage());</span>
+<span class="nc" id="L275">			throw e;</span>
+<span class="nc" id="L276">		}</span>
+<span class="nc" id="L277">	}</span>
+
+	/**
+	 * Handles request/response logic for details/solver.jsp for non-anonymous
+	 * pages.
+	 * 
+	 * @author Albert Giegerich
+	 */
+	public static void handleNonAnonymousSolverPage(HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+<span class="nc" id="L287">		final String methodName = &quot;handleNonAnonymousSolverPage&quot;;</span>
+
+<span class="nc" id="L289">		int userId = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L290">		int solverId = Integer.parseInt(request.getParameter(&quot;id&quot;));</span>
+
+		try {
+<span class="nc" id="L293">			Solver s = null;</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">			if (Permissions.canUserSeeSolver(solverId, userId)) {</span>
+<span class="nc" id="L295">				s = Solvers.get(solverId);</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">				if (s == null) {</span>
+<span class="nc" id="L297">					handleNullSolver(solverId, response);</span>
+<span class="nc" id="L298">					return;</span>
+				}
+
+<span class="nc" id="L301">				boolean downloadable = SolverSecurity.canUserDownloadSolver(s.getId(), userId).isSuccess();</span>
+<span class="nc" id="L302">				request.setAttribute(&quot;downloadable&quot;, downloadable);</span>
+<span class="nc" id="L303">				request.setAttribute(&quot;hasAdminReadPrivileges&quot;, GeneralSecurity.hasAdminReadPrivileges(userId));</span>
+
+<span class="nc" id="L305">				setSolverPageRequestAttributes(false, false, s, request);</span>
+<span class="nc" id="L306">			} else {</span>
+<span class="nc" id="L307">				response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Solver does not exist or is restricted&quot;);</span>
+			}
+<span class="nc" id="L309">		} catch (IOException e) {</span>
+<span class="nc" id="L310">			log.error(methodName, &quot;Caught an IOException while handling non-anonymous solver page: &quot; + e.getMessage());</span>
+<span class="nc" id="L311">			throw e;</span>
+<span class="nc" id="L312">		}</span>
+<span class="nc" id="L313">	}</span>
+
+	/**
+	 * Helper method that sets the request attributes for details/job.jsp
+	 * 
+	 * @author Albert Giegerich
+	 */
+	private static void setSolverPageRequestAttributes(
+			boolean isAnonymousPage,
+			boolean hideSolverName,
+			Solver s,
+			HttpServletRequest request) {
+
+<span class="nc bnc" id="L326" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L327">			return;</span>
+		}
+
+<span class="nc" id="L330">		List&lt;Website&gt; sites = Websites.getAll(s.getId(), WebsiteType.SOLVER);</span>
+		// we need two versions of every website URL-- one for insertion into an
+		// attribute and
+		// one for insertion into the HTML body. This data structure represents every
+		// site with 3 strings
+		// first the name, then the attribute URL, then the body URL
+<span class="nc" id="L336">		List&lt;String[]&gt; formattedSites = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		for (Website site : sites) {</span>
+<span class="nc" id="L338">			String[] formattedSite = new String[3];</span>
+<span class="nc" id="L339">			formattedSite[0] = GeneralSecurity.getHTMLSafeString(site.getName());</span>
+<span class="nc" id="L340">			formattedSite[1] = GeneralSecurity.getHTMLAttributeSafeString(site.getUrl());</span>
+<span class="nc" id="L341">			formattedSite[2] = GeneralSecurity.getHTMLSafeString(site.getUrl());</span>
+<span class="nc" id="L342">			formattedSites.add(formattedSite);</span>
+<span class="nc" id="L343">		}</span>
+<span class="nc" id="L344">		SolverBuildStatus buildStatus = s.buildStatus();</span>
+<span class="nc" id="L345">		request.setAttribute(&quot;buildStatus&quot;, buildStatus.getStatus());</span>
+<span class="nc" id="L346">		request.setAttribute(&quot;sourceDownloadable&quot;, buildStatus.hasBeenBuiltOnStarexec());</span>
+
+<span class="nc bnc" id="L348" title="All 2 branches missed.">		request.setAttribute(&quot;solverPageTitle&quot;, hideSolverName ? &quot;&quot; : s.getName());</span>
+<span class="nc" id="L349">		request.setAttribute(&quot;solver&quot;, s);</span>
+<span class="nc" id="L350">		request.setAttribute(&quot;isAnonymousPage&quot;, isAnonymousPage);</span>
+<span class="nc" id="L351">		request.setAttribute(&quot;hideSolverName&quot;, hideSolverName);</span>
+<span class="nc" id="L352">		request.setAttribute(&quot;sites&quot;, formattedSites);</span>
+<span class="nc" id="L353">		request.setAttribute(&quot;diskSize&quot;, Util.byteCountToDisplaySize(s.getDiskSize()));</span>
+<span class="nc" id="L354">		List&lt;Configuration&gt; configs = Solvers.getConfigsForSolver(s.getId());</span>
+<span class="nc" id="L355">		configs.sort(Comparator.comparingInt(Identifiable::getId));</span>
+
+<span class="nc" id="L357">		request.setAttribute(&quot;configs&quot;, configs);</span>
+
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (!isAnonymousPage) {</span>
+<span class="nc" id="L360">			request.setAttribute(&quot;usr&quot;, Users.get(s.getUserId()));</span>
+		}
+
+<span class="nc" id="L363">	}</span>
+
+	/**
+	 * Sends the appropriate response for a null solver.
+	 * 
+	 * @author Albert Giegerich
+	 */
+	private static void handleNullSolver(int solverId, HttpServletResponse response) throws IOException {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">		if (Solvers.isSolverDeleted(solverId)) {</span>
+<span class="nc" id="L372">			response.sendError(HttpServletResponse.SC_NOT_FOUND,</span>
+					&quot;This solver has been deleted. You likely want to remove it from your spaces.&quot;);
+<span class="nc bnc" id="L374" title="All 2 branches missed.">		} else if (Solvers.isSolverRecycled(solverId)) {</span>
+<span class="nc" id="L375">			response.sendError(HttpServletResponse.SC_NOT_FOUND,</span>
+					&quot;This solver has been moved to the trash bin by its owner.&quot;);
+		} else {
+<span class="nc" id="L378">			response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Solver does not exist or is restricted&quot;);</span>
+		}
+<span class="nc" id="L380">	}</span>
+
+	/**
+	 * Handles request/response logic for details/benchmark
+	 * 
+	 * @author Albert Giegerich
+	 */
+	public static void handleAnonymousBenchPage(String uniqueId, HttpServletRequest request,
+			HttpServletResponse response)
+			throws IOException, SQLException {
+<span class="nc" id="L390">		Optional&lt;Integer&gt; benchmarkId = AnonymousLinks.getIdOfBenchmarkAssociatedWithLink(uniqueId);</span>
+<span class="nc" id="L391">		Optional&lt;PrimitivesToAnonymize&gt; primitivesToAnonymize = AnonymousLinks</span>
+<span class="nc" id="L392">				.getPrimitivesToAnonymizeForBenchmark(uniqueId);</span>
+
+<span class="nc bnc" id="L394" title="All 4 branches missed.">		if (benchmarkId.isPresent() &amp;&amp; primitivesToAnonymize.isPresent()) {</span>
+<span class="nc" id="L395">			boolean hideBenchmark = AnonymousLinks.areBenchmarksAnonymized(primitivesToAnonymize.get());</span>
+<span class="nc" id="L396">			setBenchmarkPageRequestAttributes(true, hideBenchmark, benchmarkId.get(), request, response);</span>
+<span class="nc" id="L397">		} else {</span>
+<span class="nc" id="L398">			response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Page not found.&quot;);</span>
+		}
+<span class="nc" id="L400">	}</span>
+
+	public static void handleNonAnonymousBenchPage(HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+<span class="nc" id="L404">		int benchId = Integer.parseInt(request.getParameter(&quot;id&quot;));</span>
+<span class="nc" id="L405">		setBenchmarkPageRequestAttributes(false, false, benchId, request, response);</span>
+<span class="nc" id="L406">	}</span>
+
+	public static void handleAnonymousJobKeyPage(HttpServletRequest request, HttpServletResponse response)
+			throws IOException, SQLException {
+<span class="nc" id="L410">		int userId = SessionUtil.getUserId(request);</span>
+
+<span class="nc" id="L412">		String jobUuid = request.getParameter(&quot;anonId&quot;);</span>
+<span class="nc" id="L413">		Optional&lt;Integer&gt; potentialJobId = AnonymousLinks.getIdOfJobAssociatedWithLink(jobUuid);</span>
+
+<span class="nc bnc" id="L415" title="All 2 branches missed.">		if (!potentialJobId.isPresent()) {</span>
+<span class="nc" id="L416">			response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;No job with given ID.&quot;);</span>
+<span class="nc" id="L417">			return;</span>
+		}
+
+<span class="nc" id="L420">		int jobId = potentialJobId.get();</span>
+
+<span class="nc bnc" id="L422" title="All 2 branches missed.">		if (!JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L423">			response.sendError(HttpServletResponse.SC_FORBIDDEN,</span>
+					&quot;You are not permitted to see this job's anonymous solver name key page.&quot;);
+<span class="nc" id="L425">			return;</span>
+		}
+
+<span class="nc" id="L428">		Job job = Jobs.get(jobId);</span>
+<span class="nc" id="L429">		List&lt;Triple&lt;String, String, Integer&gt;&gt; anonymousSolverNamesKey = AnonymousLinks</span>
+<span class="nc" id="L430">				.getAnonymousSolverNamesKey(jobId);</span>
+<span class="nc" id="L431">		request.setAttribute(&quot;job&quot;, job);</span>
+<span class="nc" id="L432">		request.setAttribute(&quot;solverTripleList&quot;, anonymousSolverNamesKey);</span>
+<span class="nc" id="L433">	}</span>
+
+	/**
+	 * Sets up request attributes to be used on the jsp template.
+	 * 
+	 * @author Albert Giegerich and Unknown
+	 */
+	private static void setBenchmarkPageRequestAttributes(
+			boolean isAnonymousPage,
+			boolean hideBenchmarkName,
+			Integer benchId,
+			HttpServletRequest request,
+			HttpServletResponse response) throws IOException {
+
+<span class="nc" id="L447">		final String methodName = &quot;setBenchmarkPageRequestAttributes&quot;;</span>
+<span class="nc" id="L448">		log.entry(methodName);</span>
+
+		// Set to true so anonymous user will be able to see the bench.
+<span class="nc" id="L451">		boolean userCanSeeBench = true;</span>
+
+		// Set downloadable to true so anonymous user can view contents of benchmark.
+<span class="nc" id="L454">		boolean downloadable = true;</span>
+
+<span class="nc bnc" id="L456" title="All 2 branches missed.">		if (!isAnonymousPage) {</span>
+<span class="nc" id="L457">			int userId = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L458">			userCanSeeBench = Permissions.canUserSeeBench(benchId, userId);</span>
+<span class="nc" id="L459">			request.setAttribute(&quot;hasAdminReadPrivileges&quot;, GeneralSecurity.hasAdminReadPrivileges(userId));</span>
+<span class="nc" id="L460">			downloadable = BenchmarkSecurity.canUserDownloadBenchmark(benchId, userId).isSuccess();</span>
+			try {
+<span class="nc" id="L462">				request.setAttribute(&quot;brokenBenchDeps&quot;, Benchmarks.getBrokenBenchDependencies(benchId));</span>
+<span class="nc" id="L463">			} catch (SQLException e) {</span>
+<span class="nc" id="L464">				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,</span>
+						&quot;Error occurred while checking for broken benchmark dependencies.&quot;);
+<span class="nc" id="L466">				return;</span>
+<span class="nc" id="L467">			}</span>
+		}
+<span class="nc" id="L469">		request.setAttribute(&quot;downloadable&quot;, downloadable);</span>
+
+		// Send an error message if the user isn't allowed to see the benchmark.
+<span class="nc bnc" id="L472" title="All 2 branches missed.">		if (!userCanSeeBench) {</span>
+<span class="nc" id="L473">			response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;You do not have permission to view this benchmark.&quot;);</span>
+<span class="nc" id="L474">			return;</span>
+		}
+
+		// Get the benchmark, if it can't be gotten send an error message telling the
+		// user why.
+<span class="nc" id="L479">		Benchmark b = Benchmarks.get(benchId, true, false);</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">		if (b == null) {</span>
+<span class="nc" id="L481">			sendErrorMessage(benchId, response);</span>
+<span class="nc" id="L482">			return;</span>
+		}
+
+<span class="nc" id="L485">		StringBuilder js = new StringBuilder(</span>
+				&quot;common/delaySpinner, lib/jquery.dataTables.min, shared/copyToStardev, details/shared, lib/prettify, details/benchmark&quot;);
+<span class="nc" id="L487">		StringBuilder lang = new StringBuilder();</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">		if (b.getType().getSyntax().js != null) {</span>
+<span class="nc" id="L489">			js.append(&quot;, &quot;).append(b.getType().getSyntax().js);</span>
+<span class="nc" id="L490">			lang.append(b.getType().getSyntax().classname);</span>
+		}
+<span class="nc" id="L492">		request.setAttribute(&quot;js&quot;, js.toString());</span>
+<span class="nc" id="L493">		request.setAttribute(&quot;lang&quot;, lang.toString());</span>
+
+		// Set the page title to be the name of the benchmark if we're showing the
+		// benchmark name.
+<span class="nc" id="L497">		final String benchPageTitleAttributeName = &quot;benchPageTitle&quot;;</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">		if (hideBenchmarkName) {</span>
+<span class="nc" id="L499">			request.setAttribute(benchPageTitleAttributeName, &quot;&quot;);</span>
+		} else {
+<span class="nc" id="L501">			request.setAttribute(benchPageTitleAttributeName, b.getName());</span>
+		}
+
+<span class="nc" id="L504">		TreeMap&lt;String, String&gt; attrs = Benchmarks.getSortedAttributes(benchId);</span>
+<span class="nc" id="L505">		List&lt;BenchmarkDependency&gt; deps = Benchmarks.getBenchDependencies(benchId);</span>
+<span class="nc" id="L506">		request.setAttribute(&quot;usr&quot;, Users.get(b.getUserId()));</span>
+<span class="nc" id="L507">		request.setAttribute(&quot;bench&quot;, b);</span>
+<span class="nc" id="L508">		request.setAttribute(&quot;diskSize&quot;, Util.byteCountToDisplaySize(b.getDiskSize()));</span>
+
+<span class="nc" id="L510">		Space s = Communities.getDetails(b.getType().getCommunityId());</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L512">			s = new Space();</span>
+<span class="nc" id="L513">			s.setName(&quot;none&quot;);</span>
+		}
+
+<span class="nc" id="L516">		request.setAttribute(&quot;com&quot;, s);</span>
+<span class="nc" id="L517">		request.setAttribute(&quot;depends&quot;, deps);</span>
+<span class="nc" id="L518">		request.setAttribute(&quot;attributes&quot;, attrs);</span>
+
+		try {
+<span class="nc" id="L521">			Optional&lt;String&gt; benchmarkContents = Benchmarks.getContents(b, 100);</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">			if (!benchmarkContents.isPresent()) {</span>
+<span class="nc" id="L523">				request.setAttribute(&quot;content&quot;, &quot;benchmark contents not available&quot;);</span>
+<span class="nc" id="L524">				return;</span>
+			}
+<span class="nc" id="L526">			String content = GeneralSecurity.getHTMLSafeString(benchmarkContents.get());</span>
+<span class="nc" id="L527">			request.setAttribute(&quot;content&quot;, content);</span>
+<span class="nc" id="L528">		} catch (IOException e) {</span>
+<span class="nc" id="L529">			log.warn(methodName, &quot;Caught exception while trying to set benchmark contents.&quot;, e);</span>
+<span class="nc" id="L530">			request.setAttribute(&quot;content&quot;, &quot;IO Error: Could not get benchmark contents.&quot;);</span>
+<span class="nc" id="L531">		}</span>
+<span class="nc" id="L532">	}</span>
+
+	private static void sendErrorMessage(int benchId, HttpServletResponse response) throws IOException {
+<span class="nc bnc" id="L535" title="All 2 branches missed.">		if (Benchmarks.isBenchmarkDeleted(benchId)) {</span>
+<span class="nc" id="L536">			response.sendError(HttpServletResponse.SC_NOT_FOUND,</span>
+					&quot;This benchmark has been deleted. You likely want to remove it from your spaces&quot;);
+<span class="nc bnc" id="L538" title="All 2 branches missed.">		} else if (Benchmarks.isBenchmarkRecycled(benchId)) {</span>
+<span class="nc" id="L539">			response.sendError(HttpServletResponse.SC_NOT_FOUND,</span>
+					&quot;This benchmark has been moved to the trash bin by its owner.&quot;);
+		} else {
+<span class="nc" id="L542">			response.sendError(HttpServletResponse.SC_NOT_FOUND, &quot;Benchmark does not exist or is restricted&quot;);</span>
+		}
+<span class="nc" id="L544">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

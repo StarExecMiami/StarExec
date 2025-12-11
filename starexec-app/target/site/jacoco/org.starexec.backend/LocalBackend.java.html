@@ -1,0 +1,1162 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LocalBackend.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.backend</a> &gt; <span class="el_source">LocalBackend.java</span></div><h1>LocalBackend.java</h1><pre class="source lang-java linenums">package org.starexec.backend;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.starexec.config.EnvironmentConfig;
+import org.starexec.constants.R;
+import org.starexec.logger.StarLogger;
+
+/**
+ * Enhanced LocalBackend with concurrent job execution.
+ *
+ * &lt;p&gt;
+ * This backend executes jobs locally on the host machine using a configurable
+ * thread pool for concurrent execution. Unlike the original sequential
+ * implementation,
+ * this version can run multiple jobs simultaneously, making it suitable for:
+ * &lt;ul&gt;
+ * &lt;li&gt;Development and testing environments&lt;/li&gt;
+ * &lt;li&gt;Single-machine deployments&lt;/li&gt;
+ * &lt;li&gt;Stress testing and performance analysis&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h2&gt;Configuration&lt;/h2&gt;
+ * &lt;p&gt;
+ * The backend is configured via environment variables:
+ * &lt;/p&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;{@code STAREXEC_LOCAL_CONCURRENCY} - Number of concurrent jobs (default:
+ * min(4, CPU cores))&lt;/li&gt;
+ * &lt;li&gt;{@code STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS} - Per-job timeout in seconds
+ * (default: 3600)&lt;/li&gt;
+ * &lt;li&gt;{@code STAREXEC_LOCAL_USE_RUNSOLVER} - Whether to wrap jobs with
+ * runsolver (default: false)&lt;/li&gt;
+ * &lt;li&gt;{@code STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS} - Shutdown timeout
+ * (default: 30)&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h3&gt;Configuration Guidance&lt;/h3&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;&lt;strong&gt;STAREXEC_LOCAL_CONCURRENCY&lt;/strong&gt;: Set to match your system's
+ * CPU cores for optimal performance.
+ * Values higher than available cores may cause thrashing. For I/O-bound jobs,
+ * higher values may be beneficial.
+ * Default is conservative (min of 4 and CPU cores) to prevent system
+ * overload.&lt;/li&gt;
+ * &lt;li&gt;&lt;strong&gt;STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS&lt;/strong&gt;: Adjust based on
+ * expected job duration.
+ * Longer timeouts allow more complex jobs but increase resource usage for stuck
+ * processes.&lt;/li&gt;
+ * &lt;li&gt;&lt;strong&gt;STAREXEC_LOCAL_USE_RUNSOLVER&lt;/strong&gt;: Enable for precise
+ * resource monitoring and limiting.
+ * Requires runsolver to be installed and configured.&lt;/li&gt;
+ * &lt;li&gt;&lt;strong&gt;STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS&lt;/strong&gt;: Increase for
+ * systems with slow shutdown processes.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h2&gt;Performance Considerations&lt;/h2&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;Concurrent execution improves throughput but increases CPU and memory
+ * usage&lt;/li&gt;
+ * &lt;li&gt;Thread pool uses bounded queue (10,000 jobs) with CallerRunsPolicy for
+ * backpressure&lt;/li&gt;
+ * &lt;li&gt;Monitor thread pool metrics (active threads, queue size) to tune
+ * concurrency&lt;/li&gt;
+ * &lt;li&gt;Jobs are isolated in separate processes with proper cleanup on
+ * termination&lt;/li&gt;
+ * &lt;li&gt;Resource usage scales with concurrency setting - monitor system load&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h2&gt;Architecture&lt;/h2&gt;
+ * &lt;p&gt;
+ * Jobs are submitted to a bounded thread pool executor. Each job runs in its
+ * own
+ * thread with proper lifecycle management including:
+ * &lt;/p&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;Process spawning with configurable working directory and output
+ * redirection&lt;/li&gt;
+ * &lt;li&gt;Timeout enforcement with graceful termination&lt;/li&gt;
+ * &lt;li&gt;Proper cleanup on cancellation or failure&lt;/li&gt;
+ * &lt;li&gt;Thread-safe tracking of active jobs&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h2&gt;Monitoring&lt;/h2&gt;
+ * &lt;p&gt;
+ * The backend exposes metrics for monitoring:
+ * &lt;/p&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;Active job count and IDs&lt;/li&gt;
+ * &lt;li&gt;Queued job count&lt;/li&gt;
+ * &lt;li&gt;Completed job count (since startup)&lt;/li&gt;
+ * &lt;li&gt;Failed job count (since startup)&lt;/li&gt;
+ * &lt;li&gt;Thread pool statistics (active threads, pool size, queue size)&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * @see Backend
+ * @see EnvironmentConfig
+ */
+<span class="fc" id="L107">public class LocalBackend implements Backend {</span>
+
+<span class="fc" id="L109">    private static final StarLogger log = StarLogger.getLogger(</span>
+            LocalBackend.class);
+
+    // Configuration constants with defaults
+<span class="fc" id="L113">    private static final int DEFAULT_CONCURRENCY = Math.min(</span>
+            4,
+<span class="fc" id="L115">            Runtime.getRuntime().availableProcessors());</span>
+    private static final int DEFAULT_JOB_TIMEOUT_SECONDS = 3600; // 1 hour
+    private static final int DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30;
+
+    // Node and queue names
+<span class="fc" id="L120">    private String nodeName = &quot;local-node&quot;;</span>
+    private static final String QUEUE_NAME = R.DEFAULT_QUEUE_NAME;
+
+    // Thread pool for concurrent job execution
+    private ExecutorService executorService;
+    private int maxConcurrency;
+    private int jobTimeoutSeconds;
+    private int gracefulShutdownSeconds;
+    private boolean useRunsolver;
+
+    // Execution ID generator (thread-safe)
+<span class="fc" id="L131">    private final AtomicInteger execIdGenerator = new AtomicInteger(1);</span>
+
+    // Thread-safe mapping of execution IDs to job futures and metadata
+<span class="fc" id="L134">    private final ConcurrentHashMap&lt;Integer, LocalJob&gt; activeJobs = new ConcurrentHashMap&lt;&gt;();</span>
+
+    // Metrics counters
+<span class="fc" id="L137">    private final AtomicInteger completedJobCount = new AtomicInteger(0);</span>
+<span class="fc" id="L138">    private final AtomicInteger failedJobCount = new AtomicInteger(0);</span>
+
+    // Job completion monitor (reads status files and updates database)
+    private LocalJobMonitor jobMonitor;
+
+    // Cached container detection result (null = not yet checked)
+<span class="fc" id="L144">    private static volatile Boolean isRunningInContainer = null;</span>
+<span class="fc" id="L145">    private static final Object CONTAINER_CHECK_LOCK = new Object();</span>
+
+    /**
+     * Represents a job being executed by this backend.
+     */
+    private static class LocalJob {
+
+        final int execId;
+        final String scriptPath;
+        final String workingDirectoryPath;
+        final String logPath;
+        final long submittedAt;
+
+        volatile Process process;
+        volatile Future&lt;?&gt; future;
+        volatile JobState state;
+        volatile long startedAt;
+        volatile long completedAt;
+
+<span class="fc" id="L164">        enum JobState {</span>
+<span class="fc" id="L165">            PENDING, // Submitted but not yet started</span>
+<span class="fc" id="L166">            RUNNING, // Currently executing</span>
+<span class="fc" id="L167">            COMPLETED, // Finished successfully</span>
+<span class="fc" id="L168">            FAILED, // Finished with error</span>
+<span class="fc" id="L169">            CANCELLED, // Cancelled by user</span>
+<span class="fc" id="L170">            TIMEOUT, // Killed due to timeout</span>
+        }
+
+        LocalJob(
+                int execId,
+                String scriptPath,
+                String workingDirectoryPath,
+<span class="fc" id="L177">                String logPath) {</span>
+<span class="fc" id="L178">            this.execId = execId;</span>
+<span class="fc" id="L179">            this.scriptPath = scriptPath;</span>
+<span class="fc" id="L180">            this.workingDirectoryPath = workingDirectoryPath;</span>
+<span class="fc" id="L181">            this.logPath = logPath;</span>
+<span class="fc" id="L182">            this.submittedAt = System.currentTimeMillis();</span>
+<span class="fc" id="L183">            this.state = JobState.PENDING;</span>
+<span class="fc" id="L184">        }</span>
+
+        @Override
+        public String toString() {
+<span class="nc" id="L188">            StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L189">            sb.append(&quot;LocalJob{&quot;);</span>
+<span class="nc" id="L190">            sb.append(&quot;execId=&quot;).append(execId);</span>
+<span class="nc" id="L191">            sb.append(&quot;, state=&quot;).append(state);</span>
+<span class="nc" id="L192">            sb.append(&quot;, script=&quot;).append(scriptPath);</span>
+<span class="nc" id="L193">            sb.append(&quot;, submittedAt=&quot;).append(submittedAt);</span>
+<span class="nc bnc" id="L194" title="All 4 branches missed.">            if (state == JobState.RUNNING &amp;&amp; startedAt &gt; 0) {</span>
+<span class="nc" id="L195">                long runningSeconds = (System.currentTimeMillis() - startedAt) / 1000;</span>
+<span class="nc" id="L196">                sb.append(&quot;, running=&quot;).append(runningSeconds).append(&quot;s&quot;);</span>
+            }
+<span class="nc bnc" id="L198" title="All 4 branches missed.">            if (state == JobState.COMPLETED &amp;&amp; completedAt &gt; 0) {</span>
+<span class="nc" id="L199">                long totalSeconds = (completedAt - submittedAt) / 1000;</span>
+<span class="nc" id="L200">                sb.append(&quot;, duration=&quot;).append(totalSeconds).append(&quot;s&quot;);</span>
+            }
+<span class="nc" id="L202">            sb.append(&quot;}&quot;);</span>
+<span class="nc" id="L203">            return sb.toString();</span>
+        }
+
+        String getStatusLine() {
+<span class="fc" id="L207">            StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L208">            sb.append(execId).append(&quot;\t&quot;);</span>
+<span class="fc" id="L209">            sb.append(state.name()).append(&quot;\t&quot;);</span>
+<span class="fc" id="L210">            sb.append(new File(scriptPath).getName());</span>
+<span class="pc bpc" id="L211" title="2 of 4 branches missed.">            if (state == JobState.RUNNING &amp;&amp; startedAt &gt; 0) {</span>
+<span class="fc" id="L212">                long runningSeconds = (System.currentTimeMillis() - startedAt) / 1000;</span>
+<span class="fc" id="L213">                sb.append(&quot;\t&quot;).append(runningSeconds).append(&quot;s&quot;);</span>
+            }
+<span class="fc" id="L215">            return sb.toString();</span>
+        }
+    }
+
+    /**
+     * Generates a unique execution ID.
+     *
+     * @return A positive integer execution ID
+     */
+    private int generateExecId() {
+        int id;
+<span class="fc" id="L226">        int retries = 0;</span>
+<span class="fc" id="L227">        final int MAX_RETRIES = 1000000; // Prevent infinite loop in edge case</span>
+        do {
+<span class="pc bpc" id="L229" title="1 of 2 branches missed.">            if (retries++ &gt; MAX_RETRIES) {</span>
+<span class="nc" id="L230">                throw new RuntimeException(</span>
+                        &quot;Unable to generate unique execution ID after &quot; +
+                                MAX_RETRIES +
+                                &quot; attempts&quot;);
+            }
+<span class="fc" id="L235">            id = execIdGenerator.getAndIncrement();</span>
+<span class="pc bpc" id="L236" title="1 of 2 branches missed.">            if (id &lt;= 0) {</span>
+                // Handle wraparound
+<span class="nc" id="L238">                execIdGenerator.compareAndSet(id + 1, 1);</span>
+<span class="nc" id="L239">                id = execIdGenerator.getAndIncrement();</span>
+            }
+<span class="pc bpc" id="L241" title="1 of 2 branches missed.">        } while (activeJobs.containsKey(id));</span>
+<span class="fc" id="L242">        return id;</span>
+    }
+
+    @Override
+    public boolean isError(int execCode) {
+<span class="nc bnc" id="L247" title="All 2 branches missed.">        return execCode &lt;= 0;</span>
+    }
+
+    /**
+     * Extracts the pair ID from a log file path.
+     * Log paths are formatted as: .../jobId/jobSpaceId/pairId.txt
+     *
+     * @param logPath The full path to the log file
+     * @return The pair ID, or -1 if it cannot be extracted
+     */
+    private int extractPairIdFromLogPath(String logPath) {
+        try {
+<span class="pc bpc" id="L259" title="2 of 4 branches missed.">            if (logPath == null || logPath.isEmpty()) {</span>
+<span class="nc" id="L260">                return -1;</span>
+            }
+            // Extract filename without extension
+<span class="fc" id="L263">            File f = new File(logPath);</span>
+<span class="fc" id="L264">            String filename = f.getName();</span>
+<span class="pc bpc" id="L265" title="1 of 2 branches missed.">            if (filename.endsWith(&quot;.txt&quot;)) {</span>
+<span class="fc" id="L266">                String pairIdStr = filename.substring(0, filename.length() - 4);</span>
+<span class="nc" id="L267">                return Integer.parseInt(pairIdStr);</span>
+            }
+<span class="fc" id="L269">        } catch (NumberFormatException e) {</span>
+<span class="fc" id="L270">            log.debug(&quot;Could not extract pair ID from log path: &quot; + logPath);</span>
+<span class="nc" id="L271">        } catch (Exception e) {</span>
+<span class="nc" id="L272">            log.debug(&quot;Error extracting pair ID from log path: &quot; + logPath, e);</span>
+<span class="pc" id="L273">        }</span>
+<span class="fc" id="L274">        return -1;</span>
+    }
+
+    /**
+     * Executes a job. This method is called in a worker thread from the executor.
+     *
+     * @param job The job to execute
+     */
+    private void executeJob(LocalJob job) {
+<span class="fc" id="L283">        job.state = LocalJob.JobState.RUNNING;</span>
+<span class="fc" id="L284">        job.startedAt = System.currentTimeMillis();</span>
+
+        // Extract pair ID from logPath (format: .../pairId.txt)
+<span class="fc" id="L287">        int pairId = extractPairIdFromLogPath(job.logPath);</span>
+<span class="pc bpc" id="L288" title="3 of 4 branches missed.">        if (pairId &gt; 0 &amp;&amp; jobMonitor != null) {</span>
+<span class="nc" id="L289">            jobMonitor.registerJob(new File(job.logPath).getParent(), pairId);</span>
+<span class="nc" id="L290">            log.info(</span>
+                    &quot;Registered job with monitor: execId=&quot; +
+                            job.execId +
+                            &quot;, pairId=&quot; +
+                            pairId +
+                            &quot;, logDir=&quot; +
+<span class="nc" id="L296">                            new File(job.logPath).getParent());</span>
+<span class="pc bpc" id="L297" title="1 of 2 branches missed.">        } else if (pairId &lt;= 0) {</span>
+<span class="fc" id="L298">            log.warn(&quot;Could not extract pairId from logPath: &quot; + job.logPath);</span>
+        }
+
+<span class="fc" id="L301">        log.info(</span>
+                &quot;Starting job execution: execId=&quot; +
+                        job.execId +
+                        &quot;, pairId=&quot; +
+                        pairId +
+                        &quot;, script=&quot; +
+                        job.scriptPath +
+                        &quot;, workingDir=&quot; +
+                        job.workingDirectoryPath +
+                        &quot;, timeout=&quot; +
+                        jobTimeoutSeconds +
+                        &quot;s&quot;);
+
+        // NOTE: This thread will block for the entire duration of job execution.
+        // For very long-running jobs (hours), this ties up a worker thread.
+        // Monitor thread pool exhaustion via getStats() if experiencing throughput
+        // issues.
+        // Future optimization: Use ProcessHandle.onExit() for async job completion.
+
+        try {
+            // Start the job process
+<span class="fc" id="L322">            job.process = startJobProcess(job);</span>
+
+            // Wait for completion with timeout
+<span class="fc" id="L325">            boolean finished = job.process.waitFor(</span>
+                    jobTimeoutSeconds,
+                    TimeUnit.SECONDS);
+
+<span class="pc bpc" id="L329" title="1 of 2 branches missed.">            if (!finished) {</span>
+                // Timeout - kill the process
+<span class="nc" id="L331">                log.error(</span>
+                        &quot;Job &quot; +
+                                job.execId +
+                                &quot; (pairId=&quot; +
+                                pairId +
+                                &quot;) exceeded timeout of &quot; +
+                                jobTimeoutSeconds +
+                                &quot; seconds, killing process&quot;);
+<span class="nc" id="L339">                killProcess(job.process);</span>
+<span class="nc" id="L340">                job.state = LocalJob.JobState.TIMEOUT;</span>
+<span class="nc" id="L341">                failedJobCount.incrementAndGet();</span>
+            } else {
+<span class="fc" id="L343">                int exitCode = job.process.exitValue();</span>
+<span class="pc bpc" id="L344" title="1 of 2 branches missed.">                if (exitCode == 0) {</span>
+<span class="fc" id="L345">                    job.state = LocalJob.JobState.COMPLETED;</span>
+<span class="fc" id="L346">                    completedJobCount.incrementAndGet();</span>
+<span class="fc" id="L347">                    log.info(</span>
+                            &quot;Job &quot; +
+                                    job.execId +
+                                    &quot; (pairId=&quot; +
+                                    pairId +
+                                    &quot;) completed successfully with exit code &quot; +
+                                    exitCode);
+                } else {
+<span class="nc" id="L355">                    job.state = LocalJob.JobState.FAILED;</span>
+<span class="nc" id="L356">                    failedJobCount.incrementAndGet();</span>
+<span class="nc" id="L357">                    log.error(</span>
+                            &quot;Job &quot; +
+                                    job.execId +
+                                    &quot; (pairId=&quot; +
+                                    pairId +
+                                    &quot;) failed with exit code: &quot; +
+                                    exitCode +
+                                    &quot;. Check &quot; +
+                                    job.logPath +
+                                    &quot; for details&quot;);
+                }
+            }
+<span class="fc" id="L369">        } catch (InterruptedException e) {</span>
+            // Job was cancelled - restore interrupt flag
+<span class="fc" id="L371">            log.warn(</span>
+                    &quot;Job &quot; +
+                            job.execId +
+                            &quot; (pairId=&quot; +
+                            pairId +
+                            &quot;) was interrupted/cancelled&quot;);
+<span class="fc" id="L377">            job.state = LocalJob.JobState.CANCELLED;</span>
+<span class="pc bpc" id="L378" title="1 of 2 branches missed.">            if (job.process != null) {</span>
+<span class="fc" id="L379">                killProcess(job.process);</span>
+            }
+<span class="fc" id="L381">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L382">        } catch (IOException e) {</span>
+            // Process creation failed - likely a user/system error
+<span class="nc" id="L384">            log.error(</span>
+                    &quot;Failed to start job &quot; +
+                            job.execId +
+                            &quot; (pairId=&quot; +
+                            pairId +
+                            &quot;): &quot; +
+<span class="nc" id="L390">                            e.getMessage() +</span>
+                            &quot; (check script path and permissions). &quot; +
+                            &quot;Script: &quot; +
+                            job.scriptPath +
+                            &quot;, WorkDir: &quot; +
+                            job.workingDirectoryPath,
+                    e);
+<span class="nc" id="L397">            job.state = LocalJob.JobState.FAILED;</span>
+<span class="nc" id="L398">            failedJobCount.incrementAndGet();</span>
+<span class="nc" id="L399">        } catch (Exception e) {</span>
+            // Other unexpected errors
+<span class="nc" id="L401">            log.error(</span>
+                    &quot;Unexpected error executing job &quot; +
+                            job.execId +
+                            &quot;: &quot; +
+<span class="nc" id="L405">                            e.getClass().getSimpleName() +</span>
+                            &quot;: &quot; +
+<span class="nc" id="L407">                            e.getMessage(),</span>
+                    e);
+<span class="nc" id="L409">            job.state = LocalJob.JobState.FAILED;</span>
+<span class="nc" id="L410">            failedJobCount.incrementAndGet();</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">            if (job.process != null) {</span>
+<span class="nc" id="L412">                killProcess(job.process);</span>
+            }
+        } finally {
+<span class="fc" id="L415">            job.completedAt = System.currentTimeMillis();</span>
+            // Remove from active jobs immediately
+<span class="fc" id="L417">            activeJobs.remove(job.execId);</span>
+        }
+<span class="fc" id="L419">    }</span>
+
+    /**
+     * Builds and starts the process for a job.
+     *
+     * @param job The job to start
+     * @return The started process
+     * @throws IOException If process creation fails (file not found, no
+     *                     permissions, etc.)
+     */
+    private Process startJobProcess(LocalJob job) throws IOException {
+        // Validate output directory exists and is writable
+<span class="fc" id="L431">        File outputDir = new File(job.logPath).getParentFile();</span>
+<span class="pc bpc" id="L432" title="1 of 2 branches missed.">        if (!outputDir.exists()) {</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            if (!outputDir.mkdirs()) {</span>
+<span class="nc" id="L434">                throw new IOException(</span>
+                        &quot;Cannot create output directory: &quot; +
+<span class="nc" id="L436">                                outputDir.getAbsolutePath());</span>
+            }
+<span class="nc" id="L438">            log.info(</span>
+<span class="nc" id="L439">                    &quot;Created output directory: &quot; + outputDir.getAbsolutePath());</span>
+        }
+
+<span class="pc bpc" id="L442" title="1 of 2 branches missed.">        if (!outputDir.isDirectory()) {</span>
+<span class="nc" id="L443">            throw new IOException(</span>
+<span class="nc" id="L444">                    &quot;Output path is not a directory: &quot; + outputDir.getAbsolutePath());</span>
+        }
+
+<span class="pc bpc" id="L447" title="1 of 2 branches missed.">        if (!outputDir.canWrite()) {</span>
+<span class="nc" id="L448">            throw new IOException(</span>
+                    &quot;Output directory is not writable: &quot; +
+<span class="nc" id="L450">                            outputDir.getAbsolutePath() +</span>
+                            &quot; (check permissions, disk space)&quot;);
+        }
+
+<span class="fc" id="L454">        ProcessBuilder builder = new ProcessBuilder();</span>
+
+<span class="pc bpc" id="L456" title="3 of 4 branches missed.">        if (useRunsolver &amp;&amp;</span>
+                R.RUNSOLVER_PATH != null &amp;&amp;
+<span class="nc bnc" id="L458" title="All 2 branches missed.">                Files.exists(Path.of(R.RUNSOLVER_PATH))) {</span>
+            // Wrap with runsolver for resource limiting
+<span class="nc" id="L460">            builder.command(</span>
+                    R.RUNSOLVER_PATH,
+                    &quot;-w&quot;,
+                    job.logPath + &quot;.watcher&quot;,
+                    &quot;-v&quot;,
+                    job.logPath + &quot;.var&quot;,
+                    &quot;-W&quot;,
+<span class="nc" id="L467">                    String.valueOf(jobTimeoutSeconds),</span>
+                    &quot;--&quot;,
+                    job.scriptPath);
+        } else {
+            // Direct execution
+<span class="pc bpc" id="L472" title="1 of 2 branches missed.">            if (useRunsolver) {</span>
+<span class="nc" id="L473">                log.warn(</span>
+                        &quot;Runsolver requested but not available (path: &quot; +
+                                R.RUNSOLVER_PATH +
+                                &quot;), falling back to direct execution without resource limits&quot;);
+            }
+<span class="fc" id="L478">            builder.command(&quot;/bin/bash&quot;, job.scriptPath);</span>
+        }
+
+<span class="fc" id="L481">        builder.directory(new File(job.workingDirectoryPath));</span>
+<span class="fc" id="L482">        builder.redirectErrorStream(true);</span>
+<span class="fc" id="L483">        builder.redirectOutput(new File(job.logPath));</span>
+
+        // Set environment variables for the job
+<span class="fc" id="L486">        Map&lt;String, String&gt; env = builder.environment();</span>
+<span class="fc" id="L487">        env.put(&quot;STAREXEC_JOB_ID&quot;, String.valueOf(job.execId));</span>
+<span class="fc" id="L488">        env.put(&quot;STAREXEC_WORKING_DIR&quot;, job.workingDirectoryPath);</span>
+
+        // LocalBackend always uses file-based status reporting (CONTAINER_MODE)
+        // Jobs write status.json instead of directly calling database functions
+        // The LocalJobMonitor will read these files and update the database
+<span class="fc" id="L493">        env.put(&quot;CONTAINER_MODE&quot;, &quot;true&quot;);</span>
+<span class="fc" id="L494">        env.put(&quot;STAREXEC_OUTPUT_DIR&quot;, new File(job.logPath).getParent());</span>
+
+<span class="fc" id="L496">        log.debug(</span>
+                &quot;Environment for job &quot; +
+                        job.execId +
+                        &quot;: CONTAINER_MODE=true, &quot; +
+                        &quot;STAREXEC_OUTPUT_DIR=&quot; +
+<span class="fc" id="L501">                        new File(job.logPath).getParent());</span>
+
+<span class="pc bpc" id="L503" title="1 of 2 branches missed.">        if (isRunningInContainer()) {</span>
+<span class="nc" id="L504">            log.debug(</span>
+                    &quot;Running in container environment - CONTAINER_MODE enabled for job &quot; +
+                            job.execId);
+        } else {
+<span class="fc" id="L508">            log.debug(</span>
+                    &quot;LocalBackend using file-based status reporting for job &quot; +
+                            job.execId);
+        }
+
+        // NOTE: Process is created without explicit resource limits.
+        // If running untrusted code, STAREXEC_LOCAL_USE_RUNSOLVER must be enabled.
+<span class="fc" id="L515">        return builder.start();</span>
+    }
+
+    /**
+     * Forcibly kills a process and its descendants.
+     * Attempts graceful termination first, then forceful termination if needed.
+     * Also attempts to kill child processes to prevent zombies.
+     *
+     * @param process The process to kill
+     */
+    private void killProcess(Process process) {
+<span class="pc bpc" id="L526" title="1 of 2 branches missed.">        if (process == null)</span>
+<span class="nc" id="L527">            return;</span>
+
+        try {
+<span class="fc" id="L530">            long pid = process.pid();</span>
+
+            // Try graceful termination first (SIGTERM)
+<span class="fc" id="L533">            process.destroy();</span>
+<span class="pc bpc" id="L534" title="1 of 2 branches missed.">            if (!process.waitFor(5, TimeUnit.SECONDS)) {</span>
+                // Force kill if still running (SIGKILL)
+<span class="nc" id="L536">                process.destroyForcibly();</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">                if (!process.waitFor(5, TimeUnit.SECONDS)) {</span>
+<span class="nc" id="L538">                    log.warn(</span>
+                            &quot;Process &quot; +
+                                    pid +
+                                    &quot; did not terminate after SIGKILL, may become zombie&quot;);
+                }
+            }
+
+            // Attempt to kill any child processes (process group)
+            // This helps prevent orphaned child processes on Unix systems
+            // Commented out to prevent potential system crashes during testing
+            /*
+             * try {
+             * if (
+             * System.getProperty(&quot;os.name&quot;)
+             * .toLowerCase()
+             * .contains(&quot;linux&quot;) ||
+             * System.getProperty(&quot;os.name&quot;)
+             * .toLowerCase()
+             * .contains(&quot;unix&quot;) ||
+             * System.getProperty(&quot;os.name&quot;).toLowerCase().contains(&quot;mac&quot;)
+             * ) {
+             * // On Unix-like systems, try to kill the process group
+             * Runtime.getRuntime().exec(
+             * new String[] { &quot;kill&quot;, &quot;-9&quot;, &quot;-&quot; + pid }
+             * );
+             * }
+             * } catch (Exception e) {
+             * // Silently ignore if process group kill fails - process may already be dead
+             * log.debug(
+             * &quot;Could not kill process group for &quot; +
+             * pid +
+             * &quot;: &quot; +
+             * e.getMessage()
+             * );
+             * }
+             */
+<span class="nc" id="L574">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L575">            process.destroyForcibly();</span>
+<span class="nc" id="L576">            Thread.currentThread().interrupt();</span>
+<span class="fc" id="L577">        }</span>
+<span class="fc" id="L578">    }</span>
+
+    /**
+     * Submits a job script for execution.
+     *
+     * &lt;p&gt;
+     * &lt;strong&gt;IMPORTANT:&lt;/strong&gt; Jobs are queued in memory and will be lost if the
+     * application restarts or crashes. For critical workloads requiring durability,
+     * consider using PodmanBackend with database-backed job persistence instead.
+     *
+     * &lt;p&gt;
+     * &lt;strong&gt;Concurrency Note:&lt;/strong&gt; This method blocks the calling thread only
+     * during
+     * queue insertion. Job execution happens asynchronously in the thread pool.
+     *
+     * @param scriptPath           Path to the executable job script
+     * @param workingDirectoryPath Working directory for job execution
+     * @param logPath              Path where job output/logs should be written
+     * @return Execution ID for tracking the job, or -1 on error
+     */
+    @Override
+    public synchronized int submitScript(
+            String scriptPath,
+            String workingDirectoryPath,
+            String logPath) {
+<span class="pc bpc" id="L603" title="2 of 4 branches missed.">        if (executorService == null || executorService.isShutdown()) {</span>
+<span class="nc" id="L604">            log.error(&quot;Cannot submit job: executor service is not available&quot;);</span>
+<span class="nc" id="L605">            return -1;</span>
+        }
+
+        try {
+            // Validate inputs
+<span class="fc" id="L610">            File script = new File(scriptPath);</span>
+<span class="pc bpc" id="L611" title="1 of 2 branches missed.">            if (!script.exists()) {</span>
+<span class="nc" id="L612">                log.error(&quot;Script file does not exist: &quot; + scriptPath);</span>
+<span class="nc" id="L613">                return -1;</span>
+            }
+<span class="pc bpc" id="L615" title="1 of 2 branches missed.">            if (!script.canExecute()) {</span>
+                // Try to make it executable
+<span class="nc bnc" id="L617" title="All 2 branches missed.">                if (!script.setExecutable(true)) {</span>
+<span class="nc" id="L618">                    log.warn(</span>
+                            &quot;Could not set execute permission on: &quot; + scriptPath);
+                }
+            }
+
+<span class="fc" id="L623">            File workDir = new File(workingDirectoryPath);</span>
+<span class="pc bpc" id="L624" title="1 of 2 branches missed.">            if (!workDir.exists()) {</span>
+<span class="nc bnc" id="L625" title="All 2 branches missed.">                if (!workDir.mkdirs()) {</span>
+<span class="nc" id="L626">                    log.error(</span>
+                            &quot;Could not create working directory: &quot; +
+                                    workingDirectoryPath);
+<span class="nc" id="L629">                    return -1;</span>
+                }
+            }
+
+            // Create the job
+<span class="fc" id="L634">            int execId = generateExecId();</span>
+<span class="fc" id="L635">            LocalJob job = new LocalJob(</span>
+                    execId,
+                    scriptPath,
+                    workingDirectoryPath,
+                    logPath);
+
+            // Submit to executor
+<span class="fc" id="L642">            Future&lt;?&gt; future = executorService.submit(() -&gt; executeJob(job));</span>
+<span class="fc" id="L643">            job.future = future;</span>
+
+            // Track the job
+<span class="fc" id="L646">            activeJobs.put(execId, job);</span>
+
+<span class="fc" id="L648">            log.debug(</span>
+                    &quot;Job submitted: execId=&quot; +
+                            execId +
+                            &quot;, script=&quot; +
+                            scriptPath +
+                            &quot;, activeJobs=&quot; +
+<span class="fc" id="L654">                            activeJobs.size());</span>
+
+<span class="fc" id="L656">            return execId;</span>
+<span class="nc" id="L657">        } catch (Exception e) {</span>
+<span class="nc" id="L658">            log.error(&quot;Error submitting job: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L659">            return -1;</span>
+        }
+    }
+
+    @Override
+    public synchronized boolean killPair(int execId) {
+<span class="fc" id="L665">        LocalJob job = activeJobs.get(execId);</span>
+<span class="fc bfc" id="L666" title="All 2 branches covered.">        if (job == null) {</span>
+<span class="fc" id="L667">            log.debug(&quot;Cannot kill job &quot; + execId + &quot;: not found&quot;);</span>
+<span class="fc" id="L668">            return false;</span>
+        }
+
+        try {
+<span class="fc" id="L672">            log.info(&quot;Killing job: &quot; + execId);</span>
+
+            // Cancel the future (interrupts if running)
+<span class="pc bpc" id="L675" title="1 of 2 branches missed.">            if (job.future != null) {</span>
+<span class="fc" id="L676">                job.future.cancel(true);</span>
+            }
+
+            // Kill the process directly
+<span class="pc bpc" id="L680" title="1 of 2 branches missed.">            if (job.process != null) {</span>
+<span class="nc" id="L681">                killProcess(job.process);</span>
+            }
+
+<span class="fc" id="L684">            job.state = LocalJob.JobState.CANCELLED;</span>
+<span class="fc" id="L685">            activeJobs.remove(execId);</span>
+
+<span class="fc" id="L687">            return true;</span>
+<span class="nc" id="L688">        } catch (Exception e) {</span>
+<span class="nc" id="L689">            log.error(&quot;Error killing job &quot; + execId + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L690">            return false;</span>
+        }
+    }
+
+    @Override
+    public synchronized boolean killAll() {
+<span class="fc" id="L696">        log.info(&quot;Killing all jobs (&quot; + activeJobs.size() + &quot; active)&quot;);</span>
+
+<span class="fc" id="L698">        boolean allKilled = true;</span>
+<span class="fc bfc" id="L699" title="All 2 branches covered.">        for (Integer execId : new ArrayList&lt;&gt;(activeJobs.keySet())) {</span>
+<span class="pc bpc" id="L700" title="1 of 2 branches missed.">            if (!killPair(execId)) {</span>
+<span class="nc" id="L701">                allKilled = false;</span>
+            }
+<span class="fc" id="L703">        }</span>
+
+<span class="fc" id="L705">        return allKilled;</span>
+    }
+
+    @Override
+    public synchronized String getRunningJobsStatus() {
+<span class="fc" id="L710">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L711">        sb.append(&quot;LocalBackend Status\n&quot;);</span>
+<span class="fc" id="L712">        sb.append(&quot;==================\n&quot;);</span>
+<span class="fc" id="L713">        sb.append(&quot;Max Concurrency: &quot;).append(maxConcurrency).append(&quot;\n&quot;);</span>
+<span class="fc" id="L714">        sb.append(&quot;Active Jobs: &quot;).append(getActiveJobCount()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L715">        sb.append(&quot;Queued Jobs: &quot;).append(getQueuedJobCount()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L716">        sb</span>
+<span class="fc" id="L717">                .append(&quot;Completed Jobs: &quot;)</span>
+<span class="fc" id="L718">                .append(completedJobCount.get())</span>
+<span class="fc" id="L719">                .append(&quot;\n&quot;);</span>
+<span class="fc" id="L720">        sb.append(&quot;Failed Jobs: &quot;).append(failedJobCount.get()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L721">        sb.append(&quot;\nActive Job Details:\n&quot;);</span>
+<span class="fc" id="L722">        sb.append(&quot;ID\tSTATUS\tSCRIPT\tRUNTIME\n&quot;);</span>
+<span class="fc" id="L723">        sb.append(&quot;--\t------\t------\t-------\n&quot;);</span>
+
+<span class="fc" id="L725">        int count = 0;</span>
+<span class="fc" id="L726">        final int MAX_DISPLAY = 100;</span>
+<span class="fc bfc" id="L727" title="All 2 branches covered.">        for (LocalJob job : activeJobs.values()) {</span>
+<span class="pc bpc" id="L728" title="1 of 2 branches missed.">            if (count++ &gt;= MAX_DISPLAY) {</span>
+<span class="nc" id="L729">                sb</span>
+<span class="nc" id="L730">                        .append(&quot;... (showing first &quot;)</span>
+<span class="nc" id="L731">                        .append(MAX_DISPLAY)</span>
+<span class="nc" id="L732">                        .append(&quot; jobs)\n&quot;);</span>
+<span class="nc" id="L733">                break;</span>
+            }
+<span class="fc" id="L735">            sb.append(job.getStatusLine()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L736">        }</span>
+
+<span class="fc" id="L738">        return sb.toString();</span>
+    }
+
+    @Override
+    public Set&lt;Integer&gt; getActiveExecutionIds() throws IOException {
+<span class="nc" id="L743">        return new HashSet&lt;&gt;(activeJobs.keySet());</span>
+    }
+
+    /**
+     * Returns the number of currently active (running or pending) jobs.
+     *
+     * @return Active job count
+     */
+    public int getActiveJobCount() {
+<span class="fc" id="L752">        return (int) activeJobs</span>
+<span class="fc" id="L753">                .values()</span>
+<span class="fc" id="L754">                .stream()</span>
+<span class="fc" id="L755">                .filter(</span>
+<span class="pc bpc" id="L756" title="1 of 4 branches missed.">                        j -&gt; j.state == LocalJob.JobState.RUNNING ||</span>
+                                j.state == LocalJob.JobState.PENDING)
+<span class="fc" id="L758">                .count();</span>
+    }
+
+    /**
+     * Returns the number of jobs waiting in the queue.
+     *
+     * @return Queued job count
+     */
+    public int getQueuedJobCount() {
+<span class="fc" id="L767">        return (int) activeJobs</span>
+<span class="fc" id="L768">                .values()</span>
+<span class="fc" id="L769">                .stream()</span>
+<span class="pc bpc" id="L770" title="1 of 2 branches missed.">                .filter(j -&gt; j.state == LocalJob.JobState.PENDING)</span>
+<span class="fc" id="L771">                .count();</span>
+    }
+
+    /**
+     * Returns the number of jobs currently running.
+     *
+     * @return Running job count
+     */
+    public int getRunningJobCount() {
+<span class="nc" id="L780">        return (int) activeJobs</span>
+<span class="nc" id="L781">                .values()</span>
+<span class="nc" id="L782">                .stream()</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">                .filter(j -&gt; j.state == LocalJob.JobState.RUNNING)</span>
+<span class="nc" id="L784">                .count();</span>
+    }
+
+    @Override
+    public String[] getWorkerNodes() {
+<span class="nc" id="L789">        return new String[] { nodeName };</span>
+    }
+
+    @Override
+    public String[] getQueues() {
+<span class="fc" id="L794">        return new String[] { QUEUE_NAME };</span>
+    }
+
+    @Override
+    public Map&lt;String, String&gt; getNodeQueueAssociations() {
+<span class="nc" id="L799">        HashMap&lt;String, String&gt; mapping = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L800">        mapping.put(nodeName, QUEUE_NAME);</span>
+<span class="nc" id="L801">        return mapping;</span>
+    }
+
+    @Override
+    public boolean clearNodeErrorStates() {
+<span class="nc" id="L806">        return true;</span>
+    }
+
+    // Queue management is not applicable for local backend
+    @Override
+    public void deleteQueue(String queueName) {
+<span class="nc" id="L812">    }</span>
+
+    @Override
+    public boolean createQueue(
+            String newQueueName,
+            String[] nodeNames,
+            String[] sourceQueueNames) {
+<span class="nc" id="L819">        return false;</span>
+    }
+
+    @Override
+    public boolean createQueueWithSlots(
+            String newQueueName,
+            String[] nodeNames,
+            String[] sourceQueueNames,
+            Integer slots) {
+<span class="nc" id="L828">        return false;</span>
+    }
+
+    @Override
+    public void moveNodes(
+            String destQueueName,
+            String[] nodeNames,
+            String[] sourceQueueNames) {
+<span class="nc" id="L836">    }</span>
+
+    @Override
+    public void moveNode(String nodeName, String queueName) {
+<span class="nc" id="L840">    }</span>
+
+    @Override
+    public void clearPairTracking(int pairId) {
+<span class="nc bnc" id="L844" title="All 2 branches missed.">        if (jobMonitor != null) {</span>
+<span class="nc" id="L845">            jobMonitor.clearPairTracking(pairId);</span>
+        }
+<span class="nc" id="L847">    }</span>
+
+    @Override
+    public void destroyIf() {
+<span class="fc" id="L851">        log.info(&quot;Shutting down LocalBackend&quot;);</span>
+
+        // Stop the job monitor first
+<span class="pc bpc" id="L854" title="1 of 2 branches missed.">        if (jobMonitor != null) {</span>
+<span class="fc" id="L855">            jobMonitor.stop();</span>
+        }
+
+<span class="pc bpc" id="L858" title="1 of 2 branches missed.">        if (executorService != null) {</span>
+<span class="fc" id="L859">            executorService.shutdown();</span>
+            try {
+<span class="pc bpc" id="L861" title="1 of 2 branches missed.">                if (!executorService.awaitTermination(</span>
+                        gracefulShutdownSeconds,
+                        TimeUnit.SECONDS)) {
+<span class="nc" id="L864">                    log.warn(</span>
+                            &quot;Forcing shutdown after &quot; +
+                                    gracefulShutdownSeconds +
+                                    &quot; seconds&quot;);
+<span class="nc" id="L868">                    executorService.shutdownNow();</span>
+<span class="nc" id="L869">                    executorService.awaitTermination(10, TimeUnit.SECONDS);</span>
+                }
+<span class="nc" id="L871">            } catch (InterruptedException e) {</span>
+<span class="nc" id="L872">                log.error(&quot;Shutdown interrupted, forcing immediate shutdown&quot;);</span>
+<span class="nc" id="L873">                executorService.shutdownNow();</span>
+<span class="nc" id="L874">                Thread.currentThread().interrupt();</span>
+<span class="fc" id="L875">            }</span>
+        }
+
+        // Kill any remaining processes
+<span class="pc bpc" id="L879" title="1 of 2 branches missed.">        for (LocalJob job : activeJobs.values()) {</span>
+<span class="nc bnc" id="L880" title="All 4 branches missed.">            if (job.process != null &amp;&amp; job.process.isAlive()) {</span>
+<span class="nc" id="L881">                killProcess(job.process);</span>
+            }
+<span class="nc" id="L883">        }</span>
+<span class="fc" id="L884">        activeJobs.clear();</span>
+
+<span class="fc" id="L886">        log.info(&quot;LocalBackend shutdown complete&quot;);</span>
+<span class="fc" id="L887">    }</span>
+
+    /**
+     * Detects if the application is running inside a container (Docker, Podman,
+     * Kubernetes).
+     *
+     * Detection methods (in order):
+     * 1. Check for /.dockerenv file (Docker)
+     * 2. Check for /run/.containerenv file (Podman)
+     * 3. Check if /proc/1/cgroup contains &quot;docker&quot; or &quot;kubepods&quot; or &quot;containerd&quot;
+     *
+     * The result is cached since the container status won't change at runtime.
+     *
+     * @return true if running inside a container, false otherwise
+     */
+    private static boolean isRunningInContainer() {
+<span class="fc bfc" id="L903" title="All 2 branches covered.">        if (isRunningInContainer != null) {</span>
+<span class="fc" id="L904">            return isRunningInContainer;</span>
+        }
+
+<span class="fc" id="L907">        synchronized (CONTAINER_CHECK_LOCK) {</span>
+<span class="pc bpc" id="L908" title="1 of 2 branches missed.">            if (isRunningInContainer != null) {</span>
+<span class="nc" id="L909">                return isRunningInContainer;</span>
+            }
+
+            // Check for Docker
+<span class="pc bpc" id="L913" title="1 of 2 branches missed.">            if (Files.exists(Path.of(&quot;/.dockerenv&quot;))) {</span>
+<span class="nc" id="L914">                log.info(&quot;Container detected: /.dockerenv exists (Docker)&quot;);</span>
+<span class="nc" id="L915">                isRunningInContainer = true;</span>
+<span class="nc" id="L916">                return true;</span>
+            }
+
+            // Check for Podman
+<span class="pc bpc" id="L920" title="1 of 2 branches missed.">            if (Files.exists(Path.of(&quot;/run/.containerenv&quot;))) {</span>
+<span class="nc" id="L921">                log.info(</span>
+                        &quot;Container detected: /run/.containerenv exists (Podman)&quot;);
+<span class="nc" id="L923">                isRunningInContainer = true;</span>
+<span class="nc" id="L924">                return true;</span>
+            }
+
+            // Check cgroup for container indicators
+            try {
+<span class="fc" id="L929">                Path cgroupPath = Path.of(&quot;/proc/1/cgroup&quot;);</span>
+<span class="pc bpc" id="L930" title="1 of 2 branches missed.">                if (Files.exists(cgroupPath)) {</span>
+                    try (
+<span class="fc" id="L932">                            BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L933">                                    new FileReader(cgroupPath.toFile()))) {</span>
+                        String line;
+<span class="fc bfc" id="L935" title="All 2 branches covered.">                        while ((line = reader.readLine()) != null) {</span>
+<span class="fc" id="L936">                            String lowerLine = line.toLowerCase();</span>
+<span class="pc bpc" id="L937" title="1 of 2 branches missed.">                            if (lowerLine.contains(&quot;docker&quot;) ||</span>
+<span class="pc bpc" id="L938" title="1 of 2 branches missed.">                                    lowerLine.contains(&quot;kubepods&quot;) ||</span>
+<span class="pc bpc" id="L939" title="1 of 2 branches missed.">                                    lowerLine.contains(&quot;containerd&quot;) ||</span>
+<span class="pc bpc" id="L940" title="1 of 2 branches missed.">                                    lowerLine.contains(&quot;lxc&quot;)) {</span>
+<span class="nc" id="L941">                                log.info(</span>
+                                        &quot;Container detected via /proc/1/cgroup: &quot; +
+<span class="nc" id="L943">                                                line.trim());</span>
+<span class="nc" id="L944">                                isRunningInContainer = true;</span>
+<span class="nc" id="L945">                                return true;</span>
+                            }
+<span class="fc" id="L947">                        }</span>
+<span class="nc" id="L948">                    }</span>
+                }
+<span class="nc" id="L950">            } catch (IOException e) {</span>
+<span class="nc" id="L951">                log.debug(</span>
+                        &quot;Could not read /proc/1/cgroup for container detection: &quot; +
+<span class="nc" id="L953">                                e.getMessage());</span>
+<span class="fc" id="L954">            }</span>
+
+            // Also check /proc/self/cgroup as a fallback
+            try {
+<span class="fc" id="L958">                Path selfCgroupPath = Path.of(&quot;/proc/self/cgroup&quot;);</span>
+<span class="pc bpc" id="L959" title="1 of 2 branches missed.">                if (Files.exists(selfCgroupPath)) {</span>
+                    try (
+<span class="fc" id="L961">                            BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L962">                                    new FileReader(selfCgroupPath.toFile()))) {</span>
+                        String line;
+<span class="fc bfc" id="L964" title="All 2 branches covered.">                        while ((line = reader.readLine()) != null) {</span>
+<span class="fc" id="L965">                            String lowerLine = line.toLowerCase();</span>
+<span class="pc bpc" id="L966" title="1 of 2 branches missed.">                            if (lowerLine.contains(&quot;docker&quot;) ||</span>
+<span class="pc bpc" id="L967" title="1 of 2 branches missed.">                                    lowerLine.contains(&quot;kubepods&quot;) ||</span>
+<span class="pc bpc" id="L968" title="1 of 2 branches missed.">                                    lowerLine.contains(&quot;containerd&quot;) ||</span>
+<span class="pc bpc" id="L969" title="1 of 2 branches missed.">                                    lowerLine.contains(&quot;lxc&quot;)) {</span>
+<span class="nc" id="L970">                                log.info(</span>
+                                        &quot;Container detected via /proc/self/cgroup: &quot; +
+<span class="nc" id="L972">                                                line.trim());</span>
+<span class="nc" id="L973">                                isRunningInContainer = true;</span>
+<span class="nc" id="L974">                                return true;</span>
+                            }
+<span class="fc" id="L976">                        }</span>
+<span class="nc" id="L977">                    }</span>
+                }
+<span class="nc" id="L979">            } catch (IOException e) {</span>
+<span class="nc" id="L980">                log.debug(</span>
+                        &quot;Could not read /proc/self/cgroup for container detection: &quot; +
+<span class="nc" id="L982">                                e.getMessage());</span>
+<span class="fc" id="L983">            }</span>
+
+<span class="fc" id="L985">            log.info(</span>
+                    &quot;No container environment detected - running on bare metal/VM&quot;);
+<span class="fc" id="L987">            isRunningInContainer = false;</span>
+<span class="fc" id="L988">            return false;</span>
+        }
+    }
+
+    /**
+     * Loads configuration from environment variables.
+     */
+    private void loadConfiguration() {
+        // Concurrency level
+<span class="fc" id="L997">        maxConcurrency = getEnvInt(</span>
+                &quot;STAREXEC_LOCAL_CONCURRENCY&quot;,
+                DEFAULT_CONCURRENCY);
+<span class="pc bpc" id="L1000" title="1 of 2 branches missed.">        if (maxConcurrency &lt; 1) {</span>
+<span class="nc" id="L1001">            log.warn(</span>
+                    &quot;Invalid concurrency &quot; +
+                            maxConcurrency +
+                            &quot;, using default: &quot; +
+                            DEFAULT_CONCURRENCY);
+<span class="nc" id="L1006">            maxConcurrency = DEFAULT_CONCURRENCY;</span>
+        }
+
+        // Job timeout
+<span class="fc" id="L1010">        jobTimeoutSeconds = getEnvInt(</span>
+                &quot;STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS&quot;,
+                DEFAULT_JOB_TIMEOUT_SECONDS);
+<span class="pc bpc" id="L1013" title="1 of 2 branches missed.">        if (jobTimeoutSeconds &lt; 1) {</span>
+<span class="nc" id="L1014">            jobTimeoutSeconds = DEFAULT_JOB_TIMEOUT_SECONDS;</span>
+        }
+
+        // Graceful shutdown timeout
+<span class="fc" id="L1018">        gracefulShutdownSeconds = getEnvInt(</span>
+                &quot;STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS&quot;,
+                DEFAULT_GRACEFUL_SHUTDOWN_SECONDS);
+
+        // Use runsolver - MANDATORY for running untrusted code
+<span class="fc" id="L1023">        useRunsolver = getEnvBoolean(&quot;STAREXEC_LOCAL_USE_RUNSOLVER&quot;, false);</span>
+
+        // CRITICAL SAFETY CHECK: Enforce resource limits if executing untrusted jobs
+<span class="fc" id="L1026">        String runUntrusted = System.getenv(</span>
+                &quot;STAREXEC_LOCAL_RUN_UNTRUSTED_JOBS&quot;);
+<span class="pc bpc" id="L1028" title="3 of 4 branches missed.">        if (&quot;true&quot;.equalsIgnoreCase(runUntrusted) &amp;&amp; !useRunsolver) {</span>
+<span class="nc" id="L1029">            log.warn(</span>
+                    &quot;⚠️  CRITICAL SAFETY WARNING: Running untrusted jobs without resource limits! &quot; +
+                            &quot;Set STAREXEC_LOCAL_USE_RUNSOLVER=true or disable untrusted job execution.&quot;);
+        }
+<span class="fc" id="L1033">    }</span>
+
+    private int getEnvInt(String key, int defaultValue) {
+<span class="fc" id="L1036">        String value = System.getenv(key);</span>
+<span class="pc bpc" id="L1037" title="3 of 4 branches missed.">        if (value != null &amp;&amp; !value.isEmpty()) {</span>
+            try {
+<span class="nc" id="L1039">                return Integer.parseInt(value.trim());</span>
+<span class="nc" id="L1040">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L1041">                log.warn(&quot;Invalid integer for &quot; + key + &quot;: &quot; + value);</span>
+            }
+        }
+<span class="fc" id="L1044">        return defaultValue;</span>
+    }
+
+    private boolean getEnvBoolean(String key, boolean defaultValue) {
+<span class="fc" id="L1048">        String value = System.getenv(key);</span>
+<span class="pc bpc" id="L1049" title="3 of 4 branches missed.">        if (value != null &amp;&amp; !value.isEmpty()) {</span>
+<span class="nc" id="L1050">            return Boolean.parseBoolean(value.trim());</span>
+        }
+<span class="fc" id="L1052">        return defaultValue;</span>
+    }
+
+    /**
+     * Initializes the backend.
+     *
+     * &lt;p&gt;
+     * Creates the thread pool executor and sets up the node name based on the
+     * hostname.
+     * &lt;/p&gt;
+     *
+     * @param backendRoot Not used for LocalBackend, but required by interface
+     */
+    @Override
+    public void initialize(String backendRoot) {
+<span class="fc" id="L1067">        log.info(&quot;Initializing LocalBackend (concurrent mode)&quot;);</span>
+
+        // Load configuration
+<span class="fc" id="L1070">        loadConfiguration();</span>
+
+        // Set node name to hostname
+        try {
+<span class="fc" id="L1074">            nodeName = InetAddress.getLocalHost().getHostName();</span>
+<span class="nc" id="L1075">        } catch (Exception e) {</span>
+<span class="nc" id="L1076">            log.warn(</span>
+                    &quot;Could not determine hostname, using default: &quot; + nodeName);
+<span class="fc" id="L1078">        }</span>
+
+        // Create thread pool with custom thread factory for better naming
+<span class="fc" id="L1081">        ThreadFactory threadFactory = new ThreadFactory() {</span>
+<span class="fc" id="L1082">            private final AtomicInteger counter = new AtomicInteger(1);</span>
+
+            @Override
+            public Thread newThread(Runnable r) {
+<span class="fc" id="L1086">                Thread t = new Thread(</span>
+                        r,
+<span class="fc" id="L1088">                        &quot;LocalBackend-Worker-&quot; + counter.getAndIncrement());</span>
+<span class="fc" id="L1089">                t.setDaemon(false); // Don't die silently</span>
+<span class="fc" id="L1090">                return t;</span>
+            }
+        };
+
+        // Create bounded thread pool with configurable queue size
+<span class="fc" id="L1095">        int queueSize = getEnvInt(&quot;STAREXEC_LOCAL_QUEUE_SIZE&quot;, 10000);</span>
+<span class="pc bpc" id="L1096" title="1 of 2 branches missed.">        if (queueSize &lt; 10) {</span>
+<span class="nc" id="L1097">            log.warn(&quot;Queue size too small, setting to minimum of 10&quot;);</span>
+<span class="nc" id="L1098">            queueSize = 10;</span>
+        }
+
+<span class="fc" id="L1101">        executorService = new ThreadPoolExecutor(</span>
+                maxConcurrency, // Core pool size
+                maxConcurrency, // Maximum pool size
+                60L,
+                TimeUnit.SECONDS, // Keep-alive time for idle threads
+                new LinkedBlockingQueue&lt;&gt;(queueSize), // Work queue with bounded capacity
+                threadFactory,
+                new ThreadPoolExecutor.CallerRunsPolicy() // Backpressure: caller thread runs if queue is full
+        );
+
+        // Create and start job completion monitor
+<span class="fc" id="L1112">        jobMonitor = new LocalJobMonitor();</span>
+<span class="fc" id="L1113">        jobMonitor.start();</span>
+
+<span class="fc" id="L1115">        log.info(&quot;LocalBackend initialized successfully&quot;);</span>
+<span class="fc" id="L1116">        log.info(&quot;  Node name: &quot; + nodeName);</span>
+<span class="fc" id="L1117">        log.info(&quot;  Max concurrency: &quot; + maxConcurrency);</span>
+<span class="fc" id="L1118">        log.info(&quot;  Job timeout: &quot; + jobTimeoutSeconds + &quot; seconds&quot;);</span>
+<span class="fc" id="L1119">        log.info(&quot;  Use runsolver: &quot; + useRunsolver);</span>
+<span class="fc" id="L1120">        log.info(&quot;  Queue size: &quot; + queueSize);</span>
+<span class="fc" id="L1121">        log.info(</span>
+                &quot;  Graceful shutdown: &quot; + gracefulShutdownSeconds + &quot; seconds&quot;);
+
+<span class="pc bpc" id="L1124" title="1 of 2 branches missed.">        if (!useRunsolver) {</span>
+<span class="fc" id="L1125">            log.warn(</span>
+                    &quot;⚠️  LocalBackend running WITHOUT runsolver resource limits. &quot; +
+                            &quot;Jobs can consume unlimited CPU, memory, and I/O. &quot; +
+                            &quot;This is acceptable ONLY for trusted code. &quot; +
+                            &quot;For untrusted code, set STAREXEC_LOCAL_USE_RUNSOLVER=true.&quot;);
+        }
+<span class="fc" id="L1131">    }</span>
+
+    /**
+     * Returns backend statistics as a map for monitoring/metrics.
+     *
+     * @return Map of metric name to value
+     */
+    public Map&lt;String, Object&gt; getStats() {
+<span class="nc" id="L1139">        Map&lt;String, Object&gt; stats = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L1140">        stats.put(&quot;nodeName&quot;, nodeName);</span>
+<span class="nc" id="L1141">        stats.put(&quot;maxConcurrency&quot;, maxConcurrency);</span>
+<span class="nc" id="L1142">        stats.put(&quot;activeJobs&quot;, getActiveJobCount());</span>
+<span class="nc" id="L1143">        stats.put(&quot;runningJobs&quot;, getRunningJobCount());</span>
+<span class="nc" id="L1144">        stats.put(&quot;queuedJobs&quot;, getQueuedJobCount());</span>
+<span class="nc" id="L1145">        stats.put(&quot;completedJobs&quot;, completedJobCount.get());</span>
+<span class="nc" id="L1146">        stats.put(&quot;failedJobs&quot;, failedJobCount.get());</span>
+<span class="nc" id="L1147">        stats.put(&quot;jobTimeoutSeconds&quot;, jobTimeoutSeconds);</span>
+<span class="nc" id="L1148">        stats.put(&quot;useRunsolver&quot;, useRunsolver);</span>
+
+        // Thread pool metrics
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">        if (executorService instanceof ThreadPoolExecutor) {</span>
+<span class="nc" id="L1152">            ThreadPoolExecutor tpe = (ThreadPoolExecutor) executorService;</span>
+<span class="nc" id="L1153">            stats.put(&quot;threadPoolActiveThreads&quot;, tpe.getActiveCount());</span>
+<span class="nc" id="L1154">            stats.put(&quot;threadPoolPoolSize&quot;, tpe.getPoolSize());</span>
+<span class="nc" id="L1155">            stats.put(&quot;threadPoolQueueSize&quot;, tpe.getQueue().size());</span>
+<span class="nc" id="L1156">            stats.put(&quot;threadPoolLargestPoolSize&quot;, tpe.getLargestPoolSize());</span>
+        }
+
+<span class="nc" id="L1159">        return stats;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

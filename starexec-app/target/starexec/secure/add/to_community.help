@@ -1,0 +1,25 @@
+<h1>Joining a Community</h1>
+
+<p>Communities in StarExec are groups of users who collaborate on shared resources such as solvers, benchmarks, and jobs. To participate in a community, you must first request membership from the community's leaders.</p>
+
+<h2>Requesting Membership</h2>
+
+<p>If you are not already a member of the community, you can request to join by providing a brief reason for your interest. Navigate to the community you wish to join and select the "Join Community" option.</p>
+
+<ul>
+<li><strong>Community Name:</strong> Displays the name of the community you are requesting to join.</li>
+<li><strong>Reason for Joining:</strong> Enter a short message (2-512 characters) explaining why you want to join. This will be sent to the community's leaders for approval.</li>
+<li><strong>Notice:</strong> All community leaders will receive an email notification with your request.</li>
+</ul>
+
+<p>Once submitted, your request will be pending approval. You will receive an email when a leader approves or declines your request.</p>
+
+<h2>Important Notes</h2>
+
+<ul>
+<li>If you are already a member of the community, you will be redirected back to the community explorer.</li>
+<li>If you have a pending request, the page will inform you and prevent duplicate submissions.</li>
+<li>Ensure your reason is clear and concise to improve your chances of approval.</li>
+</ul>
+
+<p>For more information on communities and permissions, refer to the <a href="https://wiki.uiowa.edu/display/stardev/User+Guide#UserGuide-Communities">User Guide</a>.</p>

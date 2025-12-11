@@ -1,0 +1,891 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JobUtil.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.util</a> &gt; <span class="el_source">JobUtil.java</span></div><h1>JobUtil.java</h1><pre class="source lang-java linenums">package org.starexec.util;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.*;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.*;
+import org.starexec.data.to.Queue;
+import org.starexec.data.to.enums.BenchmarkingFramework;
+import org.starexec.data.to.enums.ConfigXmlAttribute;
+import org.starexec.data.to.enums.JobXmlType;
+import org.starexec.data.to.pipelines.*;
+import org.starexec.data.to.pipelines.PipelineDependency.PipelineInputType;
+import org.starexec.data.to.pipelines.StageAttributes.SaveResultsOption;
+import org.starexec.data.to.tuples.ConfigAttrMapPair;
+import org.starexec.logger.StarLogger;
+import org.starexec.servlets.CreateJob;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+
+<span class="nc" id="L30">public class JobUtil {</span>
+<span class="nc" id="L31">	private static final StarLogger log = StarLogger.getLogger(JobUtil.class);</span>
+
+<span class="nc" id="L33">	private Boolean jobCreationSuccess = false;</span>
+<span class="nc" id="L34">	private String errorMessage = &quot;&quot;;//this will be used to given information to user about failures in validation</span>
+<span class="nc" id="L35">	private String secondaryErrorMessage = &quot;&quot;; // this will be used for additional error message useful to developers.</span>
+
+
+	/**
+	 * Creates jobs from the xml file. This also creates any solver pipelines defined in the XML document
+	 *
+	 * @param file the xml file we wish to create jobs from
+	 * @param userId the userId of the user making the request
+	 * @param spaceId the space that will serve as the root for jobs to run under
+	 * @return List&lt;Integer&gt; Null on failure, and a list of jobIds on success. Some jobs may have failed,
+	 * resulting in values of -1 in the list.
+	 * @throws SAXException
+	 * @throws ParserConfigurationException
+	 * @throws IOException
+	 * @author Tim Smith
+	 */
+	public List&lt;Integer&gt; createJobsFromFile(File file, int userId, Integer spaceId, JobXmlType xmlType,
+	                                        ConfigAttrMapPair configAttrMapPair) throws IOException,
+			ParserConfigurationException, SAXException {
+
+<span class="nc" id="L55">		final String method = &quot;createJobsFromFile&quot;;</span>
+<span class="nc" id="L56">		List&lt;Integer&gt; jobIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L57" title="All 2 branches missed.">		if (!validateAgainstSchema(file, xmlType)) {</span>
+<span class="nc" id="L58">			log.debug(method, &quot;File '&quot; + file.getName() + &quot;' from User &quot; + userId + &quot; is not Schema valid.&quot;);</span>
+<span class="nc" id="L59">			return null;</span>
+		}
+
+<span class="nc" id="L62">		Permission p = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">		if (!p.canAddJob()) {</span>
+<span class="nc" id="L64">			log.info(method,</span>
+					&quot;User with id=&quot; + userId + &quot; does not have permission to create a job on space with id=&quot; +
+					spaceId);
+<span class="nc" id="L67">			errorMessage = &quot;You do not have permission to create a job on this space&quot;;</span>
+<span class="nc" id="L68">			return null;</span>
+		}
+
+<span class="nc" id="L71">		DocumentBuilderFactory docBuilderFactory = DocumentBuilderFactory.newInstance();</span>
+		
+		// SECURITY: Disable XXE (XML External Entity) attacks
+		try {
+<span class="nc" id="L75">			docBuilderFactory.setFeature(&quot;http://apache.org/xml/features/disallow-doctype-decl&quot;, true);</span>
+<span class="nc" id="L76">			docBuilderFactory.setFeature(&quot;http://xml.org/sax/features/external-general-entities&quot;, false);</span>
+<span class="nc" id="L77">			docBuilderFactory.setFeature(&quot;http://xml.org/sax/features/external-parameter-entities&quot;, false);</span>
+<span class="nc" id="L78">			docBuilderFactory.setFeature(&quot;http://apache.org/xml/features/nonvalidating/load-external-dtd&quot;, false);</span>
+<span class="nc" id="L79">			docBuilderFactory.setXIncludeAware(false);</span>
+<span class="nc" id="L80">			docBuilderFactory.setExpandEntityReferences(false);</span>
+<span class="nc" id="L81">		} catch (ParserConfigurationException e) {</span>
+<span class="nc" id="L82">			log.error(method, &quot;Failed to configure XXE protection&quot;, e);</span>
+<span class="nc" id="L83">			throw e;</span>
+<span class="nc" id="L84">		}</span>
+		
+<span class="nc" id="L86">		DocumentBuilder docBuilder = docBuilderFactory.newDocumentBuilder();</span>
+<span class="nc" id="L87">		Document doc = docBuilder.parse(file);</span>
+<span class="nc" id="L88">		Element jobsElement = doc.getDocumentElement();</span>
+<span class="nc" id="L89">		NodeList listOfJobElements = jobsElement.getElementsByTagName(&quot;Job&quot;);</span>
+
+<span class="nc" id="L91">		NodeList listOfPipelines = doc.getElementsByTagName(&quot;SolverPipeline&quot;);</span>
+<span class="nc" id="L92">		log.info(method, &quot;# of pipelines = &quot; + listOfPipelines.getLength());</span>
+
+		//Check Jobs and Job Pairs
+<span class="nc" id="L95">		NodeList listOfJobs = doc.getElementsByTagName(&quot;Job&quot;);</span>
+<span class="nc" id="L96">		log.info(method, &quot;# of Jobs = &quot; + listOfJobs.getLength());</span>
+<span class="nc" id="L97">		NodeList listOfJobPairs = doc.getElementsByTagName(&quot;JobPair&quot;);</span>
+<span class="nc" id="L98">		NodeList listOfUploadedSolverJobPairs = doc.getElementsByTagName(&quot;UploadedSolverJobPair&quot;);</span>
+
+
+<span class="nc" id="L101">		log.info(method, &quot;# of JobPairs = &quot; + listOfJobPairs.getLength());</span>
+<span class="nc" id="L102">		log.info(method, &quot;# of UploadedSolverJobPairs = &quot; + listOfUploadedSolverJobPairs.getLength());</span>
+
+<span class="nc" id="L104">		NodeList listOfJobLines = doc.getElementsByTagName(&quot;JobLine&quot;);</span>
+<span class="nc" id="L105">		log.info(method, &quot; # of JobLines = &quot; + listOfJobLines.getLength());</span>
+		//this job has nothing to run
+<span class="nc" id="L107">		int pairCount =</span>
+<span class="nc" id="L108">				listOfJobPairs.getLength() + listOfJobLines.getLength() + listOfUploadedSolverJobPairs.getLength();</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">		if (pairCount == 0) {</span>
+<span class="nc" id="L110">			errorMessage = &quot;Every job must have at least one job pair or job line to be created&quot;;</span>
+<span class="nc" id="L111">			return null;</span>
+		}
+<span class="nc" id="L113">		User u = Users.get(userId);</span>
+<span class="nc" id="L114">		int pairsAvailable = Math.max(0, u.getPairQuota() - Jobs.countPairsByUser(userId));</span>
+		// This just checks if a quota is totally full, which is sufficient for quick jobs and as a fast sanity check
+		// for full jobs. After the number of pairs have been acquired for a full job this check will be done
+		// factoring them in.
+<span class="nc bnc" id="L118" title="All 2 branches missed.">		if (pairsAvailable &lt; pairCount) {</span>
+<span class="nc" id="L119">			errorMessage = &quot;Error: You are trying to create &quot; + pairCount + &quot; pairs, but you have &quot; + pairsAvailable +</span>
+			               &quot; remaining in your quota. Please delete some old jobs before continuing.&quot;;
+<span class="nc" id="L121">			return null;</span>
+		}
+
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (Users.isDiskQuotaExceeded(userId)) {</span>
+<span class="nc" id="L125">			errorMessage =</span>
+					&quot;Your disk quota has been exceeded: please clear out some old solvers, jobs, or benchmarks &quot; +
+					&quot;before proceeding&quot;;
+<span class="nc" id="L128">			return null;</span>
+		}
+
+		//validate all solver pipelines
+
+		//data structure to ensure all pipeline names in this upload are unique
+<span class="nc" id="L134">		HashMap&lt;String, SolverPipeline&gt; pipelineNames = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L135">		log.info(method, &quot;Creating pipelines from elements.&quot;);</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">		for (int i = 0; i &lt; listOfPipelines.getLength(); i++) {</span>
+<span class="nc" id="L137">			Node pipeline = listOfPipelines.item(i);</span>
+<span class="nc" id="L138">			SolverPipeline pipe = createPipelineFromElement(userId, (Element) pipeline);</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">			if (pipe == null) {</span>
+<span class="nc" id="L140">				log.info(&quot;error creating pipeline&quot;);</span>
+<span class="nc" id="L141">				secondaryErrorMessage = &quot;Solver pipeline was null.&quot;;</span>
+<span class="nc" id="L142">				return null; // this means there was some error. The error message should have been set already</span>
+				// the call to createPipelineFromElement
+			}
+<span class="nc bnc" id="L145" title="All 2 branches missed.">			if (pipelineNames.containsKey(pipe.getName())) {</span>
+<span class="nc" id="L146">				errorMessage = &quot; Duplicate pipeline name = &quot; + pipe.getName() +</span>
+				               &quot;. All pipelines in this upload must have unique names&quot;;
+<span class="nc" id="L148">				return null;</span>
+			}
+<span class="nc" id="L150">			pipelineNames.put(pipe.getName(), pipe);</span>
+		}
+<span class="nc" id="L152">		log.info(method, &quot;Finished creating pipelines from elements.&quot;);</span>
+
+		// Make sure jobs are named
+<span class="nc" id="L155">		log.info(method, &quot;Checking to make sure jobs are named.&quot;);</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">		for (int i = 0; i &lt; listOfJobs.getLength(); i++) {</span>
+<span class="nc" id="L157">			Node jobNode = listOfJobs.item(i);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">			if (jobNode.getNodeType() == Node.ELEMENT_NODE) {</span>
+<span class="nc" id="L159">				Element jobElement = (Element) jobNode;</span>
+<span class="nc" id="L160">				String name = jobElement.getAttribute(&quot;name&quot;);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">				if (name == null) {</span>
+<span class="nc" id="L162">					log.info(method, &quot;Name not found&quot;);</span>
+<span class="nc" id="L163">					errorMessage = &quot;Job elements must include a 'name' attribute.&quot;;</span>
+<span class="nc" id="L164">					return null;</span>
+				}
+<span class="nc" id="L166">				log.debug(method, &quot;Job Name = &quot; + name);</span>
+
+<span class="nc bnc" id="L168" title="All 2 branches missed.">				if (!org.starexec.util.Validator.isValidJobName(name)) {</span>
+<span class="nc" id="L169">					errorMessage = name + &quot;is not a valid job name&quot;;</span>
+<span class="nc" id="L170">					return null;</span>
+				}
+
+<span class="nc" id="L173">			} else {</span>
+<span class="nc" id="L174">				log.warn(&quot;Job Node should be an element, but isn't&quot;);</span>
+			}
+		}
+
+<span class="nc" id="L178">		log.info(method, &quot;Finished checking to make sure jobs are named.&quot;);</span>
+
+
+<span class="nc" id="L181">		log.info(method, &quot;Creating jobs from elements.&quot;);</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">		for (int i = 0; i &lt; listOfJobElements.getLength(); i++) {</span>
+<span class="nc" id="L183">			Node jobNode = listOfJobElements.item(i);</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">			if (jobNode.getNodeType() == Node.ELEMENT_NODE) {</span>
+<span class="nc" id="L185">				Element jobElement = (Element) jobNode;</span>
+<span class="nc" id="L186">				log.info(&quot;about to create job from element&quot;);</span>
+
+<span class="nc" id="L188">				Integer id = createJobFromElement(userId, spaceId, jobElement, pipelineNames, configAttrMapPair);</span>
+
+<span class="nc bnc" id="L190" title="All 2 branches missed.">				if (id &lt; 0) {</span>
+<span class="nc" id="L191">					secondaryErrorMessage = &quot;createJobFromElement returned: &quot; + id;</span>
+<span class="nc" id="L192">					return null; // means there was an error. Error message should have been set</span>
+				}
+<span class="nc" id="L194">				jobIds.add(id);</span>
+			}
+		}
+<span class="nc" id="L197">		log.info(method, &quot;Finished creating jobs from elements, returning job ids.&quot;);</span>
+<span class="nc" id="L198">		this.jobCreationSuccess = true;</span>
+
+<span class="nc" id="L200">		return jobIds;</span>
+	}
+
+
+	/**
+	 * Creates a single solver pipeline from a SolverPipeline XML element. If there are any errors,
+	 * returns null
+	 *
+	 * @param userId The ID of the user who is doing this upload
+	 * @param pipeElement The XML element corresponding to the &lt;SolverPipeline&gt; tag.
+	 * @return The SolverPipeline object, where the pipeline will already have been added to the database.
+	 * On error, null is returned, and the errorMessage string will be set
+	 */
+	private SolverPipeline createPipelineFromElement(int userId, Element pipeElement) {
+<span class="nc" id="L214">		boolean foundPrimary = false;</span>
+<span class="nc" id="L215">		SolverPipeline pipeline = new SolverPipeline();</span>
+<span class="nc" id="L216">		pipeline.setUserId(userId);</span>
+<span class="nc" id="L217">		String name = pipeElement.getAttribute(&quot;name&quot;);</span>
+
+<span class="nc bnc" id="L219" title="All 2 branches missed.">		if (!org.starexec.util.Validator.isValidPipelineName(name)) {</span>
+<span class="nc" id="L220">			errorMessage = name + &quot; is not a valid pipeline name&quot;;</span>
+<span class="nc" id="L221">			return null;</span>
+		}
+<span class="nc" id="L223">		pipeline.setName(name);</span>
+
+<span class="nc" id="L225">		NodeList stages = pipeElement.getChildNodes();</span>
+
+		//data structure for storing all of the unique benchmark inputs in this upload.
+		//We need to validate the following rule-- if there are n unique benchmark inputs,
+		//then the numbers on those inputs must go exactly from 1 to n.
+
+<span class="nc" id="L231">		HashSet&lt;Integer&gt; benchmarkInputs = new HashSet&lt;&gt;();</span>
+
+		//XML files have a stage tag for each stage
+<span class="nc" id="L234">		int currentStage = 0;</span>
+<span class="nc" id="L235">		List&lt;PipelineStage&gt; stageList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">		for (int i = 0; i &lt; stages.getLength(); i++) {</span>
+
+<span class="nc bnc" id="L238" title="All 2 branches missed.">			if (stages.item(i).getNodeName().equals(&quot;PipelineStage&quot;)) {</span>
+<span class="nc" id="L239">				currentStage += 1;</span>
+<span class="nc" id="L240">				Element stage = (Element) stages.item(i);</span>
+<span class="nc" id="L241">				PipelineStage s = new PipelineStage();</span>
+<span class="nc" id="L242">				s.setNoOp(false);</span>
+
+
+<span class="nc bnc" id="L245" title="All 2 branches missed.">				if (stage.hasAttribute(&quot;primary&quot;)) {</span>
+<span class="nc" id="L246">					boolean currentPrimary = Boolean.parseBoolean(stage.getAttribute(&quot;primary&quot;));</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">					if (currentPrimary) {</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">						if (foundPrimary) {</span>
+<span class="nc" id="L249">							errorMessage = &quot;More than one primary stage for pipeline &quot; + pipeline.getName();</span>
+<span class="nc" id="L250">							return null;</span>
+						}
+<span class="nc" id="L252">						foundPrimary = true;</span>
+					}
+<span class="nc" id="L254">					s.setPrimary(true);</span>
+<span class="nc" id="L255">					pipeline.setPrimaryStageNumber(currentStage);</span>
+<span class="nc" id="L256">				} else {</span>
+<span class="nc" id="L257">					s.setPrimary(false);</span>
+				}
+
+<span class="nc" id="L260">				s.setConfigId(Integer.parseInt(stage.getAttribute(&quot;config-id&quot;)));</span>
+				// make sure the user is authorized to use the solver they are trying to use
+<span class="nc" id="L262">				Solver solver = Solvers.getSolverByConfig(s.getConfigId(), false);</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">				if (solver == null) {</span>
+<span class="nc" id="L264">					errorMessage = &quot;The given configuration could not be found&quot;;</span>
+<span class="nc" id="L265">					return null;</span>
+				}
+<span class="nc bnc" id="L267" title="All 2 branches missed.">				if (!Permissions.canUserSeeSolver(solver.getId(), userId)) {</span>
+<span class="nc" id="L268">					errorMessage = &quot;You do not have permission to see the solver&quot; + solver.getId();</span>
+<span class="nc" id="L269">					return null;</span>
+				}
+
+
+<span class="nc" id="L273">				NodeList dependencies = stage.getChildNodes();</span>
+<span class="nc" id="L274">				int inputNumber = 0;</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">				for (int x = 0; x &lt; dependencies.getLength(); x++) {</span>
+
+<span class="nc" id="L277">					Node t = dependencies.item(x);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">					if (t.getNodeType() == Node.ELEMENT_NODE) {</span>
+<span class="nc" id="L279">						Element dependency = (Element) t;</span>
+<span class="nc" id="L280">						PipelineDependency dep = new PipelineDependency();</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">						if (dependency.getTagName().equals(&quot;StageDependency&quot;)) {</span>
+<span class="nc" id="L282">							inputNumber++;</span>
+
+<span class="nc" id="L284">							dep.setType(PipelineInputType.ARTIFACT);</span>
+<span class="nc" id="L285">							int neededStageId = Integer.parseInt(dependency.getAttribute(&quot;stage&quot;));</span>
+
+<span class="nc bnc" id="L287" title="All 2 branches missed.">							if (neededStageId &lt; 1) {</span>
+<span class="nc" id="L288">								errorMessage = &quot;Invalid stage dependency-- all stages are numbered 1 or greater&quot;;</span>
+<span class="nc" id="L289">								return null;</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">							} else if (neededStageId &gt;= (currentStage - 1)) {</span>
+<span class="nc" id="L291">								errorMessage =</span>
+										&quot;Invalid stage dependency-- stages can only depend on earlier stages, and a&quot; +
+										&quot; stages implicitly depend on previous stages. Bad dependency =  Stage &quot; +
+										currentStage + &quot; depends on&quot; + &quot; stage &quot; + neededStageId;
+<span class="nc" id="L295">								return null;</span>
+							}
+<span class="nc" id="L297">							dep.setDependencyId(neededStageId);</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">						} else if (dependency.getTagName().equals(&quot;BenchmarkDependency&quot;)) {</span>
+<span class="nc" id="L299">							inputNumber++;</span>
+
+<span class="nc" id="L301">							dep.setType(PipelineInputType.BENCHMARK);</span>
+
+<span class="nc" id="L303">							dep.setDependencyId(Integer.parseInt(dependency.getAttribute(&quot;input&quot;)));</span>
+<span class="nc" id="L304">							benchmarkInputs.add(dep.getDependencyId());</span>
+						}
+<span class="nc" id="L306">						dep.setInputNumber(inputNumber);</span>
+<span class="nc" id="L307">						s.addDependency(dep);</span>
+
+					}
+				}
+<span class="nc" id="L311">				stageList.add(s);</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">			} else if (stages.item(i).getNodeName().equals(&quot;noop&quot;)) {</span>
+<span class="nc" id="L313">				currentStage += 1;</span>
+<span class="nc" id="L314">				PipelineStage stage = new PipelineStage();</span>
+<span class="nc" id="L315">				stage.setNoOp(true);</span>
+<span class="nc" id="L316">				stage.setConfigId(null);</span>
+<span class="nc" id="L317">				stage.setPrimary(false);</span>
+<span class="nc" id="L318">				stageList.add(stage);</span>
+
+			}
+
+		}
+		//ensure that benchmark inputs are ordered correctly. Benchmark inputs must be ordered from
+		//1 to n, where n is the total number of inputs.
+<span class="nc bnc" id="L325" title="All 2 branches missed.">		if (!benchmarkInputs.isEmpty()) {</span>
+<span class="nc" id="L326">			int maxSeen = Collections.max(benchmarkInputs);</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">			if (maxSeen != benchmarkInputs.size()) {</span>
+<span class="nc" id="L328">				errorMessage = &quot;Invalid benchmark inputs for pipeline = &quot; + pipeline.getName() +</span>
+				               &quot;. Benchmark inputs must be numbered from 1 to n, where n is the total number of &quot; +
+				               &quot;expected inputs&quot;;
+<span class="nc" id="L331">				return null;</span>
+			}
+		}
+
+<span class="nc bnc" id="L335" title="All 2 branches missed.">		if (stageList.size() &gt; R.MAX_STAGES_PER_PIPELINE) {</span>
+<span class="nc" id="L336">			errorMessage = &quot;Too many stages in pipeline &quot; + pipeline.getName() + &quot;. The maximum is &quot; +</span>
+			               R.MAX_STAGES_PER_PIPELINE;
+<span class="nc" id="L338">			return null;</span>
+		}
+<span class="nc bnc" id="L340" title="All 2 branches missed.">		if (!foundPrimary) {</span>
+<span class="nc" id="L341">			errorMessage = &quot;No primary stage specified for pipeline &quot; + pipeline.getName();</span>
+<span class="nc" id="L342">			return null;</span>
+		}
+<span class="nc" id="L344">		pipeline.setStages(stageList);</span>
+<span class="nc" id="L345">		int id = Pipelines.addPipelineToDatabase(pipeline);</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">		if (id &lt;= 0) { //if there was a database error</span>
+<span class="nc" id="L347">			errorMessage = &quot; Internal database error adding a pipeline&quot;;</span>
+<span class="nc" id="L348">			return null;</span>
+		}
+<span class="nc" id="L350">		return pipeline;</span>
+	}
+
+	/**
+	 * Converts an XML element to a StageAttributes object
+	 *
+	 * @param stageAttributes The element to convert
+	 * @param maxStages The max stages present in any pipeline in the job that owns this element. Used
+	 * to verify that stage-nums are chosen properly
+	 * @param userId ID of user that will own this job. Used to verify they have permission to create benchmarks
+	 * in their chosen space
+	 * @param cpuTimeout Default when not specified
+	 * @param wallclock Default when not specified
+	 * @param memoryLimit Default when not specified
+	 * @param queueId ID of the queue for this job. Used to validate chosen timeouts.
+	 * @return
+	 */
+	private StageAttributes elementToStageAttributes(Element stageAttributes, int maxStages, int userId, int
+			cpuTimeout, int wallclock, long memoryLimit, int queueId) {
+<span class="nc" id="L369">		StageAttributes attrs = new StageAttributes();</span>
+
+		//first,  we need to find which stage this is for, given the name of a pipeline and the stage number (not ID)
+
+<span class="nc" id="L373">		int neededStageNum =</span>
+<span class="nc" id="L374">				Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;stage-num&quot;).getAttribute(&quot;value&quot;));</span>
+		// the stage number needs to be between 1 and n if there are a maximum of n stages in any pipeline in this job
+<span class="nc bnc" id="L376" title="All 4 branches missed.">		if (neededStageNum &lt;= 0 || neededStageNum &gt; maxStages) {</span>
+<span class="nc" id="L377">			errorMessage = &quot;StageAttributes tag has invalid stage-num = &quot; + neededStageNum;</span>
+<span class="nc" id="L378">			return null;</span>
+		}
+<span class="nc" id="L380">		attrs.setStageNumber(neededStageNum);</span>
+
+
+		// all timeouts are optional-- they default to job timeouts if not given
+<span class="nc" id="L384">		int stageCpu = cpuTimeout;</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;cpu-timeout&quot;)) {</span>
+<span class="nc" id="L386">			stageCpu =</span>
+<span class="nc" id="L387">					Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;cpu-timeout&quot;).getAttribute(&quot;value&quot;));</span>
+		}
+<span class="nc" id="L389">		int stageWallclock = wallclock;</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;wallclock-timeout&quot;)) {</span>
+<span class="nc" id="L391">			stageWallclock = Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;wallclock-timeout&quot;)</span>
+<span class="nc" id="L392">			                                           .getAttribute(&quot;value&quot;));</span>
+		}
+<span class="nc" id="L394">		long stageMemory = memoryLimit;</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;mem-limit&quot;)) {</span>
+<span class="nc" id="L396">			Double gigMem =</span>
+<span class="nc" id="L397">					Double.parseDouble(DOMHelper.getElementByName(stageAttributes, &quot;mem-limit&quot;).getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L398">			stageMemory = Util.gigabytesToBytes(gigMem);</span>
+		}
+
+		//the space to put new benchmarks created from the job output into
+<span class="nc" id="L402">		Integer stageSpace = null;</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;space-id&quot;)) {</span>
+<span class="nc" id="L404">			stageSpace =</span>
+<span class="nc" id="L405">					Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;space-id&quot;).getAttribute(&quot;value&quot;));</span>
+		}
+
+		// if no suffix is given, benchmarks will retain their old suffixes when they are created
+<span class="nc" id="L409">		String stageBenchSuffix = null;</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;bench-suffix&quot;)) {</span>
+<span class="nc" id="L411">			stageBenchSuffix = DOMHelper.getElementByName(stageAttributes, &quot;bench-suffix&quot;).getAttribute(&quot;value&quot;);</span>
+		}
+
+		// If processors are not given in the stage attributes, that means they are not used for this ttage
+<span class="nc" id="L415">		Integer stagePostProcId = null;</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;postproc-id&quot;)) {</span>
+<span class="nc" id="L417">			stagePostProcId =</span>
+<span class="nc" id="L418">					Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;postproc-id&quot;).getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L419">			attrs.setPostProcessor(Processors.get(stagePostProcId));</span>
+
+		}
+<span class="nc" id="L422">		Integer stagePreProcId = null;</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;preproc-id&quot;)) {</span>
+<span class="nc" id="L424">			stagePreProcId =</span>
+<span class="nc" id="L425">					Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;preproc-id&quot;).getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L426">			attrs.setPreProcessor(Processors.get(stagePreProcId));</span>
+
+		}
+
+<span class="nc bnc" id="L430" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;results-interval&quot;)) {</span>
+<span class="nc" id="L431">			int resultsInterval = Integer.parseInt(DOMHelper.getElementByName(stageAttributes, &quot;results-interval&quot;)</span>
+<span class="nc" id="L432">			                                                .getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L433">			attrs.setResultsInterval(resultsInterval);</span>
+<span class="nc" id="L434">		} else {</span>
+<span class="nc" id="L435">			attrs.setResultsInterval(0);</span>
+		}
+
+<span class="nc bnc" id="L438" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;stdout-save&quot;)) {</span>
+<span class="nc" id="L439">			attrs.setStdoutSaveOption(SaveResultsOption</span>
+<span class="nc" id="L440">					.stringToOption(DOMHelper.getElementByName(stageAttributes, &quot;stdout-save&quot;).getAttribute(&quot;value&quot;)));</span>
+		}
+
+<span class="nc bnc" id="L443" title="All 2 branches missed.">		if (DOMHelper.hasElement(stageAttributes, &quot;other-save&quot;)) {</span>
+<span class="nc" id="L444">			attrs.setExtraOutputSaveOption(SaveResultsOption</span>
+<span class="nc" id="L445">					.stringToOption(DOMHelper.getElementByName(stageAttributes, &quot;other-save&quot;).getAttribute(&quot;value&quot;)));</span>
+		}
+
+		//validate this new set of parameters
+<span class="nc" id="L449">		ValidatorStatusCode stageStatus =</span>
+<span class="nc" id="L450">				CreateJob.isValid(userId, queueId, cpuTimeout, wallclock, stagePreProcId, stagePostProcId);</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">		if (!stageStatus.isSuccess()) {</span>
+<span class="nc" id="L452">			errorMessage = stageStatus.getMessage();</span>
+<span class="nc" id="L453">			return null;</span>
+		}
+
+		//also make sure the user can add both spaces and benchmarks to the given space
+<span class="nc bnc" id="L457" title="All 2 branches missed.">		if (stageSpace != null) {</span>
+<span class="nc" id="L458">			Permission p = Permissions.get(userId, stageSpace);</span>
+<span class="nc bnc" id="L459" title="All 4 branches missed.">			if (!p.canAddBenchmark() || !p.canAddSpace()) {</span>
+<span class="nc" id="L460">				errorMessage =</span>
+						&quot;You do not have permission to add benchmarks or spaces to the space with id = &quot; + stageSpace;
+<span class="nc" id="L462">				return null;</span>
+			}
+		}
+
+
+<span class="nc" id="L467">		attrs.setWallclockTimeout(stageWallclock);</span>
+<span class="nc" id="L468">		attrs.setCpuTimeout(stageCpu);</span>
+<span class="nc" id="L469">		attrs.setMaxMemory(stageMemory);</span>
+<span class="nc" id="L470">		attrs.setSpaceId(stageSpace);</span>
+<span class="nc" id="L471">		attrs.setBenchSuffix(stageBenchSuffix);</span>
+<span class="nc" id="L472">		return attrs;</span>
+	}
+
+	/**
+	 * Creates a single job from an XML job element.
+	 *
+	 * @param userId the ID of the user creating the job
+	 * @param spaceId the space in which the job will be created
+	 * @param jobElement the XML job element as defined in the deployed public/batchJobSchema.xsd
+	 * @return The id of the new job on success or -1 on failure
+	 * @author Tim Smith
+	 */
+	private Integer createJobFromElement(int userId, Integer spaceId, Element jobElement, HashMap&lt;String,
+			SolverPipeline&gt; pipelines, ConfigAttrMapPair configAttrMapPair) {
+		try {
+			// final String method = &quot;createJobFromElement&quot;;
+
+<span class="nc" id="L489">			Element jobAttributes = DOMHelper.getElementByName(jobElement, &quot;JobAttributes&quot;);</span>
+<span class="nc" id="L490">			HashMap&lt;Integer, Solver&gt; configIdsToSolvers = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L492">			Job job = new Job();</span>
+<span class="nc" id="L493">			job.setName(jobElement.getAttribute(&quot;name&quot;));</span>
+<span class="nc" id="L494">			log.info(&quot;name set&quot;);</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;description&quot;)) {</span>
+<span class="nc" id="L496">				Element description = DOMHelper.getElementByName(jobAttributes, &quot;description&quot;);</span>
+<span class="nc" id="L497">				job.setDescription(description.getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L498">			} else {</span>
+<span class="nc" id="L499">				job.setDescription(&quot;no description&quot;);</span>
+			}
+
+<span class="nc bnc" id="L502" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, R.XML_BENCH_FRAMEWORK_ELE_NAME)) {</span>
+<span class="nc" id="L503">				Element framework = DOMHelper.getElementByName(jobAttributes, R.XML_BENCH_FRAMEWORK_ELE_NAME);</span>
+
+<span class="nc" id="L505">				BenchmarkingFramework selectedFramework =</span>
+<span class="nc" id="L506">						BenchmarkingFramework.valueOf(framework.getAttribute(&quot;value&quot;).toUpperCase());</span>
+
+<span class="nc" id="L508">				job.setBenchmarkingFramework(selectedFramework);</span>
+<span class="nc" id="L509">			} else {</span>
+<span class="nc" id="L510">				job.setBenchmarkingFramework(R.DEFAULT_BENCHMARKING_FRAMEWORK);</span>
+			}
+
+<span class="nc" id="L513">			job.setUserId(userId);</span>
+
+<span class="nc" id="L515">			String jobId = jobElement.getAttribute(&quot;id&quot;);</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">			if (!Util.isNullOrEmpty(jobId)) {</span>
+<span class="nc" id="L517">				log.info(&quot;job id set: &quot; + jobId);</span>
+<span class="nc" id="L518">				job.setId(Integer.parseInt(jobId));</span>
+			}
+
+
+<span class="nc" id="L522">			Element queueIdEle = DOMHelper.getElementByName(jobAttributes, &quot;queue-id&quot;);</span>
+<span class="nc" id="L523">			int queueId = Integer.parseInt(queueIdEle.getAttribute(&quot;value&quot;));</span>
+
+<span class="nc" id="L525">			Queue queue = Queues.get(queueId);</span>
+<span class="nc" id="L526">			job.setQueue(queue);</span>
+<span class="nc" id="L527">			job.setPrimarySpace(spaceId);</span>
+
+<span class="nc" id="L529">			String rootName = Spaces.getName(spaceId);</span>
+
+			// this attributes object will be ignored if there is an explicit StageAttributes tag for stage 1
+<span class="nc" id="L532">			StageAttributes stageOneAttributes = new StageAttributes();</span>
+<span class="nc" id="L533">			stageOneAttributes.setStageNumber(1);</span>
+
+<span class="nc" id="L535">			Element wallclockEle = DOMHelper.getElementByName(jobAttributes, &quot;wallclock-timeout&quot;);</span>
+<span class="nc" id="L536">			int wallclock = Integer.parseInt(wallclockEle.getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L537">			job.setWallclockTimeout(wallclock);</span>
+<span class="nc" id="L538">			stageOneAttributes.setWallclockTimeout(wallclock);</span>
+
+<span class="nc" id="L540">			Element cpuTimeoutEle = DOMHelper.getElementByName(jobAttributes, &quot;cpu-timeout&quot;);</span>
+<span class="nc" id="L541">			int cpuTimeout = Integer.parseInt(cpuTimeoutEle.getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L542">			job.setCpuTimeout(cpuTimeout);</span>
+<span class="nc" id="L543">			stageOneAttributes.setCpuTimeout(cpuTimeout);</span>
+
+<span class="nc bnc" id="L545" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;seed&quot;)) {</span>
+<span class="nc" id="L546">				final Element seedElement = DOMHelper.getElementByName(jobAttributes, &quot;seed&quot;);</span>
+<span class="nc" id="L547">				final long seed = Long.parseLong(seedElement.getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L548">				job.setSeed(seed);</span>
+			}
+
+<span class="nc bnc" id="L551" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;kill-delay&quot;)) {</span>
+<span class="nc" id="L552">				Element killDelayEle = DOMHelper.getElementByName(jobAttributes, &quot;kill-delay&quot;);</span>
+<span class="nc" id="L553">				int killDelay = Integer.parseInt(killDelayEle.getAttribute(&quot;value&quot;));</span>
+<span class="nc bnc" id="L554" title="All 4 branches missed.">				if (killDelay &gt;= 10 &amp;&amp; killDelay &lt;= R.MAX_KILL_DELAY) {</span>
+<span class="nc" id="L555">					job.setKillDelay(killDelay);</span>
+				}
+			}
+
+<span class="nc bnc" id="L559" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;soft-time-limit&quot;)) {</span>
+<span class="nc" id="L560">				Element softTimeLimitEle = DOMHelper.getElementByName(jobAttributes, &quot;soft-time-limit&quot;);</span>
+<span class="nc" id="L561">				int softTimeLimit = Integer.parseInt(softTimeLimitEle.getAttribute(&quot;value&quot;));</span>
+<span class="nc bnc" id="L562" title="All 2 branches missed.">				if (softTimeLimit &gt;= 0) {</span>
+<span class="nc" id="L563">					job.setSoftTimeLimit(softTimeLimit);</span>
+				}
+			}
+
+<span class="nc" id="L567">			Element memLimitEle = DOMHelper.getElementByName(jobAttributes, &quot;mem-limit&quot;);</span>
+<span class="nc" id="L568">			double memLimit = Double.parseDouble(memLimitEle.getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L569">			long memoryLimit = Util.gigabytesToBytes(memLimit);</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">			memoryLimit = (memoryLimit &lt;= 0) ? R.DEFAULT_PAIR_VMEM : memoryLimit; //bounds memory limit by system max</span>
+<span class="nc" id="L571">			job.setMaxMemory(memoryLimit);</span>
+<span class="nc" id="L572">			stageOneAttributes.setMaxMemory(memoryLimit);</span>
+
+			// If processors are not given in the stage attributes, that means they are not used for this ttage
+<span class="nc" id="L575">			Integer postProcId = null;</span>
+<span class="nc bnc" id="L576" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;postproc-id&quot;)) {</span>
+<span class="nc" id="L577">				postProcId = Integer.parseInt(DOMHelper.getElementByName(jobAttributes, &quot;postproc-id&quot;)</span>
+<span class="nc" id="L578">				                                       .getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L579">				stageOneAttributes.setPostProcessor(Processors.get(postProcId));</span>
+
+			}
+<span class="nc" id="L582">			Integer preProcId = null;</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;preproc-id&quot;)) {</span>
+<span class="nc" id="L584">				preProcId =</span>
+<span class="nc" id="L585">						Integer.parseInt(DOMHelper.getElementByName(jobAttributes, &quot;preproc-id&quot;).getAttribute</span>
+<span class="nc" id="L586">								(&quot;value&quot;));</span>
+<span class="nc" id="L587">				stageOneAttributes.setPreProcessor(Processors.get(preProcId));</span>
+			}
+
+<span class="nc bnc" id="L590" title="All 2 branches missed.">			if (DOMHelper.hasElement(jobAttributes, &quot;results-interval&quot;)) {</span>
+<span class="nc" id="L591">				int resultsInterval = Integer.parseInt(DOMHelper.getElementByName(jobAttributes, &quot;results-interval&quot;)</span>
+<span class="nc" id="L592">				                                                .getAttribute(&quot;value&quot;));</span>
+
+<span class="nc" id="L594">				stageOneAttributes.setResultsInterval(resultsInterval);</span>
+<span class="nc" id="L595">			} else {</span>
+<span class="nc" id="L596">				stageOneAttributes.setResultsInterval(0);</span>
+			}
+
+			//validate memory limits
+<span class="nc" id="L600">			ValidatorStatusCode status = CreateJob.isValid(userId, queueId, cpuTimeout, wallclock, null, null);</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L602">				errorMessage = &quot;CreateJob.isValid: &quot; + status.getMessage();</span>
+<span class="nc" id="L603">				return -1;</span>
+			}
+
+<span class="nc" id="L606">			log.info(&quot;nodelist about to be set&quot;);</span>
+
+<span class="nc" id="L608">			int maxStages = 0;</span>
+<span class="nc bnc" id="L609" title="All 2 branches missed.">			for (SolverPipeline pipe : pipelines.values()) {</span>
+<span class="nc" id="L610">				maxStages = Math.max(maxStages, pipe.getStages().size());</span>
+<span class="nc" id="L611">			}</span>
+
+			//next, we set the per-stage job attributes
+<span class="nc" id="L614">			NodeList stageAttributeElements = jobElement.getElementsByTagName(&quot;StageAttributes&quot;);</span>
+<span class="nc bnc" id="L615" title="All 2 branches missed.">			for (int index = 0; index &lt; stageAttributeElements.getLength(); index++) {</span>
+<span class="nc" id="L616">				Element stageAttributes = (Element) stageAttributeElements.item(index);</span>
+<span class="nc" id="L617">				StageAttributes attrs =</span>
+<span class="nc" id="L618">						elementToStageAttributes(stageAttributes, maxStages, userId, cpuTimeout, wallclock,</span>
+								memoryLimit, queueId);
+<span class="nc bnc" id="L620" title="All 2 branches missed.">				if (attrs == null) {</span>
+<span class="nc" id="L621">					errorMessage = &quot;elementToStageAttributes returned null.&quot;;</span>
+<span class="nc" id="L622">					return -1;</span>
+				}
+<span class="nc" id="L624">				job.addStageAttributes(attrs);</span>
+			}
+
+<span class="nc bnc" id="L627" title="All 2 branches missed.">			if (!job.containsStageOneAttributes()) {</span>
+<span class="nc" id="L628">				job.addStageAttributes(stageOneAttributes);</span>
+			}
+			//this is the set of every top level space path given in the XML. There must be exactly 1 top level space,
+			// so if there is
+			// more than one then we will need to prepend the rootName onto every pair path to condense it
+			// to a single root space
+<span class="nc" id="L634">			HashSet&lt;String&gt; jobRootPaths = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L635">			Map&lt;Integer, Benchmark&gt; accessibleCachedBenchmarks = new HashMap&lt;&gt;();</span>
+			// IMPORTANT: For efficieny reasons this function has the side-effect of populating configIdsToSolvers
+			//			  as well as accessibleCachedBenchmarks
+
+<span class="nc" id="L639">			final NodeList jobPairs = jobElement.getElementsByTagName(&quot;JobPair&quot;);</span>
+<span class="nc" id="L640">			Optional&lt;String&gt; potentialError =</span>
+<span class="nc" id="L641">					JobPairs.populateConfigIdsToSolversMapAndJobPairsForJobXMLUpload(rootName, userId,</span>
+<span class="nc" id="L642">							accessibleCachedBenchmarks, configIdsToSolvers, job, spaceId, jobRootPaths, new</span>
+									ConfigAttrMapPair(ConfigXmlAttribute.ID), // We need to use config-id as the
+							// attribute for JobPair elements.
+							jobPairs);
+<span class="nc bnc" id="L646" title="All 2 branches missed.">			if (potentialError.isPresent()) {</span>
+<span class="nc" id="L647">				errorMessage = &quot;Error parsing JobPair elements: &quot; + potentialError.get();</span>
+<span class="nc" id="L648">				return -1;</span>
+			}
+<span class="nc" id="L650">			final NodeList uploadedSolverJobPairs = jobElement.getElementsByTagName(&quot;UploadedSolverJobPair&quot;);</span>
+<span class="nc" id="L651">			potentialError =</span>
+<span class="nc" id="L652">					JobPairs.populateConfigIdsToSolversMapAndJobPairsForJobXMLUpload(rootName, userId,</span>
+<span class="nc" id="L653">							accessibleCachedBenchmarks, configIdsToSolvers, job, spaceId, jobRootPaths,</span>
+							configAttrMapPair, uploadedSolverJobPairs);
+<span class="nc bnc" id="L655" title="All 2 branches missed.">			if (potentialError.isPresent()) {</span>
+<span class="nc" id="L656">				errorMessage = &quot;Error parsing UploadedSolverJopPair elements: &quot; + potentialError.get();</span>
+<span class="nc" id="L657">				return -1;</span>
+			}
+
+			//JobLine elements are still job pairs, but they are how multi-stage pairs are denoted
+			//in the XML
+<span class="nc" id="L662">			NodeList jobLines = jobElement.getElementsByTagName(&quot;JobLine&quot;);</span>
+<span class="nc bnc" id="L663" title="All 2 branches missed.">			for (int i = 0; i &lt; jobLines.getLength(); i++) {</span>
+<span class="nc" id="L664">				Node jobLineNode = jobLines.item(i);</span>
+<span class="nc bnc" id="L665" title="All 2 branches missed.">				if (jobLineNode.getNodeType() == Node.ELEMENT_NODE) {</span>
+<span class="nc" id="L666">					Element jobLineElement = (Element) jobLineNode;</span>
+
+<span class="nc" id="L668">					JobPair jobPair = new JobPair();</span>
+<span class="nc" id="L669">					int benchmarkId = Integer.parseInt(jobLineElement.getAttribute(&quot;bench-id&quot;));</span>
+
+					//JobLine elements must reference some pipeline that was created in this file
+<span class="nc" id="L672">					String pipeName = jobLineElement.getAttribute(&quot;pipe-name&quot;);</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">					if (!pipelines.containsKey(pipeName)) {</span>
+<span class="nc" id="L674">						errorMessage =</span>
+								&quot;the pipeline with name = &quot; + pipeName + &quot; is not declared as a pipeline in this file&quot;;
+<span class="nc" id="L676">						return -1;</span>
+					}
+<span class="nc" id="L678">					SolverPipeline currentPipe = pipelines.get(pipeName);</span>
+<span class="nc bnc" id="L679" title="All 4 branches missed.">					if (!job.isUsingDependencies() &amp;&amp; currentPipe.usesDependencies()) {</span>
+<span class="nc" id="L680">						job.setUsingDependencies(true);</span>
+					}
+					//get the path of the job space for this pair. If empty, just use the root space
+<span class="nc" id="L683">					String path = jobLineElement.getAttribute(&quot;job-space-path&quot;);</span>
+<span class="nc bnc" id="L684" title="All 2 branches missed.">					if (path.isEmpty()) {</span>
+<span class="nc" id="L685">						path = rootName;</span>
+					}
+<span class="nc" id="L687">					jobPair.setPath(path);</span>
+
+					//add the top level space of this path to the set of all top level spaces
+<span class="nc bnc" id="L690" title="All 2 branches missed.">					if (path.contains(R.JOB_PAIR_PATH_DELIMITER)) {</span>
+<span class="nc" id="L691">						jobRootPaths.add(path.substring(0, path.indexOf(R.JOB_PAIR_PATH_DELIMITER)));</span>
+					} else {
+<span class="nc" id="L693">						jobRootPaths.add(path);</span>
+					}
+
+<span class="nc" id="L696">					Benchmark b = null;</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">					if (accessibleCachedBenchmarks.containsKey(benchmarkId)) {</span>
+<span class="nc" id="L698">						b = accessibleCachedBenchmarks.get(benchmarkId);</span>
+					} else {
+<span class="nc" id="L700">						b = Benchmarks.get(benchmarkId);</span>
+<span class="nc bnc" id="L701" title="All 2 branches missed.">						if (!Permissions.canUserSeeBench(benchmarkId, userId)) {</span>
+<span class="nc" id="L702">							errorMessage = &quot;You do not have permission to see benchmark &quot; + benchmarkId;</span>
+<span class="nc" id="L703">							return -1;</span>
+						}
+<span class="nc" id="L705">						accessibleCachedBenchmarks.put(benchmarkId, b);</span>
+					}
+<span class="nc" id="L707">					jobPair.setBench(b);</span>
+
+					//the benchmark inputs for the pair.
+<span class="nc" id="L710">					NodeList inputs = jobLineElement.getElementsByTagName(&quot;BenchmarkInput&quot;);</span>
+<span class="nc bnc" id="L711" title="All 2 branches missed.">					for (int inputIndex = 0; inputIndex &lt; inputs.getLength(); inputIndex++) {</span>
+<span class="nc" id="L712">						Element inputElement = (Element) inputs.item(inputIndex);</span>
+<span class="nc" id="L713">						int benchmarkInput = Integer.parseInt(inputElement.getAttribute(&quot;bench-id&quot;));</span>
+						// If the benchmark cache already contains the bench id then we know the user can see it.
+<span class="nc bnc" id="L715" title="All 2 branches missed.">						if (!accessibleCachedBenchmarks.containsKey(benchmarkInput)) {</span>
+<span class="nc bnc" id="L716" title="All 2 branches missed.">							if (!Permissions.canUserSeeBench(benchmarkInput, userId)) {</span>
+<span class="nc" id="L717">								errorMessage = &quot;You do not have permission to see benchmark input &quot; + benchmarkId;</span>
+<span class="nc" id="L718">								return -1;</span>
+							}
+						}
+<span class="nc" id="L721">						jobPair.addBenchInput(benchmarkInput);</span>
+					}
+
+					//make sure that if the pipeline requires n inputs, this pair actually has n specified inputs
+<span class="nc bnc" id="L725" title="All 2 branches missed.">					if (currentPipe.getRequiredNumberOfInputs() != jobPair.getBenchInputs().size()) {</span>
+<span class="nc" id="L726">						errorMessage =</span>
+<span class="nc" id="L727">								&quot;Job pairs have invalid inputs. Given inputs = &quot; + jobPair.getBenchInputs().size() +</span>
+<span class="nc" id="L728">								&quot;, but &quot; + &quot;required inputs = &quot; + currentPipe.getRequiredNumberOfInputs();</span>
+<span class="nc" id="L729">						return -1;</span>
+					}
+
+
+					// add all the jobline stages to this pair, generating the jobline stages from the pipeline stages
+					// of the pipeline being referenced.
+<span class="nc" id="L735">					int stageNumber = 0;</span>
+<span class="nc bnc" id="L736" title="All 2 branches missed.">					for (PipelineStage s : currentPipe.getStages()) {</span>
+<span class="nc" id="L737">						stageNumber++;</span>
+<span class="nc" id="L738">						JoblineStage stage = new JoblineStage();</span>
+<span class="nc" id="L739">						stage.setStageNumber(stageNumber);</span>
+<span class="nc bnc" id="L740" title="All 2 branches missed.">						if (s.isNoOp()) {</span>
+<span class="nc" id="L741">							stage.setNoOp(true);</span>
+
+						} else {
+<span class="nc" id="L744">							stage.setNoOp(false);</span>
+<span class="nc" id="L745">							int configId = s.getConfigId();</span>
+
+<span class="nc bnc" id="L747" title="All 2 branches missed.">							if (!configIdsToSolvers.containsKey(configId)) {</span>
+<span class="nc" id="L748">								Solver solver = Solvers.getSolverByConfig(configId, false);</span>
+<span class="nc bnc" id="L749" title="All 2 branches missed.">								if (!Permissions.canUserSeeSolver(solver.getId(), userId)) {</span>
+<span class="nc" id="L750">									errorMessage = &quot;You do not have permission to see the solver &quot; + solver.getId();</span>
+<span class="nc" id="L751">									return -1;</span>
+								}
+<span class="nc" id="L753">								solver.addConfiguration(Solvers.getConfiguration(configId));</span>
+<span class="nc" id="L754">								configIdsToSolvers.put(configId, solver);</span>
+							}
+<span class="nc" id="L756">							Solver solver = configIdsToSolvers.get(configId);</span>
+<span class="nc" id="L757">							stage.setSolver(solver);</span>
+<span class="nc" id="L758">							stage.setConfiguration(solver.getConfigurations().get(0));</span>
+<span class="nc" id="L759">							stage.setStageId(s.getId());</span>
+
+							// if the stage is primary, then set it as such in the job pair
+<span class="nc bnc" id="L762" title="All 2 branches missed.">							if (s.isPrimary()) {</span>
+<span class="nc" id="L763">								jobPair.setPrimaryStageNumber(jobPair.getStages().size() + 1);</span>
+							}
+						}
+<span class="nc" id="L766">						jobPair.addStage(stage);</span>
+
+<span class="nc" id="L768">					}</span>
+<span class="nc" id="L769">					jobPair.setSpace(Spaces.get(spaceId));</span>
+<span class="nc" id="L770">					job.addJobPair(jobPair);</span>
+				}
+			}
+
+<span class="nc" id="L774">			log.info(&quot;job pairs set&quot;);</span>
+
+<span class="nc bnc" id="L776" title="All 2 branches missed.">			if (job.getJobPairs().isEmpty()) {</span>
+				// No pairs in the job means something is wrong; error out
+<span class="nc" id="L778">				errorMessage = &quot;Error: no job pairs created for the job. Could not proceed with job submission.&quot;;</span>
+<span class="nc" id="L779">				return -1;</span>
+			}
+
+
+			// pairs must have exactly 1 root space, so if there is more than one, we prepend the rootname onto every
+			// path
+<span class="nc bnc" id="L785" title="All 2 branches missed.">			if (jobRootPaths.size() &gt; 1) {</span>
+<span class="nc bnc" id="L786" title="All 2 branches missed.">				for (JobPair p : job.getJobPairs()) {</span>
+<span class="nc" id="L787">					p.setPath(rootName + R.JOB_PAIR_PATH_DELIMITER + p.getPath());</span>
+<span class="nc" id="L788">				}</span>
+			} else {
+<span class="nc" id="L790">				rootName = jobRootPaths.iterator().next();</span>
+			}
+			//check to make sure that, for all spaces where we will be creating mirrored hierarchies to store new
+			// benchmarks,
+			//that we actually can create the mirrored hierarchy without name collisions.
+<span class="nc bnc" id="L795" title="All 2 branches missed.">			for (StageAttributes attrs : job.getStageAttributes()) {</span>
+<span class="nc bnc" id="L796" title="All 2 branches missed.">				if (attrs.getSpaceId() != null) {</span>
+<span class="nc bnc" id="L797" title="All 2 branches missed.">					if (Spaces.getSubSpaceIDbyName(attrs.getSpaceId(), rootName) != -1) {</span>
+<span class="nc" id="L798">						errorMessage = &quot;Error: Can't use space id = &quot; + attrs.getSpaceId() +</span>
+						               &quot; to save benchmarks because it already contains a subspace with the name &quot; +
+						               rootName;
+<span class="nc" id="L801">						return -1;</span>
+					}
+
+				}
+<span class="nc" id="L805">			}</span>
+
+<span class="nc" id="L807">			log.info(&quot;job pair size nonzero&quot;);</span>
+
+<span class="nc" id="L809">			boolean startPaused = getBooleanElementValue(false, &quot;start-paused&quot;, jobAttributes);</span>
+<span class="nc" id="L810">			boolean suppressTimestamps = getBooleanElementValue(false, &quot;suppress-timestamps&quot;, jobAttributes);</span>
+
+<span class="nc" id="L812">			job.setSuppressTimestamp(suppressTimestamps);</span>
+
+
+<span class="nc" id="L815">			log.info(&quot;start-paused: &quot; + (Boolean.toString(startPaused)));</span>
+
+<span class="nc" id="L817">			boolean submitSuccess = Jobs.add(job, spaceId);</span>
+<span class="nc bnc" id="L818" title="All 2 branches missed.">			if (!submitSuccess) {</span>
+<span class="nc" id="L819">				errorMessage = &quot;Error: could not add job with id &quot; + job.getId() + &quot; to space with id &quot; + spaceId;</span>
+<span class="nc" id="L820">				return -1;</span>
+<span class="nc bnc" id="L821" title="All 2 branches missed.">			} else if (startPaused) {</span>
+<span class="nc" id="L822">				Jobs.pause(job.getId());</span>
+			}
+
+<span class="nc" id="L825">			int newJobId = job.getId();</span>
+<span class="nc bnc" id="L826" title="All 2 branches missed.">			if (newJobId == -1) {</span>
+<span class="nc" id="L827">				errorMessage = &quot;Job id was never set.&quot;;</span>
+				// could just skip this and return newJobId but this makes the -1 return explicit.
+<span class="nc" id="L829">				return -1;</span>
+			}
+<span class="nc" id="L831">			return newJobId;</span>
+<span class="nc" id="L832">		} catch (Exception e) {</span>
+<span class="nc" id="L833">			log.error(e.getMessage(), e);</span>
+<span class="nc" id="L834">			errorMessage = &quot;Internal error when creating your job: &quot; + e.getMessage();</span>
+<span class="nc" id="L835">			return -1;</span>
+		}
+	}
+
+	/**
+	 * Gets the value of a boolean element contained in an XML element.
+	 *
+	 * @param defaultValue return this value if the element is not found.
+	 * @param elementName the name of the element to get the value of.
+	 * @param attributes the containing element of the element to find.
+	 * @author Albert Giegerich
+	 */
+	public boolean getBooleanElementValue(boolean defaultValue, String elementName, Element attributes) {
+<span class="nc bnc" id="L848" title="All 2 branches missed.">		if (DOMHelper.hasElement(attributes, elementName)) {</span>
+<span class="nc" id="L849">			Element booleanElement = DOMHelper.getElementByName(attributes, elementName);</span>
+<span class="nc" id="L850">			log.info(elementName + booleanElement.getAttribute(&quot;value&quot;));</span>
+<span class="nc" id="L851">			return Boolean.valueOf(booleanElement.getAttribute(&quot;value&quot;));</span>
+		} else {
+<span class="nc" id="L853">			return defaultValue;</span>
+		}
+	}
+
+	/**
+	 * Checks that the XML file uploaded is valid against the deployed public/batchJobSchema.xsd
+	 *
+	 * @param file the XML file to be validated against the XSD
+	 * @author Tim Smith
+	 */
+	public Boolean validateAgainstSchema(File file, JobXmlType jobXmlType) throws ParserConfigurationException,
+			IOException {
+<span class="nc" id="L865">		ValidatorStatusCode code = XMLUtil.validateAgainstSchema(file, jobXmlType.schemaPath);</span>
+<span class="nc" id="L866">		errorMessage = code.getMessage();</span>
+<span class="nc" id="L867">		return code.isSuccess();</span>
+	}
+
+	public String getSecondaryErrorMessage() {
+<span class="nc" id="L871">		return secondaryErrorMessage;</span>
+	}
+
+	public String getErrorMessage() {
+<span class="nc" id="L875">		return errorMessage;</span>
+	}
+
+	public void setErrorMessage(String errorMessage) {
+<span class="nc" id="L879">		this.errorMessage = errorMessage;</span>
+<span class="nc" id="L880">	}</span>
+
+	public Boolean getJobCreationSuccess() {
+<span class="nc" id="L883">		return jobCreationSuccess;</span>
+	}
+
+	public void setJobCreationSuccess(Boolean jobCreationSuccess) {
+<span class="nc" id="L887">		this.jobCreationSuccess = jobCreationSuccess;</span>
+<span class="nc" id="L888">	}</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

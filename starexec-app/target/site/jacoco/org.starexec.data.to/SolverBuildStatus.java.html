@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SolverBuildStatus.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to</a> &gt; <span class="el_source">SolverBuildStatus.java</span></div><h1>SolverBuildStatus.java</h1><pre class="source lang-java linenums">package org.starexec.data.to;
+
+import com.google.gson.annotations.Expose;
+
+<span class="nc" id="L5">public class SolverBuildStatus {</span>
+<span class="nc" id="L6">	public enum SolverBuildStatusCode {</span>
+<span class="nc" id="L7">		UNBUILT(0), BUILT(1), BUILT_BY_STAREXEC(2), BUILD_FAILED(3), STATUS_UNKNOWN(4);</span>
+
+		private final int val;
+
+<span class="nc" id="L11">		SolverBuildStatusCode(int val) {</span>
+<span class="nc" id="L12">			this.val = val;</span>
+<span class="nc" id="L13">		}</span>
+
+		public int getVal() {
+<span class="nc" id="L16">			return this.val;</span>
+		}
+
+		public static SolverBuildStatusCode toStatusCode(int code) {
+
+<span class="nc bnc" id="L21" title="All 5 branches missed.">			switch (code) {</span>
+				case 0:
+<span class="nc" id="L23">					return SolverBuildStatusCode.UNBUILT;</span>
+				case 1:
+<span class="nc" id="L25">					return SolverBuildStatusCode.BUILT;</span>
+				case 2:
+<span class="nc" id="L27">					return SolverBuildStatusCode.BUILT_BY_STAREXEC;</span>
+				case 3:
+<span class="nc" id="L29">					return SolverBuildStatusCode.BUILD_FAILED;</span>
+			}
+<span class="nc" id="L31">			return SolverBuildStatusCode.STATUS_UNKNOWN;</span>
+		}
+	}
+
+	private static String getDescription(int code) {
+<span class="nc bnc" id="L36" title="All 5 branches missed.">		switch (code) {</span>
+			case 0:
+<span class="nc" id="L38">				return &quot;This solver is not built yet.&quot;;</span>
+			case 1:
+<span class="nc" id="L40">				return &quot;This solver was compiled prior to uploading to StarExec.&quot;;</span>
+			case 2:
+<span class="nc" id="L42">				return &quot;This solver has been built by StarExec.&quot;;</span>
+
+			case 3:
+<span class="nc" id="L45">				return &quot;StarExec has attempted to build this solver and failed.&quot;;</span>
+		}
+<span class="nc" id="L47">		return &quot;This solver has an unknown build status code&quot;;</span>
+	}
+
+	private static String getStatus(int code) {
+<span class="nc bnc" id="L51" title="All 5 branches missed.">		switch (code) {</span>
+			case 0:
+<span class="nc" id="L53">				return &quot;unbuilt&quot;;</span>
+			case 1:
+<span class="nc" id="L55">				return &quot;uploaded built&quot;;</span>
+			case 2:
+<span class="nc" id="L57">				return &quot;built on StarExec&quot;;</span>
+			case 3:
+<span class="nc" id="L59">				return &quot;build failed&quot;;</span>
+		}
+<span class="nc" id="L61">		return &quot;unknown&quot;;</span>
+	}
+
+<span class="nc" id="L64">	@Expose private SolverBuildStatusCode code = SolverBuildStatusCode.STATUS_UNKNOWN;</span>
+
+	public SolverBuildStatusCode getCode() {
+<span class="nc" id="L67">		return code;</span>
+	}
+
+	public void setCode(SolverBuildStatusCode code) {
+<span class="nc" id="L71">		this.code = code;</span>
+<span class="nc" id="L72">	}</span>
+
+	public void setCode(int code) {
+<span class="nc" id="L75">		this.code = SolverBuildStatusCode.toStatusCode(code);</span>
+<span class="nc" id="L76">	}</span>
+
+	public String getStatus() {
+<span class="nc" id="L79">		return SolverBuildStatus.getStatus(this.code.getVal());</span>
+	}
+
+	public String getDescription() {
+<span class="nc" id="L83">		return SolverBuildStatus.getDescription(this.code.getVal());</span>
+	}
+
+	public Boolean hasBeenBuiltOnStarexec() {
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		return code == SolverBuildStatusCode.BUILT_BY_STAREXEC;</span>
+	}
+
+	@Override
+	public String toString() {
+<span class="nc" id="L92">		return this.getStatus();</span>
+	}
+}
+
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

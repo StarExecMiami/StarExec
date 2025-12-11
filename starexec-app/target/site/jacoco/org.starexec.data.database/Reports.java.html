@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Reports.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Reports.java</span></div><h1>Reports.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.data.to.Report;
+import org.starexec.logger.StarLogger;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+
+/**
+ * Handles database interaction for the weekly reports.
+ *
+ * @author Albert Giegerich
+ */
+<span class="nc" id="L17">public class Reports {</span>
+<span class="nc" id="L18">	private static final StarLogger log = StarLogger.getLogger(Reports.class);</span>
+
+	/**
+	 * Set the number of occurrences for an event not related to a queue.
+	 *
+	 * @param eventName   the name of the event.
+	 * @param occurrences the number of times the event occurred.
+	 * @return True on success and false on error
+	 * @author Albert Giegerich
+	 */
+	public static boolean setEventOccurrencesNotRelatedToQueue(String eventName, int occurrences) {
+<span class="nc" id="L29">		return setEventOccurrences(eventName, occurrences, null);</span>
+	}
+
+	/**
+	 * Add occurrences to an event not related to a queue.
+	 *
+	 * @param eventName   the name of the event.
+	 * @param occurrences the number of times the event occurred.
+	 * @return True on success and false on error
+	 * @author Albert Giegerich
+	 */
+	public static boolean addToEventOccurrencesNotRelatedToQueue(String eventName, int occurrences) {
+<span class="nc" id="L41">		return addToEventOccurrences(eventName, occurrences, null);</span>
+	}
+
+	/**
+	 * Add occurrences to an event related to a queue
+	 *
+	 * @param eventName   the name of the event.
+	 * @param occurrences the number of times the event occurred.
+	 * @param queueName   the name of the queue related to the event.
+	 * @return True on success and false on error
+	 */
+	public static boolean addToEventOccurrencesForQueue(String eventName, int occurrences, String queueName) {
+<span class="nc" id="L53">		return addToEventOccurrences(eventName, occurrences, queueName);</span>
+	}
+
+	/**
+	 * Gets every event and the number of times it occurred for events that are not
+	 * related to a queue.
+	 *
+	 * @return a list of ImmutablePairs representing and event and the number of
+	 *         times it occurred.
+	 * @author Albert Giegerich
+	 */
+	public static List&lt;Report&gt; getAllReportsNotRelatedToQueues() {
+<span class="nc" id="L65">		List&lt;Report&gt; reports = new LinkedList&lt;&gt;();</span>
+<span class="nc" id="L66">		Connection con = null;</span>
+<span class="nc" id="L67">		PreparedStatement ps = null;</span>
+<span class="nc" id="L68">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L71">			con = Common.getConnection();</span>
+<span class="nc" id="L72">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAllEventsAndOccurrencesNotRelatedToQueues()&quot;);</span>
+<span class="nc" id="L73">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L75" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L76">				String event = results.getString(&quot;event_name&quot;);</span>
+<span class="nc" id="L77">				Integer occurrences = results.getInt(&quot;occurrences&quot;);</span>
+<span class="nc" id="L78">				Report report = new Report(event, occurrences);</span>
+<span class="nc" id="L79">				reports.add(report);</span>
+<span class="nc" id="L80">			}</span>
+<span class="nc" id="L81">			return reports;</span>
+<span class="nc" id="L82">		} catch (Exception e) {</span>
+<span class="nc" id="L83">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L85">			Common.safeClose(con);</span>
+<span class="nc" id="L86">			Common.safeClose(ps);</span>
+<span class="nc" id="L87">			Common.safeClose(results);</span>
+		}
+<span class="nc" id="L89">		return null;</span>
+	}
+
+	/**
+	 * Get every event, the number of times it occurred, and the queue it occurred
+	 * on.
+	 *
+	 * @return a list of Reports representing the event, the number of times it
+	 *         occurred, and which queue it occurred
+	 *         on.
+	 * @author Albert Giegerich
+	 */
+	public static List&lt;List&lt;Report&gt;&gt; getAllReportsForAllQueues() throws SQLException {
+<span class="nc" id="L102">		LinkedList&lt;Report&gt; reportsForAllQueues = new LinkedList&lt;&gt;();</span>
+<span class="nc" id="L103">		Connection con = null;</span>
+<span class="nc" id="L104">		PreparedStatement ps = null;</span>
+<span class="nc" id="L105">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L108">			con = Common.getConnection();</span>
+<span class="nc" id="L109">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAllEventsAndOccurrencesForAllQueues()&quot;);</span>
+<span class="nc" id="L110">			results = ps.executeQuery();</span>
+
+<span class="nc bnc" id="L112" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L113">				String event = results.getString(&quot;event_name&quot;);</span>
+<span class="nc" id="L114">				Integer occurrences = results.getInt(&quot;occurrences&quot;);</span>
+<span class="nc" id="L115">				String queueName = results.getString(&quot;queue_name&quot;);</span>
+
+<span class="nc" id="L117">				Report report = new Report(event, occurrences, queueName);</span>
+
+<span class="nc" id="L119">				reportsForAllQueues.add(report);</span>
+<span class="nc" id="L120">			}</span>
+<span class="nc" id="L121">			return separateReportsByQueue(reportsForAllQueues);</span>
+		} finally {
+<span class="nc" id="L123">			Common.safeClose(con);</span>
+<span class="nc" id="L124">			Common.safeClose(ps);</span>
+<span class="nc" id="L125">			Common.safeClose(results);</span>
+		}
+	}
+
+	/**
+	 * Resets all report data by setting all occurrences to 0 and deleting any rows
+	 * related to queues.
+	 *
+	 * @author Albert Giegerich
+	 */
+	public static void resetReports() {
+<span class="nc" id="L136">		Connection con = null;</span>
+<span class="nc" id="L137">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L139">			con = Common.getConnection();</span>
+<span class="nc" id="L140">			ps = con.prepareStatement(&quot;SELECT starexec.ResetReports()&quot;);</span>
+<span class="nc" id="L141">			ps.execute();</span>
+<span class="nc" id="L142">		} catch (Exception e) {</span>
+<span class="nc" id="L143">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L145">			Common.safeClose(con);</span>
+<span class="nc" id="L146">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L148">	}</span>
+
+	/**
+	 * Inner method that sets the number of event occurrences not related to a queue
+	 * if queueName is null otherwise
+	 * sets
+	 * the number of event occurrences related to the specified queue.
+	 *
+	 * @param eventName   the name of the event to set the number of occurrences for
+	 * @param occurrences the number of times the event occurred
+	 * @param queueName   the name of the queue for which the event occurred. Null
+	 *                    the event is unrelated to a queue.
+	 * @author Albert Giegerich
+	 */
+	private static boolean setEventOccurrences(String eventName, int occurrences, String queueName) {
+<span class="nc" id="L163">		Connection con = null;</span>
+<span class="nc" id="L164">		PreparedStatement ps = null;</span>
+
+		try {
+<span class="nc" id="L167">			con = Common.getConnection();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">			if (queueName == null) {</span>
+<span class="nc" id="L169">				ps = con.prepareStatement(&quot;SELECT starexec.SetEventOccurrencesNotRelatedToQueue(?, ?)&quot;);</span>
+			} else {
+<span class="nc" id="L171">				ps = con.prepareStatement(&quot;SELECT starexec.SetEventOccurrencesForQueue(?, ?, ?)&quot;);</span>
+<span class="nc" id="L172">				ps.setString(3, queueName);</span>
+			}
+<span class="nc" id="L174">			ps.setString(1, eventName);</span>
+<span class="nc" id="L175">			ps.setInt(2, occurrences);</span>
+<span class="nc" id="L176">			ps.execute();</span>
+<span class="nc" id="L177">			return true;</span>
+<span class="nc" id="L178">		} catch (SQLException e) {</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">			if (&quot;P0002&quot;.equals(e.getSQLState())) {</span>
+<span class="nc" id="L180">				log.warn(&quot;Event '&quot; + eventName + &quot;' not found in reports&quot;);</span>
+			} else {
+<span class="nc" id="L182">				log.error(&quot;setEventOccurrences&quot;, e.getMessage(), e);</span>
+			}
+		} finally {
+<span class="nc" id="L185">			Common.safeClose(con);</span>
+<span class="nc" id="L186">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L188">		return false;</span>
+	}
+
+	/**
+	 * Inner method that adds to the number of event occurrences not related to a
+	 * queue if queueName is null, otherwise
+	 * adds to the number of event occurrences related to the specified queue.
+	 *
+	 * @param eventName   the name of the event
+	 * @param occurrences the number of times the event occurred
+	 * @param queueName   the name of the queue the event is related to. Null if not
+	 *                    related to a queue.
+	 * @return True on success and false on error
+	 * @author Albert Giegerich
+	 */
+	private static boolean addToEventOccurrences(String eventName, int occurrences, String queueName) {
+<span class="nc" id="L204">		Connection con = null;</span>
+<span class="nc" id="L205">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L207">			con = Common.getConnection();</span>
+
+<span class="nc bnc" id="L209" title="All 2 branches missed.">			if (queueName == null) {</span>
+<span class="nc" id="L210">				ps = con.prepareStatement(&quot;CALL starexec.AddToEventOccurrencesNotRelatedToQueue(?, ?)&quot;);</span>
+			} else {
+<span class="nc" id="L212">				ps = con.prepareStatement(&quot;SELECT starexec.AddToEventOccurrencesForQueue(?, ?, ?)&quot;);</span>
+<span class="nc" id="L213">				ps.setString(3, queueName);</span>
+			}
+<span class="nc" id="L215">			ps.setString(1, eventName);</span>
+<span class="nc" id="L216">			ps.setInt(2, occurrences);</span>
+
+<span class="nc" id="L218">			ps.execute();</span>
+<span class="nc" id="L219">			log.debug(&quot;Added &quot; + occurrences + &quot; occurrences to &quot; + eventName +</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">					(queueName == null ? &quot;&quot; : &quot; for queue &quot; + queueName) + &quot;.&quot;);</span>
+<span class="nc" id="L221">			return true;</span>
+<span class="nc" id="L222">		} catch (Exception e) {</span>
+<span class="nc" id="L223">			log.error(e.getMessage(), e);</span>
+		} finally {
+<span class="nc" id="L225">			Common.safeClose(con);</span>
+<span class="nc" id="L226">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L228">		return false;</span>
+	}
+
+	/**
+	 * Turns a list of reports related to queues into a list of lists related to
+	 * queues where each inner list is
+	 * made up
+	 * of reports related to a different queue.
+	 *
+	 * @param reports a list of reports related to queues
+	 * @author Albert Giegerich
+	 */
+	private static List&lt;List&lt;Report&gt;&gt; separateReportsByQueue(List&lt;Report&gt; reports) {
+		// Build a map that separates all the reports into lists based on which queue
+		// they're related to.
+<span class="nc" id="L243">		Map&lt;String, List&lt;Report&gt;&gt; reportMap = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">		for (Report report : reports) {</span>
+<span class="nc" id="L245">			String queueName = report.getQueueName();</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">			if (reportMap.containsKey(queueName)) {</span>
+<span class="nc" id="L247">				reportMap.get(queueName).add(report);</span>
+			} else {
+<span class="nc" id="L249">				List&lt;Report&gt; reportsRelatedToQueue = new LinkedList&lt;&gt;();</span>
+<span class="nc" id="L250">				reportsRelatedToQueue.add(report);</span>
+<span class="nc" id="L251">				reportMap.put(queueName, reportsRelatedToQueue);</span>
+			}
+<span class="nc" id="L253">		}</span>
+
+		// Use the map to build a list of lists where each inner list contains all the
+		// reports related to a single
+		// queue.
+<span class="nc" id="L258">		List&lt;List&lt;Report&gt;&gt; reportsSeparatedByQueue = new LinkedList&lt;&gt;();</span>
+<span class="nc" id="L259">		Set&lt;String&gt; keys = reportMap.keySet();</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		for (String key : keys) {</span>
+<span class="nc" id="L261">			reportsSeparatedByQueue.add(reportMap.get(key));</span>
+<span class="nc" id="L262">		}</span>
+
+<span class="nc" id="L264">		return reportsSeparatedByQueue;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

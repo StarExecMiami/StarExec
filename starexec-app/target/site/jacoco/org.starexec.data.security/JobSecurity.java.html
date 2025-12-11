@@ -1,0 +1,479 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JobSecurity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.security</a> &gt; <span class="el_source">JobSecurity.java</span></div><h1>JobSecurity.java</h1><pre class="source lang-java linenums">package org.starexec.data.security;
+
+import org.starexec.app.RESTServices;
+import org.starexec.data.database.*;
+import org.starexec.data.to.*;
+import org.starexec.data.to.Status.StatusCode;
+import org.starexec.logger.StarLogger;
+
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Optional;
+
+<span class="nc" id="L13">public class JobSecurity {</span>
+
+<span class="nc" id="L15">	private static final StarLogger log = StarLogger.getLogger(JobSecurity.class);</span>
+
+	/**
+	 * Checks to see whether a user can delete all the orphaned jobs owned by some user
+	 *
+	 * @param userIdToDelete The ID of the user having their jobs deleted
+	 * @param userIdMakingRequest The ID of the user making the request
+	 * @return A ValidatorStatusCide
+	 */
+	public static ValidatorStatusCode canUserDeleteOrphanedJobs(int userIdToDelete, int userIdMakingRequest) {
+<span class="nc bnc" id="L25" title="All 2 branches missed.">		if (Users.get(userIdToDelete) == null) {</span>
+<span class="nc" id="L26">			return new ValidatorStatusCode(false, &quot;The given user could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L28" title="All 4 branches missed.">		if (userIdToDelete != userIdMakingRequest &amp;&amp; !GeneralSecurity.hasAdminWritePrivileges(userIdMakingRequest)) {</span>
+<span class="nc" id="L29">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to delete jobs belonging to another user&quot;);
+		}
+
+<span class="nc" id="L33">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static ValidatorStatusCode canUserRecompileJob(int jobId, int userId) {
+<span class="nc bnc" id="L37" title="All 2 branches missed.">		if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {</span>
+<span class="nc" id="L38">			return new ValidatorStatusCode(false, &quot;Only administrators can perform this action&quot;);</span>
+		}
+
+<span class="nc" id="L41">		Job j = Jobs.get(jobId);</span>
+<span class="nc bnc" id="L42" title="All 2 branches missed.">		if (j == null) {</span>
+<span class="nc" id="L43">			return new ValidatorStatusCode(false, &quot;The given job could not be found&quot;);</span>
+		}
+
+<span class="nc" id="L46">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static ValidatorStatusCode canUserChangeJobPriority(int jobId, int userId) {
+<span class="nc bnc" id="L50" title="All 2 branches missed.">		if (!userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L51">			return new ValidatorStatusCode(false, &quot;You do not have permission to change the priority of this job.&quot;);</span>
+		}
+
+<span class="nc" id="L54">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the user is allowed to look at details of a given job space. This is equivalent to
+	 * checking
+	 * whether the user can see the job that owns the job space
+	 *
+	 * @param jobSpaceId The ID of the job space
+	 * @param userId The ID of the user that wants to view details of the job space
+	 * @return A ValidatorStatusCode that will have true if the operation is allowed and false otherwise
+	 */
+	public static ValidatorStatusCode canUserSeeJobSpace(int jobSpaceId, int userId) {
+<span class="nc" id="L67">		JobSpace s = Spaces.getJobSpace(jobSpaceId);</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L69">			return new ValidatorStatusCode(false, &quot;The given job space could not be found&quot;);</span>
+		}
+<span class="nc" id="L71">		return canUserSeeJob(s.getJobId(), userId);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to see the details of the given job
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserSeeJob(int jobId, int userId) {
+<span class="nc" id="L83">		return Permissions.canUserSeeJob(jobId, userId);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to see the details of the job that owns the given pair
+	 *
+	 * @param pairId The ID of the pair
+	 * @param userId The ID of the user making the request
+	 * @return A ValidatorStatusCode
+	 */
+	public static ValidatorStatusCode canUserSeeJobWithPair(int pairId, int userId) {
+<span class="nc" id="L94">		JobPair jp = JobPairs.getPair(pairId);</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">		if (jp == null) {</span>
+<span class="nc" id="L96">			return new ValidatorStatusCode(false, &quot;The given pair could not be found&quot;);</span>
+		}
+<span class="nc" id="L98">		return canUserSeeJob(jp.getJobId(), userId);</span>
+	}
+
+	/**
+	 * Checks if a job is associated with a given anonymous link uuid.
+	 *
+	 * @param anonymousLinkUuid A uuid that needs to be checked if it is connected to the given job space.
+	 * @param jobSpaceId The id of the job space to check
+	 * @return true ValidatorStatusCode if successful otherwise a false ValidatorStatusCode
+	 * @author Eric Burns
+	 */
+	public static ValidatorStatusCode isAnonymousLinkAssociatedWithJobSpace(String anonymousLinkUuid, int jobSpaceId) {
+<span class="nc" id="L110">		JobSpace space = Spaces.getJobSpace(jobSpaceId);</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">		if (space == null) {</span>
+<span class="nc" id="L112">			return new ValidatorStatusCode(false, &quot;The given job space could not be found&quot;);</span>
+		}
+<span class="nc" id="L114">		return isAnonymousLinkAssociatedWithJob(anonymousLinkUuid, space.getJobId());</span>
+	}
+
+	/**
+	 * Checks if a job is associated with a given anonymous link uuid.
+	 *
+	 * @param anonymousLinkUuid A uuid that needs to be checked if it is connected to the given job.
+	 * @param jobId The id of the job to check
+	 * @return true ValidatorStatusCode if successful otherwise a false ValidatorStatusCode
+	 * @author Albert Giegerich
+	 */
+	public static ValidatorStatusCode isAnonymousLinkAssociatedWithJob(String anonymousLinkUuid, int jobId) {
+<span class="nc" id="L126">		final String methodName = &quot;isAnonymousLinkAssociatedWithJob&quot;;</span>
+<span class="nc" id="L127">		log.entry(methodName);</span>
+		try {
+<span class="nc" id="L129">			Optional&lt;Integer&gt; potentialJobId = AnonymousLinks.getIdOfJobAssociatedWithLink(anonymousLinkUuid);</span>
+<span class="nc bnc" id="L130" title="All 4 branches missed.">			if (!potentialJobId.isPresent() || potentialJobId.get() != jobId) {</span>
+<span class="nc" id="L131">				return new ValidatorStatusCode(false, &quot;Job does not exist.&quot;);</span>
+			} else {
+<span class="nc" id="L133">				return new ValidatorStatusCode(true);</span>
+			}
+<span class="nc" id="L135">		} catch (SQLException e) {</span>
+<span class="nc" id="L136">			log.error(methodName, &quot;Caught an SQLException while trying to access anonymous links table data.&quot;);</span>
+<span class="nc" id="L137">			return new ValidatorStatusCode(false, &quot;Database error.&quot;);</span>
+		}
+	}
+
+	/**
+	 * Checks whether a given string is a valid type for the pairsInSpace page
+	 *
+	 * @param type The string to check
+	 * @return True if valid and false otherwise
+	 */
+	public static boolean isValidGetPairType(String type) {
+<span class="nc bnc" id="L148" title="All 8 branches missed.">		return type.equals(&quot;all&quot;) || type.equals(&quot;solved&quot;) || type.equals(&quot;incomplete&quot;) || type.equals(&quot;wrong&quot;) ||</span>
+<span class="nc bnc" id="L149" title="All 6 branches missed.">				type.equals(&quot;unknown&quot;) || type.equals(&quot;resource&quot;) || type.equals(&quot;failed&quot;);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to run a new post processor on the given job
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the requests
+	 * @param pid the ID of the post processor that would be used.
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserPostProcessJob(int jobId, int userId, int pid, int stageNumber) {
+<span class="nc" id="L162">		Job job = Jobs.get(jobId);</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">		if (job == null) {</span>
+<span class="nc" id="L164">			return new ValidatorStatusCode(false, &quot;The job could not be found&quot;);</span>
+		}
+<span class="nc" id="L166">		boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userId);</span>
+
+<span class="nc bnc" id="L168" title="All 4 branches missed.">		if (job.getUserId() != userId &amp;&amp; !isAdmin) {</span>
+<span class="nc" id="L169">			return new ValidatorStatusCode(false, &quot;You do not have permission to post process this job&quot;);</span>
+		}
+<span class="nc" id="L171">		Processor p = Processors.get(pid);</span>
+<span class="nc bnc" id="L172" title="All 6 branches missed.">		if (p == null || !Users.isMemberOfCommunity(userId, p.getCommunityId()) &amp;&amp; !isAdmin) {</span>
+<span class="nc" id="L173">			return new ValidatorStatusCode(false, &quot;You do not have permission to use the selected post processor&quot;);</span>
+		}
+
+<span class="nc bnc" id="L176" title="All 2 branches missed.">		if (!Jobs.canJobBePostProcessed(jobId)) {</span>
+<span class="nc" id="L177">			return new ValidatorStatusCode(false, &quot;The job is not yet completed&quot;);</span>
+		}
+
+<span class="nc bnc" id="L180" title="All 2 branches missed.">		if (stageNumber &lt;= 0) {</span>
+<span class="nc" id="L181">			return new ValidatorStatusCode(false, &quot;Stage numbers must be greater than 0&quot;);</span>
+		}
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">		if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L185">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and cannot be processed&quot;);</span>
+		}
+
+<span class="nc" id="L188">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Ensures a given user has permission to rerun pairs of a given status code
+	 *
+	 * @param jobId
+	 * @param userId
+	 * @param statusCode
+	 * @return
+	 */
+	public static ValidatorStatusCode canUserRerunPairs(int jobId, int userId, int statusCode) {
+<span class="nc" id="L200">		ValidatorStatusCode result = canUserRerunPairs(jobId, userId);</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">		if (!result.isSuccess()) {</span>
+<span class="nc" id="L202">			return result;</span>
+		}
+
+		//can't rerun pairs that are not complete
+<span class="nc bnc" id="L206" title="All 8 branches missed.">		if ((statusCode &gt; StatusCode.ERROR_GENERAL.getVal() &amp;&amp; statusCode != StatusCode.ERROR_PRE_PROCESSOR.getVal() &amp;&amp; statusCode != StatusCode.ERROR_POST_PROCESSOR.getVal()) || statusCode == StatusCode.STATUS_ENQUEUED.getVal() ||</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">				statusCode == StatusCode.STATUS_RUNNING.getVal() ||</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">				statusCode == StatusCode.STATUS_PENDING_SUBMIT.getVal()) {</span>
+<span class="nc" id="L209">			return new ValidatorStatusCode(false, &quot;This pair is not yet completed&quot;);</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">		} else if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L211">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and no pairs can be rerun&quot;);</span>
+		}
+<span class="nc" id="L213">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static ValidatorStatusCode canUserSeeRerunPairsPage(int jobId, int userId) {
+<span class="nc" id="L217">		return rerunPairsHelper(jobId, userId, GeneralSecurity.hasAdminReadPrivileges(userId));</span>
+	}
+
+	public static ValidatorStatusCode canUserRerunPairs(int jobId, int userId) {
+<span class="nc" id="L221">		return rerunPairsHelper(jobId, userId, GeneralSecurity.hasAdminWritePrivileges(userId));</span>
+	}
+
+	private static ValidatorStatusCode rerunPairsHelper(int jobId, int userId, boolean readOrWritePrivileges) {
+<span class="nc" id="L225">		final String methodName = &quot;rerunPairsHelper&quot;;</span>
+<span class="nc" id="L226">		Job job = Jobs.get(jobId);</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">		if (job == null) {</span>
+<span class="nc" id="L228">			return new ValidatorStatusCode(false, &quot;The job could not be found&quot;);</span>
+		}
+
+<span class="nc bnc" id="L231" title="All 4 branches missed.">		if (job.getUserId() != userId &amp;&amp; !readOrWritePrivileges) {</span>
+<span class="nc" id="L232">			return new ValidatorStatusCode(false, &quot;You do not have permission to rerun pairs in this job&quot;);</span>
+		}
+<span class="nc bnc" id="L234" title="All 2 branches missed.">		if (job.isBuildJob()) {</span>
+<span class="nc" id="L235">			return new ValidatorStatusCode(</span>
+					false, &quot;You may not rerun solver build jobs. Please reupload your solver instead.&quot;);
+		}
+
+<span class="nc" id="L239">		JobStatus status = null;</span>
+		try {
+<span class="nc" id="L241">			status = Jobs.getJobStatus(jobId);</span>
+<span class="nc" id="L242">		} catch (SQLException e) {</span>
+<span class="nc" id="L243">			log.error(methodName, &quot;Could not find job &quot; + jobId + &quot;in DB&quot;, e);</span>
+<span class="nc" id="L244">			return RESTServices.ERROR_DATABASE;</span>
+<span class="nc" id="L245">		}</span>
+
+<span class="nc bnc" id="L247" title="All 2 branches missed.">		if (status == JobStatus.PAUSED) {</span>
+<span class="nc" id="L248">			return new ValidatorStatusCode(</span>
+					false, &quot;This job is currently paused. Please resume it before rerunning pairs&quot;);
+		}
+<span class="nc bnc" id="L251" title="All 2 branches missed.">		if (status == JobStatus.KILLED) {</span>
+<span class="nc" id="L252">			return new ValidatorStatusCode(false, &quot;This job has been killed. It may no longer be run&quot;);</span>
+		}
+<span class="nc bnc" id="L254" title="All 2 branches missed.">		if (Jobs.isJobDeleted(jobId)) {</span>
+<span class="nc" id="L255">			return new ValidatorStatusCode(false, &quot;This job has been deleted already&quot;);</span>
+		}
+<span class="nc bnc" id="L257" title="All 2 branches missed.">		if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L258">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and no pairs can be rerun&quot;);</span>
+		}
+<span class="nc" id="L260">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static ValidatorStatusCode canUserRerunAllPairs(int jobId, int userId) {
+<span class="nc bnc" id="L264" title="All 2 branches missed.">		if (!Jobs.isJobComplete(jobId)) {</span>
+<span class="nc" id="L265">			return new ValidatorStatusCode(false, &quot;This job is not yet completed&quot;);</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">		} else if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L267">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and no pairs can be rerun&quot;);</span>
+		}
+<span class="nc" id="L269">		return canUserRerunPairs(jobId, userId);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to pause the given job
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserPauseJob(int jobId, int userId) {
+<span class="nc" id="L281">		Job job = Jobs.get(jobId);</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">		if (job == null) {</span>
+<span class="nc" id="L283">			return new ValidatorStatusCode(false, &quot;The job could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L285" title="All 2 branches missed.">		if (!userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L286">			return new ValidatorStatusCode(false, &quot;You do not have permission to pause this job&quot;);</span>
+		}
+<span class="nc" id="L288">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * @param jobId The id of the job to get an anonymous link for.
+	 * @param userId The id of the user trying to get the anonymous link.
+	 * @return A successful ValidatorStatusCode if the user can get an anonymous link for this job. An unsuccessful one
+	 * otherwise.
+	 * @author Albert Giegerich
+	 */
+	public static ValidatorStatusCode canUserGetAnonymousLink(int jobId, int userId) {
+<span class="nc bnc" id="L299" title="All 2 branches missed.">		if (userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L300">			return new ValidatorStatusCode(true);</span>
+		} else {
+<span class="nc" id="L302">			return new ValidatorStatusCode(false, &quot;You do not have permission to get an anonymous link for this job.&quot;);</span>
+		}
+	}
+
+	/**
+	 * Checks to see if the given user has permission to resume the given job
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserResumeJob(int jobId, int userId) {
+<span class="nc bnc" id="L315" title="All 2 branches missed.">		if (!userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L316">			return new ValidatorStatusCode(false, &quot;You do not have permission to resume this job&quot;);</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">		} else if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L318">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and cannot be resumed&quot;);</span>
+		}
+
+<span class="nc bnc" id="L321" title="All 2 branches missed.">		if (Users.isDiskQuotaExceeded(userId)) {</span>
+<span class="nc" id="L322">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;Your disk quota has been exceeded: please clear out some old solvers, jobs, or benchmarks before &quot; +
+							&quot;proceeding&quot;
+			);
+		}
+
+<span class="nc" id="L329">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to delete all jobs in the given list of jobs
+	 *
+	 * @param jobIds The IDs of the jobs being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise. If the user does not have the needed permissions for even one job, the error code will be returned
+	 */
+	public static ValidatorStatusCode canUserDeleteJobs(List&lt;Integer&gt; jobIds, int userId) {
+<span class="nc bnc" id="L341" title="All 2 branches missed.">		for (Integer jid : jobIds) {</span>
+<span class="nc" id="L342">			ValidatorStatusCode status = canUserDeleteJob(jid, userId);</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L344">				return status;</span>
+			}
+<span class="nc" id="L346">		}</span>
+<span class="nc" id="L347">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to the given job
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise.
+	 */
+	public static ValidatorStatusCode canUserDeleteJob(int jobId, int userId) {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (!userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L360">			return new ValidatorStatusCode(false, &quot;You do not have permission to delete this job&quot;);</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">		} else if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L362">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and cannot be deleted&quot;);</span>
+		}
+<span class="nc" id="L364">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to change the queue the given job is running on
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise.
+	 */
+	public static ValidatorStatusCode canChangeQueue(int jobId, int userId, int queueId) {
+<span class="nc bnc" id="L376" title="All 2 branches missed.">		if (!userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L377">			return new ValidatorStatusCode(false, &quot;You do not have permission to change queues for this job&quot;);</span>
+		}
+<span class="nc" id="L379">		Queue q = Queues.get(queueId);</span>
+
+<span class="nc bnc" id="L381" title="All 2 branches missed.">		if (q == null) {</span>
+<span class="nc" id="L382">			return new ValidatorStatusCode(false, &quot;The given queue could not be found&quot;);</span>
+		}
+<span class="nc" id="L384">		List&lt;Queue&gt; queues = Queues.getUserQueues(userId);</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">		for (Queue queue : queues) {</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">			if (queue.getId() == queueId) {</span>
+<span class="nc" id="L387">				return new ValidatorStatusCode(true);</span>
+			}
+<span class="nc" id="L389">		}</span>
+<span class="nc" id="L390">		return new ValidatorStatusCode(false, &quot;You do not have permission to access the selected queue&quot;);</span>
+	}
+
+	/**
+	 * Checks if a user can add job pairs to a given job.
+	 *
+	 * @param jobId the id of the job to check permissions for.
+	 * @param userId the id of the user to check permissions for.
+	 * @return an appropriate ValidatorStatusCode.
+	 * @author Albert Giegerich
+	 */
+	public static ValidatorStatusCode canUserAddJobPairs(int jobId, int userId) {
+<span class="nc bnc" id="L402" title="All 2 branches missed.">		if (!userOwnsJobOrIsAdmin(jobId, userId)) {</span>
+<span class="nc" id="L403">			return new ValidatorStatusCode(false, &quot;You do not have permission to add job pairs for this job.&quot;);</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">		} else if (Jobs.isReadOnly(jobId)) {</span>
+<span class="nc" id="L405">			return new ValidatorStatusCode(false, &quot;This job is currently Read Only and no pairs can be added&quot;);</span>
+		}
+<span class="nc" id="L407">		Job j = Jobs.get(jobId);</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">		if (j.isBuildJob()) {</span>
+<span class="nc" id="L409">			return new ValidatorStatusCode(false, &quot;You can not add job pairs to a solver build job&quot;);</span>
+		}
+<span class="nc" id="L411">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user either owns the given job or is an admin
+	 *
+	 * @param jobId The ID of the job being checked
+	 * @param userId The ID of the user making the request
+	 */
+	public static boolean userOwnsJobOrIsAdmin(int jobId, int userId) {
+<span class="nc" id="L421">		Job j = Jobs.get(jobId);</span>
+<span class="nc bnc" id="L422" title="All 6 branches missed.">		return j != null &amp;&amp; (GeneralSecurity.hasAdminWritePrivileges(userId) || j.getUserId() == userId);</span>
+	}
+
+	/**
+	 * Checks to see whether the user is allowed to download the Json object representing the job
+	 *
+	 * @param jobId
+	 * @param userId
+	 * @return
+	 */
+	public static ValidatorStatusCode canGetJsonJob(int jobId, int userId) {
+<span class="nc" id="L433">		ValidatorStatusCode canSeeJobStatus = Permissions.canUserSeeJob(jobId, userId);</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">		if (!canSeeJobStatus.isSuccess()) {</span>
+<span class="nc" id="L435">			return canSeeJobStatus;</span>
+		}
+<span class="nc" id="L437">		Job s = Jobs.getIncludeDeleted(jobId);</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L439">			return new ValidatorStatusCode(false, &quot;The given job could not be found&quot;);</span>
+		}
+<span class="nc" id="L441">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a job can be run with community default settings in the given space
+	 *
+	 * @param userId ID of the user creating the job
+	 * @param sId Id of the space to put the job in
+	 * @return
+	 */
+	public static ValidatorStatusCode canCreateQuickJobWithCommunityDefaults(int userId, int sId, int statusId) {
+<span class="nc" id="L452">		final String methodName = &quot;canCreateQuickJobWithCommunityDefaults&quot;;</span>
+<span class="nc" id="L453">		ValidatorStatusCode status = JobSecurity.canUserCreateJobInSpace(userId, sId);</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L455">			return status;</span>
+		}
+		try {
+<span class="nc" id="L458">			DefaultSettings settings = Settings.getProfileById(statusId);</span>
+<span class="nc bnc" id="L459" title="All 4 branches missed.">			if (settings.getBenchIds().isEmpty() || Benchmarks.get(settings.getBenchIds().get(0)) == null) {</span>
+<span class="nc" id="L460">				return new ValidatorStatusCode(false, &quot;The selected community has no default benchmark selected&quot;);</span>
+			}
+<span class="nc" id="L462">		} catch (SQLException e) {</span>
+<span class="nc" id="L463">			log.error(methodName, &quot;Caught SQLException.&quot;, e);</span>
+<span class="nc" id="L464">			return RESTServices.ERROR_DATABASE;</span>
+<span class="nc" id="L465">		}</span>
+<span class="nc" id="L466">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static ValidatorStatusCode canUserCreateJobInSpace(int userId, int sId) {
+<span class="nc" id="L470">		Permission p = Permissions.get(userId, sId);</span>
+
+<span class="nc bnc" id="L472" title="All 4 branches missed.">		if (p == null || !p.canAddJob()) {</span>
+<span class="nc" id="L473">			return new ValidatorStatusCode(false, &quot;You do not have permission to create a job in this space&quot;);</span>
+		}
+
+<span class="nc" id="L476">		return new ValidatorStatusCode(true);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,178 @@
+// =============================================================================
+// REGISTRATION PAGE STYLES
+// =============================================================================
+
+@import "../common/_pass_strength_meter";
+@import "../global/colors";
+@import "../global/typography";
+@import "../global/spacing";
+@import "../global/mixins";
+
+// =============================================================================
+// PAGE LAYOUT
+// =============================================================================
+
+.registration-page {
+    min-height: 100vh;
+    background: $background-color;
+}
+
+.registration-header {
+    background: linear-gradient(
+        135deg,
+        $foreground-color 0%,
+        lighten($foreground-color, 5%) 100%
+    );
+    padding: $spacing-2xl 0;
+    border-bottom: 1px solid $surface-tertiary;
+    text-align: center;
+
+    @include mobile {
+        padding: $spacing-xl 0;
+    }
+}
+
+.page-title {
+    font-size: $font-size-3xl;
+    font-weight: $font-weight-bold;
+    color: $text-main-color;
+    margin: 0 0 $spacing-xs;
+
+    @include mobile {
+        font-size: $font-size-2xl;
+    }
+}
+
+.page-subtitle {
+    font-size: $font-size-lg;
+    color: $text-accent-color;
+    margin: 0;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 $spacing-lg;
+}
+
+// =============================================================================
+// FORM WRAPPER
+// =============================================================================
+
+.registration-form-wrapper {
+    padding: $spacing-2xl 0;
+
+    @include mobile {
+        padding: $spacing-xl 0;
+    }
+}
+
+.registration-form {
+    background: $foreground-color;
+    border: 1px solid $surface-tertiary;
+    border-radius: 16px;
+    padding: $spacing-2xl;
+
+    @include mobile {
+        padding: $spacing-lg;
+        border-radius: 12px;
+    }
+}
+
+// =============================================================================
+// ALERT STYLES
+// =============================================================================
+// Alert styles are now centralized in components/alert.scss
+// No page-specific overrides needed - use .alert and .alert--{type} classes
+// For backwards compatibility, legacy styles are handled by alert.scss
+
+// =============================================================================
+// SECTION ICONS
+// =============================================================================
+
+.section-icon {
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+// =============================================================================
+// LEGACY STYLES (for backwards compatibility)
+// =============================================================================
+
+fieldset {
+    width: 75%;
+    margin-top: 25px;
+    margin-bottom: 25px;
+
+    table {
+        margin: auto;
+        width: 100%;
+        height: 100%;
+
+        tr td:first-child {
+            width: 222px;
+            margin: 10px;
+        }
+    }
+}
+
+table tr td {
+    &:first-child.label {
+        padding-left: 10px;
+        vertical-align: middle;
+    }
+
+    padding: 5px;
+}
+
+td button {
+    float: right;
+}
+
+tr .label {
+    min-width: 120px;
+    float: top;
+}
+
+.shade {
+    background-color: $background-color;
+}
+
+table .styled {
+    width: 212px;
+    height: 28px;
+    font-size: 16px;
+
+    &.error {
+        border: solid 1px $accent-red;
+    }
+}
+
+textarea#reason {
+    height: 80px;
+
+    &.error {
+        border: solid 1px $accent-red;
+    }
+}
+
+.registration {
+    visibility: hidden;
+}
+
+#javascriptDisabled {
+    margin-top: 200px;
+    text-align: center;
+    color: $accent-red;
+    font-weight: bold;
+}
+
+#archiveType {
+    width: 212px;
+    height: 28px;
+
+    &.error {
+        border: solid 1px $accent-red;
+    }
+}

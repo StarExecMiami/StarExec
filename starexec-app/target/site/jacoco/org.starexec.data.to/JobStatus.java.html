@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JobStatus.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to</a> &gt; <span class="el_source">JobStatus.java</span></div><h1>JobStatus.java</h1><pre class="source lang-java linenums">package org.starexec.data.to;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+/**
+ * Represents a status for a job
+ */
+<span class="nc" id="L9">public enum JobStatus {</span>
+<span class="nc" id="L10">	UNKNOWN(&quot;unknown&quot;), COMPLETE(&quot;complete&quot;), RUNNING(&quot;incomplete&quot;), PAUSED(&quot;paused&quot;), KILLED(&quot;killed&quot;), PROCESSING(</span>
+			&quot;incomplete&quot;), // This is only &quot;incomplete&quot; instead of &quot;processing&quot; for historical reasons
+<span class="nc" id="L12">	DELETED(&quot;deleted&quot;), GLOBAL_PAUSE(&quot;global pause&quot;);</span>
+
+	private final String status;
+
+<span class="nc" id="L16">	JobStatus(String status) {</span>
+<span class="nc" id="L17">		this.status = status;</span>
+<span class="nc" id="L18">	}</span>
+
+	@Override
+	public String toString() {
+<span class="nc" id="L22">		return status;</span>
+	}
+
+	/**
+	 * Returns a JobStatus from an SQL result
+	 *
+	 * @param result SQL result containing ONLY a JobStatus label
+	 * @return the corresponding JobStatus
+	 */
+	public static JobStatus fromResultSet(ResultSet result) throws SQLException {
+<span class="nc" id="L32">		result.next();</span>
+<span class="nc" id="L33">		return valueOf(result.getString(1));</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

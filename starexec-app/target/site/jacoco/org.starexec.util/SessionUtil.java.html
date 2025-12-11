@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SessionUtil.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.util</a> &gt; <span class="el_source">SessionUtil.java</span></div><h1>SessionUtil.java</h1><pre class="source lang-java linenums">package org.starexec.util;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.Permissions;
+import org.starexec.data.database.Spaces;
+import org.starexec.data.to.Permission;
+import org.starexec.data.to.User;
+import org.starexec.logger.StarLogger;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
+import java.util.HashMap;
+
+/**
+ * Contains handy methods for accessing data within a user's session
+ * @author Tyler Jensen
+ */
+<span class="nc" id="L18">public class SessionUtil {	</span>
+<span class="fc" id="L19">	private static final StarLogger log = StarLogger.getLogger(SessionUtil.class);</span>
+	public static final String USER = &quot;user&quot;;	// The string we store the user's User object under
+	public static final String PERMISSION_CACHE = &quot;perm&quot;;	// The string we store the user's permission cache object under
+	/**
+	 * @param request The request to retrieve the user object from
+	 * @return The user object representing the currently logged in user
+	 */
+	public static User getUser(HttpServletRequest request) {
+<span class="nc" id="L27">		final String method = &quot;getUser&quot;;</span>
+<span class="nc" id="L28">		log.entry(method);</span>
+		
+		// If they have a valid session, then check for the user object
+<span class="nc" id="L31">		User u = null;</span>
+		try {
+<span class="nc" id="L33">			HttpSession session = request.getSession(false);</span>
+<span class="nc bnc" id="L34" title="All 2 branches missed.">			if (session != null) {</span>
+<span class="nc" id="L35">				u = (User) session.getAttribute(SessionUtil.USER);</span>
+			}
+<span class="nc" id="L37">		} catch (Exception e) {</span>
+<span class="nc" id="L38">			log.debug(method, &quot;Exception getting user: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L39">		}</span>
+		
+		// Only log when there's an issue (reduce log spam)
+<span class="nc bnc" id="L42" title="All 4 branches missed.">		if (u == null &amp;&amp; request.getSession(false) != null) {</span>
+<span class="nc" id="L43">			log.debug(method, &quot;User session exists but user not found in session&quot;);</span>
+		}
+		
+<span class="nc" id="L46">		return u;</span>
+	}	/**
+	 * @param request The request to get the user's id from
+	 * @return The current user's id
+	 */
+	public static int getUserId(HttpServletRequest request) {
+<span class="nc" id="L52">		HttpSession session = request.getSession(false);</span>
+<span class="nc bnc" id="L53" title="All 2 branches missed.">		if (session == null) {</span>
+<span class="nc" id="L54">			return R.PUBLIC_USER_ID;</span>
+		}
+<span class="nc" id="L56">		return SessionUtil.getUserId(session);</span>
+	}
+	
+	/**
+	 * @param session The session to get the user's id from
+	 * @return The current user's id
+	 */
+	private static int getUserId(HttpSession session) {
+<span class="nc bnc" id="L64" title="All 2 branches missed.">		if (session.getAttribute(SessionUtil.USER)==null) {</span>
+<span class="nc" id="L65">			return R.PUBLIC_USER_ID;</span>
+		}
+<span class="nc" id="L67">		 return ((User)session.getAttribute(SessionUtil.USER)).getId();</span>
+	}
+	
+	/**
+	 * @param request The request to get the user's cache from
+	 * @return The current user's permission cache
+	 */
+	public static HashMap&lt;Integer, Permission&gt; getPermissionCache(HttpServletRequest request) {
+<span class="nc" id="L75">		return SessionUtil.getPermissionCache(request.getSession(false));</span>
+	}
+		
+	/**
+	 * @param session The session to get the user's cache from
+	 * @return The current user's permission cache
+	 */
+	@SuppressWarnings(&quot;unchecked&quot;)
+	public static HashMap&lt;Integer, Permission&gt; getPermissionCache(HttpSession session) {
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if (session == null) {</span>
+<span class="nc" id="L85">			return new HashMap&lt;&gt;();</span>
+		}
+<span class="nc bnc" id="L87" title="All 2 branches missed.">		if (session.getAttribute(SessionUtil.PERMISSION_CACHE)==null) {</span>
+<span class="nc" id="L88">			HashMap&lt;Integer, Permission&gt; newCache = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L89">			session.setAttribute(SessionUtil.PERMISSION_CACHE, newCache);</span>
+<span class="nc" id="L90">			return newCache;</span>
+		}
+<span class="nc" id="L92">		return (HashMap&lt;Integer, Permission&gt;)session.getAttribute(SessionUtil.PERMISSION_CACHE);</span>
+	}
+	
+	/**
+	 * @param request The request to get the permission from
+	 * @param spaceId The space to get the current user's permissions for
+	 * @return The permission associated with the given space
+	 */
+	public static Permission getPermission(HttpServletRequest request, int spaceId) {
+<span class="nc" id="L101">		return SessionUtil.getPermission(request.getSession(false), spaceId);</span>
+	}
+	
+	
+	/**
+	 * @param session The session to get the permission from
+	 * @param spaceId The space to get the current user's permissions for
+	 * @return The permission associated with the given space
+	 */
+	private static Permission getPermission(HttpSession session, int spaceId) {
+<span class="nc bnc" id="L111" title="All 2 branches missed.">		if (session == null) {</span>
+<span class="nc" id="L112">			return new Permission();</span>
+		}
+<span class="nc" id="L114">		final int userId = SessionUtil.getUserId(session);</span>
+<span class="nc" id="L115">		HashMap&lt;Integer, Permission&gt; cache = SessionUtil.getPermissionCache(session);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">		if(!cache.containsKey(spaceId)) {</span>
+<span class="nc" id="L117">			SessionUtil.cachePermission(session, spaceId);</span>
+<span class="nc" id="L118">			cache = SessionUtil.getPermissionCache(session);</span>
+		} else {
+<span class="nc" id="L120">			log.debug(&quot;Cache hit for spaceId=&quot;+spaceId);</span>
+		}
+
+<span class="nc" id="L123">		Permission p = cache.get(spaceId);</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">		if (p != null) {</span>
+<span class="nc" id="L125">			log.debug(&quot;Returning cached permission: &quot;+p);</span>
+<span class="nc" id="L126">			return p;</span>
+		}
+
+<span class="nc" id="L129">		boolean isPublic = Spaces.isPublicSpace(spaceId);</span>
+
+<span class="nc bnc" id="L131" title="All 2 branches missed.">		if (userId != R.PUBLIC_USER_ID) {</span>
+			// For a real (logged in) user, attempt a one-time forced reload before falling back.
+<span class="nc" id="L133">			forceReloadPermission(session, spaceId);</span>
+<span class="nc" id="L134">			p = cache.get(spaceId); // cache reference unchanged; entry may have been added</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">			if (p != null) {</span>
+<span class="nc" id="L136">				log.debug(&quot;Reload succeeded, returning permission: &quot;+p);</span>
+<span class="nc" id="L137">				return p;</span>
+			}
+		}
+
+<span class="nc bnc" id="L141" title="All 2 branches missed.">		if (isPublic) {</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">			if (userId == R.PUBLIC_USER_ID) {</span>
+<span class="nc" id="L143">				log.debug(&quot;Public space and public user; returning empty permission&quot;);</span>
+			} else {
+<span class="nc" id="L145">				log.debug(&quot;Public space but no specific permission row; returning empty permission&quot;);</span>
+			}
+<span class="nc" id="L147">			return Permissions.getEmptyPermission();</span>
+		}
+
+<span class="nc" id="L150">		log.debug(&quot;Permission unresolved (private space) returning null&quot;);</span>
+<span class="nc" id="L151">		return null;</span>
+	}
+
+	/**
+	 * Looks up the user's permissions on the given space from the database and adds it
+	 * to the user's permission cache
+	 * @param session The session where the cache is located
+	 * @param spaceId The id of the space to cache the permission for
+	 */
+	private static void cachePermission(HttpSession session, int spaceId) {
+<span class="nc bnc" id="L161" title="All 2 branches missed.">		if (session == null) {</span>
+<span class="nc" id="L162">			return;</span>
+		}
+<span class="nc" id="L164">		HashMap&lt;Integer, Permission&gt; cache = SessionUtil.getPermissionCache(session);</span>
+<span class="nc" id="L165">		int userId = SessionUtil.getUserId(session);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">		if (cache.containsKey(spaceId)) { return; }</span>
+<span class="nc" id="L167">		Permission p = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		if (p != null) {</span>
+<span class="nc" id="L169">			cache.put(spaceId, p);</span>
+		}
+<span class="nc" id="L171">	}</span>
+
+	// Force re-query permission ignoring existing cached absence
+	private static void forceReloadPermission(HttpSession session, int spaceId) {
+<span class="nc bnc" id="L175" title="All 2 branches missed.">		if (session == null) {</span>
+<span class="nc" id="L176">			return;</span>
+		}
+<span class="nc" id="L178">		HashMap&lt;Integer, Permission&gt; cache = SessionUtil.getPermissionCache(session);</span>
+<span class="nc" id="L179">		cache.remove(spaceId);</span>
+		// log.debug(&quot;forceReloadPermission: removed cache entry for spaceId=&quot;+spaceId);
+<span class="nc" id="L181">		cachePermission(session, spaceId);</span>
+<span class="nc" id="L182">	}</span>
+	
+	/**
+	 * Removes a user's permission for a given space from cache; this prevents
+	 * the cached permissions and the actual permissions from becoming desynchronized 
+	 *  
+	 * @param request the session where the cache is located
+	 * @param spaceId the id of the space to remove permissions from cache for
+	 * @author Todd Elvers
+	 */
+	public static void removeCachePermission(HttpServletRequest request, int spaceId){
+<span class="nc" id="L193">		HashMap&lt;Integer, Permission&gt; cache = SessionUtil.getPermissionCache(request.getSession());</span>
+<span class="nc" id="L194">		cache.remove(spaceId);</span>
+<span class="nc" id="L195">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

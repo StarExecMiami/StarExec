@@ -1,0 +1,110 @@
+// Global Mixins
+
+// Flexbox helpers
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@mixin flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+// Breakpoints
+$breakpoint-mobile: 768px;
+$breakpoint-tablet: 1024px;
+$breakpoint-desktop: 1200px;
+
+@mixin mobile {
+  @media (max-width: #{$breakpoint-mobile}) {
+    @content;
+  }
+}
+
+@mixin tablet {
+  @media (max-width: #{$breakpoint-tablet}) {
+    @content;
+  }
+}
+
+@mixin desktop {
+  @media (min-width: #{$breakpoint-mobile + 1px}) {
+    @content;
+  }
+}
+
+// Visual effects
+@mixin card-shadow {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+@mixin transition-default {
+  transition: all 0.2s ease;
+}
+
+// Typography
+@mixin text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Screen reader only
+@mixin sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+// =============================================================================
+// ACCESSIBILITY
+// =============================================================================
+
+// Respect user's motion preferences (WCAG 2.1)
+// Usage: @include reduced-motion { transition: none; }
+@mixin reduced-motion {
+  @media (prefers-reduced-motion: reduce) {
+    @content;
+  }
+}
+
+// Safe transitions that respect motion preferences
+@mixin transition-safe($properties...) {
+  transition: $properties;
+  
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+// Focus visible styling (keyboard-only focus)
+@mixin focus-visible {
+  &:focus-visible {
+    @content;
+  }
+  
+  // Fallback for older browsers
+  &:focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+// Visible focus ring with customizable color
+@mixin focus-ring($color: #dc6f04, $offset: 2px) {
+  outline: 2px solid $color;
+  outline-offset: $offset;
+}

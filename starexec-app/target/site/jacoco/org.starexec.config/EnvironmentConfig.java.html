@@ -1,0 +1,611 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EnvironmentConfig.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.config</a> &gt; <span class="el_source">EnvironmentConfig.java</span></div><h1>EnvironmentConfig.java</h1><pre class="source lang-java linenums">package org.starexec.config;
+
+/**
+ * Configuration class that reads environment variables and provides default values.
+ * This replaces the build-time property substitution with runtime environment variable reading.
+ *
+ * @author GitHub Copilot
+ */
+public class EnvironmentConfig {
+
+<span class="nc" id="L11">    private EnvironmentConfig() {</span>
+<span class="nc" id="L12">        throw new UnsupportedOperationException(</span>
+            &quot;Cannot instantiate utility class&quot;
+        );
+    }
+
+    /**
+     * Get an environment variable with a default value
+     */
+    private static String getEnv(String key, String defaultValue) {
+<span class="fc" id="L21">        String value = System.getenv(key);</span>
+<span class="pc bpc" id="L22" title="3 of 4 branches missed.">        return (value != null &amp;&amp; !value.trim().isEmpty())</span>
+<span class="nc" id="L23">            ? value</span>
+<span class="fc" id="L24">            : defaultValue;</span>
+    }
+
+    /**
+     * Get an environment variable as integer with a default value
+     */
+    private static int getEnvInt(String key, int defaultValue) {
+<span class="fc" id="L31">        String value = System.getenv(key);</span>
+<span class="pc bpc" id="L32" title="3 of 4 branches missed.">        if (value != null &amp;&amp; !value.trim().isEmpty()) {</span>
+            try {
+<span class="nc" id="L34">                return Integer.parseInt(value);</span>
+<span class="nc" id="L35">            } catch (NumberFormatException e) {</span>
+                // Return default if parsing fails
+<span class="nc" id="L37">                return defaultValue;</span>
+            }
+        }
+<span class="fc" id="L40">        return defaultValue;</span>
+    }
+
+    // Database Configuration
+    public static String getDbName() {
+<span class="fc" id="L45">        return getEnv(&quot;STAREXEC_DB_NAME&quot;, &quot;starexec&quot;);</span>
+    }
+
+    public static String getDbUrl() {
+<span class="fc" id="L49">        String host = getEnv(&quot;STAREXEC_DB_HOST&quot;, &quot;localhost&quot;);</span>
+<span class="fc" id="L50">        String port = getEnv(&quot;STAREXEC_DB_PORT&quot;, &quot;5432&quot;);</span>
+<span class="fc" id="L51">        String dbName = getDbName();</span>
+        // Allow full override via STAREXEC_DB_URL, otherwise construct a PostgreSQL JDBC URL.
+<span class="fc" id="L53">        return getEnv(</span>
+            &quot;STAREXEC_DB_URL&quot;,
+            &quot;jdbc:postgresql://&quot; + host + &quot;:&quot; + port + &quot;/&quot; + dbName
+        );
+    }
+
+    public static String getDbUser() {
+        // Align Java default with Helm/Makefile default which historically used 'starexec'.
+        // Avoid an empty or unexpected user being returned by default in production.
+<span class="fc" id="L62">        return getEnv(&quot;STAREXEC_DB_USER&quot;, &quot;starexec&quot;);</span>
+    }
+
+    public static String getDbPassword() {
+        // Keep default empty for local/dev but require validation in production via
+        // validateDatabaseConfig() (called when STAREXEC_VALIDATE_AT_STARTUP=true).
+<span class="fc" id="L68">        return getEnv(&quot;STAREXEC_DB_PASSWORD&quot;, &quot;&quot;);</span>
+    }
+
+    /**
+     * Validate database-related configuration and fail-fast when required values are
+     * missing in production-like environments. This method intentionally errs on the
+     * side of safety: in k8s / prod we require explicit credentials rather than
+     * silently falling back to defaults.
+     *
+     * Behavior:
+     *  - If running in Kubernetes (KUBERNETES_SERVICE_HOST env var present) or
+     *    STAREXEC_ENV=prod, the method will throw IllegalStateException when the
+     *    DB user or DB password are empty.
+     *  - In other environments (dev/ci) missing password is allowed.
+     *
+     * Control:
+     *  - Set STAREXEC_VALIDATE_AT_STARTUP=true to run this validation automatically
+     *    during class initialization (helpful in container startup flows).
+     */
+    public static void validateDatabaseConfig() {
+<span class="nc" id="L88">        String env = getEnv(&quot;STAREXEC_ENV&quot;, &quot;dev&quot;).toLowerCase();</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">        boolean runningInK8s = System.getenv(&quot;KUBERNETES_SERVICE_HOST&quot;) != null;</span>
+<span class="nc bnc" id="L90" title="All 4 branches missed.">        boolean requireSecrets = runningInK8s || &quot;prod&quot;.equals(env);</span>
+
+<span class="nc" id="L92">        String user = getDbUser();</span>
+<span class="nc" id="L93">        String pass = getDbPassword();</span>
+
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (requireSecrets) {</span>
+<span class="nc" id="L96">            StringBuilder problems = new StringBuilder();</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">            if (user == null || user.trim().isEmpty()) {</span>
+<span class="nc" id="L98">                problems.append(&quot;STAREXEC_DB_USER is empty. &quot;);</span>
+            }
+<span class="nc bnc" id="L100" title="All 4 branches missed.">            if (pass == null || pass.trim().isEmpty()) {</span>
+<span class="nc" id="L101">                problems.append(&quot;STAREXEC_DB_PASSWORD is empty. &quot;);</span>
+            }
+<span class="nc bnc" id="L103" title="All 2 branches missed.">            if (problems.length() &gt; 0) {</span>
+<span class="nc" id="L104">                throw new IllegalStateException(</span>
+                    &quot;Database configuration invalid: &quot; +
+<span class="nc" id="L106">                        problems.toString() +</span>
+                        &quot;\nProvide credentials via environment variables (recommended) or Kubernetes secrets.&quot;
+                );
+            }
+        }
+<span class="nc" id="L111">    }</span>
+
+    // Optional auto-validate when requested by environment (disabled by default)
+    static {
+<span class="fc" id="L115">        if (</span>
+<span class="pc bpc" id="L116" title="1 of 2 branches missed.">            &quot;true&quot;.equalsIgnoreCase(</span>
+<span class="fc" id="L117">                System.getenv(&quot;STAREXEC_VALIDATE_AT_STARTUP&quot;)</span>
+            )
+        ) {
+            try {
+<span class="nc" id="L121">                validateDatabaseConfig();</span>
+<span class="nc" id="L122">            } catch (RuntimeException ex) {</span>
+                // Convert to unchecked and rethrow to fail startup fast
+<span class="nc" id="L124">                throw ex;</span>
+<span class="nc" id="L125">            }</span>
+        }
+<span class="fc" id="L127">    }</span>
+
+    public static int getDbPoolMax() {
+<span class="fc" id="L130">        return getEnvInt(&quot;STAREXEC_DB_POOL_MAX&quot;, 125);</span>
+    }
+
+    public static int getDbPoolMin() {
+<span class="fc" id="L134">        return getEnvInt(&quot;STAREXEC_DB_POOL_MIN&quot;, 20);</span>
+    }
+
+    // Cluster Database Configuration
+    public static String getClusterDbUser() {
+<span class="fc" id="L139">        return getEnv(&quot;STAREXEC_CLUSTER_DB_USER&quot;, getDbUser());</span>
+    }
+
+    public static String getClusterDbPassword() {
+<span class="fc" id="L143">        return getEnv(&quot;STAREXEC_CLUSTER_DB_PASSWORD&quot;, getDbPassword());</span>
+    }
+
+    public static String getClusterDbUrl() {
+<span class="nc" id="L147">        return getEnv(&quot;STAREXEC_CLUSTER_DB_URL&quot;, getDbUrl());</span>
+    }
+
+    public static String getReportHost() {
+<span class="fc" id="L151">        return getEnv(&quot;STAREXEC_REPORT_HOST&quot;, &quot;localhost&quot;);</span>
+    }
+
+    public static int getClusterUpdatePeriod() {
+<span class="fc" id="L155">        return getEnvInt(&quot;STAREXEC_CLUSTER_UPDATE_PERIOD&quot;, 1200);</span>
+    }
+
+    // Email Configuration
+    public static String getEmailSmtp() {
+<span class="fc" id="L160">        return getEnv(&quot;STAREXEC_EMAIL_SMTP&quot;, &quot;localhost&quot;);</span>
+    }
+
+    public static int getEmailPort() {
+<span class="fc" id="L164">        return getEnvInt(&quot;STAREXEC_EMAIL_PORT&quot;, 25);</span>
+    }
+
+    public static String getEmailUser() {
+<span class="fc" id="L168">        return getEnv(&quot;STAREXEC_EMAIL_USER&quot;, &quot;&quot;);</span>
+    }
+
+    public static String getEmailPassword() {
+<span class="fc" id="L172">        return getEnv(&quot;STAREXEC_EMAIL_PASSWORD&quot;, &quot;&quot;);</span>
+    }
+
+    public static String getEmailFrom() {
+<span class="fc" id="L176">        return getEnv(&quot;STAREXEC_EMAIL_FROM&quot;, &quot;starexec@localhost&quot;);</span>
+    }
+
+    // Backend Configuration
+    public static String getBackendType() {
+<span class="fc" id="L181">        return getEnv(&quot;STAREXEC_BACKEND_TYPE&quot;, &quot;local&quot;);</span>
+    }
+
+    public static String getBackendRoot() {
+<span class="fc" id="L185">        return getEnv(&quot;STAREXEC_BACKEND_ROOT&quot;, &quot;/tmp&quot;);</span>
+    }
+
+    public static String getBackendWorkingDir() {
+<span class="fc" id="L189">        return getEnv(&quot;STAREXEC_BACKEND_WORKING_DIR&quot;, &quot;/tmp/starexec&quot;);</span>
+    }
+
+    // Data Directories
+    public static String getDataDir() {
+<span class="fc" id="L194">        return getEnv(&quot;STAREXEC_DATA_DIR&quot;, &quot;/tmp/starexec/data&quot;);</span>
+    }
+
+    public static String getSandboxDir() {
+<span class="fc" id="L198">        return getEnv(&quot;STAREXEC_SANDBOX_DIR&quot;, &quot;/tmp/starexec/sandbox&quot;);</span>
+    }
+
+    public static String getJobOutputDirectory() {
+<span class="fc" id="L202">        return getEnv(&quot;STAREXEC_JOB_OUTPUT_DIR&quot;, getDataDir() + &quot;/output&quot;);</span>
+    }
+
+    public static String getJobLogDirectory() {
+<span class="fc" id="L206">        return getEnv(&quot;STAREXEC_JOB_LOG_DIR&quot;, getDataDir() + &quot;/logs&quot;);</span>
+    }
+
+    // Web Configuration
+    public static String getWebAddress() {
+<span class="fc" id="L211">        return getEnv(&quot;STAREXEC_WEB_ADDRESS&quot;, &quot;localhost&quot;);</span>
+    }
+
+    public static String getWebBaseDirectory() {
+<span class="fc" id="L215">        return getEnv(&quot;STAREXEC_WEB_BASE_DIR&quot;, &quot;/starexec&quot;);</span>
+    }
+
+    public static String getAppName() {
+<span class="fc" id="L219">        return getEnv(&quot;STAREXEC_APP_NAME&quot;, &quot;starexec&quot;);</span>
+    }
+
+    // Proxy Configuration
+    public static String getProxyAddress() {
+<span class="fc" id="L224">        return getEnv(&quot;STAREXEC_PROXY_ADDRESS&quot;, getWebAddress());</span>
+    }
+
+    public static int getProxyPort() {
+<span class="fc" id="L228">        return getEnvInt(&quot;STAREXEC_PROXY_PORT&quot;, 80);</span>
+    }
+
+    public static String getProxyScheme() {
+<span class="fc" id="L232">        return getEnv(&quot;STAREXEC_PROXY_SCHEME&quot;, &quot;http://&quot;);</span>
+    }
+
+    // User Configuration
+    public static long getUserDefaultDiskQuota() {
+<span class="fc" id="L237">        return Long.parseLong(</span>
+<span class="fc" id="L238">            getEnv(&quot;STAREXEC_USER_DEFAULT_DISK_QUOTA&quot;, &quot;10737418240&quot;)</span>
+        );
+    }
+
+    // Job Configuration
+    public static int getJobSubmissionPeriod() {
+<span class="fc" id="L244">        return getEnvInt(&quot;STAREXEC_JOB_SUBMISSION_PERIOD&quot;, 20);</span>
+    }
+
+    public static int getJobPairMaxFileWrite() {
+<span class="fc" id="L248">        return getEnvInt(&quot;STAREXEC_JOB_PAIR_MAX_FILE_WRITE&quot;, 600);</span>
+    }
+
+    /**
+     * Number of job pairs to submit per job per cycle.
+     * Higher values increase throughput but may cause queue congestion.
+     * Default: 5
+     */
+    public static int getNumJobPairsAtATime() {
+<span class="fc" id="L257">        return getEnvInt(&quot;STAREXEC_NUM_JOB_PAIRS_AT_A_TIME&quot;, 5);</span>
+    }
+
+    /**
+     * Multiplier for target queue depth per worker node.
+     * queue_depth = NODE_MULTIPLIER × node_count
+     * Default: 16
+     */
+    public static int getNodeMultiplier() {
+<span class="fc" id="L266">        return getEnvInt(&quot;STAREXEC_NODE_MULTIPLIER&quot;, 16);</span>
+    }
+
+    /**
+     * Polling interval for ContainerJobMonitor (in milliseconds).
+     * Lower values reduce latency but increase CPU usage.
+     * Default: 5000 (5 seconds)
+     *
+     * @deprecated Use {@link #getAdaptivePollBaseInterval()} for adaptive polling.
+     *             This method now returns the base interval for backward compatibility.
+     */
+    public static long getContainerJobMonitorPollInterval() {
+<span class="nc" id="L278">        return Long.parseLong(</span>
+<span class="nc" id="L279">            getEnv(&quot;STAREXEC_CONTAINER_POLL_INTERVAL_MS&quot;, &quot;5000&quot;)</span>
+        );
+    }
+
+    // ========================================================================
+    // ADAPTIVE POLLING CONFIGURATION
+    // ========================================================================
+    // The adaptive polling system reduces CPU usage during idle periods by
+    // gradually increasing the poll interval when no work is found, and
+    // immediately resetting to the base interval when new jobs arrive.
+    //
+    // Behavior:
+    // - Starts at BASE_INTERVAL_MS (default: 1000ms)
+    // - After IDLE_THRESHOLD consecutive idle polls, starts backing off
+    // - Each backoff multiplies interval by BACKOFF_MULTIPLIER (default: 1.5)
+    // - Caps at MAX_INTERVAL_MS (default: 10000ms)
+    // - Resets to BASE_INTERVAL_MS immediately when new jobs are registered
+    // ========================================================================
+
+    /**
+     * Base (minimum) polling interval for adaptive job monitors.
+     * This is the interval used when jobs are actively being processed.
+     * Default: 1000ms (1 second) for responsive job completion detection.
+     */
+    public static long getAdaptivePollBaseInterval() {
+<span class="fc" id="L304">        return Long.parseLong(getEnv(&quot;STAREXEC_POLL_BASE_INTERVAL_MS&quot;, &quot;1000&quot;));</span>
+    }
+
+    /**
+     * Maximum polling interval for adaptive job monitors.
+     * The interval will not exceed this value even during extended idle periods.
+     * Default: 10000ms (10 seconds) to balance responsiveness with CPU savings.
+     */
+    public static long getAdaptivePollMaxInterval() {
+<span class="fc" id="L313">        return Long.parseLong(getEnv(&quot;STAREXEC_POLL_MAX_INTERVAL_MS&quot;, &quot;10000&quot;));</span>
+    }
+
+    /**
+     * Backoff multiplier for adaptive polling.
+     * After idle threshold is reached, interval = interval * multiplier.
+     * Default: 1.5 (50% increase per idle cycle)
+     */
+    public static double getAdaptivePollBackoffMultiplier() {
+<span class="fc" id="L322">        return Double.parseDouble(</span>
+<span class="fc" id="L323">            getEnv(&quot;STAREXEC_POLL_BACKOFF_MULTIPLIER&quot;, &quot;1.5&quot;)</span>
+        );
+    }
+
+    /**
+     * Number of consecutive idle polls before backoff begins.
+     * Prevents premature backoff during brief gaps between job completions.
+     * Default: 3 consecutive idle polls
+     */
+    public static int getAdaptivePollIdleThreshold() {
+<span class="fc" id="L333">        return getEnvInt(&quot;STAREXEC_POLL_IDLE_THRESHOLD&quot;, 3);</span>
+    }
+
+    // Additional path and configuration methods
+    public static String getConfigPath() {
+<span class="fc" id="L338">        return getEnv(&quot;STAREXEC_CONFIG_PATH&quot;, &quot;/config&quot;);</span>
+    }
+
+    public static String getRunsolverPath() {
+<span class="fc" id="L342">        return getEnv(&quot;STAREXEC_RUNSOLVER_PATH&quot;, &quot;/usr/local/bin/runsolver&quot;);</span>
+    }
+
+    public static String getDownloadFileDir() {
+<span class="fc" id="L346">        return getEnv(&quot;STAREXEC_DOWNLOAD_FILE_DIR&quot;, &quot;/downloads&quot;);</span>
+    }
+
+    public static String getSpaceXmlSchemaRelativeLoc() {
+<span class="fc" id="L350">        return getEnv(</span>
+            &quot;STAREXEC_SPACE_XML_SCHEMA_LOC&quot;,
+            &quot;/schemas/batchSpaceSchema.xsd&quot;
+        );
+    }
+
+    public static String getJobXmlSchemaRelativeLoc() {
+<span class="fc" id="L357">        return getEnv(</span>
+            &quot;STAREXEC_JOB_XML_SCHEMA_LOC&quot;,
+            &quot;/schemas/batchJobSchema.xsd&quot;
+        );
+    }
+
+    public static String getStarexecUrlPrefix() {
+<span class="fc" id="L364">        return getEnv(&quot;STAREXEC_URL_PREFIX&quot;, &quot;http&quot;);</span>
+    }
+
+    public static String getJobGraphFileDir() {
+<span class="fc" id="L368">        return getEnv(&quot;STAREXEC_JOB_GRAPH_DIR&quot;, &quot;/jobgraphs&quot;);</span>
+    }
+
+    public static String getClusterGraphDir() {
+<span class="fc" id="L372">        return getEnv(&quot;STAREXEC_CLUSTER_GRAPH_DIR&quot;, &quot;/secure/clustergraphs&quot;);</span>
+    }
+
+    public static String getJobSolverCacheClearLogDirectory() {
+<span class="fc" id="L376">        return getEnv(</span>
+            &quot;STAREXEC_JOB_SOLVER_CACHE_CLEAR_LOG_DIR&quot;,
+<span class="fc" id="L378">            getDataDir() + &quot;/cache_clear_logs&quot;</span>
+        );
+    }
+
+    public static String getOldJobOutputDirectory() {
+<span class="fc" id="L383">        return getEnv(</span>
+            &quot;STAREXEC_OLD_JOB_OUTPUT_DIR&quot;,
+<span class="fc" id="L385">            getDataDir() + &quot;/old_output&quot;</span>
+        );
+    }
+
+    public static String getOldJobLogDirectory() {
+<span class="fc" id="L390">        return getEnv(&quot;STAREXEC_OLD_JOB_LOG_DIR&quot;, getDataDir() + &quot;/old_logs&quot;);</span>
+    }
+
+    // Test configuration
+    public static int getTestCommunityId() {
+<span class="fc" id="L395">        return getEnvInt(&quot;STAREXEC_TEST_COMMUNITY_ID&quot;, 1);</span>
+    }
+
+    public static boolean getAllowTesting() {
+<span class="fc" id="L399">        return Boolean.parseBoolean(getEnv(&quot;STAREXEC_ALLOW_TESTING&quot;, &quot;false&quot;));</span>
+    }
+
+    // Sandbox users
+    public static String getClusterUserOne() {
+<span class="fc" id="L404">        return getEnv(&quot;STAREXEC_CLUSTER_USER_ONE&quot;, &quot;starexec1&quot;);</span>
+    }
+
+    public static String getClusterUserTwo() {
+<span class="fc" id="L408">        return getEnv(&quot;STAREXEC_CLUSTER_USER_TWO&quot;, &quot;starexec2&quot;);</span>
+    }
+
+    // Contact email
+    public static String getContactEmail() {
+<span class="fc" id="L413">        return getEnv(&quot;STAREXEC_CONTACT_EMAIL&quot;, &quot;admin@starexec.org&quot;);</span>
+    }
+
+    // Build information
+    public static String getBuildVersion() {
+<span class="fc" id="L418">        return getEnv(&quot;STAREXEC_BUILD_VERSION&quot;, &quot;dev&quot;);</span>
+    }
+
+    public static String getBuildUser() {
+<span class="fc" id="L422">        return getEnv(&quot;STAREXEC_BUILD_USER&quot;, &quot;unknown&quot;);</span>
+    }
+
+    public static String getBuildDate() {
+<span class="fc" id="L426">        return getEnv(&quot;STAREXEC_BUILD_DATE&quot;, &quot;unknown&quot;);</span>
+    }
+
+    // Backend Root and Working Directory
+    public static String getBackendRootDir() {
+<span class="fc" id="L431">        return getEnv(&quot;STAREXEC_BACKEND_ROOT_DIR&quot;, getBackendRoot());</span>
+    }
+
+    // Job Pair Execution Prefix
+    public static String getJobPairExecutionPrefix() {
+<span class="fc" id="L436">        return getEnv(&quot;STAREXEC_JOB_PAIR_EXECUTION_PREFIX&quot;, &quot;&quot;);</span>
+    }
+
+    // Proxy URL
+    public static String getProxyUrl() {
+<span class="fc" id="L441">        return getEnv(</span>
+            &quot;STAREXEC_PROXY_URL&quot;,
+<span class="fc" id="L443">            getProxyScheme() + getProxyAddress()</span>
+        );
+    }
+
+    // Container Backend Configuration
+
+    /**
+     * Get the container engine socket path.
+     * Defaults to standard Docker socket, but supports Rootless Podman paths.
+     * Examples:
+     *   - Standard Docker: unix:///var/run/docker.sock
+     *   - Rootless Podman: unix:///run/user/1000/podman/podman.sock
+     *   - TCP connection: tcp://localhost:2375
+     */
+    public static String getContainerSocketPath() {
+<span class="nc" id="L458">        return getEnv(</span>
+            &quot;STAREXEC_CONTAINER_SOCKET&quot;,
+            &quot;unix:///var/run/docker.sock&quot;
+        );
+    }
+
+    /**
+     * Get the base image for job containers.
+     * This image should contain minimal runtime dependencies.
+     */
+    public static String getContainerBaseImage() {
+<span class="nc" id="L469">        return getEnv(&quot;STAREXEC_CONTAINER_BASE_IMAGE&quot;, &quot;ubuntu:22.04&quot;);</span>
+    }
+
+    /**
+     * Whether to use pre-built base images (recommended for performance)
+     * or build images per-job (legacy behavior for testing).
+     */
+    public static boolean getContainerUsePrebuiltImage() {
+<span class="nc" id="L477">        return Boolean.parseBoolean(</span>
+<span class="nc" id="L478">            getEnv(&quot;STAREXEC_CONTAINER_USE_PREBUILT&quot;, &quot;true&quot;)</span>
+        );
+    }
+
+    /**
+     * Pre-built image name for job containers (when STAREXEC_CONTAINER_USE_PREBUILT=true).
+     * This image should already have the entrypoint.sh and base dependencies.
+     *
+     * &lt;p&gt;Default: starexec/job-runner:latest (locally built image)&lt;/p&gt;
+     *
+     * &lt;p&gt;For production, use the GHCR image: ghcr.io/starexecmiami/starexec-job-runner:latest&lt;/p&gt;
+     * &lt;p&gt;The image is automatically built and published to GitHub Container Registry
+     * by the job-runner-publish.yml workflow. For local development, build with:
+     * {@code make build-job-runner}&lt;/p&gt;
+     */
+    public static String getContainerJobImage() {
+<span class="nc" id="L494">        return getEnv(</span>
+            &quot;STAREXEC_CONTAINER_JOB_IMAGE&quot;,
+            &quot;starexec/job-runner:latest&quot;
+        );
+    }
+
+    /**
+     * Connection timeout for container engine communication (in seconds).
+     */
+    public static int getContainerConnectionTimeout() {
+<span class="nc" id="L504">        return getEnvInt(&quot;STAREXEC_CONTAINER_CONNECTION_TIMEOUT&quot;, 30);</span>
+    }
+
+    /**
+     * Response timeout for container engine operations (in seconds).
+     */
+    public static int getContainerResponseTimeout() {
+<span class="nc" id="L511">        return getEnvInt(&quot;STAREXEC_CONTAINER_RESPONSE_TIMEOUT&quot;, 45);</span>
+    }
+
+    /**
+     * Maximum concurrent connections to container engine.
+     */
+    public static int getContainerMaxConnections() {
+<span class="nc" id="L518">        return getEnvInt(&quot;STAREXEC_CONTAINER_MAX_CONNECTIONS&quot;, 100);</span>
+    }
+
+    /**
+     * Default memory limit for job containers (in MB).
+     */
+    public static long getContainerDefaultMemoryMb() {
+<span class="nc" id="L525">        return Long.parseLong(</span>
+<span class="nc" id="L526">            getEnv(&quot;STAREXEC_CONTAINER_DEFAULT_MEMORY_MB&quot;, &quot;2048&quot;)</span>
+        );
+    }
+
+    /**
+     * Default CPU limit for job containers (in seconds).
+     */
+    public static int getContainerDefaultCpuLimit() {
+<span class="nc" id="L534">        return getEnvInt(&quot;STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT&quot;, 600);</span>
+    }
+
+    /**
+     * Default wallclock limit for job containers (in seconds).
+     */
+    public static int getContainerDefaultWallclockLimit() {
+<span class="nc" id="L541">        return getEnvInt(&quot;STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT&quot;, 600);</span>
+    }
+
+    /**
+     * Host path corresponding to STAREXEC_DATA_DIR for DooD (Docker-outside-of-Docker) scenarios.
+     *
+     * &lt;p&gt;
+     * When running the StarExec application inside a container with a mounted container socket
+     * (DooD pattern), bind mounts for job containers must reference paths on the HOST, not
+     * inside the StarExec container. This variable specifies the host path that maps to
+     * STAREXEC_DATA_DIR.
+     * &lt;/p&gt;
+     *
+     * &lt;p&gt;
+     * For named volumes, this is typically the volume's mountpoint on the host. For bind mounts,
+     * this is the same as the host's source path.
+     * &lt;/p&gt;
+     *
+     * Examples:
+     *   - Podman named volume: /home/user/.local/share/containers/storage/volumes/starexec-data/_data
+     *   - Docker named volume: /var/lib/docker/volumes/starexec-data/_data
+     *   - Bind mount: /path/on/host/data
+     *   - Empty string: Disable DooD path translation (container and host paths are same)
+     */
+    public static String getContainerHostDataPath() {
+<span class="nc" id="L566">        return getEnv(&quot;STAREXEC_CONTAINER_HOST_DATA_PATH&quot;, &quot;&quot;);</span>
+    }
+
+    /**
+     * Container data path (inside the StarExec container).
+     * Used together with getContainerHostDataPath() for path translation.
+     */
+    public static String getContainerDataPath() {
+<span class="nc" id="L574">        return getDataDir();</span>
+    }
+
+    /**
+     * Network mode for job containers.
+     * &lt;p&gt;
+     * Specifies how job containers should be networked. Options:
+     * &lt;/p&gt;
+     * &lt;ul&gt;
+     *   &lt;li&gt;&quot;host&quot; - Use the host network (simplest, jobs can reach localhost services)&lt;/li&gt;
+     *   &lt;li&gt;&quot;bridge&quot; - Default bridge network (isolated)&lt;/li&gt;
+     *   &lt;li&gt;&quot;podman-default-kube-network&quot; - Connect to the Podman kube network (for pod connectivity)&lt;/li&gt;
+     *   &lt;li&gt;&quot;container:&amp;lt;name&amp;gt;&quot; - Share network with another container&lt;/li&gt;
+     * &lt;/ul&gt;
+     * &lt;p&gt;
+     * For Podman pods, use &quot;podman-default-kube-network&quot; to allow job containers to
+     * communicate with the StarExec application and PostgreSQL containers.
+     * &lt;/p&gt;
+     */
+    public static String getContainerNetworkMode() {
+<span class="nc" id="L594">        return getEnv(</span>
+            &quot;STAREXEC_CONTAINER_NETWORK_MODE&quot;,
+            &quot;podman-default-kube-network&quot;
+        );
+    }
+
+    /**
+     * Database host for job containers.
+     * &lt;p&gt;
+     * When job containers are on the same network as the PostgreSQL container,
+     * they can use &quot;postgres&quot; (container name) or the container's IP address.
+     * &lt;/p&gt;
+     */
+    public static String getContainerDbHost() {
+<span class="nc" id="L608">        return getEnv(&quot;STAREXEC_CONTAINER_DB_HOST&quot;, &quot;postgres&quot;);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

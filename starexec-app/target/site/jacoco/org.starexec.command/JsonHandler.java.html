@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JsonHandler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.command</a> &gt; <span class="el_source">JsonHandler.java</span></div><h1>JsonHandler.java</h1><pre class="source lang-java linenums">package org.starexec.command;
+
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.apache.http.HttpResponse;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map.Entry;
+
+<span class="nc" id="L15">public class JsonHandler {</span>
+	/**
+	 * Given an HttpRespone with a JsonElement in its content, returns the
+	 * JsonElement
+	 * 
+	 * @param response The HttpResponse that should contain the JsonElement
+	 * @return The JsonElement
+	 * @throws Exception
+	 */
+
+	public static JsonElement getJsonString(HttpResponse response) throws IOException {
+<span class="fc" id="L26">		BufferedReader reader = new BufferedReader(new InputStreamReader(response.getEntity().getContent(), &quot;UTF-8&quot;));</span>
+<span class="fc" id="L27">		StringBuilder builder = new StringBuilder();</span>
+<span class="fc bfc" id="L28" title="All 2 branches covered.">		for (String line = null; (line = reader.readLine()) != null;) {</span>
+<span class="fc" id="L29">			builder.append(line).append(&quot;\n&quot;);</span>
+		}
+<span class="fc" id="L31">		JsonParser parser = new JsonParser();</span>
+<span class="fc" id="L32">		return parser.parse(builder.toString());</span>
+
+	}
+
+	/**
+	 * Gets back a status message from a ValidatorStatusCode sent back from the
+	 * server object attached
+	 * 
+	 * @param obj The json ValidatorStatusCode object to get the string message
+	 *        from
+	 * @return The string message, or null if there is no ValidatorStatusCode
+	 */
+
+	protected static String getMessageOfResponse(JsonObject obj) {
+		try {
+<span class="nc" id="L47">			return obj.get(&quot;message&quot;).getAsString();</span>
+<span class="nc" id="L48">		} catch (Exception e) {</span>
+<span class="nc" id="L49">			return null;</span>
+		}
+
+	}
+
+	/**
+	 * Gets back whether a request is successful from a response that has a JSON
+	 * ValidatorStatusCode object attached
+	 * 
+	 * @param obj The json ValidatorStatusCode object to get the boolean success
+	 *        value from
+	 * @return Whether the request was successful, or null if there is no
+	 *         ValidatorStatusCode
+	 */
+
+	protected static Boolean getSuccessOfResponse(JsonObject obj) {
+
+		try {
+<span class="nc" id="L67">			return obj.get(&quot;success&quot;).getAsBoolean();</span>
+<span class="nc" id="L68">		} catch (Exception e) {</span>
+<span class="nc" id="L69">			e.printStackTrace();</span>
+<span class="nc" id="L70">			return null;</span>
+		}
+
+	}
+
+	/**
+	 * Attempts to get a Json object given an HTTP response that has a Json
+	 * object in its content
+	 * 
+	 * @param response
+	 * @return The object, or null if none existed
+	 */
+	public static JsonObject getJsonObject(HttpResponse response) {
+		try {
+
+<span class="nc" id="L85">			JsonElement jsonE = JsonHandler.getJsonString(response);</span>
+
+<span class="nc" id="L87">			return jsonE.getAsJsonObject();</span>
+<span class="nc" id="L88">		} catch (Exception e) {</span>
+<span class="nc" id="L89">			return null;</span>
+		}
+	}
+
+	protected static HashMap&lt;String, String&gt; getJsonAttributes(JsonObject obj) {
+<span class="nc" id="L94">		Iterator&lt;Entry&lt;String, JsonElement&gt;&gt; iterator = obj.entrySet().iterator();</span>
+<span class="nc" id="L95">		HashMap&lt;String, String&gt; attrs = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">		while (iterator.hasNext()) {</span>
+<span class="nc" id="L97">			Entry&lt;String, JsonElement&gt; e = iterator.next();</span>
+<span class="nc" id="L98">			String key = e.getKey();</span>
+<span class="nc" id="L99">			JsonElement value = e.getValue();</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">			if (value.isJsonPrimitive()) {</span>
+<span class="nc" id="L101">				attrs.put(key, value.getAsJsonPrimitive().getAsString());</span>
+			}
+<span class="nc" id="L103">		}</span>
+<span class="nc" id="L104">		return attrs;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

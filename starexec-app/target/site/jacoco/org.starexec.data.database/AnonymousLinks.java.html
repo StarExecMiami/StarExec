@@ -1,0 +1,745 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AnonymousLinks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">AnonymousLinks.java</span></div><h1>AnonymousLinks.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.apache.commons.lang3.tuple.ImmutableTriple;
+import org.apache.commons.lang3.tuple.Triple;
+import org.starexec.constants.R;
+import org.starexec.data.to.*;
+import org.starexec.data.to.pipelines.JoblineStage;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+
+<span class="nc" id="L17">public class AnonymousLinks {</span>
+<span class="nc" id="L18">	private static final StarLogger log = StarLogger.getLogger(AnonymousLinks.class);</span>
+	private static final int MAX_UUID_LENGTH = 36;
+
+<span class="nc" id="L21">	public enum PrimitivesToAnonymize {</span>
+<span class="nc" id="L22">		ALL, ALL_BUT_BENCH, NONE</span>
+	}
+
+	/**
+	 * Utility method that determines if benchmarks are anonymized in a PrimitivesToAnonmize enum.
+	 *
+	 * @author Albert Giegerich
+	 */
+	public static boolean areBenchmarksAnonymized(PrimitivesToAnonymize primitivesToAnonymize) {
+<span class="nc" id="L31">		return isEverythingAnonymized(primitivesToAnonymize);</span>
+	}
+
+	/**
+	 * Utility method that determines if solves are anonymized in a PrimitivesToAnonmize enum.
+	 *
+	 * @author Albert Giegerich
+	 */
+	public static boolean areSolversAnonymized(PrimitivesToAnonymize primitivesToAnonymize) {
+<span class="nc bnc" id="L40" title="All 4 branches missed.">		return isEverythingAnonymized(primitivesToAnonymize) ||</span>
+				primitivesToAnonymize == PrimitivesToAnonymize.ALL_BUT_BENCH;
+	}
+
+	/**
+	 * Utility method that determines if jobs are anonymized in a PrimitivesToAnonmize enum.
+	 *
+	 * @author Albert Giegerich
+	 */
+	public static boolean areJobsAnonymized(PrimitivesToAnonymize primitivesToAnonymize) {
+<span class="nc bnc" id="L50" title="All 4 branches missed.">		return isEverythingAnonymized(primitivesToAnonymize) ||</span>
+				primitivesToAnonymize == PrimitivesToAnonymize.ALL_BUT_BENCH;
+	}
+
+	/**
+	 * Utility method that determines if all primitives are anonymized in a PrimitivesToAnonmize enum.
+	 *
+	 * @author Albert Giegerich
+	 */
+	public static boolean isEverythingAnonymized(PrimitivesToAnonymize primitivesToAnonymize) {
+<span class="nc bnc" id="L60" title="All 2 branches missed.">		return primitivesToAnonymize == PrimitivesToAnonymize.ALL;</span>
+	}
+
+	/**
+	 * Utility method that determines if no primitives are anonymized in a PrimitivesToAnonmize enum.
+	 *
+	 * @author Albert Giegerich
+	 */
+	public static boolean isNothingAnonymized(PrimitivesToAnonymize primitivesToAnonymize) {
+<span class="nc bnc" id="L69" title="All 2 branches missed.">		return primitivesToAnonymize == PrimitivesToAnonymize.NONE;</span>
+	}
+
+	/**
+	 * Converts from a PrimitivesToAnonymize enum name to a PrimitiveToAnonymize enum.
+	 *
+	 * @param enumName the string representation of the PrimitivesToAnonymize enum.
+	 * @return the PrimitivesToAnonymize enum represented by the input string.
+	 * @author Albert Giegerich
+	 */
+	public static PrimitivesToAnonymize createPrimitivesToAnonymize(String enumName) {
+<span class="nc" id="L80">		PrimitivesToAnonymize primitivesToAnonymize = null;</span>
+<span class="nc bnc" id="L81" title="All 4 branches missed.">		switch (enumName) {</span>
+			case R.ANONYMIZE_ALL:
+<span class="nc" id="L83">				primitivesToAnonymize = PrimitivesToAnonymize.ALL;</span>
+<span class="nc" id="L84">				break;</span>
+			case R.ANONYMIZE_ALL_BUT_BENCH:
+<span class="nc" id="L86">				primitivesToAnonymize = PrimitivesToAnonymize.ALL_BUT_BENCH;</span>
+<span class="nc" id="L87">				break;</span>
+			case R.ANONYMIZE_NONE:
+<span class="nc" id="L89">				primitivesToAnonymize = PrimitivesToAnonymize.NONE;</span>
+<span class="nc" id="L90">				break;</span>
+			default:
+<span class="nc" id="L92">				throw new IllegalArgumentException(</span>
+						&quot;There is no PrimitivesToAnonymize enum associated with the string: &quot; + enumName);
+		}
+<span class="nc" id="L95">		return primitivesToAnonymize;</span>
+	}
+
+	/**
+	 * Converts from a PrimitivesToAnonymize enum to the string representation of that enum.
+	 *
+	 * @param primitivesToAnonymize a PrimitivesToAnonymize enum.
+	 * @return the String representation of the input enum.
+	 * @author Albert Giegerich
+	 */
+	public static String getPrimitivesToAnonymizeName(PrimitivesToAnonymize primitivesToAnonymize) {
+<span class="nc" id="L106">		String enumName = null;</span>
+<span class="nc bnc" id="L107" title="All 4 branches missed.">		switch (primitivesToAnonymize) {</span>
+			case ALL:
+<span class="nc" id="L109">				enumName = R.ANONYMIZE_ALL;</span>
+<span class="nc" id="L110">				break;</span>
+			case ALL_BUT_BENCH:
+<span class="nc" id="L112">				enumName = R.ANONYMIZE_ALL_BUT_BENCH;</span>
+<span class="nc" id="L113">				break;</span>
+			case NONE:
+<span class="nc" id="L115">				enumName = R.ANONYMIZE_NONE;</span>
+<span class="nc" id="L116">				break;</span>
+			default:
+<span class="nc" id="L118">				throw new IllegalArgumentException(</span>
+						&quot;A case has not been implemented for the input PrimitivesToAnonymize.&quot;);
+		}
+<span class="nc" id="L121">		return enumName;</span>
+	}
+
+	/**
+	 * Adds a new anonymous link entry to the database.
+	 *
+	 * @param primitiveId The id of the primitive for which a public anonymous link will be generated.
+	 * @param primitiveType The type of primitive (benchmark, solver, etc.) that a link will be generated for.
+	 * @param primitivesToAnonymize the enum representing which primitives should be anonymized for this anonymous
+	 * page.
+	 * @return The unique ID that was used as the new anonymous link
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static String addAnonymousLink(
+			final String primitiveType, final int primitiveId, final PrimitivesToAnonymize primitivesToAnonymize
+	) throws SQLException {
+
+<span class="nc" id="L139">		final String methodName = &quot;addAnonymousLink&quot;;</span>
+<span class="nc" id="L140">		log.entry(methodName);</span>
+
+<span class="nc" id="L142">		final String universallyUniqueId = UUID.randomUUID().toString();</span>
+
+<span class="nc" id="L144">		log.debug(&quot;Adding anonymous link for &quot; + primitiveType + &quot; with id=&quot; + primitiveId);</span>
+
+<span class="nc" id="L146">	Connection con = null;</span>
+<span class="nc" id="L147">	PreparedStatement ps = null;</span>
+
+		try {
+			// Setup the AddAnonymousLink function call.
+<span class="nc" id="L151">			con = Common.getConnection();</span>
+<span class="nc" id="L152">			Common.beginTransaction(con);</span>
+<span class="nc" id="L153">			ps = con.prepareStatement(&quot;SELECT starexec.AddAnonymousLink(?, ?, ?, ?)&quot;);</span>
+
+			// Set the parameters
+<span class="nc" id="L156">			ps.setString(1, universallyUniqueId);</span>
+<span class="nc" id="L157">			ps.setString(2, primitiveType);</span>
+<span class="nc" id="L158">			ps.setInt(3, primitiveId);</span>
+<span class="nc" id="L159">			ps.setString(4, getPrimitivesToAnonymizeName(primitivesToAnonymize));</span>
+
+			// Execute and commit the changes.
+<span class="nc" id="L162">			ps.execute();</span>
+<span class="nc" id="L163">			Common.endTransaction(con);</span>
+
+<span class="nc" id="L165">			return universallyUniqueId;</span>
+<span class="nc" id="L166">		} catch (SQLException e) {</span>
+<span class="nc" id="L167">			log.error(methodName, &quot;Threw an exception while adding anonymous link for &quot; + primitiveType + &quot; with id=&quot; +</span>
+<span class="nc" id="L168">					primitiveId + &quot;\nError message: &quot; + e.getMessage());</span>
+<span class="nc" id="L169">			Common.doRollback(con);</span>
+
+<span class="nc" id="L171">			throw e;</span>
+		} finally {
+<span class="nc" id="L173">			Common.safeClose(con);</span>
+<span class="nc" id="L174">			Common.safeClose(ps);</span>
+		}
+	}
+
+	/**
+	 * Get the unique code that links to a given primitive from the database.
+	 *
+	 * @param primitiveType The type of primitive for which a code will be retrieved (solver, bench, etc.)
+	 * @param primitiveId The id of the primitive for which a code will be retrieved.
+	 * @param primitivesToAnonymize an enum that determines which primitives wil be anonymized on the anonymous page.
+	 * @return an Optional containing the code if present in the database otherwise an empty Optional.
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;String&gt; getAnonymousLinkCode(
+			final String primitiveType, final int primitiveId, final PrimitivesToAnonymize primitivesToAnonymize
+	) throws SQLException {
+
+<span class="nc" id="L192">		final String methodName = &quot;getAnonymousLinkCode&quot;;</span>
+<span class="nc" id="L193">		log.entry(methodName);</span>
+
+<span class="nc" id="L195">		Connection con = null;</span>
+<span class="nc" id="L196">		PreparedStatement ps = null;</span>
+<span class="nc" id="L197">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L200">			con = Common.getConnection();</span>
+<span class="nc" id="L201">			Common.beginTransaction(con);</span>
+
+			// Setup the GetAnonymousLink function call.
+					// Setup the GetAnonymousLink function call.
+<span class="nc" id="L205">					ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAnonymousLink(?, ?, ?)&quot;);</span>
+<span class="nc" id="L206">					ps.setString(1, primitiveType);</span>
+<span class="nc" id="L207">					ps.setInt(2, primitiveId);</span>
+<span class="nc" id="L208">					ps.setString(3, getPrimitivesToAnonymizeName(primitivesToAnonymize));</span>
+<span class="nc" id="L209">			results = ps.executeQuery();</span>
+<span class="nc" id="L210">					results = ps.executeQuery();</span>
+			// If the code is in the database return it otherwise return an empty Optional.
+<span class="nc bnc" id="L212" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L213">				return Optional.of(results.getString(&quot;unique_id&quot;));</span>
+			} else {
+<span class="nc" id="L215">				return Optional.empty();</span>
+			}
+<span class="nc" id="L217">		} catch (SQLException e) {</span>
+<span class="nc" id="L218">			log.error(&quot;Caught an exception while trying to get an anonymous link from database.&quot;, e);</span>
+<span class="nc" id="L219">			Common.doRollback(con);</span>
+<span class="nc" id="L220">			throw e;</span>
+		} finally {
+<span class="nc" id="L222">			Common.safeClose(con);</span>
+<span class="nc" id="L223">			Common.safeClose(ps);</span>
+<span class="nc" id="L224">			Common.safeClose(results);</span>
+		}
+	}
+
+	/**
+	 * Gets the id of the job associated with a given UUID
+	 *
+	 * @param universallyUniqueId the UUID associated with the job whose id will be retrieved.
+	 * @return the id of the job associated with the given UUID
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;Integer&gt; getIdOfJobAssociatedWithLink(final String universallyUniqueId) throws
+			SQLException {
+<span class="nc" id="L238">		return getIdOfPrimitiveAssociatedWithLink(universallyUniqueId, R.JOB);</span>
+	}
+
+	/**
+	 * Gets the id of the benchmark associated with a given UUID
+	 *
+	 * @param universallyUniqueId The UUID associated with the benchmark whose id will be retrieved.
+	 * @return The id of the benchmark associated with the given UUID
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;Integer&gt; getIdOfBenchmarkAssociatedWithLink(final String universallyUniqueId)
+			throws SQLException {
+<span class="nc" id="L251">		return getIdOfPrimitiveAssociatedWithLink(universallyUniqueId, R.BENCHMARK);</span>
+	}
+
+	/**
+	 * Gets the id of the solver associated with a given UUID
+	 *
+	 * @param universallyUniqueId the UUID associated with the solver whose id will be retrieved.
+	 * @return the id of the solver associated with the given UUID
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;Integer&gt; getIdOfSolverAssociatedWithLink(final String universallyUniqueId)
+			throws SQLException {
+<span class="nc" id="L264">		return getIdOfPrimitiveAssociatedWithLink(universallyUniqueId, R.SOLVER);</span>
+	}
+
+	/**
+	 * Gets the id of the primitive associated with a given UUID
+	 *
+	 * @param universallyUniqueId the UUID associated with the primitive whose id will be retrieved.
+	 * @param primitiveType the type of primitive whose id will be retrieved.
+	 * @return the id of the primitive associated with the given UUID
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	private static Optional&lt;Integer&gt; getIdOfPrimitiveAssociatedWithLink(
+			final String universallyUniqueId, final String primitiveType
+	) throws SQLException {
+
+<span class="nc" id="L280">		final String methodName = &quot;getIdOfPrimitiveAssociatedWithCode&quot;;</span>
+<span class="nc" id="L281">		log.entry(methodName);</span>
+
+		// UUIDs have a max size of 36.
+<span class="nc bnc" id="L284" title="All 2 branches missed.">		if (universallyUniqueId.length() &gt; MAX_UUID_LENGTH) {</span>
+<span class="nc" id="L285">			return Optional.empty();</span>
+		}
+
+<span class="nc" id="L288">		Connection con = null;</span>
+<span class="nc" id="L289">		PreparedStatement ps = null;</span>
+<span class="nc" id="L290">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L293">			con = Common.getConnection();</span>
+<span class="nc" id="L294">			Common.beginTransaction(con);</span>
+
+			// Setup the GetIdOfPrimitiveAssociatedWithLink function call.
+<span class="nc" id="L297">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetIdOfPrimitiveAssociatedWithLink(?, ?)&quot;);</span>
+<span class="nc" id="L298">			ps.setString(1, universallyUniqueId);</span>
+<span class="nc" id="L299">			ps.setString(2, primitiveType);</span>
+
+<span class="nc" id="L301">			results = ps.executeQuery();</span>
+<span class="nc" id="L302">			Common.endTransaction(con);</span>
+			// If the code is in the database return it otherwise return an empty Optional.
+<span class="nc bnc" id="L304" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L305">				return Optional.of(results.getInt(&quot;primitive_id&quot;));</span>
+			} else {
+<span class="nc" id="L307">				return Optional.empty();</span>
+			}
+<span class="nc" id="L309">		} catch (SQLException e) {</span>
+<span class="nc" id="L310">			log.error(methodName, e.toString());</span>
+<span class="nc" id="L311">			Common.doRollback(con);</span>
+<span class="nc" id="L312">			throw e;</span>
+		} finally {
+<span class="nc" id="L314">			Common.safeClose(con);</span>
+<span class="nc" id="L315">			Common.safeClose(ps);</span>
+<span class="nc" id="L316">			Common.safeClose(results);</span>
+		}
+	}
+
+	/**
+	 * Gets which primitives to anonymize for an anonymous solver page.
+	 *
+	 * @param linkUuid the anonymous link unique identifier.
+	 * @return an Optional containing an enum specifying which primitives to anonymize if the anonymous page exists
+	 * otherwise an empty Optional.
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;PrimitivesToAnonymize&gt; getPrimitivesToAnonymizeForSolver(String linkUuid)
+			throws SQLException {
+<span class="nc" id="L331">		return getPrimitivesToAnonymize(linkUuid, R.SOLVER);</span>
+	}
+
+	/**
+	 * Gets which primitives to anonymize for an anonymous job page.
+	 *
+	 * @param linkUuid the anonymous link unique identifier.
+	 * @return an Optional containing an enum specifying which primitives to anonymize if the anonymous page exists
+	 * otherwise an empty Optional.
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;PrimitivesToAnonymize&gt; getPrimitivesToAnonymizeForJob(String linkUuid) throws SQLException {
+<span class="nc" id="L344">		return getPrimitivesToAnonymize(linkUuid, R.JOB);</span>
+	}
+
+	/**
+	 * Gets which primitives to anonymize for an anonymous benchmark page.
+	 *
+	 * @param linkUuid the anonymous link unique identifier.
+	 * @return an Optional containing an enum specifying which primitives to anonymize if the anonymous page exists
+	 * otherwise an empty Optional.
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static Optional&lt;PrimitivesToAnonymize&gt; getPrimitivesToAnonymizeForBenchmark(String linkUuid)
+			throws SQLException {
+<span class="nc" id="L358">		return getPrimitivesToAnonymize(linkUuid, R.BENCHMARK);</span>
+	}
+
+	private static Optional&lt;PrimitivesToAnonymize&gt; getPrimitivesToAnonymize(String linkUuid, String primitiveType)
+			throws SQLException {
+<span class="nc" id="L363">		final String methodName = &quot;getPrimitivesToAnonymize&quot;;</span>
+<span class="nc" id="L364">		log.entry(methodName);</span>
+
+		// UUIDs have a max size of 36.
+<span class="nc bnc" id="L367" title="All 2 branches missed.">		if (linkUuid.length() &gt; MAX_UUID_LENGTH) {</span>
+<span class="nc" id="L368">			return Optional.empty();</span>
+		}
+
+<span class="nc" id="L371">		Connection con = null;</span>
+<span class="nc" id="L372">		PreparedStatement ps = null;</span>
+<span class="nc" id="L373">		ResultSet results = null;</span>
+
+		try {
+<span class="nc" id="L376">			con = Common.getConnection();</span>
+
+			// Setup the GetPrimitivesToAnonymize function call.
+<span class="nc" id="L379">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetPrimitivesToAnonymize(?, ?)&quot;);</span>
+<span class="nc" id="L380">			ps.setString(1, linkUuid);</span>
+<span class="nc" id="L381">			ps.setString(2, primitiveType);</span>
+
+<span class="nc" id="L383">			results = ps.executeQuery();</span>
+			// If the code is in the database return it otherwise return an empty Optional.
+<span class="nc bnc" id="L385" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L386">				return Optional.of(createPrimitivesToAnonymize(results.getString(&quot;primitives_to_anonymize&quot;)));</span>
+			} else {
+<span class="nc" id="L388">				return Optional.empty();</span>
+			}
+<span class="nc" id="L390">		} catch (SQLException e) {</span>
+<span class="nc" id="L391">			log.error(methodName, e.toString());</span>
+<span class="nc" id="L392">			throw e;</span>
+		} finally {
+<span class="nc" id="L394">			Common.safeClose(con);</span>
+<span class="nc" id="L395">			Common.safeClose(ps);</span>
+<span class="nc" id="L396">			Common.safeClose(results);</span>
+		}
+	}
+
+	/**
+	 * Deletes all old links in the database.
+	 *
+	 * @param ageThresholdInDays the minimum age a link must be to be deleted.
+	 * @author Albert Giegerich
+	 */
+	public static void deleteOldLinks(int ageThresholdInDays) throws SQLException {
+<span class="nc" id="L407">		final String methodName = &quot;deleteOldLinks&quot;;</span>
+<span class="nc" id="L408">		Connection con = null;</span>
+<span class="nc" id="L409">		PreparedStatement ps = null;</span>
+
+		try {
+<span class="nc" id="L412">			con = Common.getConnection();</span>
+<span class="nc" id="L413">			Common.beginTransaction(con);</span>
+
+<span class="nc" id="L415">			ps = con.prepareStatement(&quot;SELECT starexec.deleteoldlinks(?)&quot;);</span>
+<span class="nc" id="L416">			ps.setInt(1, ageThresholdInDays);</span>
+
+<span class="nc" id="L418">			ps.execute();</span>
+
+<span class="nc" id="L420">			Common.endTransaction(con);</span>
+<span class="nc" id="L421">		} catch (SQLException e) {</span>
+<span class="nc" id="L422">			log.error(methodName, Util.getStackTrace(e));</span>
+<span class="nc" id="L423">			Common.doRollback(con);</span>
+<span class="nc" id="L424">			throw e;</span>
+		} finally {
+<span class="nc" id="L426">			Common.safeClose(con);</span>
+<span class="nc" id="L427">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L429">	}</span>
+
+	/**
+	 * Deletes all anonymous link that corresponds to the given UUIDs
+	 *
+	 * @param uuids the identifiers for the anonymous links.
+	 * @author Albert Giegerich
+	 */
+	public static void delete(List&lt;String&gt; uuids) throws SQLException {
+<span class="nc" id="L438">		final String methodName = &quot;delete(List&lt;String&gt;)&quot;;</span>
+<span class="nc" id="L439">		Connection con = null;</span>
+		try {
+<span class="nc" id="L441">			con = Common.getConnection();</span>
+<span class="nc" id="L442">			Common.beginTransaction(con);</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">			for (String uuid : uuids) {</span>
+<span class="nc" id="L444">				delete(uuid, con);</span>
+<span class="nc" id="L445">			}</span>
+<span class="nc" id="L446">			Common.endTransaction(con);</span>
+<span class="nc" id="L447">		} catch (SQLException e) {</span>
+<span class="nc" id="L448">			log.error(methodName, &quot;Caught SQLException e: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L449">			Common.doRollback(con);</span>
+<span class="nc" id="L450">			throw e;</span>
+		} finally {
+<span class="nc" id="L452">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L454">	}</span>
+
+	/**
+	 * Deletes an anonymous link that corresponds to a given UUID
+	 *
+	 * @param uuid the identifier for the anonymous link.
+	 * @author Albert Giegerich
+	 */
+	public static void delete(String uuid) {
+<span class="nc" id="L463">		final String methodName = &quot;delete(String)&quot;;</span>
+<span class="nc" id="L464">		Connection con = null;</span>
+		try {
+<span class="nc" id="L466">			con = Common.getConnection();</span>
+<span class="nc" id="L467">			Common.beginTransaction(con);</span>
+<span class="nc" id="L468">			delete(uuid, con);</span>
+<span class="nc" id="L469">			Common.endTransaction(con);</span>
+<span class="nc" id="L470">		} catch (SQLException e) {</span>
+<span class="nc" id="L471">			log.error(methodName, &quot;Caught SQLException: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L472">			Common.doRollback(con);</span>
+		} finally {
+<span class="nc" id="L474">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L476">	}</span>
+
+	private static void delete(String uuid, Connection con) throws SQLException {
+		// final String methodName = &quot;delete(String, Connection)&quot;;
+
+<span class="nc" id="L481">		PreparedStatement ps = null;</span>
+
+		try {
+<span class="nc" id="L484">			ps = con.prepareStatement(&quot;SELECT starexec.DeleteAnonymousLink(?)&quot;);</span>
+<span class="nc" id="L485">			ps.setString(1, uuid);</span>
+<span class="nc" id="L486">			ps.execute();</span>
+		} finally {
+<span class="nc" id="L488">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L490">	}</span>
+
+	public static boolean hasJobBeenAnonymized(final int jobId) throws SQLException {
+<span class="nc" id="L493">		final String methodName = &quot;hasJobBeenAnonymized&quot;;</span>
+<span class="nc" id="L494">		log.entry(methodName);</span>
+<span class="nc" id="L495">		Connection con = null;</span>
+<span class="nc" id="L496">		PreparedStatement ps = null;</span>
+<span class="nc" id="L497">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L499">			con = Common.getConnection();</span>
+<span class="nc" id="L500">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAnonymousNamesForJob(?)&quot;);</span>
+
+			// Set the parameters
+<span class="nc" id="L503">			ps.setInt(1, jobId);</span>
+
+			// Execute query and return whether there are any results.
+<span class="nc" id="L506">			results = ps.executeQuery();</span>
+<span class="nc" id="L507">			return results.next();</span>
+<span class="nc" id="L508">		} catch (SQLException e) {</span>
+<span class="nc" id="L509">			log.error(methodName, &quot;Caught SQLException: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L510">			throw e;</span>
+		} finally {
+<span class="nc" id="L512">			Common.safeClose(con);</span>
+<span class="nc" id="L513">			Common.safeClose(ps);</span>
+<span class="nc" id="L514">			Common.safeClose(results);</span>
+		}
+	}
+
+	/**
+	 * Adds all primitives in a job to the anonymous names table for use in the anonymous job page.
+	 *
+	 * @param jobId the id of the job from which to get primitives.
+	 * @throws SQLException if the database fails.
+	 * @author Albert Giegerich
+	 */
+	public static void addAnonymousNamesForJob(final int jobId) throws SQLException {
+<span class="nc" id="L526">		final String methodName = &quot;addAnonymousNamesForJob&quot;;</span>
+<span class="nc" id="L527">		log.entry(methodName);</span>
+
+<span class="nc" id="L529">		Job job = Jobs.getWithSimplePairs(jobId);</span>
+
+<span class="nc" id="L531">		List&lt;JobPair&gt; jobPairs = job.getJobPairs();</span>
+
+<span class="nc" id="L533">		List&lt;Benchmark&gt; benchmarks = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L534">		List&lt;Solver&gt; solvers = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">		for (JobPair pair : jobPairs) {</span>
+<span class="nc" id="L536">			benchmarks.add(pair.getBench());</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">			for (JoblineStage stage : pair.getStages()) {</span>
+<span class="nc" id="L538">				solvers.add(stage.getSolver());</span>
+<span class="nc" id="L539">			}</span>
+<span class="nc" id="L540">		}</span>
+
+<span class="nc" id="L542">		Connection con = null;</span>
+		try {
+
+			// Generate a map of anonymized solver names and add them to the database.
+<span class="nc" id="L546">			Map&lt;Integer, String&gt; anonymizedSolverNames = buildAnonymizedSolverNamesMap(solvers);</span>
+
+<span class="nc" id="L548">			con = Common.getConnection();</span>
+<span class="nc" id="L549">			Common.beginTransaction(con);</span>
+
+<span class="nc bnc" id="L551" title="All 2 branches missed.">			for (Integer solverId : anonymizedSolverNames.keySet()) {</span>
+
+				// For each solver, add all the anonymous config names.
+<span class="nc" id="L554">				Map&lt;Integer, String&gt; anonymizedConfigNames = buildAnonymizedConfigNamesMap(solverId);</span>
+<span class="nc bnc" id="L555" title="All 2 branches missed.">				for (Integer configId : anonymizedConfigNames.keySet()) {</span>
+<span class="nc" id="L556">					String anonymousConfigName = anonymizedConfigNames.get(configId);</span>
+<span class="nc" id="L557">					addAnonymousPrimitiveName(anonymousConfigName, configId, R.CONFIGURATION, jobId, con);</span>
+<span class="nc" id="L558">				}</span>
+
+<span class="nc" id="L560">				String anonymousSolverName = anonymizedSolverNames.get(solverId);</span>
+<span class="nc" id="L561">				addAnonymousPrimitiveName(anonymousSolverName, solverId, R.SOLVER, jobId, con);</span>
+<span class="nc" id="L562">			}</span>
+
+			// Generate a map of anonymized benchmark names and add them to the database.
+<span class="nc" id="L565">			Map&lt;Integer, String&gt; anonymizedBenchmarkNames = buildAnonymizedBenchmarkNamesMap(benchmarks);</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">			for (Integer benchmarkId : anonymizedBenchmarkNames.keySet()) {</span>
+<span class="nc" id="L567">				String anonymousBenchmarkName = anonymizedBenchmarkNames.get(benchmarkId);</span>
+<span class="nc" id="L568">				addAnonymousPrimitiveName(anonymousBenchmarkName, benchmarkId, R.BENCHMARK, jobId, con);</span>
+<span class="nc" id="L569">			}</span>
+
+<span class="nc" id="L571">			Common.endTransaction(con);</span>
+<span class="nc" id="L572">		} catch (SQLException e) {</span>
+<span class="nc" id="L573">			log.error(methodName, e.getMessage(), e);</span>
+<span class="nc" id="L574">			throw e;</span>
+		} finally {
+<span class="nc" id="L576">			Common.doRollback(con);</span>
+<span class="nc" id="L577">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L579">	}</span>
+
+	public static Map&lt;Integer, String&gt; getAnonymizedBenchmarkNames(List&lt;Benchmark&gt; benchmarks) {
+<span class="nc" id="L582">		return buildAnonymizedBenchmarkNamesMap(benchmarks);</span>
+	}
+
+	public static Map&lt;Integer, String&gt; getAnonymizedSolverNames(int jobId, int stageNumber) {
+<span class="nc" id="L586">		Job job = Jobs.getWithSimplePairs(jobId);</span>
+<span class="nc" id="L587">		List&lt;Solver&gt; solvers = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">		for (JobPair pair : job.getJobPairs()) {</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">			for (JoblineStage stage : pair.getStages()) {</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">				if (stage.getStageNumber() == stageNumber) {</span>
+<span class="nc" id="L591">					solvers.add(stage.getSolver());</span>
+				}
+<span class="nc" id="L593">			}</span>
+<span class="nc" id="L594">		}</span>
+<span class="nc" id="L595">		return buildAnonymizedSolverNamesMap(solvers);</span>
+	}
+	/**
+	 * @param jobId the id of the anonymized job to get solver information for.
+	 * @author Albert Giegerich
+	 */
+	public static List&lt;Triple&lt;String, String, Integer&gt;&gt; getAnonymousSolverNamesKey(int jobId) throws SQLException {
+<span class="nc" id="L602">		final String methodName = &quot;getAnonymizedSolverNamesKey&quot;;</span>
+<span class="nc" id="L603">		Connection con = null;</span>
+<span class="nc" id="L604">		PreparedStatement ps = null;</span>
+<span class="nc" id="L605">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L607">			con = Common.getConnection();</span>
+<span class="nc" id="L608">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.GetAnonymousSolverNamesAndIds(?)&quot;);</span>
+<span class="nc" id="L609">			ps.setInt(1, jobId);</span>
+
+<span class="nc" id="L611">			results = ps.executeQuery();</span>
+
+<span class="nc" id="L613">			List&lt;Triple&lt;String, String, Integer&gt;&gt; anonymizedSolverNamesKey = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">			while (results.next()) {</span>
+<span class="nc" id="L615">				int solverId = results.getInt(&quot;primitiveId&quot;);</span>
+<span class="nc" id="L616">				Solver solver = Solvers.get(con, solverId, false);</span>
+<span class="nc" id="L617">				String anonymizedSolverName = results.getString(&quot;anonymousName&quot;);</span>
+
+<span class="nc" id="L619">				anonymizedSolverNamesKey.add(new ImmutableTriple&lt;&gt;(solver.getName(), anonymizedSolverName, solverId));</span>
+<span class="nc" id="L620">			}</span>
+<span class="nc" id="L621">			return anonymizedSolverNamesKey;</span>
+<span class="nc" id="L622">		} catch (SQLException e) {</span>
+<span class="nc" id="L623">			log.error(methodName, &quot;Database failure while getting anonymized solver names key.&quot;, e);</span>
+<span class="nc" id="L624">			throw e;</span>
+		} finally {
+<span class="nc" id="L626">			Common.safeClose(con);</span>
+<span class="nc" id="L627">			Common.safeClose(ps);</span>
+<span class="nc" id="L628">			Common.safeClose(results);</span>
+		}
+	}
+
+	private static void addAnonymousPrimitiveName(
+			final String anonymousName, final int primitiveId, final String primitiveType, final int jobId,
+			final Connection con
+	) throws SQLException {
+
+<span class="nc" id="L637">		final String methodName = &quot;addAnonymousPrimitiveName&quot;;</span>
+<span class="nc" id="L638">		log.entry(methodName);</span>
+
+<span class="nc" id="L640">		PreparedStatement ps = null;</span>
+
+		try {
+<span class="nc" id="L643">			ps = con.prepareStatement(&quot;SELECT starexec.AddAnonymousPrimitiveName(?, ?, ?, ?)&quot;);</span>
+<span class="nc" id="L644">			ps.setString(1, anonymousName);</span>
+<span class="nc" id="L645">			ps.setInt(2, primitiveId);</span>
+<span class="nc" id="L646">			ps.setString(3, primitiveType);</span>
+<span class="nc" id="L647">			ps.setInt(4, jobId);</span>
+
+<span class="nc" id="L649">			ps.execute();</span>
+<span class="nc" id="L650">		} catch (SQLException e) {</span>
+<span class="nc" id="L651">			log.error(methodName, &quot;Caught SQLException: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L652">			throw e;</span>
+		} finally {
+<span class="nc" id="L654">			Common.safeClose(ps);</span>
+		}
+<span class="nc" id="L656">	}</span>
+
+	/**
+	 * @param solverId The solver id to get the configuration map for
+	 * @return A map from configuration id's to their anonymized names for use in the anonymous page feature.
+	 * @author Albert Giegerich
+	 */
+	private static Map&lt;Integer, String&gt; buildAnonymizedConfigNamesMap(int solverId) {
+<span class="nc" id="L664">		List&lt;Configuration&gt; configs = Solvers.getConfigsForSolver(solverId);</span>
+
+<span class="nc" id="L666">		Map&lt;Integer, String&gt; configIdToNameMap = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L667">		int numberToAppend = 1;</span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">		for (Configuration config : configs) {</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">			if (!configIdToNameMap.containsKey(config.getId())) {</span>
+<span class="nc" id="L670">				configIdToNameMap.put(config.getId(), &quot;Config&quot; + numberToAppend);</span>
+<span class="nc" id="L671">				numberToAppend += 1;</span>
+			}
+<span class="nc" id="L673">		}</span>
+<span class="nc" id="L674">		return configIdToNameMap;</span>
+	}
+
+	/**
+	 * Gets a mapping of solver ID's to unique anonymized names.
+	 *
+	 * @param solvers a list of Solvers to map to anonymized name.
+	 * @author Albert Giegerich
+	 */
+	private static Map&lt;Integer, String&gt; buildAnonymizedSolverNamesMap(final List&lt;Solver&gt; solvers) {
+		// Build a mapping of solvers to anonymized names.
+<span class="nc" id="L685">		Map&lt;Integer, String&gt; solverIdToAnonymizedName = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L686">		int numberToAppend = 1;</span>
+<span class="nc bnc" id="L687" title="All 2 branches missed.">		for (Solver solver : solvers) {</span>
+<span class="nc" id="L688">			int solverId = solver.getId();</span>
+<span class="nc bnc" id="L689" title="All 2 branches missed.">			if (!solverIdToAnonymizedName.containsKey(solverId)) {</span>
+<span class="nc" id="L690">				solverIdToAnonymizedName.put(solverId, &quot;Solver&quot; + numberToAppend);</span>
+<span class="nc" id="L691">				numberToAppend += 1;</span>
+			}
+<span class="nc" id="L693">		}</span>
+<span class="nc" id="L694">		return solverIdToAnonymizedName;</span>
+	}
+
+	/**
+	 * Gets a mapping of benchmark ID's to unique anonymized names.
+	 *
+	 * @param benchmarks a list of benchmarks to get anonymized names for.
+	 * @return a mapping from benchmark ID's to an anonymous name for the benchmark.
+	 * @author Albert Giegerich
+	 */
+	private static Map&lt;Integer, String&gt; buildAnonymizedBenchmarkNamesMap(final List&lt;Benchmark&gt; benchmarks) {
+<span class="nc" id="L705">		final String methodName = &quot;buildAnonymizedBenchmarkNamesMap&quot;;</span>
+<span class="nc" id="L706">		log.entry(methodName);</span>
+
+<span class="nc" id="L708">		Map&lt;Integer, String&gt; benchmarkIdToAnonymizedName = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L709">		int numberToAppend = 1;</span>
+<span class="nc bnc" id="L710" title="All 2 branches missed.">		for (Benchmark bench : benchmarks) {</span>
+<span class="nc" id="L711">			int benchId = bench.getId();</span>
+<span class="nc bnc" id="L712" title="All 2 branches missed.">			if (!benchmarkIdToAnonymizedName.containsKey(benchId)) {</span>
+<span class="nc" id="L713">				benchmarkIdToAnonymizedName.put(benchId, &quot;Benchmark&quot; + numberToAppend);</span>
+<span class="nc" id="L714">				numberToAppend += 1;</span>
+			}
+<span class="nc" id="L716">		}</span>
+<span class="nc" id="L717">		return benchmarkIdToAnonymizedName;</span>
+	}
+
+	/**
+	 * Gets a mapping of job space ID's to unique anonymized names.
+	 *
+	 * @param jobId the id of the job to get a mapping for.
+	 * @author Albert Giegerich
+	 */
+	public static Map&lt;Integer, String&gt; getAnonymizedJobSpaceNames(final int jobId) {
+<span class="nc" id="L727">		Job job = Jobs.get(jobId);</span>
+
+<span class="nc" id="L729">		List&lt;JobSpace&gt; jobSpaces = Spaces.getSubSpacesForJob(job.getPrimarySpace(), true);</span>
+<span class="nc" id="L730">		jobSpaces.add(Spaces.getJobSpace(job.getPrimarySpace()));</span>
+<span class="nc" id="L731">		jobSpaces.sort(Comparator.comparingInt(Identifiable::getId));</span>
+
+<span class="nc" id="L733">		Map&lt;Integer, String&gt; jobSpaceIdToAnonymizedName = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L734">		int numberToAppend = 1;</span>
+<span class="nc bnc" id="L735" title="All 2 branches missed.">		for (JobSpace space : jobSpaces) {</span>
+<span class="nc" id="L736">			int spaceId = space.getId();</span>
+<span class="nc bnc" id="L737" title="All 2 branches missed.">			if (!jobSpaceIdToAnonymizedName.containsKey(spaceId)) {</span>
+<span class="nc" id="L738">				jobSpaceIdToAnonymizedName.put(spaceId, &quot;Space&quot; + numberToAppend);</span>
+<span class="nc" id="L739">				numberToAppend += 1;</span>
+			}
+<span class="nc" id="L741">		}</span>
+<span class="nc" id="L742">		return jobSpaceIdToAnonymizedName;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

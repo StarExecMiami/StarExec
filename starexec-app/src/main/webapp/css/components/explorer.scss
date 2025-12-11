@@ -1,0 +1,404 @@
+// =============================================================================
+// UNIFIED EXPLORER COMPONENT STYLES - StarExec Design System
+// =============================================================================
+// This file provides consistent styling for the explorer/sidebar navigation
+// component used across the application (Spaces, Cluster, Job Details, etc.)
+// =============================================================================
+
+@import "../global/colors";
+@import "../global/helper";
+
+// =============================================================================
+// SPACING SYSTEM (8px base unit)
+// =============================================================================
+// Using a consistent spacing scale for all margins and paddings
+
+$space-unit: 8px !default;
+$space-xs: $space-unit * 0.5 !default;   // 4px
+$space-sm: $space-unit !default;          // 8px
+$space-md: $space-unit * 1.5 !default;    // 12px
+$space-lg: $space-unit * 2 !default;      // 16px
+$space-xl: $space-unit * 3 !default;      // 24px
+$space-xxl: $space-unit * 4 !default;     // 32px
+
+// =============================================================================
+// EXPLORER VARIABLES
+// =============================================================================
+
+// Layout - Widths
+$explorer-width: 28% !default;
+$explorer-width-narrow: 23% !default;     // For job details
+$explorer-width-job: 23% !default;        // Alias for job details page
+$explorer-width-mobile: 100% !default;
+$detail-panel-width: 68% !default;
+$detail-panel-width-wide: 72% !default;   // Companion to narrow explorer
+
+// Layout - Spacing
+$explorer-margin-top: $space-lg !default;
+$explorer-padding-x: $space-sm !default;
+$explorer-padding-y: $space-sm !default;
+$explorer-min-height: 400px !default;
+$explorer-max-height-mobile: 300px !default;
+
+// Colors
+$explorer-bg: transparent !default;
+$explorer-border-color: $background-color !default;
+$explorer-border-width: 3px !default;
+$explorer-text-color: $text-main-color !default;
+
+// Heading
+$explorer-heading-font-size: 1.5rem !default;  // 24px
+$explorer-heading-line-height: 1.2 !default;
+$explorer-heading-margin-bottom: $space-sm !default;
+$explorer-heading-color: $text-main-color !default;
+$explorer-base-font-size: 14px !default;
+
+// Tree node styling
+$tree-node-padding-x: $space-sm !default;
+$tree-node-padding-y: $space-xs !default;
+$tree-node-padding: $tree-node-padding-y $tree-node-padding-x !default;
+$tree-node-margin: 0 0 2px 0 !default;
+$tree-node-border-radius: 2px !default;
+$tree-node-min-height: 28px !default;
+
+// Tree node states
+$tree-node-hover-bg: $accent-orange !default;
+$tree-node-hover-shadow: 0 0 2px 1px rgba($text-main-color, 0.3) !default;
+$tree-node-selected-bg: $accent-red !default;
+$tree-node-selected-shadow: 0 0 2px 1px rgba($text-main-color, 0.3) !default;
+$tree-node-active-border: 1px dashed $accent-green !default;
+$tree-node-drop-hover-bg: $accent-green !default;
+
+// Tree icon
+$tree-icon-size: 18px !default;
+$tree-icon-size-mobile: 24px !default;
+$tree-icon-margin-right: $space-xs !default;
+
+// Node count badge
+$node-count-color: $text-accent-color !default;
+$node-count-font-size: 0.85em !default;
+$node-count-margin-left: $space-xs !default;
+
+// Detail panel
+$detail-panel-padding-left: $space-md !default;
+$detail-panel-padding-right: $space-xl !default;
+$detail-panel-padding-mobile: $space-sm !default;
+
+// =============================================================================
+// EXPLORER MIXINS
+// =============================================================================
+
+@mixin explorer-base {
+  margin-top: $explorer-margin-top;
+  padding: $explorer-padding-y $explorer-padding-x;
+  float: left;
+  width: $explorer-width;
+  min-height: $explorer-min-height;
+  height: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+  background: $explorer-bg;
+  box-sizing: border-box;
+}
+
+@mixin explorer-heading {
+  color: $explorer-heading-color;
+  font-size: $explorer-heading-font-size;
+  line-height: $explorer-heading-line-height;
+  margin: 0 0 $explorer-heading-margin-bottom 0;
+  padding: 0;
+  display: inline-block;
+  font-weight: normal;
+}
+
+@mixin tree-node-hover {
+  background-color: $tree-node-hover-bg;
+  box-shadow: $tree-node-hover-shadow;
+  border-radius: $tree-node-border-radius;
+  color: $text-main-color;
+}
+
+@mixin tree-node-selected {
+  background-color: $tree-node-selected-bg;
+  box-shadow: $tree-node-selected-shadow;
+  border-radius: $tree-node-border-radius;
+  color: $text-main-color;
+}
+
+// =============================================================================
+// BASE EXPLORER STYLES
+// =============================================================================
+
+#explorer {
+  @include explorer-base;
+  
+  // Heading
+  h3 {
+    @include explorer-heading;
+  }
+  
+  // Links
+  a:link,
+  a:visited {
+    text-decoration: none;
+    color: $explorer-text-color;
+  }
+  
+  // Variant for job details page
+  &.jobDetails {
+    width: $explorer-width-job;
+  }
+}
+
+// =============================================================================
+// EXPLORE LIST CONTAINER
+// =============================================================================
+
+#exploreList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  
+  // Active state for drag & drop
+  a.active {
+    border: $tree-node-active-border;
+    border-radius: $tree-node-border-radius;
+  }
+  
+  // Hover state for drag & drop target
+  a.hover {
+    background-color: $tree-node-drop-hover-bg;
+    border-radius: $tree-node-border-radius;
+  }
+}
+
+// =============================================================================
+// JSTREE DARK THEME OVERRIDES
+// =============================================================================
+// Override jsTree default theme with StarExec dark theme colors
+
+.jstree-default {
+  // Base list item
+  li {
+    margin: $tree-node-margin;
+    padding: 0;
+    background-color: transparent;
+    
+    &.jstree-last {
+      background-color: $foreground-color;
+    }
+  }
+  
+  // No dots variant
+  .jstree-no-dots li,
+  .jstree-no-dots .jstree-leaf > ins {
+    background-color: $foreground-color;
+  }
+  
+  // Hover state
+  .jstree-hovered {
+    @include tree-node-hover;
+  }
+  
+  // Selected/clicked state
+  .jstree-clicked {
+    @include tree-node-selected;
+  }
+  
+  // Links
+  a {
+    color: $explorer-text-color !important;
+    padding: $tree-node-padding;
+    display: inline-block;
+    
+    &:hover {
+      color: $text-main-color !important;
+    }
+    
+    // Search results
+    &.jstree-search {
+      color: cyan !important;
+      font-style: italic;
+    }
+  }
+}
+
+// =============================================================================
+// NODE COUNT BADGE
+// =============================================================================
+// The (n) count shown next to tree nodes
+
+.nodeCount {
+  color: $node-count-color;
+  font-size: $node-count-font-size;
+  margin-left: $node-count-margin-left;
+  font-weight: normal;
+}
+
+// =============================================================================
+// TREE ICON STYLING
+// =============================================================================
+
+.jstree-icon {
+  display: inline-block;
+  width: $tree-icon-size;
+  height: $tree-icon-size;
+  vertical-align: middle;
+  margin-right: $tree-icon-margin-right;
+}
+
+// =============================================================================
+// CONTEXT MENU DARK THEME
+// =============================================================================
+
+#vakata-contextmenu.jstree-default-context {
+  background: $foreground-color;
+  border: 1px solid $background-color;
+  box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+  border-radius: $tree-node-border-radius;
+  
+  li ul {
+    background: $foreground-color;
+    border: 1px solid $background-color;
+  }
+  
+  a {
+    color: $text-main-color;
+    font-size: $explorer-base-font-size;
+    padding: $space-xs $space-sm;
+    display: block;
+    
+    &:hover {
+      background-color: $accent-orange;
+      color: $text-main-color;
+      border-radius: $tree-node-border-radius;
+    }
+  }
+  
+  .vakata-hover > a {
+    background-color: $accent-orange;
+    color: $text-main-color;
+    border-radius: $tree-node-border-radius;
+  }
+}
+
+// =============================================================================
+// DRAG & DROP STYLING
+// =============================================================================
+
+.dragClone {
+  max-width: 200px;
+  overflow: hidden;
+  position: fixed;
+  background-color: $text-main-color;
+  color: $background-color;
+  z-index: 999;
+  text-align: center;
+  padding: $space-sm;
+  border-radius: $tree-node-border-radius;
+  box-shadow: 4px 4px 5px rgba(0, 0, 0, 0.3);
+  opacity: 0.9;
+  
+  span {
+    float: left;
+    margin-right: $space-xs;
+  }
+}
+
+#vakata-dragged.jstree-default {
+  ins {
+    background: transparent !important;
+  }
+}
+
+#jstree-marker.jstree-default {
+  z-index: 1000;
+}
+
+// =============================================================================
+// DETAIL PANEL (COMPANION TO EXPLORER)
+// =============================================================================
+
+#detailPanel {
+  padding-left: $detail-panel-padding-left;
+  padding-right: $detail-panel-padding-right;
+  margin-top: $explorer-margin-top;
+  float: right;
+  width: 65%;
+  border-left: solid 3px $explorer-border-color;
+  box-sizing: border-box;
+  
+  // Variant for job details
+  &.jobDetails {
+    width: 70%;
+  }
+  
+  // Heading
+  h3 {
+    @include explorer-heading;
+  }
+  
+  // Horizontal rule
+  hr {
+    border: none;
+    border-top: solid 1px $text-accent-color;
+    margin: $space-md 0;
+  }
+  
+  // Description text
+  .spaceName,
+  #spaceDesc {
+    width: 90%;
+    word-wrap: break-word;
+  }
+  
+  // Accent text
+  p.accent {
+    color: $text-accent-color;
+    font-style: italic;
+  }
+  
+  // Buttons
+  .button {
+    margin-bottom: $space-sm;
+  }
+  
+  // Fieldsets
+  fieldset {
+    margin-top: $space-lg;
+  }
+}
+
+// =============================================================================
+// RESPONSIVE STYLES
+// =============================================================================
+
+@media only screen and (max-width: 767px) {
+  #explorer {
+    width: 100%;
+    float: none;
+    margin-bottom: $space-lg;
+    overflow-y: auto;
+    max-height: 300px;
+    border-bottom: 2px solid $explorer-border-color;
+    padding-bottom: $space-sm;
+  }
+  
+  .jstree-icon {
+    width: $tree-icon-size-mobile;
+  }
+  
+  #detailPanel {
+    width: 100%;
+    float: none;
+    margin: 0 auto;
+    padding-left: $detail-panel-padding-mobile;
+    padding-right: $detail-panel-padding-mobile;
+    border-left: none;
+    
+    &.jobDetails {
+      width: 100%;
+    }
+  }
+}

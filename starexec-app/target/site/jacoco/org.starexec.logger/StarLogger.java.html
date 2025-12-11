@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StarLogger.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.logger</a> &gt; <span class="el_source">StarLogger.java</span></div><h1>StarLogger.java</h1><pre class="source lang-java linenums">package org.starexec.logger;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.starexec.data.database.ErrorLogs;
+import org.starexec.util.Util;
+
+import java.util.Optional;
+
+public class StarLogger extends BaseStarLogger {
+
+<span class="fc" id="L12">    private StarLogger(Class&lt;?&gt; clazz) { super(clazz); }</span>
+<span class="nc" id="L13">    private StarLogger(String name) { super(name); }</span>
+<span class="nc" id="L14">    private StarLogger(Logger logger) { super(logger); }</span>
+
+<span class="fc" id="L16">    public static StarLogger getLogger(Class&lt;?&gt; clazz) { return new StarLogger(clazz); }</span>
+<span class="nc" id="L17">    public static StarLogger getLogger(String name) { return new StarLogger(name); }</span>
+<span class="nc" id="L18">    public static StarLogger getRootLogger() { return new StarLogger(LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)); }</span>
+
+    @Override
+    protected void log(StarLevel level, final String method, final String message, final Throwable t) {
+<span class="fc" id="L22">        String msg = getMessage(method, message, t);</span>
+<span class="fc" id="L23">        sendToLogger(level, msg, t);</span>
+<span class="fc bfc" id="L24" title="All 4 branches covered.">        if (level == StarLevel.ERROR || level == StarLevel.WARN) {</span>
+<span class="fc" id="L25">            reportError(level, msg, t);</span>
+        }
+<span class="fc" id="L27">    }</span>
+
+    private void reportError(final StarLevel level, final String message, final Throwable t) {
+<span class="pc bpc" id="L30" title="1 of 2 branches missed.">        String messageAndTrace = message == null ? &quot;&lt;no message&gt;&quot; : message;</span>
+<span class="fc" id="L31">        messageAndTrace = &quot;(&quot; + log.getName() + &quot;) - &quot; + messageAndTrace;</span>
+<span class="fc bfc" id="L32" title="All 2 branches covered.">        if (t != null) {</span>
+<span class="fc" id="L33">            messageAndTrace += &quot;\nStack Trace:\n&quot; + Util.getStackTrace(t);</span>
+        }
+<span class="fc" id="L35">        Optional&lt;Integer&gt; logId = ErrorLogs.add(messageAndTrace, level);</span>
+<span class="pc bpc" id="L36" title="1 of 2 branches missed.">        if (!logId.isPresent()) {</span>
+<span class="fc" id="L37">            log.error(&quot;Failed to add error message to logs.&quot;);</span>
+        }
+<span class="fc" id="L39">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

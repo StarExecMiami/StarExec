@@ -1,0 +1,708 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PeriodicTasks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.app</a> &gt; <span class="el_source">PeriodicTasks.java</span></div><h1>PeriodicTasks.java</h1><pre class="source lang-java linenums">package org.starexec.app;
+
+import com.google.common.collect.ImmutableSet;
+import java.io.File;
+import java.io.IOException;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+import org.apache.commons.lang3.time.StopWatch;
+import org.starexec.constants.R;
+import org.starexec.data.database.*;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.to.ErrorLog;
+import org.starexec.data.to.Queue;
+import org.starexec.data.to.Status;
+import org.starexec.data.to.User;
+import org.starexec.data.to.tuples.PairIdJobId;
+import org.starexec.exceptions.StarExecException;
+import org.starexec.jobs.JobManager;
+import org.starexec.jobs.ProcessingManager;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Mail;
+import org.starexec.util.RobustRunnable;
+import org.starexec.util.Util;
+
+/**
+ * Class that contains the periodic task enumerations.
+ * The PeriodicTask enumeration contains all the periodic tasks as constant enum values so that these
+ * values can be references from any location. Storing these values as an enum with fields makes sense because
+ * the period, delay, task, etc. are all related to one task and storing these as separate constants would not enforce
+ * this relationship. Using an enum also allows all the tasks to be gotten with EnumSet.allOf()
+ */
+<span class="nc" id="L40">class PeriodicTasks {</span>
+
+<span class="nc" id="L42">    private static final StarLogger log = StarLogger.getLogger(</span>
+        PeriodicTasks.class
+    );
+
+    // Enum constants of all the periodic tasks.
+<span class="nc" id="L47">    enum PeriodicTask {</span>
+        // period needs to be a supplier since CLUSTER_UPDATE_PERIOD is dynamically set by configuration.
+<span class="nc" id="L49">        UPDATE_CLUSTER(</span>
+            true,
+            UPDATE_CLUSTER_TASK,
+            0,
+<span class="nc" id="L53">            () -&gt; R.CLUSTER_UPDATE_PERIOD,</span>
+            TimeUnit.SECONDS
+        ),
+<span class="nc" id="L56">        SUBMIT_JOBS(true, SUBMIT_JOBS_TASK, 0, () -&gt; 20, TimeUnit.SECONDS),</span>
+<span class="nc" id="L57">        POST_PROCESS_JOBS(</span>
+            true,
+            POST_PROCESS_JOBS_TASK,
+            0,
+<span class="nc" id="L61">            () -&gt; 45,</span>
+            TimeUnit.SECONDS
+        ),
+<span class="nc" id="L64">        RERUN_FAILED_PAIRS(</span>
+            true,
+            RERUN_FAILED_PAIRS_TASK,
+            0,
+<span class="nc" id="L68">            () -&gt; 90,</span>
+            TimeUnit.MINUTES
+        ),
+<span class="nc" id="L71">        FIND_BROKEN_JOB_PAIRS(</span>
+            true,
+            FIND_BROKEN_JOB_PAIRS_TASK,
+            0,
+<span class="nc" id="L75">            () -&gt; 3,</span>
+            TimeUnit.HOURS
+        ),
+<span class="nc" id="L78">        SEND_ERROR_LOGS(true, SEND_ERROR_LOGS_TASK, 0, () -&gt; 1, TimeUnit.DAYS),</span>
+<span class="nc" id="L79">        CLEAR_TEMPORARY_FILES(</span>
+            false,
+            CLEAR_TEMPORARY_FILES_TASK,
+            0,
+<span class="nc" id="L83">            () -&gt; 3,</span>
+            TimeUnit.HOURS
+        ),
+<span class="nc" id="L86">        CLEAR_JOB_LOG(false, CLEAR_JOB_LOG_TASK, 0, () -&gt; 7, TimeUnit.DAYS),</span>
+<span class="nc" id="L87">        CLEAR_JOB_GRAPHS(</span>
+            false,
+            CLEAR_JOB_GRAPHS_TASK,
+            0,
+<span class="nc" id="L91">            () -&gt; 7,</span>
+            TimeUnit.DAYS
+        ),
+<span class="nc" id="L94">        FIND_BROKEN_NODES(</span>
+            true,
+            FIND_BROKEN_NODES_TASK,
+            0,
+<span class="nc" id="L98">            () -&gt; 6,</span>
+            TimeUnit.HOURS
+        ),
+<span class="nc" id="L101">        CLEAR_JOB_SCRIPTS(</span>
+            false,
+            CLEAR_JOB_SCRIPTS_TASK,
+            0,
+<span class="nc" id="L105">            () -&gt; 12,</span>
+            TimeUnit.HOURS
+        ),
+<span class="nc" id="L108">        CLEAN_DATABASE(false, CLEAN_DATABASE_TASK, 0, () -&gt; 7, TimeUnit.DAYS),</span>
+<span class="nc" id="L109">        CREATE_WEEKLY_REPORTS(</span>
+            false,
+            CREATE_WEEKLY_REPORTS_TASK,
+            0,
+<span class="nc" id="L113">            () -&gt; 1,</span>
+            TimeUnit.DAYS
+        ),
+<span class="nc" id="L116">        DELETE_OLD_ANONYMOUS_LINKS(</span>
+            false,
+            DELETE_OLD_ANONYMOUS_LINKS_TASK,
+            0,
+<span class="nc" id="L120">            () -&gt; 30,</span>
+            TimeUnit.DAYS
+        ),
+<span class="nc" id="L123">        UPDATE_USER_DISK_SIZES(</span>
+            false,
+            UPDATE_USER_DISK_SIZES_TASK,
+            0,
+<span class="nc" id="L127">            () -&gt; 1,</span>
+            TimeUnit.DAYS
+        ),
+<span class="nc" id="L130">        UPDATE_COMMUNITY_STATS(</span>
+            false,
+            UPDATE_COMMUNITY_STATS_TASK,
+            0,
+<span class="nc" id="L134">            () -&gt; 6,</span>
+            TimeUnit.HOURS
+        ),
+<span class="nc" id="L137">        SAVE_ANALYTICS(</span>
+            false,
+            SAVE_ANALYTICS_TASK,
+            10,
+<span class="nc" id="L141">            () -&gt; 10,</span>
+            TimeUnit.MINUTES
+        ),
+<span class="nc" id="L144">        NOTIFY_USERS_OF_JOBS(</span>
+            false,
+            NOTIFY_USERS_OF_JOBS_TASK,
+            0,
+<span class="nc" id="L148">            () -&gt; 5,</span>
+            TimeUnit.MINUTES
+        ),
+<span class="nc" id="L151">        GENERATE_CLUSTER_GRAPH(</span>
+            true,
+            GENERATE_CLUSTER_GRAPH_TASK,
+            5,
+<span class="nc" id="L155">            () -&gt; 5,</span>
+            TimeUnit.SECONDS
+        ),
+<span class="nc" id="L158">        CHECK_STUCK_JOBS(</span>
+            true,
+            CHECK_STUCK_JOBS_TASK,
+            0,
+<span class="nc" id="L162">            () -&gt; 5,</span>
+            TimeUnit.MINUTES
+        );
+
+        //CLEAR_JOB_SCRIPTS(true, CLEAR_JOB_SCRIPTS_TASK, 0, () -&gt; 7, TimeUnit.DAYS);
+
+        public final boolean fullInstanceOnly;
+        public final Runnable task;
+        public final int delay;
+        public final Supplier&lt;Integer&gt; period;
+        public final TimeUnit unit;
+
+        /**
+         *
+         * @param fullInstanceOnly true if this task should only be run when a working backend is configured
+         * @param task the runnable that will be run for the task.
+         * @param delay initial delay before the task should be run.
+         * @param period the period between each successive run of the task.
+         * @param unit the time unit to use for period and delay.
+         */
+        PeriodicTask(
+            boolean fullInstanceOnly,
+            Runnable task,
+            int delay,
+            Supplier&lt;Integer&gt; period,
+            TimeUnit unit
+<span class="nc" id="L188">        ) {</span>
+<span class="nc" id="L189">            this.fullInstanceOnly = fullInstanceOnly;</span>
+<span class="nc" id="L190">            this.delay = delay;</span>
+<span class="nc" id="L191">            this.period = period;</span>
+<span class="nc" id="L192">            this.unit = unit;</span>
+<span class="nc" id="L193">            this.task = task;</span>
+<span class="nc" id="L194">        }</span>
+    }
+
+    private static final String sendErrorLogsTaskName = &quot;sendErrorReportsTask&quot;;
+<span class="nc" id="L198">    private static final Runnable SEND_ERROR_LOGS_TASK = new RobustRunnable(</span>
+        sendErrorLogsTaskName
+<span class="nc" id="L200">    ) {</span>
+        @Override
+        protected void dorun() {
+            // Calculate the timestamp from yesterday.
+<span class="nc" id="L204">            Calendar calendar = Calendar.getInstance();</span>
+<span class="nc" id="L205">            calendar.add(</span>
+                Calendar.DAY_OF_YEAR,
+                -R.TIME_BETWEEN_SENDING_ERROR_LOGS
+            );
+<span class="nc" id="L209">            Timestamp yesterday = new Timestamp(calendar.getTime().getTime());</span>
+
+            try {
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                if (ErrorLogs.existBefore(yesterday)) {</span>
+<span class="nc" id="L213">                    log.info(</span>
+                        &quot;Found error logs from &quot; +
+                            R.TIME_BETWEEN_SENDING_ERROR_LOGS +
+                            &quot; days ago. Sending error logs...&quot;
+                    );
+                    // Make sure users we're emailing are developers and admins.
+                    List&lt;User&gt; usersSubscribedToErrorLogs =
+<span class="nc" id="L220">                        Users.getUsersSubscribedToErrorLogs();</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">                    for (User user : usersSubscribedToErrorLogs) {</span>
+<span class="nc" id="L222">                        if (</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                            !GeneralSecurity.hasAdminReadPrivileges(</span>
+<span class="nc" id="L224">                                user.getId()</span>
+                            )
+                        ) {
+<span class="nc" id="L227">                            log.error(</span>
+                                &quot;Found user who wasn't developer/admin while emailing error logs: &quot; +
+<span class="nc" id="L229">                                    user.getEmail()</span>
+                            );
+                        }
+<span class="nc" id="L232">                    }</span>
+
+<span class="nc" id="L234">                    usersSubscribedToErrorLogs = usersSubscribedToErrorLogs</span>
+<span class="nc" id="L235">                        .stream()</span>
+<span class="nc" id="L236">                        .filter(u -&gt;</span>
+<span class="nc" id="L237">                            GeneralSecurity.hasAdminReadPrivileges(u.getId())</span>
+                        )
+<span class="nc" id="L239">                        .collect(Collectors.toList());</span>
+
+                    // Gather the error logs and send them.
+<span class="nc" id="L242">                    List&lt;ErrorLog&gt; allLogs = ErrorLogs.getAll();</span>
+<span class="nc" id="L243">                    Mail.sendErrorLogEmails(</span>
+                        allLogs,
+                        usersSubscribedToErrorLogs
+                    );
+
+                    // Delete all the error logs, in the future we may keep some until they get too old.
+<span class="nc" id="L249">                    ErrorLogs.deleteAll();</span>
+<span class="nc" id="L250">                } else {</span>
+<span class="nc" id="L251">                    log.info(</span>
+                        &quot;No error logs from &quot; +
+                            R.TIME_BETWEEN_SENDING_ERROR_LOGS +
+                            &quot; days ago. Not sending error logs.&quot;
+                    );
+                }
+<span class="nc" id="L257">            } catch (SQLException e) {</span>
+<span class="nc" id="L258">                log.error(&quot;Failed to send error log emails.&quot;, e);</span>
+<span class="nc" id="L259">            }</span>
+<span class="nc" id="L260">        }</span>
+    };
+
+    private static final String updateClusterTaskName = &quot;updateClusterTask&quot;;
+    // Create a task that updates the cluster usage info (this may take some time)
+<span class="nc" id="L265">    private static final Runnable UPDATE_CLUSTER_TASK = new RobustRunnable(</span>
+        updateClusterTaskName
+<span class="nc" id="L267">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L270">            Cluster.loadWorkerNodes();</span>
+<span class="nc" id="L271">            Cluster.loadQueueDetails();</span>
+<span class="nc" id="L272">        }</span>
+    };
+
+    private static final String generateClusterGraphTaskName =
+        &quot;generateClusterGraphTask&quot;;
+<span class="nc" id="L277">    private static final Runnable GENERATE_CLUSTER_GRAPH_TASK =</span>
+<span class="nc" id="L278">        new RobustRunnable(generateClusterGraphTaskName) {</span>
+            @Override
+            protected void dorun() {
+                try {
+                    // previous implementation for just one queue graph; commented out by Alexander Brown 11/20
+                    //		    int num_enqueued = Util.executeCommand(&quot;qstat -u tomcat -s p&quot;).split(&quot;\r\n|\r|\n&quot;).length - 2;
+                    //		    if(num_enqueued &lt; 0) num_enqueued = 0; //Adjust for the top two lines being headings.
+                    //		    Statistics.addQueuePlotPoint(num_enqueued);
+
+                    // loop through the SGE cluster queues, calling the function to create the queue graph for each one
+<span class="nc" id="L288">                    List&lt;Queue&gt; activeQueues = Queues.getAllActive();</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">                    if (activeQueues != null) {</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">                        for (Queue q : activeQueues) {</span>
+<span class="nc" id="L291">                            Statistics.addQueuePlotPoint(q.getId());</span>
+<span class="nc" id="L292">                        }</span>
+                    }
+<span class="nc" id="L294">                } catch (Exception e) {</span>
+<span class="nc" id="L295">                    log.warn(e.getMessage());</span>
+<span class="nc" id="L296">                }</span>
+<span class="nc" id="L297">            }</span>
+        };
+
+    private static final String submitJobTasksName = &quot;submitJobTasks&quot;;
+    // Create a task that submits jobs that have pending/rejected job pairs
+<span class="nc" id="L302">    private static final Runnable SUBMIT_JOBS_TASK = new RobustRunnable(</span>
+        submitJobTasksName
+<span class="nc" id="L304">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L307">            JobManager.checkPendingJobs();</span>
+<span class="nc" id="L308">        }</span>
+    };
+
+    private static final String rerunFailedPairsTaskName =
+        &quot;rerunFailedPairsTask&quot;;
+<span class="nc" id="L313">    private static final Runnable RERUN_FAILED_PAIRS_TASK = new RobustRunnable(</span>
+        rerunFailedPairsTaskName
+<span class="nc" id="L315">    ) {</span>
+        @Override
+        protected void dorun() {
+            try {
+                // Get all pairs that haven't already been rerun that have the ERROR_RUNSCRIPT status and
+                // rerun them.
+<span class="nc" id="L321">                StopWatch timer = new StopWatch();</span>
+<span class="nc" id="L322">                timer.start();</span>
+<span class="nc" id="L323">                List&lt;Integer&gt; pairIdsToRerun =</span>
+<span class="nc" id="L324">                    JobPairs.getPairIdsByStatusNotRerunAfterDate(</span>
+                        Status.StatusCode.ERROR_RUNSCRIPT,
+<span class="nc" id="L326">                        R.earliestDateToRerunFailedPairs()</span>
+                    );
+<span class="nc" id="L328">                timer.stop();</span>
+<span class="nc" id="L329">                log.info(</span>
+                    &quot;(&quot; +
+                        this.name +
+                        &quot;)&quot; +
+                        &quot; Got &quot; +
+<span class="nc" id="L334">                        pairIdsToRerun.size() +</span>
+                        &quot; in &quot; +
+<span class="nc" id="L336">                        timer.toString()</span>
+                );
+
+<span class="nc bnc" id="L339" title="All 2 branches missed.">                for (Integer pairId : pairIdsToRerun) {</span>
+<span class="nc" id="L340">                    Jobs.rerunPair(pairId);</span>
+<span class="nc" id="L341">                    PairsRerun.markPairAsRerun(pairId);</span>
+<span class="nc" id="L342">                }</span>
+<span class="nc" id="L343">            } catch (SQLException e) {</span>
+<span class="nc" id="L344">                log.warn(</span>
+                    this.name +
+                        &quot; caught SQLException. Could not get pairs to rerun from database.&quot;,
+                    e
+                );
+<span class="nc" id="L349">            }</span>
+<span class="nc" id="L350">        }</span>
+    };
+
+    private static final String postProcessJobsTaskName = &quot;postProcessJobsTask&quot;;
+    // Create a task that submits jobs that have pending/rejected job pairs
+<span class="nc" id="L355">    private static final Runnable POST_PROCESS_JOBS_TASK = new RobustRunnable(</span>
+        postProcessJobsTaskName
+<span class="nc" id="L357">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L360">            ProcessingManager.checkProcessingPairs();</span>
+<span class="nc" id="L361">        }</span>
+    };
+
+    // Create a task that deletes download files older than 1 day
+    private static final String clearTemporaryFilesTaskName =
+        &quot;clearTemporaryFilesTask&quot;;
+<span class="nc" id="L367">    private static final Runnable CLEAR_TEMPORARY_FILES_TASK =</span>
+<span class="nc" id="L368">        new RobustRunnable(clearTemporaryFilesTaskName) {</span>
+            @Override
+            protected void dorun() {
+<span class="nc" id="L371">                Util.clearOldFiles(</span>
+                    new File(
+                        R.STAREXEC_ROOT,
+                        R.DOWNLOAD_FILE_DIR
+<span class="nc" id="L375">                    ).getAbsolutePath(),</span>
+                    1,
+                    false
+                );
+
+                // clear sandbox files older than one day old
+<span class="nc" id="L381">                Util.clearOldSandboxFiles(</span>
+<span class="nc" id="L382">                    Util.getSandboxDirectory().getAbsolutePath(),</span>
+                    1
+                );
+<span class="nc" id="L385">            }</span>
+        };
+
+    /*  Create a task that deletes job logs older than 7 days */
+    private static final String clearJobLogTaskName = &quot;clearJobLogTask&quot;;
+<span class="nc" id="L390">    private static final Runnable CLEAR_JOB_LOG_TASK = new RobustRunnable(</span>
+        clearJobLogTaskName
+<span class="nc" id="L392">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L395">            Util.clearOldFiles(</span>
+                R.JOB_LOG_DIRECTORY,
+                R.CLEAR_JOB_LOG_PERIOD,
+                true
+            );
+<span class="nc" id="L400">        }</span>
+    };
+    /*  Create a task that deletes job graphs older than 7 days */
+    private static final String clearJobGraphsTaskName = &quot;clearJobGraphsTask&quot;;
+<span class="nc" id="L404">    private static final Runnable CLEAR_JOB_GRAPHS_TASK = new RobustRunnable(</span>
+        clearJobGraphsTaskName
+<span class="nc" id="L406">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L409">            Util.clearOldFiles(R.JOBGRAPH_FILE_DIR, 7, true);</span>
+<span class="nc" id="L410">        }</span>
+    };
+    /*  Create a task that deletes job scripts older than 3 days */
+    private static final String clearJobScriptTaskName = &quot;clearJobScriptTask&quot;;
+<span class="nc" id="L414">    private static final Runnable CLEAR_JOB_SCRIPTS_TASK = new RobustRunnable(</span>
+        clearJobScriptTaskName
+<span class="nc" id="L416">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L419">            Util.clearOldFiles(R.getJobInboxDir(), 1, false);</span>
+<span class="nc" id="L420">        }</span>
+    };
+    /* Create a task that deletes job graphs older than 7 days old */
+    /*private static final String clearJobGraphsTaskName = &quot;clearJobGraphsTask&quot;;
+    private static final runnable CLEAR_JOB_GRAPHS_TASK = new RobustRunnable(clearJobGraphsTaskName) {
+	@Override
+	protected void doRun() {
+	    File f = new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR);
+	    Util.clearOldFiles(f.getPath(), 7, false);
+	}
+    };*/
+
+    /**
+     * Removes solvers and benchmarks from the database that are both orphaned (unaffiliated
+     * with any spaces or job pairs) AND have already been deleted on disk.
+     */
+    private static final String cleanDatabaseTaskName = &quot;cleanDatabaseTask&quot;;
+<span class="nc" id="L437">    private static final Runnable CLEAN_DATABASE_TASK = new RobustRunnable(</span>
+        cleanDatabaseTaskName
+<span class="nc" id="L439">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L442">            Solvers.cleanOrphanedDeletedSolvers();</span>
+<span class="nc" id="L443">            Benchmarks.cleanOrphanedDeletedBenchmarks();</span>
+<span class="nc" id="L444">            Jobs.cleanOrphanedDeletedJobs();</span>
+<span class="nc" id="L445">        }</span>
+    };
+
+    private static final String findBrokenNodesTaskName = &quot;findBrokenNodes&quot;;
+<span class="nc" id="L449">    private static final Runnable FIND_BROKEN_NODES_TASK = new RobustRunnable(</span>
+        findBrokenNodesTaskName
+<span class="nc" id="L451">    ) {</span>
+        @Override
+        protected void dorun() {
+            try {
+<span class="nc" id="L455">                ImmutableSet&lt;PairIdJobId&gt; brokenPairs =</span>
+<span class="nc" id="L456">                    JobPairs.getPairsEnqueuedLongerThan(</span>
+                        R.PAIR_ENQUEUE_TIME_THRESHOLD
+                    );
+<span class="nc bnc" id="L459" title="All 2 branches missed.">                for (PairIdJobId pairAndJob : brokenPairs) {</span>
+<span class="nc" id="L460">                    log.warn(</span>
+                        &quot;Detected pair that has been enqueued for &quot; +
+                            R.PAIR_ENQUEUE_TIME_THRESHOLD +
+                            &quot; minutes &quot; +
+                            &quot;without running. Pair has id &quot; +
+                            pairAndJob.pairId +
+                            &quot; and is in job with id &quot; +
+                            pairAndJob.jobId
+                    );
+<span class="nc" id="L469">                }</span>
+<span class="nc" id="L470">            } catch (SQLException e) {</span>
+<span class="nc" id="L471">                log.error(&quot;Database error while searching for broken pairs.&quot;);</span>
+<span class="nc" id="L472">            }</span>
+<span class="nc" id="L473">        }</span>
+    };
+
+    private static final String findBrokenJobPairsTaskName =
+        &quot;findBrokenJobPairs&quot;;
+<span class="nc" id="L478">    private static final Runnable FIND_BROKEN_JOB_PAIRS_TASK =</span>
+<span class="nc" id="L479">        new RobustRunnable(findBrokenJobPairsTaskName) {</span>
+            @Override
+            protected void dorun() {
+                try {
+<span class="nc" id="L483">                    Jobs.setBrokenPairsToErrorStatus(R.BACKEND);</span>
+<span class="nc" id="L484">                } catch (IOException e) {</span>
+<span class="nc" id="L485">                    log.error(&quot;Caught IOException: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L486">                }</span>
+<span class="nc" id="L487">            }</span>
+        };
+
+    private static final String updateUserDiskSizesTaskName =
+        &quot;updateUserDiskSizesTask&quot;;
+<span class="nc" id="L492">    private static final Runnable UPDATE_USER_DISK_SIZES_TASK =</span>
+<span class="nc" id="L493">        new RobustRunnable(updateUserDiskSizesTaskName) {</span>
+            @Override
+            protected void dorun() {
+<span class="nc bnc" id="L496" title="All 2 branches missed.">                if (!Users.updateAllUserDiskSizes()) {</span>
+<span class="nc" id="L497">                    log.error(&quot;failed to update user disk sizes (periodic)&quot;);</span>
+                }
+<span class="nc" id="L499">            }</span>
+        };
+
+    private static final String deleteOldAnonymousLinksTaskName =
+        &quot;deleteOldAnonymousLinksTask&quot;;
+<span class="nc" id="L504">    private static final Runnable DELETE_OLD_ANONYMOUS_LINKS_TASK =</span>
+<span class="nc" id="L505">        new RobustRunnable(deleteOldAnonymousLinksTaskName) {</span>
+            @Override
+            protected void dorun() {
+                try {
+<span class="nc" id="L509">                    AnonymousLinks.deleteOldLinks(</span>
+                        R.MAX_AGE_OF_ANONYMOUS_LINKS_IN_DAYS
+                    );
+<span class="nc" id="L512">                } catch (SQLException e) {</span>
+<span class="nc" id="L513">                    log.error(</span>
+                        &quot;Caught SQLException: Failed to delete old anonymous links.&quot;,
+                        e
+                    );
+<span class="nc" id="L517">                }</span>
+<span class="nc" id="L518">            }</span>
+        };
+
+    private static final String updateCommunityStatsTaskName =
+        &quot;updateCommunityStats&quot;;
+<span class="nc" id="L523">    private static final Runnable UPDATE_COMMUNITY_STATS_TASK =</span>
+<span class="nc" id="L524">        new RobustRunnable(updateCommunityStatsTaskName) {</span>
+            @Override
+            protected void dorun() {
+<span class="nc" id="L527">                Communities.updateCommunityMap();</span>
+<span class="nc" id="L528">            }</span>
+        };
+
+    private static final String weeklyReportsTaskName = &quot;weeklyReportsTask&quot;;
+<span class="nc" id="L532">    private static final Runnable CREATE_WEEKLY_REPORTS_TASK =</span>
+<span class="nc" id="L533">        new RobustRunnable(weeklyReportsTaskName) {</span>
+            @Override
+            protected void dorun() {
+                // create the reports directory in the starexec data directory if it does not already exist
+<span class="nc" id="L537">                String dataDirectory = R.STAREXEC_DATA_DIR;</span>
+<span class="nc" id="L538">                File reportsDirectory = new File(dataDirectory, &quot;/reports/&quot;);</span>
+<span class="nc bnc" id="L539" title="All 2 branches missed.">                if (!reportsDirectory.exists()) {</span>
+                    try {
+<span class="nc" id="L541">                        log.debug(</span>
+                            &quot;Attempting to create reports directory &quot; +
+                                dataDirectory +
+                                &quot;/reports/&quot;
+                        );
+<span class="nc" id="L546">                        boolean reportsDirectoryCreated =</span>
+<span class="nc" id="L547">                            reportsDirectory.mkdir();</span>
+<span class="nc bnc" id="L548" title="All 2 branches missed.">                        if (!reportsDirectoryCreated) {</span>
+<span class="nc" id="L549">                            log.error(</span>
+                                &quot;Starexec does not have permission to create the reports directory in &quot; +
+                                    dataDirectory
+                            );
+                        }
+<span class="nc" id="L554">                    } catch (SecurityException e) {</span>
+<span class="nc" id="L555">                        log.error(</span>
+                            &quot;Starexec does not have permission to create the reports directory in &quot; +
+                                dataDirectory,
+                            e
+                        );
+<span class="nc" id="L560">                    }</span>
+                }
+
+                List&lt;User&gt; subscribedUsers =
+<span class="nc" id="L564">                    Users.getAllUsersSubscribedToReports();</span>
+                try {
+<span class="nc bnc" id="L566" title="All 2 branches missed.">                    if (</span>
+                        subscribedUsers != null &amp;&amp;
+<span class="nc bnc" id="L568" title="All 2 branches missed.">                        subscribedUsers.size() &gt; Users.getCount()</span>
+                    ) {
+                        // make sure that we're not sending unnecessary emails
+<span class="nc" id="L571">                        throw new StarExecException(</span>
+                            &quot;There are more users subscribed to reports than users in the system!&quot;
+                        );
+                    }
+
+<span class="nc" id="L576">                    Calendar today = Calendar.getInstance();</span>
+                    // check if it's the day to email reports and check if reports were already sent today
+<span class="nc bnc" id="L578" title="All 2 branches missed.">                    if (</span>
+                        subscribedUsers != null &amp;&amp;
+<span class="nc bnc" id="L580" title="All 2 branches missed.">                        today.get(Calendar.DAY_OF_WEEK) ==</span>
+                        R.EMAIL_REPORTS_DAY &amp;&amp;
+<span class="nc bnc" id="L582" title="All 2 branches missed.">                        !Mail.reportsEmailedToday()</span>
+                    ) {
+                        String reportsEmail =
+<span class="nc" id="L585">                            Mail.generateGenericReportsEmail();</span>
+<span class="nc" id="L586">                        log.info(</span>
+                            &quot;Storing reports and sending reports to subscribed users.&quot;
+                        );
+<span class="nc" id="L589">                        Mail.storeReportsEmail(reportsEmail);</span>
+<span class="nc" id="L590">                        Mail.sendReports(subscribedUsers, reportsEmail);</span>
+                        // Set all the events occurrences in the reports table back to 0.
+<span class="nc" id="L592">                        Reports.resetReports();</span>
+                        // Erase all data from the logins table.
+<span class="nc" id="L594">                        Logins.resetLogins();</span>
+                    }
+<span class="nc" id="L596">                } catch (IOException e) {</span>
+<span class="nc" id="L597">                    log.error(</span>
+                        &quot;Issue while storing reports email as text file.&quot;,
+                        e
+                    );
+<span class="nc" id="L601">                } catch (StarExecException e) {</span>
+<span class="nc" id="L602">                    log.error(&quot;Caught StarExecException: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L603">                } catch (SQLException e) {</span>
+<span class="nc" id="L604">                    log.error(&quot;Caught SQLException: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L605">                }</span>
+<span class="nc" id="L606">            }</span>
+        };
+
+    private static final String saveAnalyticsTask = &quot;saveAnalyticsTask&quot;;
+    // Create a task that submits jobs that have pending/rejected job pairs
+<span class="nc" id="L611">    private static final Runnable SAVE_ANALYTICS_TASK = new RobustRunnable(</span>
+        saveAnalyticsTask
+<span class="nc" id="L613">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L616">            Analytics.saveToDB();</span>
+<span class="nc" id="L617">        }</span>
+    };
+
+    // Create a task that notifies Users of status changes to Jobs they have
+    // subscribed to
+    private static final String notifyUsersOfJobsTask = &quot;notifyUsersOfJobsTask&quot;;
+<span class="nc" id="L623">    private static final Runnable NOTIFY_USERS_OF_JOBS_TASK =</span>
+<span class="nc" id="L624">        new RobustRunnable(notifyUsersOfJobsTask) {</span>
+            @Override
+            protected void dorun() {
+<span class="nc" id="L627">                Notifications.sendEmailNotifications();</span>
+<span class="nc" id="L628">            }</span>
+        };
+
+    // Check for stuck jobs that have been incomplete for too long
+    private static final String checkStuckJobsTaskName = &quot;checkStuckJobsTask&quot;;
+<span class="nc" id="L633">    private static final Runnable CHECK_STUCK_JOBS_TASK = new RobustRunnable(</span>
+        checkStuckJobsTaskName
+<span class="nc" id="L635">    ) {</span>
+        @Override
+        protected void dorun() {
+<span class="nc" id="L638">            checkForStuckJobs();</span>
+<span class="nc" id="L639">        }</span>
+    };
+
+    /**
+     * Detects jobs that have been incomplete for more than 10 minutes and logs them for investigation.
+     * This helps identify jobs that may be stuck due to backend failures.
+     */
+    private static void checkForStuckJobs() {
+        try {
+            // Find jobs that are &gt; 10 minutes old and still have incomplete pairs
+<span class="nc" id="L649">            String query =</span>
+                &quot;SELECT DISTINCT j.id, j.name, j.created, &quot; +
+                &quot;COUNT(jp.id) as incomplete_pairs &quot; +
+                &quot;FROM jobs j &quot; +
+                &quot;JOIN job_pairs jp ON j.id = jp.job_id &quot; +
+                &quot;WHERE j.completed IS NULL &quot; +
+                &quot;AND j.created &lt; NOW() - INTERVAL '10 minutes' &quot; +
+                &quot;AND (jp.status_code &lt; 7 OR jp.status_code &gt; 18) &quot; +
+                &quot;GROUP BY j.id, j.name, j.created &quot; +
+                &quot;HAVING COUNT(jp.id) &gt; 0&quot;;
+
+<span class="nc" id="L660">            List&lt;String&gt; stuckJobs = Common.runInTransaction(con -&gt; {</span>
+<span class="nc" id="L661">                List&lt;String&gt; jobs = new ArrayList&lt;&gt;();</span>
+                try (
+<span class="nc" id="L663">                    Statement stmt = con.createStatement();</span>
+<span class="nc" id="L664">                    ResultSet rs = stmt.executeQuery(query)</span>
+                ) {
+<span class="nc bnc" id="L666" title="All 2 branches missed.">                    while (rs.next()) {</span>
+<span class="nc" id="L667">                        int jobId = rs.getInt(&quot;id&quot;);</span>
+<span class="nc" id="L668">                        String jobName = rs.getString(&quot;name&quot;);</span>
+<span class="nc" id="L669">                        java.sql.Timestamp created = rs.getTimestamp(&quot;created&quot;);</span>
+<span class="nc" id="L670">                        int incompletePairs = rs.getInt(&quot;incomplete_pairs&quot;);</span>
+
+<span class="nc" id="L672">                        jobs.add(</span>
+<span class="nc" id="L673">                            String.format(</span>
+                                &quot;Job %d (%s) created %s with %d incomplete pairs&quot;,
+<span class="nc" id="L675">                                jobId,</span>
+                                jobName,
+                                created,
+<span class="nc" id="L678">                                incompletePairs</span>
+                            )
+                        );
+<span class="nc" id="L681">                    }</span>
+                }
+<span class="nc" id="L683">                return jobs;</span>
+            });
+
+<span class="nc bnc" id="L686" title="All 2 branches missed.">            if (!stuckJobs.isEmpty()) {</span>
+<span class="nc" id="L687">                log.warn(</span>
+<span class="nc" id="L688">                    &quot;Found &quot; + stuckJobs.size() + &quot; potentially stuck jobs:&quot;</span>
+                );
+<span class="nc bnc" id="L690" title="All 2 branches missed.">                for (String jobInfo : stuckJobs) {</span>
+<span class="nc" id="L691">                    log.warn(&quot;  - &quot; + jobInfo);</span>
+<span class="nc" id="L692">                    log.warn(</span>
+                        &quot;    Check LocalBackend logs for execution errors&quot;
+                    );
+<span class="nc" id="L695">                    log.warn(</span>
+                        &quot;    Check output directory for missing status.json files&quot;
+                    );
+<span class="nc" id="L698">                    log.warn(</span>
+                        &quot;    Monitor LocalJobMonitor logs for processing failures&quot;
+                    );
+<span class="nc" id="L701">                }</span>
+            }
+<span class="nc" id="L703">        } catch (Exception e) {</span>
+<span class="nc" id="L704">            log.error(&quot;Error checking for stuck jobs&quot;, e);</span>
+<span class="nc" id="L705">        }</span>
+<span class="nc" id="L706">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,46 @@
+// Component sizing standards
+// Use these classes for consistent layouts
+
+.component-full {
+	width: 100%;
+}
+
+.component-wide {
+	width: 90%;
+	margin: 0 auto;
+
+	@include mobile {
+		width: 100%;
+	}
+}
+
+.component-standard {
+	width: 75%;
+	margin: 0 auto;
+
+	@include mobile {
+		width: 95%;
+	}
+}
+
+.component-narrow {
+	width: 60%;
+	margin: 0 auto;
+
+	@include mobile {
+		width: 90%;
+	}
+}
+
+.component-fixed-600 {
+	width: 600px;
+	margin: 0 auto;
+
+	@media (max-width: 1023px) {
+		width: 90%;
+	}
+
+	@include mobile {
+		width: 100%;
+	}
+}

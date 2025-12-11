@@ -1,0 +1,68 @@
+// =============================================================================
+// LEGACY STATUS MESSAGE STYLES - DEPRECATED
+// =============================================================================
+// These styles are DEPRECATED and maintained for backwards compatibility only.
+//
+// MIGRATION REQUIRED: Please migrate to the new centralized alert system:
+//   - CSS: Use .alert and .alert--{type} classes from alert.scss
+//   - JS: Use window.Alerts utility from alerts.js
+//   - Banners: Use window.Banners utility from banners.js
+//
+// Timeline for removal:
+//   - Current: Maintained for backwards compatibility
+//   - Q1 2026: Issue deprecation warnings in console
+//   - Q2 2026: Remove from codebase
+//
+// New Alert System Benefits:
+//   ✓ Unified DOM structure across all notifications
+//   ✓ Consistent styling and behavior
+//   ✓ Better accessibility (ARIA roles, live regions)
+//   ✓ Session dismissal persistence
+//   ✓ Responsive mobile-friendly design
+//   ✓ Animation support
+//   ✓ Flexible positioning (not fixed to bottom)
+//
+// MIGRATION EXAMPLES:
+//
+//   Old (DEPRECATED):
+//   <div class="status-message">
+//     <p>
+//       Status message text
+//       <a href="#">link</a>
+//     </p>
+//   </div>
+//
+//   New (RECOMMENDED):
+//   Use window.Alerts.create() in JavaScript:
+//   var alert = Alerts.create({
+//     id: 'status-alert',
+//     type: 'warning',
+//     message: 'Status message text <a href="#">link</a>',
+//     dismissible: true
+//   });
+//
+// =============================================================================
+
+// Legacy status message styles (DEPRECATED - see above for migration guide)
+.status-message {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background: #f00;
+    padding: 5px 0;
+    z-index: 999;
+
+    p {
+        width: 1024px;
+        margin: 0 auto;
+
+        a {
+            margin: 0 0 0 1em;
+            font-weight: bold;
+        }
+    }
+}
+
+// Deprecated warning: This file will be removed in a future version
+// Use the new centralized alert system instead (see comments above)

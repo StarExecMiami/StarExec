@@ -1,0 +1,187 @@
+@import "../global/colors";
+@import "../global/mixins";
+
+fieldset {
+    width: 75%;
+    margin: 50px auto 0 auto;
+    padding: 30px;
+    background-color: $surface-primary;
+    border: 1px solid $input-background-selected;
+    border-radius: 12px;
+    @include card-shadow;
+}
+
+@media only screen and (max-width: 767px) {
+    fieldset {
+        width: 95%;
+        padding: 20px;
+        background-color: $surface-primary;
+        border: 1px solid $input-background-selected;
+        border-radius: 8px;
+        @include card-shadow;
+    }
+}
+
+fieldset table {
+    margin: auto;
+    width: 100%;
+    height: 100%;
+}
+
+fieldset table tr td:first-child {
+    width: 200px;
+    margin: 10px;
+}
+
+table tr td:first-child.label {
+    padding-left: 10px;
+    vertical-align: middle;
+}
+
+table tr td {
+    padding: 10px;
+}
+
+/* Button positioning for to_community page table cells */
+/* Base button styles come from global components/buttons.scss */
+td button {
+    float: right;
+}
+
+tr .label {
+    min-width: 120px;
+    float: top;
+}
+
+.shade {
+    background-color: #111111;
+}
+
+table .styled {
+    width: 212px;
+    height: 28px;
+    border: 1px solid #13a5e1;
+    font-size: 16px;
+}
+
+table .styled.error {
+    border: solid 1px #ae0000;
+}
+
+textarea#reason {
+    height: 80px;
+    width: 460px;
+    border: 1px solid $accent-blue;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 14px;
+    line-height: 1.4;
+    resize: vertical;
+    background-color: $input-background;
+    color: $text-main-color;
+    @include transition-safe(border-color 0.3s ease);
+}
+
+textarea#reason:focus {
+    border-color: $accent-blue;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba($accent-blue, 0.2);
+    @include focus-visible {
+        box-shadow: 0 0 0 2px rgba($accent-blue, 0.2);
+    }
+}
+
+textarea#reason.error {
+    vertical-align: middle;
+    border: solid 1px $accent-red;
+    background-color: $input-background;
+    color: $text-main-color;
+}
+
+textarea#reason.error:focus {
+    border-color: $soft-red;
+    box-shadow: 0 0 0 2px rgba($soft-red, 0.2);
+    @include focus-visible {
+        box-shadow: 0 0 0 2px rgba($soft-red, 0.2);
+    }
+}
+
+@include mobile {
+    #wrapper #communityInformation textarea {
+        width: 100%;
+        height: 100px;
+    }
+
+    p {
+        font-size: 16px;
+        margin-bottom: 20px;
+        color: $text-main-color;
+        line-height: 1.5;
+        font-weight: 400;
+    }
+
+    #wrapper #communityInformation tr > *:nth-child(1) {
+        width: 30%;
+    }
+}
+
+// Pending request notice card
+.pending-notice {
+    padding: 20px;
+    margin: 20px 0;
+    background-color: rgba($accent-blue, 0.1);
+    border: 1px solid $accent-blue;
+    border-radius: 8px;
+    @include card-shadow;
+    color: $text-main-color;
+
+    h2 {
+        margin-top: 0;
+        color: $accent-orange;
+        font-size: 24px;
+        font-weight: 600;
+    }
+
+    p {
+        margin-bottom: 0;
+        color: $text-main-color;
+        font-size: 16px;
+        line-height: 1.5;
+        font-weight: 400;
+    }
+}
+
+// Success notice card
+.success-notice {
+    padding: 20px;
+    margin: 20px 0;
+    background-color: rgba($success, 0.1);
+    border: 1px solid $success;
+    border-radius: 8px;
+    @include card-shadow;
+    color: $text-main-color;
+
+    p {
+        margin: 0;
+        color: $text-main-color;
+        font-size: 16px;
+        line-height: 1.5;
+        font-weight: 400;
+    }
+}
+
+@include mobile {
+    .pending-notice,
+    .success-notice {
+        padding: 15px;
+        margin: 15px 0;
+
+        h2 {
+            font-size: 20px;
+        }
+
+        p {
+            font-size: 14px;
+        }
+    }
+}

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MatrixElement.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.util.matrixView</a> &gt; <span class="el_source">MatrixElement.java</span></div><h1>MatrixElement.java</h1><pre class="source lang-java linenums">package org.starexec.util.matrixView;
+
+
+/**
+ * Helper class for the matrix view of a job.
+ * Represents one element in the matrix.
+ * @author Albert Giegerich
+ */
+public class MatrixElement {
+	private final String status;
+	private final String cpuTime;
+	private final String memUsage;
+	private final String wallclock;
+	private final String jobPairId;
+	private final String uniqueIdentifier;
+
+<span class="nc" id="L17">	public MatrixElement(String status, String cpuTime, String memUsage, String wallclock, Integer jobPairId, String uniqueIdentifier) {</span>
+<span class="nc" id="L18">		this.status = status;</span>
+<span class="nc" id="L19">		this.cpuTime = cpuTime;</span>
+<span class="nc" id="L20">		this.memUsage = memUsage;</span>
+<span class="nc" id="L21">		this.wallclock = wallclock;</span>
+<span class="nc" id="L22">		this.jobPairId = String.valueOf(jobPairId);</span>
+<span class="nc" id="L23">		this.uniqueIdentifier = uniqueIdentifier;</span>
+<span class="nc" id="L24">	}</span>
+
+	public String getUniqueIdentifier() {
+<span class="nc" id="L27">		return uniqueIdentifier;</span>
+	}
+
+	public String getJobPairId() {
+<span class="nc" id="L31">		return jobPairId;</span>
+	}
+
+	public String getStatus() {
+<span class="nc" id="L35">		return status;</span>
+	}
+
+	public String getCpuTime() {
+<span class="nc" id="L39">		return cpuTime;</span>
+	}
+
+	public String getMemUsage() {
+<span class="nc" id="L43">		return memUsage;</span>
+	}
+
+	public String getWallclock() {
+<span class="nc" id="L47">		return wallclock;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

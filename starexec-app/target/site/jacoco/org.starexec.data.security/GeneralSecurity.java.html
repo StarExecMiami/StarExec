@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GeneralSecurity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.security</a> &gt; <span class="el_source">GeneralSecurity.java</span></div><h1>GeneralSecurity.java</h1><pre class="source lang-java linenums">package org.starexec.data.security;
+
+import org.owasp.esapi.ESAPI;
+import org.starexec.constants.R;
+import org.starexec.data.database.Users;
+import org.starexec.logger.StarLogger;
+
+import org.starexec.util.Hash;
+import org.starexec.util.PasswordHasher;
+import org.starexec.util.Util;
+import org.starexec.util.SystemTestStatus;
+import org.starexec.util.Validator;
+
+import java.sql.Connection;
+
+<span class="nc" id="L16">public class GeneralSecurity {</span>
+
+<span class="fc" id="L18">	private static final StarLogger log = StarLogger.getLogger(GeneralSecurity.class);</span>
+	// private static final org.owasp.esapi.Logger esapiLogger =
+	// ESAPI.getLogger(GeneralSecurity.class.toString());
+
+	/**
+	 * Checks to see if the given user has permission to execute tests without
+	 * checking to see if tests are already
+	 * running
+	 *
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a
+	 *         status code from ValidatorStatusCodes
+	 *         otherwise
+	 */
+
+	public static ValidatorStatusCode canUserRunTestsNoRunningCheck(int userId) {
+		// only the admin can run tests, and they cannot be run on production
+<span class="nc bnc" id="L35" title="All 4 branches missed.">		if (!GeneralSecurity.hasAdminWritePrivileges(userId) || !R.ALLOW_TESTING) {</span>
+<span class="nc" id="L36">			return new ValidatorStatusCode(false, &quot;You do not have permission to perform this operation&quot;);</span>
+		}
+<span class="nc" id="L38">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user has permission to execute tests
+	 *
+	 * @param userId The ID of the user making the request
+	 * @param stress True if the tests in question are stress tests, false otherwise
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a
+	 *         status code from ValidatorStatusCodes
+	 *         otherwise
+	 */
+
+	public static ValidatorStatusCode canUserRunTests(int userId, boolean stress) {
+
+<span class="nc" id="L53">		boolean testRunning = false;</span>
+
+<span class="nc bnc" id="L55" title="All 2 branches missed.">		if (stress) {</span>
+<span class="nc" id="L56">			testRunning = SystemTestStatus.isStressTestRunning();</span>
+		} else {
+<span class="nc" id="L58">			testRunning = SystemTestStatus.areTestsRunning();</span>
+		}
+<span class="nc bnc" id="L60" title="All 2 branches missed.">		if (testRunning) {</span>
+<span class="nc" id="L61">			return new ValidatorStatusCode(</span>
+					false, &quot;Tests are already running. Please wait until the current tests are finished&quot;);
+		}
+
+<span class="nc" id="L65">		return canUserRunTestsNoRunningCheck(userId);</span>
+	}
+
+	/**
+	 * Given a string, returns the same string in an HTML safe format Do NOT use
+	 * this for HTML attributes! Use the
+	 * function specifically for attributes
+	 *
+	 * @param str The string to change
+	 * @return The formatted string
+	 */
+	public static String getHTMLSafeString(String str) {
+<span class="nc" id="L77">		return ESAPI.encoder().encodeForHTML(str);</span>
+	}
+
+	/**
+	 * a test method to make sure ESAPI is working correctly
+	 */
+	public static void test() {
+		try {
+<span class="nc" id="L85">			String str = getHTMLSafeString(&quot;test&quot;);</span>
+<span class="nc" id="L86">			log.info(&quot;ESAPI test passed: &quot; + str);</span>
+<span class="nc" id="L87">		} catch (Exception e) {</span>
+<span class="nc" id="L88">			log.error(&quot;Caught exception checking that ESAPI is working: &quot; + Util.getStackTrace(e));</span>
+<span class="nc" id="L89">			return;</span>
+<span class="nc" id="L90">		}</span>
+<span class="nc" id="L91">	}</span>
+
+	/**
+	 * Formats a string so it is safe to insert in to an HTML attribute
+	 *
+	 * @param str The string to format
+	 * @return The formatted string
+	 */
+
+	public static String getHTMLAttributeSafeString(String str) {
+<span class="nc" id="L101">		return ESAPI.encoder().encodeForHTMLAttribute(str);</span>
+	}
+
+	/**
+	 * Formats a string so it is safe to insert into Javascript Do NOT use this for
+	 * strings that will eventually
+	 * inserted into HTML, even if they are going to Javascript first! It is not
+	 * secure for that condition.
+	 *
+	 * @param str
+	 * @return The formatted string
+	 */
+
+	public static String getJavascriptSafeString(String str) {
+<span class="nc" id="L115">		return ESAPI.encoder().encodeForJavaScript(str);</span>
+	}
+
+	public static ValidatorStatusCode canUserUpdatePassword(
+			int userId, int userIdMakingRequest, String oldPass, String newPass, String confirmNewPass) {
+<span class="nc bnc" id="L120" title="All 2 branches missed.">		boolean userIsChangingOwnPassword = (userId == userIdMakingRequest);</span>
+<span class="nc" id="L121">		boolean userIsAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdMakingRequest);</span>
+<span class="nc bnc" id="L122" title="All 4 branches missed.">		if (!(userIsChangingOwnPassword || userIsAdmin)) {</span>
+<span class="nc" id="L123">			return new ValidatorStatusCode(false, &quot;You do not have permission to change this user's password.&quot;);</span>
+		}
+<span class="nc bnc" id="L125" title="All 2 branches missed.">		if (Users.isPublicUser(userIdMakingRequest)) {</span>
+<span class="nc" id="L126">			return new ValidatorStatusCode(false, &quot;Passwords for guests cannot be changed&quot;);</span>
+		}
+
+		// Get stored password hash
+<span class="nc" id="L130">		String databasePass = Users.getPassword(userId);</span>
+<span class="nc bnc" id="L131" title="All 4 branches missed.">		if (databasePass == null || databasePass.isEmpty()) {</span>
+<span class="nc" id="L132">			log.error(&quot;No password hash found for user &quot; + userId);</span>
+<span class="nc" id="L133">			return new ValidatorStatusCode(false,</span>
+					&quot;Account configuration error. Please contact support.&quot;);
+		}
+
+		try {
+			// Verify old password using BCrypt
+<span class="nc bnc" id="L139" title="All 2 branches missed.">			if (!PasswordHasher.verify(oldPass, databasePass)) {</span>
+<span class="nc" id="L140">				return new ValidatorStatusCode(false, &quot;The supplied password is incorrect&quot;);</span>
+			}
+<span class="nc" id="L142">		} catch (Exception e) {</span>
+<span class="nc" id="L143">			log.error(&quot;Password verification failed for user &quot; + userId, e);</span>
+<span class="nc" id="L144">			return new ValidatorStatusCode(false,</span>
+					&quot;Authentication error. Please try again or contact support.&quot;);
+<span class="nc" id="L146">		}</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">		if (!newPass.equals(confirmNewPass)) {</span>
+<span class="nc" id="L148">			return new ValidatorStatusCode(false, &quot;The passwords are not the same&quot;);</span>
+		}
+
+<span class="nc bnc" id="L151" title="All 2 branches missed.">		if (!Validator.isValidPassword(newPass)) {</span>
+<span class="nc" id="L152">			return new ValidatorStatusCode(false, &quot;The supplied password is invalid&quot;);</span>
+		}
+
+<span class="nc" id="L155">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if a user can view admin only pages.
+	 *
+	 * @param userId
+	 * @return True if the user is either an admin or developer and false otherwise
+	 * @author Albert Giegerich
+	 */
+	public static boolean hasAdminReadPrivileges(int userId) {
+<span class="nc bnc" id="L166" title="All 4 branches missed.">		return Users.isAdmin(userId) || Users.isDeveloper(userId);</span>
+	}
+
+	public static boolean hasAdminReadPrivileges(Connection con, int userId) {
+<span class="nc bnc" id="L170" title="All 4 branches missed.">		return Users.isAdmin(con, userId) || Users.isDeveloper(con, userId);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can make admin-only changes to the
+	 * website/backend.
+	 *
+	 * @param userId
+	 * @return True if the user is an admin and false otherwise
+	 * @author Albert Giegerich
+	 */
+	public static boolean hasAdminWritePrivileges(int userId) {
+<span class="nc" id="L182">		return Users.isAdmin(userId);</span>
+	}
+
+	public static ValidatorStatusCode canUserSuspendOrReinstateUser(int userIdBeingUpdated, int userIdMakingCall) {
+<span class="nc bnc" id="L186" title="All 2 branches missed.">		if (Users.get(userIdBeingUpdated) == null) {</span>
+<span class="nc" id="L187">			return new ValidatorStatusCode(false, &quot;The given user could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L189" title="All 2 branches missed.">		if (!GeneralSecurity.hasAdminWritePrivileges(userIdMakingCall)) {</span>
+<span class="nc" id="L190">			return new ValidatorStatusCode(false, &quot;You do not have permission to suspend or reinstate users&quot;);</span>
+		}
+
+<span class="nc" id="L193">		return new ValidatorStatusCode(false);</span>
+	}
+
+	/**
+	 * Checks if a user can generate a public anonymous link for a given primitive.
+	 *
+	 * @param userId        The id of the user making the request for the link.
+	 * @param primitiveType The type of the primitive. (Benchmark, Solver, etc.)
+	 * @param primitiveId   The id of the primitive.
+	 * @author Albert Giegerich
+	 */
+	public static ValidatorStatusCode canUserGetAnonymousLinkForPrimitive(
+			int userId, String primitiveType, int primitiveId) {
+<span class="nc" id="L206">		final String methodName = &quot;canUserGetAnonymousLinkForPrimitive&quot;;</span>
+<span class="nc" id="L207">		log.entry(methodName);</span>
+<span class="nc" id="L208">		log.debug(&quot;Checking if user can get anonymous link for primitive of type &quot; + primitiveType);</span>
+<span class="nc bnc" id="L209" title="All 4 branches missed.">		switch (primitiveType) {</span>
+			case R.BENCHMARK:
+<span class="nc" id="L211">				log.debug(</span>
+						methodName, &quot;Found that primitive was of type &quot; + R.BENCHMARK +
+								&quot; while checking if an anonymous link could be generated for it.&quot;);
+<span class="nc" id="L214">				return BenchmarkSecurity.canUserGetAnonymousLink(primitiveId, userId);</span>
+			case R.SOLVER:
+<span class="nc" id="L216">				log.debug(</span>
+						methodName, &quot;Found that primitive was of type &quot; + R.SOLVER +
+								&quot; while checking if an anonymous link could be generated for it.&quot;);
+<span class="nc" id="L219">				return SolverSecurity.canUserGetAnonymousLink(primitiveId, userId);</span>
+			case R.JOB:
+<span class="nc" id="L221">				log.debug(</span>
+						methodName, &quot;Found that primitive was of type &quot; + R.JOB +
+								&quot; while checking if an anonymous link could be generated for it.&quot;);
+<span class="nc" id="L224">				return JobSecurity.canUserGetAnonymousLink(primitiveId, userId);</span>
+			default:
+<span class="nc" id="L226">				return new ValidatorStatusCode(</span>
+						false, &quot;You do not have permission to get an anonymous link for this primitive.&quot;);
+		}
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

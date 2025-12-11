@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BackendCommunicationException.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.backend.exception</a> &gt; <span class="el_source">BackendCommunicationException.java</span></div><h1>BackendCommunicationException.java</h1><pre class="source lang-java linenums">package org.starexec.backend.exception;
+
+/**
+ * Base exception for backend communication failures.
+ *
+ * This exception hierarchy allows callers to distinguish between:
+ * - Network/transient errors (can retry)
+ * - Logic/configuration errors (need investigation)
+ * - Resource exhaustion (need cleanup)
+ *
+ * This observability is crucial for:
+ * 1. Automatic retry policies (only for transient errors)
+ * 2. Alerting (different thresholds for different error types)
+ * 3. Debugging (stack traces categorized by error type)
+ *
+ * Example usage:
+ * &lt;pre&gt;
+ * try {
+ *     backend.submitScript(scriptPath, jobId, dataDir);
+ * } catch (BackendTransientException e) {
+ *     // Retry with exponential backoff
+ *     retryWithBackoff(e);
+ * } catch (BackendLogicException e) {
+ *     // Log error and notify admin
+ *     log.error(&quot;Configuration error in backend&quot;, e);
+ *     alertOps(e);
+ * } catch (BackendResourceException e) {
+ *     // Trigger cleanup and queue pause
+ *     cleanupOrphanedContainers();
+ *     pauseJobQueue();
+ * }
+ * &lt;/pre&gt;
+ */
+public abstract class BackendCommunicationException extends Exception {
+    private final int exitCode;
+    private final String stderr;
+    private final long timestamp;
+    private final String backendType;
+
+    protected BackendCommunicationException(
+            String message,
+            Throwable cause,
+            int exitCode,
+            String stderr,
+            String backendType) {
+<span class="nc" id="L46">        super(message, cause);</span>
+<span class="nc" id="L47">        this.exitCode = exitCode;</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">        this.stderr = stderr != null ? stderr : &quot;&quot;;</span>
+<span class="nc" id="L49">        this.timestamp = System.currentTimeMillis();</span>
+<span class="nc" id="L50">        this.backendType = backendType;</span>
+<span class="nc" id="L51">    }</span>
+
+    /**
+     * Returns the process exit code (if available).
+     * -1 if the process did not complete normally.
+     */
+    public int getExitCode() {
+<span class="nc" id="L58">        return exitCode;</span>
+    }
+
+    /**
+     * Returns the stderr output from the process.
+     * Useful for debugging subprocess failures.
+     */
+    public String getStderr() {
+<span class="nc" id="L66">        return stderr;</span>
+    }
+
+    /**
+     * Returns the timestamp when this exception was created.
+     * Useful for correlating with log entries.
+     */
+    public long getTimestamp() {
+<span class="nc" id="L74">        return timestamp;</span>
+    }
+
+    /**
+     * Returns the backend type (e.g., &quot;podman&quot;, &quot;kubernetes&quot;, &quot;local&quot;).
+     * Useful for routing error handling based on backend.
+     */
+    public String getBackendType() {
+<span class="nc" id="L82">        return backendType;</span>
+    }
+
+    @Override
+    public String toString() {
+<span class="nc" id="L87">        return getClass().getSimpleName() + &quot;{&quot; +</span>
+<span class="nc" id="L88">                &quot;message='&quot; + getMessage() + '\'' +</span>
+                &quot;, exitCode=&quot; + exitCode +
+<span class="nc" id="L90">                &quot;, stderrLength=&quot; + stderr.length() +</span>
+                &quot;, backendType='&quot; + backendType + '\'' +
+                &quot;, timestamp=&quot; + timestamp +
+                '}';
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Notifications.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.database</a> &gt; <span class="el_source">Notifications.java</span></div><h1>Notifications.java</h1><pre class="source lang-java linenums">package org.starexec.data.database;
+
+import org.starexec.data.to.JobStatus;
+import org.starexec.data.to.User;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Mail;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+public class Notifications {
+	private Notifications() {
+	} // Class cannot be instantiated
+
+<span class="nc" id="L17">	private static final StarLogger log = StarLogger.getLogger(Notifications.class);</span>
+
+	/**
+	 * @param user ID of User
+	 * @param job ID of Job
+	 * @return True if user is subscribed to job, false otherwise
+	 */
+	public static boolean isUserSubscribedToJob(int user, int job) throws SQLException {
+<span class="nc" id="L25">		Connection con = null;</span>
+<span class="nc" id="L26">		PreparedStatement ps = null;</span>
+<span class="nc" id="L27">		ResultSet results = null;</span>
+		try {
+<span class="nc" id="L29">			con = Common.getConnection();</span>
+<span class="nc" id="L30">			ps = con.prepareStatement(&quot;SELECT * FROM starexec.UserSubscribedToJob(?,?)&quot;);</span>
+<span class="nc" id="L31">			ps.setInt(1, user);</span>
+<span class="nc" id="L32">			ps.setInt(2, job);</span>
+<span class="nc" id="L33">			results = ps.executeQuery();</span>
+<span class="nc bnc" id="L34" title="All 2 branches missed.">			if (results.next()) {</span>
+<span class="nc" id="L35">				return results.getBoolean(1);</span>
+			}
+<span class="nc" id="L37">			return false;</span>
+		} finally {
+<span class="nc" id="L39">			Common.safeClose(results);</span>
+<span class="nc" id="L40">			Common.safeClose(ps);</span>
+<span class="nc" id="L41">			Common.safeClose(con);</span>
+		}
+	}
+
+	/**
+	 * Subscribe User u to Job j
+	 *
+	 * @param user ID of User
+	 * @param job ID of Job
+	 */
+	public static void subscribeUserToJob(int user, int job) throws SQLException {
+<span class="nc" id="L52">		Connection con = null;</span>
+<span class="nc" id="L53">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L55">			con = Common.getConnection();</span>
+<span class="nc" id="L56">			ps = con.prepareStatement(&quot;SELECT starexec.SubscribeUserToJob(?,?)&quot;);</span>
+<span class="nc" id="L57">			ps.setInt(1, user);</span>
+<span class="nc" id="L58">			ps.setInt(2, job);</span>
+<span class="nc" id="L59">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L61">			Common.safeClose(ps);</span>
+<span class="nc" id="L62">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L64">	}</span>
+
+	/**
+	 * Unsubscribe user from job
+	 *
+	 * @param user ID of User
+	 * @param job ID of Job
+	 */
+	public static void unsubscribeUserToJob(int user, int job) throws SQLException {
+<span class="nc" id="L73">		Connection con = null;</span>
+<span class="nc" id="L74">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L76">			con = Common.getConnection();</span>
+<span class="nc" id="L77">			ps = con.prepareStatement(&quot;SELECT starexec.UnsubscribeUserToJob(?,?)&quot;);</span>
+<span class="nc" id="L78">			ps.setInt(1, user);</span>
+<span class="nc" id="L79">			ps.setInt(2, job);</span>
+<span class="nc" id="L80">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L82">			Common.safeClose(ps);</span>
+<span class="nc" id="L83">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L85">	}</span>
+
+	/**
+	 * Update the last seen status of a Job to status. After we have sent a notification, we need to record the current
+	 * status of the Job so that we can be notified when it changes again.
+	 *
+	 * @param userId
+	 * @param job
+	 * @param status
+	 */
+	private static void updateNotificationJobStatus(int userId, int job, JobStatus status) throws SQLException {
+<span class="nc" id="L96">		log.debug(</span>
+				&quot;updateNotificationJobStatus&quot;,
+<span class="nc" id="L98">				&quot;user: &quot; + userId + &quot;    job: &quot; + job + &quot;   status &quot; + status.toString()</span>
+		);
+<span class="nc" id="L100">		Connection con = null;</span>
+<span class="nc" id="L101">		PreparedStatement ps = null;</span>
+		try {
+<span class="nc" id="L103">			con = Common.getConnection();</span>
+<span class="nc" id="L104">			ps = con.prepareStatement(&quot;SELECT starexec.UpdateNotificationJobStatus(?,?,?)&quot;);</span>
+<span class="nc" id="L105">			ps.setInt(1, userId);</span>
+<span class="nc" id="L106">			ps.setInt(2, job);</span>
+<span class="nc" id="L107">			ps.setString(3, status.name());</span>
+<span class="nc" id="L108">			Common.executeAndDrain(ps);</span>
+		} finally {
+<span class="nc" id="L110">			Common.safeClose(ps);</span>
+<span class="nc" id="L111">			Common.safeClose(con);</span>
+		}
+<span class="nc" id="L113">	}</span>
+
+	/**
+	 * Send email notifications for Jobs with changed status. Query the DB for Jobs whose status has changed since last
+	 * we checked. Send email notifications to users subscribed to those jobs, then record the new status so we will
+	 * know if it changes again in the future.
+	 */
+	public static void sendEmailNotifications() {
+<span class="nc" id="L121">		final String method = &quot;sendEmailNotifications&quot;;</span>
+		try {
+<span class="nc" id="L123">			Connection con = null;</span>
+<span class="nc" id="L124">			PreparedStatement ps = null;</span>
+<span class="nc" id="L125">			ResultSet results = null;</span>
+			try {
+<span class="nc" id="L127">				con = Common.getConnection();</span>
+<span class="nc" id="L128">				ps = con.prepareStatement(&quot;SELECT * FROM starexec.NotifyUsersOfJobs()&quot;);</span>
+<span class="nc" id="L129">				results = ps.executeQuery();</span>
+<span class="nc" id="L130">				User user = new User();</span>
+				JobStatus status;
+				int job;
+				int userId;
+<span class="nc bnc" id="L134" title="All 2 branches missed.">				while (results.next()) {</span>
+<span class="nc" id="L135">					userId = results.getInt(&quot;user&quot;);</span>
+<span class="nc" id="L136">					user.setId(userId);</span>
+<span class="nc" id="L137">					user.setEmail(results.getString(&quot;email&quot;));</span>
+<span class="nc" id="L138">					user.setFirstName(results.getString(&quot;firstName&quot;));</span>
+<span class="nc" id="L139">					user.setLastName(results.getString(&quot;lastName&quot;));</span>
+<span class="nc" id="L140">					job = results.getInt(&quot;job&quot;);</span>
+<span class="nc" id="L141">					status = JobStatus.valueOf(results.getString(&quot;status&quot;));</span>
+<span class="nc" id="L142">					Mail.notifyUserOfJobStatus(user, job, status);</span>
+<span class="nc" id="L143">					updateNotificationJobStatus(userId, job, status);</span>
+				}
+			} finally {
+<span class="nc" id="L146">				Common.safeClose(results);</span>
+<span class="nc" id="L147">				Common.safeClose(ps);</span>
+<span class="nc" id="L148">				Common.safeClose(con);</span>
+			}
+<span class="nc" id="L150">		} catch (SQLException e) {</span>
+<span class="nc" id="L151">			log.error(method, e);</span>
+<span class="nc" id="L152">		}</span>
+<span class="nc" id="L153">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

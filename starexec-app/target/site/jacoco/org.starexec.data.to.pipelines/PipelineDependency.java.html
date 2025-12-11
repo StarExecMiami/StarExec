@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PipelineDependency.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to.pipelines</a> &gt; <span class="el_source">PipelineDependency.java</span></div><h1>PipelineDependency.java</h1><pre class="source lang-java linenums">package org.starexec.data.to.pipelines;
+
+/**
+ * Class represents a dependency for some solver pipeline. Dependencies can be either on benchmarks or on the output of
+ * a previous stage
+ *
+ * @author Eric
+ */
+<span class="nc" id="L9">public class PipelineDependency {</span>
+
+	/**
+	 * Type of pipeline dependency is either a benchmark or an 'artifact,' the output of some previous stage.
+	 */
+<span class="nc" id="L14">	public enum PipelineInputType {</span>
+
+<span class="nc" id="L16">		BENCHMARK(1), ARTIFACT(2);  //type for the output from a previous stage</span>
+
+		private final int val;
+
+<span class="nc" id="L20">		PipelineInputType(int val) {</span>
+<span class="nc" id="L21">			this.val = val;</span>
+<span class="nc" id="L22">		}</span>
+
+		public int getVal() {
+<span class="nc" id="L25">			return this.val;</span>
+		}
+
+		public static PipelineInputType valueOf(int val) {
+<span class="nc bnc" id="L29" title="All 3 branches missed.">			switch (val) {</span>
+				case 1:
+<span class="nc" id="L31">					return BENCHMARK;</span>
+				case 2:
+<span class="nc" id="L33">					return ARTIFACT;</span>
+
+				default:
+<span class="nc" id="L36">					return null;</span>
+			}
+		}
+	}
+
+	private int stageId; // the stage this dependency is for
+	private int dependencyId; // either a 1-indexed number of a stage in a pipeline if the type is &quot;artifact&quot; 
+	// or a 1-indexed number indicating which of the n benchmarks a user has uploaded
+	private PipelineInputType type; // whether this is a benchmark or artifact
+	private int inputNumber; // whether this is the first, second... etc. input to the stage
+
+	public int getStageId() {
+<span class="nc" id="L48">		return stageId;</span>
+	}
+
+	public void setStageId(int stage_id) {
+<span class="nc" id="L52">		this.stageId = stage_id;</span>
+<span class="nc" id="L53">	}</span>
+
+	public int getDependencyId() {
+<span class="nc" id="L56">		return dependencyId;</span>
+	}
+
+	public void setDependencyId(int dependency_id) {
+<span class="nc" id="L60">		this.dependencyId = dependency_id;</span>
+<span class="nc" id="L61">	}</span>
+
+	public PipelineInputType getType() {
+<span class="nc" id="L64">		return type;</span>
+	}
+
+	public void setType(PipelineInputType type) {
+<span class="nc" id="L68">		this.type = type;</span>
+<span class="nc" id="L69">	}</span>
+
+	public int getInputNumber() {
+<span class="nc" id="L72">		return inputNumber;</span>
+	}
+
+	public void setInputNumber(int inputNumber) {
+<span class="nc" id="L76">		this.inputNumber = inputNumber;</span>
+<span class="nc" id="L77">	}</span>
+}
+	
+
+	
+	
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CreateQueue.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.servlets</a> &gt; <span class="el_source">CreateQueue.java</span></div><h1>CreateQueue.java</h1><pre class="source lang-java linenums">package org.starexec.servlets;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.Cluster;
+import org.starexec.data.database.Queues;
+import org.starexec.data.security.QueueSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.Queue;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.SessionUtil;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Servlet which handles incoming requests adding new queues
+ *
+ * @author Wyatt Kaiser
+ */
+<span class="nc" id="L28">public class CreateQueue extends HttpServlet {</span>
+<span class="nc" id="L29">	private static final StarLogger log = StarLogger.getLogger(CreateQueue.class);</span>
+
+	// Request attributes
+	private static final String name = &quot;name&quot;;
+	private static final String nodes = &quot;node&quot;;
+	private static final String maxCpuTimeout = &quot;cpuTimeout&quot;;
+	private static final String maxWallTimeout = &quot;wallTimeout&quot;;
+	private static final String numberOfJobsPerQueue = &quot;numberOfJobs&quot;;
+
+	/**
+	 * @see HttpServlet#doGet(HttpServletRequest request, HttpServletResponse response)
+	 */
+	protected void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L43">		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);</span>
+<span class="nc" id="L44">	}</span>
+
+	/**
+	 * @see HttpServlet#doPost(HttpServletRequest request, HttpServletResponse response)
+	 * handles the post request 
+	 */
+	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L52">		log.info(&quot;Starting queue creation process.&quot;);</span>
+		try {
+			//make sure that the user supplied values are valid
+<span class="nc" id="L55">			ValidatorStatusCode status = isRequestValid(request);</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L57">				log.warn(&quot;Request validation failed: &quot; + status.getMessage());</span>
+				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
+<span class="nc" id="L59">				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));</span>
+<span class="nc" id="L60">				response.sendError(HttpServletResponse.SC_FORBIDDEN, status.getMessage());</span>
+<span class="nc" id="L61">				return;</span>
+			}
+
+			//get all the node data required to re-assign the selected nodes from their original queues
+<span class="nc" id="L65">			List&lt;Integer&gt; nodeIds = Util.toIntegerList(request.getParameterValues(nodes));</span>
+<span class="nc" id="L66">			LinkedList&lt;String&gt; nodeNames = new LinkedList&lt;&gt;();</span>
+<span class="nc" id="L67">			LinkedList&lt;String&gt; queueNames = new LinkedList&lt;&gt;();</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">			if (nodeIds != null) {</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">				for (int id : nodeIds) {</span>
+<span class="nc" id="L70">					Queue q = Cluster.getQueueForNode(id);</span>
+<span class="nc" id="L71">					nodeNames.add(Cluster.getNodeNameById(id));</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">					if (q == null) {</span>
+<span class="nc" id="L73">						queueNames.add(null);</span>
+					} else {
+<span class="nc" id="L75">						queueNames.add(q.getName());</span>
+					}
+<span class="nc" id="L77">				}</span>
+			}
+
+			//creates the queue
+<span class="nc" id="L81">			String queue_name = (String) request.getParameter(name);</span>
+<span class="nc" id="L82">			String qName = queue_name + &quot;.q&quot;;</span>
+<span class="nc" id="L83">			Integer jobsPerQueue = Integer.parseInt(request.getParameter(numberOfJobsPerQueue));</span>
+<span class="nc" id="L84">			String[] nNames = nodeNames.toArray(new String[nodeNames.size()]);</span>
+<span class="nc" id="L85">			String[] qNames = queueNames.toArray(new String[queueNames.size()]);</span>
+<span class="nc" id="L86">			boolean backend_success = R.BACKEND.createQueueWithSlots(qName, nNames, qNames, jobsPerQueue);</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">			if (!backend_success) {</span>
+<span class="nc" id="L88">				log.error(&quot;Backend failed to create queue: &quot; + qName);</span>
+<span class="nc" id="L89">				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, &quot;Backend failed to create queue&quot;);</span>
+<span class="nc" id="L90">				return;</span>
+			}
+
+			//reloads worker nodes and queues
+<span class="nc" id="L94">			Cluster.loadWorkerNodes();</span>
+<span class="nc" id="L95">			Cluster.loadQueueDetails();</span>
+
+			//DatabaseChanges, sets the timeOut values, and the descriptions
+<span class="nc" id="L98">			int queueId = Queues.getIdByName(qName);</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">			if (queueId &lt;= 0) {</span>
+<span class="nc" id="L100">				log.error(&quot;Failed to retrieve queue ID for: &quot; + qName);</span>
+<span class="nc" id="L101">				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, &quot;Failed to retrieve queue ID&quot;);</span>
+<span class="nc" id="L102">				return;</span>
+			}
+<span class="nc" id="L104">			Integer cpuTimeout = Integer.parseInt(request.getParameter(maxCpuTimeout));</span>
+<span class="nc" id="L105">			Integer wallTimeout = Integer.parseInt(request.getParameter(maxWallTimeout));</span>
+<span class="nc" id="L106">			String description = request.getParameter(&quot;description&quot;);</span>
+<span class="nc" id="L107">			boolean success = Queues.updateQueueCpuTimeout(queueId, cpuTimeout);</span>
+<span class="nc bnc" id="L108" title="All 4 branches missed.">			success = success &amp;&amp; Queues.updateQueueWallclockTimeout(queueId, wallTimeout);</span>
+<span class="nc" id="L109">			success &amp;= Queues.updateQueueDesc(queueId, description);</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">			if (!success) {</span>
+<span class="nc" id="L111">				response.sendError(</span>
+						HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+						&quot;There was an internal error adding the queue to the starexec database&quot;
+				);
+			} else {
+				// On success, redirect to the space explorer so they can see changes
+<span class="nc" id="L117">				response.sendRedirect(Util.docRoot(&quot;secure/admin/cluster.jsp&quot;));</span>
+			}
+<span class="nc" id="L119">		} catch (Exception e) {</span>
+<span class="nc" id="L120">			log.error(&quot;Caught Exception in CreateQueue.doPost: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L121">			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, &quot;Internal server error&quot;);</span>
+<span class="nc" id="L122">		}</span>
+<span class="nc" id="L123">	}</span>
+
+	/*
+	 * Given an http request, make sure that the user supplied parameters are valid, 
+	 */
+	private static ValidatorStatusCode isRequestValid(HttpServletRequest request) {
+		try {
+<span class="nc" id="L130">			int userId = SessionUtil.getUserId(request);</span>
+<span class="nc" id="L131">			String queueName = request.getParameter(name);</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if (!Validator.isValidPosInteger(request.getParameter(maxCpuTimeout)) ||</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">					!Validator.isValidPosInteger(request.getParameter(maxWallTimeout))) {</span>
+<span class="nc" id="L134">				return new ValidatorStatusCode(false, &quot;Timeouts need to be valid integers&quot;);</span>
+			}
+
+<span class="nc" id="L137">			Integer cpuTimeout = Integer.parseInt(request.getParameter(maxCpuTimeout));</span>
+<span class="nc" id="L138">			Integer wallTimeout = Integer.parseInt(request.getParameter(maxWallTimeout));</span>
+<span class="nc bnc" id="L139" title="All 4 branches missed.">			if (cpuTimeout &lt;= 0 || wallTimeout &lt;= 0) {</span>
+<span class="nc" id="L140">				return new ValidatorStatusCode(false, &quot;Timeouts need to be greater than 0.&quot;);</span>
+			}
+
+<span class="nc" id="L143">			Integer jobsPerQueue = Integer.parseInt(request.getParameter(numberOfJobsPerQueue));</span>
+<span class="nc bnc" id="L144" title="All 4 branches missed.">			if (jobsPerQueue != 1 &amp;&amp; jobsPerQueue != 2) {</span>
+<span class="nc" id="L145">				return new ValidatorStatusCode(false, &quot;Number of jobs must be 1 or 2&quot;);</span>
+			}
+
+<span class="nc" id="L148">			return QueueSecurity.canUserMakeQueue(userId, queueName);</span>
+<span class="nc" id="L149">		} catch (Exception e) {</span>
+<span class="nc" id="L150">			log.error(&quot;Exception during request validation: &quot; + e.getMessage(), e);</span>
+		}
+
+<span class="nc" id="L153">		return new ValidatorStatusCode(false, &quot;Internal error processing queue creation request&quot;);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

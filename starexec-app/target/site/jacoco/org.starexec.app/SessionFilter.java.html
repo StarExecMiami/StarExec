@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SessionFilter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.app</a> &gt; <span class="el_source">SessionFilter.java</span></div><h1>SessionFilter.java</h1><pre class="source lang-java linenums">package org.starexec.app;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.*;
+import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.to.User;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.SessionUtil;
+import org.starexec.util.Util;
+
+import javax.servlet.*;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import java.io.IOException;
+import java.util.regex.Pattern;
+
+/**
+ * This class is responsible for intercepting all requests to protected
+ * resources
+ * and checking if the user has the appropriate session variables set to
+ * continue
+ * using the website. As a side-effect, this is where newly logged in users
+ * are detected and logged.
+ *
+ * @author Tyler Jensen
+ */
+<span class="nc" id="L28">public class SessionFilter implements Filter {</span>
+<span class="nc" id="L29">	private static final StarLogger log = StarLogger.getLogger(SessionFilter.class);</span>
+
+	/**
+	 * This RegEx is used to match known StarExecCommand User-Agent headers.
+	 * Until r26351 StarExecCommand was not setting a User-Agent header, so it
+	 * would just send the default &quot;Apache-HttpClient&quot; string. For now, we may
+	 * as well just check for either of them.
+	 */
+<span class="nc" id="L37">	private static final Pattern StarExecCommand = Pattern.compile(&quot;\\AStarExecCommand|\\AApache-HttpClient/&quot;);</span>
+
+	/**
+	 * Detects requests originating from StarExecCommand
+	 * 
+	 * @param request HTTP Request
+	 * @return true if request is from StarExecCommand, false otherwise
+	 */
+	private static boolean isFromCommand(HttpServletRequest request) {
+<span class="nc" id="L46">		final String userAgent = request.getHeader(&quot;User-Agent&quot;);</span>
+<span class="nc bnc" id="L47" title="All 2 branches missed.">		return userAgent != null</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">				&amp;&amp; StarExecCommand.matcher(userAgent).find();</span>
+	}
+
+	/** This RegEx is used to match known Python API User-Agent headers. */
+<span class="nc" id="L52">	private static final Pattern PythonUserAgent = Pattern.compile(&quot;starexec\\.py&quot;);</span>
+
+	/**
+	 * Detects requests originating from StarExecCommand
+	 * 
+	 * @param request HTTP Request
+	 * @return true if request is from StarExecCommand, false otherwise
+	 */
+	private static boolean isFromPython(HttpServletRequest request) {
+<span class="nc" id="L61">		final String userAgent = request.getHeader(&quot;User-Agent&quot;);</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">		return userAgent != null</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">				&amp;&amp; PythonUserAgent.matcher(userAgent).find();</span>
+	}
+
+	@Override
+	public void destroy() {
+		// Do nothing
+<span class="nc" id="L69">	}</span>
+
+	@Override
+	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+			throws IOException, ServletException {
+		try {
+<span class="nc" id="L75">			final String method = &quot;doFilter&quot;;</span>
+			// Cast the servlet request to an httpRequest so we have access to the session
+<span class="nc" id="L77">			HttpServletRequest httpRequest = (HttpServletRequest) request;</span>
+<span class="nc" id="L78">			log.debug(method, &quot;Request URI: &quot; + httpRequest.getRequestURI());</span>
+
+<span class="nc" id="L80">			boolean isCommandRequest = isFromCommand(httpRequest);</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">			if (isCommandRequest) {</span>
+<span class="nc" id="L82">				log.debug(method, &quot;isFromCommand: true&quot;);</span>
+			}
+
+			// Allow access to public resources and authentication endpoints FIRST
+			// Do NOT touch the session for j_security_check or login pages to avoid
+			// interfering with Tomcat's FormAuthenticator
+<span class="nc" id="L88">			String requestURI = httpRequest.getRequestURI();</span>
+<span class="nc" id="L89">			String contextPath = httpRequest.getContextPath();</span>
+
+			// Use explicit paths for static resources instead of file extensions
+			// to prevent accidentally bypassing auth for protected resources
+<span class="nc bnc" id="L93" title="All 2 branches missed.">			if (requestURI.startsWith(contextPath + &quot;/public/&quot;) ||</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">					requestURI.startsWith(contextPath + &quot;/login&quot;) ||</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">					requestURI.startsWith(contextPath + &quot;/j_security_check&quot;) ||</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">					requestURI.startsWith(contextPath + &quot;/assets/&quot;) ||</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">					requestURI.startsWith(contextPath + &quot;/css/&quot;) ||</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">					requestURI.startsWith(contextPath + &quot;/js/&quot;) ||</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">					requestURI.startsWith(contextPath + &quot;/images/&quot;)) {</span>
+<span class="nc" id="L100">				chain.doFilter(request, response);</span>
+<span class="nc" id="L101">				return;</span>
+			}
+
+			// Do not create a session eagerly for every request. Creating a session
+			// before the container's FormAuthenticator has a chance to save the
+			// original request can lead to a session-id mismatch during FORM
+			// authentication (observed as HTTP 408 &quot;login timeout&quot;). Use
+			// getSession(false) and only create a session when we need to bridge
+			// container-managed authentication into the application's session.
+<span class="nc" id="L110">			HttpSession session = httpRequest.getSession(false);</span>
+<span class="nc" id="L111">			HttpServletResponse httpResponse = (HttpServletResponse) response;</span>
+
+			// Bridge between container-managed security and application's session
+			// management
+<span class="nc bnc" id="L115" title="All 4 branches missed.">			if (SessionUtil.getUser(httpRequest) == null &amp;&amp; httpRequest.getRemoteUser() != null) {</span>
+<span class="nc" id="L116">				String username = httpRequest.getRemoteUser();</span>
+<span class="nc" id="L117">				log.debug(method,</span>
+						&quot;User is authenticated by container but not in session. Initializing session for: &quot; + username);
+<span class="nc" id="L119">				User user = Users.get(username);</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">				if (user != null) {</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">					if (session == null) {</span>
+<span class="nc" id="L122">						session = httpRequest.getSession(true);</span>
+					}
+<span class="nc" id="L124">					session.setAttribute(SessionUtil.USER, user);</span>
+<span class="nc" id="L125">					logUserLogin(user, httpRequest);</span>
+				} else {
+<span class="nc" id="L127">					log.error(method, &quot;Could not find user in database for authenticated user: &quot; + username);</span>
+				}
+			}
+
+			// If the user is logged in...
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if (SessionUtil.getUser(httpRequest) != null</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">					&amp;&amp; SessionUtil.getUser(httpRequest).getId() != R.PUBLIC_USER_ID) {</span>
+<span class="nc" id="L134">				User user = SessionUtil.getUser(httpRequest);</span>
+<span class="nc" id="L135">				String userEmail = user.getEmail();</span>
+				// Check if they have the necessary user SessionUtil stored in their session
+<span class="nc" id="L137">				int userId = user.getId();</span>
+<span class="nc" id="L138">				log.debug(method, &quot;User Id of request was: &quot; + userId);</span>
+<span class="nc" id="L139">				log.debug(method, &quot;User email of request was: &quot; + userEmail);</span>
+
+<span class="nc bnc" id="L141" title="All 2 branches missed.">				if (R.DEBUG_MODE_ACTIVE) {</span>
+<span class="nc" id="L142">					log.debug(method, &quot;Debug mode is active.&quot;);</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">					if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L144">						log.debug(method, &quot;User does not have admin read privileges, redirecting to index...&quot;);</span>
+<span class="nc" id="L145">						httpRequest.getSession().invalidate();</span>
+<span class="nc" id="L146">						httpResponse.sendRedirect(Util.docRoot(&quot;&quot;));</span>
+<span class="nc" id="L147">						return;</span>
+					}
+				}
+<span class="nc" id="L150">				log.debug(method, &quot;User role was found to be &quot; + user.getRole());</span>
+				// suspended and unauthorized users cannot utilize the system: always place them
+				// back on the index page
+				// whenever they try to access anything secure.
+<span class="nc bnc" id="L154" title="All 4 branches missed.">				if (user.getRole().equals(R.SUSPENDED_ROLE_NAME) || user.getRole().equals(R.UNAUTHORIZED_ROLE_NAME)) {</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">					if (!httpRequest.getRequestURI().equals(&quot;/&quot; + R.STAREXEC_APPNAME + &quot;/&quot;)) {</span>
+<span class="nc" id="L156">						log.debug(method, &quot;Redirecting &quot; + user.getRole() + &quot; user to index.&quot;);</span>
+<span class="nc" id="L157">						httpResponse.sendRedirect(Util.docRoot(&quot;&quot;));</span>
+					}
+				}
+<span class="nc" id="L160">			} else {</span>
+				// User not logged in - let Tomcat's security system handle authentication
+				// Do NOT redirect manually, as this interferes with j_security_check
+<span class="nc" id="L163">				log.debug(method, &quot;User not logged in, letting container handle authentication.&quot;);</span>
+				// Continue with the filter chain to allow Tomcat's authentication to work
+			}
+
+			// Be nice and pass on the request to the next filter
+<span class="nc" id="L168">			chain.doFilter(request, response);</span>
+<span class="nc" id="L169">		} catch (Throwable t) {</span>
+<span class="nc" id="L170">			log.debug(&quot;Caught throwable in doFilter. &quot;, t);</span>
+<span class="nc" id="L171">			throw t;</span>
+<span class="nc" id="L172">		}</span>
+<span class="nc" id="L173">	}</span>
+
+	/**
+	 * Adds a record to the database that represents the login
+	 * 
+	 * @param user    The user that just logged in
+	 * @param request The request containing data required to log
+	 */
+	private void logUserLogin(User user, HttpServletRequest request) {
+		// Log the regular application log
+<span class="nc" id="L183">		log.info(String.format(&quot;%s [%s] logged in.&quot;, user.getFullName(), user.getEmail()));</span>
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">		if (isFromCommand(request)) {</span>
+<span class="nc" id="L186">			Analytics.STAREXECCOMMAND_LOGIN.record(user.getId());</span>
+		}
+
+<span class="nc bnc" id="L189" title="All 2 branches missed.">		if (isFromPython(request)) {</span>
+<span class="nc" id="L190">			Analytics.PYTHON_API_LOGIN.record(user.getId());</span>
+		}
+
+<span class="nc" id="L193">		String ip = request.getRemoteAddr();</span>
+<span class="nc" id="L194">		String rawBrowser = request.getHeader(&quot;user-agent&quot;);</span>
+
+		// Also save in the database to maintain a historical record
+<span class="nc" id="L197">		Common.addLoginRecord(user.getId(), ip, rawBrowser);</span>
+		// Get the number of unique logins that have occurred since the last report was
+		// sent and
+		// record it in the reports table.
+<span class="nc" id="L201">		Integer uniqueLogins = Logins.getNumberOfUniqueLogins();</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">		if (uniqueLogins != null) {</span>
+<span class="nc" id="L203">			log.debug(&quot;Number of unique logins: &quot; + uniqueLogins);</span>
+<span class="nc" id="L204">			Reports.setEventOccurrencesNotRelatedToQueue(&quot;unique logins&quot;, uniqueLogins);</span>
+		} else {
+<span class="nc" id="L206">			log.error(&quot;Could not get number of unique logins from logins table.&quot;);</span>
+		}
+<span class="nc" id="L208">	}</span>
+
+	@Override
+	public void init(FilterConfig args) throws ServletException {
+		// Do nothing
+<span class="nc" id="L213">	}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

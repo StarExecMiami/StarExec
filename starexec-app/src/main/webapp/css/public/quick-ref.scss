@@ -1,0 +1,915 @@
+// =============================================================================
+// QUICK REFERENCE PAGE STYLES
+// =============================================================================
+// Styling for the Quick Reference Guide page
+// Uses shared components from the design system
+// =============================================================================
+
+@use "../global/colors" as c;
+@use "../global/typography" as t;
+@use "../global/spacing" as s;
+@use "../global/mixins" as m;
+
+// Local variable aliases for cleaner code
+$background-color: c.$background-color;
+$foreground-color: c.$foreground-color;
+$text-main-color: c.$text-main-color;
+$text-secondary: c.$text-secondary;
+$accent-blue: c.$accent-blue;
+$accent-orange: c.$accent-orange;
+$accent-green: c.$accent-green;
+$surface-secondary: c.$surface-secondary;
+$surface-tertiary: c.$surface-tertiary;
+$surface-primary: c.$surface-primary;
+$success: c.$success;
+$warning: c.$warning;
+$error: c.$error;
+$text-tertiary: c.$text-tertiary;
+$accent-purple: c.$accent-purple;
+$accent-red: c.$accent-red;
+
+$font-size-4xl: t.$font-size-4xl;
+$font-size-3xl: t.$font-size-3xl;
+$font-size-2xl: t.$font-size-2xl;
+$font-size-xl: t.$font-size-xl;
+$font-size-lg: t.$font-size-lg;
+$font-size-base: t.$font-size-base;
+$font-size-sm: t.$font-size-sm;
+$font-size-xs: t.$font-size-xs;
+$font-weight-bold: t.$font-weight-bold;
+$font-weight-semibold: t.$font-weight-semibold;
+$font-weight-medium: t.$font-weight-medium;
+$font-family-mono: t.$font-family-mono;
+
+$spacing-3xl: s.$spacing-3xl;
+$spacing-2xl: s.$spacing-2xl;
+$spacing-xl: s.$spacing-xl;
+$spacing-lg: s.$spacing-lg;
+$spacing-md: s.$spacing-md;
+$spacing-sm: s.$spacing-sm;
+$spacing-xs: s.$spacing-xs;
+$spacing-2xs: s.$spacing-2xs;
+$container-max-width: s.$container-max-width;
+
+// ============================================================================
+// Quick Reference Layout
+// ============================================================================
+
+.quick-ref-guide {
+  min-height: 100vh;
+  background: $background-color;
+}
+
+.container {
+  max-width: $container-max-width;
+  margin: 0 auto;
+  padding: 0 $spacing-lg;
+
+  @include m.mobile {
+    padding: 0 $spacing-md;
+  }
+}
+
+// ============================================================================
+// Header Section
+// ============================================================================
+
+.guide-header {
+  background: linear-gradient(
+    135deg,
+    rgba($accent-blue, 0.08) 0%,
+    transparent 100%
+  );
+  border-bottom: 1px solid $foreground-color;
+  padding: $spacing-2xl 0;
+  margin-bottom: $spacing-2xl;
+}
+
+.header-content {
+  max-width: 900px;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: $spacing-xs;
+  margin-bottom: $spacing-md;
+  font-size: $font-size-sm;
+}
+
+.breadcrumb-link {
+  color: $text-secondary;
+  text-decoration: none;
+  @include m.transition-default;
+
+  &:hover {
+    color: $text-main-color;
+  }
+}
+
+.breadcrumb-separator {
+  color: $text-secondary;
+}
+
+.breadcrumb-current {
+  color: $text-main-color;
+  font-weight: $font-weight-medium;
+}
+
+.page-title {
+  font-size: $font-size-4xl;
+  font-weight: $font-weight-bold;
+  color: $text-main-color;
+  margin-bottom: $spacing-sm;
+  line-height: 1.2;
+}
+
+.page-subtitle {
+  font-size: $font-size-lg;
+  color: $text-secondary;
+  margin-bottom: $spacing-lg;
+  line-height: 1.5;
+}
+
+.header-actions {
+  display: flex;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+}
+
+// ============================================================================
+// Two-Column Layout
+// ============================================================================
+
+.guide-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: $spacing-2xl;
+  align-items: start;
+  margin-bottom: $spacing-3xl;
+
+  @include m.tablet {
+    grid-template-columns: 1fr;
+    gap: $spacing-xl;
+  }
+}
+
+// ============================================================================
+// Sticky Navigation
+// ============================================================================
+
+.guide-nav {
+  background: $foreground-color;
+  border: 1px solid $surface-tertiary;
+  border-radius: 12px;
+  overflow: hidden;
+
+  @include m.desktop {
+    position: sticky;
+    top: $spacing-lg;
+  }
+}
+
+.nav-header {
+  padding: $spacing-md;
+  border-bottom: 1px solid $surface-tertiary;
+}
+
+.nav-title {
+  font-size: $font-size-base;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.nav-list {
+  list-style: none;
+  padding: $spacing-sm;
+  margin: 0;
+}
+
+.nav-item {
+  margin-bottom: $spacing-2xs;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-sm $spacing-md;
+  color: $text-secondary;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: $font-size-sm;
+  @include m.transition-default;
+
+  &:hover {
+    background: $surface-secondary;
+    color: $text-main-color;
+  }
+
+  &.active {
+    background: linear-gradient(
+      135deg,
+      rgba($accent-blue, 0.15),
+      rgba($accent-blue, 0.05)
+    );
+    color: $accent-blue;
+    font-weight: $font-weight-medium;
+
+    .nav-icon {
+      transform: scale(1.1);
+    }
+  }
+}
+
+.nav-icon {
+  font-size: $font-size-lg;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.nav-footer {
+  padding: $spacing-md;
+  border-top: 1px solid $surface-tertiary;
+  text-align: center;
+}
+
+.scroll-to-top {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-xs;
+  color: $text-secondary;
+  font-size: $font-size-sm;
+  text-decoration: none;
+  @include m.transition-default;
+
+  &:hover {
+    color: $accent-blue;
+  }
+}
+
+// ============================================================================
+// Content Sections
+// ============================================================================
+
+.guide-content {
+  max-width: 900px;
+}
+
+.content-section {
+  margin-bottom: $spacing-3xl;
+  scroll-margin-top: $spacing-lg;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: $spacing-md;
+  margin-bottom: $spacing-md;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  font-size: $font-size-2xl;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.section-icon {
+  font-size: $font-size-3xl;
+  line-height: 1;
+}
+
+.section-intro {
+  margin-bottom: $spacing-lg;
+
+  p {
+    font-size: $font-size-lg;
+    color: $text-secondary;
+    line-height: 1.7;
+    margin: 0;
+
+    strong {
+      color: $text-main-color;
+      font-weight: $font-weight-semibold;
+    }
+  }
+}
+
+// ============================================================================
+// Difficulty Badges
+// ============================================================================
+
+.difficulty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-xs;
+  padding: $spacing-2xs $spacing-sm;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-medium;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+
+  &--beginner {
+    background: rgba($success, 0.15);
+    color: $success;
+  }
+
+  &--intermediate {
+    background: rgba($warning, 0.15);
+    color: $warning;
+  }
+
+  &--advanced {
+    background: rgba($error, 0.15);
+    color: $error;
+  }
+}
+
+// ============================================================================
+// Feature Grid (Space Explorer)
+// ============================================================================
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: $spacing-md;
+  margin-bottom: $spacing-lg;
+}
+
+.feature-card {
+  background: $foreground-color;
+  border: 1px solid $surface-tertiary;
+  border-radius: 12px;
+  padding: $spacing-md;
+  @include m.transition-default;
+
+  &:hover {
+    border-color: $accent-blue;
+    transform: translateY(-2px);
+    @include m.card-shadow;
+  }
+}
+
+.feature-header {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  margin-bottom: $spacing-sm;
+}
+
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $surface-tertiary;
+  border-radius: 8px;
+  color: $accent-blue;
+  flex-shrink: 0;
+
+  &--left {
+    background: linear-gradient(
+      135deg,
+      rgba($accent-blue, 0.2),
+      rgba($accent-blue, 0.1)
+    );
+  }
+
+  &--right {
+    background: linear-gradient(
+      135deg,
+      rgba($accent-orange, 0.2),
+      rgba($accent-orange, 0.1)
+    );
+  }
+}
+
+.feature-title {
+  font-size: $font-size-lg;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.feature-description {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  line-height: 1.6;
+  margin: 0;
+}
+
+// ============================================================================
+// Tip Box
+// ============================================================================
+
+.tip-box {
+  display: flex;
+  gap: $spacing-md;
+  background: linear-gradient(
+    135deg,
+    rgba($accent-blue, 0.08),
+    rgba($accent-blue, 0.03)
+  );
+  border: 1px solid rgba($accent-blue, 0.2);
+  border-left: 4px solid $accent-blue;
+  border-radius: 8px;
+  padding: $spacing-md;
+
+  .tip-icon {
+    font-size: $font-size-2xl;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .tip-content {
+    font-size: $font-size-sm;
+    color: $text-secondary;
+    line-height: 1.6;
+
+    strong {
+      color: $accent-blue;
+      font-weight: $font-weight-semibold;
+    }
+  }
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: $surface-tertiary;
+  border: 1px solid $surface-primary;
+  border-radius: 4px;
+  font-family: $font-family-mono;
+  font-size: $font-size-xs;
+  color: $text-main-color;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+// ============================================================================
+// Resource Grid (Space Info)
+// ============================================================================
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: $spacing-md;
+}
+
+.resource-card {
+  background: $foreground-color;
+  border: 1px solid $surface-tertiary;
+  border-radius: 12px;
+  padding: $spacing-md;
+  text-align: center;
+  @include m.transition-default;
+
+  &:hover {
+    border-color: $accent-blue;
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+
+    .resource-icon {
+      transform: scale(1.1);
+    }
+  }
+}
+
+.resource-icon {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  margin: 0 auto $spacing-md;
+  transition: transform 0.2s ease;
+}
+
+.resource-title {
+  font-size: $font-size-lg;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin-bottom: $spacing-xs;
+}
+
+.resource-description {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  line-height: 1.5;
+  margin: 0;
+}
+
+// ============================================================================
+// Operation Cards (Drag & Drop)
+// ============================================================================
+
+.operation-list {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.operation-card {
+  background: $foreground-color;
+  border: 2px solid $surface-tertiary;
+  border-radius: 12px;
+  padding: $spacing-lg;
+  @include m.transition-default;
+
+  &--add {
+    border-left-width: 4px;
+    border-left-color: $success;
+
+    .operation-icon {
+      background: linear-gradient(
+        135deg,
+        rgba($success, 0.2),
+        rgba($success, 0.1)
+      );
+      color: $success;
+    }
+  }
+
+  &--delete {
+    border-left-width: 4px;
+    border-left-color: $error;
+
+    .operation-icon {
+      background: linear-gradient(
+        135deg,
+        rgba($error, 0.2),
+        rgba($error, 0.1)
+      );
+      color: $error;
+    }
+  }
+}
+
+.operation-header {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  margin-bottom: $spacing-md;
+}
+
+.operation-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.operation-title {
+  font-size: $font-size-xl;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.operation-description {
+  font-size: $font-size-base;
+  color: $text-secondary;
+  line-height: 1.7;
+  margin-bottom: $spacing-md;
+}
+
+.operation-steps {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  font-size: $font-size-sm;
+  color: $text-secondary;
+}
+
+.step-number {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $surface-tertiary;
+  color: $text-main-color;
+  font-weight: $font-weight-semibold;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.warning-box {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  background: rgba($warning, 0.1);
+  border: 1px solid rgba($warning, 0.3);
+  border-radius: 8px;
+  padding: $spacing-sm $spacing-md;
+  margin-top: $spacing-md;
+  font-size: $font-size-sm;
+  color: $warning;
+
+  svg {
+    flex-shrink: 0;
+  }
+}
+
+// ============================================================================
+// Action List
+// ============================================================================
+
+.action-list {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.action-item {
+  display: flex;
+  gap: $spacing-md;
+  background: $foreground-color;
+  border: 1px solid $surface-tertiary;
+  border-radius: 12px;
+  padding: $spacing-lg;
+  @include m.transition-default;
+
+  &:hover {
+    border-color: $accent-blue;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+}
+
+.action-number {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, $accent-blue, darken($accent-blue, 10%));
+  color: white;
+  font-size: $font-size-lg;
+  font-weight: $font-weight-bold;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.action-content {
+  flex: 1;
+}
+
+.action-title {
+  font-size: $font-size-xl;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin-bottom: $spacing-xs;
+}
+
+.action-description {
+  font-size: $font-size-base;
+  color: $text-secondary;
+  line-height: 1.7;
+  margin-bottom: $spacing-md;
+}
+
+.action-workflow {
+  display: flex;
+  align-items: center;
+  gap: $spacing-xs;
+  flex-wrap: wrap;
+}
+
+.workflow-step {
+  padding: $spacing-xs $spacing-sm;
+  background: $surface-secondary;
+  color: $text-secondary;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-medium;
+  border-radius: 6px;
+}
+
+.workflow-arrow {
+  color: $text-secondary;
+  font-size: $font-size-sm;
+}
+
+// ============================================================================
+// Requirements (Solver Upload)
+// ============================================================================
+
+.requirement-list {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+  margin-bottom: $spacing-lg;
+}
+
+.requirement-item {
+  background: $foreground-color;
+  border: 1px solid $surface-tertiary;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.requirement-header {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  padding: $spacing-md;
+  background: $surface-secondary;
+  border-bottom: 1px solid $surface-tertiary;
+}
+
+.requirement-badge {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $accent-blue;
+  color: white;
+  font-weight: $font-weight-bold;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.requirement-title {
+  font-size: $font-size-lg;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.requirement-content {
+  padding: $spacing-md;
+
+  p {
+    color: $text-secondary;
+    line-height: 1.6;
+    margin-bottom: $spacing-md;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  code {
+    background: $surface-secondary;
+    color: $accent-orange;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: $font-family-mono;
+    font-size: $font-size-sm;
+  }
+}
+
+.requirement-note {
+  font-size: $font-size-sm !important;
+  font-style: italic;
+  color: $text-tertiary !important;
+}
+
+.code-block {
+  background: $surface-primary;
+  border: 1px solid $surface-tertiary;
+  border-radius: 8px;
+  padding: $spacing-md;
+  margin: $spacing-sm 0;
+
+  code {
+    background: none;
+    color: $accent-orange;
+    font-size: $font-size-base;
+    padding: 0;
+  }
+}
+
+// Directory Tree
+.directory-tree {
+  background: $surface-primary;
+  border: 1px solid $surface-tertiary;
+  border-radius: 8px;
+  padding: $spacing-md;
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  margin: $spacing-sm 0;
+}
+
+.tree-item {
+  color: $text-secondary;
+  padding: $spacing-2xs 0;
+
+  &--folder {
+    color: $accent-blue;
+    font-weight: $font-weight-medium;
+  }
+}
+
+.tree-children {
+  padding-left: $spacing-md;
+  border-left: 1px solid $surface-tertiary;
+  margin-left: $spacing-xs;
+}
+
+// Variable List
+.variable-list {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+  margin: $spacing-sm 0;
+}
+
+.variable-item {
+  display: flex;
+  align-items: baseline;
+  gap: $spacing-md;
+  padding: $spacing-sm;
+  background: $surface-secondary;
+  border-radius: 6px;
+}
+
+.variable-name {
+  background: $surface-primary;
+  color: $accent-orange;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  font-weight: $font-weight-semibold;
+  flex-shrink: 0;
+}
+
+.variable-description {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  line-height: 1.5;
+}
+
+// Example Box
+.example-box {
+  background: $surface-primary;
+  border: 1px solid $surface-tertiary;
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: $spacing-md;
+}
+
+.example-header {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-sm $spacing-md;
+  background: $surface-secondary;
+  border-bottom: 1px solid $surface-tertiary;
+  color: $text-main-color;
+  font-size: $font-size-sm;
+  font-weight: $font-weight-medium;
+}
+
+.example-code {
+  padding: $spacing-md;
+  margin: 0;
+  color: $text-secondary;
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+// ============================================================================
+// Resource Icon Modifiers (Replaces Inline Styles)
+// ============================================================================
+
+.resource-icon--jobs {
+  background: $accent-blue;
+}
+
+.resource-icon--solvers {
+  background: $accent-green;
+}
+
+.resource-icon--benchmarks {
+  background: $accent-orange;
+}
+
+.resource-icon--users {
+  background: $accent-purple;
+}
+
+.resource-icon--spaces {
+  background: $accent-red;
+}

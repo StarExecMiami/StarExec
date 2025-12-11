@@ -1,0 +1,1129 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SpaceSecurity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.security</a> &gt; <span class="el_source">SpaceSecurity.java</span></div><h1>SpaceSecurity.java</h1><pre class="source lang-java linenums">package org.starexec.data.security;
+
+import org.starexec.data.database.*;
+import org.starexec.data.to.*;
+import org.starexec.data.to.SolverBuildStatus.SolverBuildStatusCode;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.Validator;
+
+import java.util.ArrayList;
+import java.util.List;
+
+<span class="nc" id="L12">public class SpaceSecurity {</span>
+<span class="fc" id="L13">	private static final StarLogger log = StarLogger.getLogger(SpaceSecurity.class);</span>
+
+	/**
+	 * Checks to see whether a user can update the properties of a space (such as default permissions, sticky leaders,
+	 * and so on)
+	 *
+	 * @param spaceId The ID of the space being updated
+	 * @param userId The ID of the user making the request
+	 * @param name The name the space would have upon updating
+	 * @param stickyLeaders The value stickyLeaders would have upon updating
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUpdateProperties(int spaceId, int userId, String name, boolean
+			stickyLeaders) {
+		// Admin bypass - admins can update any space properties
+<span class="nc bnc" id="L29" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {</span>
+			// Still validate: communities cannot have sticky leaders
+<span class="nc bnc" id="L31" title="All 4 branches missed.">			if (Communities.isCommunity(spaceId) &amp;&amp; stickyLeaders) {</span>
+<span class="nc" id="L32">				return new ValidatorStatusCode(false, &quot;Community spaces may not enable sticky leaders&quot;);</span>
+			}
+			// Validate name uniqueness
+<span class="nc" id="L35">			Space os = Spaces.get(spaceId);</span>
+<span class="nc bnc" id="L36" title="All 2 branches missed.">			if (!os.getName().equals(name)) {</span>
+<span class="nc" id="L37">				int parentId = Spaces.getParentSpace(os.getId());</span>
+<span class="nc bnc" id="L38" title="All 2 branches missed.">				if (Spaces.notUniquePrimitiveName(name, parentId)) {</span>
+<span class="nc" id="L39">					return new ValidatorStatusCode(false, &quot;The new name needs to be unique in the space&quot;);</span>
+				}
+			}
+<span class="nc" id="L42">			return new ValidatorStatusCode(true);</span>
+		}
+		
+<span class="nc" id="L45">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L46" title="All 4 branches missed.">		if (perm == null || !perm.isLeader()) {</span>
+<span class="nc" id="L47">			return new ValidatorStatusCode(false, &quot;You do not have permission to update this space&quot;);</span>
+		}
+
+		//communities are not allowed to have sticky leaders enabled
+<span class="nc bnc" id="L51" title="All 4 branches missed.">		if (Communities.isCommunity(spaceId) &amp;&amp; stickyLeaders) {</span>
+<span class="nc" id="L52">			return new ValidatorStatusCode(false, &quot;Community spaces may not enable sticky leaders&quot;);</span>
+		}
+
+<span class="nc" id="L55">		Space os = Spaces.get(spaceId);</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">		if (!os.getName().equals(name)) {</span>
+<span class="nc" id="L57">			int parentId = Spaces.getParentSpace(os.getId());</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">			if (Spaces.notUniquePrimitiveName(name, parentId)) {</span>
+<span class="nc" id="L59">				return new ValidatorStatusCode(false, &quot;The new name needs to be unique in the space&quot;);</span>
+			}
+		}
+
+<span class="nc" id="L63">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user may both remove and recycle benchmarks in a space
+	 *
+	 * @param benchmarkIds The IDs of the benchmarks that would be removed and recycled
+	 * @param spaceId The ID of the space containing the benchmarks
+	 * @param userId The ID of the user making the request
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveAndRecycleBenchmarks(
+			List&lt;Integer&gt; benchmarkIds, int spaceId, int userId
+	) {
+<span class="nc" id="L77">		ValidatorStatusCode status = canUserRemoveBenchmark(spaceId, userId);</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L79">			return status;</span>
+		}
+
+
+<span class="nc" id="L83">		status = BenchmarkSecurity.canUserRecycleBenchmarks(benchmarkIds, userId);</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L85">			return status;</span>
+		}
+
+<span class="nc" id="L88">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user may both remove and delete jobs in a space
+	 *
+	 * @param jobIds The IDs of the jobs that would be removed and recycled
+	 * @param spaceId The ID of the space containing the jobs
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveAndDeleteJobs(List&lt;Integer&gt; jobIds, int spaceId, int userId) {
+<span class="nc" id="L101">		ValidatorStatusCode status = canUserRemoveJob(spaceId, userId);</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L103">			return status;</span>
+		}
+<span class="nc" id="L105">		status = JobSecurity.canUserDeleteJobs(jobIds, userId);</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L107">			return status;</span>
+		}
+
+<span class="nc" id="L110">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user may both remove and delete solvers in a space
+	 *
+	 * @param solverIds The IDs of the solvers that would be removed and recycled
+	 * @param spaceId The ID of the space containing the solvers
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+
+	public static ValidatorStatusCode canUserRemoveAndRecycleSolvers(List&lt;Integer&gt; solverIds, int spaceId, int
+			userId) {
+<span class="nc" id="L125">		ValidatorStatusCode status = canUserRemoveSolver(spaceId, userId);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L127">			return status;</span>
+		}
+<span class="nc" id="L129">		status = SolverSecurity.canUserRecycleSolvers(solverIds, userId);</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L131">			return status;</span>
+		}
+
+<span class="nc" id="L134">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether a user may remove a benchmark from a space
+	 *
+	 * @param spaceId The ID of the space containing the primitive
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveBenchmark(int spaceId, int userId) {
+		// Permissions check; ensures user is the leader of the community
+<span class="nc" id="L147">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L148" title="All 4 branches missed.">		if (perm == null || !perm.canRemoveBench()) {</span>
+<span class="nc" id="L149">			return new ValidatorStatusCode(false, &quot;You do not have permission to remove benchmarks from this space&quot;);</span>
+		}
+<span class="nc" id="L151">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the given user can remove all of the given subspaces
+	 *
+	 * @param userId
+	 * @param subspaceIds
+	 * @return
+	 */
+
+	// NOTE: To remove a space hierarchy, the caller must have canRemoveSpace on the parent and be a leader of the target space and every subspace.
+	public static ValidatorStatusCode canUserRemoveSpace(int userId, List&lt;Integer&gt; subspaceIds) {
+<span class="nc bnc" id="L164" title="All 2 branches missed.">		for (Integer sid : subspaceIds) {</span>
+<span class="nc" id="L165">			Space subspace = Spaces.get(sid);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">			if (subspace == null) {</span>
+<span class="nc" id="L167">				return new ValidatorStatusCode(false, &quot;The space with the following ID could not be found: &quot; + sid);</span>
+			}
+
+<span class="nc" id="L170">			Integer parent = Spaces.getParentSpace(sid);</span>
+<span class="nc" id="L171">			Permission perm = Permissions.get(userId, parent);</span>
+<span class="nc bnc" id="L172" title="All 4 branches missed.">			if (null == perm || !perm.canRemoveSpace()) {</span>
+<span class="nc" id="L173">				return new ValidatorStatusCode(false, &quot;You do not have permission to remove subspaces from this &quot; +</span>
+						&quot;space&quot;);
+			}
+<span class="nc" id="L176">			Permission p = Permissions.get(userId, sid);</span>
+<span class="nc bnc" id="L177" title="All 4 branches missed.">			if (p == null || !p.isLeader()) {</span>
+<span class="nc" id="L178">				return new ValidatorStatusCode(false, &quot;You cannot remove spaces that you are not a leader of&quot;);</span>
+			}
+
+
+<span class="nc bnc" id="L182" title="All 2 branches missed.">			for (Space subspace2 : Spaces.getSubSpaceHierarchy(sid)) {</span>
+				// Ensure the user is the leader of that space
+<span class="nc" id="L184">				p = Permissions.get(userId, subspace2.getId());</span>
+<span class="nc bnc" id="L185" title="All 4 branches missed.">				if (p == null || !p.isLeader()) {</span>
+<span class="nc" id="L186">					return new ValidatorStatusCode(false, &quot;You cannot remove spaces that you are not a leader of&quot;);</span>
+				}
+<span class="nc" id="L188">			}</span>
+<span class="nc" id="L189">		}</span>
+<span class="nc" id="L190">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether the user demoting is the administrator
+	 *
+	 * @param spaceId
+	 * @param userIdBeingDemoted
+	 * @param userIdDoingDemoting
+	 * @return
+	 */
+	// NOTE: Only admins can demote leaders; leaders cannot demote other leaders here.
+	public static ValidatorStatusCode canDemoteLeader(int spaceId, int userIdBeingDemoted, int userIdDoingDemoting) {
+		// Permissions check; ensures user is the leader of the community or is an admin
+<span class="nc bnc" id="L204" title="All 2 branches missed.">		if (Users.get(userIdBeingDemoted) == null) {</span>
+<span class="nc" id="L205">			return new ValidatorStatusCode(false, &quot;The given user could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L207" title="All 2 branches missed.">		if (Spaces.get(spaceId) == null) {</span>
+<span class="nc" id="L208">			return new ValidatorStatusCode(false, &quot;The given space could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L210" title="All 2 branches missed.">		if (!GeneralSecurity.hasAdminWritePrivileges(userIdDoingDemoting)) {</span>
+<span class="nc" id="L211">			return new ValidatorStatusCode(false, &quot;You do not have permission to demote leaders in this space&quot;);</span>
+		}
+<span class="nc" id="L213">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether a user may remove a job from a space
+	 *
+	 * @param spaceId The ID of the space containing the primitive
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveJob(int spaceId, int userId) {
+		// Permissions check; ensures user is the leader of the community
+<span class="nc" id="L226">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L227" title="All 4 branches missed.">		if (perm == null || !perm.canRemoveJob()) {</span>
+<span class="nc" id="L228">			return new ValidatorStatusCode(false, &quot;You do not have permission to remove jobs from this space&quot;);</span>
+		}
+<span class="nc" id="L230">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether a user may remove a solver from a space
+	 *
+	 * @param spaceId The ID of the space containing the primitive
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserRemoveSolver(int spaceId, int userId) {
+		// Permissions check; ensures user is the leader of the community
+<span class="nc" id="L243">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L244" title="All 4 branches missed.">		if (perm == null || !perm.canRemoveSolver()) {</span>
+<span class="nc" id="L245">			return new ValidatorStatusCode(false, &quot;You do not have permission to remove solvers from this space&quot;);</span>
+		}
+<span class="nc" id="L247">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether a user may leave a community
+	 *
+	 * @param commId The ID of the community a user wants to leave
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserLeaveCommunity(int commId, int userId) {
+		//the user can leave if they are in the space
+<span class="nc bnc" id="L260" title="All 2 branches missed.">		if (!Users.isMemberOfCommunity(userId, commId)) {</span>
+<span class="nc" id="L261">			return new ValidatorStatusCode(false, &quot;You are not a member of this community&quot;);</span>
+		}
+<span class="nc" id="L263">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether a user may leave a space
+	 *
+	 * @param spaceId The ID of the space containing the primitive
+	 * @param userId The ID of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserLeaveSpace(int spaceId, int userId) {
+		//the user can leave if they are in the space
+<span class="nc bnc" id="L276" title="All 2 branches missed.">		if (!Users.isMemberOfSpace(userId, spaceId)) {</span>
+<span class="nc" id="L277">			return new ValidatorStatusCode(false, &quot;You are not currently in this space&quot;);</span>
+		}
+<span class="nc" id="L279">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can see the given space
+	 *
+	 * @param spaceId The ID of the space in question
+	 * @param userId The ID of the user who wants to see the space
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserSeeSpace(int spaceId, int userId) {
+<span class="nc bnc" id="L291" title="All 2 branches missed.">		if (!Permissions.canUserSeeSpace(spaceId, userId)) {</span>
+<span class="nc" id="L292">			log.debug(&quot;denying user id = &quot; + userId + &quot; for space = &quot; + spaceId);</span>
+<span class="nc" id="L293">			return new ValidatorStatusCode(false, &quot;You do not have permission to view this space&quot;);</span>
+		}
+<span class="nc" id="L295">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can copy any primitive from the given space. They cannot copy if the space is
+	 * locked
+	 * or if they cannot see the space.
+	 *
+	 * @param spaceId The ID of the space being copied from
+	 * @param userIdDoingCopying The ID of the user who is making the copy request.
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	private static ValidatorStatusCode canCopyPrimFromSpace(int spaceId, int userIdDoingCopying) {
+<span class="nc bnc" id="L309" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminWritePrivileges(userIdDoingCopying)) {</span>
+<span class="nc" id="L310">			return new ValidatorStatusCode(true);</span>
+		}
+		// And the space the user is being copied from must not be locked
+<span class="nc bnc" id="L313" title="All 2 branches missed.">		if (Spaces.get(spaceId).isLocked()) {</span>
+<span class="nc" id="L314">			return new ValidatorStatusCode(false, &quot;The space you are trying to copy from is locked&quot;);</span>
+		}
+
+		// Verify the user can at least see the space they claim to be copying from
+<span class="nc bnc" id="L318" title="All 2 branches missed.">		if (!Permissions.canUserSeeSpace(spaceId, userIdDoingCopying)) {</span>
+<span class="nc" id="L319">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the space you are copying from&quot;);</span>
+		}
+
+<span class="nc" id="L322">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can copy a given benchmark from the given space
+	 *
+	 * @param spaceId The space ID the user is being copied FROM
+	 * @param userIdDoingCopying The ID of the user making the request
+	 * @param benchId The ID of the benchmark that would be copied
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+	private static ValidatorStatusCode canCopyBenchmarkFromSpace(int spaceId, int userIdDoingCopying, int benchId) {
+
+
+<span class="nc" id="L336">		ValidatorStatusCode status = canCopyPrimFromSpace(spaceId, userIdDoingCopying);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L338">			return status;</span>
+		}
+<span class="nc bnc" id="L340" title="All 2 branches missed.">		if (!Permissions.canUserSeeBench(benchId, userIdDoingCopying)) {</span>
+<span class="nc" id="L341">			return new ValidatorStatusCode(false, &quot;You are not allowed to see the benchmark you are trying to move&quot;);</span>
+		}
+<span class="nc bnc" id="L343" title="All 2 branches missed.">		if (Benchmarks.isBenchmarkDeleted(benchId)) {</span>
+<span class="nc" id="L344">			return new ValidatorStatusCode(false, &quot;The benchmark you are trying to copy has already been deleted&quot;);</span>
+		}
+<span class="nc" id="L346">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can copy a given space from the given space
+	 *
+	 * @param userId The ID of the user making the request
+	 * @param spaceIdBeingCopied The ID of the space that would be copied
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+	private static ValidatorStatusCode canCopySpaceFromSpace(int userId, int spaceIdBeingCopied) {
+<span class="nc" id="L357">		int fromSpaceId = Spaces.getParentSpace(spaceIdBeingCopied);</span>
+<span class="nc" id="L358">		ValidatorStatusCode status = canCopyPrimFromSpace(fromSpaceId, userId);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L360">			return status;</span>
+		}
+
+<span class="nc bnc" id="L363" title="All 2 branches missed.">		if (!Permissions.canUserSeeSpace(spaceIdBeingCopied, userId)) {</span>
+<span class="nc" id="L364">			return new ValidatorStatusCode(</span>
+					false, &quot;The subspace you are trying to move is not in the space you are copying from&quot;);
+		}
+
+<span class="nc" id="L368">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can copy a given job from the given space
+	 *
+	 * @param spaceId The space ID the user is being copied FROM
+	 * @param userIdDoingCopying The ID of the user making the request
+	 * @param jobId The ID of the job that would be copied
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+
+	private static ValidatorStatusCode canCopyJobFromSpace(int spaceId, int userIdDoingCopying, int jobId) {
+
+
+<span class="nc" id="L383">		ValidatorStatusCode status = canCopyPrimFromSpace(spaceId, userIdDoingCopying);</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L385">			return status;</span>
+		}
+<span class="nc" id="L387">		ValidatorStatusCode canSeeJobStatus = Permissions.canUserSeeJob(jobId, userIdDoingCopying);</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">		if (!canSeeJobStatus.isSuccess()) {</span>
+<span class="nc" id="L389">			return canSeeJobStatus;</span>
+		}
+
+<span class="nc bnc" id="L392" title="All 2 branches missed.">		if (Jobs.isJobDeleted(jobId)) {</span>
+<span class="nc" id="L393">			return new ValidatorStatusCode(false, &quot;The job you are trying to copy has already been deleted&quot;);</span>
+		}
+<span class="nc" id="L395">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can copy a given solver from the given space
+	 *
+	 * @param spaceId The space ID the user is being copied FROM
+	 * @param userIdDoingCopying The ID of the user making the request
+	 * @param solverId The ID of the solver that would be copied
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+	private static ValidatorStatusCode canCopySolverFromSpace(int spaceId, int userIdDoingCopying, int solverId) {
+<span class="nc" id="L407">		ValidatorStatusCode status = canCopyPrimFromSpace(spaceId, userIdDoingCopying);</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L409">			return status;</span>
+		}
+
+		//the solver being copied should actually be in the space they are supposedly being copied from
+<span class="nc bnc" id="L413" title="All 2 branches missed.">		if (!Permissions.canUserSeeSolver(solverId, userIdDoingCopying)) {</span>
+<span class="nc" id="L414">			return new ValidatorStatusCode(</span>
+					false, &quot;The solver you are trying to move is not in the space you are copying from&quot;);
+		}
+
+		//we can't copy a solver if it has been deleted on disk
+<span class="nc bnc" id="L419" title="All 2 branches missed.">		if (Solvers.isSolverDeleted(solverId)) {</span>
+<span class="nc" id="L420">			return new ValidatorStatusCode(false, &quot;The solver you are trying to move has already been deleted&quot;);</span>
+		}
+
+<span class="nc" id="L423">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether the user has enough disk quota to fit all of a list of solvers
+	 *
+	 * @param solvers The solvers that would be added
+	 * @param userId The ID of the user in question
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+	private static ValidatorStatusCode doesUserHaveDiskQuotaForSolvers(List&lt;Solver&gt; solvers, int userId) {
+<span class="nc bnc" id="L434" title="All 2 branches missed.">		for (Solver s : solvers) {</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">			if (s == null) {</span>
+<span class="nc" id="L436">				return new ValidatorStatusCode(</span>
+						false, &quot;At least one of the given solvers does not exist or has been &quot; + &quot;deleted&quot;);
+			}
+<span class="nc" id="L439">		}</span>
+		//first, validate that the user has enough disk quota to copy all the selected solvers
+		//we don't copy any unless they have room for all of them
+<span class="nc" id="L442">		User u = Users.get(userId);</span>
+<span class="nc" id="L443">		long userDiskUsage = u.getDiskUsage();</span>
+<span class="nc" id="L444">		long userDiskQuota = u.getDiskQuota();</span>
+<span class="nc" id="L445">		userDiskQuota -= userDiskUsage;</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">		for (Solver s : solvers) {</span>
+<span class="nc" id="L447">			userDiskQuota -= s.getDiskSize();</span>
+<span class="nc" id="L448">		}</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">		if (userDiskQuota &lt; 0) {</span>
+<span class="nc" id="L450">			return new ValidatorStatusCode(false, &quot;Not enough disk quota&quot;);</span>
+		}
+<span class="nc" id="L452">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether the user has enough disk quota to fit all of a list of benchmarks
+	 *
+	 * @param benchIDs The solver IDs that would be added
+	 * @param userId The ID of the user in question
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+
+	private static boolean doesUserHaveDiskQuotaForBenchmarks(List&lt;Integer&gt; benchIDs, int userId) {
+<span class="nc" id="L464">		List&lt;Benchmark&gt; oldBenches = Benchmarks.get(benchIDs);</span>
+		//first, validate that the user has enough disk quota to copy all the selected solvers
+		//we don't copy any unless they have room for all of them
+<span class="nc" id="L467">		User u = Users.get(userId);</span>
+<span class="nc" id="L468">		long userDiskUsage = u.getDiskUsage();</span>
+<span class="nc" id="L469">		long userDiskQuota = u.getDiskQuota();</span>
+<span class="nc" id="L470">		userDiskQuota -= userDiskUsage;</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">		for (Benchmark b : oldBenches) {</span>
+<span class="nc" id="L472">			userDiskQuota -= b.getDiskSize();</span>
+<span class="nc" id="L473">		}</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">		return userDiskQuota &gt;= 0;</span>
+	}
+
+	/**
+	 * Checks to see whether a user can copy one set of subspaces from a space to another space \s	 * @param toSpaceId
+	 * The ID of the space that new subspaces will be copied TO
+	 *
+	 * @param userId The ID of the user making the request
+	 * @param subspaceIds The IDs of the subspaces that would be copied
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+
+	public static ValidatorStatusCode canCopySpace(int toSpaceId, int userId, List&lt;Integer&gt; subspaceIds) {
+<span class="nc" id="L487">		ValidatorStatusCode status = null;</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">		for (Integer sid : subspaceIds) {</span>
+<span class="nc" id="L489">			status = SpaceSecurity.canCopySpaceFromSpace(userId, sid);</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L491">				return status;</span>
+			}
+<span class="nc" id="L493">		}</span>
+<span class="nc" id="L494">		status = canCopySpaceToSpace(toSpaceId, userId);</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L496">			return status;</span>
+		}
+
+		// Make sure the user can see the subSpaces they're trying to copy
+<span class="nc bnc" id="L500" title="All 2 branches missed.">		for (int id : subspaceIds) {</span>
+			// Make sure that the subspace has a unique name in the space.
+<span class="nc bnc" id="L502" title="All 2 branches missed.">			if (Spaces.notUniquePrimitiveName(Spaces.get(id).getName(), toSpaceId)) {</span>
+<span class="nc" id="L503">				return new ValidatorStatusCode(</span>
+						false, &quot;The name of the space you are trying to copy is not unique in the destination space&quot;);
+			}
+<span class="nc" id="L506">		}</span>
+
+<span class="nc" id="L508">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a user can link jobs from a space to another space
+	 *
+	 * @param fromSpaceId The ID of the spaces that jobs are being copied FROM
+	 * @param toSpaceId The ID of the space that new jobs will be copied TO
+	 * @param userId The ID of the user making the request
+	 * @param jobIdsBeingCopied The IDs of the jobs that would be copied
+	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
+	 */
+
+	public static ValidatorStatusCode canLinkJobsBetweenSpaces(
+			Integer fromSpaceId, int toSpaceId, int userId, List&lt;Integer&gt; jobIdsBeingCopied
+	) {
+
+<span class="nc" id="L525">		ValidatorStatusCode status = null;</span>
+<span class="nc" id="L526">		boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userId);</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">		if (fromSpaceId != null) {</span>
+<span class="nc bnc" id="L528" title="All 2 branches missed.">			for (Integer jid : jobIdsBeingCopied) {</span>
+<span class="nc" id="L529">				status = canCopyJobFromSpace(fromSpaceId, userId, jid);</span>
+<span class="nc bnc" id="L530" title="All 2 branches missed.">				if (!status.isSuccess()) {</span>
+<span class="nc" id="L531">					return status;</span>
+				}
+<span class="nc" id="L533">			}</span>
+		} else {
+<span class="nc bnc" id="L535" title="All 2 branches missed.">			for (Integer jid : jobIdsBeingCopied) {</span>
+<span class="nc" id="L536">				Job j = Jobs.get(jid);</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">				if (j == null) {</span>
+<span class="nc" id="L538">					return new ValidatorStatusCode(false, &quot;The given job could not be found&quot;);</span>
+				}
+<span class="nc bnc" id="L540" title="All 4 branches missed.">				if (j.getUserId() != userId &amp;&amp; !isAdmin) {</span>
+<span class="nc" id="L541">					return new ValidatorStatusCode(</span>
+							false, &quot;You are not the owner of all the jobs you are trying to move&quot;);
+				}
+<span class="nc" id="L544">			}</span>
+		}
+
+<span class="nc" id="L547">		status = canCopyJobToSpace(toSpaceId, userId);</span>
+<span class="nc bnc" id="L548" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L549">			return status;</span>
+		}
+
+
+<span class="nc" id="L553">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a list of benchmarks can be copied or linked from one space to another
+	 *
+	 * @param fromSpaceId The ID of the space the benchmarks are already in
+	 * @param toSpaceId The ID of the space the benchmarks would be placed in
+	 * @param userId The ID of the user making the request
+	 * @param benchmarkIdsBeingCopied The IDs of the benchmarks that would be copied or linked
+	 * @param copy If true, the primitives are being copied. Otherwise, they are being linked
+	 * @return new ValidatorStatusCode(true) if the operation is allowed, and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+
+	public static ValidatorStatusCode canCopyOrLinkBenchmarksBetweenSpaces(
+			Integer fromSpaceId, int toSpaceId, int userId, List&lt;Integer&gt; benchmarkIdsBeingCopied, boolean copy
+	) {
+<span class="nc bnc" id="L571" title="All 4 branches missed.">		if (copy &amp;&amp; UploadSecurity.uploadsFrozen()) {</span>
+<span class="nc" id="L572"> 			return new ValidatorStatusCode(false, &quot;Copying benchmarks is currently disabled by the system administrator&quot;);</span>
+ 		}
+
+<span class="nc" id="L575">		boolean isAdmin = GeneralSecurity.hasAdminWritePrivileges(userId);</span>
+<span class="nc" id="L576">		ValidatorStatusCode status = null;</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">		if (fromSpaceId != null) {</span>
+<span class="nc bnc" id="L578" title="All 2 branches missed.">			for (Integer bid : benchmarkIdsBeingCopied) {</span>
+				//first make sure the user can copy each benchmark FROM the original space
+<span class="nc" id="L580">				status = canCopyBenchmarkFromSpace(fromSpaceId, userId, bid);</span>
+<span class="nc bnc" id="L581" title="All 2 branches missed.">				if (!status.isSuccess()) {</span>
+<span class="nc" id="L582">					return status;</span>
+				}
+<span class="nc" id="L584">			}</span>
+		} else {
+<span class="nc bnc" id="L586" title="All 2 branches missed.">			for (Integer bid : benchmarkIdsBeingCopied) {</span>
+<span class="nc" id="L587">				Benchmark b = Benchmarks.get(bid);</span>
+<span class="nc bnc" id="L588" title="All 6 branches missed.">				if (b == null || (b.getUserId() != userId &amp;&amp; !isAdmin)) {</span>
+<span class="nc" id="L589">					return new ValidatorStatusCode(</span>
+							false,
+							&quot;You are not the owner of all the benchmarks you are trying to move, or some do not exist&quot;
+					);
+				}
+<span class="nc" id="L594">			}</span>
+		}
+
+		//then, check to make sure they are allowed to copy TO the new space
+<span class="nc" id="L598">		status = canCopyBenchmarkToSpace(toSpaceId, userId);</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">		if (!status.isSuccess()) {</span>
+<span class="nc" id="L600">			return status;</span>
+		}
+
+		//if we are copying, but not linking, disk quota must be checked
+<span class="nc bnc" id="L604" title="All 2 branches missed.">		if (copy) {</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">			if (!doesUserHaveDiskQuotaForBenchmarks(benchmarkIdsBeingCopied, userId)) {</span>
+<span class="nc" id="L606">				return new ValidatorStatusCode(</span>
+						false, &quot;You do not have enough disk quota space to copy the benchmark(s)&quot;);
+			}
+		}
+
+<span class="nc" id="L611">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a list of solvers can be copied or linked from one space to another
+	 *
+	 * @param fromSpaceId The ID of the space the solvers are already in
+	 * @param toSpaceId The ID of the space the solvers would be placed in
+	 * @param userId The ID of the user making the request
+	 * @param solverIdsBeingCopied The IDs of the solvers that would be copied or linked
+	 * @param hierarchy If true, the copy will take place in the entire hierarchy rooted at the space with ID toSpaceId
+	 * @param copy If true, the primitives are being copied. Otherwise, they are being linked
+	 * @return new ValidatorStatusCode(true) if the operation is allowed, and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canCopyOrLinkSolverBetweenSpaces(
+			Integer fromSpaceId, int toSpaceId, int userId, List&lt;Integer&gt; solverIdsBeingCopied, boolean hierarchy,
+			boolean copy
+	) {
+		//if we are copying, but not linking, make sure the user has enough disk space
+<span class="nc bnc" id="L631" title="All 2 branches missed.">		if (copy) {</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">			if (UploadSecurity.uploadsFrozen()) {</span>
+<span class="nc" id="L633"> 				return new ValidatorStatusCode(false, &quot;Copying solvers is currently disabled by the system administrator&quot;);</span>
+ 			}
+
+<span class="nc" id="L636">			List&lt;Solver&gt; solvers = Solvers.get(solverIdsBeingCopied);</span>
+<span class="nc" id="L637">			int index = 0;</span>
+<span class="nc bnc" id="L638" title="All 2 branches missed.">			for (Solver s : solvers) {</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">				if (s == null) {</span>
+<span class="nc" id="L640">					return new ValidatorStatusCode(</span>
+<span class="nc" id="L641">							false, &quot;The following solver could not be found. ID = &quot; + solverIdsBeingCopied.get(index));</span>
+				}
+<span class="nc bnc" id="L643" title="All 2 branches missed.">				if (s.buildStatus().getCode() == SolverBuildStatusCode.UNBUILT) {</span>
+<span class="nc" id="L644">					return new ValidatorStatusCode(false, &quot;Solvers cannot be copied until they are finished building&quot;);</span>
+				}
+<span class="nc" id="L646">				index++;</span>
+<span class="nc" id="L647">			}</span>
+
+<span class="nc bnc" id="L649" title="All 2 branches missed.">			if (!doesUserHaveDiskQuotaForSolvers(solvers, userId).isSuccess()) {</span>
+<span class="nc" id="L650">				return new ValidatorStatusCode(false, &quot;You do not have enough disk quota space to copy the solver(s)&quot;);</span>
+			}
+		}
+
+<span class="nc" id="L654">		List&lt;Integer&gt; spaceIds = new ArrayList&lt;&gt;(); //all the spaceIds of spaces being copied to</span>
+<span class="nc" id="L655">		spaceIds.add(toSpaceId);</span>
+
+		//if we are checking the hierarchy, we must first get every space in it
+<span class="nc bnc" id="L658" title="All 2 branches missed.">		if (hierarchy) {</span>
+<span class="nc" id="L659">			List&lt;Space&gt; subspaces = Spaces.trimSubSpaces(userId, Spaces.getSubSpaceHierarchy(toSpaceId, userId));</span>
+<span class="nc bnc" id="L660" title="All 2 branches missed.">			for (Space s : subspaces) {</span>
+<span class="nc" id="L661">				spaceIds.add(s.getId());</span>
+<span class="nc" id="L662">			}</span>
+		}
+
+<span class="nc" id="L665">		ValidatorStatusCode status = null;</span>
+		//we only need to check this if we are actually copying from another space
+<span class="nc bnc" id="L667" title="All 2 branches missed.">		if (fromSpaceId != null) {</span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">			for (Integer sid : solverIdsBeingCopied) {</span>
+				//make sure the user is allowed to copy solvers FROM the original space
+<span class="nc" id="L670">				status = canCopySolverFromSpace(fromSpaceId, userId, sid);</span>
+<span class="nc bnc" id="L671" title="All 2 branches missed.">				if (!status.isSuccess()) {</span>
+<span class="nc" id="L672">					return status;</span>
+				}
+<span class="nc" id="L674">			}</span>
+		} else {
+<span class="nc bnc" id="L676" title="All 2 branches missed.">			for (Integer sid : solverIdsBeingCopied) {</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">				if (!SolverSecurity.canUserDownloadSolver(sid, userId).isSuccess()) {</span>
+<span class="nc" id="L678">					return new ValidatorStatusCode(false,</span>
+					                               &quot;You do not have permission to download all the solvers you are trying to copy.&quot;);
+				}
+<span class="nc" id="L681">			}</span>
+		}
+
+
+		//then, for every destination space, make sure they can copy TO that space
+<span class="nc bnc" id="L686" title="All 2 branches missed.">		for (Integer spaceId : spaceIds) {</span>
+<span class="nc" id="L687">			status = canCopySolverToSpace(spaceId, userId);</span>
+<span class="nc bnc" id="L688" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+<span class="nc" id="L689">				return status;</span>
+			}
+<span class="nc" id="L691">		}</span>
+<span class="nc" id="L692">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a list of users can be copied from one space to another
+	 *
+	 * @param toSpaceId The ID of the space the users would be placed in
+	 * @param userIdDoingCopying The ID of the user making the request
+	 * @param userIdsBeingCopied The IDs of the users that would be copied
+	 * @param hierarchy If true, the copy will take place in the entire hierarchy rooted at the space with ID toSpaceId
+	 * @return new ValidatorStatusCode(true) if the operation is allowed, and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canCopyUserBetweenSpaces(
+			int toSpaceId, int userIdDoingCopying, List&lt;Integer&gt; userIdsBeingCopied, boolean hierarchy
+	) {
+<span class="nc" id="L708">		List&lt;Integer&gt; spaceIds = new ArrayList&lt;&gt;(); //all the spaceIds of spaces being copied to</span>
+<span class="nc" id="L709">		spaceIds.add(toSpaceId);</span>
+<span class="nc bnc" id="L710" title="All 2 branches missed.">		if (hierarchy) {</span>
+<span class="nc" id="L711">			List&lt;Space&gt; subspaces = Spaces.trimSubSpaces(userIdDoingCopying,</span>
+<span class="nc" id="L712">			                                             Spaces.getSubSpaceHierarchy(toSpaceId, userIdDoingCopying)</span>
+			);
+<span class="nc bnc" id="L714" title="All 2 branches missed.">			for (Space s : subspaces) {</span>
+<span class="nc" id="L715">				spaceIds.add(s.getId());</span>
+<span class="nc" id="L716">			}</span>
+		}
+<span class="nc" id="L718">		ValidatorStatusCode status = null;</span>
+
+<span class="nc bnc" id="L720" title="All 2 branches missed.">		for (Integer sid : spaceIds) {</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">			for (Integer uid : userIdsBeingCopied) {</span>
+<span class="nc" id="L722">				status = canAddUserToSpace(sid, userIdDoingCopying, uid);</span>
+<span class="nc bnc" id="L723" title="All 2 branches missed.">				if (!status.isSuccess()) {</span>
+<span class="nc" id="L724">					return status;</span>
+				}
+<span class="nc" id="L726">			}</span>
+<span class="nc" id="L727">		}</span>
+
+<span class="nc" id="L729">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can copy a user into another space
+	 *
+	 * @param spaceId The ID of the space where the new user would be PLACED.
+	 * @param userIdMakingRequest The ID of the user making the request
+	 * @param userIdToAdd The user that would be added to a new space
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	public static ValidatorStatusCode canAddUserToSpace(int spaceId, int userIdMakingRequest, int userIdToAdd) {
+		// Check permissions, the user must have add user permissions in the destination space
+<span class="nc" id="L742">		Permission perm = Permissions.get(userIdMakingRequest, spaceId);</span>
+<span class="nc bnc" id="L743" title="All 4 branches missed.">		if (perm == null || !perm.canAddUser()) {</span>
+<span class="nc" id="L744">			return new ValidatorStatusCode(false, &quot;You do not have permission to add a user to this space&quot;);</span>
+		}
+
+<span class="nc bnc" id="L747" title="All 2 branches missed.">		if (!Users.isMemberOfCommunity(userIdToAdd, Spaces.getCommunityOfSpace(spaceId)) &amp;&amp;</span>
+<span class="nc bnc" id="L748" title="All 2 branches missed.">				!GeneralSecurity.hasAdminWritePrivileges(userIdMakingRequest)) {</span>
+<span class="nc" id="L749">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The user is not a member of the community you are trying to move them to. They must request to &quot; +
+							&quot;join the community first&quot;
+			);
+		}
+
+<span class="nc" id="L756">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can copy a solver into another space
+	 *
+	 * @param spaceId The ID of the space where the new solver would be PLACED.
+	 * @param userId The ID of the user making the request
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	private static ValidatorStatusCode canCopySolverToSpace(int spaceId, int userId) {
+		// Check permissions - the user must have add solver permissions in the destination space
+<span class="nc" id="L768">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L769" title="All 4 branches missed.">		if (perm == null || !perm.canAddSolver()) {</span>
+<span class="nc" id="L770">			return new ValidatorStatusCode(false, &quot;You do not have permission to add a solver to this space&quot;);</span>
+		}
+<span class="nc" id="L772">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can copy a benchmark into another space
+	 *
+	 * @param spaceId The ID of the space where the new benchmark would be PLACED.
+	 * @param userId The ID of the user making the request
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	private static ValidatorStatusCode canCopyBenchmarkToSpace(int spaceId, int userId) {
+		// Check permissions - the user must have add solver permissions in the destination space
+<span class="nc" id="L784">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L785" title="All 4 branches missed.">		if (perm == null || !perm.canAddBenchmark()) {</span>
+<span class="nc" id="L786">			return new ValidatorStatusCode(false, &quot;You do not have permission to add a benchmark to this space&quot;);</span>
+		}
+<span class="nc" id="L788">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can copy a job into another space
+	 *
+	 * @param spaceId The ID of the space where the new job would be PLACED.
+	 * @param userId The ID of the user making the request
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	private static ValidatorStatusCode canCopyJobToSpace(int spaceId, int userId) {
+		// Check permissions - the user must have add solver permissions in the destination space
+<span class="nc" id="L800">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L801" title="All 4 branches missed.">		if (perm == null || !perm.canAddJob()) {</span>
+<span class="nc" id="L802">			return new ValidatorStatusCode(false, &quot;You do not have permission to add a job to this space&quot;);</span>
+		}
+<span class="nc" id="L804">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user can copy a space into another space
+	 *
+	 * @param spaceId The ID of the space where the new space would be PLACED. This is NOT the ID of the space that
+	 * would be moved.
+	 * @param userId The ID of the user making the request
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	private static ValidatorStatusCode canCopySpaceToSpace(int spaceId, int userId) {
+		// Check permissions - the user must have add solver permissions in the destination space
+<span class="nc" id="L817">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L818" title="All 4 branches missed.">		if (perm == null || !perm.canAddSpace()) {</span>
+<span class="nc" id="L819">			return new ValidatorStatusCode(false, &quot;You do not have permission to add a subspace to this space&quot;);</span>
+		}
+
+<span class="nc" id="L822">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether a list of users can all be removed from the given space
+	 *
+	 * @param userIdsBeingRemoved The IDs of the users that would be removed
+	 * @param userIdDoingRemoval The ID of the user making the request
+	 * @param rootSpaceId The space ID to check
+	 * @param hierarchy If true, checks to see whether the users can be removed from the entire hierarchy
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+	public static ValidatorStatusCode canRemoveUsersFromSpaces(
+			List&lt;Integer&gt; userIdsBeingRemoved, int userIdDoingRemoval, int rootSpaceId, boolean hierarchy
+	) {
+		try {
+<span class="nc" id="L838">			Permission perm = Permissions.get(userIdDoingRemoval, rootSpaceId);</span>
+<span class="nc bnc" id="L839" title="All 4 branches missed.">			if (perm == null || !perm.canRemoveUser()) {</span>
+<span class="nc" id="L840">				return new ValidatorStatusCode(false, &quot;You do not have permission to remove a user from this space&quot;);</span>
+			}
+
+<span class="nc bnc" id="L843" title="All 2 branches missed.">			if (!GeneralSecurity.hasAdminWritePrivileges(userIdDoingRemoval)) {</span>
+				// Validate the list of users to remove by:
+				// 1 - Ensuring the leader who initiated the removal of users from a space isn't themselves in the
+				// list of users to remove
+				// 2 - Ensuring other leaders of the space aren't in the list of users to remove
+<span class="nc bnc" id="L848" title="All 2 branches missed.">				for (int userId : userIdsBeingRemoved) {</span>
+<span class="nc bnc" id="L849" title="All 2 branches missed.">					if (userId == userIdDoingRemoval) {</span>
+<span class="nc" id="L850">						return new ValidatorStatusCode(false, &quot;You cannot remove yourself from a space in this way&quot;);</span>
+					}
+<span class="nc" id="L852">					perm = Permissions.get(userId, rootSpaceId);</span>
+<span class="nc bnc" id="L853" title="All 4 branches missed.">					if (perm != null &amp;&amp; perm.isLeader()) {</span>
+<span class="nc" id="L854">						return new ValidatorStatusCode(</span>
+								false, &quot;You do not have permission to remove a leader from this space&quot;);
+					}
+<span class="nc" id="L857">				}</span>
+			}
+<span class="nc bnc" id="L859" title="All 2 branches missed.">			if (hierarchy) {</span>
+<span class="nc" id="L860">				List&lt;Space&gt; subspaces = Spaces.trimSubSpaces(userIdDoingRemoval,</span>
+<span class="nc" id="L861">				                                             Spaces.getSubSpaceHierarchy(rootSpaceId,</span>
+				                                                                         userIdDoingRemoval
+				                                             )
+				);
+				// Iterate once through all subspaces of the destination space to ensure the user has removeUser
+				// permissions in each
+<span class="nc bnc" id="L867" title="All 2 branches missed.">				for (Space subspace : subspaces) {</span>
+
+<span class="nc" id="L869">					ValidatorStatusCode status =</span>
+<span class="nc" id="L870">							canRemoveUsersFromSpaces(userIdsBeingRemoved, userIdDoingRemoval, subspace.getId(), false);</span>
+<span class="nc bnc" id="L871" title="All 2 branches missed.">					if (!status.isSuccess()) {</span>
+<span class="nc" id="L872">						return status;</span>
+					}
+<span class="nc" id="L874">				}</span>
+			}
+<span class="nc" id="L876">			return new ValidatorStatusCode(true);</span>
+<span class="nc" id="L877">		} catch (Exception e) {</span>
+<span class="nc" id="L878">			log.error(e.getMessage(), e);</span>
+		}
+<span class="nc" id="L880">		return new ValidatorStatusCode(false, &quot;You do not have permission to perform this operation&quot;);</span>
+	}
+
+	/**
+	 * Checks whether the given user is allowed to see the current new community requests
+	 *
+	 * @param userId The ID of the user in question
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserViewCommunityRequests(int userId) {
+<span class="nc bnc" id="L891" title="All 2 branches missed.">		if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L892">			return new ValidatorStatusCode(false, &quot;You do not have permission to perform this operation&quot;);</span>
+		}
+<span class="nc" id="L894">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether the given user is allowed to see the current new community requests
+	 *
+	 * @param userId The ID of the user in question
+	 * @param communityId The ID of the community to get requests for
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUserViewCommunityRequestsForCommunity(int userId, int communityId) {
+<span class="nc" id="L906">		Permission perm = Permissions.get(userId, communityId);</span>
+		//must be a leader to make a space public
+<span class="nc bnc" id="L908" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L909">			return new ValidatorStatusCode(true);</span>
+<span class="nc bnc" id="L910" title="All 4 branches missed.">		} else if (!(perm == null) &amp;&amp; perm.isLeader()) {</span>
+<span class="nc" id="L911">			return new ValidatorStatusCode(true);</span>
+		} else {
+<span class="nc" id="L913">			return new ValidatorStatusCode(false, &quot;Only community leaders may view requests to join communities&quot;);</span>
+		}
+	}
+
+	/**
+	 * Checks whether a user can update whether a space is public or private
+	 *
+	 * @param spaceId The ID of the space being checked
+	 * @param userId The ID  of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canSetSpacePublicOrPrivate(int spaceId, int userId) {
+		// Admin bypass - admins can change public/private status of any space
+<span class="nc bnc" id="L927" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {</span>
+<span class="nc" id="L928">			return new ValidatorStatusCode(true);</span>
+		}
+		
+<span class="nc" id="L931">		Permission perm = Permissions.get(userId, spaceId);</span>
+		//must be a leader to make a space public
+<span class="nc bnc" id="L933" title="All 4 branches missed.">		if (perm == null || !perm.isLeader()) {</span>
+<span class="nc" id="L934">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to affect whether this space is public &quot; + &quot;or private&quot;);
+		}
+
+<span class="nc" id="L938">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the permissions of one user in a particular space's hierarchy can be updated by another
+	 * user
+	 *
+	 * @param spaceId The ID of the space in question
+	 * @param userIdBeingUpdated The ID of the user who would have their permissions updated
+	 * @param requestUserId The Id of the user making the request
+	 * @return list of spaces where permissions can be changed
+	 */
+	public static List&lt;Integer&gt; getUpdatePermissionSpaces(int spaceId, int userIdBeingUpdated, int requestUserId) {
+		// NOTE: This currently queries per space in the hierarchy; optimize if it becomes a bottleneck.
+
+
+<span class="nc" id="L954">		List&lt;Integer&gt; spaceIds = new ArrayList&lt;&gt;(); //all the spaceIds of spaces being copied to</span>
+<span class="nc" id="L955">		spaceIds.add(spaceId);</span>
+
+
+<span class="nc" id="L958">		List&lt;Space&gt; subspaces =</span>
+<span class="nc" id="L959">				Spaces.trimSubSpaces(userIdBeingUpdated, Spaces.getSubSpaceHierarchy(spaceId, userIdBeingUpdated));</span>
+
+<span class="nc bnc" id="L961" title="All 2 branches missed.">		for (Space s : subspaces) {</span>
+<span class="nc" id="L962">			spaceIds.add(s.getId());</span>
+<span class="nc" id="L963">		}</span>
+
+<span class="nc" id="L965">		List&lt;Integer&gt; permittedSpaceIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L966" title="All 2 branches missed.">		for (Integer sid : spaceIds) {</span>
+<span class="nc" id="L967">			ValidatorStatusCode status = canUpdatePermissions(sid, userIdBeingUpdated, requestUserId);</span>
+<span class="nc bnc" id="L968" title="All 2 branches missed.">			if (status.isSuccess()) {</span>
+<span class="nc" id="L969">				permittedSpaceIds.add(sid);</span>
+			}
+<span class="nc" id="L971">		}</span>
+
+<span class="nc" id="L973">		return permittedSpaceIds;</span>
+	}
+
+	/**
+	 * Checks to see whether the permissions of one user in a particular space can be updated by another user
+	 *
+	 * @param spaceId The ID of the space in question
+	 * @param userIdBeingUpdated The ID of the user who would have their permissions updated
+	 * @param requestUserId The Id of the user making the request
+	 * @return new ValidatorStatusCode(true) if the operation is allowed and a status code from ValidatorStatusCodes
+	 * otherwise
+	 */
+	public static ValidatorStatusCode canUpdatePermissions(int spaceId, int userIdBeingUpdated, int requestUserId) {
+		// Admin bypass - admins can update any user's permissions
+<span class="nc bnc" id="L987" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminWritePrivileges(requestUserId)) {</span>
+			// Verify the user being updated exists in the space
+<span class="nc" id="L989">			Permission targetPerm = Permissions.get(userIdBeingUpdated, spaceId);</span>
+<span class="nc bnc" id="L990" title="All 2 branches missed.">			if (targetPerm == null) {</span>
+<span class="nc" id="L991">				return new ValidatorStatusCode(false, &quot;The given user is not a member of the given space&quot;);</span>
+			}
+<span class="nc" id="L993">			return new ValidatorStatusCode(true);</span>
+		}
+
+<span class="nc" id="L996">		Permission perm = Permissions.get(requestUserId, spaceId);</span>
+<span class="nc bnc" id="L997" title="All 4 branches missed.">		if (perm == null || !perm.isLeader()) {</span>
+<span class="nc" id="L998">			return new ValidatorStatusCode(false, &quot;You do not have permission to update permissions here&quot;);</span>
+		}
+
+
+		// Ensure the user to edit the permissions of isn't themselves a leader
+<span class="nc" id="L1003">		perm = Permissions.get(userIdBeingUpdated, spaceId);</span>
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">		if (perm == null) {</span>
+<span class="nc" id="L1005">			return new ValidatorStatusCode(false, &quot;The given user is not a member of the given space&quot;);</span>
+		}
+<span class="nc bnc" id="L1007" title="All 4 branches missed.">		if (perm.isLeader() &amp;&amp; !GeneralSecurity.hasAdminWritePrivileges(requestUserId) &amp;&amp;</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">				Communities.isCommunity(spaceId)) {</span>
+<span class="nc" id="L1009">			return new ValidatorStatusCode(false, &quot;You do not have permission to update permissions for a leader &quot; +</span>
+					&quot;here&quot;);
+		}
+
+
+<span class="nc" id="L1014">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static ValidatorStatusCode canUserLinkAllOrphaned(int userId, int userIdOfCaller, int spaceId) {
+<span class="nc bnc" id="L1018" title="All 2 branches missed.">		if (Users.get(userId) == null) {</span>
+<span class="nc" id="L1019">			return new ValidatorStatusCode(false, &quot;The given user could not be found&quot;);</span>
+		}
+<span class="nc bnc" id="L1021" title="All 4 branches missed.">		if (!GeneralSecurity.hasAdminWritePrivileges(userIdOfCaller) &amp;&amp; userId != userIdOfCaller) {</span>
+<span class="nc" id="L1022">			return new ValidatorStatusCode(false, &quot;You can only perform this operation on your own primitives&quot;);</span>
+		}
+<span class="nc" id="L1024">		Space s = Spaces.getDetails(spaceId, userIdOfCaller);</span>
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L1026">			return new ValidatorStatusCode(false, &quot;The given space could not be found&quot;);</span>
+		}
+
+<span class="nc" id="L1029">		Permission p = Permissions.get(userIdOfCaller, spaceId);</span>
+<span class="nc bnc" id="L1030" title="All 6 branches missed.">		if (!p.canAddJob() || !p.canAddBenchmark() || !p.canAddSolver()) {</span>
+<span class="nc" id="L1031">			return new ValidatorStatusCode(false, &quot;You do not have permissions to add primitives to the space&quot;);</span>
+		}
+<span class="nc" id="L1033">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the user is allowed to download the Json object representing the space
+	 *
+	 * @param spaceId
+	 * @param userId
+	 * @return
+	 */
+	public static ValidatorStatusCode canGetJsonSpace(int spaceId, int userId) {
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">		if (!Permissions.canUserSeeSpace(spaceId, userId)) {</span>
+<span class="nc" id="L1045">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the specified space&quot;);</span>
+		}
+<span class="nc" id="L1047">		Space s = Spaces.get(spaceId);</span>
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">		if (s == null) {</span>
+<span class="nc" id="L1049">			return new ValidatorStatusCode(false, &quot;The given space could not be found&quot;);</span>
+		}
+<span class="nc" id="L1051">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks whether a user can update the default settings (default timeouts, max-memory, etc.) of a community.
+	 *
+	 * @param spaceId The ID of the space that would have its settings changed
+	 * @param attribute The name of the setting being changed
+	 * @param newValue The new value that would be given to the setting
+	 * @param userId The ID of the user making the request
+	 * @return 0 if the operation is allowed and a status code from ValidatorStatusCodes otherwise
+	 */
+
+	// NOTE: Validation is performed here to keep checks close to the update path.
+	public static ValidatorStatusCode canUpdateSettings(int spaceId, String attribute, String newValue, int userId) {
+<span class="nc" id="L1066">		log.debug(&quot;canUpdateSettings called: spaceId=&quot; + spaceId + &quot;, userId=&quot; + userId + &quot;, attribute=&quot; + attribute);</span>
+		
+		// Check if user is admin first - admins can update any space
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {</span>
+<span class="nc" id="L1070">			log.debug(&quot;User &quot; + userId + &quot; has admin write privileges, allowing update&quot;);</span>
+			// Still validate the input even for admins
+<span class="nc bnc" id="L1072" title="All 2 branches missed.">			if (attribute.equals(&quot;name&quot;)) {</span>
+<span class="nc" id="L1073">				Space s = Spaces.get(spaceId);</span>
+<span class="nc bnc" id="L1074" title="All 4 branches missed.">				if (s != null &amp;&amp; !s.getName().equals(newValue)) {</span>
+<span class="nc bnc" id="L1075" title="All 2 branches missed.">					if (Spaces.notUniquePrimitiveName(newValue, spaceId)) {</span>
+<span class="nc" id="L1076">						return new ValidatorStatusCode(false, &quot;The new name needs to be unique in the space&quot;);</span>
+					}
+				}
+<span class="nc bnc" id="L1079" title="All 2 branches missed.">			} else if (attribute.equals(&quot;description&quot;)) {</span>
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">				if (!Validator.isValidPrimDescription(newValue)) {</span>
+<span class="nc" id="L1081">					return new ValidatorStatusCode(</span>
+							false,
+							&quot;The description is not in a valid format. Please refer to the help pages to see the correct format&quot;
+					);
+				}
+			}
+<span class="nc" id="L1087">			return new ValidatorStatusCode(true);</span>
+		}
+
+<span class="nc" id="L1090">		Permission perm = Permissions.get(userId, spaceId);</span>
+<span class="nc bnc" id="L1091" title="All 2 branches missed.">		log.debug(&quot;Permission retrieved for user &quot; + userId + &quot;: &quot; + (perm != null ? &quot;isLeader=&quot; + perm.isLeader() : &quot;null&quot;));</span>
+		
+<span class="nc bnc" id="L1093" title="All 4 branches missed.">		if (perm == null || !perm.isLeader()) {</span>
+<span class="nc" id="L1094">			return new ValidatorStatusCode(false, &quot;Only leaders can update settings in a space&quot;);</span>
+		}
+
+<span class="nc" id="L1097">		Space s = Spaces.get(spaceId);</span>
+		// Go through all the cases, depending on what attribute we are changing.
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">		if (attribute.equals(&quot;name&quot;)) {</span>
+
+
+<span class="nc bnc" id="L1102" title="All 2 branches missed.">			if (!s.getName().equals(newValue)) {</span>
+<span class="nc bnc" id="L1103" title="All 2 branches missed.">				if (Spaces.notUniquePrimitiveName(newValue, spaceId)) {</span>
+<span class="nc" id="L1104">					return new ValidatorStatusCode(false, &quot;The new name needs to be unique in the space&quot;);</span>
+				}
+			}
+<span class="nc bnc" id="L1107" title="All 2 branches missed.">		} else if (attribute.equals(&quot;description&quot;)) {</span>
+<span class="nc bnc" id="L1108" title="All 2 branches missed.">			if (!Validator.isValidPrimDescription(newValue)) {</span>
+<span class="nc" id="L1109">				return new ValidatorStatusCode(</span>
+						false,
+						&quot;The description is not in a valid format. Please refer to the help pages to see the correct &quot; +
+								&quot;format&quot;
+				);
+			}
+		}
+
+
+<span class="nc" id="L1118">		return new ValidatorStatusCode(true);</span>
+	}
+
+	public static boolean canUserSeeSpaceXMLStatus(int statusId, int userId) {
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">		if (GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="nc" id="L1123">			return true;</span>
+		}
+<span class="nc" id="L1125">		SpaceXMLUploadStatus status = Uploads.getSpaceXMLStatus(statusId);</span>
+<span class="nc bnc" id="L1126" title="All 2 branches missed.">		return status.getUserId() == userId;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

@@ -1,0 +1,72 @@
+@use "../global/colors" as c;
+@use "../global/typography" as t;
+@use "../global/spacing" as s;
+
+#benchmarkField {
+  width: 96%;
+  height: 300px;
+}
+
+.contentTbl {
+  width: 100%;
+}
+
+.contentTbl tr th {
+  padding: s.$spacing-sm;
+}
+
+.contentTbl tr td {
+  padding: s.$spacing-sm;
+  vertical-align: middle;
+}
+
+.contentTbl input[type="text"] {
+  width: 200px;
+}
+#content fieldset {
+  width: 700px;
+  margin: s.$spacing-2xl auto s.$spacing-2xl auto;
+}
+
+@media only screen and (max-width: 1023px) {
+  #content fieldset {
+    width: 90%;
+  }
+}
+
+@media only screen and (max-width: 767px) {
+  #content fieldset,
+  #wrapper fieldset {
+    width: 100%;
+  }
+
+  #wrapper .contentTbl input[type="text"] {
+    width: 95%;
+  }
+  #wrapper .contentTbl textarea {
+    width: 95%;
+  }
+}
+
+label.error {
+  color: c.$accent-red;
+  font-size: t.$font-size-sm;
+  margin-left: s.$spacing-sm;
+  display: inline-block;
+  font-weight: t.$font-weight-bold;
+}
+
+#btnSelectSolver {
+  margin-left: s.$spacing-md;
+}
+
+#solverNameField {
+  font-weight: t.$font-weight-bold;
+  display: inline-block;
+  min-width: 50px;
+}
+
+// Muted text style for "No solvers available" message
+.text-muted {
+  color: c.$text-accent-color;
+}

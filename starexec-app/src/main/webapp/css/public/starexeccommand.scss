@@ -1,0 +1,824 @@
+// =============================================================================
+// STAREXECCOMMAND PAGE STYLES
+// =============================================================================
+// Styling for the StarExecCommand CLI documentation page
+// Uses shared components from the design system
+// =============================================================================
+
+@use "../global/colors" as c;
+@use "../global/typography" as t;
+@use "../global/spacing" as s;
+@use "../global/mixins" as m;
+
+// Local variable aliases for cleaner code
+$background-color: c.$background-color;
+$foreground-color: c.$foreground-color;
+$text-main-color: c.$text-main-color;
+$text-secondary: c.$text-secondary;
+$accent-blue: c.$accent-blue;
+$accent-orange: c.$accent-orange;
+$accent-green: c.$accent-green;
+$surface-secondary: c.$surface-secondary;
+$surface-tertiary: c.$surface-tertiary;
+$success: c.$success;
+$info: c.$info;
+
+$font-size-4xl: t.$font-size-4xl;
+$font-size-3xl: t.$font-size-3xl;
+$font-size-2xl: t.$font-size-2xl;
+$font-size-xl: t.$font-size-xl;
+$font-size-lg: t.$font-size-lg;
+$font-size-base: t.$font-size-base;
+$font-size-sm: t.$font-size-sm;
+$font-size-xs: t.$font-size-xs;
+$font-weight-bold: t.$font-weight-bold;
+$font-weight-semibold: t.$font-weight-semibold;
+$font-weight-medium: t.$font-weight-medium;
+$font-family-mono: t.$font-family-mono;
+
+$spacing-3xl: s.$spacing-3xl;
+$spacing-2xl: s.$spacing-2xl;
+$spacing-xl: s.$spacing-xl;
+$spacing-lg: s.$spacing-lg;
+$spacing-md: s.$spacing-md;
+$spacing-sm: s.$spacing-sm;
+$spacing-xs: s.$spacing-xs;
+$spacing-2xs: s.$spacing-2xs;
+$container-max-width: s.$container-max-width;
+
+// ============================================================================
+// Page Container
+// ============================================================================
+
+.starexeccommand-container {
+  min-height: 100vh;
+  background: $background-color;
+  padding-bottom: $spacing-2xl;
+}
+
+.container {
+  max-width: $container-max-width;
+  margin: 0 auto;
+  padding: $spacing-lg $spacing-lg;
+
+  @include m.mobile {
+    padding: $spacing-md $spacing-md;
+  }
+}
+
+// ============================================================================
+// Header Section
+// ============================================================================
+
+.page-header {
+  background: linear-gradient(
+    135deg,
+    rgba($accent-blue, 0.08) 0%,
+    transparent 100%
+  );
+  border-bottom: 1px solid $foreground-color;
+  padding: $spacing-2xl 0;
+  margin-bottom: $spacing-2xl;
+
+  .container {
+    max-width: 900px;
+  }
+}
+
+.page-title {
+  margin-top: 0;
+  margin-bottom: $spacing-sm;
+  color: $text-main-color;
+  font-size: $font-size-4xl;
+  font-weight: $font-weight-bold;
+  line-height: 1.2;
+}
+
+.lead {
+  font-size: $font-size-lg;
+  color: $text-secondary;
+  margin-bottom: $spacing-lg;
+  line-height: 1.5;
+}
+
+// ============================================================================
+// Download Section
+// ============================================================================
+
+.download-section {
+  margin-top: $spacing-lg;
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+}
+
+.btn-download {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-xs;
+  background-color: $accent-blue;
+  color: $text-main-color;
+  padding: $spacing-md $spacing-lg;
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: $font-weight-semibold;
+  @include m.transition-default;
+  border: 1px solid transparent;
+  box-shadow: 0 2px 8px rgba($accent-blue, 0.2);
+
+  &:hover {
+    background-color: lighten($accent-blue, 8%);
+    color: $text-main-color;
+    text-decoration: none;
+    box-shadow: 0 4px 12px rgba($accent-blue, 0.3);
+    transform: translateY(-2px);
+  }
+
+  &:focus {
+    outline: 2px solid $accent-blue;
+    outline-offset: 2px;
+  }
+
+  .icon {
+    font-size: $font-size-xl;
+  }
+}
+
+.version-info {
+  color: $text-secondary;
+  font-size: $font-size-sm;
+}
+
+// ============================================================================
+// Breadcrumb Navigation
+// ============================================================================
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: $spacing-xs;
+  margin-bottom: $spacing-md;
+  font-size: $font-size-sm;
+}
+
+.breadcrumb-link {
+  color: $text-secondary;
+  text-decoration: none;
+  @include m.transition-default;
+
+  &:hover {
+    color: $text-main-color;
+  }
+
+  &:focus {
+    outline: 2px solid $accent-blue;
+    outline-offset: 2px;
+  }
+}
+
+.breadcrumb-separator {
+  color: $text-secondary;
+}
+
+.breadcrumb-current {
+  color: $text-main-color;
+  font-weight: $font-weight-medium;
+}
+
+// ============================================================================
+// Layout Structure
+// ============================================================================
+
+.guide-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: $spacing-xl;
+  margin-bottom: auto;
+  align-items: start;
+
+  @include m.tablet {
+    grid-template-columns: 240px 1fr;
+  }
+
+  @include m.mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sidebar {
+  @include m.mobile {
+    order: 2;
+  }
+}
+
+// ============================================================================
+// Navigation Sidebar
+// ============================================================================
+
+.doc-nav {
+  position: sticky;
+  top: $spacing-lg;
+  width: auto;
+  max-height: calc(100vh - #{$spacing-2xl});
+  overflow-y: auto;
+  background: $foreground-color;
+  padding: $spacing-lg;
+  border-radius: 4px;
+  border: 1px solid lighten($foreground-color, 10%);
+  z-index: 100;
+
+  @include m.mobile {
+    position: static;
+    max-height: none;
+    margin-bottom: $spacing-xl;
+  }
+}
+
+.nav-title {
+  font-size: $font-size-xl;
+  margin-top: 0;
+  margin-bottom: $spacing-md;
+  color: $text-main-color;
+  border-bottom: 2px solid $accent-blue;
+  padding-bottom: $spacing-xs;
+}
+
+.nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.nav-item {
+  margin-bottom: $spacing-md;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.nav-link {
+  color: $text-secondary;
+  text-decoration: none;
+  display: block;
+  padding: $spacing-2xs $spacing-sm;
+  border-radius: 4px;
+  @include m.transition-default;
+
+  &:hover {
+    color: $text-main-color;
+    background-color: lighten($foreground-color, 5%);
+  }
+
+  &:focus {
+    outline: 2px solid $accent-blue;
+    outline-offset: -2px;
+  }
+
+  &.active {
+    color: $accent-blue;
+    font-weight: $font-weight-semibold;
+    background-color: lighten($foreground-color, 5%);
+  }
+}
+
+.nav-footer {
+  margin-top: $spacing-lg;
+  padding-top: $spacing-lg;
+  border-top: 1px solid lighten($foreground-color, 10%);
+}
+
+.scroll-to-top {
+  color: $text-secondary;
+  text-decoration: none;
+  font-size: $font-size-sm;
+  @include m.transition-default;
+
+  &:hover {
+    color: $text-main-color;
+  }
+
+  &:focus {
+    outline: 2px solid $accent-blue;
+    outline-offset: 2px;
+  }
+}
+
+/* Main Content */
+.documentation {
+  grid-column: auto;
+
+  section {
+    margin-bottom: $spacing-2xl;
+    scroll-margin-top: $spacing-xl;
+  }
+
+  h2 {
+    color: $text-main-color;
+    border-bottom: 2px solid $foreground-color;
+    padding-bottom: $spacing-sm;
+    margin-top: 0;
+    margin-bottom: $spacing-lg;
+    font-size: $font-size-3xl;
+  }
+
+  h3 {
+    color: $text-main-color;
+    margin-top: $spacing-xl;
+    margin-bottom: $spacing-md;
+    font-size: $font-size-2xl;
+  }
+
+  h4 {
+    color: $accent-blue;
+    margin-bottom: $spacing-sm;
+    font-size: $font-size-xl;
+  }
+
+  p {
+    color: $text-main-color;
+    line-height: 1.6;
+    margin-bottom: $spacing-md;
+  }
+
+  ul,
+  ol {
+    color: $text-main-color;
+    line-height: 1.6;
+    margin: $spacing-md 0;
+    padding-left: $spacing-lg;
+
+    li {
+      margin-bottom: $spacing-xs;
+    }
+  }
+
+  strong {
+    color: $text-main-color;
+    font-weight: $font-weight-semibold;
+  }
+
+  code {
+    background: $foreground-color;
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    color: $accent-orange;
+    font-size: $font-size-sm;
+    border: 1px solid lighten($foreground-color, 5%);
+  }
+}
+
+// ============================================================================
+// Code Blocks
+// ============================================================================
+
+pre {
+  background: $foreground-color;
+  border: 1px solid lighten($foreground-color, 10%);
+  border-radius: 4px;
+  padding: $spacing-md;
+  overflow-x: auto;
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  margin: $spacing-md 0;
+  line-height: 1.5;
+
+  code {
+    background: none;
+    padding: 0;
+    color: $text-main-color;
+    border: none;
+  }
+}
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+.param-table,
+.command-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: $spacing-lg 0;
+  font-size: $font-size-sm;
+  background: $foreground-color;
+  overflow-x: auto;
+
+  th,
+  td {
+    border: 1px solid lighten($foreground-color, 10%);
+    padding: $spacing-sm;
+    text-align: left;
+  }
+
+  th {
+    background-color: $background-color;
+    font-weight: 600;
+    color: $text-main-color;
+    border-bottom: 2px solid $accent-blue;
+  }
+
+  td {
+    color: $text-main-color;
+  }
+
+  tbody tr:nth-child(even) {
+    background-color: lighten($foreground-color, 3%);
+  }
+
+  tbody tr:hover {
+    background-color: lighten($foreground-color, 5%);
+  }
+
+  code {
+    background: $background-color;
+    color: $accent-orange;
+  }
+}
+
+// ============================================================================
+// Command Cards
+// ============================================================================
+
+.command {
+  background: $foreground-color;
+  border: 1px solid lighten($foreground-color, 10%);
+  border-radius: 4px;
+  padding: $spacing-lg;
+  margin-bottom: $spacing-lg;
+  @include m.transition-default;
+
+  &:hover {
+    border-color: $accent-blue;
+  }
+
+  h4 {
+    margin-top: 0;
+    margin-bottom: $spacing-md;
+  }
+
+  p {
+    margin-bottom: $spacing-md;
+    color: $text-main-color;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: $spacing-sm $spacing-lg;
+    margin: $spacing-md 0;
+  }
+
+  dt {
+    font-weight: 600;
+    color: $text-secondary;
+  }
+
+  dd {
+    margin: 0;
+    color: $text-main-color;
+  }
+
+  pre {
+    margin: $spacing-md 0 0 0;
+  }
+}
+
+.command-grid {
+  display: grid;
+  gap: $spacing-lg;
+  margin: $spacing-lg 0;
+}
+
+// ============================================================================
+// Section Headers & Titles
+// ============================================================================
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: $spacing-md;
+  margin-bottom: $spacing-lg;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  font-size: $font-size-3xl;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.section-icon {
+  color: $accent-blue;
+  flex-shrink: 0;
+}
+
+// ============================================================================
+// Difficulty Badges
+// ============================================================================
+
+.difficulty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-xs;
+  padding: $spacing-2xs $spacing-sm;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-medium;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.difficulty-badge--beginner {
+  background: rgba($success, 0.15);
+  color: $success;
+}
+
+// ============================================================================
+// Feature Grid & Cards
+// ============================================================================
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: $spacing-lg;
+  margin: $spacing-lg 0 $spacing-2xl 0;
+}
+
+.feature-card {
+  background: $foreground-color;
+  border: 1px solid lighten($foreground-color, 10%);
+  border-radius: 12px;
+  padding: $spacing-lg;
+  @include m.transition-default;
+  display: flex;
+  flex-direction: column;
+  height: auto;
+
+  &:hover {
+    border-color: $accent-blue;
+    transform: translateY(-2px);
+  }
+}
+
+.feature-header {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  margin-bottom: $spacing-md;
+}
+
+.feature-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  flex-shrink: 0;
+  color: white;
+
+  &--shell {
+    background: linear-gradient(135deg, $info, darken($info, 8%));
+  }
+
+  &--batch {
+    background: linear-gradient(135deg, $success, darken($success, 8%));
+  }
+}
+
+.feature-title {
+  font-size: $font-size-lg;
+  font-weight: $font-weight-semibold;
+  color: $text-main-color;
+  margin: 0;
+}
+
+.feature-description {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  line-height: 1.6;
+  margin: 0;
+  flex-grow: 1;
+}
+
+// ============================================================================
+// Syntax Rules
+// ============================================================================
+
+.syntax-rules {
+  margin: $spacing-lg 0;
+
+  h3 {
+    margin-top: 0;
+    margin-bottom: $spacing-md;
+  }
+
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: $spacing-md 0;
+  }
+
+  li {
+    padding: $spacing-xs 0;
+    color: $text-main-color;
+    font-size: $font-size-sm;
+  }
+}
+
+// ============================================================================
+// Example Boxes
+// ============================================================================
+
+.example-box {
+  background: lighten($foreground-color, 2%);
+  border: 1px solid lighten($foreground-color, 8%);
+  border-radius: 12px;
+  overflow: hidden;
+  margin: $spacing-lg 0;
+}
+
+.example-header {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-md;
+  background: lighten($foreground-color, 4%);
+  border-bottom: 1px solid lighten($foreground-color, 8%);
+  color: $text-main-color;
+  font-size: $font-size-sm;
+  font-weight: $font-weight-medium;
+}
+
+.example-code {
+  padding: $spacing-md;
+  margin: 0;
+  color: $text-secondary;
+  font-family: $font-family-mono;
+  font-size: $font-size-sm;
+  line-height: 1.6;
+  overflow-x: auto;
+  background: $foreground-color;
+
+  code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: $text-secondary;
+  }
+}
+
+// ============================================================================
+// Tip Boxes
+// ============================================================================
+
+.tip-box {
+  display: flex;
+  gap: $spacing-md;
+  background: linear-gradient(
+    135deg,
+    rgba($accent-blue, 0.08),
+    rgba($accent-blue, 0.03)
+  );
+  border: 1px solid rgba($accent-blue, 0.2);
+  border-left: 4px solid $accent-blue;
+  border-radius: 8px;
+  padding: $spacing-md;
+  margin: $spacing-lg 0;
+}
+
+.tip-icon {
+  font-size: $font-size-2xl;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tip-content {
+  font-size: $font-size-sm;
+  color: $text-secondary;
+  line-height: 1.6;
+
+  strong {
+    color: $accent-blue;
+    font-weight: $font-weight-semibold;
+  }
+}
+
+// ============================================================================
+// Mode Comparison
+// ============================================================================
+
+.mode-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: $spacing-lg;
+  margin: $spacing-lg 0 $spacing-2xl 0;
+}
+
+.mode-card {
+  background: $foreground-color;
+  border: 1px solid lighten($foreground-color, 10%);
+  border-radius: 12px;
+  padding: $spacing-lg;
+  @include m.transition-default;
+
+  &:hover {
+    border-color: $accent-blue;
+  }
+
+  h3 {
+    color: $text-main-color;
+    margin-top: 0;
+    margin-bottom: $spacing-md;
+    font-size: $font-size-xl;
+  }
+
+  p {
+    margin-bottom: $spacing-md;
+  }
+}
+
+.mode-features {
+  display: flex;
+  gap: $spacing-xs;
+  flex-wrap: wrap;
+}
+
+.feature-tag {
+  display: inline-block;
+  padding: $spacing-2xs $spacing-sm;
+  background: lighten($foreground-color, 8%);
+  color: $text-main-color;
+  font-size: $font-size-xs;
+  font-weight: $font-weight-medium;
+  border-radius: 6px;
+  border: 1px solid lighten($foreground-color, 12%);
+}
+
+// ============================================================================
+// Responsive Design
+// ============================================================================
+
+@include m.mobile {
+  .starexeccommand-container {
+    padding: $spacing-md;
+  }
+
+  .page-header {
+    padding-bottom: $spacing-md;
+    margin-bottom: $spacing-lg;
+  }
+
+  .page-header .page-title {
+    font-size: $font-size-3xl;
+    margin-bottom: $spacing-sm;
+  }
+
+  .lead {
+    font-size: $font-size-base;
+  }
+
+  .section-title {
+    font-size: $font-size-2xl;
+  }
+
+  .param-table,
+  .command-table {
+    font-size: $font-size-sm;
+
+    th,
+    td {
+      padding: $spacing-xs;
+    }
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-comparison {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-layout {
+    grid-template-columns: 1fr;
+    gap: $spacing-md;
+  }
+
+  .doc-nav {
+    position: static;
+    margin-bottom: $spacing-lg;
+  }
+
+  .command-grid {
+    grid-template-columns: 1fr;
+  }
+}

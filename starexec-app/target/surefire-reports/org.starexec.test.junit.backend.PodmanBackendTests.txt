@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: org.starexec.test.junit.backend.PodmanBackendTests
+-------------------------------------------------------------------------------
+Tests run: 29, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.199 s -- in org.starexec.test.junit.backend.PodmanBackendTests

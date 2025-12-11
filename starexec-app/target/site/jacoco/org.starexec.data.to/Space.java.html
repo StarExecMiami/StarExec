@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Space.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.to</a> &gt; <span class="el_source">Space.java</span></div><h1>Space.java</h1><pre class="source lang-java linenums">package org.starexec.data.to;
+
+import com.google.gson.annotations.Expose;
+import org.starexec.util.Util;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+
+/**
+ * Represents a space in the database.
+ *
+ * @author Tyler Jensen
+ */
+public class Space extends Identifiable implements Iterable&lt;Space&gt;, Nameable {
+	@Expose private String name;
+<span class="fc" id="L19">	@Expose private String description = &quot;no description&quot;;</span>
+	private boolean locked;
+	private boolean isPublic;
+	private Timestamp created;
+	private Permission defaultPermission;
+	@Expose private List&lt;Solver&gt; solvers;
+	@Expose private List&lt;Benchmark&gt; benchmarks;
+	@Expose private List&lt;Job&gt; jobs;
+	@Expose private List&lt;User&gt; users;
+	@Expose private List&lt;Space&gt; subspaces;
+	@Expose private Integer parentSpace;
+	@Expose private boolean stickyLeaders;
+
+	public void setParentSpace(Integer space) {
+<span class="nc" id="L33">		this.parentSpace = space;</span>
+<span class="nc" id="L34">	}</span>
+
+	public Integer getParentSpace() {
+<span class="nc" id="L37">		return this.parentSpace;</span>
+	}
+
+<span class="fc" id="L40">	public Space() {</span>
+<span class="fc" id="L41">		this.solvers = new LinkedList&lt;&gt;();</span>
+<span class="fc" id="L42">		this.benchmarks = new LinkedList&lt;&gt;();</span>
+<span class="fc" id="L43">		this.jobs = new LinkedList&lt;&gt;();</span>
+<span class="fc" id="L44">		this.users = new LinkedList&lt;&gt;();</span>
+<span class="fc" id="L45">		this.subspaces = new LinkedList&lt;&gt;();</span>
+<span class="fc" id="L46">		this.defaultPermission = new Permission();</span>
+<span class="fc" id="L47">	}</span>
+
+	/**
+	 * @return the default permission entry that represents the permission newly added users have
+	 */
+	public Permission getPermission() {
+<span class="nc" id="L53">		return defaultPermission;</span>
+	}
+
+	/**
+	 * @param permission the default permission to set for this space
+	 */
+	public void setPermission(Permission permission) {
+<span class="nc" id="L60">		this.defaultPermission = permission;</span>
+<span class="nc" id="L61">	}</span>
+
+	/**
+	 * @return the user defined name for the space
+	 */
+	public String getName() {
+<span class="nc" id="L67">		return name;</span>
+	}
+
+	/**
+	 * @param name the name to set for the space
+	 */
+	public void setName(String name) {
+<span class="nc" id="L74">		this.name = name;</span>
+<span class="nc" id="L75">	}</span>
+
+	/**
+	 * @return the user defined description of the space
+	 */
+	public String getDescription() {
+<span class="nc" id="L81">		return description;</span>
+	}
+
+	/**
+	 * @param description the description to set for the space
+	 */
+	public void setDescription(String description) {
+<span class="nc bnc" id="L88" title="All 2 branches missed.">		if (!Util.isNullOrEmpty(description)) {</span>
+<span class="nc" id="L89">			this.description = description;</span>
+		}
+<span class="nc" id="L91">	}</span>
+
+	/**
+	 * @return true if the space is 'locked' false otherwise (locked indicates no links can be made to the space)
+	 */
+	public boolean isLocked() {
+<span class="nc" id="L97">		return locked;</span>
+	}
+
+	/**
+	 * @param locked the locked property to set for the space
+	 */
+	public void setLocked(boolean locked) {
+<span class="nc" id="L104">		this.locked = locked;</span>
+<span class="nc" id="L105">	}</span>
+
+	/**
+	 * @return the time the space was created
+	 */
+	public Timestamp getCreated() {
+<span class="nc" id="L111">		return created;</span>
+	}
+
+	/**
+	 * @param created the creation time to set for the space
+	 */
+	public void setCreated(Timestamp created) {
+<span class="nc" id="L118">		this.created = created;</span>
+<span class="nc" id="L119">	}</span>
+
+	/**
+	 * @return all solvers belonging directly to this space
+	 */
+	public List&lt;Solver&gt; getSolvers() {
+<span class="nc" id="L125">		return this.solvers;</span>
+	}
+
+	/**
+	 * @param solver the solver to add to this space
+	 */
+	public void addSolver(Solver solver) {
+<span class="nc" id="L132">		this.solvers.add(solver);</span>
+<span class="nc" id="L133">	}</span>
+
+	/**
+	 * @return all benchmarks belonging directly to this space
+	 */
+	public List&lt;Benchmark&gt; getBenchmarks() {
+<span class="nc" id="L139">		return this.benchmarks;</span>
+	}
+
+	/**
+	 * @return all benchmarks in this space and all subspaces recursively
+	 */
+	public List&lt;Benchmark&gt; getBenchmarksRecursively() {
+<span class="nc" id="L146">		List&lt;Benchmark&gt; benchs = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L147">		benchs.addAll(this.benchmarks);</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">		for (Space s : this.getSubspaces()) {</span>
+<span class="nc" id="L149">			benchs.addAll(s.getBenchmarksRecursively());</span>
+<span class="nc" id="L150">		}</span>
+<span class="nc" id="L151">		return benchs;</span>
+	}
+
+	/**
+	 * @param benchmark the benchmark to add to this space
+	 */
+	public void addBenchmark(Benchmark benchmark) {
+<span class="nc" id="L158">		this.benchmarks.add(benchmark);</span>
+<span class="nc" id="L159">	}</span>
+
+	/**
+	 * @return all jobs belonging directly to this space
+	 */
+	public List&lt;Job&gt; getJobs() {
+<span class="nc" id="L165">		return this.jobs;</span>
+	}
+
+	/**
+	 * @param job the job to add to the space
+	 */
+	public void addJob(Job job) {
+<span class="nc" id="L172">		this.jobs.add(job);</span>
+<span class="nc" id="L173">	}</span>
+
+	/**
+	 * @return all users belonging to the space
+	 */
+	public List&lt;User&gt; getUsers() {
+<span class="nc" id="L179">		return this.users;</span>
+	}
+
+	/**
+	 * @param user the user to add to the space
+	 */
+	public void addUser(User user) {
+<span class="nc" id="L186">		this.users.add(user);</span>
+<span class="nc" id="L187">	}</span>
+
+	/**
+	 * @param solvers The list of solvers belonging to this space
+	 */
+	public void setSolvers(List&lt;Solver&gt; solvers) {
+<span class="nc" id="L193">		this.solvers = solvers;</span>
+<span class="nc" id="L194">	}</span>
+
+	/**
+	 * @param benchmarks The list of benchmarks belonging to this space
+	 */
+	public void setBenchmarks(List&lt;Benchmark&gt; benchmarks) {
+<span class="nc" id="L200">		this.benchmarks = benchmarks;</span>
+<span class="nc" id="L201">	}</span>
+
+	/**
+	 * @param jobs The list of jobs belonging to this space
+	 */
+	public void setJobs(List&lt;Job&gt; jobs) {
+<span class="nc" id="L207">		this.jobs = jobs;</span>
+<span class="nc" id="L208">	}</span>
+
+	/**
+	 * @param users The list of users belonging to this space
+	 */
+	public void setUsers(List&lt;User&gt; users) {
+<span class="nc" id="L214">		this.users = users;</span>
+<span class="nc" id="L215">	}</span>
+
+	/**
+	 * @return the list of subspaces belonging to this space
+	 */
+	public List&lt;Space&gt; getSubspaces() {
+<span class="nc" id="L221">		return subspaces;</span>
+	}
+
+	/**
+	 * @param subspaces the subspaces to set for this space
+	 */
+	public void setSubspaces(List&lt;Space&gt; subspaces) {
+<span class="nc" id="L228">		this.subspaces = subspaces;</span>
+<span class="nc" id="L229">	}</span>
+
+	public boolean isPublic() {
+<span class="nc" id="L232">		return isPublic;</span>
+	}
+
+	public void setPublic(boolean pbc) {
+<span class="nc" id="L236">		isPublic = pbc;</span>
+<span class="nc" id="L237">	}</span>
+
+	@Override
+	public Iterator&lt;Space&gt; iterator() {
+<span class="nc" id="L241">		return this.subspaces.iterator();</span>
+	}
+
+	public void setStickyLeaders(boolean stickyLeaders) {
+<span class="nc" id="L245">		this.stickyLeaders = stickyLeaders;</span>
+<span class="nc" id="L246">	}</span>
+
+	public boolean isStickyLeaders() {
+<span class="nc" id="L249">		return stickyLeaders;</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

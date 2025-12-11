@@ -1,0 +1,24 @@
+// =============================================================================
+// NAVIGATION - LEGACY COMPATIBILITY LAYER
+// =============================================================================
+// Main navigation styles are now in components/navigation.scss
+// This file provides minimal overrides for backwards compatibility
+// TODO: Remove this file once all navigation HTML is updated
+// =============================================================================
+
+@import "colors";
+
+// Legacy float-based positioning (kept for compatibility)
+// The new component uses flexbox but these ensure old markup still works
+
+nav {
+	// Override old float with modern layout
+	float: none;
+	margin-top: 0;
+
+	@include mobile {
+		width: 100%;
+	}
+}
+
+// Legacy .round class support is handled in components/navigation.scss

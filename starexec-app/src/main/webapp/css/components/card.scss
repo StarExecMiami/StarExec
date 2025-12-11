@@ -1,0 +1,70 @@
+@use "../global/colors" as c;
+@use "../global/spacing" as s;
+@use "../global/typography" as t;
+
+.card {
+  background: c.$surface-secondary;
+  border: 1px solid c.$surface-tertiary;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    border-color: c.$accent-orange;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  }
+  
+  &__header {
+    padding: s.$spacing-lg;
+    border-bottom: 1px solid c.$surface-tertiary;
+  }
+  
+  &__body {
+    padding: s.$spacing-lg;
+  }
+  
+  &__footer {
+    padding: s.$spacing-lg;
+    border-top: 1px solid c.$surface-tertiary;
+    background: c.$surface-primary;
+  }
+  
+  &__icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: c.$surface-tertiary;
+    border-radius: 8px;
+    font-size: t.$font-size-2xl;
+    margin-bottom: s.$spacing-md;
+  }
+  
+  &__title {
+    font-size: t.$font-size-xl;
+    font-weight: t.$font-weight-semibold;
+    color: c.$text-primary;
+    margin-bottom: s.$spacing-xs;
+  }
+  
+  &__description {
+    color: c.$text-secondary;
+    font-size: t.$font-size-sm;
+    line-height: 1.6;
+  }
+}
+
+.card--interactive {
+  cursor: pointer;
+  
+  &:active {
+    transform: translateY(0);
+  }
+}
+
+.card--highlight {
+  border-color: c.$accent-blue;
+  background: rgba(c.$accent-blue, 0.1);
+}

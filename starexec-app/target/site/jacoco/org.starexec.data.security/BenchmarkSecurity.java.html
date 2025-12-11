@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BenchmarkSecurity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.data.security</a> &gt; <span class="el_source">BenchmarkSecurity.java</span></div><h1>BenchmarkSecurity.java</h1><pre class="source lang-java linenums">package org.starexec.data.security;
+
+import org.starexec.data.database.*;
+import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.BenchmarkUploadStatus;
+import org.starexec.data.to.Processor;
+import org.starexec.data.to.enums.ProcessorType;
+import org.starexec.util.Validator;
+
+import java.util.List;
+
+<span class="nc" id="L12">public class BenchmarkSecurity {</span>
+
+	/**
+	 * Checks to see whether the given user has permission to download the given benchmark
+	 *
+	 * @param benchId
+	 * @param userId
+	 * @return
+	 */
+
+	public static ValidatorStatusCode canUserDownloadBenchmark(int benchId, int userId) {
+<span class="fc" id="L23">		Benchmark b = Benchmarks.get(benchId);</span>
+<span class="fc bfc" id="L24" title="All 2 branches covered.">		if (b == null) {</span>
+<span class="fc" id="L25">			return new ValidatorStatusCode(false, &quot;The given benchmark could not be found&quot;);</span>
+		}
+<span class="fc bfc" id="L27" title="All 2 branches covered.">		if (!Permissions.canUserSeeBench(benchId, userId)) {</span>
+<span class="fc" id="L28">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the given benchmark&quot;);</span>
+		}
+<span class="fc bfc" id="L30" title="All 6 branches covered.">		if (!(b.isDownloadable() || b.getUserId() == userId || GeneralSecurity.hasAdminReadPrivileges(userId))) {</span>
+<span class="fc" id="L31">			return new ValidatorStatusCode(false, &quot;The given benchmark has been marked as being not downloadable&quot;);</span>
+		}
+
+<span class="fc" id="L34">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given userId can get an anonymous public link for the benchmark.
+	 *
+	 * @param benchmarkId The id of the benchmark for which an anonymous link is being requested.
+	 * @param userId The id of the user attempting to generate an anonymous link.
+	 * @return A status code indicating if the user can generate a link.
+	 * @author Albert Giegerich
+	 */
+	public static ValidatorStatusCode canUserGetAnonymousLink(int benchmarkId, int userId) {
+<span class="fc" id="L46">		Benchmark bench = Benchmarks.get(benchmarkId);</span>
+<span class="fc bfc" id="L47" title="All 2 branches covered.">		if (!userOwnsBenchOrIsAdmin(bench, userId)) {</span>
+<span class="fc" id="L48">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to generate an anonymous link for this benchmark.&quot;);
+		} else {
+<span class="fc" id="L51">			return new ValidatorStatusCode(true);</span>
+		}
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to see the contents of the given benchmark
+	 *
+	 * @param benchmarkId The ID of the benchmark being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed.
+	 */
+	public static ValidatorStatusCode canUserSeeBenchmarkContents(int benchmarkId, int userId) {
+
+<span class="fc" id="L64">		Benchmark b = Benchmarks.get(benchmarkId);</span>
+
+<span class="fc bfc" id="L66" title="All 2 branches covered.">		if (b == null) {</span>
+
+<span class="fc" id="L68">			return new ValidatorStatusCode(false, &quot;The benchmark could not be found&quot;);</span>
+		}
+		//the benchmark doesn't need to be downloadable if this is the owner
+<span class="fc bfc" id="L71" title="All 4 branches covered.">		if (b.getUserId() == userId || GeneralSecurity.hasAdminReadPrivileges(userId)) {</span>
+<span class="fc" id="L72">			return new ValidatorStatusCode(true);</span>
+		}
+
+<span class="pc bpc" id="L75" title="1 of 4 branches missed.">		if (Permissions.canUserSeeBench(b.getId(), userId) &amp;&amp; b.isDownloadable()) {</span>
+<span class="fc" id="L76">			return new ValidatorStatusCode(true);</span>
+		}
+<span class="fc" id="L78">		return new ValidatorStatusCode(false, &quot;You do not have permission to see the contents of this benchmark&quot;);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to delete the given benchmark
+	 *
+	 * @param benchId The ID of the benchmark being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed.
+	 */
+
+	public static ValidatorStatusCode canUserDeleteBench(int benchId, int userId) {
+
+<span class="fc" id="L91">		Benchmark bench = Benchmarks.getIncludeDeletedAndRecycled(benchId, false);</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">		if (bench == null) {</span>
+
+<span class="fc" id="L94">			return new ValidatorStatusCode(false, &quot;The benchmark could not be found&quot;);</span>
+		}
+<span class="fc bfc" id="L96" title="All 2 branches covered.">		if (!userOwnsBenchOrIsAdmin(bench, userId)) {</span>
+<span class="fc" id="L97">			return new ValidatorStatusCode(false, &quot;You do not have permission to delete this benchmark&quot;);</span>
+		}
+<span class="fc" id="L99">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to recycle the given benchmark
+	 *
+	 * @param benchId The ID of the benchmark being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed.
+	 */
+
+	public static ValidatorStatusCode canUserRecycleBench(int benchId, int userId) {
+<span class="fc" id="L111">		Benchmark bench = Benchmarks.get(benchId);</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">		if (bench == null) {</span>
+<span class="fc" id="L113">			return new ValidatorStatusCode(false, &quot;The benchmark could not be found&quot;);</span>
+		}
+<span class="pc bpc" id="L115" title="1 of 2 branches missed.">		if (!userOwnsBenchOrIsAdmin(bench, userId)) {</span>
+<span class="nc" id="L116">			return new ValidatorStatusCode(false, &quot;You do not have permission to recycle this benchmark&quot;);</span>
+		}
+<span class="fc" id="L118">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to recycle all of the given benchmarks
+	 *
+	 * @param benchIds The IDs of all the benchmarks being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed. If the user doesn't have the
+	 * required permissions for even 1 benchmark, a status code will be returned
+	 */
+	public static ValidatorStatusCode canUserRecycleBenchmarks(List&lt;Integer&gt; benchIds, int userId) {
+<span class="nc bnc" id="L130" title="All 2 branches missed.">		for (Integer bid : benchIds) {</span>
+<span class="nc" id="L131">			ValidatorStatusCode code = canUserRecycleBench(bid, userId);</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">			if (!code.isSuccess()) {</span>
+<span class="nc" id="L133">				return code;</span>
+			}
+<span class="nc" id="L135">		}</span>
+
+<span class="nc" id="L137">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to delete all of the given benchmarks
+	 *
+	 * @param benchIds The IDs of all the benchmarks being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed. If the user doesn't have the
+	 * required permissions for even 1 benchmark, a status code will be returned
+	 */
+	public static ValidatorStatusCode canUserDeleteBenchmarks(List&lt;Integer&gt; benchIds, int userId) {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">		for (Integer bid : benchIds) {</span>
+<span class="nc" id="L150">			ValidatorStatusCode code = canUserDeleteBench(bid, userId);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">			if (!code.isSuccess()) {</span>
+<span class="nc" id="L152">				return code;</span>
+			}
+<span class="nc" id="L154">		}</span>
+
+<span class="nc" id="L156">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to restore all of the given benchmarks
+	 *
+	 * @param benchIds The IDs of all the benchmarks being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed. If the user doesn't have the
+	 * required permissions for even 1 benchmark, a status code will be returned
+	 */
+	public static ValidatorStatusCode canUserRestoreBenchmarks(List&lt;Integer&gt; benchIds, int userId) {
+<span class="nc bnc" id="L168" title="All 2 branches missed.">		for (Integer bid : benchIds) {</span>
+<span class="nc" id="L169">			ValidatorStatusCode code = canUserRestoreBenchmark(bid, userId);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">			if (!code.isSuccess()) {</span>
+<span class="nc" id="L171">				return code;</span>
+			}
+<span class="nc" id="L173">		}</span>
+
+<span class="nc" id="L175">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to restore the given benchmark
+	 *
+	 * @param benchId The ID of the benchmark being checked
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed.
+	 */
+	public static ValidatorStatusCode canUserRestoreBenchmark(int benchId, int userId) {
+<span class="fc" id="L186">		Benchmark bench = Benchmarks.getIncludeDeletedAndRecycled(benchId, false);</span>
+<span class="fc bfc" id="L187" title="All 2 branches covered.">		if (bench == null) {</span>
+<span class="fc" id="L188">			return new ValidatorStatusCode(false, &quot;The benchmark could not be found&quot;);</span>
+		}
+<span class="fc bfc" id="L190" title="All 2 branches covered.">		if (!Benchmarks.isBenchmarkRecycled(benchId)) {</span>
+<span class="fc" id="L191">			return new ValidatorStatusCode(false, &quot;The benchmark is not currently recycled, so it cannot be restored&quot;);</span>
+		}
+<span class="fc bfc" id="L193" title="All 2 branches covered.">		if (!userOwnsBenchOrIsAdmin(bench, userId)) {</span>
+<span class="fc" id="L194">			return new ValidatorStatusCode(false, &quot;You do not have permission to restore this benchmark&quot;);</span>
+		}
+<span class="fc" id="L196">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the given user is allowed to edit the given benchmark
+	 *
+	 * @param benchId The ID of the benchmark being checked
+	 * @param name The name that the benchmark will be given upon editing
+	 * @param desc the description that will be given to the benchmark upon editing
+	 * @param typeId The new benchmark type to assign to the benchmark
+	 * @param userId The ID of the user making the request
+	 * @return 0 if allowed, or a status code from ValidatorStatusCodes if not allowed.
+	 */
+
+	public static ValidatorStatusCode canUserEditBenchmark(
+			int benchId, String name, String desc, int typeId, int userId
+	) {
+		// Ensure the parameters are valid
+<span class="fc bfc" id="L214" title="All 2 branches covered.">		if (!Validator.isValidBenchName(name)) {</span>
+
+<span class="fc" id="L216">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The new name is not valid. Please refer to the help pages to find format for benchmark names&quot;
+			);
+		}
+
+<span class="fc bfc" id="L222" title="All 2 branches covered.">		if (!Validator.isValidPrimDescription(desc)) {</span>
+<span class="fc" id="L223">			return new ValidatorStatusCode(</span>
+					false,
+					&quot;The new description is not valid. Please refer to the help pages to find format for benchmark &quot; +
+							&quot;descriptions&quot;
+			);
+		}
+
+<span class="fc" id="L230">		Benchmark bench = Benchmarks.getIncludeDeletedAndRecycled(benchId, false);</span>
+<span class="fc bfc" id="L231" title="All 2 branches covered.">		if (bench == null) {</span>
+<span class="fc" id="L232">			return new ValidatorStatusCode(false, &quot;The benchmark could not be found&quot;);</span>
+		}
+<span class="fc bfc" id="L234" title="All 2 branches covered.">		if (!userOwnsBenchOrIsAdmin(bench, userId)) {</span>
+<span class="fc" id="L235">			return new ValidatorStatusCode(false, &quot;You do not have permission to edit this benchmark&quot;);</span>
+		}
+<span class="fc bfc" id="L237" title="All 2 branches covered.">		if (Benchmarks.isBenchmarkDeleted(benchId)) {</span>
+<span class="fc" id="L238">			return new ValidatorStatusCode(false, &quot;The benchmark has been deleted&quot;);</span>
+		}
+
+<span class="fc" id="L241">		Processor p = Processors.get(typeId);</span>
+<span class="fc bfc" id="L242" title="All 2 branches covered.">		if (p == null) {</span>
+<span class="fc" id="L243">			return new ValidatorStatusCode(false, &quot;The given type could not be found&quot;);</span>
+<span class="fc bfc" id="L244" title="All 2 branches covered.">		} else if (p.getType() != ProcessorType.BENCH) {</span>
+<span class="fc" id="L245">			return new ValidatorStatusCode(false, &quot;The given type is not a benchmark processor type&quot;);</span>
+		}
+<span class="fc" id="L247">		return ProcessorSecurity.canUserSeeProcessor(typeId, userId);</span>
+	}
+
+	/**
+	 * Returns true if the given user owns the given benchmark or if the user is an admin
+	 *
+	 * @param bench The  Benchmark object being checked, which must have its userId field set
+	 * @param userId The ID of the user making the request
+	 * @return True of the user is the owner of the benchmark or an admin
+	 */
+
+	public static boolean userOwnsBenchOrIsAdmin(Benchmark bench, int userId) {
+<span class="fc bfc" id="L259" title="All 6 branches covered.">		return (bench != null &amp;&amp; (bench.getUserId() == userId || GeneralSecurity.hasAdminWritePrivileges(userId)));</span>
+	}
+
+	/**
+	 * Checks to see whether a user can recycle all the orphaned benchmarks owned by another user.
+	 *
+	 * @param userIdToDelete The user who owns the orphaned benchmarks that will be recycled
+	 * @param userIdMakingRequest The user who is trying to do the recycling
+	 * @return A ValidatorStatusCode
+	 */
+	public static ValidatorStatusCode canUserRecycleOrphanedBenchmarks(int userIdToDelete, int userIdMakingRequest) {
+<span class="fc bfc" id="L270" title="All 2 branches covered.">		if (Users.get(userIdToDelete) == null) {</span>
+<span class="fc" id="L271">			return new ValidatorStatusCode(false, &quot;The given user could not be found&quot;);</span>
+		}
+<span class="fc bfc" id="L273" title="All 4 branches covered.">		if (userIdToDelete != userIdMakingRequest &amp;&amp; !GeneralSecurity.hasAdminWritePrivileges(userIdMakingRequest)) {</span>
+<span class="fc" id="L274">			return new ValidatorStatusCode(</span>
+					false, &quot;You do not have permission to recycle benchmarks belonging to another user&quot;);
+		}
+
+<span class="fc" id="L278">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see whether the user is allowed to download the Json object representing the benchmark
+	 *
+	 * @param benchmarkId the ID of the benchmark to get JSON from.
+	 * @param userId the user for which we want to see whether or not they can get the JSON.
+	 * @return a status determining whether or not the user can get the JSON for the benchmark.
+	 */
+	public static ValidatorStatusCode canGetJsonBenchmark(int benchmarkId, int userId) {
+<span class="fc bfc" id="L289" title="All 2 branches covered.">		if (!Permissions.canUserSeeBench(benchmarkId, userId)) {</span>
+<span class="fc" id="L290">			return new ValidatorStatusCode(false, &quot;You do not have permission to see the specified benchmark&quot;);</span>
+		}
+<span class="fc" id="L292">		Benchmark b = Benchmarks.getIncludeDeletedAndRecycled(benchmarkId, false);</span>
+<span class="fc bfc" id="L293" title="All 2 branches covered.">		if (b == null) {</span>
+<span class="fc" id="L294">			return new ValidatorStatusCode(false, &quot;The given benchmark could not be found&quot;);</span>
+		}
+<span class="fc" id="L296">		return new ValidatorStatusCode(true);</span>
+	}
+
+	/**
+	 * Checks to see if the user belongs to the given upload status
+	 *
+	 * @param statusId The space to check if the user can see
+	 * @param userId The user that is requesting to view the given upload status
+	 * @return True if the user owns the status, false otherwise
+	 * @author Benton McCune
+	 */
+	public static boolean canUserSeeBenchmarkStatus(int statusId, int userId) {
+
+<span class="fc" id="L309">		BenchmarkUploadStatus status = Uploads.getBenchmarkStatus(statusId);</span>
+<span class="fc bfc" id="L310" title="All 6 branches covered.">		return status != null &amp;&amp; (GeneralSecurity.hasAdminReadPrivileges(userId) || status.getUserId() == userId);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

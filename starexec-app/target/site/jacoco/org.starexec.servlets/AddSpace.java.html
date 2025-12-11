@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AddSpace.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.servlets</a> &gt; <span class="el_source">AddSpace.java</span></div><h1>AddSpace.java</h1><pre class="source lang-java linenums">package org.starexec.servlets;
+
+import org.starexec.constants.R;
+import org.starexec.data.database.*;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.*;
+import org.starexec.logger.StarLogger;
+import org.starexec.util.SessionUtil;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Servlet which handles incoming requests adding new spaces
+ *
+ * @author Tyler Jensen
+ */
+@SuppressWarnings(&quot;JavadocReference&quot;)
+<span class="nc" id="L29">public class AddSpace extends HttpServlet {</span>
+<span class="nc" id="L30">	private static final StarLogger log = StarLogger.getLogger(AddSpace.class);</span>
+
+	// Request attributes
+	private static final String parentSpace = &quot;parent&quot;;
+	private static final String name = &quot;name&quot;;
+	private static final String description = &quot;desc&quot;;
+	private static final String locked = &quot;locked&quot;;
+	private static final String users = &quot;users&quot;;
+	private static final String solvers = &quot;solvers&quot;;
+	private static final String benchmarks = &quot;benchmarks&quot;;
+	private static final String addSolver = &quot;addSolver&quot;;
+	private static final String addBench = &quot;addBench&quot;;
+	private static final String addUser = &quot;addUser&quot;;
+	private static final String addSpace = &quot;addSpace&quot;;
+	private static final String addJob = &quot;addJob&quot;;
+	private static final String removeSolver = &quot;removeSolver&quot;;
+	private static final String removeBench = &quot;removeBench&quot;;
+	private static final String removeUser = &quot;removeUser&quot;;
+	private static final String removeSpace = &quot;removeSpace&quot;;
+	private static final String removeJob = &quot;removeJob&quot;;
+	private static final String stickyLeaders = &quot;sticky&quot;;
+
+	/**
+	 * @see HttpServlet#doGet(HttpServletRequest request, HttpServletResponse response)
+	 */
+	protected void doGet(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+<span class="nc" id="L57">		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);</span>
+<span class="nc" id="L58">	}</span>
+
+	/**
+	 * @see HttpServlet#doPost(HttpServletRequest request, HttpServletResponse response)
+	 */
+	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
+		try {
+			// Make sure the request is valid
+<span class="nc" id="L67">			ValidatorStatusCode status = isValid(request);</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">			if (!status.isSuccess()) {</span>
+				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
+				// Encode to satisfy RFC 6265 (no spaces or illegal chars in cookie value)
+<span class="nc bnc" id="L71" title="All 2 branches missed.">				String rawMsg = status.getMessage() == null ? &quot;&quot; : status.getMessage();</span>
+<span class="nc" id="L72">				String encodedMsg = URLEncoder.encode(rawMsg, StandardCharsets.UTF_8.name());</span>
+<span class="nc" id="L73">				Cookie statusCookie = new Cookie(R.STATUS_MESSAGE_COOKIE, encodedMsg);</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">				statusCookie.setPath(request.getContextPath().isEmpty() ? &quot;/&quot; : request.getContextPath());</span>
+<span class="nc" id="L75">				response.addCookie(statusCookie);</span>
+<span class="nc" id="L76">				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());</span>
+<span class="nc" id="L77">				return;</span>
+			}
+
+<span class="nc" id="L80">			int spaceId = Integer.parseInt((String) request.getParameter(parentSpace));</span>
+<span class="nc" id="L81">			int userId = SessionUtil.getUserId(request);</span>
+
+			// Make the space to be added and set it's basic information
+<span class="nc" id="L84">			Space s = new Space();</span>
+<span class="nc" id="L85">			s.setName((String) request.getParameter(name));</span>
+<span class="nc" id="L86">			s.setDescription((String) request.getParameter(description));</span>
+<span class="nc" id="L87">			s.setLocked(Boolean.parseBoolean((String) request.getParameter(locked)));</span>
+<span class="nc" id="L88">			s.setStickyLeaders(Boolean.parseBoolean((String) request.getParameter(stickyLeaders)));</span>
+<span class="nc" id="L89">			s.setParentSpace(spaceId);</span>
+
+			// Make the default permissions for the space to be added
+<span class="nc" id="L92">			Permission p = new Permission();</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">			p.setAddBenchmark(request.getParameter(addBench) != null);</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">			p.setAddSolver(request.getParameter(addSolver) != null);</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">			p.setAddSpace(request.getParameter(addSpace) != null);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">			p.setAddUser(request.getParameter(addUser) != null);</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">			p.setAddJob(request.getParameter(addJob) != null);</span>
+
+<span class="nc bnc" id="L99" title="All 2 branches missed.">			p.setRemoveBench(request.getParameter(removeBench) != null);</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">			p.setRemoveSolver(request.getParameter(removeSolver) != null);</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">			p.setRemoveSpace(request.getParameter(removeSpace) != null);</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">			p.setRemoveUser(request.getParameter(removeUser) != null);</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">			p.setRemoveJob(request.getParameter(removeJob) != null);</span>
+<span class="nc" id="L104">			p.setLeader(false);</span>
+			// Set the default permission on the space
+<span class="nc" id="L106">			s.setPermission(p);</span>
+
+<span class="nc" id="L108">			int newSpaceId = Spaces.add(s, userId);</span>
+
+			//Inherit Users
+<span class="nc" id="L111">			boolean inheritUsers = Boolean.parseBoolean((String) request.getParameter(users));</span>
+<span class="nc" id="L112">			log.debug(&quot;inheritUsers = &quot; + inheritUsers);</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">			if (inheritUsers) {</span>
+<span class="nc" id="L114">				log.debug(&quot;Adding inherited users&quot;);</span>
+<span class="nc" id="L115">				List&lt;User&gt; users = Spaces.getUsers(spaceId);</span>
+<span class="nc" id="L116">				log.debug(&quot;parent users = &quot; + users);</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">				for (User u : users) {</span>
+<span class="nc" id="L118">					log.debug(&quot;users = &quot; + u.getFirstName());</span>
+<span class="nc" id="L119">					int tempId = u.getId();</span>
+<span class="nc" id="L120">					Users.associate(tempId, newSpaceId);</span>
+<span class="nc" id="L121">				}</span>
+			}
+
+<span class="nc" id="L124">			boolean inheritSolvers = Boolean.parseBoolean((String) request.getParameter(solvers));</span>
+<span class="nc" id="L125">			log.debug(&quot;inheritSolvers = &quot; + inheritSolvers);</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">			if (inheritSolvers) {</span>
+<span class="nc" id="L127">				log.debug(&quot;Adding inherited solvers&quot;);</span>
+<span class="nc" id="L128">				List&lt;Solver&gt; solvers = Solvers.getBySpace(spaceId);</span>
+<span class="nc" id="L129">				log.debug(&quot;parent solvers = &quot; + solvers);</span>
+<span class="nc" id="L130">				log.debug(&quot;parent solvers size = &quot; + solvers.size());</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">				for (Solver solver : solvers) {</span>
+<span class="nc" id="L132">					log.debug(&quot;solvers = &quot; + solver.getName());</span>
+<span class="nc" id="L133">					Solvers.associate(solver.getId(), newSpaceId);</span>
+<span class="nc" id="L134">				}</span>
+			}
+
+<span class="nc" id="L137">			boolean inheritBenchmarks = Boolean.parseBoolean((String) request.getParameter(benchmarks));</span>
+<span class="nc" id="L138">			log.debug(&quot;inheritBenchmarks = &quot; + inheritBenchmarks);</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">			if (inheritBenchmarks) {</span>
+<span class="nc" id="L140">				log.debug(&quot;Adding inherited benchmarks&quot;);</span>
+<span class="nc" id="L141">				List&lt;Benchmark&gt; benchmarks = Benchmarks.getBySpace(spaceId);</span>
+<span class="nc" id="L142">				log.debug(&quot;parent benchmarks = &quot; + benchmarks);</span>
+<span class="nc" id="L143">				log.debug(&quot;parent benchmarks size = &quot; + benchmarks.size());</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">				for (Benchmark benchmark : benchmarks) {</span>
+<span class="nc" id="L145">					log.debug(&quot;benchmarks = &quot; + benchmark.getName());</span>
+<span class="nc" id="L146">					Benchmarks.associate(benchmark.getId(), newSpaceId);</span>
+<span class="nc" id="L147">				}</span>
+			}
+
+
+		//adds sticky users from ancestor spaces
+<span class="nc" id="L152">		log.debug(&quot;adding leaders from parent spaces&quot;);</span>
+<span class="nc" id="L153">		Set&lt;Integer&gt; stickyUsers = Spaces.getStickyLeaders(newSpaceId);</span>
+<span class="nc" id="L154">		Permission perm = Permissions.getFullPermission();</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">		for (Integer id : stickyUsers) {</span>
+<span class="nc" id="L156">			Users.associate(id, newSpaceId);</span>
+<span class="nc" id="L157">			Permissions.set(id, newSpaceId, perm);</span>
+<span class="nc" id="L158">		}</span>
+		
+		// Also add ALL leaders from the direct parent space
+		// This ensures that community leaders can see subspaces created after their promotion
+<span class="nc" id="L162">		log.debug(&quot;adding leaders from parent space (spaceId=&quot; + spaceId + &quot;)&quot;);</span>
+<span class="nc" id="L163">		List&lt;User&gt; parentLeaders = Spaces.getLeaders(spaceId);</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">		for (User leader : parentLeaders) {</span>
+<span class="nc" id="L165">			int leaderId = leader.getId();</span>
+			// Only add if not already added by sticky leaders logic
+<span class="nc bnc" id="L167" title="All 2 branches missed.">			if (!stickyUsers.contains(leaderId)) {</span>
+<span class="nc" id="L168">				log.debug(&quot;Adding parent leader &quot; + leader.getEmail() + &quot; to new subspace&quot;);</span>
+<span class="nc" id="L169">				Users.associate(leaderId, newSpaceId);</span>
+<span class="nc" id="L170">				Permissions.set(leaderId, newSpaceId, perm);</span>
+			}
+<span class="nc" id="L172">		} try {</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">			if (Communities.isCommunity(newSpaceId)) {</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">				if (Communities.isCommunity(newSpaceId)) {</span>
+<span class="nc" id="L175">					Communities.createUsersSpace(newSpaceId);</span>
+				}
+			}
+<span class="nc" id="L178">		} catch (Exception e) {</span>
+<span class="nc" id="L179">			log.error(&quot;doPost&quot;, &quot;Error creating Users subspace&quot;, e);</span>
+<span class="nc" id="L180">			}</span>
+
+<span class="nc bnc" id="L182" title="All 2 branches missed.">			if (newSpaceId &lt;= 0) {</span>
+				// If it failed, notify an error
+<span class="nc" id="L184">				response.sendError(</span>
+						HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+						&quot;There was an internal error adding the space to the starexec database&quot;
+				);
+			} else {
+				// On success, redirect to the space explorer so they can see changes
+<span class="nc" id="L190">				response.addCookie(new Cookie(&quot;New_ID&quot;, String.valueOf(newSpaceId)));</span>
+<span class="nc" id="L191">				response.sendRedirect(Util.docRoot(&quot;secure/explore/spaces.jsp&quot;));</span>
+			}
+<span class="nc" id="L193">		} catch (Exception e) {</span>
+<span class="nc" id="L194">			log.warn(&quot;Caught Exception in AddSpace.doPost&quot;, e);</span>
+<span class="nc" id="L195">			throw e;</span>
+<span class="nc" id="L196">		}</span>
+<span class="nc" id="L197">	}</span>
+
+	/**
+	 * Uses the Validate util to ensure the incoming request is valid. This checks for illegal characters and content
+	 * length requirements to ensure it is not malicious.
+	 *
+	 * @return True if the request is ok to act on, false otherwise
+	 */
+	private ValidatorStatusCode isValid(HttpServletRequest request) {
+		try {
+<span class="nc" id="L207">			final String methodName = &quot;isValid&quot;;</span>
+<span class="nc" id="L208">			log.entry(methodName);</span>
+			// Make sure the parent space id is a int
+<span class="nc bnc" id="L210" title="All 2 branches missed.">			if (!Validator.isValidPosInteger(request.getParameter(parentSpace))) {</span>
+<span class="nc" id="L211">				log.warn(methodName, &quot;Invalid parent space ID: &quot; + request.getParameter(parentSpace));</span>
+<span class="nc" id="L212">				return new ValidatorStatusCode(false, &quot;The space ID needs to be an integer&quot;);</span>
+			}
+<span class="nc" id="L214">			int spaceId = Integer.parseInt(request.getParameter(parentSpace));</span>
+<span class="nc" id="L215">			log.debug(methodName, &quot;Parent space ID: &quot; + spaceId);</span>
+
+			// Get name parameter early and validate null/blank before calling Validator (prevents NPE)
+<span class="nc" id="L218">			String n = request.getParameter(name);</span>
+<span class="nc" id="L219">			log.debug(methodName, &quot;Space name: &quot; + n);</span>
+<span class="nc bnc" id="L220" title="All 4 branches missed.">			if (n == null || n.trim().isEmpty()) {</span>
+<span class="nc" id="L221">				log.warn(methodName, &quot;Space name is null or empty&quot;);</span>
+<span class="nc" id="L222">				return new ValidatorStatusCode(false, &quot;A name is required for the new space&quot;);</span>
+			}
+<span class="nc bnc" id="L224" title="All 2 branches missed.">			if (!Validator.isValidSpaceName(n)) {</span>
+<span class="nc" id="L225">				log.warn(methodName, &quot;Invalid space name: &quot; + n);</span>
+<span class="nc" id="L226">				return new ValidatorStatusCode(</span>
+						false, &quot;The given name is invalid-- please reference the help pages to see valid space names&quot;);
+			}
+
+			// Description: allow empty but avoid passing null to validator
+<span class="nc" id="L231">			String desc = request.getParameter(description);</span>
+<span class="nc" id="L232">			log.debug(methodName, &quot;Space description: &quot; + desc);</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">			if (desc == null) {</span>
+<span class="nc" id="L234">				desc = &quot;&quot;;</span>
+			}
+<span class="nc bnc" id="L236" title="All 2 branches missed.">			if (!Validator.isValidPrimDescription(desc)) {</span>
+<span class="nc" id="L237">				log.warn(methodName, &quot;Invalid description: &quot; + desc);</span>
+<span class="nc" id="L238">				return new ValidatorStatusCode(</span>
+						false,
+						&quot;The given description is invalid-- please reference the help pages to see valid description names&quot;
+				);
+			}
+
+			// Ensure the isLocked value is a parseable boolean
+<span class="nc" id="L245">			String lockVal = request.getParameter(locked);</span>
+<span class="nc" id="L246">			log.debug(methodName, &quot;Locked value: &quot; + lockVal);</span>
+<span class="nc bnc" id="L247" title="All 6 branches missed.">			if (lockVal == null || (!lockVal.equals(&quot;true&quot;) &amp;&amp; !lockVal.equals(&quot;false&quot;))) {</span>
+<span class="nc" id="L248">				log.warn(methodName, &quot;Invalid locked value: &quot; + lockVal);</span>
+<span class="nc" id="L249">				return new ValidatorStatusCode(false, &quot;The 'locked' attribute needs to be either true or false&quot;);</span>
+			}
+
+			// sticky should also be a parsable boolean
+<span class="nc" id="L253">			String sticky = request.getParameter(stickyLeaders);</span>
+<span class="nc" id="L254">			log.debug(methodName, &quot;Sticky leaders value: &quot; + sticky);</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">			if (sticky != null) {</span>
+<span class="nc bnc" id="L256" title="All 4 branches missed.">				if (!sticky.equals(&quot;true&quot;) &amp;&amp; !sticky.equals(&quot;false&quot;)) {</span>
+<span class="nc" id="L257">					log.warn(methodName, &quot;Invalid sticky leaders value: &quot; + sticky);</span>
+<span class="nc" id="L258">					return new ValidatorStatusCode(</span>
+							false, &quot;The 'sticky leaders' attribute needs to be either true or false&quot;);
+				}
+				// subspaces of the root can not have sticky leaders enabled
+<span class="nc bnc" id="L262" title="All 4 branches missed.">				if (spaceId == 1 &amp;&amp; sticky.equals(&quot;true&quot;)) {</span>
+<span class="nc" id="L263">					log.warn(methodName, &quot;Attempted to enable sticky leaders on a community&quot;);</span>
+<span class="nc" id="L264">					return new ValidatorStatusCode(false, &quot;Communities may not enable the sticky leaders option&quot;);</span>
+				}
+			}
+
+			// Verify this user can add spaces to this space
+<span class="nc" id="L269">			Permission p = SessionUtil.getPermission(request, spaceId);</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">			if (p == null || !p.canAddSpace()) {</span>
+<span class="nc" id="L271">				log.warn(methodName, &quot;User does not have permission to add a space here.&quot;);</span>
+<span class="nc" id="L272">				return new ValidatorStatusCode(false, &quot;You do not have permission to add a new space here&quot;);</span>
+			}
+
+			// Ensure subspace name uniqueness
+<span class="nc bnc" id="L276" title="All 2 branches missed.">			if (Spaces.getSubSpaceIDbyName(spaceId, n) != -1) {</span>
+<span class="nc" id="L277">				log.warn(methodName, &quot;Subspace name is not unique: &quot; + n);</span>
+<span class="nc" id="L278">				return new ValidatorStatusCode(false,</span>
+											   &quot;The subspace should have a unique name in the space. It is possible a private subspace you are not authorized to see has the same name.&quot;);
+			}
+
+			// Passed all checks
+<span class="nc" id="L283">			log.info(methodName, &quot;Validation successful&quot;);</span>
+<span class="nc" id="L284">			return new ValidatorStatusCode(true);</span>
+<span class="nc" id="L285">		} catch (Exception e) {</span>
+<span class="nc" id="L286">			log.warn(&quot;Validation error in AddSpace.isValid for parentSpace=&quot; + request.getParameter(parentSpace) + &quot;: &quot; +</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">					 (e.getMessage()==null?e.getClass().getName():e.getMessage()), e);</span>
+		}
+
+		// Return false if control flow is broken and ends up here
+<span class="nc" id="L291">		return new ValidatorStatusCode(false, &quot;Internal error processing request&quot;);</span>
+	}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

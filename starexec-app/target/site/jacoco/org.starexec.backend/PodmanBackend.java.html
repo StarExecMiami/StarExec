@@ -1,0 +1,1595 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PodmanBackend.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">StarExec Application</a> &gt; <a href="index.source.html" class="el_package">org.starexec.backend</a> &gt; <span class="el_source">PodmanBackend.java</span></div><h1>PodmanBackend.java</h1><pre class="source lang-java linenums">package org.starexec.backend;
+
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.exception.NotModifiedException;
+import com.github.dockerjava.api.model.Bind;
+import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.model.HostConfig;
+import com.github.dockerjava.api.model.Volume;
+import com.github.dockerjava.core.DefaultDockerClientConfig;
+import com.github.dockerjava.core.DockerClientConfig;
+import com.github.dockerjava.core.DockerClientImpl;
+import com.github.dockerjava.zerodep.ZerodepDockerHttpClient;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import org.starexec.config.EnvironmentConfig;
+import org.starexec.data.database.Queues;
+import org.starexec.logger.StarLogger;
+
+/**
+ * Backend implementation for Docker/Podman container execution.
+ *
+ * This backend uses the Docker-out-of-Docker (DooD) pattern to communicate
+ * with the container engine on the host via a mounted socket. This allows
+ * StarExec (running in a container) to create sibling containers for job
+ * execution without requiring privileged mode.
+ *
+ * &lt;h2&gt;Architecture&lt;/h2&gt;
+ * &lt;p&gt;
+ * This backend implements the {@link Backend} interface, focusing only on
+ * job execution capabilities. Queue and node management methods inherited from
+ * the legacy SGE-oriented interface are no-ops, as containerized execution
+ * does not use traditional cluster concepts.
+ * &lt;/p&gt;
+ *
+ * &lt;h2&gt;Performance Optimization&lt;/h2&gt;
+ * &lt;p&gt;
+ * By default, this backend uses &lt;b&gt;volume mounting&lt;/b&gt; instead of per-job
+ * image building. Job artifacts (solver, processors, benchmarks) are mounted
+ * into a pre-warmed base container at runtime, reducing job startup latency
+ * from seconds to milliseconds.
+ * &lt;/p&gt;
+ *
+ * &lt;h2&gt;Configuration&lt;/h2&gt;
+ * &lt;p&gt;
+ * All settings are externalized via {@link EnvironmentConfig}:
+ * &lt;/p&gt;
+ * &lt;ul&gt;
+ * &lt;li&gt;{@code STAREXEC_CONTAINER_SOCKET} - Container engine socket path&lt;/li&gt;
+ * &lt;li&gt;{@code STAREXEC_CONTAINER_JOB_IMAGE} - Pre-built job runner image&lt;/li&gt;
+ * &lt;li&gt;{@code STAREXEC_CONTAINER_USE_PREBUILT} - Enable volume mounting
+ * mode&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;h2&gt;Security&lt;/h2&gt;
+ * &lt;p&gt;
+ * Jobs run as non-root user inside containers. The DooD pattern requires
+ * mounting the host's container socket, which grants container management
+ * access. Ensure proper access controls on the socket.
+ * &lt;/p&gt;
+ *
+ * @see Backend
+ * @see EnvironmentConfig
+ */
+<span class="fc" id="L72">public class PodmanBackend implements Backend {</span>
+
+<span class="fc" id="L74">    private static final StarLogger log = StarLogger.getLogger(</span>
+        PodmanBackend.class
+    );
+
+    // Container engine client
+    private DockerClient dockerClient;
+
+    // Container name prefix for easy identification
+    private static final String CONTAINER_PREFIX = &quot;starexec-job-&quot;;
+
+    // Label keys for container management
+    private static final String LABEL_PAIR_ID = &quot;starexec.pair.id&quot;;
+    private static final String LABEL_MANAGED = &quot;starexec.managed&quot;;
+
+    // Configuration (loaded from EnvironmentConfig)
+    private String containerSocketPath;
+    private String baseImage;
+    private String jobImage;
+    private boolean usePrebuiltImage;
+    private long defaultMemoryMb;
+    private int defaultCpuLimit;
+    private int defaultWallclockLimit;
+
+    // DooD (Docker-outside-of-Docker) path translation
+    // Maps container paths to host paths for volume mounts
+    private String hostDataPath;
+    private String containerDataPath;
+
+    // Thread-safe mapping of execution IDs to container IDs
+<span class="fc" id="L103">    private final Map&lt;Integer, String&gt; execIdToContainerId =</span>
+        new ConcurrentHashMap&lt;&gt;();
+
+    // Atomic counter for execution IDs
+<span class="fc" id="L107">    private int nextExecId = 1000;</span>
+<span class="fc" id="L108">    private final Object execIdLock = new Object();</span>
+
+    // Monitor for processing completed container jobs
+    private ContainerJobMonitor jobMonitor;
+
+    /**
+     * Initializes the Docker/Podman client.
+     *
+     * &lt;p&gt;
+     * Configuration is loaded from environment variables via
+     * {@link EnvironmentConfig}:
+     * &lt;/p&gt;
+     * &lt;ul&gt;
+     * &lt;li&gt;{@code STAREXEC_CONTAINER_SOCKET} - Socket path (default:
+     * unix:///var/run/docker.sock)&lt;/li&gt;
+     * &lt;li&gt;{@code STAREXEC_CONTAINER_JOB_IMAGE} - Pre-built job image&lt;/li&gt;
+     * &lt;li&gt;{@code STAREXEC_CONTAINER_USE_PREBUILT} - Use volume mounting (default:
+     * true)&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param backendRoot Not used for container backend, but required by interface
+     */
+    @Override
+    public void initialize(String backendRoot) {
+        try {
+<span class="nc" id="L133">            log.info(&quot;Initializing PodmanBackend...&quot;);</span>
+
+            // Load configuration from environment
+<span class="nc" id="L136">            loadConfiguration();</span>
+
+<span class="nc" id="L138">            log.info(&quot;Container socket: &quot; + containerSocketPath);</span>
+<span class="nc" id="L139">            log.info(&quot;Use prebuilt image: &quot; + usePrebuiltImage);</span>
+<span class="nc" id="L140">            log.info(</span>
+                &quot;Job image: &quot; +
+<span class="nc bnc" id="L142" title="All 2 branches missed.">                    (usePrebuiltImage ? jobImage : baseImage + &quot; (JIT build)&quot;)</span>
+            );
+
+            // Configure Docker client with externalized socket path
+            DockerClientConfig config =
+<span class="nc" id="L147">                DefaultDockerClientConfig.createDefaultConfigBuilder()</span>
+<span class="nc" id="L148">                    .withDockerHost(containerSocketPath)</span>
+<span class="nc" id="L149">                    .build();</span>
+
+            // Create HTTP client with zerodep implementation (pure Java, no external dependencies)
+            // This avoids intermittent &quot;Broken pipe&quot; errors seen with httpclient5
+<span class="nc" id="L153">            ZerodepDockerHttpClient httpClient =</span>
+                new ZerodepDockerHttpClient.Builder()
+<span class="nc" id="L155">                    .dockerHost(config.getDockerHost())</span>
+<span class="nc" id="L156">                    .maxConnections(</span>
+<span class="nc" id="L157">                        EnvironmentConfig.getContainerMaxConnections()</span>
+                    )
+<span class="nc" id="L159">                    .connectionTimeout(</span>
+<span class="nc" id="L160">                        Duration.ofSeconds(</span>
+<span class="nc" id="L161">                            EnvironmentConfig.getContainerConnectionTimeout()</span>
+                        )
+                    )
+<span class="nc" id="L164">                    .responseTimeout(</span>
+<span class="nc" id="L165">                        Duration.ofSeconds(</span>
+<span class="nc" id="L166">                            EnvironmentConfig.getContainerResponseTimeout()</span>
+                        )
+                    )
+<span class="nc" id="L169">                    .build();</span>
+
+<span class="nc" id="L171">            this.dockerClient = DockerClientImpl.getInstance(</span>
+                config,
+                httpClient
+            );
+
+            // Test connection
+<span class="nc" id="L177">            String engineVersion = dockerClient</span>
+<span class="nc" id="L178">                .versionCmd()</span>
+<span class="nc" id="L179">                .exec()</span>
+<span class="nc" id="L180">                .getVersion();</span>
+<span class="nc" id="L181">            log.info(</span>
+                &quot;PodmanBackend initialized successfully. Engine version: &quot; +
+                    engineVersion
+            );
+
+            // Check for job runner image if using prebuilt mode
+<span class="nc bnc" id="L187" title="All 2 branches missed.">            if (usePrebuiltImage) {</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">                if (!ensureImageExists(jobImage)) {</span>
+<span class="nc" id="L189">                    log.warn(</span>
+                        &quot;Job runner image not available. Jobs will fail until image is built.&quot;
+                    );
+<span class="nc" id="L192">                    log.warn(&quot;To build locally: make build-job-runner&quot;);</span>
+                }
+            }
+
+            // Ensure a virtual queue exists for container jobs
+<span class="nc" id="L197">            ensureContainerQueueExists();</span>
+
+            // Start the job completion monitor
+<span class="nc" id="L200">            this.jobMonitor = new ContainerJobMonitor(this);</span>
+<span class="nc" id="L201">            this.jobMonitor.start();</span>
+<span class="nc" id="L202">            log.info(&quot;ContainerJobMonitor started&quot;);</span>
+<span class="nc" id="L203">        } catch (Exception e) {</span>
+<span class="nc" id="L204">            log.error(&quot;Fatal error initializing PodmanBackend&quot;, e);</span>
+<span class="nc" id="L205">            throw new IllegalStateException(</span>
+                &quot;Could not connect to the container engine. &quot; +
+                    &quot;Ensure the socket is available at: &quot; +
+                    containerSocketPath,
+                e
+            );
+<span class="nc" id="L211">        }</span>
+<span class="nc" id="L212">    }</span>
+
+    /**
+     * Container queue name used for all container-based job execution.
+     * This is a virtual queue that exists only in the database to satisfy
+     * the job submission form requirements.
+     */
+    public static final String CONTAINER_QUEUE_NAME = &quot;container.q&quot;;
+
+    /**
+     * Virtual worker node name for container-based job execution.
+     * This node doesn't represent a physical machine but satisfies the
+     * JobManager's requirement for at least one node associated with a queue.
+     */
+    public static final String CONTAINER_WORKER_NODE = &quot;container-worker-1&quot;;
+
+    /**
+     * Ensures a virtual queue exists for container job submission.
+     * &lt;p&gt;
+     * The StarExec job submission UI requires a queue selection, but container
+     * backends don't use traditional SGE queues. This method creates a virtual
+     * &quot;container.q&quot; queue with generous timeout limits that serves as the
+     * target for all container-based jobs.
+     * &lt;/p&gt;
+     */
+    private void ensureContainerQueueExists() {
+        try {
+            // Check if container queue already exists
+<span class="nc bnc" id="L240" title="All 2 branches missed.">            if (Queues.getIdByName(CONTAINER_QUEUE_NAME) &gt; 0) {</span>
+<span class="nc" id="L241">                log.info(</span>
+                    &quot;Container queue '&quot; +
+                        CONTAINER_QUEUE_NAME +
+                        &quot;' already exists&quot;
+                );
+<span class="nc" id="L246">                return;</span>
+            }
+
+            // Create virtual queue with generous limits
+            // CPU and wallclock limits are enforced by the container, not the queue
+<span class="nc" id="L251">            int cpuTimeout = 86400; // 24 hours max</span>
+<span class="nc" id="L252">            int wallTimeout = 86400; // 24 hours max</span>
+
+<span class="nc" id="L254">            int queueId = Queues.add(</span>
+                CONTAINER_QUEUE_NAME,
+                cpuTimeout,
+                wallTimeout
+            );
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            if (queueId &gt; 0) {</span>
+                // Make queue globally accessible
+<span class="nc" id="L261">                Queues.makeGlobal(queueId);</span>
+<span class="nc" id="L262">                Queues.setStatus(CONTAINER_QUEUE_NAME, &quot;ACTIVE&quot;);</span>
+<span class="nc" id="L263">                log.info(</span>
+                    &quot;Created container queue '&quot; +
+                        CONTAINER_QUEUE_NAME +
+                        &quot;' with ID: &quot; +
+                        queueId
+                );
+            } else {
+<span class="nc" id="L270">                log.warn(</span>
+                    &quot;Failed to create container queue - job submission may fail&quot;
+                );
+            }
+<span class="nc" id="L274">        } catch (Exception e) {</span>
+<span class="nc" id="L275">            log.warn(&quot;Error creating container queue: &quot; + e.getMessage());</span>
+            // Don't fail initialization - the queue might be created by another process
+<span class="nc" id="L277">        }</span>
+<span class="nc" id="L278">    }</span>
+
+    /**
+     * Loads configuration from EnvironmentConfig.
+     */
+    private void loadConfiguration() {
+<span class="nc" id="L284">        containerSocketPath = EnvironmentConfig.getContainerSocketPath();</span>
+<span class="nc" id="L285">        baseImage = EnvironmentConfig.getContainerBaseImage();</span>
+<span class="nc" id="L286">        jobImage = EnvironmentConfig.getContainerJobImage();</span>
+<span class="nc" id="L287">        usePrebuiltImage = EnvironmentConfig.getContainerUsePrebuiltImage();</span>
+<span class="nc" id="L288">        defaultMemoryMb = EnvironmentConfig.getContainerDefaultMemoryMb();</span>
+<span class="nc" id="L289">        defaultCpuLimit = EnvironmentConfig.getContainerDefaultCpuLimit();</span>
+<span class="nc" id="L290">        defaultWallclockLimit =</span>
+<span class="nc" id="L291">            EnvironmentConfig.getContainerDefaultWallclockLimit();</span>
+
+        // DooD path translation configuration
+<span class="nc" id="L294">        hostDataPath = EnvironmentConfig.getContainerHostDataPath();</span>
+<span class="nc" id="L295">        containerDataPath = EnvironmentConfig.getContainerDataPath();</span>
+
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        if (!hostDataPath.isEmpty()) {</span>
+<span class="nc" id="L298">            log.info(</span>
+                &quot;DooD path translation enabled: &quot; +
+                    containerDataPath +
+                    &quot; -&gt; &quot; +
+                    hostDataPath
+            );
+        } else {
+<span class="nc" id="L305">            log.info(</span>
+                &quot;DooD path translation disabled (host and container paths are same)&quot;
+            );
+        }
+<span class="nc" id="L309">    }</span>
+
+    /**
+     * Ensures the specified image exists locally, pulling if necessary.
+     * If the image cannot be pulled (e.g., network issues, private registry),
+     * logs a warning but does not fail initialization.
+     *
+     * @param imageName The image name to check/pull
+     * @return true if image exists or was pulled, false otherwise
+     */
+    private boolean ensureImageExists(String imageName) {
+        try {
+<span class="nc" id="L321">            dockerClient.inspectImageCmd(imageName).exec();</span>
+<span class="nc" id="L322">            log.info(&quot;Image already exists locally: &quot; + imageName);</span>
+<span class="nc" id="L323">            return true;</span>
+<span class="nc" id="L324">        } catch (NotFoundException e) {</span>
+<span class="nc" id="L325">            log.info(</span>
+                &quot;Image not found locally, attempting to pull: &quot; + imageName
+            );
+            try {
+<span class="nc" id="L329">                dockerClient.pullImageCmd(imageName).start().awaitCompletion();</span>
+<span class="nc" id="L330">                log.info(&quot;Image pulled successfully: &quot; + imageName);</span>
+<span class="nc" id="L331">                return true;</span>
+<span class="nc" id="L332">            } catch (InterruptedException ie) {</span>
+<span class="nc" id="L333">                Thread.currentThread().interrupt();</span>
+<span class="nc" id="L334">                log.warn(&quot;Image pull interrupted: &quot; + imageName);</span>
+<span class="nc" id="L335">                return false;</span>
+<span class="nc" id="L336">            } catch (Exception pullEx) {</span>
+<span class="nc" id="L337">                log.warn(</span>
+                    &quot;Could not pull image '&quot; +
+                        imageName +
+                        &quot;': &quot; +
+<span class="nc" id="L341">                        pullEx.getMessage()</span>
+                );
+<span class="nc" id="L343">                log.warn(</span>
+                    &quot;Container jobs will fail until image is available. &quot; +
+                        &quot;Build locally with: make build-job-runner&quot;
+                );
+<span class="nc" id="L347">                return false;</span>
+            }
+        }
+    }
+
+    /**
+     * Releases resources and cleans up.
+     */
+    @Override
+    public void destroyIf() {
+        // Stop the job monitor first
+<span class="pc bpc" id="L358" title="1 of 2 branches missed.">        if (jobMonitor != null) {</span>
+            try {
+<span class="nc" id="L360">                jobMonitor.stop();</span>
+<span class="nc" id="L361">                log.info(&quot;ContainerJobMonitor stopped&quot;);</span>
+<span class="nc" id="L362">            } catch (Exception e) {</span>
+<span class="nc" id="L363">                log.warn(&quot;Error stopping ContainerJobMonitor&quot;, e);</span>
+<span class="nc" id="L364">            }</span>
+        }
+
+<span class="pc bpc" id="L367" title="1 of 2 branches missed.">        if (dockerClient != null) {</span>
+            try {
+                // Clean up any orphaned StarExec containers
+<span class="fc" id="L370">                cleanupOrphanedContainers();</span>
+
+<span class="fc" id="L372">                dockerClient.close();</span>
+<span class="fc" id="L373">                dockerClient = null;</span>
+<span class="fc" id="L374">                log.info(&quot;PodmanBackend destroyed successfully.&quot;);</span>
+<span class="nc" id="L375">            } catch (Exception e) {</span>
+<span class="nc" id="L376">                log.warn(&quot;Error during PodmanBackend cleanup&quot;, e);</span>
+<span class="fc" id="L377">            }</span>
+        }
+<span class="fc" id="L379">    }</span>
+
+    @Override
+    public boolean isError(int execCode) {
+<span class="fc bfc" id="L383" title="All 2 branches covered.">        return execCode &lt; 0;</span>
+    }
+
+    /**
+     * Submits a job script for execution in a container.
+     *
+     * &lt;p&gt;
+     * This method supports two execution modes:
+     * &lt;/p&gt;
+     * &lt;ol&gt;
+     * &lt;li&gt;&lt;b&gt;Volume Mounting (default, recommended)&lt;/b&gt;: Uses a pre-built base
+     * image
+     * and mounts job artifacts as volumes. This reduces job startup time from
+     * seconds to milliseconds.&lt;/li&gt;
+     * &lt;li&gt;&lt;b&gt;JIT Building (legacy)&lt;/b&gt;: Builds a container image per job. Use this
+     * when the job requires custom dependencies not in the base image.&lt;/li&gt;
+     * &lt;/ol&gt;
+     *
+     * &lt;p&gt;
+     * Mode is controlled by {@code STAREXEC_CONTAINER_USE_PREBUILT} environment
+     * variable.
+     * &lt;/p&gt;
+     *
+     * @param scriptPath       Path to the entry script (relative to
+     *                         workingDirectory)
+     * @param workingDirectory Directory containing all job artifacts
+     * @param logPath          Directory where output should be written
+     * @return Execution ID for tracking, or negative value on error
+     */
+    @Override
+    public int submitScript(
+        String scriptPath,
+        String workingDirectory,
+        String logPath
+    ) {
+<span class="nc" id="L418">        final long timestamp = System.currentTimeMillis();</span>
+<span class="nc" id="L419">        final String baseJobName = CONTAINER_PREFIX + timestamp;</span>
+
+        // Retry logic for handling intermittent &quot;Broken pipe&quot; errors with Podman
+<span class="nc" id="L422">        final int maxRetries = 3;</span>
+<span class="nc" id="L423">        final long baseRetryDelay = 500; // milliseconds</span>
+
+<span class="nc bnc" id="L425" title="All 2 branches missed.">        for (int attempt = 1; attempt &lt;= maxRetries; attempt++) {</span>
+            // Use unique name for each retry attempt to avoid conflicts
+<span class="nc bnc" id="L427" title="All 2 branches missed.">            final String jobName = (attempt == 1)</span>
+<span class="nc" id="L428">                ? baseJobName</span>
+<span class="nc" id="L429">                : baseJobName + &quot;-retry&quot; + attempt;</span>
+
+            try {
+<span class="nc bnc" id="L432" title="All 2 branches missed.">                if (attempt &gt; 1) {</span>
+<span class="nc" id="L433">                    log.info(</span>
+                        &quot;Retry attempt &quot; +
+                            attempt +
+                            &quot; of &quot; +
+                            maxRetries +
+                            &quot; for job: &quot; +
+                            jobName
+                    );
+                }
+
+<span class="nc" id="L443">                return doSubmitScript(</span>
+                    jobName,
+                    scriptPath,
+                    workingDirectory,
+                    logPath,
+                    timestamp,
+                    attempt
+                );
+<span class="nc" id="L451">            } catch (Exception e) {</span>
+<span class="nc" id="L452">                boolean isRetryable =</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">                    e.getMessage() != null &amp;&amp;</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">                    (e.getMessage().contains(&quot;Broken pipe&quot;) ||</span>
+<span class="nc bnc" id="L455" title="All 2 branches missed.">                        e.getMessage().contains(&quot;Connection reset&quot;));</span>
+
+<span class="nc bnc" id="L457" title="All 4 branches missed.">                if (isRetryable &amp;&amp; attempt &lt; maxRetries) {</span>
+<span class="nc" id="L458">                    long delay =</span>
+<span class="nc" id="L459">                        baseRetryDelay * (long) Math.pow(2, attempt - 1);</span>
+<span class="nc" id="L460">                    log.warn(</span>
+                        &quot;Transient error on attempt &quot; +
+                            attempt +
+                            &quot; (will retry in &quot; +
+                            delay +
+                            &quot;ms): &quot; +
+<span class="nc" id="L466">                            e.getMessage()</span>
+                    );
+                    try {
+<span class="nc" id="L469">                        Thread.sleep(delay);</span>
+<span class="nc" id="L470">                    } catch (InterruptedException ie) {</span>
+<span class="nc" id="L471">                        Thread.currentThread().interrupt();</span>
+<span class="nc" id="L472">                        log.error(&quot;Interrupted during retry delay&quot;);</span>
+<span class="nc" id="L473">                        return -1;</span>
+<span class="nc" id="L474">                    }</span>
+<span class="nc" id="L475">                } else {</span>
+<span class="nc" id="L476">                    log.error(</span>
+                        &quot;Error submitting job: &quot; +
+                            jobName +
+                            &quot; (attempt &quot; +
+                            attempt +
+                            &quot; of &quot; +
+                            maxRetries +
+                            &quot;)&quot;
+                    );
+<span class="nc" id="L485">                    log.error(&quot;Exception type: &quot; + e.getClass().getName());</span>
+<span class="nc" id="L486">                    log.error(&quot;Message: &quot; + e.getMessage());</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">                    if (e.getCause() != null) {</span>
+<span class="nc" id="L488">                        log.error(</span>
+                            &quot;Cause: &quot; +
+<span class="nc" id="L490">                                e.getCause().getClass().getName() +</span>
+                                &quot; - &quot; +
+<span class="nc" id="L492">                                e.getCause().getMessage()</span>
+                        );
+                    }
+<span class="nc" id="L495">                    return -1;</span>
+                }
+            }
+        }
+<span class="nc" id="L499">        return -1; // Should not reach here</span>
+    }
+
+    /**
+     * Internal method to actually submit the job script.
+     */
+    private int doSubmitScript(
+        String jobName,
+        String scriptPath,
+        String workingDirectory,
+        String logPath,
+        long timestamp,
+        int attempt
+    ) throws Exception {
+<span class="nc" id="L513">        log.info(&quot;Submitting job: &quot; + jobName);</span>
+<span class="nc" id="L514">        log.debug(&quot;Working directory: &quot; + workingDirectory);</span>
+<span class="nc" id="L515">        log.debug(&quot;Script path: &quot; + scriptPath);</span>
+<span class="nc" id="L516">        log.debug(&quot;Log path: &quot; + logPath);</span>
+
+        // Ensure log directory exists (use the directory part of logPath, as it may be a file path)
+<span class="nc" id="L519">        Path logDir = Paths.get(logPath).getParent();</span>
+<span class="nc bnc" id="L520" title="All 2 branches missed.">        if (logDir != null) {</span>
+<span class="nc" id="L521">            Files.createDirectories(logDir);</span>
+        }
+
+        String imageName;
+<span class="nc bnc" id="L525" title="All 2 branches missed.">        if (usePrebuiltImage) {</span>
+            // Use pre-built image with volume mounting (fast path)
+<span class="nc" id="L527">            imageName = jobImage;</span>
+<span class="nc" id="L528">            log.debug(</span>
+                &quot;Using prebuilt image with volume mounting: &quot; + imageName
+            );
+        } else {
+            // Build image per job (legacy JIT path)
+<span class="nc" id="L533">            imageName = &quot;starexec/job:&quot; + timestamp;</span>
+<span class="nc" id="L534">            buildJobImage(workingDirectory, scriptPath, imageName);</span>
+        }
+
+        // Configure container with volume mounts
+<span class="nc" id="L538">        HostConfig hostConfig = createHostConfig(workingDirectory, logPath);</span>
+
+        // Get output directory for container communication (status.json, etc.)
+<span class="nc bnc" id="L541" title="All 2 branches missed.">        String outputDir = logDir != null ? logDir.toString() : &quot;/tmp/output&quot;;</span>
+
+<span class="nc" id="L543">        List&lt;String&gt; envVars = createEnvironmentVariables(</span>
+            timestamp,
+            workingDirectory,
+            outputDir
+        );
+<span class="nc" id="L548">        Map&lt;String, String&gt; labels = createContainerLabels(timestamp);</span>
+
+        // Log container creation parameters for debugging
+<span class="nc" id="L551">        log.info(&quot;Creating container with:&quot;);</span>
+<span class="nc" id="L552">        log.info(&quot;  Image: &quot; + imageName);</span>
+<span class="nc" id="L553">        log.info(&quot;  Name: &quot; + jobName);</span>
+<span class="nc" id="L554">        log.info(&quot;  Working Dir: &quot; + workingDirectory);</span>
+<span class="nc" id="L555">        log.info(&quot;  Script: &quot; + scriptPath);</span>
+<span class="nc" id="L556">        log.info(</span>
+            &quot;  Binds: &quot; +
+<span class="nc bnc" id="L558" title="All 2 branches missed.">                (hostConfig.getBinds() != null</span>
+<span class="nc" id="L559">                    ? java.util.Arrays.toString(hostConfig.getBinds())</span>
+<span class="nc" id="L560">                    : &quot;none&quot;)</span>
+        );
+<span class="nc" id="L562">        log.info(&quot;  Memory: &quot; + hostConfig.getMemory());</span>
+<span class="nc" id="L563">        log.info(&quot;  EnvVars count: &quot; + envVars.size());</span>
+<span class="nc" id="L564">        log.info(&quot;  Entrypoint: [/bin/bash]&quot;);</span>
+<span class="nc" id="L565">        log.info(&quot;  Cmd: [&quot; + scriptPath + &quot;]&quot;);</span>
+
+        // Try Java client first, fall back to curl if it fails with &quot;Broken pipe&quot;
+<span class="nc" id="L568">        String containerId = null;</span>
+        try {
+            // Create container that runs the job script directly
+            // Override entrypoint to bypass the default image entrypoint
+            // Use exec form (array) for proper entrypoint handling
+            // Set hostname to match the worker node name in the database
+<span class="nc" id="L574">            CreateContainerResponse container = dockerClient</span>
+<span class="nc" id="L575">                .createContainerCmd(imageName)</span>
+<span class="nc" id="L576">                .withName(jobName)</span>
+<span class="nc" id="L577">                .withHostName(CONTAINER_WORKER_NODE)</span>
+<span class="nc" id="L578">                .withHostConfig(hostConfig)</span>
+<span class="nc" id="L579">                .withEnv(envVars)</span>
+<span class="nc" id="L580">                .withLabels(labels)</span>
+<span class="nc" id="L581">                .withEntrypoint(new String[] { &quot;/bin/bash&quot; }) // Override image entrypoint as array</span>
+<span class="nc" id="L582">                .withCmd(scriptPath) // Pass script as argument to bash</span>
+<span class="nc" id="L583">                .withWorkingDir(workingDirectory)</span>
+<span class="nc" id="L584">                .exec();</span>
+<span class="nc" id="L585">            containerId = container.getId();</span>
+<span class="nc" id="L586">            log.info(&quot;Container created via Java client: &quot; + containerId);</span>
+<span class="nc" id="L587">        } catch (Exception e) {</span>
+            // Check for transient errors in exception chain (message or cause)
+<span class="nc" id="L589">            boolean isTransient = isTransientConnectionError(e);</span>
+<span class="nc" id="L590">            log.warn(</span>
+                &quot;Container creation failed. Transient error: &quot; +
+                    isTransient +
+                    &quot;, Exception: &quot; +
+<span class="nc" id="L594">                    e.getClass().getName()</span>
+            );
+
+<span class="nc bnc" id="L597" title="All 2 branches missed.">            if (isTransient) {</span>
+<span class="nc" id="L598">                log.warn(</span>
+                    &quot;Java client failed with transient error, falling back to curl...&quot;
+                );
+<span class="nc" id="L601">                containerId = createContainerWithCurl(</span>
+                    jobName,
+                    imageName,
+                    hostConfig,
+                    envVars,
+                    labels,
+                    scriptPath,
+                    workingDirectory
+                );
+<span class="nc" id="L610">                log.info(&quot;Container created via curl: &quot; + containerId);</span>
+            } else {
+<span class="nc" id="L612">                throw e;</span>
+            }
+<span class="nc" id="L614">        }</span>
+
+        // Start container
+<span class="nc" id="L617">        dockerClient.startContainerCmd(containerId).exec();</span>
+<span class="nc" id="L618">        log.info(&quot;Container started: &quot; + containerId);</span>
+
+        // Generate and store execution ID
+        int execId;
+<span class="nc" id="L622">        synchronized (execIdLock) {</span>
+<span class="nc" id="L623">            execId = nextExecId++;</span>
+<span class="nc" id="L624">        }</span>
+<span class="nc" id="L625">        execIdToContainerId.put(execId, containerId);</span>
+
+        // Notify the job monitor that new work has been submitted
+        // This resets the adaptive poll interval to base for responsive job detection
+<span class="nc bnc" id="L629" title="All 2 branches missed.">        if (jobMonitor != null) {</span>
+<span class="nc" id="L630">            jobMonitor.notifyNewWorkSubmitted();</span>
+        }
+
+<span class="nc" id="L633">        log.info(</span>
+            &quot;Job submitted successfully. ExecId: &quot; +
+                execId +
+                &quot;, ContainerId: &quot; +
+                containerId
+        );
+<span class="nc" id="L639">        return execId;</span>
+    }
+
+    /**
+     * Builds a container image for the job (legacy JIT mode).
+     *
+     * &lt;p&gt;
+     * This method is only called when {@code usePrebuiltImage} is false.
+     * For production workloads, prefer volume mounting with a prebuilt image.
+     * &lt;/p&gt;
+     */
+    private void buildJobImage(
+        String workingDirectory,
+        String scriptPath,
+        String imageName
+    ) throws IOException {
+        // Create Dockerfile dynamically
+<span class="nc" id="L656">        String dockerfileContent = generateDockerfile(scriptPath);</span>
+<span class="nc" id="L657">        Path dockerfilePath = Paths.get(workingDirectory, &quot;Dockerfile&quot;);</span>
+<span class="nc" id="L658">        Files.writeString(dockerfilePath, dockerfileContent);</span>
+<span class="nc" id="L659">        log.debug(&quot;Dockerfile created at: &quot; + dockerfilePath);</span>
+
+        // Build the container image
+<span class="nc" id="L662">        log.info(&quot;Building container image (JIT mode): &quot; + imageName);</span>
+<span class="nc" id="L663">        String imageId = dockerClient</span>
+<span class="nc" id="L664">            .buildImageCmd()</span>
+<span class="nc" id="L665">            .withDockerfile(dockerfilePath.toFile())</span>
+<span class="nc" id="L666">            .withBaseDirectory(new File(workingDirectory))</span>
+<span class="nc" id="L667">            .withTags(Collections.singleton(imageName))</span>
+<span class="nc" id="L668">            .withNoCache(false)</span>
+<span class="nc" id="L669">            .withPull(false)</span>
+<span class="nc" id="L670">            .start()</span>
+<span class="nc" id="L671">            .awaitImageId();</span>
+
+<span class="nc" id="L673">        log.info(&quot;Image built successfully: &quot; + imageId);</span>
+<span class="nc" id="L674">    }</span>
+
+    /**
+     * Generates a Dockerfile for the job container (JIT mode only).
+     *
+     * &lt;p&gt;
+     * This Dockerfile is only used when
+     * {@code STAREXEC_CONTAINER_USE_PREBUILT=false}.
+     * For production, use a pre-built image with volume mounting instead.
+     * &lt;/p&gt;
+     *
+     * @deprecated JIT image building is deprecated. Use the pre-built Alpine image
+     *             from GHCR instead: ghcr.io/starexecmiami/starexec-job-runner:latest
+     */
+    @Deprecated
+    private String generateDockerfile(String scriptPath) {
+        // Detect if base image is Alpine or Ubuntu-based to use correct commands
+<span class="nc" id="L691">        boolean isAlpine = baseImage.contains(&quot;alpine&quot;);</span>
+
+<span class="nc bnc" id="L693" title="All 2 branches missed.">        String installDeps = isAlpine</span>
+<span class="nc" id="L694">            ? &quot;RUN apk add --no-cache bash coreutils gcompat libstdc++ libgcc&quot;</span>
+<span class="nc" id="L695">            : &quot;RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends bash coreutils &amp;&amp; rm -rf /var/lib/apt/lists/*&quot;;</span>
+
+<span class="nc bnc" id="L697" title="All 2 branches missed.">        String createUser = isAlpine</span>
+<span class="nc" id="L698">            ? &quot;RUN adduser -D -s /bin/bash starexec_user&quot;</span>
+<span class="nc" id="L699">            : &quot;RUN useradd --create-home --shell /bin/bash starexec_user&quot;;</span>
+
+<span class="nc" id="L701">        return String.join(</span>
+            &quot;\n&quot;,
+            &quot;FROM &quot; + baseImage,
+            &quot;&quot;,
+            &quot;# Install minimal runtime dependencies&quot;,
+            installDeps,
+            &quot;&quot;,
+            &quot;# Create non-root user for security&quot;,
+            createUser,
+            &quot;&quot;,
+            &quot;# Set up working directory&quot;,
+            &quot;WORKDIR /starexec&quot;,
+            &quot;&quot;,
+            &quot;# Copy all job artifacts&quot;,
+            &quot;COPY --chown=starexec_user:starexec_user . /starexec/&quot;,
+            &quot;&quot;,
+            &quot;# Make scripts executable&quot;,
+            &quot;RUN find /starexec -type f -name '*.sh' -exec chmod +x {} \\; || true&quot;,
+            &quot;RUN find /starexec -type f -name 'starexec_run' -exec chmod +x {} \\; || true&quot;,
+            &quot;RUN chmod +x /starexec/entrypoint.sh 2&gt;/dev/null || true&quot;,
+            &quot;&quot;,
+            &quot;# Switch to non-root user&quot;,
+            &quot;USER starexec_user&quot;,
+            &quot;&quot;,
+            &quot;# Set entrypoint&quot;,
+            &quot;ENTRYPOINT [\&quot;/bin/bash\&quot;, \&quot;/starexec/entrypoint.sh\&quot;]&quot;
+        );
+    }
+
+    /**
+     * Translates a container path to a host path for DooD scenarios.
+     *
+     * &lt;p&gt;
+     * When running StarExec inside a container with a mounted container socket (DooD pattern),
+     * bind mounts for job containers must reference paths on the HOST filesystem, not paths
+     * inside the StarExec container. This method translates container paths to host paths.
+     * &lt;/p&gt;
+     *
+     * @param containerPath Path inside the StarExec container (e.g., /app/data/jobin/job_1)
+     * @return Corresponding host path, or the original path if translation is disabled
+     */
+    private String translateToHostPath(String containerPath) {
+<span class="nc bnc" id="L743" title="All 2 branches missed.">        if (</span>
+            hostDataPath == null ||
+<span class="nc bnc" id="L745" title="All 4 branches missed.">            hostDataPath.isEmpty() ||</span>
+            containerDataPath == null
+        ) {
+<span class="nc" id="L748">            return containerPath;</span>
+        }
+
+<span class="nc bnc" id="L751" title="All 2 branches missed.">        if (containerPath.startsWith(containerDataPath)) {</span>
+<span class="nc" id="L752">            String relativePath = containerPath.substring(</span>
+<span class="nc" id="L753">                containerDataPath.length()</span>
+            );
+<span class="nc" id="L755">            String hostPath = hostDataPath + relativePath;</span>
+<span class="nc" id="L756">            log.debug(</span>
+                &quot;DooD path translation: &quot; + containerPath + &quot; -&gt; &quot; + hostPath
+            );
+<span class="nc" id="L759">            return hostPath;</span>
+        }
+
+<span class="nc" id="L762">        log.warn(</span>
+            &quot;Path not under data directory, cannot translate: &quot; + containerPath
+        );
+<span class="nc" id="L765">        return containerPath;</span>
+    }
+
+    /**
+     * Creates a container using curl as a fallback when the Java client fails.
+     *
+     * &lt;p&gt;
+     * This is a workaround for intermittent &quot;Broken pipe&quot; errors from the docker-java client
+     * when communicating with Podman's Docker-compatible API. Curl doesn't have this issue.
+     * &lt;/p&gt;
+     *
+     * @return The container ID
+     */
+    private String createContainerWithCurl(
+        String name,
+        String image,
+        HostConfig hostConfig,
+        List&lt;String&gt; env,
+        Map&lt;String, String&gt; labels,
+        String scriptPath,
+        String workDir
+    ) throws Exception {
+        // Build JSON payload for container creation
+<span class="nc" id="L788">        StringBuilder json = new StringBuilder();</span>
+<span class="nc" id="L789">        json.append(&quot;{&quot;);</span>
+<span class="nc" id="L790">        json.append(&quot;\&quot;Image\&quot;:\&quot;&quot;).append(escapeJson(image)).append(&quot;\&quot;,&quot;);</span>
+<span class="nc" id="L791">        json</span>
+<span class="nc" id="L792">            .append(&quot;\&quot;Hostname\&quot;:\&quot;&quot;)</span>
+<span class="nc" id="L793">            .append(escapeJson(CONTAINER_WORKER_NODE))</span>
+<span class="nc" id="L794">            .append(&quot;\&quot;,&quot;);</span>
+<span class="nc" id="L795">        json.append(&quot;\&quot;Entrypoint\&quot;:[\&quot;/bin/bash\&quot;],&quot;);</span>
+<span class="nc" id="L796">        json</span>
+<span class="nc" id="L797">            .append(&quot;\&quot;Cmd\&quot;:[\&quot;&quot;)</span>
+<span class="nc" id="L798">            .append(escapeJson(scriptPath))</span>
+<span class="nc" id="L799">            .append(&quot;\&quot;],&quot;);</span>
+<span class="nc" id="L800">        json</span>
+<span class="nc" id="L801">            .append(&quot;\&quot;WorkingDir\&quot;:\&quot;&quot;)</span>
+<span class="nc" id="L802">            .append(escapeJson(workDir))</span>
+<span class="nc" id="L803">            .append(&quot;\&quot;,&quot;);</span>
+
+        // Environment variables
+<span class="nc" id="L806">        json.append(&quot;\&quot;Env\&quot;:[&quot;);</span>
+<span class="nc bnc" id="L807" title="All 2 branches missed.">        for (int i = 0; i &lt; env.size(); i++) {</span>
+<span class="nc bnc" id="L808" title="All 2 branches missed.">            if (i &gt; 0) json.append(&quot;,&quot;);</span>
+<span class="nc" id="L809">            json.append(&quot;\&quot;&quot;).append(escapeJson(env.get(i))).append(&quot;\&quot;&quot;);</span>
+        }
+<span class="nc" id="L811">        json.append(&quot;],&quot;);</span>
+
+        // Labels
+<span class="nc" id="L814">        json.append(&quot;\&quot;Labels\&quot;:{&quot;);</span>
+<span class="nc" id="L815">        int labelIdx = 0;</span>
+<span class="nc bnc" id="L816" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; entry : labels.entrySet()) {</span>
+<span class="nc bnc" id="L817" title="All 2 branches missed.">            if (labelIdx &gt; 0) json.append(&quot;,&quot;);</span>
+<span class="nc" id="L818">            json.append(&quot;\&quot;&quot;).append(escapeJson(entry.getKey())).append(&quot;\&quot;:&quot;);</span>
+<span class="nc" id="L819">            json.append(&quot;\&quot;&quot;).append(escapeJson(entry.getValue())).append(&quot;\&quot;&quot;);</span>
+<span class="nc" id="L820">            labelIdx++;</span>
+<span class="nc" id="L821">        }</span>
+<span class="nc" id="L822">        json.append(&quot;},&quot;);</span>
+
+        // HostConfig
+<span class="nc" id="L825">        json.append(&quot;\&quot;HostConfig\&quot;:{&quot;);</span>
+
+        // Binds
+<span class="nc" id="L828">        Bind[] binds = hostConfig.getBinds();</span>
+<span class="nc bnc" id="L829" title="All 4 branches missed.">        if (binds != null &amp;&amp; binds.length &gt; 0) {</span>
+<span class="nc" id="L830">            json.append(&quot;\&quot;Binds\&quot;:[&quot;);</span>
+<span class="nc bnc" id="L831" title="All 2 branches missed.">            for (int i = 0; i &lt; binds.length; i++) {</span>
+<span class="nc bnc" id="L832" title="All 2 branches missed.">                if (i &gt; 0) json.append(&quot;,&quot;);</span>
+<span class="nc" id="L833">                String bindStr =</span>
+<span class="nc" id="L834">                    binds[i].getPath() + &quot;:&quot; + binds[i].getVolume().getPath();</span>
+                // Check if read-only via access mode
+<span class="nc" id="L836">                if (</span>
+<span class="nc bnc" id="L837" title="All 2 branches missed.">                    binds[i].getAccessMode() ==</span>
+                    com.github.dockerjava.api.model.AccessMode.ro
+                ) {
+<span class="nc" id="L840">                    bindStr += &quot;:ro&quot;;</span>
+                }
+<span class="nc" id="L842">                json.append(&quot;\&quot;&quot;).append(escapeJson(bindStr)).append(&quot;\&quot;&quot;);</span>
+            }
+<span class="nc" id="L844">            json.append(&quot;],&quot;);</span>
+        }
+
+        // Network mode
+<span class="nc bnc" id="L848" title="All 2 branches missed.">        if (hostConfig.getNetworkMode() != null) {</span>
+<span class="nc" id="L849">            json</span>
+<span class="nc" id="L850">                .append(&quot;\&quot;NetworkMode\&quot;:\&quot;&quot;)</span>
+<span class="nc" id="L851">                .append(escapeJson(hostConfig.getNetworkMode()))</span>
+<span class="nc" id="L852">                .append(&quot;\&quot;,&quot;);</span>
+        }
+
+        // Memory limits
+<span class="nc bnc" id="L856" title="All 2 branches missed.">        if (hostConfig.getMemory() != null) {</span>
+<span class="nc" id="L857">            json</span>
+<span class="nc" id="L858">                .append(&quot;\&quot;Memory\&quot;:&quot;)</span>
+<span class="nc" id="L859">                .append(hostConfig.getMemory())</span>
+<span class="nc" id="L860">                .append(&quot;,&quot;);</span>
+        }
+<span class="nc bnc" id="L862" title="All 2 branches missed.">        if (hostConfig.getMemorySwap() != null) {</span>
+<span class="nc" id="L863">            json</span>
+<span class="nc" id="L864">                .append(&quot;\&quot;MemorySwap\&quot;:&quot;)</span>
+<span class="nc" id="L865">                .append(hostConfig.getMemorySwap())</span>
+<span class="nc" id="L866">                .append(&quot;,&quot;);</span>
+        }
+
+        // CPU limits
+<span class="nc bnc" id="L870" title="All 2 branches missed.">        if (hostConfig.getCpuPeriod() != null) {</span>
+<span class="nc" id="L871">            json</span>
+<span class="nc" id="L872">                .append(&quot;\&quot;CpuPeriod\&quot;:&quot;)</span>
+<span class="nc" id="L873">                .append(hostConfig.getCpuPeriod())</span>
+<span class="nc" id="L874">                .append(&quot;,&quot;);</span>
+        }
+<span class="nc bnc" id="L876" title="All 2 branches missed.">        if (hostConfig.getCpuQuota() != null) {</span>
+<span class="nc" id="L877">            json</span>
+<span class="nc" id="L878">                .append(&quot;\&quot;CpuQuota\&quot;:&quot;)</span>
+<span class="nc" id="L879">                .append(hostConfig.getCpuQuota())</span>
+<span class="nc" id="L880">                .append(&quot;,&quot;);</span>
+        }
+
+        // Remove trailing comma and close HostConfig
+<span class="nc" id="L884">        String jsonStr = json.toString();</span>
+<span class="nc bnc" id="L885" title="All 2 branches missed.">        if (jsonStr.endsWith(&quot;,&quot;)) {</span>
+<span class="nc" id="L886">            jsonStr = jsonStr.substring(0, jsonStr.length() - 1);</span>
+        }
+<span class="nc" id="L888">        jsonStr += &quot;}}&quot;;</span>
+
+<span class="nc" id="L890">        log.debug(&quot;Container creation JSON: &quot; + jsonStr);</span>
+
+        // Get socket path (strip unix:// prefix if present)
+<span class="nc" id="L893">        String socketPath = containerSocketPath;</span>
+<span class="nc bnc" id="L894" title="All 2 branches missed.">        if (socketPath.startsWith(&quot;unix://&quot;)) {</span>
+<span class="nc" id="L895">            socketPath = socketPath.substring(7);</span>
+        }
+
+        // Execute curl command
+<span class="nc" id="L899">        ProcessBuilder pb = new ProcessBuilder(</span>
+            &quot;curl&quot;,
+            &quot;-s&quot;,
+            &quot;-X&quot;,
+            &quot;POST&quot;,
+            &quot;--unix-socket&quot;,
+            socketPath,
+            &quot;-H&quot;,
+            &quot;Content-Type: application/json&quot;,
+            &quot;-d&quot;,
+            jsonStr,
+            &quot;http://localhost/v1.41/containers/create?name=&quot; + name
+        );
+<span class="nc" id="L912">        pb.redirectErrorStream(true);</span>
+
+<span class="nc" id="L914">        Process process = pb.start();</span>
+        String output;
+        try (
+<span class="nc" id="L917">            java.io.BufferedReader reader = new java.io.BufferedReader(</span>
+<span class="nc" id="L918">                new java.io.InputStreamReader(process.getInputStream())</span>
+            )
+        ) {
+<span class="nc" id="L921">            output = reader</span>
+<span class="nc" id="L922">                .lines()</span>
+<span class="nc" id="L923">                .collect(java.util.stream.Collectors.joining(&quot;\n&quot;));</span>
+        }
+
+<span class="nc" id="L926">        int exitCode = process.waitFor();</span>
+<span class="nc bnc" id="L927" title="All 2 branches missed.">        if (exitCode != 0) {</span>
+<span class="nc" id="L928">            throw new Exception(</span>
+                &quot;curl failed with exit code &quot; + exitCode + &quot;: &quot; + output
+            );
+        }
+
+<span class="nc" id="L933">        log.debug(&quot;curl response: &quot; + output);</span>
+
+        // Parse container ID from JSON response: {&quot;Id&quot;:&quot;...&quot;, &quot;Warnings&quot;:[...]}
+<span class="nc" id="L936">        String containerId = null;</span>
+<span class="nc bnc" id="L937" title="All 2 branches missed.">        if (output.contains(&quot;\&quot;Id\&quot;:&quot;)) {</span>
+<span class="nc" id="L938">            int start = output.indexOf(&quot;\&quot;Id\&quot;:\&quot;&quot;) + 6;</span>
+<span class="nc" id="L939">            int end = output.indexOf(&quot;\&quot;&quot;, start);</span>
+<span class="nc bnc" id="L940" title="All 4 branches missed.">            if (start &gt; 5 &amp;&amp; end &gt; start) {</span>
+<span class="nc" id="L941">                containerId = output.substring(start, end);</span>
+            }
+        }
+
+<span class="nc bnc" id="L945" title="All 4 branches missed.">        if (containerId == null || containerId.isEmpty()) {</span>
+<span class="nc" id="L946">            throw new Exception(</span>
+                &quot;Failed to parse container ID from response: &quot; + output
+            );
+        }
+
+<span class="nc" id="L951">        return containerId;</span>
+    }
+
+    /**
+     * Escapes a string for use in JSON.
+     */
+    private String escapeJson(String s) {
+<span class="nc bnc" id="L958" title="All 2 branches missed.">        if (s == null) return &quot;&quot;;</span>
+<span class="nc" id="L959">        return s</span>
+<span class="nc" id="L960">            .replace(&quot;\\&quot;, &quot;\\\\&quot;)</span>
+<span class="nc" id="L961">            .replace(&quot;\&quot;&quot;, &quot;\\\&quot;&quot;)</span>
+<span class="nc" id="L962">            .replace(&quot;\n&quot;, &quot;\\n&quot;)</span>
+<span class="nc" id="L963">            .replace(&quot;\r&quot;, &quot;\\r&quot;)</span>
+<span class="nc" id="L964">            .replace(&quot;\t&quot;, &quot;\\t&quot;);</span>
+    }
+
+    /**
+     * Checks if an exception represents a transient connection error that should trigger
+     * fallback to curl-based container creation.
+     *
+     * &lt;p&gt;
+     * This method recursively checks the exception chain (cause) for known transient errors
+     * like &quot;Broken pipe&quot; or &quot;Connection reset&quot; that occur intermittently with the docker-java
+     * client when communicating with Podman's API.
+     * &lt;/p&gt;
+     *
+     * @param e The exception to check
+     * @return true if this is a transient connection error
+     */
+    private boolean isTransientConnectionError(Throwable e) {
+<span class="nc bnc" id="L981" title="All 2 branches missed.">        if (e == null) {</span>
+<span class="nc" id="L982">            return false;</span>
+        }
+
+<span class="nc" id="L985">        String message = e.getMessage();</span>
+<span class="nc bnc" id="L986" title="All 2 branches missed.">        if (message != null) {</span>
+<span class="nc" id="L987">            String lowerMessage = message.toLowerCase();</span>
+<span class="nc" id="L988">            if (</span>
+<span class="nc bnc" id="L989" title="All 2 branches missed.">                lowerMessage.contains(&quot;broken pipe&quot;) ||</span>
+<span class="nc bnc" id="L990" title="All 2 branches missed.">                lowerMessage.contains(&quot;connection reset&quot;) ||</span>
+<span class="nc bnc" id="L991" title="All 2 branches missed.">                lowerMessage.contains(&quot;connection refused&quot;) ||</span>
+<span class="nc bnc" id="L992" title="All 2 branches missed.">                lowerMessage.contains(&quot;socket closed&quot;)</span>
+            ) {
+<span class="nc" id="L994">                return true;</span>
+            }
+        }
+
+        // Check for IOException types that indicate connection issues
+<span class="nc bnc" id="L999" title="All 2 branches missed.">        if (e instanceof java.io.IOException) {</span>
+<span class="nc" id="L1000">            String className = e.getClass().getSimpleName().toLowerCase();</span>
+<span class="nc" id="L1001">            if (</span>
+<span class="nc bnc" id="L1002" title="All 4 branches missed.">                className.contains(&quot;brokenpipe&quot;) || className.contains(&quot;socket&quot;)</span>
+            ) {
+<span class="nc" id="L1004">                return true;</span>
+            }
+        }
+
+        // Recursively check cause
+<span class="nc" id="L1009">        Throwable cause = e.getCause();</span>
+<span class="nc bnc" id="L1010" title="All 4 branches missed.">        if (cause != null &amp;&amp; cause != e) {</span>
+<span class="nc" id="L1011">            return isTransientConnectionError(cause);</span>
+        }
+
+        // Also check suppressed exceptions
+<span class="nc bnc" id="L1015" title="All 2 branches missed.">        for (Throwable suppressed : e.getSuppressed()) {</span>
+<span class="nc bnc" id="L1016" title="All 2 branches missed.">            if (isTransientConnectionError(suppressed)) {</span>
+<span class="nc" id="L1017">                return true;</span>
+            }
+        }
+
+<span class="nc" id="L1021">        return false;</span>
+    }
+
+    /**
+     * Creates host configuration with resource limits and volume mounts.
+     *
+     * &lt;p&gt;
+     * When using prebuilt images (default), job artifacts are mounted as volumes
+     * rather than being baked into the image. This significantly improves startup
+     * time.
+     * &lt;/p&gt;
+     *
+     * &lt;p&gt;
+     * In DooD (Docker-outside-of-Docker) scenarios, paths are translated from
+     * container paths to host paths using {@link #translateToHostPath(String)}.
+     * &lt;/p&gt;
+     *
+     * @param workingDirectory Directory containing job artifacts (solver,
+     *                         processor, benchmark)
+     * @param logPath          Directory where output should be written
+     */
+    private HostConfig createHostConfig(
+        String workingDirectory,
+        String logPath
+    ) {
+<span class="nc" id="L1046">        List&lt;Bind&gt; binds = new ArrayList&lt;&gt;();</span>
+
+        // Translate paths for DooD scenarios
+<span class="nc" id="L1049">        String hostLogPath = translateToHostPath(logPath);</span>
+
+        // Mount the entire data directory so job scripts have access to all artifacts
+        // (Solvers, Benchmarks, jobin scripts, etc.)
+<span class="nc" id="L1053">        String hostDataPath = translateToHostPath(containerDataPath);</span>
+<span class="nc" id="L1054">        Volume dataVolume = new Volume(containerDataPath);</span>
+<span class="nc" id="L1055">        binds.add(new Bind(hostDataPath, dataVolume, false));</span>
+<span class="nc" id="L1056">        log.debug(</span>
+            &quot;Mounting data directory: &quot; +
+                hostDataPath +
+                &quot; -&gt; &quot; +
+                containerDataPath
+        );
+
+        // Always mount output directory for logs
+        // Note: logPath is a file path, we mount its parent directory
+<span class="nc" id="L1065">        Path logDir = Paths.get(logPath).getParent();</span>
+<span class="nc" id="L1066">        String hostLogDir = translateToHostPath(logDir.toString());</span>
+<span class="nc bnc" id="L1067" title="All 2 branches missed.">        if (!hostLogDir.startsWith(hostDataPath)) {</span>
+            // Only add separate mount if logs are outside data directory
+<span class="nc" id="L1069">            Volume outputVolume = new Volume(logDir.toString());</span>
+<span class="nc" id="L1070">            binds.add(new Bind(hostLogDir, outputVolume));</span>
+        }
+
+        // Get the network mode for job containers
+        // Use podman-default-kube-network to connect to the same network as the app pod
+<span class="nc" id="L1075">        String networkMode = EnvironmentConfig.getContainerNetworkMode();</span>
+<span class="nc" id="L1076">        log.debug(&quot;Job container network mode: &quot; + networkMode);</span>
+
+<span class="nc" id="L1078">        return new HostConfig()</span>
+<span class="nc" id="L1079">            .withBinds(binds.toArray(new Bind[0]))</span>
+<span class="nc" id="L1080">            .withNetworkMode(networkMode)</span>
+<span class="nc" id="L1081">            .withMemory(defaultMemoryMb * 1024 * 1024) // Convert MB to bytes</span>
+<span class="nc" id="L1082">            .withMemorySwap(defaultMemoryMb * 1024 * 1024) // Disable swap</span>
+<span class="nc" id="L1083">            .withCpuPeriod(100000L)</span>
+<span class="nc" id="L1084">            .withCpuQuota(100000L) // 1 CPU core</span>
+<span class="nc" id="L1085">            .withAutoRemove(false); // Keep container for inspection after completion</span>
+    }
+
+    /**
+     * Adds a bind mount if the source directory exists.
+     *
+     * @param binds           List to add the bind mount to
+     * @param containerBaseDir Base directory inside the StarExec container (for existence check)
+     * @param hostBaseDir     Corresponding base directory on the host (for actual mount)
+     * @param subDir          Subdirectory to mount
+     * @param targetPath      Target path inside the job container
+     * @param readOnly        Whether to mount as read-only
+     */
+    private void mountIfExists(
+        List&lt;Bind&gt; binds,
+        String containerBaseDir,
+        String hostBaseDir,
+        String subDir,
+        String targetPath,
+        boolean readOnly
+    ) {
+<span class="nc" id="L1106">        Path containerPath = Paths.get(containerBaseDir, subDir);</span>
+<span class="nc bnc" id="L1107" title="All 2 branches missed.">        if (Files.exists(containerPath)) {</span>
+<span class="nc" id="L1108">            Path hostPath = Paths.get(hostBaseDir, subDir);</span>
+<span class="nc" id="L1109">            Volume volume = new Volume(targetPath);</span>
+<span class="nc" id="L1110">            binds.add(new Bind(hostPath.toString(), volume, readOnly));</span>
+<span class="nc" id="L1111">            log.debug(</span>
+                &quot;Mounting &quot; +
+                    hostPath +
+                    &quot; -&gt; &quot; +
+                    targetPath +
+                    &quot; (checked: &quot; +
+                    containerPath +
+                    &quot;)&quot;
+            );
+        }
+<span class="nc" id="L1121">    }</span>
+
+    /**
+     * Creates environment variables for the container.
+     *
+     * &lt;p&gt;
+     * Paths are passed as environment variables to decouple the entrypoint.sh
+     * script from hardcoded paths, improving maintainability.
+     * &lt;/p&gt;
+     *
+     * @param pairId           The job pair ID
+     * @param workingDirectory The job's working directory on the host
+     * @param outputDir        Directory where the job should write status.json and other output files
+     */
+    private List&lt;String&gt; createEnvironmentVariables(
+        long pairId,
+        String workingDirectory,
+        String outputDir
+    ) {
+<span class="nc" id="L1140">        List&lt;String&gt; envVars = new ArrayList&lt;&gt;(</span>
+<span class="nc" id="L1141">            Arrays.asList(</span>
+                &quot;STAREXEC_PAIR_ID=&quot; + pairId,
+                &quot;STAREXEC_CPU_LIMIT=&quot; + defaultCpuLimit,
+                &quot;STAREXEC_WALLCLOCK_LIMIT=&quot; + defaultWallclockLimit,
+                &quot;STAREXEC_MEM_LIMIT=&quot; + defaultMemoryMb,
+                &quot;CONTAINER_MODE=true&quot;, // Signal to job script to use file-based communication
+                &quot;STAREXEC_OUTPUT_DIR=&quot; + outputDir
+            )
+        ); // Where to write status.json, stats.json, attributes.txt
+
+        // Pass paths as environment variables for decoupling
+<span class="nc bnc" id="L1152" title="All 2 branches missed.">        if (usePrebuiltImage) {</span>
+<span class="nc" id="L1153">            envVars.add(&quot;STAREXEC_SOLVER_PATH=/starexec/solver/starexec_run&quot;);</span>
+<span class="nc" id="L1154">            envVars.add(</span>
+                &quot;STAREXEC_PRE_PROCESSOR_PATH=/starexec/pre-processor/starexec_run&quot;
+            );
+<span class="nc" id="L1157">            envVars.add(</span>
+                &quot;STAREXEC_POST_PROCESSOR_PATH=/starexec/post-processor/starexec_run&quot;
+            );
+<span class="nc" id="L1160">            envVars.add(&quot;STAREXEC_BENCHMARK_PATH=/starexec/input/benchmark&quot;);</span>
+            // Note: STAREXEC_OUTPUT_DIR is already set above with the correct path
+        }
+
+<span class="nc" id="L1164">        return envVars;</span>
+    }
+
+    /**
+     * Creates labels for container management.
+     */
+    private Map&lt;String, String&gt; createContainerLabels(long pairId) {
+<span class="nc" id="L1171">        Map&lt;String, String&gt; labels = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L1172">        labels.put(LABEL_MANAGED, &quot;true&quot;);</span>
+<span class="nc" id="L1173">        labels.put(LABEL_PAIR_ID, String.valueOf(pairId));</span>
+<span class="nc" id="L1174">        return labels;</span>
+    }
+
+    /**
+     * Kills a specific job pair by execution ID.
+     */
+    @Override
+    public boolean killPair(int execId) {
+<span class="fc" id="L1182">        String containerId = execIdToContainerId.get(execId);</span>
+<span class="fc bfc" id="L1183" title="All 2 branches covered.">        if (containerId == null) {</span>
+<span class="fc" id="L1184">            log.warn(&quot;Container not found for execId: &quot; + execId);</span>
+<span class="fc" id="L1185">            return false;</span>
+        }
+
+        try {
+<span class="fc" id="L1189">            log.info(&quot;Killing container for execId: &quot; + execId);</span>
+
+            // Stop container (with timeout)
+            try {
+<span class="fc" id="L1193">                dockerClient</span>
+<span class="fc" id="L1194">                    .stopContainerCmd(containerId)</span>
+<span class="fc" id="L1195">                    .withTimeout(10)</span>
+<span class="fc" id="L1196">                    .exec();</span>
+<span class="fc" id="L1197">            } catch (NotModifiedException e) {</span>
+                // Container already stopped
+<span class="fc" id="L1199">                log.debug(&quot;Container already stopped: &quot; + containerId);</span>
+<span class="fc" id="L1200">            }</span>
+
+            // Remove container
+<span class="fc" id="L1203">            dockerClient.removeContainerCmd(containerId).withForce(true).exec();</span>
+
+<span class="fc" id="L1205">            execIdToContainerId.remove(execId);</span>
+<span class="fc" id="L1206">            log.info(&quot;Container killed successfully: &quot; + containerId);</span>
+<span class="fc" id="L1207">            return true;</span>
+<span class="fc" id="L1208">        } catch (NotFoundException e) {</span>
+<span class="fc" id="L1209">            log.warn(&quot;Container not found (already removed?): &quot; + containerId);</span>
+<span class="fc" id="L1210">            execIdToContainerId.remove(execId);</span>
+<span class="fc" id="L1211">            return true;</span>
+<span class="nc" id="L1212">        } catch (Exception e) {</span>
+<span class="nc" id="L1213">            log.error(&quot;Error killing container: &quot; + containerId, e);</span>
+<span class="nc" id="L1214">            return false;</span>
+        }
+    }
+
+    /**
+     * Kills all StarExec job containers.
+     */
+    @Override
+    public boolean killAll() {
+<span class="fc" id="L1223">        log.info(&quot;Killing all StarExec containers...&quot;);</span>
+<span class="fc" id="L1224">        boolean success = true;</span>
+
+        // Kill tracked containers
+<span class="fc bfc" id="L1227" title="All 2 branches covered.">        for (Integer execId : new ArrayList&lt;&gt;(execIdToContainerId.keySet())) {</span>
+<span class="pc bpc" id="L1228" title="1 of 2 branches missed.">            if (!killPair(execId)) {</span>
+<span class="nc" id="L1229">                success = false;</span>
+            }
+<span class="fc" id="L1231">        }</span>
+
+        // Also clean up any orphaned containers
+<span class="fc" id="L1234">        cleanupOrphanedContainers();</span>
+
+<span class="fc" id="L1236">        return success;</span>
+    }
+
+    /**
+     * Cleans up any StarExec containers that might have been orphaned.
+     */
+    private void cleanupOrphanedContainers() {
+        try {
+<span class="fc" id="L1244">            List&lt;Container&gt; containers = dockerClient</span>
+<span class="fc" id="L1245">                .listContainersCmd()</span>
+<span class="fc" id="L1246">                .withShowAll(true)</span>
+<span class="fc" id="L1247">                .withLabelFilter(</span>
+<span class="fc" id="L1248">                    Collections.singletonMap(LABEL_MANAGED, &quot;true&quot;)</span>
+                )
+<span class="fc" id="L1250">                .exec();</span>
+
+<span class="fc bfc" id="L1252" title="All 2 branches covered.">            for (Container container : containers) {</span>
+                try {
+<span class="fc" id="L1254">                    log.info(</span>
+<span class="fc" id="L1255">                        &quot;Cleaning up orphaned container: &quot; + container.getId()</span>
+                    );
+<span class="fc" id="L1257">                    dockerClient</span>
+<span class="fc" id="L1258">                        .removeContainerCmd(container.getId())</span>
+<span class="fc" id="L1259">                        .withForce(true)</span>
+<span class="fc" id="L1260">                        .exec();</span>
+<span class="nc" id="L1261">                } catch (Exception e) {</span>
+<span class="nc" id="L1262">                    log.warn(</span>
+                        &quot;Failed to remove orphaned container: &quot; +
+<span class="nc" id="L1264">                            container.getId(),</span>
+                        e
+                    );
+<span class="fc" id="L1267">                }</span>
+<span class="fc" id="L1268">            }</span>
+<span class="nc" id="L1269">        } catch (Exception e) {</span>
+<span class="nc" id="L1270">            log.warn(&quot;Error during orphaned container cleanup&quot;, e);</span>
+<span class="fc" id="L1271">        }</span>
+<span class="fc" id="L1272">    }</span>
+
+    /**
+     * Returns status information about running job containers.
+     */
+    @Override
+    public String getRunningJobsStatus() {
+        try {
+<span class="fc" id="L1280">            StringBuilder status = new StringBuilder();</span>
+<span class="fc" id="L1281">            status.append(&quot;=== StarExec Container Backend Status ===\n&quot;);</span>
+
+<span class="fc" id="L1283">            List&lt;Container&gt; containers = dockerClient</span>
+<span class="fc" id="L1284">                .listContainersCmd()</span>
+<span class="fc" id="L1285">                .withShowAll(true)</span>
+<span class="fc" id="L1286">                .withLabelFilter(</span>
+<span class="fc" id="L1287">                    Collections.singletonMap(LABEL_MANAGED, &quot;true&quot;)</span>
+                )
+<span class="fc" id="L1289">                .exec();</span>
+
+<span class="fc bfc" id="L1291" title="All 2 branches covered.">            if (containers.isEmpty()) {</span>
+<span class="fc" id="L1292">                status.append(&quot;No StarExec containers currently running.\n&quot;);</span>
+            } else {
+<span class="fc bfc" id="L1294" title="All 2 branches covered.">                for (Container container : containers) {</span>
+<span class="fc" id="L1295">                    status.append(</span>
+<span class="fc" id="L1296">                        String.format(</span>
+                            &quot;Container: %s | Name: %s | Status: %s | State: %s\n&quot;,
+<span class="fc" id="L1298">                            container.getId().substring(0, 12),</span>
+<span class="fc" id="L1299">                            String.join(&quot;,&quot;, container.getNames()),</span>
+<span class="fc" id="L1300">                            container.getStatus(),</span>
+<span class="fc" id="L1301">                            container.getState()</span>
+                        )
+                    );
+<span class="fc" id="L1304">                }</span>
+            }
+
+<span class="fc" id="L1307">            status</span>
+<span class="fc" id="L1308">                .append(&quot;\nTracked executions: &quot;)</span>
+<span class="fc" id="L1309">                .append(execIdToContainerId.size())</span>
+<span class="fc" id="L1310">                .append(&quot;\n&quot;);</span>
+
+<span class="fc" id="L1312">            return status.toString();</span>
+<span class="fc" id="L1313">        } catch (Exception e) {</span>
+<span class="fc" id="L1314">            log.error(&quot;Error getting running jobs status&quot;, e);</span>
+<span class="fc" id="L1315">            return &quot;Error retrieving container status: &quot; + e.getMessage();</span>
+        }
+    }
+
+    /**
+     * Returns the set of active execution IDs.
+     */
+    @Override
+    public Set&lt;Integer&gt; getActiveExecutionIds() throws IOException {
+        // Refresh the map by checking actual container states
+<span class="fc" id="L1325">        Set&lt;Integer&gt; activeIds = new HashSet&lt;&gt;();</span>
+
+<span class="fc bfc" id="L1327" title="All 2 branches covered.">        for (Map.Entry&lt;Integer, String&gt; entry : new HashMap&lt;&gt;(</span>
+            execIdToContainerId
+<span class="fc" id="L1329">        ).entrySet()) {</span>
+            try {
+<span class="fc" id="L1331">                var inspection = dockerClient</span>
+<span class="fc" id="L1332">                    .inspectContainerCmd(entry.getValue())</span>
+<span class="fc" id="L1333">                    .exec();</span>
+<span class="fc" id="L1334">                var state = inspection.getState();</span>
+<span class="pc bpc" id="L1335" title="1 of 4 branches missed.">                if (state != null &amp;&amp; Boolean.TRUE.equals(state.getRunning())) {</span>
+<span class="fc" id="L1336">                    activeIds.add(entry.getKey());</span>
+                } else {
+                    // Container finished, remove from tracking
+<span class="fc" id="L1339">                    execIdToContainerId.remove(entry.getKey());</span>
+                }
+<span class="fc" id="L1341">            } catch (NotFoundException e) {</span>
+                // Container no longer exists
+<span class="fc" id="L1343">                execIdToContainerId.remove(entry.getKey());</span>
+<span class="fc" id="L1344">            }</span>
+<span class="fc" id="L1345">        }</span>
+
+<span class="fc" id="L1347">        return activeIds;</span>
+    }
+
+    /**
+     * Information about a completed container job.
+     */
+    public static class CompletedContainerInfo {
+
+        public final String containerId;
+        public final int pairId;
+        public final String outputDir;
+        public final int exitCode;
+
+        public CompletedContainerInfo(
+            String containerId,
+            int pairId,
+            String outputDir,
+            int exitCode
+<span class="nc" id="L1365">        ) {</span>
+<span class="nc" id="L1366">            this.containerId = containerId;</span>
+<span class="nc" id="L1367">            this.pairId = pairId;</span>
+<span class="nc" id="L1368">            this.outputDir = outputDir;</span>
+<span class="nc" id="L1369">            this.exitCode = exitCode;</span>
+<span class="nc" id="L1370">        }</span>
+    }
+
+    /**
+     * Returns a list of completed containers with their job information.
+     * Used by ContainerJobMonitor to process completed jobs.
+     *
+     * @return List of completed container info
+     */
+    public List&lt;CompletedContainerInfo&gt; getCompletedContainers() {
+<span class="fc" id="L1380">        List&lt;CompletedContainerInfo&gt; completed = new ArrayList&lt;&gt;();</span>
+
+        List&lt;Container&gt; containers;
+        try {
+            // Podman only supports &quot;exited&quot; status (not &quot;dead&quot; like Docker)
+<span class="fc" id="L1385">            containers = dockerClient</span>
+<span class="fc" id="L1386">                .listContainersCmd()</span>
+<span class="fc" id="L1387">                .withShowAll(true)</span>
+<span class="fc" id="L1388">                .withLabelFilter(</span>
+<span class="fc" id="L1389">                    Collections.singletonMap(LABEL_MANAGED, &quot;true&quot;)</span>
+                )
+<span class="fc" id="L1391">                .withStatusFilter(Collections.singletonList(&quot;exited&quot;))</span>
+<span class="fc" id="L1392">                .exec();</span>
+<span class="nc" id="L1393">        } catch (Exception e) {</span>
+<span class="nc" id="L1394">            log.warn(&quot;Error listing containers: &quot; + e.getMessage());</span>
+<span class="nc" id="L1395">            return completed;</span>
+<span class="fc" id="L1396">        }</span>
+
+<span class="pc bpc" id="L1398" title="1 of 2 branches missed.">        for (Container container : containers) {</span>
+            try {
+<span class="nc" id="L1400">                String pairIdLabel = container.getLabels().get(LABEL_PAIR_ID);</span>
+<span class="nc bnc" id="L1401" title="All 2 branches missed.">                if (pairIdLabel == null) continue;</span>
+
+                // The label may contain a timestamp instead of actual pair ID
+                // We'll use -1 as a placeholder and let ContainerJobMonitor read
+                // the real pair ID from status.json
+<span class="nc" id="L1406">                int pairId = -1;</span>
+                try {
+                    // Check if it's a reasonable pair ID (under 10 million)
+<span class="nc" id="L1409">                    long labelValue = Long.parseLong(pairIdLabel);</span>
+<span class="nc bnc" id="L1410" title="All 2 branches missed.">                    if (labelValue &lt; 10_000_000) {</span>
+<span class="nc" id="L1411">                        pairId = (int) labelValue;</span>
+                    }
+<span class="nc" id="L1413">                } catch (NumberFormatException e) {</span>
+<span class="nc" id="L1414">                    log.warn(</span>
+                        &quot;Invalid pair ID format in container label: &quot; +
+                            pairIdLabel
+                    );
+<span class="nc" id="L1418">                }</span>
+
+                // Get output directory from container inspection
+<span class="nc" id="L1421">                var inspection = dockerClient</span>
+<span class="nc" id="L1422">                    .inspectContainerCmd(container.getId())</span>
+<span class="nc" id="L1423">                    .exec();</span>
+<span class="nc" id="L1424">                var mounts = inspection.getMounts();</span>
+<span class="nc" id="L1425">                var state = inspection.getState();</span>
+
+<span class="nc" id="L1427">                int exitCode = 0;</span>
+<span class="nc bnc" id="L1428" title="All 4 branches missed.">                if (state != null &amp;&amp; state.getExitCodeLong() != null) {</span>
+<span class="nc" id="L1429">                    exitCode = state.getExitCodeLong().intValue();</span>
+                }
+
+<span class="nc" id="L1432">                String outputDir = null;</span>
+                // First, try to get STAREXEC_OUTPUT_DIR from container's environment
+<span class="nc" id="L1434">                var config = inspection.getConfig();</span>
+<span class="nc bnc" id="L1435" title="All 4 branches missed.">                if (config != null &amp;&amp; config.getEnv() != null) {</span>
+<span class="nc bnc" id="L1436" title="All 2 branches missed.">                    for (String env : config.getEnv()) {</span>
+<span class="nc bnc" id="L1437" title="All 2 branches missed.">                        if (env.startsWith(&quot;STAREXEC_OUTPUT_DIR=&quot;)) {</span>
+<span class="nc" id="L1438">                            outputDir = env.substring(</span>
+<span class="nc" id="L1439">                                &quot;STAREXEC_OUTPUT_DIR=&quot;.length()</span>
+                            );
+<span class="nc" id="L1441">                            break;</span>
+                        }
+                    }
+                }
+
+                // If not found, fall back to data mount
+<span class="nc bnc" id="L1447" title="All 4 branches missed.">                if (outputDir == null &amp;&amp; mounts != null) {</span>
+<span class="nc bnc" id="L1448" title="All 2 branches missed.">                    for (var mount : mounts) {</span>
+                        // Look for the data mount
+<span class="nc" id="L1450">                        var destination = mount.getDestination();</span>
+<span class="nc bnc" id="L1451" title="All 2 branches missed.">                        if (destination != null) {</span>
+<span class="nc" id="L1452">                            String destPath = destination.getPath();</span>
+<span class="nc bnc" id="L1453" title="All 2 branches missed.">                            if (</span>
+                                destPath != null &amp;&amp;
+<span class="nc bnc" id="L1455" title="All 2 branches missed.">                                destPath.contains(&quot;/app/data&quot;)</span>
+                            ) {
+                                // getSource() returns the host path as a String
+<span class="nc" id="L1458">                                outputDir = mount.getSource();</span>
+<span class="nc" id="L1459">                                break;</span>
+                            }
+                        }
+<span class="nc" id="L1462">                    }</span>
+                }
+
+<span class="nc bnc" id="L1465" title="All 2 branches missed.">                if (outputDir != null) {</span>
+<span class="nc" id="L1466">                    completed.add(</span>
+                        new CompletedContainerInfo(
+<span class="nc" id="L1468">                            container.getId(),</span>
+                            pairId,
+                            outputDir,
+                            exitCode
+                        )
+                    );
+<span class="nc" id="L1474">                    log.debug(</span>
+                        &quot;Found completed container for pair &quot; +
+                            pairId +
+                            &quot;: exitCode=&quot; +
+                            exitCode +
+                            &quot;, outputDir=&quot; +
+                            outputDir
+                    );
+                }
+<span class="nc" id="L1483">            } catch (Exception e) {</span>
+<span class="nc" id="L1484">                log.warn(&quot;Error processing container: &quot; + e.getMessage());</span>
+<span class="nc" id="L1485">            }</span>
+<span class="nc" id="L1486">        }</span>
+
+<span class="fc" id="L1488">        return completed;</span>
+    }
+
+    /**
+     * Removes a completed container after processing.
+     *
+     * @param containerId The container ID to remove
+     */
+    public void removeCompletedContainer(String containerId) {
+        try {
+<span class="fc" id="L1498">            dockerClient</span>
+<span class="fc" id="L1499">                .removeContainerCmd(containerId)</span>
+<span class="fc" id="L1500">                .withForce(true)</span>
+<span class="fc" id="L1501">                .withRemoveVolumes(false)</span>
+<span class="fc" id="L1502">                .exec();</span>
+<span class="fc" id="L1503">            log.debug(&quot;Removed completed container: &quot; + containerId);</span>
+<span class="fc" id="L1504">        } catch (Exception e) {</span>
+<span class="fc" id="L1505">            log.warn(</span>
+                &quot;Failed to remove container &quot; +
+                    containerId +
+                    &quot;: &quot; +
+<span class="fc" id="L1509">                    e.getMessage()</span>
+            );
+<span class="fc" id="L1511">        }</span>
+<span class="fc" id="L1512">    }</span>
+
+    // --- Methods not applicable to container backend ---
+
+    @Override
+    public String[] getWorkerNodes() {
+        // Return a virtual worker node to satisfy JobManager's requirement
+        // for at least one node associated with the container queue
+<span class="fc" id="L1520">        log.debug(&quot;getWorkerNodes: Returning virtual container worker node&quot;);</span>
+<span class="fc" id="L1521">        return new String[] { CONTAINER_WORKER_NODE };</span>
+    }
+
+    @Override
+    public String[] getQueues() {
+        // Return the virtual container queue so Cluster.loadQueueDetails() keeps it active
+<span class="fc" id="L1527">        log.debug(</span>
+            &quot;getQueues: Returning container queue: &quot; + CONTAINER_QUEUE_NAME
+        );
+<span class="fc" id="L1530">        return new String[] { CONTAINER_QUEUE_NAME };</span>
+    }
+
+    @Override
+    public Map&lt;String, String&gt; getNodeQueueAssociations() {
+        // Return the association between the virtual worker node and container queue
+        // This enables Cluster.setQueueAssociationsInDb() to populate the queue_assoc table
+<span class="fc" id="L1537">        Map&lt;String, String&gt; associations = new HashMap&lt;&gt;();</span>
+<span class="fc" id="L1538">        associations.put(CONTAINER_WORKER_NODE, CONTAINER_QUEUE_NAME);</span>
+<span class="fc" id="L1539">        log.debug(</span>
+            &quot;getNodeQueueAssociations: Returning virtual node-queue association&quot;
+        );
+<span class="fc" id="L1542">        return associations;</span>
+    }
+
+    @Override
+    public boolean clearNodeErrorStates() {
+<span class="fc" id="L1547">        return true;</span>
+    }
+
+    @Override
+    public void deleteQueue(String queueName) {
+<span class="fc" id="L1552">        log.debug(&quot;deleteQueue: Not applicable for container backend&quot;);</span>
+<span class="fc" id="L1553">    }</span>
+
+    @Override
+    public boolean createQueue(
+        String newQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames
+    ) {
+<span class="fc" id="L1561">        log.debug(&quot;createQueue: Not applicable for container backend&quot;);</span>
+<span class="fc" id="L1562">        return true;</span>
+    }
+
+    @Override
+    public boolean createQueueWithSlots(
+        String newQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames,
+        Integer slots
+    ) {
+<span class="fc" id="L1572">        log.debug(&quot;createQueueWithSlots: Not applicable for container backend&quot;);</span>
+<span class="fc" id="L1573">        return true;</span>
+    }
+
+    @Override
+    public void moveNodes(
+        String destQueueName,
+        String[] nodeNames,
+        String[] sourceQueueNames
+    ) {
+<span class="fc" id="L1582">        log.debug(&quot;moveNodes: Not applicable for container backend&quot;);</span>
+<span class="fc" id="L1583">    }</span>
+
+    @Override
+    public void moveNode(String nodeName, String queueName) {
+<span class="fc" id="L1587">        log.debug(&quot;moveNode: Not applicable for container backend&quot;);</span>
+<span class="fc" id="L1588">    }</span>
+
+    @Override
+    public void clearPairTracking(int pairId) {
+        // PodmanBackend does not track pair state - no-op
+<span class="nc" id="L1593">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>
