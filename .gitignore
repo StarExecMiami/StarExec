@@ -104,8 +104,9 @@ backups/
 *.sql.gz
 
 # But allow tracked migration scripts
-!src/main/resources/db/migration/*.sql
+!starexec-app/src/main/resources/db/migration/*.sql
 !src/main/resources/sql/**/*.sql
+!starexec-app/src/main/resources/sql/**/*.sql
 
 ####################################
 # Docker / Podman / Container
