@@ -424,6 +424,7 @@
                     </delimiters>
                     <nonFilteredFileExtensions>
                         <nonFilteredFileExtension>jks</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>sql</nonFilteredFileExtension>
                     </nonFilteredFileExtensions>
                 </configuration>
             </plugin>
