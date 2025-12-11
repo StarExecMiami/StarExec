@@ -81,6 +81,11 @@ src/main/webapp/css/**/*.css
 .mvn/wrapper/maven-wrapper.jar
 
 ####################################
+# Maven build artifacts
+####################################
+**/dependency-reduced-pom.xml
+
+####################################
 # Python / test caches
 ####################################
 __pycache__/
