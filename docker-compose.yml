@@ -1,19 +1,260 @@
+# ==============================================================================
 # StarExec Docker Compose Configuration
+# ==============================================================================
 #
-# Basic usage (local backend - no job execution):
+# This is the SINGLE AUTHORITATIVE docker-compose configuration for StarExec.
+# All services (PostgreSQL, migrations, application) are defined here.
+#
+# Architecture:
+#   1. PostgreSQL starts first (health checks ensure readiness)
+#   2. Migrations service runs in parallel (depends on postgres healthy)
+#   3. Application starts only after migrations complete
+#
+# Usage:
+#   # Standard deployment (includes migrations)
 #   docker compose up -d
 #
-# Podman/Container backend (enables job execution via DooD pattern):
+#   # View migration progress
+#   docker compose logs -f migrations
+#
+#   # View application logs
+#   docker compose logs -f starexec
+#
+#   # For Podman container backend (DooD pattern), also use:
 #   docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
 #
-# See docker-compose.podman.yml for container backend configuration.
+# Environment Variables (see .env or export):
+#   STAREXEC_DB_PASSWORD    - Database password (default: starexec_dev_password)
+#   STAREXEC_VERSION        - Image version tag (default: latest)
+#   VOLUME_PREFIX           - Volume name prefix (default: starexec)
+#
+# ==============================================================================
 
 services:
+  # ==============================================================================
+  # PostgreSQL Database Service
+  # ==============================================================================
+  # Primary data store for StarExec.
+  # Health check ensures database is accepting connections before migrations run.
+  # ==============================================================================
+  postgres:
+    container_name: starexec-postgres
+    image: postgres:15
+    environment:
+      POSTGRES_DB: starexec
+      POSTGRES_USER: starexec
+      POSTGRES_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
+      # Ensure UTF-8 collation/ctype so PostgreSQL behaves like typical UTF-8 installs
+      # Note: these take effect when the DB cluster is initialized; if the volume
+      # already contains an initialized database, re-init or remove the volume.
+      LC_COLLATE: en_US.UTF-8
+      LC_CTYPE: en_US.UTF-8
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    # Health check: Ensures PostgreSQL is truly ready before migrations/app start
+    # Uses pg_isready which checks if the database is accepting connections
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U starexec"]
+      interval: 10s # Check every 10 seconds
+      timeout: 5s # Wait up to 5s for response
+      retries: 30 # Try up to 30 times (5 minutes total)
+      start_period: 10s # Grace period before starting checks
+
+    networks:
+      - starexec_network
+
+  # ==============================================================================
+  # Database Migration Service (Decoupled)
+  # ==============================================================================
+  # Runs Flyway migrations using EmbeddedFlywayLauncher before application starts.
+  #
+  # Architecture:
+  #   - Ephemeral container that exits cleanly after migrations complete
+  #   - Depends on postgres (service_healthy) for database readiness
+  #   - Application depends on migrations (service_completed_successfully)
+  #   - No long-term resource overhead (container exits)
+  #
+  # Security:
+  #   - Database credentials passed ONLY via environment variables
+  #   - Never exposed via command-line arguments
+  #   - EmbeddedFlywayLauncher reads from System.getenv() only
+  #
+  # Troubleshooting:
+  #   - View migration logs: docker compose logs migrations
+  #   - Check migration success: docker compose ps migrations (should show "Exited (0)")
+  #   - Verify credentials not leaked: docker compose logs migrations | grep REDACTED
+  #
+  # ==============================================================================
+  migrations:
+    container_name: starexec-migrations
+    image: ghcr.io/starexecmiami/starexec:${STAREXEC_VERSION:-latest}
+
+    # Override default entrypoint to run ONLY migrations, skip Tomcat startup
+    entrypoint: ["/bin/bash", "-c"]
+
+    command:
+      - |
+        set -euo pipefail
+
+        echo "[MIGRATION][INIT] Starting database migration service..."
+        echo "========================================================================"
+
+        # Database connection configuration
+        export STAREXEC_DB_HOST="${STAREXEC_DB_HOST:-postgres}"
+        export STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"
+        export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
+        export STAREXEC_DB_USER="${STAREXEC_DB_USER:-starexec}"
+        export STAREXEC_DB_PASSWORD="${STAREXEC_DB_PASSWORD}"
+        export STAREXEC_DB_SCHEMA="${STAREXEC_DB_SCHEMA:-starexec}"
+
+        CATALINA_HOME="/opt/tomcat"
+        WEBAPP_DIR="${CATALINA_HOME}/webapps/starexec"
+        MIGRATIONS_DIR="${WEBAPP_DIR}/WEB-INF/classes/db/migration"
+        CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
+
+        # =====================================================================
+        # STEP 1: Validate Configuration
+        # =====================================================================
+        echo "[MIGRATION][CONFIG] Validating database configuration..."
+        if [ -z "${STAREXEC_DB_PASSWORD:-}" ]; then
+          echo "[MIGRATION][ERROR] ❌ STAREXEC_DB_PASSWORD environment variable is not set"
+          exit 1
+        fi
+        echo "[MIGRATION][CONFIG] ✅ Configuration validated"
+        echo ""
+
+        # =====================================================================
+        # STEP 2: Wait for PostgreSQL to be Ready
+        # =====================================================================
+        echo "[MIGRATION][CONNECT] Waiting for PostgreSQL to become available..."
+        retry_count=0
+        max_retries=60
+        wait_time=2
+
+        while [ $retry_count -lt $max_retries ]; do
+          if PGPASSWORD="$STAREXEC_DB_PASSWORD" pg_isready -h "$STAREXEC_DB_HOST" -p "$STAREXEC_DB_PORT" -U "$STAREXEC_DB_USER" -d "$STAREXEC_DB_NAME" >/dev/null 2>&1; then
+            echo "[MIGRATION][CONNECT] ✅ PostgreSQL is accepting connections"
+
+            # Perform authenticated SQL probe to ensure DB truly ready
+            if PGPASSWORD="$STAREXEC_DB_PASSWORD" psql -h "$STAREXEC_DB_HOST" -p "$STAREXEC_DB_PORT" -U "$STAREXEC_DB_USER" -d "$STAREXEC_DB_NAME" -c "SELECT 1;" >/dev/null 2>&1; then
+              echo "[MIGRATION][CONNECT] ✅ Authenticated SQL probe succeeded"
+              break
+            fi
+          fi
+
+          retry_count=$((retry_count + 1))
+          if [ $retry_count -eq $max_retries ]; then
+            echo "[MIGRATION][ERROR] ❌ PostgreSQL not available after $((max_retries * wait_time)) seconds"
+            echo "[MIGRATION][ERROR]    Host: $STAREXEC_DB_HOST:$STAREXEC_DB_PORT"
+            exit 2
+          fi
+
+          printf "[MIGRATION][CONNECT] Waiting... (attempt %d/%d)\n" "$retry_count" "$max_retries"
+          sleep $wait_time
+        done
+        echo ""
+
+        # =====================================================================
+        # STEP 3: Verify Migration Files Exist
+        # =====================================================================
+        echo "[MIGRATION][FILES] Verifying migration files..."
+        if [ ! -d "$MIGRATIONS_DIR" ]; then
+          echo "[MIGRATION][ERROR] ❌ Migration directory not found: $MIGRATIONS_DIR"
+          echo "[MIGRATION][ERROR]    Ensure WAR file includes WEB-INF/classes/db/migration/"
+          exit 1
+        fi
+
+        migration_count=$(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name "*.sql" 2>/dev/null | wc -l)
+        echo "[MIGRATION][FILES] ✅ Found $migration_count migration SQL files"
+        echo ""
+
+        # =====================================================================
+        # STEP 4: Execute Flyway Migrations
+        # =====================================================================
+        echo "[MIGRATION][EXECUTE] Executing Flyway migrations..."
+        echo "[MIGRATION][EXECUTE] Target: jdbc:postgresql://${STAREXEC_DB_HOST}:${STAREXEC_DB_PORT}/${STAREXEC_DB_NAME}"
+        echo "[MIGRATION][EXECUTE] Schema: $STAREXEC_DB_SCHEMA"
+        echo "[MIGRATION][EXECUTE] User: $STAREXEC_DB_USER"
+        echo "[MIGRATION][EXECUTE] Password: ***REDACTED***"
+        echo ""
+
+        # Execute EmbeddedFlywayLauncher
+        # IMPORTANT: Credentials are passed ONLY via environment variables
+        # NEVER via system properties (-D flags)
+        # This prevents credential exposure via process inspection
+        if java -cp "$CLASSPATH" \
+               org.starexec.migration.EmbeddedFlywayLauncher; then
+          migration_exit_code=0
+        else
+          migration_exit_code=$?
+        fi
+
+        echo ""
+        echo "========================================================================"
+
+        # =====================================================================
+        # STEP 5: Report Results
+        # =====================================================================
+        if [ $migration_exit_code -eq 0 ]; then
+          echo "[MIGRATION][SUCCESS] ✅ All database migrations applied successfully"
+          echo "[MIGRATION][SUCCESS] Database schema is now up-to-date"
+          exit 0
+        else
+          echo "[MIGRATION][FAILURE] ❌ Database migration failed with exit code $migration_exit_code"
+          echo "[MIGRATION][FAILURE] Check logs above for details"
+          echo "[MIGRATION][FAILURE] Database may be in an inconsistent state"
+          exit 3
+        fi
+
+    # Environment variables passed to migration service
+    # All credentials come from environment, never from system properties
+    environment:
+      STAREXEC_DB_HOST: postgres
+      STAREXEC_DB_PORT: 5432
+      STAREXEC_DB_NAME: starexec
+      STAREXEC_DB_USER: starexec
+      STAREXEC_DB_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
+      STAREXEC_DB_SCHEMA: starexec
+
+    # Depends on PostgreSQL being healthy before migrations can run
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - starexec_network
+
+    # Do not restart on completion (ephemeral container)
+    # Exit code 0 = success, non-zero = failure
+    restart: "no"
+
+  # ==============================================================================
+  # StarExec Application Service
+  # ==============================================================================
+  # Main application container running Tomcat with StarExec application.
+  #
+  # Dependencies:
+  #   - postgres (service_healthy): Database must be accepting connections
+  #   - migrations (service_completed_successfully): Migrations must complete before app starts
+  #
+  # Architecture:
+  #   - SKIP_MIGRATIONS=true: App doesn't try to run migrations (migrations service handles it)
+  #   - Waits for BOTH postgres and migrations to be ready before starting
+  #   - This ensures database schema is always up-to-date before app tries to use it
+  #
+  # ==============================================================================
   starexec:
     container_name: starexec-app
-    image: ghcr.io/starexecmiami/starexec:latest
+    image: ghcr.io/starexecmiami/starexec:${STAREXEC_VERSION:-latest}
+
     ports:
       - "8080:8080"
+
     environment:
       # Database Configuration
       STAREXEC_DB_HOST: postgres
@@ -22,6 +263,10 @@ services:
       STAREXEC_DB_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
       STAREXEC_DB_NAME: starexec
       STAREXEC_REPORT_HOST: postgres
+
+      # Skip migrations in app (migrations service handles it)
+      # This prevents duplicate migration attempts and potential conflicts
+      SKIP_MIGRATIONS: "true"
 
       # Email Configuration
       STAREXEC_EMAIL_SMTP: localhost
@@ -58,36 +303,24 @@ services:
       - sandbox:/app/sandbox
       - backend:/app/backend
       - work:/app/work
+
+    # Wait for BOTH services to be ready
+    # postgres: Must be accepting connections (health check)
+    # migrations: Must complete successfully (exit code 0)
     depends_on:
       postgres:
         condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
     networks:
       - starexec_network
 
-  postgres:
-    container_name: starexec-postgres
-    image: postgres:15
-    environment:
-      POSTGRES_DB: starexec
-      POSTGRES_USER: starexec
-      POSTGRES_PASSWORD: ${STAREXEC_DB_PASSWORD:-starexec_dev_password}
-      # Ensure UTF-8 collation/ctype so PostgreSQL behaves like typical UTF-8 installs
-      # Note: these take effect when the DB cluster is initialized; if the volume
-      # already contains an initialized database, re-init or remove the volume.
-      LC_COLLATE: en_US.UTF-8
-      LC_CTYPE: en_US.UTF-8
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U starexec"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    networks:
-      - starexec_network
-
+# ==============================================================================
+# Volumes
+# ==============================================================================
+# Named volumes for data persistence across container restarts
+# ==============================================================================
 volumes:
   data:
     name: ${VOLUME_PREFIX:-starexec}_data
@@ -100,6 +333,11 @@ volumes:
   postgres_data:
     name: ${VOLUME_PREFIX:-starexec}_postgres
 
+# ==============================================================================
+# Networks
+# ==============================================================================
+# Bridge network for inter-container communication
+# ==============================================================================
 networks:
   starexec_network:
     driver: bridge
