@@ -91,6 +91,32 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up JDK 17 for WAR build
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Build WAR artifact
+        run: |
+          cd starexec-app
+          mvn clean package -DskipTests -B -q
+          echo "✓ WAR artifact built successfully"
+
+      - name: Build Docker image locally
+        run: |
+          echo "Building Docker image from Dockerfile..."
+          docker build \
+            --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+            --build-arg VCS_REF=${{ github.sha }} \
+            --build-arg VERSION=${{ github.sha }} \
+            -t ghcr.io/starexecmiami/starexec:latest \
+            -t ghcr.io/starexecmiami/starexec:${{ github.sha }} \
+            .
+          echo "✓ Docker image built successfully"
+          docker images | grep starexec
+
       - name: Start PostgreSQL service
         env:
           STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
