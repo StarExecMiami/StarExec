@@ -1,441 +1,105 @@
-{{- /*
- SECURE DEPLOYMENT CONFIGURATION
- ================================
-
- This template implements security best practices:
-
- 1. NON-ROOT EXECUTION
-    - App runs as starexec:1000 (not root)
-    - PostgreSQL runs as postgres:999
-    - Prevents privilege escalation attacks
-
- 2. CAPABILITY DROPPING
-    - All Linux capabilities dropped by default
-    - Only re-add capabilities if absolutely necessary
-    - Prevents container escape via capability abuse
-
- 3. DooD SOCKET HARDENING
-    - Socket mounted as READ-ONLY to limit damage
-    - Requires OPA Gatekeeper policies to prevent privileged container creation
-    - Alternative: Use Kubernetes-native jobs instead (preferred for production)
-
- 4. RESOURCE LIMITS
-    - Memory and CPU limits enforced
-    - Prevents resource exhaustion attacks
-
- MIGRATION FROM CURRENT DEPLOYMENT:
- - This is a SEPARATE template (deployment-secure.yaml)
- - Gradually migrate via Helm values:
-     helm install starexec ./charts/starexec -f values-security-hardened.yaml
- - After validation, make this the default deployment.yaml
-
- SECURITY AUDIT CHECKLIST:
- - [ ] Run compliance scan: kubectl-score score starexec
- - [ ] Verify non-root: kubectl get pod -o jsonpath='{.items[*].spec.containers[*].securityContext.runAsUser}'
- - [ ] Test readiness/liveness probes work with non-root user
- - [ ] Verify volume mounts have correct permissions
- - [ ] Run pod security standards audit
-*/ -}}
-{{- $volumePrefix := default "starexec" .Values.volumePrefix }}
-{{- $dataName := or .Values.persistence.podmanVolumes.data.name (printf "%s-data" $volumePrefix) }}
-{{- $postgresName := or .Values.persistence.podmanVolumes.postgres.name (printf "%s-postgres" $volumePrefix) }}
-
-{{- if or .Values.persistence.usePodmanVolumes .Values.persistence.useHostPathForPodman }}
-apiVersion: v1
-kind: Pod
-metadata:
-  name: {{ include "chart.name" . }}
-  labels:
-    app: {{ include "chart.name" . }}
-    security-hardened: "true"
-spec:
-  restartPolicy: Always
-
-  # Pod-level security context
-  securityContext:
-    fsGroup: 1000              # starexec group - ensures mounted volumes are accessible
-    seccompProfile:
-      type: RuntimeDefault     # Use default seccomp profile (blocks dangerous syscalls)
-
-  volumes:
-    - name: data
-      {{- if .Values.persistence.usePodmanVolumes }}
-      persistentVolumeClaim:
-        claimName: {{ tpl $dataName . }}
-      {{- else }}
-      hostPath:
-        path: /tmp/starexec-data
-        type: DirectoryOrCreate
-      {{- end }}
-
-    - name: postgres-data
-      {{- if and .Values.postgres.persistence.enabled .Values.persistence.usePodmanVolumes }}
-      persistentVolumeClaim:
-        claimName: {{ tpl $postgresName . }}
-      {{- else if .Values.persistence.useHostPathForPodman }}
-      hostPath:
-        path: /tmp/postgres-data
-        type: DirectoryOrCreate
-      {{- else }}
-      emptyDir: {}
-      {{- end }}
-
-    {{- if eq .Values.backend.type "podman" }}
-    # SECURITY WARNING: DooD Socket Mounting
-    # ========================================
-    # This mounts the container engine socket, allowing job containers to be created.
-    #
-    # RISKS:
-    # - Containers can create privileged containers and escape
-    # - Containers can mount host filesystems
-    # - Containers can access host network
-    #
-    # MITIGATIONS (in order of preference):
-    # 1. RECOMMENDED: Use Kubernetes-native job execution instead
-    #    - Replace PodmanBackend with KubernetesNativeBackend
-    #    - Jobs run as native Kubernetes resources with proper RBAC
-    #    - No socket mounting needed
-    #
-    # 2. Use Podman API over mTLS (if DooD is unavoidable)
-    #    - Mount certs instead of socket
-    #    - Requires HTTPS with mutual TLS authentication
-    #    - See: docs/PODMAN_API_MTLS.md
-    #
-    # 3. Use OPA Gatekeeper to restrict container creation
-    #    - Prevent privileged containers
-    #    - Prevent host mount access
-    #    - Enforce resource limits on created containers
-    #    - See: docs/OPA_GATEKEEPER_POLICIES.md
-    #
-    # 4. Mount socket as READ-ONLY (implemented below)
-    #    - Limits damage from accidental misuse
-    #    - Does NOT prevent intentional privilege escalation
-    - name: container-socket
-      hostPath:
-        path: {{ ((.Values.containerSocket).hostPath) | default "/run/user/1000/podman/podman.sock" }}
-        type: Socket
-    {{- end }}
-
-    # Temp directory for Tomcat
-    - name: tmp
-      emptyDir: {}
-
-  containers:
-    - name: app
-      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-      imagePullPolicy: {{ .Values.image.pullPolicy }}
-
-      # CONTAINER-LEVEL SECURITY CONTEXT
-      # =================================
-      securityContext:
-        # USER EXECUTION
-        runAsUser: 1000                    # Run as 'starexec' (non-root)
-        runAsGroup: 1000                   # Run as 'starexec' group
-        runAsNonRoot: true                 # ENFORCE non-root at container runtime
-        fsGroup: 1000                      # Files created with gid=1000
-
-        # PRIVILEGE ESCALATION PREVENTION
-        allowPrivilegeEscalation: false    # Prevent setuid/setgid in container
-        readOnlyRootFilesystem: false      # Tomcat needs /tmp, /var/log
-
-        # CAPABILITY DROPPING
-        capabilities:
-          drop:
-            - ALL                          # Drop ALL Linux capabilities
-            - NET_RAW                      # Can't create raw sockets (prevents packet sniffing)
-            - SYS_PTRACE                   # Can't trace other processes
-            - SYS_MODULE                   # Can't load kernel modules
-            - SYS_BOOT                     # Can't reboot system
-            - CHOWN                        # Can't change file ownership
-            - DAC_OVERRIDE                 # Can't bypass file permissions
-          # Only add back if absolutely necessary:
-          # add:
-          #   - NET_BIND_SERVICE           # Needed if binding to ports < 1024
-
-      ports:
-        - name: http
-          containerPort: 8080
-          hostPort: 7827
-
-      env:
-        - name: STAREXEC_DB_HOST
-          value: {{ .Values.postgres.host | quote }}
-        - name: STAREXEC_DB_PORT
-          value: {{ .Values.postgres.port | quote }}
-        - name: STAREXEC_DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.user | default "user" }}
-        - name: STAREXEC_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.password | default "password" }}
-        - name: STAREXEC_DB_NAME
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.database | default "database" }}
-        - name: STAREXEC_CLUSTER_DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.user | default "user" }}
-        - name: STAREXEC_CLUSTER_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.password | default "password" }}
-        - name: STAREXEC_REPORT_HOST
-          value: {{ .Values.postgres.host | quote }}
-        - name: STAREXEC_BACKEND_TYPE
-          value: {{ .Values.backend.type | quote }}
-        - name: STAREXEC_BACKEND_ROOT
-          value: {{ .Values.backend.root | quote }}
-        - name: STAREXEC_BACKEND_WORKING_DIR
-          value: {{ .Values.backend.workingDir | quote }}
-        - name: STAREXEC_DATA_DIR
-          value: {{ .Values.dataDir | quote }}
-        - name: STAREXEC_SANDBOX_DIR
-          value: {{ .Values.sandboxDir | quote }}
-
-        # SCALABILITY TUNING PARAMETERS (with documentation)
-        {{- if .Values.scalability }}
-        - name: STAREXEC_NUM_JOB_PAIRS_AT_A_TIME
-          value: {{ .Values.scalability.numJobPairsAtATime | default 5 | quote }}
-        - name: STAREXEC_NODE_MULTIPLIER
-          value: {{ .Values.scalability.nodeMultiplier | default 16 | quote }}
-        - name: STAREXEC_CONTAINER_MONITOR_POLL_MS
-          value: {{ .Values.scalability.containerMonitorPollMs | default 5000 | quote }}
-        {{- end }}
-
-        {{- if eq .Values.backend.type "podman" }}
-        # DooD Path Translation
-        - name: STAREXEC_CONTAINER_DATA_PATH
-          value: {{ .Values.dataDir | quote }}
-        {{- if .Values.backend.hostDataPath }}
-        - name: STAREXEC_CONTAINER_HOST_DATA_PATH
-          value: {{ .Values.backend.hostDataPath | quote }}
-        {{- end }}
-        - name: STAREXEC_CONTAINER_NETWORK_MODE
-          value: {{ .Values.backend.networkMode | default "podman-default-kube-network" | quote }}
-        - name: STAREXEC_CONTAINER_DB_HOST
-          value: {{ .Values.backend.jobDbHost | default "postgres" | quote }}
-        {{- end }}
-
-        {{- range $key, $value := .Values.env }}
-        - name: {{ $key }}
-          value: {{ $value | quote }}
-        {{- end }}
-
-      volumeMounts:
-        - name: data
-          mountPath: /app/data
-        - name: tmp
-          mountPath: /tmp
-        {{- if eq .Values.backend.type "podman" }}
-        - name: container-socket
-          mountPath: /var/run/docker.sock
-          readOnly: true                   # SECURITY: Mount as read-only to limit damage
-        {{- end }}
-
-      # RESOURCE LIMITS AND REQUESTS
-      resources:
-        requests:
-          memory: "1Gi"
-          cpu: "500m"
-        limits:
-          memory: "2Gi"
-          cpu: "2"
-
-      # HEALTH CHECKS
-      livenessProbe:
-        httpGet:
-          path: /starexec/
-          port: http
-          scheme: HTTP
-        initialDelaySeconds: 60
-        periodSeconds: 30
-        timeoutSeconds: 10
-        failureThreshold: 3
-
-      readinessProbe:
-        httpGet:
-          path: /starexec/
-          port: http
-          scheme: HTTP
-        initialDelaySeconds: 30
-        periodSeconds: 10
-        timeoutSeconds: 5
-        failureThreshold: 3
-
-    # PostgreSQL Container
-    - name: postgres
-      image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
-      imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
-
-      # CONTAINER-LEVEL SECURITY CONTEXT FOR POSTGRES
-      securityContext:
-        runAsUser: 999                    # postgres user
-        runAsGroup: 999                   # postgres group
-        runAsNonRoot: true
-        fsGroup: 999
-        allowPrivilegeEscalation: false
-        readOnlyRootFilesystem: false
-        capabilities:
-          drop:
-            - ALL
-
-      ports:
-        - name: postgresql
-          containerPort: 5432
-          hostPort: 5432
-
-      env:
-        - name: POSTGRES_DB
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.database | default "database" }}
-        - name: POSTGRES_USER
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.user | default "user" }}
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.postgres.existingSecret | default (printf "%s-secret-postgres" (include "chart.name" .)) }}
-              key: {{ .Values.postgres.existingSecretKeys.rootPassword | default "rootPassword" }}
-        - name: LC_COLLATE
-          value: "en_US.UTF-8"
-        - name: LC_CTYPE
-          value: "en_US.UTF-8"
-
-      volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
-        - name: tmp
-          mountPath: /tmp
-
-      resources:
-        requests:
-          memory: "512Mi"
-          cpu: "250m"
-        limits:
-          memory: "1Gi"
-          cpu: "1"
-
-      livenessProbe:
-        exec:
-          command:
-            - /bin/sh
-            - -c
-            - pg_isready -U postgres
-        initialDelaySeconds: 30
-        periodSeconds: 10
-        timeoutSeconds: 5
-        failureThreshold: 3
-
-{{- else }}
----
-# KUBERNETES NATIVE DEPLOYMENT (Non-Podman)
-# ==========================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "chart.name" . }}
+  name: starexec
   labels:
-    app: {{ include "chart.name" . }}
-    security-hardened: "true"
+    app: starexec
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: 1
   selector:
     matchLabels:
-      app: {{ include "chart.name" . }}
-
+      app: starexec
   template:
     metadata:
       labels:
-        app: {{ include "chart.name" . }}
-
+        app: starexec
     spec:
-      # Pod-level security context
+      restartPolicy: Always
       securityContext:
-        fsGroup: 1000
+        fsGroup: 999
         seccompProfile:
           type: RuntimeDefault
-
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "Ensuring directories exist (skipping chown)..."
+              mkdir -p /app/data /var/lib/postgresql/data
+              echo "Note: chown skipped to avoid permission errors on mounted volumes"
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            # keep default capabilities to allow filesystem ownership changes
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: starexec-data-pvc
+        - name: postgres-data
+{{- if .Values.postgres.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: starexec-postgres-pvc
+{{- else }}
+          emptyDir: {}
+{{- end }}
+        - name: tmp
+          emptyDir: {}
       containers:
-        # Application Container
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: STAREXEC_DB_HOST
+              value: "localhost"
+            - name: STAREXEC_DB_PORT
+              value: "5432"
+            - name: STAREXEC_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: user
+            - name: STAREXEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: password
+            - name: STAREXEC_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: database
+            - name: STAREXEC_BACKEND_TYPE
+              value: "local"
+            - name: STAREXEC_DATA_DIR
+              value: "/app/data"
+            - name: STAREXEC_SANDBOX_DIR
+              value: "/app/sandbox"
+            - name: SKIP_MIGRATIONS
+              value: "{{ if .Values.migrations.enabled }}false{{ else }}true{{ end }}"
           securityContext:
             runAsUser: 1000
-            runAsGroup: 1000
+            runAsGroup: 999
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
             capabilities:
               drop:
                 - ALL
-
-          ports:
-            - name: http
-              containerPort: 7827
-
-          env:
-            - name: STAREXEC_DB_HOST
-              value: {{ .Values.postgres.host | quote }}
-            - name: STAREXEC_DB_PORT
-              value: {{ .Values.postgres.port | quote }}
-            - name: STAREXEC_DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-postgres
-                  key: user
-            - name: STAREXEC_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-postgres
-                  key: password
-            - name: STAREXEC_DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-postgres
-                  key: database
-            - name: STAREXEC_BACKEND_TYPE
-              value: {{ .Values.backend.type | quote }}
-            - name: STAREXEC_BACKEND_ROOT
-              value: {{ .Values.backend.root | quote }}
-            - name: STAREXEC_BACKEND_WORKING_DIR
-              value: {{ .Values.backend.workingDir | quote }}
-            - name: STAREXEC_DATA_DIR
-              value: {{ $.Values.dataDir | quote }}
-            - name: STAREXEC_SANDBOX_DIR
-              value: {{ $.Values.sandboxDir | quote }}
-
-            {{- if .Values.scalability }}
-            - name: STAREXEC_NUM_JOB_PAIRS_AT_A_TIME
-              value: {{ .Values.scalability.numJobPairsAtATime | default 5 | quote }}
-            - name: STAREXEC_NODE_MULTIPLIER
-              value: {{ .Values.scalability.nodeMultiplier | default 16 | quote }}
-            - name: STAREXEC_CONTAINER_MONITOR_POLL_MS
-              value: {{ .Values.scalability.containerMonitorPollMs | default 5000 | quote }}
-            {{- end }}
-
-            {{- range $key, $value := $.Values.env }}
-            - name: {{ $key }}
-              value: {{ $value | quote }}
-            {{- end }}
-
           volumeMounts:
             - name: data
               mountPath: /app/data
-
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               memory: "1Gi"
@@ -443,96 +107,77 @@ spec:
             limits:
               memory: "2Gi"
               cpu: "2"
-
           livenessProbe:
             httpGet:
               path: /starexec/
               port: http
+              scheme: HTTP
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 3
-
           readinessProbe:
             httpGet:
               path: /starexec/
               port: http
+              scheme: HTTP
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-
-        # PostgreSQL Container
         - name: postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
-
-          securityContext:
-            runAsUser: 999
-            runAsGroup: 999
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-
           ports:
             - name: postgresql
               containerPort: 5432
-
           env:
             - name: POSTGRES_DB
-              value: {{ .Values.postgres.database | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: database
             - name: POSTGRES_USER
-              value: {{ .Values.postgres.user | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: user
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.name" . }}-secret-postgres
+                  name: starexec-postgres-credentials
                   key: password
             - name: LC_COLLATE
               value: "en_US.UTF-8"
             - name: LC_CTYPE
               value: "en_US.UTF-8"
-
+          securityContext:
+            # Run postgres container as the postgres user (non-root).
+            # Rely on the pod-level fsGroup to set group ownership on mounts.
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
-
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
-              memory: "512Mi"
+              memory: "256Mi"
               cpu: "250m"
             limits:
-              memory: "1Gi"
-              cpu: "1"
-
+              memory: "512Mi"
+              cpu: "500m"
           livenessProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - pg_isready -U postgres
+                - pg_isready -U starexec
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-
-      volumes:
-        - name: data
-          {{- if .Values.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "chart.name" . }}-pvc
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
-
-        - name: postgres-data
-          {{- if .Values.postgres.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "chart.name" . }}-postgres-pvc
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
-
-{{- end }}
