@@ -536,7 +536,7 @@ define cleanup_deployment
 		fi \
 	done
 	@for key in user password database rootPassword; do \
-		podman secret rm $(RELEASE_NAME)-$(SECRET_NAME)-$$key 2>/dev/null || true; \
+		podman secret rm starexec-starexec-postgres-credentials-$$key 2>/dev/null || true; \
 	done
 endef
 
@@ -580,13 +580,14 @@ deploy-podman-helm:
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@echo "Rendering secrets..."
-	@# Extract secrets directly from Helm template without writing to disk
-	@helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" | \
-	yq -r '.data | to_entries | .[] | .key + "=" + .value' | \
-	while read -r line; do \
-		key=$${line%%=*}; val=$${line#*=}; \
-		echo "$$val" | base64 --decode | podman secret create $(RELEASE_NAME)-$(SECRET_NAME)-$$key -; \
-	done
+	@# Extract the rendered secret's metadata.name then create podman secrets
+	SECRET_META_NAME="$$(helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" | yq -r '.metadata.name')"; \
+	helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" | \
+		yq -r '.data | to_entries | .[] | .key + "=" + .value' | \
+		while read -r line; do \
+			key=$${line%%=*}; val=$${line#*=}; \
+			echo "$$val" | base64 --decode | podman secret create "$${SECRET_META_NAME}-$${key}" -; \
+		done
 	@echo "Deploying application pod..."
 	@IMAGE_REPO="$(RELEASE_NAME)"; \
 	IMAGE_VER="$(IMAGE_TAG)"; \

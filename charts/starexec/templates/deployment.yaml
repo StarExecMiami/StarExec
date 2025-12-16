@@ -66,17 +66,17 @@ spec:
             - name: STAREXEC_DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: starexec-postgres-credentials
+                  name: {{ include "chart.fullname" . }}-postgres-credentials
                   key: user
             - name: STAREXEC_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: starexec-postgres-credentials
+                  name: {{ include "chart.fullname" . }}-postgres-credentials
                   key: password
             - name: STAREXEC_DB_NAME
               valueFrom:
                 secretKeyRef:
-                  name: starexec-postgres-credentials
+                  name: {{ include "chart.fullname" . }}-postgres-credentials
                   key: database
             - name: STAREXEC_BACKEND_TYPE
               value: "{{ .Values.backend.type }}"
@@ -143,17 +143,17 @@ spec:
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: starexec-postgres-credentials
+                  name: {{ include "chart.fullname" . }}-postgres-credentials
                   key: database
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: starexec-postgres-credentials
+                  name: {{ include "chart.fullname" . }}-postgres-credentials
                   key: user
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: starexec-postgres-credentials
+                  name: {{ include "chart.fullname" . }}-postgres-credentials
                   key: password
             - name: LC_COLLATE
               value: "en_US.UTF-8"
