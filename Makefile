@@ -845,18 +845,18 @@ LOG_LINES_DB?=30
 
 logs:
 	@echo "=== Application Logs (last $(LOG_LINES_APP) lines) ==="
-	@podman logs --tail $(LOG_LINES_APP) $(APP_CONTAINER) 2>&1 || echo "App container not running"
+	@podman logs --tail $(LOG_LINES_APP) $$(podman ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1) 2>&1 || echo "App container not running"
 	@echo ""
 	@echo "=== PostgreSQL Logs (last $(LOG_LINES_DB) lines) ==="
-	@podman logs --tail $(LOG_LINES_DB) $(DB_CONTAINER) 2>&1 || echo "Postgres container not running"
+	@podman logs --tail $(LOG_LINES_DB) $$(podman ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1) 2>&1 || echo "Postgres container not running"
 
 logs-app:
 	@echo "Following application logs (Ctrl+C to stop)..."
-	@podman logs -f $(APP_CONTAINER)
+	@podman logs -f $$(podman ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1)
 
 logs-postgres:
 	@echo "Following PostgreSQL logs (Ctrl+C to stop)..."
-	@podman logs -f $(DB_CONTAINER)
+	@podman logs -f $$(podman ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1)
 
 test: test-deps
 	@mvn test
