@@ -231,6 +231,12 @@ RUN cd ${CATALINA_HOME}/webapps && \
     ln -sf ${CATALINA_HOME}/webapps/starexec /starexec && \
     chown -R starexec:starexec ${CATALINA_HOME}/webapps/starexec /starexec
 
+# Copy migration SQL files into the image to ensure they are available
+# at container startup (avoid race with WAR expansion). These will be used
+# by the embedded Flyway launcher executed from the entrypoint.
+COPY --from=builder --chown=starexec:starexec /build/starexec-app/src/main/resources/db/migration /app/migrations
+RUN chmod -R a+r /app/migrations && chown -R starexec:starexec /app/migrations || true
+
 # Copy default pictures (only the files needed)
 COPY --from=builder /build/starexec-app/src/main/resources/static/default-pics/* /app/data/pictures/
 RUN chmod -R a+r /app/data/pictures && \

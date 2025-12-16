@@ -283,33 +283,42 @@ run_database_migrations() {
     echo "[MIGRATION][3/5] Locating Flyway migration files and classpath..."
 
     local WEBAPP_DIR="${CATALINA_HOME}/webapps/starexec"
-    local MIGRATIONS_DIR="${WEBAPP_DIR}/WEB-INF/classes/db/migration"
+    # Prefer image-bundled migrations to avoid race with WAR expansion
+    local MIGRATIONS_DIR="/app/migrations"
 
-    # If WAR not expanded, attempt extraction (harmless if already expanded)
-    if [ ! -d "${WEBAPP_DIR}/WEB-INF" ]; then
-        echo "[MIGRATION][WARN]    WAR not yet expanded at ${WEBAPP_DIR}; attempting extraction..."
-        if [ ! -f "${CATALINA_HOME}/webapps/starexec.war" ]; then
-            echo "[MIGRATION][ERROR] ❌ WAR file not found at ${CATALINA_HOME}/webapps/starexec.war"
-            echo "[MIGRATION][ERROR]    Cannot proceed without application archive"
-            echo "[MIGRATION][ERROR]    Exit code: 1"
-            return 1
-        fi
-
-        mkdir -p "$WEBAPP_DIR"
-        cd "$WEBAPP_DIR" || { echo "[MIGRATION][ERROR] Could not cd to $WEBAPP_DIR"; return 1; }
-        unzip -q "${CATALINA_HOME}/webapps/starexec.war"
-        echo "[MIGRATION][INFO]    ✅ WAR extracted successfully"
-    else
-        echo "[MIGRATION][INFO]    ✅ WAR already expanded"
-    fi
-
-    if [ ! -d "$MIGRATIONS_DIR" ]; then
-        echo "[MIGRATION][WARN]    Migration directory not found at $MIGRATIONS_DIR"
-        echo "[MIGRATION][WARN]    This may be a new installation; Flyway will baseline if necessary"
-    else
+    if [ -d "$MIGRATIONS_DIR" ]; then
         local migration_count
         migration_count=$(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name "*.sql" | wc -l | tr -d ' ')
-        echo "[MIGRATION][INFO]    ✅ Found ${migration_count:-0} migration files in $MIGRATIONS_DIR"
+        echo "[MIGRATION][INFO]    ✅ Found ${migration_count:-0} migration files in $MIGRATIONS_DIR (image-bundled)"
+    else
+        # Fallback: attempt to use migrations inside the exploded WAR (legacy behavior)
+        MIGRATIONS_DIR="${WEBAPP_DIR}/WEB-INF/classes/db/migration"
+        # If WAR not expanded, attempt extraction (harmless if already expanded)
+        if [ ! -d "${WEBAPP_DIR}/WEB-INF" ]; then
+            echo "[MIGRATION][WARN]    WAR not yet expanded at ${WEBAPP_DIR}; attempting extraction..."
+            if [ ! -f "${CATALINA_HOME}/webapps/starexec.war" ]; then
+                echo "[MIGRATION][ERROR] ❌ WAR file not found at ${CATALINA_HOME}/webapps/starexec.war"
+                echo "[MIGRATION][ERROR]    Cannot proceed without application archive or image-bundled migrations"
+                echo "[MIGRATION][ERROR]    Exit code: 1"
+                return 1
+            fi
+
+            mkdir -p "$WEBAPP_DIR"
+            cd "$WEBAPP_DIR" || { echo "[MIGRATION][ERROR] Could not cd to $WEBAPP_DIR"; return 1; }
+            unzip -q "${CATALINA_HOME}/webapps/starexec.war"
+            echo "[MIGRATION][INFO]    ✅ WAR extracted successfully"
+        else
+            echo "[MIGRATION][INFO]    ✅ WAR already expanded"
+        fi
+
+        if [ ! -d "$MIGRATIONS_DIR" ]; then
+            echo "[MIGRATION][WARN]    Migration directory not found at $MIGRATIONS_DIR"
+            echo "[MIGRATION][WARN]    This may be a new installation; Flyway will baseline if necessary"
+        else
+            local migration_count
+            migration_count=$(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name "*.sql" | wc -l | tr -d ' ')
+            echo "[MIGRATION][INFO]    ✅ Found ${migration_count:-0} migration files in $MIGRATIONS_DIR (from WAR)"
+        fi
     fi
     echo ""
 
