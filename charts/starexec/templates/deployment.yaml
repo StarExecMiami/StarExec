@@ -33,11 +33,8 @@ spec:
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false
-            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
             # keep default capabilities to allow filesystem ownership changes
-            - name: postgres-data
-              mountPath: /var/lib/postgresql/data
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -56,11 +53,14 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
-              containerPort: 8080
+             - name: http
+               containerPort: 8080
+{{- if eq .Values.deploymentMode "podman" }}
+               hostPort: 7827
+{{- end }}
           env:
             - name: STAREXEC_DB_HOST
-              value: "localhost"
+              value: "{{ .Values.postgres.host }}"
             - name: STAREXEC_DB_PORT
               value: "5432"
             - name: STAREXEC_DB_USER
@@ -79,13 +79,21 @@ spec:
                   name: starexec-postgres-credentials
                   key: database
             - name: STAREXEC_BACKEND_TYPE
-              value: "local"
+              value: "{{ .Values.backend.type }}"
+            - name: STAREXEC_CONTAINER_SOCKET
+              value: "unix:///run/podman/podman.sock"
+            - name: STAREXEC_CONTAINER_JOB_IMAGE
+              value: "starexec/job-runner:latest"
             - name: STAREXEC_DATA_DIR
               value: "/app/data"
             - name: STAREXEC_SANDBOX_DIR
               value: "/app/sandbox"
             - name: SKIP_MIGRATIONS
               value: "{{ if .Values.migrations.enabled }}false{{ else }}true{{ end }}"
+{{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+{{- end }}
           securityContext:
             runAsUser: 1000
             runAsGroup: 999

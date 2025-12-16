@@ -1,0 +1,20 @@
+kubernetes:
+  enabled: false
+
+image:
+  repository: ghcr.io/starexecmiami/starexec
+  tag: latest
+
+postgres:
+  existingSecret: "starexec-secret-postgres"
+  existingSecretKeys:
+    user: "user"
+    password: "password"
+    database: "database"
+    rootPassword: "rootPassword"
+  persistence:
+    enabled: false
+
+# Set pod fsGroup to 999 for postgres compatibility
+podSecurityContext:
+  fsGroup: 999

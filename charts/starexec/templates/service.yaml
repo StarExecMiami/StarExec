@@ -1,31 +1,20 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "chart.fullname" . }}
+  name: starexec
   labels:
-    app: {{ include "chart.name" . }}
+    app: starexec
 spec:
+  type: {{ .Values.service.type }}
   selector:
-    app: {{ include "chart.name" . }}
+    app: starexec
   ports:
-    - protocol: TCP
-      port: 8080
-      targetPort: 8080
-  type: ClusterIP # Podman does not support LoadBalancer or NodePort
-
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "chart.fullname" . }}-postgres
-  labels:
-    app: {{ include "chart.name" . }}-postgres
-spec:
-  type: ClusterIP
-  ports:
-    - protocol: TCP
+    - name: http
+      port: {{ .Values.service.port | default 8080 }}
+      targetPort: {{ .Values.service.targetPort | default 8080 }}
+      {{- if eq .Values.service.type "NodePort" }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+    - name: postgres
       port: 5432
       targetPort: 5432
-  selector:
-    app: {{ include "chart.name" . }}-postgres

@@ -1,159 +1,44 @@
-{{- /*
-  Database Migration Job
-
-  Runs Flyway migrations using the EmbeddedFlywayLauncher built into the application.
-  This job runs as a pre-install/pre-upgrade hook to ensure the database schema
-  is up-to-date before the application starts.
-
-  SECURITY NOTE: This template has been updated to pass credentials ONLY via
-  environment variables, never via system properties (-D flags).
-
-  The container image includes flyway-core in WEB-INF/lib and the
-  EmbeddedFlywayLauncher class reads credentials exclusively from environment
-  variables via System.getenv(), preventing exposure via process inspection.
-
-  Migration Flow:
-    1. Hook runs before application deployment
-    2. Waits for PostgreSQL to be ready (via healthcheck)
-    3. Reads STAREXEC_DB_* variables from K8s Secret
-    4. Executes EmbeddedFlywayLauncher (no -D properties)
-    5. Exits with code 0 (success) or non-zero (failure)
-    6. Job is cleaned up after completion (ttlSecondsAfterFinished)
-
-  NOTE: This job is ONLY used when postgres.host is NOT localhost (i.e., external database).
-  When postgres runs in the same pod (localhost), the application entrypoint handles
-  migrations automatically at startup, so this job is skipped.
-*/ -}}
-{{- if and .Values.migrations.enabled (ne .Values.postgres.host "localhost") }}
+{{- if .Values.migrations.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "chart.fullname" . }}-migrate
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "chart.fullname" . }}-migrations
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-    app.kubernetes.io/component: migration
+{{ include "chart.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  backoffLimit: 3
-  activeDeadlineSeconds: 3600  # 1 hour timeout for migrations
-  ttlSecondsAfterFinished: 300  # Clean up job 5 minutes after completion
   template:
     metadata:
       labels:
-        {{- include "chart.labels" . | nindent 8 }}
-        app.kubernetes.io/component: migration
+{{ include "chart.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "chart.serviceAccountName" . }}
-      securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-
-      containers:
-      - name: flyway
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-
-        securityContext:
-          {{- toYaml .Values.securityContext | nindent 12 }}
-
-        command:
-          - /bin/sh
-          - -c
-          - |
-            set -euo pipefail
-
-            # Configuration validation
-            if [ -z "${STAREXEC_DB_HOST:-}" ]; then
-              echo "[MIGRATION][ERROR] ❌ STAREXEC_DB_HOST environment variable is not set"
-              exit 1
-            fi
-
-            if [ -z "${STAREXEC_DB_PASSWORD:-}" ]; then
-              echo "[MIGRATION][ERROR] ❌ STAREXEC_DB_PASSWORD environment variable is not set"
-              exit 1
-            fi
-
-            # Set defaults for optional variables
-            STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"
-            STAREXEC_DB_SCHEMA="${STAREXEC_DB_SCHEMA:-starexec}"
-
-            WEBAPP_DIR="/usr/local/tomcat/webapps/starexec"
-            CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
-
-            echo "[MIGRATION][INIT] Starting Flyway migration job..."
-            echo "[MIGRATION][INFO] =========================================="
-            echo "[MIGRATION][INFO] Database Configuration:"
-            echo "[MIGRATION][INFO]   Host: ${STAREXEC_DB_HOST}"
-            echo "[MIGRATION][INFO]   Port: ${STAREXEC_DB_PORT}"
-            echo "[MIGRATION][INFO]   Database: ${STAREXEC_DB_NAME}"
-            echo "[MIGRATION][INFO]   User: ${STAREXEC_DB_USER}"
-            echo "[MIGRATION][INFO]   Password: ***REDACTED***"
-            echo "[MIGRATION][INFO]   Schema: ${STAREXEC_DB_SCHEMA}"
-            echo "[MIGRATION][INFO] =========================================="
-            echo ""
-
-            # Execute migrations using EmbeddedFlywayLauncher
-            # IMPORTANT: Credentials are passed ONLY via environment variables
-            # NEVER via system properties (-D flags)
-            # The EmbeddedFlywayLauncher reads from System.getenv() only
-            if java -cp "${CLASSPATH}" \
-                   org.starexec.migration.EmbeddedFlywayLauncher; then
-              echo ""
-              echo "[MIGRATION][SUCCESS] ✅ All database migrations applied successfully"
-              echo "[MIGRATION][SUCCESS] Database schema is now up-to-date"
-              exit 0
-            else
-              echo ""
-              echo "[MIGRATION][ERROR] ❌ Flyway migration failed with exit code $?"
-              echo "[MIGRATION][ERROR] Check logs above for details"
-              exit 1
-            fi
-
-        # =====================================================
-        # Environment Variables (Credentials + Configuration)
-        # =====================================================
-        # All credentials come from K8s Secret, NOT system properties
-        # All credentials are mounted as environment variables
-        # EmbeddedFlywayLauncher reads these via System.getenv()
-        env:
-        # Required database connection parameters
-        - name: STAREXEC_DB_HOST
-          value: {{ .Values.postgres.host | quote }}
-
-        - name: STAREXEC_DB_PORT
-          value: {{ .Values.postgres.port | default 5432 | quote }}
-
-        - name: STAREXEC_DB_NAME
-          value: {{ .Values.postgres.database | quote }}
-
-        - name: STAREXEC_DB_USER
-          value: {{ .Values.postgres.user | quote }}
-
-        # Database password from Kubernetes Secret
-        # This is NOT visible in process listing, /proc, or container logs
-        - name: STAREXEC_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "chart.name" . }}-secret-postgres
-              key: password
-
-        # Optional: Schema name (defaults to "starexec" in EmbeddedFlywayLauncher)
-        - name: STAREXEC_DB_SCHEMA
-          value: {{ .Values.postgres.schema | default "starexec" | quote }}
-
-        # Optional: Override migration directory (defaults to standard WAR location)
-        {{- if .Values.migrations.directory }}
-        - name: STAREXEC_MIGRATIONS_DIR
-          value: {{ .Values.migrations.directory | quote }}
-        {{- end }}
-
-        resources:
-          {{- toYaml .Values.resources.migrations | nindent 12 }}
-
-      # Do not restart the job on failure; manual intervention required
+      serviceAccountName: {{ include "chart.fullname" . }}
       restartPolicy: Never
-
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh","-c","/opt/starexec/bin/run-migrations.sh"]
+          env:
+            - name: STAREXEC_DB_HOST
+              value: "{{ .Values.postgres.host }}"
+            - name: STAREXEC_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
+                  key: user
+            - name: STAREXEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
+                  key: password
+            - name: STAREXEC_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
+                  key: database
+  backoffLimit: 1
 {{- end }}

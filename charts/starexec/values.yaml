@@ -1,45 +1,88 @@
 # Default values for chart.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
+
+# ============================================================================
+# DEPLOYMENT MODE CONFIGURATION
+# ============================================================================
+# Choose your deployment target. This affects how resources are created.
+# Options: podman, microk8s, kubernetes
+deploymentMode: kubernetes  # Default to full Kubernetes deployment
+
+# ============================================================================
+# IMAGE CONFIGURATION
+# ============================================================================
 image:
   repository: ghcr.io/starexecmiami/starexec
   tag: latest
   pullPolicy: IfNotPresent
 
+# ============================================================================
+# APPLICATION CONFIGURATION
+# ============================================================================
 replicaCount: 1
 volumePrefix: starexec
 
+# Application data directories
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+# ============================================================================
+# BACKEND CONFIGURATION
+# ============================================================================
+backend:
+  type: "kubernetes-native"  # Options: local, podman, kubernetes-native
+  root: "/app/backend"
+  workingDir: "/app/work"
+
+# ============================================================================
+# PERSISTENCE CONFIGURATION
+# ============================================================================
 persistence:
   enabled: true
   storageClass: ""
-  size: 5Gi
-  # Podman dev: Set usePodmanVolumes=true for named volumes (RECOMMENDED)
-  # Legacy: useHostPathForPodman=true uses /tmp hostPath (not recommended)
-  useHostPathForPodman: false
-  usePodmanVolumes: false  # Override to true in values-dev.yaml
-  
-  # Named volume configuration for Podman (only when usePodmanVolumes=true)
+
+  # Storage size configurations
+  appDataSize: 5Gi
+  postgresDataSize: 20Gi
+
+  # Deployment-specific storage options
+  # Podman: Uses named volumes managed by Podman
+  usePodmanVolumes: false
   podmanVolumes:
     data:
-      name: starexec-data
+      name: "{{ .Values.volumePrefix }}-data"
     postgres:
-      name: starexec-postgres
+      name: "{{ .Values.volumePrefix }}-postgres"
 
-postgres: # For production, use an external database
+  # MicroK8s: Uses hostPath for local development
+  useHostPath: false
+  hostPath:
+    data: "/tmp/starexec-data"
+    postgres: "/tmp/postgres-data"
+
+# ============================================================================
+# POSTGRESQL CONFIGURATION
+# ============================================================================
+postgres:
+  # Image configuration
   image:
     repository: docker.io/library/postgres
     pullPolicy: IfNotPresent
-    tag: 15
+    tag: "15"
+
+  # Connection configuration
   host: localhost
   port: 5432
   user: starexec
-  # password: MUST be overridden via env var or existingSecret
-  database: starexec  # Fixed: moved from metadata.database to database
-  # rootPassword: MUST be overridden via env var or existingSecret
-  # In production DO NOT define password here
-  # The chart only references an external secret
+  database: starexec
 
-  # Support external secrets (recommended for production)
+  # Credentials - MUST be overridden via existingSecret in production
+  # For development/testing, can be set directly (not recommended for prod)
+  password: "starexec_dev_password"  # Only set for dev/testing
+  rootPassword: "starexec_dev_password"  # Only set for dev/testing
+
+  # External secret configuration (recommended for production)
   existingSecret: ""  # If set, use this secret instead of creating one
   existingSecretKeys:
     user: "user"
@@ -47,21 +90,85 @@ postgres: # For production, use an external database
     database: "database"
     rootPassword: "rootPassword"
 
+  # Persistence for PostgreSQL
   persistence:
     enabled: false
     storageClass: ""
     size: 20Gi
-  #   database: database
-  #   rootPassword: rootPassword
 
-env: {}
+# ============================================================================
+# KUBERNETES-SPECIFIC CONFIGURATION
+# ============================================================================
+kubernetes:
+  enabled: true
 
-backend:
-  type: "local"
-  root: "/app/backend"
-  workingDir: "/app/work"
+  # Namespace for job execution (can be different from app namespace)
+  jobNamespace: ""
 
-# Scalability Tuning - adjust these based on your workload
+  # Job runner configuration
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  jobServiceAccount: "{{ include \"chart.name\" . }}-job"
+
+  # Data PVC for shared storage (required for kubernetes-native backend)
+  dataPvc:
+    name: "{{ include \"chart.name\" . }}-data"
+    storageClass: ""
+    size: "100Gi"
+    accessModes:
+      - ReadWriteMany
+
+  # Node selection and queue management
+  nodeSelector:
+    starexec.org/worker: "true"
+  queueLabelKey: "starexec/queue"
+
+  # Node management (requires ClusterRole)
+  nodeManagement:
+    enabled: false
+
+  # Job resource limits
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+
+  # Job lifecycle management
+  ttlSecondsAfterFinished: 3600  # 1 hour
+  backoffLimit: 0  # No retries - StarExec handles retry logic
+
+# ============================================================================
+# PODMAN-SPECIFIC CONFIGURATION
+# ============================================================================
+podman:
+  # Container socket path for DooD (Docker-out-of-Docker)
+  containerSocket:
+    hostPath: "/run/user/1000/podman/podman.sock"
+
+  # Job container configuration
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+
+  # Network configuration for job containers
+  networkMode: "podman-default-kube-network"
+  jobDbHost: "postgres"
+
+  # Path translation for job containers
+  hostDataPath: ""
+
+# ============================================================================
+# SERVICE CONFIGURATION
+# ============================================================================
+service:
+  type: ClusterIP  # Options: ClusterIP, NodePort, LoadBalancer
+  port: 8080
+  targetPort: 8080
+  nodePort: 30080  # Only used when type is NodePort
+
+# ============================================================================
+# SCALABILITY TUNING
+# ============================================================================
 scalability:
   # Maximum concurrent job pairs per node
   numJobPairsAtATime: 5
@@ -70,10 +177,9 @@ scalability:
   # Container status polling interval in milliseconds
   containerMonitorPollMs: 5000
 
-dataDir: "/app/data"
-sandboxDir: "/app/sandbox"
-
-# Resource requests and limits
+# ============================================================================
+# RESOURCE LIMITS
+# ============================================================================
 resources:
   app:
     requests:
@@ -89,9 +195,45 @@ resources:
     limits:
       memory: "512Mi"
       cpu: "500m"
+  migrations:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
 
-# Database migration settings
-# When postgres.host is localhost (bundled postgres), migrations run automatically
-# via the application entrypoint. The migration job is only used for external databases.
+# ============================================================================
+# DATABASE MIGRATIONS
+# ============================================================================
 migrations:
   enabled: true
+  directory: ""  # Optional: Override migration directory
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+env: {}
+
+# ============================================================================
+# INGRESS CONFIGURATION (Optional)
+# ============================================================================
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: starexec.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ============================================================================
+# MONITORING CONFIGURATION (Optional)
+# ============================================================================
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s

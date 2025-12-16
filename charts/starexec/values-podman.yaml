@@ -1,82 +1,37 @@
-# Development environment values (Podman local development)
-# Usage: make deploy-podman ENV=dev
-#        or: VALS=chart/values-dev.yaml make deploy-podman
+# Podman development environment values
+# Usage: helm template starexec ./charts/starexec -f ./charts/starexec/values-podman.yaml
+
+deploymentMode: podman
 
 image:
   repository: localhost/local/starexec
   tag: dev
   pullPolicy: Never
 
-replicaCount: 1
-volumePrefix: starexec
-
-# Podman development mode: uses named volumes for proper lifecycle
 persistence:
-  enabled: true
-  storageClass: ""  # Not applicable to Podman
-  size: 5Gi
-  useHostPathForPodman: false  # Use named volumes instead
-  usePodmanVolumes: true  # Enable Podman-specific named volume handling
-  
-  # Named volume configuration (Podman creates/manages these)
+  usePodmanVolumes: true
   podmanVolumes:
     data:
-      name: "{{ .Values.volumePrefix }}-dev-data"
+      name: "{{ .Values.volumePrefix }}-data"
     postgres:
-      name: "{{ .Values.volumePrefix }}-dev-postgres"
-
-postgres:
-  image:
-    repository: docker.io/library/postgres
-    pullPolicy: IfNotPresent
-    tag: "15"
-  
-  host: localhost  # Within pod, containers share localhost
-  port: 5432
-  user: starexec
-  password: starexec_dev_password  # Dev-only; use env override for local testing
-  database: starexec
-  rootPassword: starexec_dev_password
-  
-  persistence:
-    enabled: true  # Enable persistence in dev for database continuity
+      name: "{{ .Values.volumePrefix }}-postgres"
 
 backend:
   type: "podman"
-  root: "/app/backend"
-  workingDir: "/app/work"
 
-# Scalability Tuning for Podman backend
-scalability:
-  numJobPairsAtATime: 5      # Concurrent job pairs per node
-  nodeMultiplier: 16          # Virtual nodes per physical node
-  containerMonitorPollMs: 5000 # Container status poll interval (ms)
+service:
+  type: NodePort
+  port: 7827
+  targetPort: 8080
+  nodePort: 30080
 
-dataDir: "/app/data"
-sandboxDir: "/app/sandbox"
+postgres:
+  password: starexec_dev_password
+  rootPassword: starexec_dev_password
 
-resources:
-  app:
-    requests:
-      memory: "512Mi"
-      cpu: "500m"
-    limits:
-      memory: "1Gi"
-      cpu: "1000m"
-  postgres:
-    requests:
-      memory: "512Mi"
-      cpu: "500m"
-    limits:
-      memory: "1Gi"
-      cpu: "1000m"
-
-# Development-specific configurations
 env:
   LOG_LEVEL: "DEBUG"
   FLYWAY_BASELINE_ON_MIGRATE: "true"
   STAREXEC_WEB_ADDRESS: "localhost:7827"
   STAREXEC_URL_PREFIX: "http"
   STAREXEC_WEB_BASE_DIR: "/opt/tomcat/webapps/starexec"
-  # Use locally built job runner image (not GHCR)
-  STAREXEC_CONTAINER_JOB_IMAGE: "starexec/job-runner:latest"
