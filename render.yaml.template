@@ -42,32 +42,32 @@ spec:
   volumes:
     - name: data
       persistentVolumeClaim:
-        claimName: ${STAREXEC_DATA_VOL:-starexec-dev-data}
+        claimName: $STAREXEC_DATA_VOL
     - name: postgres-data
       persistentVolumeClaim:
-        claimName: ${STAREXEC_POSTGRES_VOL:-starexec-dev-postgres}
+        claimName: $STAREXEC_POSTGRES_VOL
   containers:
     - name: app
-      image: "${IMAGE_NAME:-localhost/local/starexec}:${IMAGE_TAG:-dev}"
+      image: "$IMAGE_NAME:$IMAGE_TAG"
       imagePullPolicy: IfNotPresent
       ports:
         - containerPort: 8080
-          hostPort: 7827
+          hostPort: 8080
       env:
         - name: STAREXEC_DB_HOST
-          value: "localhost"
+          value: "$STAREXEC_DB_HOST"
         - name: STAREXEC_DB_PORT
-          value: "${STAREXEC_DB_PORT:-5432}"
+          value: "$STAREXEC_DB_PORT"
         - name: STAREXEC_DB_USER
-          value: "${STAREXEC_DB_USER:-starexec}"
+          value: "$STAREXEC_DB_USER"
         - name: STAREXEC_DB_PASSWORD
-          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+          value: "$STAREXEC_DB_PASSWORD"
         - name: STAREXEC_DB_NAME
-          value: "${STAREXEC_DB_NAME:-starexec}"
+          value: "$STAREXEC_DB_NAME"
         - name: STAREXEC_CLUSTER_DB_USER
-          value: "${STAREXEC_DB_USER:-starexec}"
+          value: "$STAREXEC_DB_USER"
         - name: STAREXEC_CLUSTER_DB_PASSWORD
-          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+          value: "$STAREXEC_DB_PASSWORD"
         - name: STAREXEC_REPORT_HOST
           value: "localhost"
         - name: STAREXEC_BACKEND_TYPE
@@ -104,14 +104,13 @@ spec:
       imagePullPolicy: IfNotPresent
       ports:
         - containerPort: 5432
-          hostPort: 5432
       env:
         - name: POSTGRES_PASSWORD
-          value: "${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+          value: "$STAREXEC_DB_PASSWORD"
         - name: POSTGRES_USER
-          value: "${STAREXEC_DB_USER:-starexec}"
+          value: "$STAREXEC_DB_USER"
         - name: POSTGRES_DB
-          value: "${STAREXEC_DB_NAME:-starexec}"
+          value: "$STAREXEC_DB_NAME"
         # Ensure UTF-8 collation/ctype so PostgreSQL behaves like typical UTF-8 installs
         - name: LC_COLLATE
           value: "en_US.UTF-8"
