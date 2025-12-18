@@ -81,3 +81,4 @@ env:
   STAREXEC_WEB_ADDRESS: "localhost:7827"
   STAREXEC_URL_PREFIX: "http"
   STAREXEC_WEB_BASE_DIR: "/opt/tomcat/webapps/starexec"
+  STAREXEC_LOCAL_USE_RUNSOLVER: "true"
