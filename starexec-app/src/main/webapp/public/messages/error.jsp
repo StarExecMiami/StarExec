@@ -36,7 +36,6 @@
                css="error">
 	<main role="main" class="error-container">
 		<section aria-labelledby="error-heading">
-			<h1 id="error-heading" class="error-title">It seems an error has occurred...</h1>
 			<div role="alert" class="error-details">
 				<p><c:out value="(http ${pageContext.errorData.statusCode} - ${errorDesc})"/></p>
 				<p><c:out value="${requestScope['javax.servlet.error.message']}"/></p>
