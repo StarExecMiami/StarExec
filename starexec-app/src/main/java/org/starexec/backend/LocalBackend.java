@@ -41,6 +41,8 @@ import org.starexec.logger.StarLogger;
  * runsolver (default: false)</li>
  * <li>{@code STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS} - Shutdown timeout
  * (default: 30)</li>
+ * <li>{@code STAREXEC_LOCAL_FORCE_SANDBOX} - Enforce physical core isolation
+ * via sandbox locking (default: false)</li>
  * </ul>
  *
  * <h3>Configuration Guidance</h3>
@@ -60,6 +62,9 @@ import org.starexec.logger.StarLogger;
  * Requires runsolver to be installed and configured.</li>
  * <li><strong>STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS</strong>: Increase for
  * systems with slow shutdown processes.</li>
+ * <li><strong>STAREXEC_LOCAL_FORCE_SANDBOX</strong>: Set to true to enable
+ * strict CPU affinity via sandbox locking (limited to 2 concurrent jobs).
+ * Useful for precise benchmarking to avoid cache interference.</li>
  * </ul>
  *
  * <h2>Performance Considerations</h2>
@@ -126,6 +131,7 @@ public class LocalBackend implements Backend {
     private int jobTimeoutSeconds;
     private int gracefulShutdownSeconds;
     private boolean useRunsolver;
+    private boolean forceSandbox;
 
     // Execution ID generator (thread-safe)
     private final AtomicInteger execIdGenerator = new AtomicInteger(1);
@@ -491,12 +497,16 @@ public class LocalBackend implements Backend {
         // Jobs write status.json instead of directly calling database functions
         // The LocalJobMonitor will read these files and update the database
         env.put("CONTAINER_MODE", "true");
+        if (forceSandbox) {
+            env.put("STAREXEC_FORCE_SANDBOX", "true");
+        }
         env.put("STAREXEC_OUTPUT_DIR", new File(job.logPath).getParent());
 
         log.debug(
                 "Environment for job " +
                         job.execId +
                         ": CONTAINER_MODE=true, " +
+                        (forceSandbox ? "STAREXEC_FORCE_SANDBOX=true, " : "") +
                         "STAREXEC_OUTPUT_DIR=" +
                         new File(job.logPath).getParent());
 
@@ -1021,6 +1031,9 @@ public class LocalBackend implements Backend {
 
         // Use runsolver - MANDATORY for running untrusted code
         useRunsolver = getEnvBoolean("STAREXEC_LOCAL_USE_RUNSOLVER", false);
+
+        // Force sandbox usage even in container mode
+        forceSandbox = getEnvBoolean("STAREXEC_LOCAL_FORCE_SANDBOX", false);
 
         // CRITICAL SAFETY CHECK: Enforce resource limits if executing untrusted jobs
         String runUntrusted = System.getenv(

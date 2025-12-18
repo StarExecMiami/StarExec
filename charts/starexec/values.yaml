@@ -31,9 +31,16 @@ sandboxDir: "/app/sandbox"
 # BACKEND CONFIGURATION
 # ============================================================================
 backend:
-  type: "kubernetes-native"  # Options: local, podman, kubernetes-native
+  type: "local" # Options: local, podman, SGE
   root: "/app/backend"
   workingDir: "/app/work"
+
+  # Local Backend specific configuration
+  local:
+    concurrency: 1
+    forceSandbox: true
+    useRunsolver: true
+    gracefulShutdownSeconds: 30
 
 # ============================================================================
 # PERSISTENCE CONFIGURATION
@@ -79,11 +86,11 @@ postgres:
 
   # Credentials - MUST be overridden via existingSecret in production
   # For development/testing, can be set directly (not recommended for prod)
-  password: "starexec_dev_password"  # Only set for dev/testing
-  rootPassword: "starexec_dev_password"  # Only set for dev/testing
+  password: "starexec_dev_password" # Only set for dev/testing
+  rootPassword: "starexec_dev_password" # Only set for dev/testing
 
   # External secret configuration (recommended for production)
-  existingSecret: ""  # If set, use this secret instead of creating one
+  existingSecret: "" # If set, use this secret instead of creating one
   existingSecretKeys:
     user: "user"
     password: "password"
@@ -107,11 +114,11 @@ kubernetes:
 
   # Job runner configuration
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
-  jobServiceAccount: "{{ include \"chart.name\" . }}-job"
+  jobServiceAccount: '{{ include "chart.name" . }}-job'
 
   # Data PVC for shared storage (required for kubernetes-native backend)
   dataPvc:
-    name: "{{ include \"chart.name\" . }}-data"
+    name: '{{ include "chart.name" . }}-data'
     storageClass: ""
     size: "100Gi"
     accessModes:
@@ -136,8 +143,8 @@ kubernetes:
       cpu: "2"
 
   # Job lifecycle management
-  ttlSecondsAfterFinished: 3600  # 1 hour
-  backoffLimit: 0  # No retries - StarExec handles retry logic
+  ttlSecondsAfterFinished: 3600 # 1 hour
+  backoffLimit: 0 # No retries - StarExec handles retry logic
 
 # ============================================================================
 # PODMAN-SPECIFIC CONFIGURATION
@@ -161,10 +168,10 @@ podman:
 # SERVICE CONFIGURATION
 # ============================================================================
 service:
-  type: ClusterIP  # Options: ClusterIP, NodePort, LoadBalancer
+  type: ClusterIP # Options: ClusterIP, NodePort, LoadBalancer
   port: 8080
   targetPort: 8080
-  nodePort: 30080  # Only used when type is NodePort
+  nodePort: 30080 # Only used when type is NodePort
 
 # ============================================================================
 # SCALABILITY TUNING
@@ -208,7 +215,7 @@ resources:
 # ============================================================================
 migrations:
   enabled: true
-  directory: ""  # Optional: Override migration directory
+  directory: "" # Optional: Override migration directory
 
 # ============================================================================
 # ENVIRONMENT VARIABLES

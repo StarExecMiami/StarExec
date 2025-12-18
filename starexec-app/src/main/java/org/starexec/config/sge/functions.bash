@@ -391,7 +391,7 @@ function trySandbox {
 # If no sandbox can be secured, terminate this jobpair
 function initSandbox {
 	# Container mode: each container IS its own isolated sandbox, no locking needed
-	if [ "$CONTAINER_MODE" = "true" ]; then
+	if [ "$CONTAINER_MODE" = "true" ] && [ "${STAREXEC_FORCE_SANDBOX:-false}" != "true" ]; then
 		log "Container mode detected - using container as sandbox (no locking needed)"
 		SANDBOX=1
 		SANDBOX_PARAM=$SANDBOX_USER_ONE

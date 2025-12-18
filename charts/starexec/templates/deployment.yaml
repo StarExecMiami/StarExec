@@ -88,6 +88,14 @@ spec:
               value: "/app/data"
             - name: STAREXEC_SANDBOX_DIR
               value: "/app/sandbox"
+            - name: STAREXEC_LOCAL_CONCURRENCY
+              value: "{{ .Values.backend.local.concurrency }}"
+            - name: STAREXEC_LOCAL_FORCE_SANDBOX
+              value: "{{ .Values.backend.local.forceSandbox }}"
+            - name: STAREXEC_LOCAL_USE_RUNSOLVER
+              value: "{{ .Values.backend.local.useRunsolver }}"
+            - name: STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS
+              value: "{{ .Values.backend.local.gracefulShutdownSeconds }}"
             - name: SKIP_MIGRATIONS
               value: "{{ if .Values.migrations.enabled }}false{{ else }}true{{ end }}"
 {{- range $key, $value := .Values.env }}
