@@ -7,7 +7,7 @@
 # ============================================================================
 # Choose your deployment target. This affects how resources are created.
 # Options: podman, microk8s, kubernetes
-deploymentMode: kubernetes  # Default to full Kubernetes deployment
+deploymentMode: local
 
 # ============================================================================
 # IMAGE CONFIGURATION

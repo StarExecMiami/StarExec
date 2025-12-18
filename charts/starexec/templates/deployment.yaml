@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: starexec
+  name: {{ include "chart.fullname" . }}
   labels:
-    app: starexec
+    {{- include "chart.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: starexec
+      {{- include "chart.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: starexec
+        {{- include "chart.selectorLabels" . | nindent 8 }}
     spec:
       restartPolicy: Always
       securityContext:
@@ -38,11 +38,11 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: starexec-data-pvc
+            claimName: {{ include "chart.fullname" . }}-data
         - name: postgres-data
 {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: starexec-postgres-pvc
+            claimName: {{ include "chart.fullname" . }}-postgres
 {{- else }}
           emptyDir: {}
 {{- end }}
@@ -66,17 +66,17 @@ spec:
             - name: STAREXEC_DB_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.fullname" . }}-postgres-credentials
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: user
             - name: STAREXEC_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.fullname" . }}-postgres-credentials
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: password
             - name: STAREXEC_DB_NAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.fullname" . }}-postgres-credentials
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: database
             - name: STAREXEC_BACKEND_TYPE
               value: "{{ .Values.backend.type }}"
@@ -143,17 +143,17 @@ spec:
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.fullname" . }}-postgres-credentials
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: database
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.fullname" . }}-postgres-credentials
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: user
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "chart.fullname" . }}-postgres-credentials
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: password
             - name: LC_COLLATE
               value: "en_US.UTF-8"

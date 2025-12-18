@@ -12,6 +12,8 @@ volumePrefix: starexec
 kubernetes:
   enabled: false
 
+deploymentMode: podman
+
 # Podman development mode: uses named volumes for proper lifecycle
 persistence:
   enabled: true

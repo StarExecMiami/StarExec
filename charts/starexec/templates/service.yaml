@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: starexec
+  name: {{ include "chart.fullname" . }}
   labels:
-    app: starexec
+    {{- include "chart.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   selector:
-    app: starexec
+    {{- include "chart.selectorLabels" . | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.service.port | default 8080 }}
