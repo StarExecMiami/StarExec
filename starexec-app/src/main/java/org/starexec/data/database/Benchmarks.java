@@ -33,8 +33,7 @@ import java.nio.charset.StandardCharsets;
 public class Benchmarks {
 	private static final StarLogger log = StarLogger.getLogger(Benchmarks.class);
 	private static final int MAX_ATTRIBUTE_LENGTH = 128;
-	private static final String GET_BENCHMARKS_BY_IDS_SQL =
-			"SELECT b.id AS bench_id, " +
+	private static final String GET_BENCHMARKS_BY_IDS_SQL = "SELECT b.id AS bench_id, " +
 			"b.user_id AS bench_user_id, " +
 			"b.name AS bench_name, " +
 			"b.bench_type AS bench_bench_type, " +
@@ -57,9 +56,9 @@ public class Benchmarks {
 			"FROM starexec.benchmarks b " +
 			"LEFT OUTER JOIN processors p ON b.bench_type = p.id " +
 			"WHERE b.id = ANY (?) AND b.deleted = false AND b.recycled = false";
-	private static final String GET_BENCHMARK_ATTRS_BY_IDS_SQL =
-			"SELECT bench_id, attr_key, attr_value " +
+	private static final String GET_BENCHMARK_ATTRS_BY_IDS_SQL = "SELECT bench_id, attr_key, attr_value " +
 			"FROM starexec.bench_attributes WHERE bench_id = ANY (?)";
+
 	public static boolean deleteAndRemoveBenchmark(int id) {
 		Benchmark b = Benchmarks.getIncludeDeletedAndRecycled(id, false);
 		if (b == null) {
@@ -95,10 +94,11 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Recycles all benchmarks that are owned by the given user in the given collection
+	 * Recycles all benchmarks that are owned by the given user in the given
+	 * collection
 	 *
 	 * @param benchmarks The benchmarks to potentially recycle
-	 * @param userId The user who owns the benchmarks to recycle
+	 * @param userId     The user who owns the benchmarks to recycle
 	 * @return True on success and false on any error
 	 */
 	public static boolean recycleAllOwnedByUser(Collection<Benchmark> benchmarks, int userId) {
@@ -114,12 +114,13 @@ public class Benchmarks {
 	/**
 	 * Adds the given attributes to the given benchmark
 	 *
-	 * @param attrs The attrs to add. Old attributes sharing keys will be overwritten
+	 * @param attrs     The attrs to add. Old attributes sharing keys will be
+	 *                  overwritten
 	 * @param benchmark The benchmark to add attributes to
-	 * @param statusId The ID of a benchmark status upload object, or null if we aren't using one
+	 * @param statusId  The ID of a benchmark status upload object, or null if we
+	 *                  aren't using one
 	 */
-	public static void addAttributeSetToDbIfValid(Map<String, String> attrs, Benchmark benchmark, Integer
-			statusId) {
+	public static void addAttributeSetToDbIfValid(Map<String, String> attrs, Benchmark benchmark, Integer statusId) {
 		Connection con = null;
 		try {
 			con = Common.getConnection();
@@ -132,17 +133,17 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Add the given set of benchmark attributes to the database, if isBenchValid() returns true for the attrs.
+	 * Add the given set of benchmark attributes to the database, if isBenchValid()
+	 * returns true for the attrs.
 	 *
-	 * @param con the db Connection to use
-	 * @param attrs the attributes
+	 * @param con       the db Connection to use
+	 * @param attrs     the attributes
 	 * @param benchmark the Benchmark
-	 * @param statusId the id of the upload page, or null if there isn't one
+	 * @param statusId  the id of the upload page, or null if there isn't one
 	 * @return True on success and false otherwise
 	 */
 	private static boolean addAttributeSetToDbIfValid(
-			Connection con, Map<String, String> attrs, Benchmark benchmark, Integer statusId
-	) {
+			Connection con, Map<String, String> attrs, Benchmark benchmark, Integer statusId) {
 		if (!Benchmarks.isBenchValid(attrs)) {
 			Uploads.setBenchmarkErrorMessage(
 					statusId, ("The benchmark processor did not validate the benchmark " + benchmark.getName() + " (" +
@@ -159,7 +160,7 @@ public class Benchmarks {
 			String val = attrs.get(key);
 			if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {
 				log.warn("addAttributeSetToDbIfValid", "Skipping empty attribute for benchmark " + benchmark.getId() +
-					" (key='" + key + "', val='" + val + "')");
+						" (key='" + key + "', val='" + val + "')");
 				continue;
 			}
 			// Add the attribute to the database
@@ -168,8 +169,8 @@ public class Benchmarks {
 
 			if (!Benchmarks.addBenchAttr(con, benchmark.getId(), key, val)) {
 				Uploads.setBenchmarkErrorMessage(
-					statusId, "Problem adding the following attribute-value pair to the db, for benchmark " +
-						benchmark.getId() + ": " + key + ", " + val);
+						statusId, "Problem adding the following attribute-value pair to the db, for benchmark " +
+								benchmark.getId() + ": " + key + ", " + val);
 				return false;
 			}
 		}
@@ -180,8 +181,9 @@ public class Benchmarks {
 	 * Adds an attribute to an existing benchmark
 	 *
 	 * @param benchId The ID of the benchmark
-	 * @param key The attribute key. Will overwrite any other attribute with the same key.
-	 * @param val The attribute val
+	 * @param key     The attribute key. Will overwrite any other attribute with the
+	 *                same key.
+	 * @param val     The attribute val
 	 */
 	public static void addBenchAttr(int benchId, String key, String val) {
 		Connection con = null;
@@ -198,16 +200,15 @@ public class Benchmarks {
 	/**
 	 * Adds a new attribute to a benchmark
 	 *
-	 * @param con The connection to make the insertion on
+	 * @param con     The connection to make the insertion on
 	 * @param benchId The id of the benchmark the attribute is for
-	 * @param key The key of the attribute
-	 * @param val The value of the attribute
+	 * @param key     The key of the attribute
+	 * @param val     The value of the attribute
 	 * @return True if the operation was a success, false otherwise
 	 * @author Tyler Jensen
 	 */
 	private static boolean addBenchAttr(Connection con, int benchId, String key, String val) {
-		Supplier<String> trace = () ->
-				"\n\tbenchId :" + benchId +
+		Supplier<String> trace = () -> "\n\tbenchId :" + benchId +
 				"\n\tkey:     " + key +
 				"\n\tval:     " + val;
 		if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {
@@ -237,16 +238,15 @@ public class Benchmarks {
 	/**
 	 * Adds the benchmark dependency to starexec db
 	 *
-	 * @param primaryBenchId the bench that is dependent on another bench
+	 * @param primaryBenchId   the bench that is dependent on another bench
 	 * @param secondaryBenchId e.g. the axiom
-	 * @param includePath the path that will be used locally at execution time
-	 * @param con db connection
+	 * @param includePath      the path that will be used locally at execution time
+	 * @param con              db connection
 	 * @return
 	 * @author Benton McCune
 	 */
 	private static Boolean addBenchDependency(
-			int primaryBenchId, Integer secondaryBenchId, String includePath, Connection con
-	) {
+			int primaryBenchId, Integer secondaryBenchId, String includePath, Connection con) {
 		PreparedStatement procedure = null;
 		try {
 			// Setup normal information for the benchmark dependency
@@ -260,11 +260,10 @@ public class Benchmarks {
 			return true;
 		} catch (Exception e) {
 			log.error("addBenchDependency",
-				    "\tprimaryBenchId:   " + primaryBenchId
-				+ "\n\tsecondaryBenchId: " + secondaryBenchId
-				+ "\n\tincludePath:      " + includePath,
-				e
-			);
+					"\tprimaryBenchId:   " + primaryBenchId
+							+ "\n\tsecondaryBenchId: " + secondaryBenchId
+							+ "\n\tincludePath:      " + includePath,
+					e);
 		} finally {
 			Common.safeClose(procedure);
 		}
@@ -274,9 +273,9 @@ public class Benchmarks {
 	/**
 	 * Adds the benchmark dependency to starexec db
 	 *
-	 * @param primaryBenchId the bench that is dependent on another bench
+	 * @param primaryBenchId   the bench that is dependent on another bench
 	 * @param secondaryBenchId e.g. the axiom
-	 * @param includePath the path that will be used locally at execution time
+	 * @param includePath      the path that will be used locally at execution time
 	 * @return true on success and false otherwise
 	 * @author Benton McCune
 	 */
@@ -296,8 +295,9 @@ public class Benchmarks {
 	/**
 	 * Add a benchmark.
 	 *
-	 * @param bench the benchmark to be added
-	 * @param statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @param bench    the benchmark to be added
+	 * @param statusId The ID of an upload status if one exists for this operation,
+	 *                 null otherwise
 	 * @return benchmark returns the benchmark added (not typically needed)
 	 * @author Benton McCune
 	 */
@@ -318,7 +318,8 @@ public class Benchmarks {
 	 * Add a benchmark.
 	 *
 	 * @param benchmark the benchmark to be added
-	 * @param statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @param statusId  The ID of an upload status if one exists for this operation,
+	 *                  null otherwise
 	 * @return benchmark returns the benchmark added (not typically needed)
 	 * @throws Exception
 	 * @author Benton McCune
@@ -352,11 +353,10 @@ public class Benchmarks {
 				return null;
 			}
 
-			//do previously validated dependencies here
+			// do previously validated dependencies here
 			for (BenchmarkDependency d : benchmark.getDependencies()) {
 				Benchmarks.addBenchDependency(benchmark.getId(), d.getSecondaryBench().getId(), d.getDependencyPath(),
-				                              con
-				);
+						con);
 			}
 			Common.endTransaction(con);// benchmarks should be in db now
 			return benchmark;
@@ -373,10 +373,11 @@ public class Benchmarks {
 	 * Adds a single benchmark to the database under the given spaceId
 	 *
 	 * @param benchmark The benchmark to add to the database
-	 * @param spaceId The id of the space the benchmark will belong to
-	 * @param statusId the id for the upload page for adding this benchmark, if there is an upload page for this
-	 * action.
-	 * Otherwise, null
+	 * @param spaceId   The id of the space the benchmark will belong to
+	 * @param statusId  the id for the upload page for adding this benchmark, if
+	 *                  there is an upload page for this
+	 *                  action.
+	 *                  Otherwise, null
 	 * @return The new benchmark ID on success, -1 otherwise
 	 * @throws Exception Any database error that gets thrown
 	 * @author Tyler Jensen
@@ -411,7 +412,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Adds a list of benchmarks to the database and associates them with the given space ID
+	 * Adds a list of benchmarks to the database and associates them with the given
+	 * space ID
 	 *
 	 * @param benchmarks
 	 * @param spaceId
@@ -420,10 +422,10 @@ public class Benchmarks {
 	 * @throws Exception
 	 */
 	protected static List<Integer> addAndAssociate(List<Benchmark> benchmarks, Integer spaceId, Integer statusId)
-	throws SQLException, StarExecException {
+			throws SQLException, StarExecException {
 		ArrayList<Integer> benchmarkIds = new ArrayList<>();
 		log.info("in add (list) method (no con parameter )- adding " + benchmarks.size() + " benchmarks to space " +
-				         spaceId);
+				spaceId);
 		int incrementCounter = 0;
 		Timer timer = new Timer();
 		for (Benchmark b : benchmarks) {
@@ -431,8 +433,10 @@ public class Benchmarks {
 			if (id < 0) {
 				String message = ("failed to add bench " + b.getName());
 				Uploads.setBenchmarkErrorMessage(statusId, message);
-				//Note - this does not occur when Benchmark fails validation even though those benchmarks not added
-				throw new StarExecValidationException(String.format("Failed to add benchmark [%s] to space [%d]", b.getName(), spaceId));
+				// Note - this does not occur when Benchmark fails validation even though those
+				// benchmarks not added
+				throw new StarExecValidationException(
+						String.format("Failed to add benchmark [%s] to space [%d]", b.getName(), spaceId));
 			}
 
 			benchmarkIds.add(id);
@@ -450,39 +454,50 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Runs the given benchmark processor on the list of benchmarks before adding them to the database and associates
-	 * them with the given spaceId. The benchmark types are also processed based on the type of the first benchmark
-	 * only. This method will also introduced dependencies if the benchmark processor produces the right attributes.
+	 * Runs the given benchmark processor on the list of benchmarks before adding
+	 * them to the database and associates
+	 * them with the given spaceId. The benchmark types are also processed based on
+	 * the type of the first benchmark
+	 * only. This method will also introduced dependencies if the benchmark
+	 * processor produces the right attributes.
 	 *
-	 * @param benchmarks The list of benchmarks to add
-	 * @param spaceId The space the benchmarks will belong to. If null, it is not added to a space
+	 * @param benchmarks     The list of benchmarks to add
+	 * @param spaceId        The space the benchmarks will belong to. If null, it is
+	 *                       not added to a space
 	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
-	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
-	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @param linked         true if the depRootSpace is the same as the first
+	 *                       directory in the include statement
+	 * @param statusId       statusId The ID of an upload status if one exists for
+	 *                       this operation, null otherwise
 	 * @return True if the operation was a success, false otherwise
 	 */
 	public static List<Integer> processAndAdd(
-			List<Benchmark> benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId
-	) {
+			List<Benchmark> benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId) {
 		return processAndAdd(benchmarks, spaceId, depRootSpaceId, linked, statusId, true);
 	}
 
 	/**
-	 * Runs the given benchmark processor on the list of benchmarks before adding them to the database and associates
-	 * them with the given spaceId. The benchmark types are also processed based on the type of the first benchmark
-	 * only. This method will also introduced dependencies if the benchmark processor produces the right attributes.
+	 * Runs the given benchmark processor on the list of benchmarks before adding
+	 * them to the database and associates
+	 * them with the given spaceId. The benchmark types are also processed based on
+	 * the type of the first benchmark
+	 * only. This method will also introduced dependencies if the benchmark
+	 * processor produces the right attributes.
 	 *
-	 * @param benchmarks The list of benchmarks to add
-	 * @param spaceId The space the benchmarks will belong to. If null, it is not added to a space
+	 * @param benchmarks     The list of benchmarks to add
+	 * @param spaceId        The space the benchmarks will belong to. If null, it is
+	 *                       not added to a space
 	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
-	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
-	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
-	 * @param usesDeps if set to true check dependencies, otherwise ignore dependency related messages
+	 * @param linked         true if the depRootSpace is the same as the first
+	 *                       directory in the include statement
+	 * @param statusId       statusId The ID of an upload status if one exists for
+	 *                       this operation, null otherwise
+	 * @param usesDeps       if set to true check dependencies, otherwise ignore
+	 *                       dependency related messages
 	 */
 	public static List<Integer> processAndAdd(
 			List<Benchmark> benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId,
-			Boolean usesDeps
-	) {
+			Boolean usesDeps) {
 		Connection con = null;
 		try {
 			con = Common.getConnection();
@@ -499,26 +514,33 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Runs the given benchmark processor on the list of benchmarks before adding them to the database and associates
-	 * them with the given spaceId. The benchmark types are also processed based on the type of the first benchmark
-	 * only. This method will also introduced dependencies if the benchmark processor produces the right attributes.
+	 * Runs the given benchmark processor on the list of benchmarks before adding
+	 * them to the database and associates
+	 * them with the given spaceId. The benchmark types are also processed based on
+	 * the type of the first benchmark
+	 * only. This method will also introduced dependencies if the benchmark
+	 * processor produces the right attributes.
 	 *
-	 * @param benchmarks The list of benchmarks to add
-	 * @param spaceId The space the benchmarks will belong to. If null, it is not added to a space
+	 * @param benchmarks     The list of benchmarks to add
+	 * @param spaceId        The space the benchmarks will belong to. If null, it is
+	 *                       not added to a space
 	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
-	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
-	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
-	 * @param usesDeps if set to true check dependencies, otherwise ignore dependency related messages
+	 * @param linked         true if the depRootSpace is the same as the first
+	 *                       directory in the include statement
+	 * @param statusId       statusId The ID of an upload status if one exists for
+	 *                       this operation, null otherwise
+	 * @param usesDeps       if set to true check dependencies, otherwise ignore
+	 *                       dependency related messages
 	 * @return True if the operation was a success, false otherwise
 	 * @author Benton McCune
 	 */
 	public static List<Integer> processAndAdd(
 			List<Benchmark> benchmarks, Integer spaceId, Integer depRootSpaceId, Boolean linked, Integer statusId,
-			Boolean usesDeps, Connection con
-	) throws IOException, SQLException, StarExecException {
+			Boolean usesDeps, Connection con) throws IOException, SQLException, StarExecException {
 		if (!benchmarks.isEmpty()) {
 			log.info("Adding (with deps) " + benchmarks.size() + " to Space " + spaceId);
-			// Get the processor of the first benchmark (they should all have the same processor)
+			// Get the processor of the first benchmark (they should all have the same
+			// processor)
 			Processor p = Processors.get(benchmarks.get(0).getType().getId());
 
 			log.info("About to attach attributes to " + benchmarks.size());
@@ -529,13 +551,13 @@ public class Benchmarks {
 				if (!success) {
 					Uploads.setBenchmarkErrorMessage(
 							statusId,
-							"Benchmark dependencies failed to validate. Please check your processor output"
-					);
-				return null;
+							"Benchmark dependencies failed to validate. Please check your processor output");
+					return null;
 				}
 			}
 
-			// Next add them to the database (must happen AFTER they are processed and have dependencies
+			// Next add them to the database (must happen AFTER they are processed and have
+			// dependencies
 			// validated);
 			return Benchmarks.addAndAssociate(benchmarks, spaceId, statusId);
 		} else {
@@ -556,7 +578,8 @@ public class Benchmarks {
 		try {
 			return Common.runInTransaction(con -> {
 				if (!associate(benchId, spaceId, con)) {
-					throw new SQLException(String.format("AssociateBench failed for benchId=%d, spaceId=%d", benchId, spaceId));
+					throw new SQLException(
+							String.format("AssociateBench failed for benchId=%d, spaceId=%d", benchId, spaceId));
 				}
 				return true;
 			});
@@ -571,7 +594,7 @@ public class Benchmarks {
 	 *
 	 * @param benchId The ID of the benchmark to put in a space.
 	 * @param spaceId The ID of the space to add the benchmark to
-	 * @param con The open connection to make the SQL call on
+	 * @param con     The open connection to make the SQL call on
 	 * @return True on success and false otherwise
 	 */
 	public static boolean associate(int benchId, int spaceId, Connection con) {
@@ -596,7 +619,7 @@ public class Benchmarks {
 	 * Associates the benchmarks with the given ids to the given space
 	 *
 	 * @param benchIds The list of benchmark ids to associate with the space
-	 * @param spaceId The id of the space the benchmarks will be associated with
+	 * @param spaceId  The id of the space the benchmarks will be associated with
 	 * @return True if the operation was a success, false otherwise
 	 * @author Tyler Jensen
 	 */
@@ -605,7 +628,8 @@ public class Benchmarks {
 			Common.runInTransaction(con -> {
 				for (int benchId : benchIds) {
 					if (!associate(benchId, spaceId, con)) {
-						throw new SQLException(String.format("AssociateBench failed for benchId=%d, spaceId=%d", benchId, spaceId));
+						throw new SQLException(
+								String.format("AssociateBench failed for benchId=%d, spaceId=%d", benchId, spaceId));
 					}
 				}
 			});
@@ -617,18 +641,22 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Given a set of benchmarks and a processor, this method runs each benchmark through the processor and adds a
-	 * hashmap of attributes to the benchmark that are given from the processor. Attributes are NOT added to the
+	 * Given a set of benchmarks and a processor, this method runs each benchmark
+	 * through the processor and adds a
+	 * hashmap of attributes to the benchmark that are given from the processor.
+	 * Attributes are NOT added to the
 	 * database! They are just added to the benchmark objects themselves.
 	 *
 	 * @param benchmarks The set of benchmarks to get attributes for
-	 * @param p The processor to run each benchmark on
-	 * @param statusId The ID of an upload status if one exists for this operation, null otherwise
+	 * @param p          The processor to run each benchmark on
+	 * @param statusId   The ID of an upload status if one exists for this
+	 *                   operation, null otherwise
 	 * @return True if the operation is successful and false otherwise
 	 */
 	public static Boolean attachBenchAttrs(List<Benchmark> benchmarks, Processor p, Integer statusId)
 			throws IOException, StarExecException {
-		// if we are using the no_type processor, we do not need to actually execute anything-- just validate every
+		// if we are using the no_type processor, we do not need to actually execute
+		// anything-- just validate every
 		// benchmark.
 		if (p.getId() == Processors.getNoTypeProcessor().getId()) {
 			for (Benchmark b : benchmarks) {
@@ -643,8 +671,9 @@ public class Benchmarks {
 		log.info("Beginning processing for " + benchmarks.size() + " benchmarks");
 		int count = benchmarks.size();
 		// For each benchmark in the list to process...
-		int validatedCounter = 0; //stores the number of benchmarks that have been validated since the last update
-		int failedCounter = 0; //stores the TOTAL number of benchmarks that failed
+		int validatedCounter = 0; // stores the number of benchmarks that have been validated since the last
+									// update
+		int failedCounter = 0; // stores the TOTAL number of benchmarks that failed
 		Timer timer = new Timer();
 		for (Benchmark b : benchmarks) {
 			List<File> files = new ArrayList<>();
@@ -654,10 +683,11 @@ public class Benchmarks {
 			String benchPath = new File(sandbox, new File(b.getPath()).getName()).getAbsolutePath();
 			File working = new File(sandbox, new File(p.getFilePath()).getName());
 			// Run the processor on the benchmark file
-			log.info("executing - " + p.getExecutablePath() + " \"" + b.getPath() + "\"");
+			String executablePath = p.getExecutablePath();
+			log.info("executing - " + executablePath + " \"" + b.getPath() + "\"");
 			String[] procCmd = new String[2];
 
-			procCmd[0] = "./" + R.PROCESSOR_RUN_SCRIPT;
+			procCmd[0] = "./" + new File(executablePath).getName();
 			procCmd[1] = benchPath;
 			String propstr = null;
 			propstr = Util.executeSandboxCommand(procCmd, null, working);
@@ -722,8 +752,7 @@ public class Benchmarks {
 		if (processorOutput.contains("command not found")) {
 			throw new StarExecException(
 					String.format("Processor used a command that StarExec does not recognize.%nProcessor Output:%s",
-					              processorOutput
-					));
+							processorOutput));
 		}
 	}
 
@@ -731,7 +760,7 @@ public class Benchmarks {
 	 * Permanently removes a benchmark from the database
 	 *
 	 * @param benchId The ID of the benchmark to remove
-	 * @param con The open connection to make the SQL call on
+	 * @param con     The open connection to make the SQL call on
 	 * @return True on success and false otherwise
 	 */
 	private static boolean removeBenchmarkFromDatabase(int benchId, Connection con) throws StarExecDatabaseException {
@@ -756,7 +785,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Removes all benchmark database entries where the benchmark has been deleted AND has been orphaned
+	 * Removes all benchmark database entries where the benchmark has been deleted
+	 * AND has been orphaned
 	 *
 	 * @return True on success, false on error
 	 */
@@ -765,7 +795,8 @@ public class Benchmarks {
 		PreparedStatement procedure = null;
 		ResultSet results = null;
 
-		//will contain the id of every benchmark that is associated with either a space or a pair
+		// will contain the id of every benchmark that is associated with either a space
+		// or a pair
 		HashSet<Integer> parentedBenchmarks = new HashSet<>();
 		try {
 			con = Common.getConnection();
@@ -796,7 +827,8 @@ public class Benchmarks {
 						continue;
 					}
 				}
-				// the benchmark has been deleted AND it is not associated with any spaces or job pairs
+				// the benchmark has been deleted AND it is not associated with any spaces or
+				// job pairs
 				if (!parentedBenchmarks.contains(b.getId())) {
 					try {
 						removeBenchmarkFromDatabase(b.getId(), con);
@@ -818,13 +850,15 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Copies a list of benchmarks into a new space, making the given user the new owner.
+	 * Copies a list of benchmarks into a new space, making the given user the new
+	 * owner.
 	 *
 	 * @param benchmarks The benchmarks to copy
-	 * @param userId The Id of the new owner
-	 * @param spaceId The ID of the space to associate the new benchmarks with
-	 * @return A list of IDs of all the new benchmarks. Ids will be returned in the same order as their copies in the
-	 * input list of benchmarks.
+	 * @param userId     The Id of the new owner
+	 * @param spaceId    The ID of the space to associate the new benchmarks with
+	 * @return A list of IDs of all the new benchmarks. Ids will be returned in the
+	 *         same order as their copies in the
+	 *         input list of benchmarks.
 	 */
 	public static List<Integer> copyBenchmarks(List<Benchmark> benchmarks, int userId, int spaceId) {
 		List<Integer> ids = new ArrayList<>();
@@ -835,10 +869,11 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Makes a deep copy of an existing benchmark, gives it a new user, and places it into a space
+	 * Makes a deep copy of an existing benchmark, gives it a new user, and places
+	 * it into a space
 	 *
-	 * @param b The existing benchmark to copy
-	 * @param userId The userID that the new benchmark will be given
+	 * @param b       The existing benchmark to copy
+	 * @param userId  The userID that the new benchmark will be given
 	 * @param spaceId The space ID of the space to place the new benchmark in to
 	 * @return The ID of the new benchmark, or -1 on failure
 	 * @author Eric Burns
@@ -861,8 +896,8 @@ public class Benchmarks {
 				newBenchmark.setAttributes(new HashMap<>());
 			}
 
-			//this benchmark must be valid, since it is just a copy of
-			//an old benchmark that already passed validation
+			// this benchmark must be valid, since it is just a copy of
+			// an old benchmark that already passed validation
 			newBenchmark.getAttributes().put(R.VALID_BENCHMARK_ATTRIBUTE, "true");
 			File benchmarkFile = new File(b.getPath());
 
@@ -892,7 +927,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Sets a benchmark to 'deleted' in the database and actually removes in on disk Deletes a benchmark from the
+	 * Sets a benchmark to 'deleted' in the database and actually removes in on disk
+	 * Deletes a benchmark from the
 	 * database (cascading deletes handle all dependencies)
 	 *
 	 * @param id the id of the benchmark to delete
@@ -947,28 +983,36 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Creates a space named after the directory and finds any benchmarks within the directory. Then the process
-	 * recursively adds any subspaces found (other directories) until all directories under the original one are
-	 * traversed. Also extracts the description file(if there is one) and sets it as the description for the space.
-	 * *New* deletes .git directory (if present) and does not add .gitignore .gitattributes .gitmodules and
+	 * Creates a space named after the directory and finds any benchmarks within the
+	 * directory. Then the process
+	 * recursively adds any subspaces found (other directories) until all
+	 * directories under the original one are
+	 * traversed. Also extracts the description file(if there is one) and sets it as
+	 * the description for the space.
+	 * *New* deletes .git directory (if present) and does not add .gitignore
+	 * .gitattributes .gitmodules and
 	 * README.md files as benchmarks.
 	 *
-	 * @param directory The directory to extract data from
-	 * @param typeId The bench type id to set for all the found benchmarks
-	 * @param userId The user is of the owner of all the benchmarks found
-	 * @param downloadable Whether or now to mark any found benchmarks as downloadable
-	 * @param perm The default permissions to set for this space
-	 * @param statusId statusId The ID of an upload status if one exists for this operation, null otherwise
-	 * @return A single space containing all subspaces and benchmarks based on the file structure of the given
-	 * directory.
-	 * @throws Exception Any exception with the description file, with an error message contained
+	 * @param directory    The directory to extract data from
+	 * @param typeId       The bench type id to set for all the found benchmarks
+	 * @param userId       The user is of the owner of all the benchmarks found
+	 * @param downloadable Whether or now to mark any found benchmarks as
+	 *                     downloadable
+	 * @param perm         The default permissions to set for this space
+	 * @param statusId     statusId The ID of an upload status if one exists for
+	 *                     this operation, null otherwise
+	 * @return A single space containing all subspaces and benchmarks based on the
+	 *         file structure of the given
+	 *         directory.
+	 * @throws Exception Any exception with the description file, with an error
+	 *                   message contained
 	 * @author Wyatt Kaiser, Steve Fiolic
 	 */
 	public static Space extractSpacesAndBenchmarks(
-			File directory, int typeId, int userId, boolean downloadable, Permission perm, Integer statusId
-	) throws IOException, StarExecException {
+			File directory, int typeId, int userId, boolean downloadable, Permission perm, Integer statusId)
+			throws IOException, StarExecException {
 		// Create a space for the current directory and set it's name
-            log.info("Extracting Spaces and Benchmarks for " + userId + " in " + directory.getName());
+		log.info("Extracting Spaces and Benchmarks for " + userId + " in " + directory.getName());
 		Space space = new Space();
 		space.setName(directory.getName());
 		space.setPermission(perm);
@@ -989,57 +1033,59 @@ public class Benchmarks {
 
 			// If it's a sub-directory
 			if (f.isDirectory()) {
-        if (f.getName().equals(".git")){
-          FileUtils.deleteDirectory(f);
-        }
-        else{
-  				// Recursively extract spaces/benchmarks from that directory
-  				space.getSubspaces()
-  				     .add(Benchmarks.extractSpacesAndBenchmarks(f, typeId, userId, downloadable, perm, statusId));
-  				spaceCounter++;
-  				if (spaceTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
-  					Uploads.incrementTotalSpaces(statusId, spaceCounter);//for upload status page
-  					spaceCounter = 0;
-  					spaceTimer.reset();
-  				}
-        }
+				if (f.getName().equals(".git")) {
+					FileUtils.deleteDirectory(f);
+				} else {
+					// Recursively extract spaces/benchmarks from that directory
+					space.getSubspaces()
+							.add(Benchmarks.extractSpacesAndBenchmarks(f, typeId, userId, downloadable, perm,
+									statusId));
+					spaceCounter++;
+					if (spaceTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+						Uploads.incrementTotalSpaces(statusId, spaceCounter);// for upload status page
+						spaceCounter = 0;
+						spaceTimer.reset();
+					}
+				}
 			}
 
-      else if ((!f.getName().equals(R.BENCHMARK_DESC_PATH)) && (!f.getName().equals("README.md")) &&
-              (!f.getName().equals(".gitattributes")) && (!f.getName().equals(".gitignore")) &&
-							(!f.getName().equals(".gitmodules")) && (!f.getName().equals(".git")))
+			else if ((!f.getName().equals(R.BENCHMARK_DESC_PATH)) && (!f.getName().equals("README.md")) &&
+					(!f.getName().equals(".gitattributes")) && (!f.getName().equals(".gitignore")) &&
+					(!f.getName().equals(".gitmodules")) && (!f.getName().equals(".git")))
 
-       { //Not a description file, readme, .gitattributes, .gitmodules, and .gitignore
+			{ // Not a description file, readme, .gitattributes, .gitmodules, and .gitignore
 
 				if (Validator.isValidBenchName(f.getName())) {
 					space.addBenchmark(constructBenchmark(f, typeId, downloadable, userId));
 					benchCounter++;
 					if (benchTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
-						Uploads.incrementTotalBenchmarks(statusId, benchCounter);//for upload status page
+						Uploads.incrementTotalBenchmarks(statusId, benchCounter);// for upload status page
 						benchCounter = 0;
 						benchTimer.reset();
 					}
-				}
-        else {
+				} else {
 					String msg = "\"" + f.getName() + "\" is not accepted as a legal benchmark name.";
 					Uploads.setBenchmarkErrorMessage(statusId, msg);
 					throw new StarExecException(msg);
 				}
 			}
 		}
-		Uploads.incrementTotalBenchmarks(statusId, benchCounter);//for upload status page
-		Uploads.incrementTotalSpaces(statusId, spaceCounter);//for upload status page
+		Uploads.incrementTotalBenchmarks(statusId, benchCounter);// for upload status page
+		Uploads.incrementTotalSpaces(statusId, spaceCounter);// for upload status page
 
 		return space;
 	}
 
 	/**
-	 * Returns the bench id of the axiom file that is being looked for, -1 if not found or too many by that name
+	 * Returns the bench id of the axiom file that is being looked for, -1 if not
+	 * found or too many by that name
 	 *
-	 * @param spaceId the dependent bench root space
+	 * @param spaceId     the dependent bench root space
 	 * @param includePath the path that will be used to drill down and find bench
-	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
-	 * @param userId the ID of the user that owns the benchmarks with these dependencies
+	 * @param linked      true if the depRootSpace is the same as the first
+	 *                    directory in the include statement
+	 * @param userId      the ID of the user that owns the benchmarks with these
+	 *                    dependencies
 	 * @return benchId
 	 * @author Benton McCune
 	 */
@@ -1057,9 +1103,9 @@ public class Benchmarks {
 	}
 
 	private static Integer findDependentBench(
-			Integer spaceId, String includePath, Boolean linked, Integer userId, Connection con
-	) {
-		log.debug("findDependentBench called with: spaceId=" + spaceId + ", includePath=" + includePath + ", linked=" + linked + ", userId=" + userId);
+			Integer spaceId, String includePath, Boolean linked, Integer userId, Connection con) {
+		log.debug("findDependentBench called with: spaceId=" + spaceId + ", includePath=" + includePath + ", linked="
+				+ linked + ", userId=" + userId);
 
 		if (includePath == null) {
 			log.warn("includePath is null");
@@ -1110,28 +1156,30 @@ public class Benchmarks {
 			}
 		}
 
-		log.warn("Invalid currentSpaceId (" + currentSpaceId + ") or index (" + index + ") out of bounds for spaces array");
+		log.warn("Invalid currentSpaceId (" + currentSpaceId + ") or index (" + index
+				+ ") out of bounds for spaces array");
 		return -1;
 	}
 
 	/**
-	 * @param con The connection to query with
-	 * @param benchId The id of the benchmark to retrieve
-	 * @param includeDeleted If true, deleted benchmarks may be returned. If false, will not return a deleted benchmark
+	 * @param con            The connection to query with
+	 * @param benchId        The id of the benchmark to retrieve
+	 * @param includeDeleted If true, deleted benchmarks may be returned. If false,
+	 *                       will not return a deleted benchmark
 	 * @return A benchmark object representing the benchmark with the given ID
 	 * @throws Exception
 	 * @author Tyler Jensen
 	 */
 	protected static Benchmark get(Connection con, int benchId, boolean includeDeleted) {
-	PreparedStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
-				if (includeDeleted) {
-					procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(?)");
-				} else {
-					procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkById(?)");
-				}
+			if (includeDeleted) {
+				procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkByIdIncludeDeletedAndRecycled(?)");
+			} else {
+				procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkById(?)");
+			}
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
 
@@ -1153,29 +1201,29 @@ public class Benchmarks {
 		return null;
 	}
 
-    /**
-     * @param con The connection to query with
-     * @param benchId The id of the benchmark to retrieve
-     * @return A Benchmark containing just the path to the benchmark
-     * @author Aaron Stump
-     */
+	/**
+	 * @param con     The connection to query with
+	 * @param benchId The id of the benchmark to retrieve
+	 * @return A Benchmark containing just the path to the benchmark
+	 * @author Aaron Stump
+	 */
 	protected static Benchmark getSkeletal(Connection con, int benchId) {
-	PreparedStatement procedure = null;
+		PreparedStatement procedure = null;
 		ResultSet results = null;
 
 		try {
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkPathById(?)");
-		    procedure.setInt(1, benchId);
-		    results = procedure.executeQuery();
+			procedure.setInt(1, benchId);
+			results = procedure.executeQuery();
 
-		    if (results.next()) {
-			Benchmark b = new Benchmark();
-			b.setId(benchId);
-			b.setName(results.getString("name"));
-			b.setPath(results.getString("path"));
-			Common.safeClose(results);
-			return b;
-		    }
+			if (results.next()) {
+				Benchmark b = new Benchmark();
+				b.setId(benchId);
+				b.setName(results.getString("name"));
+				b.setPath(results.getString("path"));
+				Common.safeClose(results);
+				return b;
+			}
 		} catch (Exception e) {
 			log.error("getSkeletal", e);
 		} finally {
@@ -1186,7 +1234,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Retrieves a benchmark without attributes. Will not return a "deleted" benchmark
+	 * Retrieves a benchmark without attributes. Will not return a "deleted"
+	 * benchmark
 	 *
 	 * @param benchId The id of the benchmark to retrieve
 	 * @return A benchmark object representing the benchmark with the given ID
@@ -1197,9 +1246,10 @@ public class Benchmarks {
 	}
 
 	/**
-	 * @param benchId The id of the benchmark to retrieve
-	 * @param includeAttrs Whether or not to to get this benchmark's attributes
-	 * @param includeDeleted If true, may return a deleted benchmark. If false, deleted benchmarks will be ignored
+	 * @param benchId        The id of the benchmark to retrieve
+	 * @param includeAttrs   Whether or not to to get this benchmark's attributes
+	 * @param includeDeleted If true, may return a deleted benchmark. If false,
+	 *                       deleted benchmarks will be ignored
 	 * @return A benchmark object representing the benchmark with the given ID
 	 * @author Tyler Jensen
 	 */
@@ -1238,17 +1288,20 @@ public class Benchmarks {
 	 * Gets a list of benchmarks given a list of benchmark IDs
 	 *
 	 * @param benchIds The IDs of the benchmarks to retrieve.
-	 * @return The benchmarks on success or null on failure. Attributes are not returned
+	 * @return The benchmarks on success or null on failure. Attributes are not
+	 *         returned
 	 */
 	public static List<Benchmark> get(List<Integer> benchIds) {
 		return get(benchIds, false);
 	}
 
 	/**
-	 * @param benchIds A list of ids to get benchmarks for
-	 * @param includeAttrs True to include attributes for all the given benchmarks, false if attributes should not be
-	 * included
-	 * @return A list of benchmark object representing the benchmarks with the given IDs
+	 * @param benchIds     A list of ids to get benchmarks for
+	 * @param includeAttrs True to include attributes for all the given benchmarks,
+	 *                     false if attributes should not be
+	 *                     included
+	 * @return A list of benchmark object representing the benchmarks with the given
+	 *         IDs
 	 * @author Tyler Jensen
 	 */
 	public static List<Benchmark> get(List<Integer> benchIds, boolean includeAttrs) {
@@ -1287,7 +1340,8 @@ public class Benchmarks {
 		}
 	}
 
-	private static Map<Integer, Benchmark> fetchBenchmarksByIds(Connection con, List<Integer> benchIds) throws SQLException {
+	private static Map<Integer, Benchmark> fetchBenchmarksByIds(Connection con, List<Integer> benchIds)
+			throws SQLException {
 		if (benchIds.isEmpty()) {
 			return Collections.emptyMap();
 		}
@@ -1313,7 +1367,7 @@ public class Benchmarks {
 	}
 
 	private static Map<Integer, Map<String, String>> fetchAttributesForBenchIds(Connection con,
-	                                                                    Collection<Integer> benchIds) throws SQLException {
+			Collection<Integer> benchIds) throws SQLException {
 		if (benchIds == null || benchIds.isEmpty()) {
 			return Collections.emptyMap();
 		}
@@ -1340,7 +1394,8 @@ public class Benchmarks {
 	/**
 	 * Returns a list of benchmarks owned by a given user
 	 *
-	 * @param userId the id of the user who is the owner of the benchmarks we are to retrieve
+	 * @param userId the id of the user who is the owner of the benchmarks we are to
+	 *               retrieve
 	 * @return a list of benchmarks owned by a given user, may be empty
 	 * @author Todd Elvers
 	 */
@@ -1375,7 +1430,7 @@ public class Benchmarks {
 	 */
 	public static List<Benchmark> getByJob(int jobId) throws SQLException {
 		log.debug("Inside benchmarks.getByJob");
-	return Common.query("SELECT * FROM starexec.GetBenchmarksByJob(?)", procedure -> {
+		return Common.query("SELECT * FROM starexec.GetBenchmarksByJob(?)", procedure -> {
 			log.debug("Setting GetBenchmarksByJob parameter.");
 			procedure.setInt(1, jobId);
 		}, results -> {
@@ -1397,9 +1452,9 @@ public class Benchmarks {
 	 * @author Eric Burns
 	 */
 	public static List<Integer> getAssociatedSpaceIds(int benchId) {
-	Connection con = null;
-	PreparedStatement procedure = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetAssociatedSpaceIdsByBenchmark(?)");
@@ -1423,9 +1478,10 @@ public class Benchmarks {
 	/**
 	 * Retrieves all attributes (key/value) of the given benchmark
 	 *
-	 * @param con The connection to make the query on
+	 * @param con     The connection to make the query on
 	 * @param benchId The id of the benchmark to get the attributes of
-	 * @return The properties object which holds all the benchmark's attributes. Null on error.
+	 * @return The properties object which holds all the benchmark's attributes.
+	 *         Null on error.
 	 * @throws Exception
 	 * @author Tyler Jensen
 	 */
@@ -1473,16 +1529,17 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Returns a list of benchmark dependencies that have the input benchmark as the primary benchmark
+	 * Returns a list of benchmark dependencies that have the input benchmark as the
+	 * primary benchmark
 	 *
 	 * @param benchmarkId the id of the primary benchmark
 	 * @return a list of benchmark dependencies for a given benchmark, may be empty
 	 * @author Benton McCune
 	 */
 	public static List<BenchmarkDependency> getBenchDependencies(int benchmarkId) {
-	Connection con = null;
-	PreparedStatement procedure = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
@@ -1491,7 +1548,7 @@ public class Benchmarks {
 			results = procedure.executeQuery();
 			List<BenchmarkDependency> dependencies = new LinkedList<>();
 
-			Benchmark primary = Benchmarks.getSkeletal(con,benchmarkId);
+			Benchmark primary = Benchmarks.getSkeletal(con, benchmarkId);
 
 			while (results.next()) {
 				// Build benchmark dependency object
@@ -1510,8 +1567,7 @@ public class Benchmarks {
 
 			log.debug(
 					String.format("%d dependencies were returned as being needed by benchmark %d.", dependencies
-							              .size(), benchmarkId
-					));
+							.size(), benchmarkId));
 
 			return dependencies;
 		} catch (Exception e) {
@@ -1527,9 +1583,10 @@ public class Benchmarks {
 	}
 
 	/**
-	 * returns the benchId of a benchmark with a specific name in a given space (-1 if not found or more than one)
+	 * returns the benchId of a benchmark with a specific name in a given space (-1
+	 * if not found or more than one)
 	 *
-	 * @param spaceId space that bench should be in
+	 * @param spaceId   space that bench should be in
 	 * @param benchName name of bench
 	 * @return benchId
 	 * @author Benton McCune
@@ -1581,9 +1638,9 @@ public class Benchmarks {
 	 * @author Wyatt Kaiser
 	 */
 	public static int getBenchmarkCountByUser(int userId) {
-	Connection con = null;
-	PreparedStatement procedure = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkCountByUser(?)");
@@ -1604,17 +1661,18 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Get the total count of the benchmarks belonging to a specific user that match the given query
+	 * Get the total count of the benchmarks belonging to a specific user that match
+	 * the given query
 	 *
 	 * @param userId Id of the user we are looking for
-	 * @param query The query to match the benchmarks on
+	 * @param query  The query to match the benchmarks on
 	 * @return The count of the benchmarks
 	 * @author Eric Burns
 	 */
 	public static int getBenchmarkCountByUser(int userId, String query) {
-	Connection con = null;
-	PreparedStatement procedure = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 		try {
 			con = Common.getConnection();
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkCountByUserWithQuery(?, ?)");
@@ -1638,8 +1696,8 @@ public class Benchmarks {
 	/**
 	 * Get next page of the benchmarks belong to a specific user
 	 *
-	 * @param query a DataTablesQuery object
-	 * @param userId Id of the user we are looking for
+	 * @param query    a DataTablesQuery object
+	 * @param userId   Id of the user we are looking for
 	 * @param recycled Whether to get recycled or non-recycled benchmarks
 	 * @return a list of benchmarks belong to the user
 	 * @author Wyatt Kaiser
@@ -1651,9 +1709,8 @@ public class Benchmarks {
 		try {
 			con = Common.getConnection();
 			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries.GET_BENCHMARKS_BY_USER_QUERY,
-			                                                            getBenchmarkOrderColumn(query.getSortColumn()),
-			                                                            query
-			);
+					getBenchmarkOrderColumn(query.getSortColumn()),
+					query);
 
 			procedure = new NamedParameterStatement(con, builder.getSQL());
 			procedure.setInt("userId", userId);
@@ -1698,12 +1755,12 @@ public class Benchmarks {
 
 	private static String getBenchmarkOrderColumn(int indexOfColumn) {
 		switch (indexOfColumn) {
-		case 0:
-			return "benchmarks.name";
-		case 1:
-			return "processors.name";
-		case 2:
-			return "bench_assoc.order_id";
+			case 0:
+				return "benchmarks.name";
+			case 1:
+				return "processors.name";
+			case 2:
+				return "bench_assoc.order_id";
 		}
 		return "benchmarks.name";
 	}
@@ -1711,7 +1768,7 @@ public class Benchmarks {
 	/**
 	 * Retrieves benchmarks for the next page of a table on the space explorer
 	 *
-	 * @param query A DataTablesQuery object
+	 * @param query   A DataTablesQuery object
 	 * @param spaceId The ID of the space the benchmarks to retrieve are in
 	 * @return A list of benchmarks on success or null on failure
 	 */
@@ -1722,11 +1779,9 @@ public class Benchmarks {
 		try {
 			con = Common.getConnection();
 
-			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries
-					                                                            .GET_BENCHMARKS_IN_SPACE_QUERY,
-			                                                            getBenchmarkOrderColumn(query.getSortColumn()),
-			                                                            query
-			);
+			PaginationQueryBuilder builder = new PaginationQueryBuilder(PaginationQueries.GET_BENCHMARKS_IN_SPACE_QUERY,
+					getBenchmarkOrderColumn(query.getSortColumn()),
+					query);
 
 			procedure = new NamedParameterStatement(con, builder.getSQL());
 			procedure.setInt("spaceId", spaceId);
@@ -1776,9 +1831,9 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	public static List<Benchmark> getBySpace(int spaceId) {
-	Connection con = null;
-	PreparedStatement procedure = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 
 		try {
 			con = Common.getConnection();
@@ -1808,8 +1863,9 @@ public class Benchmarks {
 	/**
 	 * Retrieves the contents of a benchmark file from disk as a string
 	 *
-	 * @param b The benchmark to get the contents of (must have a valid path)
-	 * @param limit the maximum number of lines to return, or no limit if less than 0
+	 * @param b     The benchmark to get the contents of (must have a valid path)
+	 * @param limit the maximum number of lines to return, or no limit if less than
+	 *              0
 	 * @return The file contents as a string
 	 */
 	public static Optional<String> getContents(Benchmark b, int limit) throws IOException {
@@ -1821,7 +1877,7 @@ public class Benchmarks {
 	 * Retrieves the contents of a benchmark file from disk as a string
 	 *
 	 * @param benchId The id of the benchmark to get the contents of
-	 * @param limit the maximum number of lines to return
+	 * @param limit   the maximum number of lines to return
 	 * @return The file contents as a string
 	 */
 	public static Optional<String> getContents(int benchId, int limit) throws IOException {
@@ -1843,7 +1899,7 @@ public class Benchmarks {
 	 * Gets the number of Benchmarks in a given space that match a given query
 	 *
 	 * @param spaceId the id of the space to count the Benchmarks in
-	 * @param query The query to match the spaces on
+	 * @param query   The query to match the spaces on
 	 * @return the number of Benchmarks
 	 * @author Eric Burns
 	 */
@@ -1853,7 +1909,8 @@ public class Benchmarks {
 		ResultSet results = null;
 		try {
 			con = Common.getConnection();
-			// function returns a result-set/table; call it as a table to match the authoritative signature
+			// function returns a result-set/table; call it as a table to match the
+			// authoritative signature
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetBenchmarkCountInSpaceWithQuery(?, ?)");
 			procedure.setInt(1, spaceId);
 			procedure.setString(2, query);
@@ -1875,8 +1932,9 @@ public class Benchmarks {
 	/**
 	 * Retrieves a benchmark. If the benchmark is deleted, it will still be returned
 	 *
-	 * @param benchId The id of the benchmark to retrieve
-	 * @param includeAttrs True if attributes for the benchmark should also be included and false otherwise
+	 * @param benchId      The id of the benchmark to retrieve
+	 * @param includeAttrs True if attributes for the benchmark should also be
+	 *                     included and false otherwise
 	 * @return A benchmark object representing the benchmark with the given ID
 	 * @author Tyler Jensen
 	 */
@@ -1902,7 +1960,7 @@ public class Benchmarks {
 	 * Gets the number of recycled benchmarks a user has that match the given query
 	 *
 	 * @param userId The ID of the user in question
-	 * @param query The string query to match on
+	 * @param query  The string query to match on
 	 * @return The number of benchmarks, or -1 on failure
 	 * @author Eric Burns
 	 */
@@ -1912,7 +1970,8 @@ public class Benchmarks {
 		PreparedStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			// function returns a result-set/table; call it as a table to match the authoritative signature
+			// function returns a result-set/table; call it as a table to match the
+			// authoritative signature
 			procedure = con.prepareStatement("SELECT * FROM starexec.GetRecycledBenchmarkCountByUser(?,?)");
 			procedure.setInt(1, userId);
 			procedure.setString(2, query);
@@ -1933,7 +1992,7 @@ public class Benchmarks {
 	/**
 	 * Retrieves all attributes (key/value) of the given benchmark in order
 	 *
-	 * @param con The connection to make the query on
+	 * @param con     The connection to make the query on
 	 * @param benchId The id of the benchmark to get the attributes of
 	 * @return The properties object which holds all the benchmark's attributes
 	 * @throws Exception
@@ -1963,7 +2022,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Retrieves all attributes (key/value of the given benchmark in alphabetic order
+	 * Retrieves all attributes (key/value of the given benchmark in alphabetic
+	 * order
 	 *
 	 * @param benchId the id of the benchmark to get the attributes of
 	 * @return The properties object which holds all the benchmark's attributes
@@ -1983,11 +2043,13 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Returns whether a benchmark with the given ID is present in the database with the "deleted" column set to true
+	 * Returns whether a benchmark with the given ID is present in the database with
+	 * the "deleted" column set to true
 	 *
 	 * @param benchId The ID of the benchmark to check
-	 * @param con the open connection to make the SQL call on
-	 * @return True if the benchmark exists in the database with the "deleted" column set to true, and false otherwise
+	 * @param con     the open connection to make the SQL call on
+	 * @return True if the benchmark exists in the database with the "deleted"
+	 *         column set to true, and false otherwise
 	 * @author Eric Burns
 	 */
 	protected static boolean isBenchmarkDeleted(Connection con, int benchId) {
@@ -2012,10 +2074,12 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Returns whether a benchmark with the given ID is present in the database with the "deleted" column set to true
+	 * Returns whether a benchmark with the given ID is present in the database with
+	 * the "deleted" column set to true
 	 *
 	 * @param benchId The ID of the benchmark to check
-	 * @return True if the benchmark exists in the database with the "deleted" column set to true, and false otherwise
+	 * @return True if the benchmark exists in the database with the "deleted"
+	 *         column set to true, and false otherwise
 	 * @author Eric Burns
 	 */
 	public static boolean isBenchmarkDeleted(int benchId) {
@@ -2032,11 +2096,13 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Returns whether a benchmark with the given ID is present in the database with the "recycled" column set to true
+	 * Returns whether a benchmark with the given ID is present in the database with
+	 * the "recycled" column set to true
 	 *
 	 * @param benchId The ID of the benchmark to check
-	 * @param con the open connection to make the SQL call on
-	 * @return True if the benchmark exists in the database with the "recycled" column set to true, and false otherwise
+	 * @param con     the open connection to make the SQL call on
+	 * @return True if the benchmark exists in the database with the "recycled"
+	 *         column set to true, and false otherwise
 	 * @author Eric Burns
 	 */
 	protected static boolean isBenchmarkRecycled(Connection con, int benchId) {
@@ -2061,10 +2127,12 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Returns whether a benchmark with the given ID is present in the database with the "recycled" column set to true
+	 * Returns whether a benchmark with the given ID is present in the database with
+	 * the "recycled" column set to true
 	 *
 	 * @param benchId The ID of the benchmark to check
-	 * @return True if the benchmark exists in the database with the "recycled" column set to true, and false otherwise
+	 * @return True if the benchmark exists in the database with the "recycled"
+	 *         column set to true, and false otherwise
 	 * @author Eric Burns
 	 */
 	public static boolean isBenchmarkRecycled(int benchId) {
@@ -2093,22 +2161,26 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Internal helper method to determine if a benchmark is valid according to its attributes
+	 * Internal helper method to determine if a benchmark is valid according to its
+	 * attributes
 	 *
 	 * @param attrs The attributes of a benchmark
 	 * @return True if the attributes are of a valid benchmark, false otherwise
 	 */
 	private static boolean isBenchValid(Map<String, String> attrs) {
-		// A benchmark is valid if it has attributes and it has the special R.VALID_BENCHMARK_ATTRIBUTE attribute
+		// A benchmark is valid if it has attributes and it has the special
+		// R.VALID_BENCHMARK_ATTRIBUTE attribute
 		return (attrs != null && Boolean.parseBoolean(attrs.getOrDefault(R.VALID_BENCHMARK_ATTRIBUTE, "false")));
 	}
 
 	/**
-	 * Determines whether the benchmark with the given ID is public. It is public if it is in at least one public space
+	 * Determines whether the benchmark with the given ID is public. It is public if
+	 * it is in at least one public space
 	 * or if it is the default benchmark for some community
 	 *
 	 * @param benchId The ID of the benchmark in question
-	 * @return True if the benchmark exists and is in a public space, false otherwise.
+	 * @return True if the benchmark exists and is in a public space, false
+	 *         otherwise.
 	 */
 	public static boolean isPublic(int benchId) {
 		Connection con = null;
@@ -2134,14 +2206,15 @@ public class Benchmarks {
 			if (results.next()) {
 				publicSpace = (results.getInt("benchPublic") > 0);
 			}
-		
+
 			if (publicSpace) {
 				return true;
 			}
-		
+
 			Common.safeClose(results);
 			Common.safeClose(procedure);
-			//if the benchmark is in no public spaces, check to see if it is the default benchmark for some community
+			// if the benchmark is in no public spaces, check to see if it is the default
+			// benchmark for some community
 			procedure = con.prepareStatement("SELECT * FROM starexec.IsBenchACommunityDefault(?)");
 			procedure.setInt(1, benchId);
 			results = procedure.executeQuery();
@@ -2158,7 +2231,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Sets the "recycled" flag in the database to true. Indicates the user has moved the benchmark to the recycle bin,
+	 * Sets the "recycled" flag in the database to true. Indicates the user has
+	 * moved the benchmark to the recycle bin,
 	 * from which in can be deleted
 	 *
 	 * @param id the id of the benchmark to recycled
@@ -2170,7 +2244,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Sets the "recycled" flag in the database to false. Indicates the user has removed the benchmark from the recycle
+	 * Sets the "recycled" flag in the database to false. Indicates the user has
+	 * removed the benchmark from the recycle
 	 * bin
 	 *
 	 * @param id the id of the benchmark to be removed from the recycle bin
@@ -2222,7 +2297,7 @@ public class Benchmarks {
 	 * Creates a Benchmark object from a SQL resultset
 	 *
 	 * @param results The resultset pointed at the row containing benchmark data
-	 * @param prefix Optional table alias to consider when resolving column names
+	 * @param prefix  Optional table alias to consider when resolving column names
 	 * @return A Benchmark object
 	 * @throws SQLException when required columns are not present
 	 */
@@ -2268,7 +2343,8 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Deletes all benchmarks that this user has in their recycle bin from both the database and from disk
+	 * Deletes all benchmarks that this user has in their recycle bin from both the
+	 * database and from disk
 	 *
 	 * @param userId The userId in question
 	 * @return True on success, false otherwise
@@ -2306,7 +2382,7 @@ public class Benchmarks {
 	/**
 	 * Sets the "recycled" flag in the database to the given value.
 	 *
-	 * @param id the id of the benchmark to recycled
+	 * @param id    the id of the benchmark to recycled
 	 * @param state True to set as recycled, false to remove recycled tag
 	 * @return True if the operation was a success, false otherwise
 	 * @author Eric Burns
@@ -2332,20 +2408,22 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Updates the details of a benchmark. This ONLY updates the database: it does not handle actually executing the
+	 * Updates the details of a benchmark. This ONLY updates the database: it does
+	 * not handle actually executing the
 	 * given processor!
 	 *
-	 * @param id the id of the benchmark to update
-	 * @param name the new name to apply to the benchmark
-	 * @param description the new description to apply to the benchmark
-	 * @param isDownloadable boolean indicating whether or not this benchmark is downloadable
-	 * @param benchTypeId the new benchmark type to apply to the benchmark
+	 * @param id             the id of the benchmark to update
+	 * @param name           the new name to apply to the benchmark
+	 * @param description    the new description to apply to the benchmark
+	 * @param isDownloadable boolean indicating whether or not this benchmark is
+	 *                       downloadable
+	 * @param benchTypeId    the new benchmark type to apply to the benchmark
 	 * @return True if the operation was a success, false otherwise
 	 * @author Todd Elvers
 	 */
 	public static boolean updateDetails(
-			int id, String name, String description, boolean isDownloadable, int benchTypeId
-	) throws StarExecDatabaseException {
+			int id, String name, String description, boolean isDownloadable, int benchTypeId)
+			throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement procedure = null;
 		try {
@@ -2378,15 +2456,18 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Validates the dependencies for a list of benchmarks (usually all benches of a single space)
+	 * Validates the dependencies for a list of benchmarks (usually all benches of a
+	 * single space)
 	 *
 	 * @param benchmarks The list of benchmarks that might have dependencies
-	 * @param spaceId the id of the space where the axiom benchmarks lie
-	 * @param linked true if the depRootSpace is the same as the first directory in the include statement
+	 * @param spaceId    the id of the space where the axiom benchmarks lie
+	 * @param linked     true if the depRootSpace is the same as the first directory
+	 *                   in the include statement
 	 * @return the data structure that has information about dependencies
 	 * @author Eric Burns
 	 */
-	private static boolean validateDependencies(List<Benchmark> benchmarks, Integer spaceId, Boolean linked, Integer statusID) {
+	private static boolean validateDependencies(List<Benchmark> benchmarks, Integer spaceId, Boolean linked,
+			Integer statusID) {
 		Map<String, Integer> dependencyOwners = new LinkedHashMap<>();
 		for (Benchmark benchmark : benchmarks) {
 			for (String includePath : getDependencyIncludePaths(benchmark)) {
@@ -2394,12 +2475,14 @@ public class Benchmarks {
 			}
 		}
 
-		Map<String, BenchmarkDependency> resolvedDependencies = resolveDependencyBatch(spaceId, linked, dependencyOwners);
+		Map<String, BenchmarkDependency> resolvedDependencies = resolveDependencyBatch(spaceId, linked,
+				dependencyOwners);
 		for (Benchmark benchmark : benchmarks) {
 			String out = validateIndBenchDependencies(benchmark, resolvedDependencies);
 			if (!"true".equals(out)) {
 				log.warn("Dependent benchs not found for Bench " + benchmark.getName());
-				Uploads.addFailedBenchmark(statusID, benchmark.getName(), "Dependancy check failed for this benchmark. Failed search for " + out + ".");
+				Uploads.addFailedBenchmark(statusID, benchmark.getName(),
+						"Dependancy check failed for this benchmark. Failed search for " + out + ".");
 				return false;
 			}
 		}
@@ -2407,16 +2490,17 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Validates the dependencies for a benchmark. Adds the dependencies to the benchmark as well
+	 * Validates the dependencies for a benchmark. Adds the dependencies to the
+	 * benchmark as well
 	 *
-	 * @param bench The benchmark that might have dependencies
+	 * @param bench                The benchmark that might have dependencies
 	 * @param resolvedDependencies pre-resolved dependency map keyed by include path
-	 * @return "true" if the dependencies are valid, the name of the failed dependency if otherwise
+	 * @return "true" if the dependencies are valid, the name of the failed
+	 *         dependency if otherwise
 	 * @author Benton McCune
 	 */
-	private static String  validateIndBenchDependencies(
-			Benchmark bench, Map<String, BenchmarkDependency> resolvedDependencies
-	) {
+	private static String validateIndBenchDependencies(
+			Benchmark bench, Map<String, BenchmarkDependency> resolvedDependencies) {
 		String includePath = "";
 		try {
 			List<String> includePaths = getDependencyIncludePaths(bench);
@@ -2439,8 +2523,7 @@ public class Benchmarks {
 	}
 
 	private static Map<String, BenchmarkDependency> resolveDependencyBatch(
-			Integer spaceId, Boolean linked, Map<String, Integer> dependencyOwners
-	) {
+			Integer spaceId, Boolean linked, Map<String, Integer> dependencyOwners) {
 		Map<String, BenchmarkDependency> resolved = new HashMap<>();
 		if (dependencyOwners.isEmpty()) {
 			return resolved;
@@ -2512,7 +2595,7 @@ public class Benchmarks {
 	 * Gets rid of all the attributes a benchmark currently has in the database
 	 *
 	 * @param benchId The ID of the benchmark in question
-	 * @param con The connection to make the call on
+	 * @param con     The connection to make the call on
 	 * @return True on success, false on error
 	 * @author Eric Burns
 	 */
@@ -2532,15 +2615,20 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Re-process benchmarks in the given space.  Regular users can only re-process benchmarks they own. Community
+	 * Re-process benchmarks in the given space. Regular users can only re-process
+	 * benchmarks they own. Community
 	 * leaders can reprocess any benchmarks.
 	 *
-	 * @param spaceId the ID of the space in which to look for benchmarks to re-process
-	 * @param p the Processor to apply
-	 * @param hierarchy whether to process the hierarchy rooted at the space with the given ID, or just that space
-	 * @param userId the ID of the user requesting re-processing
-	 * @param clearOldAttrs true iff we should drop the old attributes we had from any earlier processing
-	 * @return The ID of an UploadStatus object for tracking progress of this request
+	 * @param spaceId       the ID of the space in which to look for benchmarks to
+	 *                      re-process
+	 * @param p             the Processor to apply
+	 * @param hierarchy     whether to process the hierarchy rooted at the space
+	 *                      with the given ID, or just that space
+	 * @param userId        the ID of the user requesting re-processing
+	 * @param clearOldAttrs true iff we should drop the old attributes we had from
+	 *                      any earlier processing
+	 * @return The ID of an UploadStatus object for tracking progress of this
+	 *         request
 	 * @author Eric Burns
 	 */
 	public static Integer process(int spaceId, Processor p, boolean hierarchy, int userId, boolean clearOldAttrs) {
@@ -2558,7 +2646,8 @@ public class Benchmarks {
 		Permission perm = Permissions.get(userId, comm);
 
 		final boolean l = perm != null && perm.isLeader();
-		//It will delay the redirect until this method is finished which is why a new thread is used
+		// It will delay the redirect until this method is finished which is why a new
+		// thread is used
 		Util.threadPoolExecute(() -> {
 			try {
 				process(s, proc, h, u, c, st, l);
@@ -2571,25 +2660,31 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Runs the given benchmark processor on all benchmarks in the given space (hierarchy)
+	 * Runs the given benchmark processor on all benchmarks in the given space
+	 * (hierarchy)
 	 *
-	 * @param spaceId The ID of the relevant space
-	 * @param p The benchmark processor to use
-	 * @param hierarchy True if we want to run on the hierarchy, false otherwise
-	 * @param statusId The ID of the UploadStatus object associated with this process, or null if one does not yet
-	 * exist
-	 * @param userId The ID of the user making this processing request
-	 * @param clearOldAttrs If true, all existing benchmark attributes will be removed for every benchmark being
-	 * processed. If false, old attributes are not cleared, but will be overwritten by new attributes with the same
-	 * names
-	 * @param isCommunityLeader True if the user is a community leader for this community and false otherwise
+	 * @param spaceId           The ID of the relevant space
+	 * @param p                 The benchmark processor to use
+	 * @param hierarchy         True if we want to run on the hierarchy, false
+	 *                          otherwise
+	 * @param statusId          The ID of the UploadStatus object associated with
+	 *                          this process, or null if one does not yet
+	 *                          exist
+	 * @param userId            The ID of the user making this processing request
+	 * @param clearOldAttrs     If true, all existing benchmark attributes will be
+	 *                          removed for every benchmark being
+	 *                          processed. If false, old attributes are not cleared,
+	 *                          but will be overwritten by new attributes with the
+	 *                          same
+	 *                          names
+	 * @param isCommunityLeader True if the user is a community leader for this
+	 *                          community and false otherwise
 	 * @return The status ID on success, -1 otherwise
 	 * @author Eric Burns
 	 */
 	private static boolean process(
 			int spaceId, Processor p, boolean hierarchy, int userId, boolean clearOldAttrs, Integer statusId,
-			boolean isCommunityLeader
-	) {
+			boolean isCommunityLeader) {
 		Connection con = null;
 
 		log.info("Processing benchmarks in space " + spaceId);
@@ -2610,7 +2705,8 @@ public class Benchmarks {
 			int incrementCounter = 0;
 			Timer timer = new Timer();
 			for (Benchmark b : benchmarks) {
-				//only work on the benchmarks the given user owns if they are not a community leader
+				// only work on the benchmarks the given user owns if they are not a community
+				// leader
 				if (!isCommunityLeader && b.getUserId() != userId) {
 					log.debug("Skipping benchmark " + b.getName());
 					continue;
@@ -2623,7 +2719,7 @@ public class Benchmarks {
 				if (!addAttributeSetToDbIfValid(con, attrs, b, statusId)) {
 					return false;
 				}
-				//updates the type of the benchmark with the new processor
+				// updates the type of the benchmark with the new processor
 				try {
 					Benchmarks.updateDetails(b.getId(), b.getName(), b.getDescription(), b.isDownloadable(), p.getId());
 				} catch (StarExecDatabaseException e) {
@@ -2647,7 +2743,7 @@ public class Benchmarks {
 				for (Space s : spaces) {
 					success = success &&
 							Benchmarks.process(s.getId(), p, false, userId, clearOldAttrs, statusId,
-							                   isCommunityLeader);
+									isCommunityLeader);
 				}
 			}
 			return success;
@@ -2663,12 +2759,13 @@ public class Benchmarks {
 	 * Returns the ID of every benchmark a user owns that is orphaned
 	 *
 	 * @param userId The ID of the user who owns all the benchmarks to be returned
-	 * @return A list of orphaned benchmark IDs owned by the given user, or null on error.
+	 * @return A list of orphaned benchmark IDs owned by the given user, or null on
+	 *         error.
 	 */
 	public static List<Integer> getOrphanedBenchmarks(int userId) {
-	Connection con = null;
-	PreparedStatement procedure = null;
-	ResultSet results = null;
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
 		List<Integer> ids = new ArrayList<>();
 
 		try {
@@ -2698,7 +2795,7 @@ public class Benchmarks {
 	 */
 	public static boolean recycleOrphanedBenchmarks(int userId) {
 		List<Integer> ids = getOrphanedBenchmarks(userId);
-		//on error
+		// on error
 		if (ids == null) {
 			return false;
 		}
@@ -2739,7 +2836,7 @@ public class Benchmarks {
 			Common.safeClose(procedure);
 			Common.safeClose(results);
 		}
-		return null; //error
+		return null; // error
 	}
 
 	/**
@@ -2777,31 +2874,33 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Retrieves a list of every Benchmark the given user is allowed to use. Used for quick jobs. Benchmarks a user can
-	 * see include Benchmarks they own, Benchmarks in public spaces, and Benchmarks in spaces the user is also in
+	 * Retrieves a list of every Benchmark the given user is allowed to use. Used
+	 * for quick jobs. Benchmarks a user can
+	 * see include Benchmarks they own, Benchmarks in public spaces, and Benchmarks
+	 * in spaces the user is also in
 	 *
 	 * @param userId The user to get benchmarks for
 	 * @return A list of benchmarks that the given user can see
 	 */
 	public static List<Benchmark> getByUser(int userId) {
 		try {
-			//will stores Benchmarks according to their IDs, used to remove duplicates
+			// will stores Benchmarks according to their IDs, used to remove duplicates
 			HashMap<Integer, Benchmark> uniqueBenchmarks = new HashMap<>();
-			
+
 			List<Benchmark> ownedBenchmarks = getByOwner(userId);
 			if (ownedBenchmarks != null) {
 				for (Benchmark s : ownedBenchmarks) {
 					uniqueBenchmarks.put(s.getId(), s);
 				}
 			}
-			
+
 			List<Benchmark> publicBenchmarks = Benchmarks.getPublicBenchmarks();
 			if (publicBenchmarks != null) {
 				for (Benchmark s : publicBenchmarks) {
 					uniqueBenchmarks.put(s.getId(), s);
 				}
 			}
-			
+
 			List<Benchmark> sharedBenchmarks = Benchmarks.getBenchmarksInSharedSpaces(userId);
 			if (sharedBenchmarks != null) {
 				for (Benchmark s : sharedBenchmarks) {
@@ -2821,11 +2920,12 @@ public class Benchmarks {
 	 * Filters a list of benchmarks using the given query
 	 *
 	 * @param searchQuery Query for the Benchmarks. Not case sensitive
-	 * @return A subset of the given Benchmarks where, for every Benchmark returned, either the name or the description
-	 * includes the search query.
+	 * @return A subset of the given Benchmarks where, for every Benchmark returned,
+	 *         either the name or the description
+	 *         includes the search query.
 	 */
 	protected static List<Benchmark> filterBenchmarks(List<Benchmark> benchmarks, String searchQuery) {
-		//no filtering is necessary if there's no query
+		// no filtering is necessary if there's no query
 		if (Util.isNullOrEmpty(searchQuery)) {
 			return benchmarks;
 		}
@@ -2847,14 +2947,16 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Returns the Benchmarks needed to populate a DataTables page for a given user. Benchmarks include all Benchmarks
+	 * Returns the Benchmarks needed to populate a DataTables page for a given user.
+	 * Benchmarks include all Benchmarks
 	 * the user can see
 	 *
-	 * @param query DataTablesQuery object containing parameters for this search
+	 * @param query  DataTablesQuery object containing parameters for this search
 	 * @param userId ID of user to get Benchmarks for
-	 * @param totals Size 2 array that, on return, will contain the total number of records as the first element and
-	 * the
-	 * total number of elements after filtering as the second element
+	 * @param totals Size 2 array that, on return, will contain the total number of
+	 *               records as the first element and
+	 *               the
+	 *               total number of elements after filtering as the second element
 	 * @return The list of benchmarks to display in the table
 	 */
 	public static List<Benchmark> getBenchmarksForNextPageByUser(DataTablesQuery query, int userId, int[] totals) {

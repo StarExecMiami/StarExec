@@ -76,6 +76,23 @@ function isContainerMode {
 	[[ "${CONTAINER_MODE:-false}" == "true" ]]
 }
 
+# Finds and returns the path to the processor script
+function getProcessorScript {
+	if [ -d "./process" ] && [ -f "./process/process" ]; then
+		echo "./process/process"
+	elif [ -f "./process" ]; then
+		echo "./process"
+	elif [ -f "./run.sh" ]; then
+		echo "./run.sh"
+	elif [ -f "./starexec_run" ]; then
+		echo "./starexec_run"
+	elif [ -f "./run" ]; then
+		echo "./run"
+	else
+		echo ""
+	fi
+}
+
 #################################################################################
 # base64 decode some names which could otherwise have nasty characters in them
 #################################################################################
@@ -921,10 +938,11 @@ function copyOutput {
 		log "executing post processor"
 		log "time limit: $POST_PROCESSOR_TIME_LIMIT minutes"
 		# The postprocessor may be in process/process subdirectory or directly as process
-		if [ -d "./process" ]; then
-			PROC_SCRIPT="./process/process"
-		else
-			PROC_SCRIPT="./process"
+		PROC_SCRIPT=$(getProcessorScript)
+		if [ -z "$PROC_SCRIPT" ]; then
+			log "post processor error: no recognized script found"
+			sendStatus "$ERROR_POST_PROCESSOR"
+			exit 1
 		fi
 		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt
 		if (( $? != 0 )); then
@@ -1176,7 +1194,13 @@ function copyDependencies {
 		log "random seed = $RAND_SEED"
 		log "time limit: $PRE_PROCESSOR_TIME_LIMIT"
 
-		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m ./process "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH"
+		PROC_SCRIPT=$(getProcessorScript)
+		if [ -z "$PROC_SCRIPT" ]; then
+			log "pre processor error: no recognized script found"
+			sendStatus "$ERROR_PRE_PROCESSOR"
+			exit 1
+		fi
+		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH"
 		if (( $? != 0 )); then
 			log "pre processor timeout"
 			sendStatus "$ERROR_PRE_PROCESSOR"

@@ -11,7 +11,8 @@ import org.starexec.util.Util;
 import java.io.File;
 
 /**
- * Represents a processor, which is an arbitrary user specified filed that takes input and produces output. This is used
+ * Represents a processor, which is an arbitrary user specified filed that takes
+ * input and produces output. This is used
  * at various stages in the job pipeline
  *
  * @author Tyler Jensen
@@ -19,10 +20,14 @@ import java.io.File;
 public class Processor extends Identifiable implements Nameable, Locatable {
 	// private static final StarLogger log = StarLogger.getLogger(Processor.class);
 
-	@Expose private String name = "none";
-	@Expose private String description = "no description";
-	@Expose private String fileName;
-	@Expose private ProcessorType type = ProcessorType.DEFAULT;
+	@Expose
+	private String name = "none";
+	@Expose
+	private String description = "no description";
+	@Expose
+	private String fileName;
+	@Expose
+	private ProcessorType type = ProcessorType.DEFAULT;
 	private String filePath;
 	private long diskSize;
 	private int timeLimit = R.PROCESSOR_TIME_LIMIT;
@@ -120,12 +125,24 @@ public class Processor extends Identifiable implements Nameable, Locatable {
 	}
 
 	/**
-	 * Gets the physical path to the executable script for this processor. Requires filePath to be set.
+	 * Gets the physical path to the executable script for this processor. Requires
+	 * filePath to be set.
 	 *
 	 * @return The path to the process script for this processor on disk
 	 */
 	public String getExecutablePath() {
-		return new File(this.getFilePath(), R.PROCESSOR_RUN_SCRIPT).getAbsolutePath();
+		File root = new File(this.getFilePath());
+		File script = new File(root, R.PROCESSOR_RUN_SCRIPT);
+		if (script.exists()) {
+			return script.getAbsolutePath();
+		}
+		for (String alt : R.PROCESSOR_RUN_SCRIPT_ALTERNATIVES) {
+			File altScript = new File(root, alt);
+			if (altScript.exists()) {
+				return altScript.getAbsolutePath();
+			}
+		}
+		return script.getAbsolutePath(); // Fallback to default name if none found
 	}
 
 	/**
@@ -176,4 +193,3 @@ public class Processor extends Identifiable implements Nameable, Locatable {
 		return syntax;
 	}
 }
-

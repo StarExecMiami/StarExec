@@ -64,7 +64,8 @@ public class ProcessorManager extends HttpServlet {
 	}
 
 	@Override
-	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+	protected void doPost(HttpServletRequest request, HttpServletResponse response)
+			throws ServletException, IOException {
 		try {
 			// Line 67 and surrounding code - ensure using correct ServletFileUpload class
 			if (ServletFileUpload.isMultipartContent(request)) {
@@ -105,14 +106,14 @@ public class ProcessorManager extends HttpServlet {
 	 * Handles requests to add a processor
 	 */
 	private void handleAddRequest(
-			HashMap<String, Object> form, HttpServletRequest request, HttpServletResponse response
-	) throws Exception {
+			HashMap<String, Object> form, HttpServletRequest request, HttpServletResponse response) throws Exception {
 		try {
 			// If we're dealing with an upload request...
 			// Make sure the request is valid
 			ValidatorStatusCode status = isValidCreateRequest(form);
 			if (!status.isSuccess()) {
-				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
+				// attach the message as a cookie so we don't need to be parsing HTML in
+				// StarexecCommand
 				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, status.getMessage());
 				return;
@@ -137,13 +138,52 @@ public class ProcessorManager extends HttpServlet {
 				response.sendError(
 						HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
 						"Failed to add new processor. Please ensure the archive is in the correct format, with a " +
-								"process script in the top level."
-				);
+								"process script in the top level.");
 			}
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
 		}
+	}
+
+	/**
+	 * Searches for a recognized processor script in the given directory and its
+	 * subdirectories.
+	 *
+	 * @param root The root directory to search in
+	 * @return The File object of the recognized script, or null if not found
+	 */
+	private static File findProcessorScript(File root) {
+		// First check the root directory
+		File script = new File(root, R.PROCESSOR_RUN_SCRIPT);
+		if (script.exists()) {
+			return script;
+		}
+		for (String alt : R.PROCESSOR_RUN_SCRIPT_ALTERNATIVES) {
+			File altScript = new File(root, alt);
+			if (altScript.exists()) {
+				return altScript;
+			}
+		}
+
+		// If not found in root, look into any single subdirectory
+		File[] subDirs = root.listFiles(File::isDirectory);
+		if (subDirs != null && subDirs.length == 1) {
+			File subDir = subDirs[0];
+			log.info("Checking subdirectory for script: " + subDir.getName());
+			File subScript = new File(subDir, R.PROCESSOR_RUN_SCRIPT);
+			if (subScript.exists()) {
+				return subScript;
+			}
+			for (String alt : R.PROCESSOR_RUN_SCRIPT_ALTERNATIVES) {
+				File altScript = new File(subDir, alt);
+				if (altScript.exists()) {
+					return altScript;
+				}
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -166,7 +206,8 @@ public class ProcessorManager extends HttpServlet {
 	}
 
 	/**
-	 * Parses through form items and builds a new Processor object from it. Then it is added to the database. Also
+	 * Parses through form items and builds a new Processor object from it. Then it
+	 * is added to the database. Also
 	 * writes the processor file to disk included in the request.
 	 *
 	 * @param form The form fields for the request
@@ -212,22 +253,27 @@ public class ProcessorManager extends HttpServlet {
 				}
 			}
 
-
 			newProc.setFilePath(uniqueDir.getAbsolutePath());
 
 			ArchiveUtil.extractArchive(archiveFile.getAbsolutePath());
 
-			File processorScript = new File(uniqueDir, R.PROCESSOR_RUN_SCRIPT);
-			if (!processorScript.exists()) {
-				log.warn("the new processor did not have a process script!");
+			File processorScript = findProcessorScript(uniqueDir);
+
+			if (processorScript == null) {
+				log.warn("the new processor did not have any recognized script!");
 				return null;
+			}
+
+			// If the script is in a subdirectory, re-root the processor to that directory
+			if (!processorScript.getParentFile().equals(uniqueDir)) {
+				log.info("Re-rooting processor from " + uniqueDir.getAbsolutePath() + " to "
+						+ processorScript.getParentFile().getAbsolutePath());
+				newProc.setFilePath(processorScript.getParentFile().getAbsolutePath());
 			}
 			ProcessorManager.setAllFilesExecutable(new File(newProc.getFilePath()));
 
-
 			log.info(String.format("Wrote new %s processor to %s for community %d", procType,
-								   uniqueDir.getAbsolutePath(), newProc.getCommunityId()
-			));
+					uniqueDir.getAbsolutePath(), newProc.getCommunityId()));
 
 			int newProcId = Processors.add(newProc);
 			if (newProcId > 0) {
@@ -247,29 +293,32 @@ public class ProcessorManager extends HttpServlet {
 	 */
 	private ProcessorType toProcessorEnum(String type) {
 		switch (type) {
-		case POST_PROCESS_TYPE:
-			return ProcessorType.POST;
-		case PRE_PROCESS_TYPE:
-			return ProcessorType.PRE;
-		case R.BENCHMARK:
-			return ProcessorType.BENCH;
-		case UPDATE_PROCESS_TYPE:
-			return ProcessorType.UPDATE;
+			case POST_PROCESS_TYPE:
+				return ProcessorType.POST;
+			case PRE_PROCESS_TYPE:
+				return ProcessorType.PRE;
+			case R.BENCHMARK:
+				return ProcessorType.BENCH;
+			case UPDATE_PROCESS_TYPE:
+				return ProcessorType.UPDATE;
 		}
 
 		return ProcessorType.DEFAULT;
 	}
 
 	/**
-	 * Creates a unique file path for the given file to write in the benchmark type directory
+	 * Creates a unique file path for the given file to write in the benchmark type
+	 * directory
 	 *
 	 * @param communityId The id of the community (used in the path)
-	 * @param procName the name of processor (and the directory for the processor)
-	 * @return The file object associated with the new file path (all necessary directories are created as needed)
+	 * @param procName    the name of processor (and the directory for the
+	 *                    processor)
+	 * @return The file object associated with the new file path (all necessary
+	 *         directories are created as needed)
 	 */
 	public static File getProcessorDirectory(int communityId, String procName) {
 		File uniqueDir = new File(R.getProcessorDir(), "" + communityId);
-		//use the date to make sure the directory is unique
+		// use the date to make sure the directory is unique
 		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
 		uniqueDir = new File(uniqueDir, procName);
 		uniqueDir.mkdirs();
@@ -277,7 +326,8 @@ public class ProcessorManager extends HttpServlet {
 	}
 
 	/**
-	 * Uses the Validate util to ensure the incoming type upload request is valid. This checks for illegal characters
+	 * Uses the Validate util to ensure the incoming type upload request is valid.
+	 * This checks for illegal characters
 	 * and content length requirements.
 	 *
 	 * @param form The form to validate
@@ -287,12 +337,11 @@ public class ProcessorManager extends HttpServlet {
 		final String method = "isValidCreateRequest";
 		try {
 
-
 			if (!Validator.isValidProcessorName((String) form.get(PROCESSOR_NAME))) {
 
 				return new ValidatorStatusCode(false,
-											   "The supplied name is invalid-- please refer to the help files to see " +
-													   "the correct format");
+						"The supplied name is invalid-- please refer to the help files to see " +
+								"the correct format");
 			}
 
 			String uploadMethod = (String) form.get(UPLOAD_METHOD);
@@ -314,8 +363,8 @@ public class ProcessorManager extends HttpServlet {
 			if (!Validator.isValidPrimDescription((String) form.get(PROCESSOR_DESC))) {
 
 				return new ValidatorStatusCode(false,
-											   "The supplied description is invalid-- please refer to the help files " +
-													   "to see the correct format");
+						"The supplied description is invalid-- please refer to the help files " +
+								"to see the correct format");
 			}
 
 			if (!Validator.isValidPosInteger((String) form.get(OWNING_COMMUNITY))) {
