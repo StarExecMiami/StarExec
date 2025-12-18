@@ -523,21 +523,26 @@ network-setup:
 
 define cleanup_deployment
 	@echo "Cleaning up existing StarExec pods, containers, and secrets..."
+	@# Remove resources by label for robustness. This targets everything created by 'podman play kube'.
+	@# The label 'app.kubernetes.io/instance' is standard for Helm.
+	@POD_IDS=$$(podman pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Id}}"); \
+	if [ -n "$$POD_IDS" ]; then \
+		echo "  Removing existing pod(s) with label app.kubernetes.io/instance=$(RELEASE_NAME)"; \
+		echo "$$POD_IDS" | xargs podman pod rm -f; \
+	fi
+	@# Fallback for older naming scheme to ensure full cleanup during transition
 	@for pod in starexec starexec-pod $(POD_NAME); do \
 		if podman pod exists $$pod 2>/dev/null; then \
-			echo "  Removing existing pod: $$pod"; \
+			echo "  Removing existing pod by legacy name: $$pod"; \
 			podman pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
-	@for container in $(APP_CONTAINER) $(DB_CONTAINER) starexec-app starexec-postgres; do \
-		if podman container exists $$container 2>/dev/null; then \
-			echo "  Removing orphaned container: $$container"; \
-			podman rm -f $$container 2>/dev/null || true; \
-		fi \
-	done
-	@for key in user password database rootPassword; do \
-		podman secret rm starexec-starexec-postgres-credentials-$$key 2>/dev/null || true; \
-	done
+	@# Clean up secrets associated with the release. Note: 'label' filter not supported for secrets in some Podman versions.
+	@SECRET_NAMES=$$(podman secret ls --filter "name=$(RELEASE_NAME)" --format "{{.Name}}"); \
+	if [ -n "$$SECRET_NAMES" ]; then \
+		echo "  Removing secrets matching name $(RELEASE_NAME)"; \
+		echo "$$SECRET_NAMES" | xargs podman secret rm; \
+	fi
 endef
 
 deploy-podman: verify-deps image network-setup volumes-create
@@ -579,30 +584,19 @@ deploy-podman-helm:
 	fi
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
-	@echo "Rendering secrets..."
-	@# Extract the rendered secret's metadata.name then create podman secrets
-	SECRET_META_NAME="$$(helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" | yq -r '.metadata.name')"; \
-	helm template $(RELEASE_NAME) $(CHART_DIR) --show-only templates/$(SECRET_NAME).yaml -f "$(VALS)" | \
-		yq -r '.data | to_entries | .[] | .key + "=" + .value' | \
-		while read -r line; do \
-			key=$${line%%=*}; val=$${line#*=}; \
-			echo "$$val" | base64 --decode | podman secret create "$${SECRET_META_NAME}-$${key}" -; \
-		done
-	@echo "Deploying application pod..."
-	@IMAGE_REPO="$(RELEASE_NAME)"; \
-	IMAGE_VER="$(IMAGE_TAG)"; \
-	DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
+	@echo "Rendering deployment manifest..."
+	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
 	HOST_DATA_PATH=$$(podman volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
-	echo "Volume host path: $$HOST_DATA_PATH"; \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
-		--set image.repository=$$IMAGE_REPO \
-		--set image.tag=$$IMAGE_VER \
+		--set image.repository=$(RELEASE_NAME) \
+		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
 		echo "Check your values file: $(VALS)"; \
 		exit 1; \
 	fi
+	@echo "Deploying application pod..."
 	@# Ensure pause image exists (Podman uses it automatically for pod infra)
 	@./scripts/ensure-pause-image.sh
 	@podman play kube render.yaml
