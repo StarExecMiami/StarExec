@@ -69,6 +69,20 @@ services:
       - starexec_network
 
   # ==============================================================================
+  # Mail Service (Mock SMTP)
+  # ==============================================================================
+  # Provides a local SMTP server for development testing.
+  # View emails at: http://localhost:1080
+  # ==============================================================================
+  mail:
+    container_name: starexec-mail
+    image: maildev/maildev:latest
+    ports:
+      - "1080:1080"
+    networks:
+      - starexec_network
+
+  # ==============================================================================
   # Database Migration Service (Decoupled)
   # ==============================================================================
   # Runs Flyway migrations using EmbeddedFlywayLauncher before application starts.
@@ -155,8 +169,8 @@ services:
       SKIP_MIGRATIONS: "true"
 
       # Email Configuration
-      STAREXEC_EMAIL_SMTP: localhost
-      STAREXEC_EMAIL_PORT: 25
+      STAREXEC_EMAIL_SMTP: mail
+      STAREXEC_EMAIL_PORT: 1025
       STAREXEC_EMAIL_USER: noreply@starexec.local
       STAREXEC_CONTACT_EMAIL: admin@starexec.local
 
@@ -183,6 +197,9 @@ services:
       # Testing
       STAREXEC_ALLOW_TESTING: "True"
       STAREXEC_TEST_COMMUNITY_ID: 1
+
+      # Backend limits (local backend)
+      STAREXEC_LOCAL_USE_RUNSOLVER: "true"
 
     volumes:
       - data:/app/data
