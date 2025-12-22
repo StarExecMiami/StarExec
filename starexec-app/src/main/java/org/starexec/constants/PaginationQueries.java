@@ -73,15 +73,18 @@ public class PaginationQueries {
 	}
 
 	private static String loadQuery(String relativePath) throws IOException {
-		Path p = Paths.get(R.CONFIG_PATH, relativePath);
+		// Ensure relativePath doesn't start with a slash when joining with Paths.get
+		// to avoid it being treated as an absolute path on some systems/JVMs
+		String filesystemPath = relativePath.startsWith("/") ? relativePath.substring(1) : relativePath;
+		Path p = Paths.get(R.CONFIG_PATH, filesystemPath);
 		String sql = null;
 
 		if (Files.exists(p)) {
 			log.info("Loading pagination query from filesystem: " + p.toAbsolutePath());
 			sql = new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
 		} else {
-			// Fallback to classpath
-			String resourcePath = "/org/starexec/config" + relativePath;
+			// Fallback to classpath - resource paths should start with a slash
+			String resourcePath = "/org/starexec/config" + (relativePath.startsWith("/") ? relativePath : "/" + relativePath);
 			log.info("Filesystem query not found at " + p.toAbsolutePath() + ". Falling back to classpath: "
 					+ resourcePath);
 			try (InputStream is = PaginationQueries.class.getResourceAsStream(resourcePath)) {
