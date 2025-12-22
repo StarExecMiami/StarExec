@@ -106,6 +106,7 @@ backups/
 # But allow tracked migration scripts
 !starexec-app/src/main/resources/db/migration/*.sql
 !starexec-app/src/main/resources/sql/**/*.sql
+!starexec-app/src/main/java/org/starexec/config/pagination/*.sql
 
 ####################################
 # Docker / Podman / Container
