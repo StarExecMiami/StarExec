@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import org.starexec.logger.StarLogger;
 
 /**
 * @author adam_crume
@@ -15,6 +16,7 @@ public class NamedParameterStatement {
     /** Maps parameter names to arrays of ints which are the parameter indices. 
 */
     private final Map<String, List<Integer>> indexMap;
+    private static final StarLogger log = StarLogger.getLogger(NamedParameterStatement.class);
 
 
     /**
@@ -83,11 +85,10 @@ method is non-private so JUnit code can
      * @throws IllegalArgumentException if the parameter does not exist
      */
     private List<Integer> getIndexes(String name) {
-    
-        List<Integer> indexes=indexMap.get(name);
-        if(indexes==null) {
-        	
-            throw new IllegalArgumentException("Parameter not found: "+name);
+        List<Integer> indexes = indexMap.get(name);
+        if (indexes == null) {
+            log.error("Parameter not found: " + name);
+            throw new IllegalArgumentException("Parameter not found: " + name);
         }
         return indexes;
     }
