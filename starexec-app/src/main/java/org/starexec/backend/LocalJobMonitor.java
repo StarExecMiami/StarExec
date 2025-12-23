@@ -459,7 +459,7 @@ public class LocalJobMonitor {
     private RunSolverStats parseRunSolverStats(Path outputDir) {
         RunSolverStats stats = new RunSolverStats();
 
-        // Try stats.json first (written by functions.bash in container mode)
+        // Try stats.json first (written by functions.bash in container/local mode)
         Path statsJson = outputDir.resolve("stats.json");
         if (Files.exists(statsJson)) {
             try {
@@ -477,6 +477,21 @@ public class LocalJobMonitor {
                     "maxResidentSetSize"
                 );
                 stats.stageNumber = extractInt(json, "stageNumber");
+
+                // Optional: disk size (bytes)
+                long ds = extractLong(json, "diskSize");
+                if (ds > 0) {
+                    stats.diskSize = ds;
+                }
+
+                // Optional: hostname of execution host/container
+                Matcher m = Pattern.compile(
+                    "\"hostname\"\\s*:\\s*\"([^\"]+)\""
+                ).matcher(json);
+                if (m.find()) {
+                    stats.hostname = m.group(1);
+                }
+
                 log.debug("Parsed stats from stats.json: " + stats);
                 return stats;
             } catch (IOException e) {
@@ -577,16 +592,43 @@ public class LocalJobMonitor {
             );
         }
 
-        // TODO: Update run stats using UpdatePairRunSolverStats stored procedure
-        // This requires adding a Java method to call the stored procedure
-        // For now, stats are parsed but not persisted to DB
-        if (stats.wallclockTime > 0 || stats.cpuTime > 0) {
+        // Persist run stats to DB using stored procedure wrapper
+        if (
+            stats.wallclockTime > 0 || stats.cpuTime > 0 || stats.diskSize > 0
+        ) {
+            try {
+                String nodeName = (stats.hostname != null &&
+                        !stats.hostname.isEmpty())
+                    ? stats.hostname
+                    : "unknown";
+                boolean ok = JobPairs.updateRunSolverStats(
+                    pairId,
+                    nodeName,
+                    stats.wallclockTime,
+                    stats.cpuTime,
+                    stats.userTime,
+                    stats.systemTime,
+                    stats.maxVirtualMemory,
+                    stats.maxResidentSetSize,
+                    stats.stageNumber,
+                    stats.diskSize
+                );
+                if (ok) {
+                    log.debug(
+                        "Persisted run stats for pair " + pairId + ": " + stats
+                    );
+                } else {
+                    log.warn("Failed to persist run stats for pair " + pairId);
+                }
+            } catch (Exception e) {
+                log.warn(
+                    "Exception persisting run stats for pair " + pairId,
+                    e
+                );
+            }
+        } else {
             log.debug(
-                "Stats available for pairId=" +
-                    pairId +
-                    ": " +
-                    stats +
-                    " (Note: stats persistence not yet implemented)"
+                "No run stats to persist for pairId=" + pairId + ": " + stats
             );
         }
 
@@ -631,18 +673,21 @@ public class LocalJobMonitor {
         public long maxResidentSetSize = 0;
         public long diskSize = 0;
         public int stageNumber = 1;
+        public String hostname = null;
 
         @Override
         public String toString() {
             return String.format(
-                "RunSolverStats{wall=%.2fs, cpu=%.2fs, user=%.2fs, sys=%.2fs, maxVM=%.0fKB, maxRSS=%dKB, stage=%d}",
+                "RunSolverStats{wall=%.2fs, cpu=%.2fs, user=%.2fs, sys=%.2fs, maxVM=%.0fKB, maxRSS=%dKB, disk=%d, stage=%d, host=%s}",
                 wallclockTime,
                 cpuTime,
                 userTime,
                 systemTime,
                 maxVirtualMemory,
                 maxResidentSetSize,
-                stageNumber
+                diskSize,
+                stageNumber,
+                hostname == null ? "unknown" : hostname
             );
         }
     }

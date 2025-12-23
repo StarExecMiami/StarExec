@@ -420,6 +420,37 @@ public class ContainerJobMonitor {
         ) {
             stats.maxResidentSetSize = Long.parseLong(m.group(1));
         }
+
+        // Optional: stage number reported by containerized execution (int)
+        if (
+            (m = Pattern.compile("\"stageNumber\"\\s*:\\s*([0-9]+)").matcher(
+                    json
+                )).find()
+        ) {
+            stats.stageNumber = Integer.parseInt(m.group(1));
+        }
+
+        // Optional: disk size used (may be reported in bytes)
+        if (
+            (m = Pattern.compile("\"diskSize\"\\s*:\\s*([0-9]+)").matcher(
+                    json
+                )).find()
+        ) {
+            try {
+                stats.diskSize = Long.parseLong(m.group(1));
+            } catch (NumberFormatException e) {
+                // ignore and leave default
+            }
+        }
+
+        // Optional: hostname of the execution host/container
+        if (
+            (m = Pattern.compile("\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(
+                    json
+                )).find()
+        ) {
+            stats.hostname = m.group(1);
+        }
     }
 
     /**
@@ -541,8 +572,34 @@ public class ContainerJobMonitor {
         // Update pair status
         JobPairs.setStatusForPairAndStages(pairId, status.getVal());
 
-        // TODO: Update run stats using UpdatePairRunSolverStats stored procedure
-        // This requires adding a Java method to call the stored procedure
+        // Persist run stats (if available) using JobPairs.updateRunSolverStats
+        try {
+            String nodeName = (stats.hostname != null &&
+                    !stats.hostname.isEmpty())
+                ? stats.hostname
+                : "unknown";
+            boolean ok = JobPairs.updateRunSolverStats(
+                pairId,
+                nodeName,
+                stats.wallclockTime,
+                stats.cpuTime,
+                stats.userTime,
+                stats.systemTime,
+                stats.maxVirtualMemory,
+                stats.maxResidentSetSize,
+                stats.stageNumber,
+                stats.diskSize
+            );
+            if (ok) {
+                log.debug(
+                    "Persisted run stats for pair " + pairId + ": " + stats
+                );
+            } else {
+                log.warn("Failed to persist run stats for pair " + pairId);
+            }
+        } catch (Exception e) {
+            log.warn("Exception persisting run stats for pair " + pairId, e);
+        }
 
         // Update attributes if any
         if (!attributes.isEmpty()) {
@@ -580,23 +637,30 @@ public class ContainerJobMonitor {
         public double systemTime = 0;
         public double maxVirtualMemory = 0;
         public long maxResidentSetSize = 0;
+        public long diskSize = 0;
+        public int stageNumber = 1;
         public int exitCode = 0;
         public boolean wallclockExceeded = false;
         public boolean cpuExceeded = false;
         public boolean memoryExceeded = false;
+        public String hostname = null;
 
         @Override
         public String toString() {
             return String.format(
-                "RunsolverStats{wall=%.2f, cpu=%.2f, mem=%.0f, exit=%d, " +
-                    "wallExceeded=%b, cpuExceeded=%b, memExceeded=%b}",
+                "RunsolverStats{wall=%.2f, cpu=%.2f, mem=%.0f, rss=%d, disk=%d, stage=%d, exit=%d, " +
+                    "wallExceeded=%b, cpuExceeded=%b, memExceeded=%b, host=%s}",
                 wallclockTime,
                 cpuTime,
                 maxVirtualMemory,
+                maxResidentSetSize,
+                diskSize,
+                stageNumber,
                 exitCode,
                 wallclockExceeded,
                 cpuExceeded,
-                memoryExceeded
+                memoryExceeded,
+                hostname == null ? "unknown" : hostname
             );
         }
     }
