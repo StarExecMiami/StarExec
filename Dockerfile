@@ -243,7 +243,7 @@ RUN chmod -R a+r /app/data/pictures && \
     chown -R starexec:starexec /app/data/pictures
 
 # Copy external configuration assets
-COPY --from=builder /build/starexec-app/src/main/java/org/starexec/config /config
+COPY --from=builder /build/starexec-app/src/main/java/org/starexec/config/ /config/
 RUN chown -R starexec:starexec /config
 
 # Copy build metadata
