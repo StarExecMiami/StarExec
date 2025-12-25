@@ -27,22 +27,30 @@ spec:
             - -c
             - |
               echo "Ensuring directories exist (skipping chown)..."
-              mkdir -p /app/data /var/lib/postgresql/data
+              mkdir -p /app/data /app/sandbox /app/backend /app/work /var/lib/postgresql/data
               echo "Note: chown skipped to avoid permission errors on mounted volumes"
           securityContext:
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
-            # keep default capabilities to allow filesystem ownership changes
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "chart.fullname" . }}-data
+            claimName: {{ include "starexec.volumeName" (list . "data") }}
+        - name: sandbox
+          persistentVolumeClaim:
+            claimName: {{ include "starexec.volumeName" (list . "sandbox") }}
+        - name: backend
+          persistentVolumeClaim:
+            claimName: {{ include "starexec.volumeName" (list . "backend") }}
+        - name: work
+          persistentVolumeClaim:
+            claimName: {{ include "starexec.volumeName" (list . "work") }}
         - name: postgres-data
 {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "chart.fullname" . }}-postgres
+            claimName: {{ include "starexec.volumeName" (list . "postgres") }}
 {{- else }}
           emptyDir: {}
 {{- end }}
@@ -78,8 +86,24 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
                   key: database
+            - name: STAREXEC_CLUSTER_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
+                  key: user
+            - name: STAREXEC_CLUSTER_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
+                  key: password
+            - name: STAREXEC_REPORT_HOST
+              value: "localhost"
             - name: STAREXEC_BACKEND_TYPE
               value: "{{ .Values.backend.type }}"
+            - name: STAREXEC_BACKEND_ROOT
+              value: "/app/backend"
+            - name: STAREXEC_BACKEND_WORKING_DIR
+              value: "/app/work"
             - name: STAREXEC_CONTAINER_SOCKET
               value: "unix:///run/podman/podman.sock"
             - name: STAREXEC_CONTAINER_JOB_IMAGE
@@ -96,6 +120,14 @@ spec:
               value: "{{ .Values.backend.local.useRunsolver }}"
             - name: STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS
               value: "{{ .Values.backend.local.gracefulShutdownSeconds }}"
+            - name: FLYWAY_BASELINE_ON_MIGRATE
+              value: "true"
+            - name: LOG_LEVEL
+              value: "DEBUG"
+            - name: STAREXEC_URL_PREFIX
+              value: "http"
+            - name: STAREXEC_WEB_ADDRESS
+              value: "localhost:7827"
             - name: SKIP_MIGRATIONS
               value: "{{ if .Values.migrations.enabled }}false{{ else }}true{{ end }}"
 {{- range $key, $value := .Values.env }}
@@ -114,6 +146,12 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /app/data
+            - name: sandbox
+              mountPath: /app/sandbox
+            - name: backend
+              mountPath: /app/backend
+            - name: work
+              mountPath: /app/work
             - name: tmp
               mountPath: /tmp
           resources:
@@ -168,8 +206,6 @@ spec:
             - name: LC_CTYPE
               value: "en_US.UTF-8"
           securityContext:
-            # Run postgres container as the postgres user (non-root).
-            # Rely on the pod-level fsGroup to set group ownership on mounts.
             runAsNonRoot: true
             runAsUser: 999
             runAsGroup: 999

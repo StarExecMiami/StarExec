@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "chart.fullname" . }}-data
+  name: {{ include "starexec.volumeName" (list . "data") }}
   labels:
     {{- include "chart.labels" . | nindent 4 }}
 spec:

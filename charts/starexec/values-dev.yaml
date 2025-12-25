@@ -54,6 +54,12 @@ backend:
   # Database host that job containers should use (different from app which uses localhost in pod)
   # Job containers are separate from the pod so they need to use the postgres service name
   jobDbHost: "postgres"
+  # Local backend specific settings
+  local:
+    concurrency: 1
+    forceSandbox: true
+    useRunsolver: true
+    gracefulShutdownSeconds: 30
 
 dataDir: "/app/data"
 sandboxDir: "/app/sandbox"

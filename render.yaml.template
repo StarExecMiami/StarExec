@@ -43,6 +43,15 @@ spec:
     - name: data
       persistentVolumeClaim:
         claimName: $STAREXEC_DATA_VOL
+    - name: sandbox
+      persistentVolumeClaim:
+        claimName: $STAREXEC_SANDBOX_VOL
+    - name: backend
+      persistentVolumeClaim:
+        claimName: $STAREXEC_BACKEND_VOL
+    - name: work
+      persistentVolumeClaim:
+        claimName: $STAREXEC_WORK_VOL
     - name: postgres-data
       persistentVolumeClaim:
         claimName: $STAREXEC_POSTGRES_VOL
@@ -91,6 +100,12 @@ spec:
       volumeMounts:
         - name: data
           mountPath: /app/data
+        - name: sandbox
+          mountPath: /app/sandbox
+        - name: backend
+          mountPath: /app/backend
+        - name: work
+          mountPath: /app/work
       resources:
         limits:
           cpu: 1000m

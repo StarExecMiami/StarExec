@@ -71,27 +71,16 @@ APP_PORT?=7827
 
 # Network configuration
 PODMAN_NETWORK?=pasta
+PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
+PODMAN_CMD := $(if $(filter yes,$(PODMAN_REQUIRES_SUDO)),sudo podman,podman)
 
-# Podman command - explicit configuration (no auto-detection)
-# Override for rootful mode: make deploy-podman PODMAN_CMD="sudo podman"
-PODMAN_CMD ?= podman
-
-# ANSI Colors for UI (TTY-safe: only set if running in a terminal)
-ifneq ($(shell [ -t 0 ] && echo 1),)
-  GREEN  := $(shell tput setaf 2 2>/dev/null || echo "")
-  YELLOW := $(shell tput setaf 3 2>/dev/null || echo "")
-  RED    := $(shell tput setaf 1 2>/dev/null || echo "")
-  BLUE   := $(shell tput setaf 4 2>/dev/null || echo "")
-  BOLD   := $(shell tput bold 2>/dev/null || echo "")
-  RESET  := $(shell tput sgr0 2>/dev/null || echo "")
-else
-  GREEN  :=
-  YELLOW :=
-  RED    :=
-  BLUE   :=
-  BOLD   :=
-  RESET  :=
-endif
+# ANSI Colors for UI
+GREEN  := $(shell tput -Txterm setaf 2)
+YELLOW := $(shell tput -Txterm setaf 3)
+RED    := $(shell tput -Txterm setaf 1)
+BLUE   := $(shell tput -Txterm setaf 4)
+BOLD   := $(shell tput -Txterm bold)
+RESET  := $(shell tput -Txterm sgr0)
 
 .PHONY: help build build-fresh build-prod image \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
@@ -190,27 +179,34 @@ help:
 build:
 	@echo "Building image: $(RELEASE_NAME):$(IMAGE_TAG)"
 	podman build -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	@echo "${GREEN}✓ Image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
+	@podman images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-fresh:
 	@echo "Building fresh image (no cache): $(RELEASE_NAME):$(IMAGE_TAG)"
 	podman build --no-cache -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	@echo "${GREEN}✓ Fresh image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
+	@podman images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-prod:
 	@echo "Building production image"
 	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-1.0.0}; \
 	podman build -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
+	@echo "${GREEN}✓ Production image built successfully ${RESET}"
+	@echo "  Image: $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
+	@podman images --format "  Size: {{.Size}}" $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION
 	@echo "Push with: podman push $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
 
 image:
 	@echo "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
 	@if podman image inspect $(RELEASE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
-		echo "✓ Image $(RELEASE_NAME):$(IMAGE_TAG) found locally"; \
+		echo "${GREEN}✓ Image $(RELEASE_NAME):$(IMAGE_TAG) found locally${RESET}"; \
 	else \
 		echo "Image not found locally at $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		echo "Attempting to pull from registry..."; \
 		if podman pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
-			echo "✓ Successfully pulled $(RELEASE_NAME):$(IMAGE_TAG)"; \
+			echo "${GREEN}✓ Successfully pulled $(RELEASE_NAME):$(IMAGE_TAG) from registry${RESET}"; \
 		else \
 			echo "⚠️  Image not available in registry. Building locally..."; \
 			$(MAKE) build; \
@@ -228,7 +224,7 @@ JOB_RUNNER_LOCAL_IMAGE?=starexec/job-runner
 pull-job-runner:
 	@echo "Pulling job-runner image from GHCR: $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)"
 	podman pull $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
-	@echo "✓ Job runner image pulled successfully"
+	@echo "${GREEN}✓ Job runner image pulled successfully: ${RESET}"
 	@podman images --format "  Size: {{.Size}}" $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
 
 # Build job-runner locally (for development only)
@@ -236,7 +232,7 @@ build-job-runner:
 	@echo "Building job-runner image locally (Alpine): $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)"
 	@echo "Note: Production deployments should use 'make pull-job-runner' instead"
 	podman build -t $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG) -f docker/job-runner.Dockerfile .
-	@echo "✓ Job runner image built successfully"
+	@echo "${GREEN}✓ Job runner image built successfully: ${RESET}"
 	@echo "  Image: $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)"
 	@podman images --format "  Size: {{.Size}}" $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)
 
@@ -246,10 +242,10 @@ build-job-runner:
 
 volumes-create:
 	@echo "Creating volumes for environment: $(ENV)"
-	$(VOLUME_SCRIPT) create $(ENV)
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) create $(ENV)
 
 volumes-list:
-	$(VOLUME_SCRIPT) list
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) list
 
 volumes-backup: verify-deps
 	@echo "Backing up volumes for environment: $(ENV)"
@@ -269,7 +265,7 @@ volumes-backup: verify-deps
 			fi; \
 		fi; \
 	fi
-	$(VOLUME_SCRIPT) backup-all $(ENV)
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) backup-all $(ENV)
 
 volumes-restore: verify-deps
 	@# =========================================================================
@@ -345,7 +341,7 @@ volumes-restore: verify-deps
 		echo "${RED}✗ No timestamp provided, aborting${RESET}"; \
 		exit 1; \
 	fi; \
-	$(VOLUME_SCRIPT) restore-all $(ENV) $$ts
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) restore-all $(ENV) $$ts
 
 volumes-export:
 	@printf "Volume name: "; \
@@ -354,27 +350,30 @@ volumes-export:
 		echo "${RED}✗ No volume name provided, aborting${RESET}"; \
 		exit 1; \
 	fi; \
-	$(VOLUME_SCRIPT) export $$vol
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) export $$vol
 
 volumes-cleanup:
 	@echo "Cleaning up old backups (keeping last 10)"
-	$(VOLUME_SCRIPT) cleanup-backups $(ENV) 10
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) cleanup-backups $(ENV) 10
 
 volumes-health:
 	@echo "Running volume health checks for environment: $(ENV)"
-	$(VOLUME_SCRIPT) health-check $(ENV)
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) health-check $(ENV)
 
 volumes-delete:
 	@if [ "$(DRY_RUN)" = "1" ]; then \
 		echo "[DRY RUN] Would delete volumes for environment: $(ENV)"; \
 		echo "  - $(VOLUME_PREFIX)-$(ENV)-data"; \
+		echo "  - $(VOLUME_PREFIX)-$(ENV)-sandbox"; \
+		echo "  - $(VOLUME_PREFIX)-$(ENV)-backend"; \
+		echo "  - $(VOLUME_PREFIX)-$(ENV)-work"; \
 		echo "  - $(VOLUME_PREFIX)-$(ENV)-postgres"; \
 		exit 0; \
 	fi
-	$(VOLUME_SCRIPT) delete $(ENV)
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) delete $(ENV)
 
 volumes-help:
-	$(VOLUME_SCRIPT) help
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) help
 
 # ============================================================================
 # DATABASE MANAGEMENT (PostgreSQL)
@@ -399,7 +398,7 @@ db-shell:
 
 db-dump:
 	@echo "Creating PostgreSQL dump (uses volume script if available)"
-	$(VOLUME_SCRIPT) dump-postgres $(ENV)
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) dump-postgres $(ENV)
 
 db-migrate:
 	@echo "Running Flyway migrations (this may take 30-60 seconds)..."
@@ -422,7 +421,7 @@ db-migrate:
 		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
 		flyway:migrate
-	@echo "✓ Migrations completed successfully"
+	@echo "${GREEN}✓ Migrations completed successfully!${RESET}"
 
 db-status:
 	@echo "Checking Flyway migration status..."
@@ -522,8 +521,11 @@ migrate-podman:
 # PODMAN DEPLOYMENT
 # ============================================================================
 network-setup:
-	@echo "Configuring Podman network"
-	@# Note: For rootful mode, set PODMAN_CMD="sudo podman"
+	@echo "Configuring Podman network (rootless mode)"
+	@if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+		echo "⚠️  Running in rootful mode. Consider running rootless for better security."; \
+		echo "See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
+	fi
 	@# For rootless, Podman uses pasta/slirp4netns automatically via netavark
 	@if ! $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
 		echo "Creating network (pasta/slirp4netns handled automatically)"; \
@@ -534,23 +536,32 @@ define cleanup_deployment
 	@echo "Cleaning up existing StarExec pods, containers, and secrets..."
 	@# Remove resources by label for robustness. This targets everything created by 'podman play kube'.
 	@# The label 'app.kubernetes.io/instance' is standard for Helm.
-	@POD_IDS=$$(podman pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Id}}"); \
+	@POD_IDS=$$($(PODMAN_CMD) pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Id}}"); \
 	if [ -n "$$POD_IDS" ]; then \
 		echo "  Removing existing pod(s) with label app.kubernetes.io/instance=$(RELEASE_NAME)"; \
-		echo "$$POD_IDS" | xargs podman pod rm -f; \
+		echo "$$POD_IDS" | xargs $(PODMAN_CMD) pod rm -f || { \
+			echo "⚠️  Pod removal reported error (likely network cleanup race), verifying..."; \
+			REMAINING=$$($(PODMAN_CMD) pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" -q); \
+			if [ -n "$$REMAINING" ]; then \
+				echo "${RED}❌ Error: Pods still exist: $$REMAINING${RESET}"; \
+				exit 1; \
+			else \
+				echo "${GREEN}✓ Pods successfully removed despite error message${RESET}"; \
+			fi; \
+		}; \
 	fi
 	@# Fallback for older naming scheme to ensure full cleanup during transition
 	@for pod in starexec starexec-pod $(POD_NAME); do \
-		if podman pod exists $$pod 2>/dev/null; then \
+		if $(PODMAN_CMD) pod exists $$pod 2>/dev/null; then \
 			echo "  Removing existing pod by legacy name: $$pod"; \
-			podman pod rm -f $$pod 2>/dev/null || true; \
+			$(PODMAN_CMD) pod rm -f $$pod 2>/dev/null || true; \
 		fi \
 	done
 	@# Clean up secrets associated with the release. Note: 'label' filter not supported for secrets in some Podman versions.
-	@SECRET_NAMES=$$(podman secret ls --filter "name=$(RELEASE_NAME)" --format "{{.Name}}"); \
+	@SECRET_NAMES=$$($(PODMAN_CMD) secret ls --filter "name=$(RELEASE_NAME)" --format "{{.Name}}") ; \
 	if [ -n "$$SECRET_NAMES" ]; then \
 		echo "  Removing secrets matching name $(RELEASE_NAME)"; \
-		echo "$$SECRET_NAMES" | xargs podman secret rm; \
+		echo "$$SECRET_NAMES" | xargs $(PODMAN_CMD) secret rm; \
 	fi
 endef
 
@@ -595,8 +606,9 @@ deploy-podman-helm:
 	$(call cleanup_deployment)
 	@echo "Rendering deployment manifest..."
 	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
-	HOST_DATA_PATH=$$(podman volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
+	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
+		--set environment=$(ENV) \
 		--set image.repository=$(RELEASE_NAME) \
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
@@ -608,7 +620,7 @@ deploy-podman-helm:
 	@echo "Deploying application pod..."
 	@# Ensure pause image exists (Podman uses it automatically for pod infra)
 	@./scripts/ensure-pause-image.sh
-	@podman play kube render.yaml
+	@$(PODMAN_CMD) play kube --userns=keep-id render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
@@ -617,10 +629,10 @@ deploy-podman-helm:
 	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
 	@echo ""
 	@echo "${BOLD}Useful commands:${RESET}"
-	@echo "  make db-shell              - PostgreSQL shell"
-	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
-	@echo "  podman logs $(APP_CONTAINER)   - Application logs"
-	@echo "  podman logs $(DB_CONTAINER) - Database logs"
+	@echo "  make db-shell               	- PostgreSQL shell"
+	@echo "  make volumes-backup ENV=$(ENV)	- Backup volumes"
+	@echo "  podman logs $(APP_CONTAINER)	- Application logs"
+	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
 
 deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
@@ -636,7 +648,7 @@ deploy-podman-direct:
 	@echo "Deploying application pod..."
 	@# Ensure pause image exists (Podman uses it automatically for pod infra)
 	@./scripts/ensure-pause-image.sh
-	@podman play kube render.yaml
+	@$(PODMAN_CMD) play kube --userns=keep-id render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
@@ -644,10 +656,10 @@ deploy-podman-direct:
 	@echo "  Migrations: Executed automatically during startup"
 	@echo ""
 	@echo "${BOLD}Useful commands:${RESET}"
-	@echo "  make db-shell              - PostgreSQL shell"
-	@echo "  make volumes-backup ENV=$(ENV) - Backup volumes"
-	@echo "  podman logs $(APP_CONTAINER)   - Application logs"
-	@echo "  podman logs $(DB_CONTAINER) - Database logs"
+	@echo "  make db-shell                	- PostgreSQL shell"
+	@echo "  make volumes-backup ENV=$(ENV)	- Backup volumes"
+	@echo "  podman logs $(APP_CONTAINER)	- Application logs"
+	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
 
 deploy-podman-cached: image
 	@if [ ! -f render.yaml ]; then \
@@ -657,7 +669,7 @@ deploy-podman-cached: image
 	@echo "Deploying using cached render.yaml..."
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
-	@podman play kube render.yaml
+	@$(PODMAN_CMD) play kube --userns=keep-id render.yaml
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete (using cached manifest)!${RESET}"
 	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
@@ -686,7 +698,7 @@ deploy-k8s:
 		--wait \
 		--timeout 5m
 	@echo ""
-	@echo "✓ Kubernetes deployment complete!"
+	@echo "${GREEN}✓ Kubernetes deployment complete!${RESET}"
 	@kubectl get pods -n starexec
 
 undeploy-k8s:
@@ -700,8 +712,8 @@ clean-podman:
 	@echo "Cleaning Podman artifacts (preserving volumes and cache)"
 	$(call cleanup_deployment)
 	@echo "Removing StarExec images..."
-	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
-	@echo "✓ Cleanup complete (volumes and cache preserved)"
+	@$(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
+	@echo "${GREEN}✓ Cleanup complete (volumes and cache preserved)${RESET}"
 
 clean-cache:
 	@echo "${YELLOW}⚠️  WARNING: Clearing Podman build cache${RESET}"
@@ -741,7 +753,7 @@ clean-hard:
 		echo "  - Remove pods: starexec, starexec-pod, $(POD_NAME)"; \
 		echo "  - Remove containers: $(APP_CONTAINER), $(DB_CONTAINER)"; \
 		echo "  - Remove secrets: $(RELEASE_NAME)-$(SECRET_NAME)-*"; \
-		echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-postgres"; \
+		echo "  - Remove volumes: $(VOLUME_PREFIX)-$(ENV)-data, $(VOLUME_PREFIX)-$(ENV)-sandbox, $(VOLUME_PREFIX)-$(ENV)-backend, $(VOLUME_PREFIX)-$(ENV)-work, $(VOLUME_PREFIX)-$(ENV)-postgres"; \
 		echo "  - Remove image: $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		exit 0; \
 	fi
@@ -763,23 +775,11 @@ clean-hard:
 		echo "${YELLOW}FORCE=1 detected, skipping confirmation${RESET}"; \
 	fi
 	$(call cleanup_deployment)
-	@echo "Checking for volumes in use..."
-	@VOLUMES="$(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres"; \
-	for vol in $$VOLUMES; do \
-		if podman volume exists $$vol 2>/dev/null; then \
-			USERS=$$(podman ps -a --filter volume=$$vol --format '{{.Names}}' 2>/dev/null); \
-			if [ -n "$$USERS" ]; then \
-				echo "${RED}❌ ERROR: Volume $$vol is in use by:${RESET}"; \
-				echo "$$USERS"; \
-				echo "Stop containers first: ${BLUE}make undeploy-podman${RESET}"; \
-				exit 1; \
-			fi; \
-		fi; \
-	done
+	@sleep 3  # Allow network cleanup to complete
 	@echo "Removing StarExec volumes..."
-	@podman volume rm -f $(VOLUME_PREFIX)-$(ENV)-data $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null || true
+	@$(MAKE) volumes-delete ENV=$(ENV) FORCE=1
 	@echo "Removing StarExec image..."
-	@podman rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
+	@$(PODMAN_CMD) rmi $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true
 	@echo "${GREEN}✓ Hard reset complete for ENV=$(ENV)${RESET}"
 
 # ============================================================================
@@ -818,6 +818,24 @@ status:
 	else \
 		echo "${RED}✗ missing${RESET}"; \
 	fi
+	@printf "%-20s: " "Sandbox Volume"
+	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-sandbox 2>/dev/null; then \
+		echo "${GREEN}✓ exists${RESET}"; \
+	else \
+		echo "${RED}✗ missing${RESET}"; \
+	fi
+	@printf "%-20s: " "Backend Volume"
+	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-backend 2>/dev/null; then \
+		echo "${GREEN}✓ exists${RESET}"; \
+	else \
+		echo "${RED}✗ missing${RESET}"; \
+	fi
+	@printf "%-20s: " "Work Volume"
+	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-work 2>/dev/null; then \
+		echo "${GREEN}✓ exists${RESET}"; \
+	else \
+		echo "${RED}✗ missing${RESET}"; \
+	fi
 	@printf "%-20s: " "Postgres Volume"
 	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null; then \
 		echo "${GREEN}✓ exists${RESET}"; \
@@ -826,7 +844,7 @@ status:
 	fi
 	@echo ""
 	@echo "${BOLD}=== Containers ===${RESET}"
-	@podman ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
+	@$(PODMAN_CMD) ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
 	@echo ""
 	@echo "${BOLD}=== Images ===${RESET}"
 	@podman images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
@@ -849,7 +867,7 @@ LOG_LINES_DB?=30
 
 logs:
 	@echo "=== Application Logs (last $(LOG_LINES_APP) lines) ==="
-	@podman logs --tail $(LOG_LINES_APP) $$(podman ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1) 2>&1 || echo "App container not running"
+	@$(PODMAN_CMD) logs --tail $(LOG_LINES_APP) $($(PODMAN_CMD) ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1) 2>&1 || echo "App container not running"
 	@echo ""
 	@echo "=== PostgreSQL Logs (last $(LOG_LINES_DB) lines) ==="
 	@podman logs --tail $(LOG_LINES_DB) $$(podman ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1) 2>&1 || echo "Postgres container not running"
@@ -941,6 +959,9 @@ template:
 	else \
 		echo "Helm not installed, generating from template..."; \
 		STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
+		STAREXEC_SANDBOX_VOL=$${STAREXEC_SANDBOX_VOL:-starexec-$(ENV)-sandbox} \
+		STAREXEC_BACKEND_VOL=$${STAREXEC_BACKEND_VOL:-starexec-$(ENV)-backend} \
+		STAREXEC_WORK_VOL=$${STAREXEC_WORK_VOL:-starexec-$(ENV)-work} \
 		STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
 		IMAGE_NAME=$(RELEASE_NAME) \
 		IMAGE_TAG=$(IMAGE_TAG) \
@@ -1044,5 +1065,5 @@ docs:
 	@echo "" >> docs/reference/makefile-targets.md
 	@echo "For detailed usage of each target, run \`make help\`" >> docs/reference/makefile-targets.md
 	@echo "" >> docs/reference/makefile-targets.md
-	@echo "✓ Generated docs/reference/makefile-targets.md"
+	@echo "${GREEN}✓ Generated docs/reference/makefile-targets.md successfully!${RESET}"
 	@echo "  Remember to run 'make docs' after adding new targets!"

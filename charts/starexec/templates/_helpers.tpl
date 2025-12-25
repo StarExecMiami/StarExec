@@ -32,3 +32,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ include "chart.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+
+{{- /*
+Generate a volume name based on the volumePrefix and volume type.
+Usage: {{ include "starexec.volumeName" (list . "data") }}
+*/ -}}
+{{- define "starexec.volumeName" -}}
+{{- $root := index . 0 -}}
+{{- $volumeType := index . 1 -}}
+{{- $env := default "dev" $root.Values.environment -}}
+{{- printf "%s-%s-%s" (default "starexec" $root.Values.volumePrefix) $env $volumeType -}}
+{{- end -}}
