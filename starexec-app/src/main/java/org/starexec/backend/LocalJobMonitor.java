@@ -12,25 +12,33 @@ import org.starexec.logger.StarLogger;
 /**
  * Monitors completed local jobs and updates the database with results.
  *
- * <p>This class is designed to work with the LocalBackend job execution model
+ * <p>
+ * This class is designed to work with the LocalBackend job execution model
  * where jobs write their results to files (status.json, stats.json) instead of
  * directly updating the database. The monitor periodically checks for completed
- * jobs and processes their output files.</p>
+ * jobs and processes their output files.
+ * </p>
  *
  * <h2>Adaptive Polling</h2>
- * <p>This monitor uses adaptive polling to reduce CPU usage during idle periods:</p>
+ * <p>
+ * This monitor uses adaptive polling to reduce CPU usage during idle periods:
+ * </p>
  * <ul>
- *   <li>Starts at a base interval (default: 1 second) for responsive job detection</li>
- *   <li>Backs off to longer intervals when no jobs are completing</li>
- *   <li>Immediately resets to base interval when new jobs are registered</li>
+ * <li>Starts at a base interval (default: 1 second) for responsive job
+ * detection</li>
+ * <li>Backs off to longer intervals when no jobs are completing</li>
+ * <li>Immediately resets to base interval when new jobs are registered</li>
  * </ul>
  *
  * <h2>Output File Format</h2>
- * <p>Jobs are expected to write the following files:</p>
+ * <p>
+ * Jobs are expected to write the following files:
+ * </p>
  * <ul>
- *   <li>{@code status.json} - Job completion status with pairId and status code</li>
- *   <li>{@code stats.json} - Job statistics (CPU time, wallclock, memory)</li>
- *   <li>{@code attributes.txt} - Post-processor output (key=value pairs)</li>
+ * <li>{@code status.json} - Job completion status with pairId and status
+ * code</li>
+ * <li>{@code stats.json} - Job statistics (CPU time, wallclock, memory)</li>
+ * <li>{@code attributes.txt} - Post-processor output (key=value pairs)</li>
  * </ul>
  *
  * @see LocalBackend
@@ -39,8 +47,7 @@ import org.starexec.logger.StarLogger;
 public class LocalJobMonitor {
 
     private static final StarLogger log = StarLogger.getLogger(
-        LocalJobMonitor.class
-    );
+            LocalJobMonitor.class);
 
     // Executor for async processing
     private final ScheduledExecutorService scheduler;
@@ -53,10 +60,20 @@ public class LocalJobMonitor {
     private volatile ScheduledFuture<?> scheduledPoll;
 
     // Maps output directories to pair IDs so we can track which jobs we've seen
-    private final ConcurrentHashMap<String, Integer> trackedPairs =
-        new ConcurrentHashMap<>();
-    private final Set<String> processedStatusFiles =
-        ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, Integer> trackedPairs = new ConcurrentHashMap<>();
+
+    // Hybrid deduplication: LRU-bounded path set + timestamp tracking
+    // Addresses NFS mtime caching while bounding memory growth
+    // See: Dr. Reeves code review (Dec 2024) - NFS consistency mitigation
+    private static final int LRU_MAX_SIZE = 1000;
+    private final Set<String> recentlyProcessedPaths = Collections.newSetFromMap(Collections.synchronizedMap(
+            new LinkedHashMap<String, Boolean>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > LRU_MAX_SIZE;
+                }
+            }));
+    private final ConcurrentHashMap<Integer, Long> lastProcessedTime = new ConcurrentHashMap<>();
 
     public LocalJobMonitor() {
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -80,19 +97,22 @@ public class LocalJobMonitor {
         // Reset poll interval to base for responsive detection of new job completion
         pollInterval.resetToBase();
 
-        // Cancel the current scheduled poll and reschedule immediately with the reset interval.
+        // Cancel the current scheduled poll and reschedule immediately with the reset
+        // interval.
         // Without this, the "reset" only applies to the NEXT scheduling cycle, meaning
-        // the user could wait up to MAX_INTERVAL (10s) even after registering a new job.
-        // See: "Immediate Reset Latency Trap" - the current scheduledPoll continues sleeping
-        // for the remainder of its original interval unless we explicitly cancel and reschedule.
+        // the user could wait up to MAX_INTERVAL (10s) even after registering a new
+        // job.
+        // See: "Immediate Reset Latency Trap" - the current scheduledPoll continues
+        // sleeping
+        // for the remainder of its original interval unless we explicitly cancel and
+        // reschedule.
         cancelAndRescheduleNow();
 
         log.debug(
-            "Registered job for monitoring: pairId=" +
-                pairId +
-                ", logDir=" +
-                logDir
-        );
+                "Registered job for monitoring: pairId=" +
+                        pairId +
+                        ", logDir=" +
+                        logDir);
     }
 
     /**
@@ -100,11 +120,16 @@ public class LocalJobMonitor {
      * This ensures the reset interval takes effect without waiting for the
      * previous (potentially long) interval to expire.
      *
-     * <p>Thread-safety note: If the poll is currently executing (not just sleeping),
-     * we use mayInterruptIfRunning=false to let it complete. The poll's finally block
-     * will also call scheduleNextPoll(), potentially resulting in two scheduled polls.
-     * This is harmless - the extra poll just does redundant work on thread-safe data
-     * structures, and subsequent polls will naturally coalesce to a single chain.</p>
+     * <p>
+     * Thread-safety note: If the poll is currently executing (not just sleeping),
+     * we use mayInterruptIfRunning=false to let it complete. The poll's finally
+     * block
+     * will also call scheduleNextPoll(), potentially resulting in two scheduled
+     * polls.
+     * This is harmless - the extra poll just does redundant work on thread-safe
+     * data
+     * structures, and subsequent polls will naturally coalesce to a single chain.
+     * </p>
      */
     private void cancelAndRescheduleNow() {
         if (!running) {
@@ -117,8 +142,7 @@ public class LocalJobMonitor {
             boolean cancelled = currentPoll.cancel(false);
             if (cancelled) {
                 log.debug(
-                    "Cancelled pending poll to apply immediate interval reset"
-                );
+                        "Cancelled pending poll to apply immediate interval reset");
             }
         }
 
@@ -132,16 +156,23 @@ public class LocalJobMonitor {
     /**
      * Clears a pair's tracking information when it's being rerun.
      * This ensures that when a pair is rerun, the monitor will process
-     * the new status.json file instead of skipping it (since it's in processedStatusFiles).
+     * the new status.json file instead of skipping it (since it's in
+     * processedStatusFiles).
      *
-     * <p>This method MUST be called when Jobs.rerunPair() is executed to prevent
-     * rerun pairs from getting stuck in ENQUEUED status.</p>
+     * <p>
+     * This method MUST be called when Jobs.rerunPair() is executed to prevent
+     * rerun pairs from getting stuck in ENQUEUED status.
+     * </p>
      *
-     * <p><b>ROOT CAUSE FIX:</b> When a pair is rerun, the old status.json file
+     * <p>
+     * <b>ROOT CAUSE FIX:</b> When a pair is rerun, the old status.json file
      * remains in the output directory. The processedStatusFiles set tracks which
-     * files have been processed to avoid redundant database updates. Without clearing
-     * this tracking, the monitor will skip the new status.json (same path as before),
-     * leaving the pair stuck in ENQUEUED status forever.</p>
+     * files have been processed to avoid redundant database updates. Without
+     * clearing
+     * this tracking, the monitor will skip the new status.json (same path as
+     * before),
+     * leaving the pair stuck in ENQUEUED status forever.
+     * </p>
      *
      * @param pairId The pair ID that is being rerun
      */
@@ -150,8 +181,8 @@ public class LocalJobMonitor {
         // This allows the pair to be re-registered when it's submitted again
         String removedLogDir = null;
         Iterator<Map.Entry<String, Integer>> it = trackedPairs
-            .entrySet()
-            .iterator();
+                .entrySet()
+                .iterator();
         while (it.hasNext()) {
             Map.Entry<String, Integer> entry = it.next();
             if (entry.getValue() == pairId) {
@@ -161,28 +192,27 @@ public class LocalJobMonitor {
             }
         }
 
-        // Also remove the processed status file entry so it gets reprocessed
+        // Also clear timestamp tracking and path set entry so it gets reprocessed
+        lastProcessedTime.remove(pairId);
         if (removedLogDir != null) {
             Path statusFile = Paths.get(removedLogDir).resolve("status.json");
             String statusPath = statusFile.toAbsolutePath().toString();
-            boolean removed = processedStatusFiles.remove(statusPath);
+            boolean removedPath = recentlyProcessedPaths.remove(statusPath);
 
             log.info(
-                "Cleared tracking for pairId=" +
-                    pairId +
-                    ": logDir=" +
-                    removedLogDir +
-                    ", statusFile cleared: " +
-                    removed +
-                    ". Monitor will reprocess status files on next poll."
-            );
+                    "Cleared tracking for pairId=" +
+                            pairId +
+                            ": logDir=" +
+                            removedLogDir +
+                            ", pathCleared=" +
+                            removedPath +
+                            ". Monitor will reprocess status files on next poll.");
         } else {
             log.warn(
-                "Could not find logDir for pairId=" +
-                    pairId +
-                    " in trackedPairs. " +
-                    "Pair may not have been registered with monitor yet."
-            );
+                    "Could not find logDir for pairId=" +
+                            pairId +
+                            " in trackedPairs. " +
+                            "Pair may not have been registered with monitor yet.");
         }
     }
 
@@ -196,9 +226,8 @@ public class LocalJobMonitor {
         scheduleNextPoll();
 
         log.info(
-            "LocalJobMonitor started with adaptive polling: " +
-                pollInterval.getStats()
-        );
+                "LocalJobMonitor started with adaptive polling: " +
+                        pollInterval.getStats());
     }
 
     /**
@@ -211,10 +240,9 @@ public class LocalJobMonitor {
 
         long interval = pollInterval.getCurrentInterval();
         scheduledPoll = scheduler.schedule(
-            this::pollAndReschedule,
-            interval,
-            TimeUnit.MILLISECONDS
-        );
+                this::pollAndReschedule,
+                interval,
+                TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -253,8 +281,7 @@ public class LocalJobMonitor {
             Thread.currentThread().interrupt();
         }
         log.info(
-            "LocalJobMonitor stopped. Final stats: " + pollInterval.getStats()
-        );
+                "LocalJobMonitor stopped. Final stats: " + pollInterval.getStats());
     }
 
     /**
@@ -272,60 +299,73 @@ public class LocalJobMonitor {
 
                 Path statusFile = Paths.get(logDir).resolve("status.json");
 
-                // Check if status file exists and hasn't been processed yet
+                // Check if status file exists
                 if (Files.exists(statusFile)) {
                     foundCount++;
                     String statusPath = statusFile.toAbsolutePath().toString();
-                    if (!processedStatusFiles.contains(statusPath)) {
+
+                    // Hybrid deduplication: check both timestamp AND path set
+                    // This handles NFS stale mtime while bounding memory
+                    long lastModified = 0;
+                    try {
+                        lastModified = Files.getLastModifiedTime(statusFile).toMillis();
+                    } catch (IOException e) {
+                        log.warn("Could not get mtime for " + statusPath + ", using fallback", e);
+                    }
+
+                    Long previousMtime = lastProcessedTime.get(pairId);
+                    boolean isNewOrModified = (previousMtime == null) || (lastModified > previousMtime);
+                    boolean notInRecentSet = !recentlyProcessedPaths.contains(statusPath);
+
+                    // Process if: (1) never seen this pairId, OR
+                    // (2) file modified since last check, OR
+                    // (3) path not in recent set (NFS fallback)
+                    if (isNewOrModified || notInRecentSet) {
                         log.info(
-                            "Monitor: Found new status.json for pairId=" +
-                                pairId +
-                                ", logDir=" +
-                                logDir
-                        );
+                                "Monitor: Found " + (previousMtime == null ? "new" : "updated") +
+                                        " status.json for pairId=" + pairId +
+                                        ", logDir=" + logDir);
                         try {
                             processCompletedJob(pairId, logDir);
-                            processedStatusFiles.add(statusPath);
+                            // Update both tracking mechanisms
+                            lastProcessedTime.put(pairId, lastModified);
+                            recentlyProcessedPaths.add(statusPath);
                             log.info(
-                                "Monitor: Successfully processed pairId=" +
-                                    pairId
-                            );
+                                    "Monitor: Successfully processed pairId=" +
+                                            pairId);
                         } catch (Exception e) {
                             log.error(
-                                "Monitor: Error processing pairId=" +
-                                    pairId +
-                                    ", logDir=" +
-                                    logDir,
-                                e
-                            );
+                                    "Monitor: Error processing pairId=" +
+                                            pairId +
+                                            ", logDir=" +
+                                            logDir,
+                                    e);
                             // Mark as error so we don't keep retrying
                             try {
                                 JobPairs.setStatusForPairAndStages(
-                                    pairId,
-                                    StatusCode.ERROR_RUNSCRIPT.getVal()
-                                );
+                                        pairId,
+                                        StatusCode.ERROR_RUNSCRIPT.getVal());
                                 log.warn(
-                                    "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
-                                        pairId +
-                                        " due to processing error"
-                                );
-                                processedStatusFiles.add(statusPath);
+                                        "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
+                                                pairId +
+                                                " due to processing error");
+                                // Mark as processed to prevent retry loop
+                                lastProcessedTime.put(pairId, lastModified);
+                                recentlyProcessedPaths.add(statusPath);
                             } catch (Exception ex) {
                                 log.error(
-                                    "Monitor: CRITICAL - Cannot set error status for pairId=" +
-                                        pairId,
-                                    ex
-                                );
+                                        "Monitor: CRITICAL - Cannot set error status for pairId=" +
+                                                pairId,
+                                        ex);
                             }
                         }
                     }
                 } else {
                     log.trace(
-                        "Monitor: No status.json yet for pairId=" +
-                            pairId +
-                            ", logDir=" +
-                            logDir
-                    );
+                            "Monitor: No status.json yet for pairId=" +
+                                    pairId +
+                                    ", logDir=" +
+                                    logDir);
                 }
             }
 
@@ -339,13 +379,12 @@ public class LocalJobMonitor {
             // Log summary at debug level
             if (checkedCount > 0) {
                 log.debug(
-                    "Monitor poll: checked " +
-                        checkedCount +
-                        " pairs, found " +
-                        foundCount +
-                        " status files. " +
-                        pollInterval.getStats()
-                );
+                        "Monitor poll: checked " +
+                                checkedCount +
+                                " pairs, found " +
+                                foundCount +
+                                " status files. " +
+                                pollInterval.getStats());
             }
         } catch (Exception e) {
             log.error("Monitor: Error in checkCompletedJobs", e);
@@ -361,7 +400,7 @@ public class LocalJobMonitor {
      * @param logDir The log directory containing output files
      */
     private void processCompletedJob(int pairId, String logDir)
-        throws Exception {
+            throws Exception {
         Path outputDir = Paths.get(logDir);
 
         // 1. Read status from status.json
@@ -395,25 +434,22 @@ public class LocalJobMonitor {
 
             // Simple regex-based JSON parsing
             Matcher statusMatcher = Pattern.compile(
-                "\"status\"\\s*:\\s*(\\d+)"
-            ).matcher(json);
+                    "\"status\"\\s*:\\s*(\\d+)").matcher(json);
             if (statusMatcher.find()) {
                 int statusCode = Integer.parseInt(statusMatcher.group(1));
                 StatusCode resolved = StatusCode.toStatusCode(statusCode);
                 log.debug(
-                    "Read status " +
-                        statusCode +
-                        " (" +
-                        resolved +
-                        ") from status.json for pairId=" +
-                        pairId
-                );
+                        "Read status " +
+                                statusCode +
+                                " (" +
+                                resolved +
+                                ") from status.json for pairId=" +
+                                pairId);
                 return resolved;
             }
 
             log.warn(
-                "Could not parse status from status.json for pairId=" + pairId
-            );
+                    "Could not parse status from status.json for pairId=" + pairId);
             return StatusCode.ERROR_RUNSCRIPT;
         } catch (IOException e) {
             log.error("Failed to read status.json for pairId=" + pairId, e);
@@ -432,7 +468,8 @@ public class LocalJobMonitor {
             try (BufferedReader reader = Files.newBufferedReader(attrsFile)) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (line.isEmpty()) continue;
+                    if (line.isEmpty())
+                        continue;
                     int eq = line.indexOf('=');
                     if (eq > 0) {
                         String key = line.substring(0, eq).trim();
@@ -443,8 +480,7 @@ public class LocalJobMonitor {
                     }
                 }
                 log.debug(
-                    "Parsed " + props.size() + " attributes from attributes.txt"
-                );
+                        "Parsed " + props.size() + " attributes from attributes.txt");
             } catch (IOException e) {
                 log.warn("Failed to parse attributes.txt", e);
             }
@@ -469,13 +505,11 @@ public class LocalJobMonitor {
                 stats.userTime = extractDouble(json, "userTime");
                 stats.systemTime = extractDouble(json, "systemTime");
                 stats.maxVirtualMemory = extractDouble(
-                    json,
-                    "maxVirtualMemory"
-                );
+                        json,
+                        "maxVirtualMemory");
                 stats.maxResidentSetSize = extractLong(
-                    json,
-                    "maxResidentSetSize"
-                );
+                        json,
+                        "maxResidentSetSize");
                 stats.stageNumber = extractInt(json, "stageNumber");
 
                 // Optional: disk size (bytes)
@@ -486,8 +520,7 @@ public class LocalJobMonitor {
 
                 // Optional: hostname of execution host/container
                 Matcher m = Pattern.compile(
-                    "\"hostname\"\\s*:\\s*\"([^\"]+)\""
-                ).matcher(json);
+                        "\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
                 if (m.find()) {
                     stats.hostname = m.group(1);
                 }
@@ -496,9 +529,8 @@ public class LocalJobMonitor {
                 return stats;
             } catch (IOException e) {
                 log.warn(
-                    "Failed to parse stats.json, falling back to var.out",
-                    e
-                );
+                        "Failed to parse stats.json, falling back to var.out",
+                        e);
             }
         }
 
@@ -510,20 +542,17 @@ public class LocalJobMonitor {
                 for (String line : lines) {
                     if (line.startsWith("WCTIME=")) {
                         stats.wallclockTime = Double.parseDouble(
-                            line.substring(7)
-                        );
+                                line.substring(7));
                     } else if (line.startsWith("CPUTIME=")) {
                         stats.cpuTime = Double.parseDouble(line.substring(8));
                     } else if (line.startsWith("USERTIME=")) {
                         stats.userTime = Double.parseDouble(line.substring(9));
                     } else if (line.startsWith("SYSTEMTIME=")) {
                         stats.systemTime = Double.parseDouble(
-                            line.substring(11)
-                        );
+                                line.substring(11));
                     } else if (line.startsWith("MAXVM=")) {
                         stats.maxVirtualMemory = Double.parseDouble(
-                            line.substring(6)
-                        );
+                                line.substring(6));
                     }
                 }
                 log.debug("Parsed stats from var.out: " + stats);
@@ -537,8 +566,7 @@ public class LocalJobMonitor {
 
     private double extractDouble(String json, String key) {
         Matcher m = Pattern.compile(
-            "\"" + key + "\"\\s*:\\s*([0-9.]+)"
-        ).matcher(json);
+                "\"" + key + "\"\\s*:\\s*([0-9.]+)").matcher(json);
         if (m.find()) {
             return Double.parseDouble(m.group(1));
         }
@@ -547,8 +575,7 @@ public class LocalJobMonitor {
 
     private long extractLong(String json, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(
-            json
-        );
+                json);
         if (m.find()) {
             return Long.parseLong(m.group(1));
         }
@@ -557,8 +584,7 @@ public class LocalJobMonitor {
 
     private int extractInt(String json, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(
-            json
-        );
+                json);
         if (m.find()) {
             return Integer.parseInt(m.group(1));
         }
@@ -569,15 +595,13 @@ public class LocalJobMonitor {
      * Updates the database with job results.
      */
     private void updateDatabase(
-        int pairId,
-        StatusCode status,
-        RunSolverStats stats,
-        Properties attributes
-    ) throws Exception {
+            int pairId,
+            StatusCode status,
+            RunSolverStats stats,
+            Properties attributes) throws Exception {
         // Update pair status
         log.info(
-            "Updating database for pairId=" + pairId + " with status=" + status
-        );
+                "Updating database for pairId=" + pairId + " with status=" + status);
         JobPairs.setStatusForPairAndStages(pairId, status.getVal());
 
         // Update attributes if any
@@ -585,61 +609,53 @@ public class LocalJobMonitor {
             // Stage 1 for now - multi-stage pipelines would need enhancement
             JobPairs.addJobPairAttributes(pairId, 1, attributes);
             log.debug(
-                "Added " +
-                    attributes.size() +
-                    " attributes for pairId=" +
-                    pairId
-            );
+                    "Added " +
+                            attributes.size() +
+                            " attributes for pairId=" +
+                            pairId);
         }
 
         // Persist run stats to DB using stored procedure wrapper
-        if (
-            stats.wallclockTime > 0 || stats.cpuTime > 0 || stats.diskSize > 0
-        ) {
+        if (stats.wallclockTime > 0 || stats.cpuTime > 0 || stats.diskSize > 0) {
             try {
                 String nodeName = (stats.hostname != null &&
                         !stats.hostname.isEmpty())
-                    ? stats.hostname
-                    : "unknown";
+                                ? stats.hostname
+                                : "unknown";
                 boolean ok = JobPairs.updateRunSolverStats(
-                    pairId,
-                    nodeName,
-                    stats.wallclockTime,
-                    stats.cpuTime,
-                    stats.userTime,
-                    stats.systemTime,
-                    stats.maxVirtualMemory,
-                    stats.maxResidentSetSize,
-                    stats.stageNumber,
-                    stats.diskSize
-                );
+                        pairId,
+                        nodeName,
+                        stats.wallclockTime,
+                        stats.cpuTime,
+                        stats.userTime,
+                        stats.systemTime,
+                        stats.maxVirtualMemory,
+                        stats.maxResidentSetSize,
+                        stats.stageNumber,
+                        stats.diskSize);
                 if (ok) {
                     log.debug(
-                        "Persisted run stats for pair " + pairId + ": " + stats
-                    );
+                            "Persisted run stats for pair " + pairId + ": " + stats);
                 } else {
                     log.warn("Failed to persist run stats for pair " + pairId);
                 }
             } catch (Exception e) {
                 log.warn(
-                    "Exception persisting run stats for pair " + pairId,
-                    e
-                );
+                        "Exception persisting run stats for pair " + pairId,
+                        e);
             }
         } else {
             log.debug(
-                "No run stats to persist for pairId=" + pairId + ": " + stats
-            );
+                    "No run stats to persist for pairId=" + pairId + ": " + stats);
         }
 
         log.info(
-            "Database updated for pairId=" +
-                pairId +
-                ": status=" +
-                status +
-                ", attrs=" +
-                attributes.size()
-        );
+                "Database updated for pairId=" +
+                        pairId +
+                        ": status=" +
+                        status +
+                        ", attrs=" +
+                        attributes.size());
     }
 
     /**
@@ -678,17 +694,16 @@ public class LocalJobMonitor {
         @Override
         public String toString() {
             return String.format(
-                "RunSolverStats{wall=%.2fs, cpu=%.2fs, user=%.2fs, sys=%.2fs, maxVM=%.0fKB, maxRSS=%dKB, disk=%d, stage=%d, host=%s}",
-                wallclockTime,
-                cpuTime,
-                userTime,
-                systemTime,
-                maxVirtualMemory,
-                maxResidentSetSize,
-                diskSize,
-                stageNumber,
-                hostname == null ? "unknown" : hostname
-            );
+                    "RunSolverStats{wall=%.2fs, cpu=%.2fs, user=%.2fs, sys=%.2fs, maxVM=%.0fKB, maxRSS=%dKB, disk=%d, stage=%d, host=%s}",
+                    wallclockTime,
+                    cpuTime,
+                    userTime,
+                    systemTime,
+                    maxVirtualMemory,
+                    maxResidentSetSize,
+                    diskSize,
+                    stageNumber,
+                    hostname == null ? "unknown" : hostname);
         }
     }
 }
