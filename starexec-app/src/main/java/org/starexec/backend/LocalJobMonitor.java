@@ -61,19 +61,7 @@ public class LocalJobMonitor {
 
     // Maps output directories to pair IDs so we can track which jobs we've seen
     private final ConcurrentHashMap<String, Integer> trackedPairs = new ConcurrentHashMap<>();
-
-    // Hybrid deduplication: LRU-bounded path set + timestamp tracking
-    // Addresses NFS mtime caching while bounding memory growth
-    // See: Dr. Reeves code review (Dec 2024) - NFS consistency mitigation
-    private static final int LRU_MAX_SIZE = 1000;
-    private final Set<String> recentlyProcessedPaths = Collections.newSetFromMap(Collections.synchronizedMap(
-            new LinkedHashMap<String, Boolean>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
-                    return size() > LRU_MAX_SIZE;
-                }
-            }));
-    private final ConcurrentHashMap<Integer, Long> lastProcessedTime = new ConcurrentHashMap<>();
+    private final Set<Integer> processedPairIds = ConcurrentHashMap.newKeySet();
 
     public LocalJobMonitor() {
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -91,21 +79,20 @@ public class LocalJobMonitor {
      * @param logDir The directory where job output will be written
      * @param pairId The database pair ID for this job
      */
-    public void registerJob(String logDir, int pairId) {
+    public synchronized void registerJob(String logDir, int pairId) {
         trackedPairs.put(logDir, pairId);
+
+        // Crucial fix: when a job is re-run, we must clear its processed status
+        // so the monitor will pick up the new run.
+        if (processedPairIds.remove(pairId)) {
+            log.debug("Cleared processed status cache for re-run pairId: " + pairId);
+        }
 
         // Reset poll interval to base for responsive detection of new job completion
         pollInterval.resetToBase();
 
         // Cancel the current scheduled poll and reschedule immediately with the reset
         // interval.
-        // Without this, the "reset" only applies to the NEXT scheduling cycle, meaning
-        // the user could wait up to MAX_INTERVAL (10s) even after registering a new
-        // job.
-        // See: "Immediate Reset Latency Trap" - the current scheduledPoll continues
-        // sleeping
-        // for the remainder of its original interval unless we explicitly cancel and
-        // reschedule.
         cancelAndRescheduleNow();
 
         log.debug(
@@ -192,20 +179,17 @@ public class LocalJobMonitor {
             }
         }
 
-        // Also clear timestamp tracking and path set entry so it gets reprocessed
-        lastProcessedTime.remove(pairId);
+        // Also remove the processed status file entry so it gets reprocessed
         if (removedLogDir != null) {
-            Path statusFile = Paths.get(removedLogDir).resolve("status.json");
-            String statusPath = statusFile.toAbsolutePath().toString();
-            boolean removedPath = recentlyProcessedPaths.remove(statusPath);
+            boolean removed = processedPairIds.remove(pairId);
 
             log.info(
                     "Cleared tracking for pairId=" +
                             pairId +
                             ": logDir=" +
                             removedLogDir +
-                            ", pathCleared=" +
-                            removedPath +
+                            ", pairId cleared: " +
+                            removed +
                             ". Monitor will reprocess status files on next poll.");
         } else {
             log.warn(
@@ -299,40 +283,34 @@ public class LocalJobMonitor {
 
                 Path statusFile = Paths.get(logDir).resolve("status.json");
 
-                // Check if status file exists
+                // Check if status file exists and hasn't been processed yet
                 if (Files.exists(statusFile)) {
                     foundCount++;
-                    String statusPath = statusFile.toAbsolutePath().toString();
+                    log.info("DEBUG_TRACE: Monitor checking pairId=" + pairId + " exists=true processed="
+                            + processedPairIds.contains(pairId) + " logDir=" + logDir);
 
-                    // Hybrid deduplication: check both timestamp AND path set
-                    // This handles NFS stale mtime while bounding memory
-                    long lastModified = 0;
-                    try {
-                        lastModified = Files.getLastModifiedTime(statusFile).toMillis();
-                    } catch (IOException e) {
-                        log.warn("Could not get mtime for " + statusPath + ", using fallback", e);
-                    }
-
-                    Long previousMtime = lastProcessedTime.get(pairId);
-                    boolean isNewOrModified = (previousMtime == null) || (lastModified > previousMtime);
-                    boolean notInRecentSet = !recentlyProcessedPaths.contains(statusPath);
-
-                    // Process if: (1) never seen this pairId, OR
-                    // (2) file modified since last check, OR
-                    // (3) path not in recent set (NFS fallback)
-                    if (isNewOrModified || notInRecentSet) {
+                    // Use pairId for tracking instead of path
+                    if (!processedPairIds.contains(pairId)) {
                         log.info(
-                                "Monitor: Found " + (previousMtime == null ? "new" : "updated") +
-                                        " status.json for pairId=" + pairId +
-                                        ", logDir=" + logDir);
+                                "DEBUG_TRACE: Found new status.json for pairId=" +
+                                        pairId +
+                                        ", logDir=" +
+                                        logDir);
+                        // Process the job
+                        // NOTE: If processing fails, we don't add to processedPairIds
+                        // so we can try again next poll
                         try {
-                            processCompletedJob(pairId, logDir);
-                            // Update both tracking mechanisms
-                            lastProcessedTime.put(pairId, lastModified);
-                            recentlyProcessedPaths.add(statusPath);
-                            log.info(
-                                    "Monitor: Successfully processed pairId=" +
-                                            pairId);
+                            boolean isTerminal = processCompletedJob(pairId, logDir);
+                            log.info("DEBUG_TRACE: processCompletedJob result for pairId=" + pairId + " isTerminal="
+                                    + isTerminal);
+                            if (isTerminal) {
+                                processedPairIds.add(pairId);
+                                log.info(
+                                        "Monitor: Successfully processed pairId=" +
+                                                pairId);
+                            } else {
+                                log.debug("Monitor: Job still running for pairId=" + pairId + ", will re-check later.");
+                            }
                         } catch (Exception e) {
                             log.error(
                                     "Monitor: Error processing pairId=" +
@@ -349,9 +327,7 @@ public class LocalJobMonitor {
                                         "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
                                                 pairId +
                                                 " due to processing error");
-                                // Mark as processed to prevent retry loop
-                                lastProcessedTime.put(pairId, lastModified);
-                                recentlyProcessedPaths.add(statusPath);
+                                processedPairIds.add(pairId);
                             } catch (Exception ex) {
                                 log.error(
                                         "Monitor: CRITICAL - Cannot set error status for pairId=" +
@@ -398,8 +374,10 @@ public class LocalJobMonitor {
      *
      * @param pairId The pair ID
      * @param logDir The log directory containing output files
+     * @return true if the job has a terminal status (complete/failed), false if
+     *         intermediate (running)
      */
-    private void processCompletedJob(int pairId, String logDir)
+    private boolean processCompletedJob(int pairId, String logDir)
             throws Exception {
         Path outputDir = Paths.get(logDir);
 
@@ -415,8 +393,16 @@ public class LocalJobMonitor {
         // 4. Update database
         updateDatabase(pairId, status, stats, attributes);
 
-        // 5. Remove from tracked pairs (cleanup)
-        trackedPairs.remove(logDir);
+        // 5. Check if status is terminal (completed or failed)
+        // If so, remove from tracking. If running/processing, keep tracking.
+        if (status.finishedRunning() || status.failed() || status == StatusCode.STATUS_COMPLETE) {
+            trackedPairs.remove(logDir);
+            log.info("Job execution finished for pairId=" + pairId + " with status=" + status);
+            return true;
+        } else {
+            log.debug("Job still running (status=" + status + "), continuing to monitor pairId=" + pairId);
+            return false;
+        }
     }
 
     /**

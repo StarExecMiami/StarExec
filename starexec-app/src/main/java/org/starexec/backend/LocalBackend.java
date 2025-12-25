@@ -8,6 +8,8 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.starexec.config.EnvironmentConfig;
@@ -281,6 +283,40 @@ public class LocalBackend implements Backend {
     }
 
     /**
+     * Cleans up artifacts from previous runs in the output directory.
+     * This prevents the LocalJobMonitor from detecting old status files
+     * and marking the job as complete before it even starts.
+     *
+     * @param outputDir The directory containing job output
+     */
+    private void cleanupPreviousRunArtifacts(File outputDir) {
+        if (outputDir == null || !outputDir.exists()) {
+            return;
+        }
+
+        String[] artifacts = {
+                "status.json",
+                "stats.json",
+                "var.out",
+                "watcher.out",
+                "attributes.txt",
+                "stdout.txt",
+                "stderr.txt"
+        };
+
+        for (String artifact : artifacts) {
+            File file = new File(outputDir, artifact);
+            if (file.exists()) {
+                if (file.delete()) {
+                    log.debug("Deleted previous run artifact: " + file.getAbsolutePath());
+                } else {
+                    log.warn("Failed to delete previous run artifact: " + file.getAbsolutePath());
+                }
+            }
+        }
+    }
+
+    /**
      * Executes a job. This method is called in a worker thread from the executor.
      *
      * @param job The job to execute
@@ -291,21 +327,27 @@ public class LocalBackend implements Backend {
 
         // Extract pair ID from logPath (format: .../pairId.txt)
         int pairId = extractPairIdFromLogPath(job.logPath);
+
+        // CLEANUP: Delete artifacts from previous runs BEFORE registering with monitor
+        // This prevents the race condition where monitor sees old status.json
+        File outputDir = new File(job.logPath).getParentFile();
+        cleanupPreviousRunArtifacts(outputDir);
+
         if (pairId > 0 && jobMonitor != null) {
-            jobMonitor.registerJob(new File(job.logPath).getParent(), pairId);
+            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId);
             log.info(
                     "Registered job with monitor: execId=" +
                             job.execId +
                             ", pairId=" +
                             pairId +
                             ", logDir=" +
-                            new File(job.logPath).getParent());
+                            outputDir.getAbsolutePath());
         } else if (pairId <= 0) {
             log.warn("Could not extract pairId from logPath: " + job.logPath);
         }
 
         log.info(
-                "Starting job execution: execId=" +
+                "DEBUG_TRACE: Starting job execution: execId=" +
                         job.execId +
                         ", pairId=" +
                         pairId +
@@ -327,10 +369,33 @@ public class LocalBackend implements Backend {
             // Start the job process
             job.process = startJobProcess(job);
 
-            // Wait for completion with timeout
-            boolean finished = job.process.waitFor(
-                    jobTimeoutSeconds,
-                    TimeUnit.SECONDS);
+            // Wait for completion with timeout and zombie detection
+            long startTime = System.currentTimeMillis();
+            long maxDuration = TimeUnit.SECONDS.toMillis(jobTimeoutSeconds);
+            boolean finished = false;
+
+            while (System.currentTimeMillis() - startTime < maxDuration) {
+                // Check if process exited naturally (poll every 2 seconds)
+                if (job.process.waitFor(2, TimeUnit.SECONDS)) {
+                    finished = true;
+                    break;
+                }
+
+                // Check if the job reported completion status >= 7 (Complete/Error) via file
+                // This handles "zombie" processes that write status but don't exit
+                if (isJobReportedComplete(job)) {
+                    log.warn("Job " + job.execId
+                            + " reported complete via status file but process is still running. Killing zombie process.");
+                    killProcess(job.process);
+                    // Give it a moment to die
+                    finished = job.process.waitFor(5, TimeUnit.SECONDS);
+                    if (!finished) {
+                        job.process.destroyForcibly();
+                        finished = true;
+                    }
+                    break;
+                }
+            }
 
             if (!finished) {
                 // Timeout - kill the process
@@ -339,6 +404,7 @@ public class LocalBackend implements Backend {
                                 job.execId +
                                 " (pairId=" +
                                 pairId +
+                                " reported=" + isJobReportedComplete(job) +
                                 ") exceeded timeout of " +
                                 jobTimeoutSeconds +
                                 " seconds, killing process");
@@ -370,6 +436,17 @@ public class LocalBackend implements Backend {
                                     ". Check " +
                                     job.logPath +
                                     " for details");
+                    // Explicitly fail the pair in the DB
+                    if (pairId > 0) {
+                        try {
+                            JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
+                        } catch (Exception e) {
+                            log.error("Failed to set error status for pairId=" + pairId, e);
+                        }
+                        if (jobMonitor != null) {
+                            jobMonitor.clearPairTracking(pairId);
+                        }
+                    }
                 }
             }
         } catch (InterruptedException e) {
@@ -402,6 +479,14 @@ public class LocalBackend implements Backend {
                     e);
             job.state = LocalJob.JobState.FAILED;
             failedJobCount.incrementAndGet();
+            // Explicitly fail the pair in the DB so it doesn't get stuck in Enqueued
+            if (pairId > 0) {
+                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_RUNSCRIPT.getVal());
+                // Also ensure monitor stops tracking it if it was registered
+                if (jobMonitor != null) {
+                    jobMonitor.clearPairTracking(pairId);
+                }
+            }
         } catch (Exception e) {
             // Other unexpected errors
             log.error(
@@ -416,6 +501,13 @@ public class LocalBackend implements Backend {
             failedJobCount.incrementAndGet();
             if (job.process != null) {
                 killProcess(job.process);
+            }
+            // Explicitly fail the pair in the DB
+            if (pairId > 0) {
+                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
+                if (jobMonitor != null) {
+                    jobMonitor.clearPairTracking(pairId);
+                }
             }
         } finally {
             job.completedAt = System.currentTimeMillis();
@@ -523,6 +615,30 @@ public class LocalBackend implements Backend {
         // NOTE: Process is created without explicit resource limits.
         // If running untrusted code, STAREXEC_LOCAL_USE_RUNSOLVER must be enabled.
         return builder.start();
+    }
+
+    private boolean isJobReportedComplete(LocalJob job) {
+        try {
+            File logDir = new File(job.logPath).getParentFile();
+            File statusFile = new File(logDir, "status.json");
+            if (statusFile.exists()) {
+                // Read file content - limited size so safe to read fully
+                String content = new String(java.nio.file.Files.readAllBytes(statusFile.toPath()));
+                // Simple regex to find status value
+                // Looks for "status": 7 or "status":7 etc.
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"status\"\\s*:\\s*(\\d+)")
+                        .matcher(content);
+                if (m.find()) {
+                    int status = Integer.parseInt(m.group(1));
+                    // Check if status is terminal (COMPLETE=7, ERROR>=8)
+                    // See org.starexec.data.to.Status.StatusCode
+                    return status >= 7;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Error checking status file for zombie detection: " + e.getMessage());
+        }
+        return false;
     }
 
     /**
