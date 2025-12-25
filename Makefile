@@ -71,15 +71,27 @@ APP_PORT?=7827
 
 # Network configuration
 PODMAN_NETWORK?=pasta
-PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
 
-# ANSI Colors for UI
-GREEN  := $(shell tput -Txterm setaf 2)
-YELLOW := $(shell tput -Txterm setaf 3)
-RED    := $(shell tput -Txterm setaf 1)
-BLUE   := $(shell tput -Txterm setaf 4)
-BOLD   := $(shell tput -Txterm bold)
-RESET  := $(shell tput -Txterm sgr0)
+# Podman command - explicit configuration (no auto-detection)
+# Override for rootful mode: make deploy-podman PODMAN_CMD="sudo podman"
+PODMAN_CMD ?= podman
+
+# ANSI Colors for UI (TTY-safe: only set if running in a terminal)
+ifneq ($(shell [ -t 0 ] && echo 1),)
+  GREEN  := $(shell tput setaf 2 2>/dev/null || echo "")
+  YELLOW := $(shell tput setaf 3 2>/dev/null || echo "")
+  RED    := $(shell tput setaf 1 2>/dev/null || echo "")
+  BLUE   := $(shell tput setaf 4 2>/dev/null || echo "")
+  BOLD   := $(shell tput bold 2>/dev/null || echo "")
+  RESET  := $(shell tput sgr0 2>/dev/null || echo "")
+else
+  GREEN  :=
+  YELLOW :=
+  RED    :=
+  BLUE   :=
+  BOLD   :=
+  RESET  :=
+endif
 
 .PHONY: help build build-fresh build-prod image \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
@@ -510,15 +522,12 @@ migrate-podman:
 # PODMAN DEPLOYMENT
 # ============================================================================
 network-setup:
-	@echo "Configuring Podman network (rootless mode)"
-	@if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
-		echo "⚠️  Running in rootful mode. Consider running rootless for better security."; \
-		echo "See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
-	fi
+	@echo "Configuring Podman network"
+	@# Note: For rootful mode, set PODMAN_CMD="sudo podman"
 	@# For rootless, Podman uses pasta/slirp4netns automatically via netavark
-	@if ! podman network exists starexec-net 2>/dev/null; then \
+	@if ! $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
 		echo "Creating network (pasta/slirp4netns handled automatically)"; \
-		podman network create starexec-net; \
+		$(PODMAN_CMD) network create starexec-net; \
 	fi
 
 define cleanup_deployment
