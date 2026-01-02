@@ -13,7 +13,7 @@ import org.starexec.util.Util;
 import org.starexec.util.Validator;
 
 import javax.servlet.ServletException;
-import javax.servlet.http.Cookie;
+
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -74,11 +74,20 @@ public class Registration extends HttpServlet {
 				result = new ValidatorStatusCode(false, "Internal error during registration.");
 			}
 
+
 			String redirectUrl;
-			if (isAdmin) {
-				redirectUrl = "secure/admin/addUser.jsp";
+			if (result.isSuccess()) {
+				if (isAdmin) {
+					redirectUrl = "secure/admin/user.jsp";
+				} else {
+					redirectUrl = "public/registrationConfirmation.jsp";
+				}
 			} else {
-				redirectUrl = "public/registrationConfirmation.jsp";
+				if (isAdmin) {
+					redirectUrl = "secure/admin/addUser.jsp";
+				} else {
+					redirectUrl = "public/registration.jsp";
+				}
 			}
 
 			if (result.isSuccess()) {
@@ -95,7 +104,8 @@ public class Registration extends HttpServlet {
 				if ("email_failed".equals(result.getMessage())) {
 					url += "?result=email_failed";
 				} else {
-					url += "?result=regSuccess";
+					url += "";
+					request.getSession().setAttribute("regSuccess", true);
 				}
 
 				try {
