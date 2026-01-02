@@ -226,7 +226,11 @@ public class Solvers {
 			Common.beginTransaction(con);
 
 			for (int sid : solverIds) {
-				Solvers.associate(con, spaceId, sid);
+				if (sid > 0) {
+					Solvers.associate(con, spaceId, sid);
+				} else {
+					log.warn("Skipping association for invalid solver ID: " + sid);
+				}
 			}
 
 			log.info("Successfully added solvers " + solverIds.toString() + " to space [" + spaceId + "]");
