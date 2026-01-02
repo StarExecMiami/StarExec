@@ -60,8 +60,10 @@ public class Util {
     );
     private static final Pattern SUBSHELL_PATTERN = Pattern.compile("\\$\\(");
     private static final ExecutorService threadPool = createBoundedExecutor();
-    private static final long COMMAND_TIMEOUT_SECONDS = 30;
-    private static final long OUTPUT_COLLECTION_TIMEOUT_SECONDS = 5;
+    private static final long COMMAND_TIMEOUT_SECONDS = 600;
+    private static final long OUTPUT_COLLECTION_TIMEOUT_SECONDS = 60;
+    public static final int CONNECT_TIMEOUT_MS = 60000;
+    public static final int READ_TIMEOUT_MS = 600000;
     private static final StarLogger log = StarLogger.getLogger(Util.class);
     private static String docRoot = null;
     private static String docRootUrl = null;
@@ -1879,6 +1881,8 @@ public class Util {
                 new InetSocketAddress(R.PROXY_ADDRESS, R.PROXY_PORT)
             );
             URLConnection connection = url.openConnection(proxy);
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
             FileUtils.copyInputStreamToFile(
                 connection.getInputStream(),
                 archiveFile
