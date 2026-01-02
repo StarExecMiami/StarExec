@@ -1354,7 +1354,7 @@ function setupJobNameAndDescriptionEditing(
 
 function openSpace(childId) {
 	$("#exploreList").jstree("open_node", "#" + curSpaceId, function() {
-		$.jstree._focused().select_node("#" + childId, true);
+		$("#exploreList").jstree("select_node", "#" + childId, true);
 	});
 }
 
