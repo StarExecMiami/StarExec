@@ -82,7 +82,7 @@ export_volume() {
 
     # Check if volume has any data before attempting export
     local file_count
-    file_count=$(${PODMAN_CMD:-podman} run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest sh -c 'find /data -type f 2>/dev/null | wc -l' 2>/dev/null || echo 0)
+    file_count=$(${PODMAN_CMD:-podman} run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest sh -c 'find /data -mindepth 1 -maxdepth 1 2>/dev/null | wc -l' 2>/dev/null || echo 0)
     if [ "$file_count" -eq 0 ]; then
         log_info "Volume $volume_name appears to be empty (no files found). Creating placeholder archive to record emptiness."
         # Create a small temporary marker file and package it so the backup records the emptiness explicitly.
@@ -112,8 +112,8 @@ export_volume() {
         docker.io/library/alpine:latest \
         tar czf "/backup/$(basename "$output_file")" -C /data .
 
-        # Validate archive size: catch truncated/empty exports (threshold 1KiB)
-        MIN_ARCHIVE_BYTES=1024
+        # Validate archive size: catch truncated/empty exports (threshold 45 bytes for minimal gzip)
+        MIN_ARCHIVE_BYTES=45
         if command -v stat >/dev/null 2>&1; then
             actual_size=$(stat -c%s "$output_file" 2>/dev/null || stat -f%z "$output_file" 2>/dev/null || echo 0)
         else
@@ -710,6 +710,18 @@ health_check() {
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
             if ${PODMAN_CMD:-podman} run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test 2>/dev/null; then
                 log_info "✅ Volume mountable: $vol"
+                
+                # Special check for data volume items
+                if [[ "$vol" == *"-data" ]]; then
+                    if ${PODMAN_CMD:-podman} run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Solvers && \
+                       ${PODMAN_CMD:-podman} run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Benchmarks; then
+                         log_info "   ✅ Data volume structure verified (Solvers/Benchmarks found)"
+                    else
+                         log_warn "   ⚠️  Data volume missing Solvers or Benchmarks directories!"
+                         log_warn "       This might indicate an incomplete backup or fresh install."
+                         warnings=$((warnings + 1))
+                    fi
+                fi
             else
                 log_error "❌ Volume mount failed: $vol"
                 log_error "   Volume may be corrupted"
