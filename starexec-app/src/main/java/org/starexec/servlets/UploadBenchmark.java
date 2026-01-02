@@ -449,17 +449,17 @@ public class UploadBenchmark extends HttpServlet {
 
 
 		// Create a unique path the zip file will be extracted to
-		File uniqueDir = new File(R.getBenchmarkPath(), "" + userId);
+		File uniqueDirBuilder = new File(R.getBenchmarkPath(), String.valueOf(userId));
 		Calendar calendar = Calendar.getInstance();
 
-		uniqueDir = new File(uniqueDir, calendar.get(Calendar.YEAR) + "");
-		uniqueDir = new File(uniqueDir, (calendar.get(Calendar.MONTH) + 1) + "");
-		uniqueDir = new File(uniqueDir, calendar.get(Calendar.DAY_OF_MONTH) + "");
-		uniqueDir = new File(uniqueDir, calendar.get(Calendar.HOUR_OF_DAY) + "");
-		uniqueDir = new File(uniqueDir, calendar.get(Calendar.MINUTE) + "");
+		uniqueDirBuilder = new File(uniqueDirBuilder, String.valueOf(calendar.get(Calendar.YEAR)));
+		uniqueDirBuilder = new File(uniqueDirBuilder, String.valueOf(calendar.get(Calendar.MONTH) + 1));
+		uniqueDirBuilder = new File(uniqueDirBuilder, String.valueOf(calendar.get(Calendar.DAY_OF_MONTH)));
+		uniqueDirBuilder = new File(uniqueDirBuilder, String.valueOf(calendar.get(Calendar.HOUR_OF_DAY)));
+		uniqueDirBuilder = new File(uniqueDirBuilder, String.valueOf(calendar.get(Calendar.MINUTE)));
 		// the random string is to ensure that this directory is unique. It would not be otherwise if the
 		// user uploads two benchmark directories in the same minute, which can easily happen using StarexecCommand
-			uniqueDir = new File(uniqueDir, Util.getRandomAlphaString(20));
+		final File uniqueDir = new File(uniqueDirBuilder, Util.getRandomAlphaString(20));
 		// Create the paths on the filesystem
                 if (uniqueDir.mkdirs()) {
                     log.info("Directory has been created");
@@ -471,7 +471,6 @@ public class UploadBenchmark extends HttpServlet {
 		log.info("Handling upload request for user " + userId + " in space " + spaceId);
 
 		File archive = null;
-		String gitSpaceString = null;
 		if (localOrUrlOrGit.equals("local")) {
 			if (fileToUpload == null) {
 				throw new Exception("No uploaded benchmark file provided for local upload");
@@ -480,52 +479,36 @@ public class UploadBenchmark extends HttpServlet {
 			fileToUpload.write(archive);
 		}
 
-		//////////////////////// URL process
-		else if (localOrUrlOrGit.equals("URL")){
-			archive = new File(uniqueDir, name);
-			if (!Util.copyFileFromURLUsingProxy(url, archive)) {
-				throw new Exception("Unable to copy file from URL");
-			}
-		}
-		else{
-			gitSpaceString = uniqueDir.getAbsolutePath();
-			String[] gitClonecmd = new String[4];
-			String[] gitSubmodulecmd = new String[5];
-
-			gitClonecmd[0] = "git";
-			gitClonecmd[1] = "clone";
-			gitClonecmd[2] = gitUrl;
-			gitClonecmd[3] = gitSpaceString;
-			log.debug("gitclonecmd: " + gitClonecmd[0] + " " + gitClonecmd[1] + " " + gitClonecmd[2]+" " +gitClonecmd[3]);
-			Util.executeCommand(gitClonecmd);
-			//git submodule update --init --recursive
-
-			String[] filesInUniqueDir = uniqueDir.list();
-			log.debug("Files in uniqueDir: ");
-			for (String s : filesInUniqueDir) {
-				log.debug("    " + s);
-			}
-
-			gitSubmodulecmd[0] = "git";
-			gitSubmodulecmd[1] = "submodule";
-			gitSubmodulecmd[2] = "update";
-			gitSubmodulecmd[3] = "--init";
-			gitSubmodulecmd[4] = "--recursive";
-
-			log.debug("gitSubmodulecmd: " + gitSubmodulecmd[0] + " " + gitSubmodulecmd[1] + " " + gitSubmodulecmd[2]+" "
-								+gitSubmodulecmd[3]+ " " + gitSubmodulecmd[4]);
-			Util.executeCommand(gitSubmodulecmd,null, uniqueDir);
-		}
-
 		final File archiveFile = archive;
-		final File gitSpace = uniqueDir;
+
 
 		if (localOrUrlOrGit.equals("Git")){
-			log.debug("String is: "+gitSpaceString);
-			log.debug("Before addBenchmakrGit: "+ gitSpace.getAbsolutePath());
 			Util.threadPoolExecute(() -> {
 				try {
-					addBenchmarksGit(gitSpace, userId, spaceId, typeId, downloadable, perm, uploadMethod,
+					String gitSpaceString = uniqueDir.getAbsolutePath();
+					log.debug("String is: "+gitSpaceString);
+					log.debug("Before addBenchmarksGit: "+ uniqueDir.getAbsolutePath());
+
+					String[] gitClonecmd = new String[4];
+					gitClonecmd[0] = "git";
+					gitClonecmd[1] = "clone";
+					gitClonecmd[2] = gitUrl;
+					gitClonecmd[3] = gitSpaceString;
+					log.debug("gitclonecmd: " + gitClonecmd[0] + " " + gitClonecmd[1] + " " + gitClonecmd[2]+" " +gitClonecmd[3]);
+					Util.executeCommand(gitClonecmd);
+
+					String[] gitSubmodulecmd = new String[5];
+					gitSubmodulecmd[0] = "git";
+					gitSubmodulecmd[1] = "submodule";
+					gitSubmodulecmd[2] = "update";
+					gitSubmodulecmd[3] = "--init";
+					gitSubmodulecmd[4] = "--recursive";
+
+					log.debug("gitSubmodulecmd: " + gitSubmodulecmd[0] + " " + gitSubmodulecmd[1] + " " + gitSubmodulecmd[2]+" "
+										+gitSubmodulecmd[3]+ " " + gitSubmodulecmd[4]);
+					Util.executeCommand(gitSubmodulecmd,null, uniqueDir);
+
+					addBenchmarksGit(uniqueDir, userId, spaceId, typeId, downloadable, perm, uploadMethod,
 											 statusId, hasDependencies, linked, depRootSpaceId
 					);
 
@@ -539,7 +522,7 @@ public class UploadBenchmark extends HttpServlet {
 						Reports.addToEventOccurrencesNotRelatedToQueue("benchmarks uploaded", totalBenchmarksUploaded);
 					}
 				} catch (Exception e) {
-					String fileName = (archiveFile != null) ? archiveFile.getName() : (gitSpace != null ? gitSpace.getName() : "unknown");
+					String fileName = (archiveFile != null) ? archiveFile.getName() : (uniqueDir != null ? uniqueDir.getName() : "unknown");
 					String msg = "userId:      " + userId
 						+ "\nspaceId:     " + spaceId
 						+ "\narchiveFile: " + fileName
@@ -553,7 +536,15 @@ public class UploadBenchmark extends HttpServlet {
 		else{
 			Util.threadPoolExecute(() -> {
 				try {
-					addBenchmarksFromArchive(archiveFile, userId, spaceId, typeId, downloadable, perm, uploadMethod,
+					File archiveToUse = archiveFile;
+					if (localOrUrlOrGit.equals("URL")) {
+						archiveToUse = new File(uniqueDir, name);
+						if (!Util.copyFileFromURLUsingProxy(url, archiveToUse)) {
+							throw new Exception("Unable to copy file from URL");
+						}
+					}
+
+					addBenchmarksFromArchive(archiveToUse, userId, spaceId, typeId, downloadable, perm, uploadMethod,
 											 statusId, hasDependencies, linked, depRootSpaceId
 					);
 
@@ -567,7 +558,7 @@ public class UploadBenchmark extends HttpServlet {
 						Reports.addToEventOccurrencesNotRelatedToQueue("benchmarks uploaded", totalBenchmarksUploaded);
 					}
 				} catch (Exception e) {
-					String fileName = (archiveFile != null) ? archiveFile.getName() : (gitSpace != null ? gitSpace.getName() : "unknown");
+					String fileName = (archiveFile != null) ? archiveFile.getName() : (uniqueDir != null ? uniqueDir.getName() : "unknown");
 					String msg = "userId:      " + userId
 						+ "\nspaceId:     " + spaceId
 						+ "\narchiveFile: " + fileName
