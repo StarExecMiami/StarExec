@@ -1027,6 +1027,12 @@ public abstract class JobManager {
 
 		String dependFilePath = String.format("%s/%s", R.getJobInboxDir(), String.format(R.DEPENDFILE_FORMAT, pairId));
 		File f = new File(dependFilePath);
+		// Ensure the parent directory exists (fix for Permission denied errors on fresh restore volumes)
+		File parent = f.getParentFile();
+		if (!parent.exists() && !parent.mkdirs()) {
+			log.error("Critical Failure: Could not create job inbox directory at " + parent.getAbsolutePath());
+			throw new IOException("Failed to initialize job workspace.");
+		}
 		f.createNewFile();
 
 		if (!f.setExecutable(true, false) || !f.setReadable(true, false)) {
