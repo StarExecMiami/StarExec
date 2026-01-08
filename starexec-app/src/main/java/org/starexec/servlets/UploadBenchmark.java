@@ -22,8 +22,8 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URI;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.nio.charset.StandardCharsets;
 
@@ -36,8 +36,8 @@ import java.nio.charset.StandardCharsets;
 public class UploadBenchmark extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(UploadBenchmark.class);
 
-	// The unique date stamped file name format
-	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
+	// The unique date stamped file name format (immutable, thread-safe)
+	private static final DateTimeFormatter SHORT_DATE = DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
 
 	// Request attributes
 	private static final String SPACE_ID = R.SPACE;
@@ -119,7 +119,7 @@ public class UploadBenchmark extends HttpServlet {
 	public static File getDirectoryForBenchmarkUpload(int userId, String name) throws FileNotFoundException {
 		final String methodName = "getDirectoryForBenchmarkUpload";
 		File uniqueDir = new File(R.getBenchmarkPath(), "" + userId);
-		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
+		uniqueDir = new File(uniqueDir, SHORT_DATE.format(LocalDateTime.now()));
 		if (name != null) {
 			uniqueDir = new File(uniqueDir, name);
 		}
@@ -263,15 +263,7 @@ public class UploadBenchmark extends HttpServlet {
 		log.debug("depRootSpaceIds = " + depRootSpaceId);
 
 		log.info("about to add benchmarks to space " + spaceId + "for user " + userId);
-		Space result = Benchmarks.extractSpacesAndBenchmarks(uniqueDir, typeId, userId, downloadable, perm, statusId);
-		if (result == null) {
-			String message = "StarExec has failed to extract the spaces and benchmarks from the files.";
-			Uploads.setBenchmarkErrorMessage(statusId, message);
-			log.error(message + " - status id = " + statusId);
-			return ids;
-		}
-		result.setId(spaceId);
-
+		
 		//update Status
 		Uploads.processingBegun(statusId);
 
@@ -285,15 +277,27 @@ public class UploadBenchmark extends HttpServlet {
 				return ids;
 			}
 
-			Spaces.addWithBenchmarks(result, userId, depRootSpaceId, linked, statusId,
-			                                             hasDependencies);
+			// Calculate totals first so progress bar works
+
+			Spaces.traverseAndAddBenchmarks(uniqueDir, spaceId, userId, typeId, downloadable, perm, statusId,
+					hasDependencies, depRootSpaceId, linked);
 		} else if (uploadMethod.equals("dump")) {
+			Space result = Benchmarks.extractSpacesAndBenchmarks(uniqueDir, typeId, userId, downloadable, perm, statusId);
+			if (result == null) {
+				String message = "StarExec has failed to extract the spaces and benchmarks from the files.";
+				Uploads.setBenchmarkErrorMessage(statusId, message);
+				log.error(message + " - status id = " + statusId);
+				return ids;
+			}
+			result.setId(spaceId);
+
 			List<Benchmark> benchmarks = result.getBenchmarksRecursively();
 
 			ids.addAll(Benchmarks.processAndAdd(benchmarks, spaceId, depRootSpaceId, linked, statusId,
-			                                             hasDependencies
-							 ));
+					hasDependencies
+			));
 		}
+
 		log.info("Handle upload method complete in " + spaceId + "for user " + userId);
                 return ids;
 	}

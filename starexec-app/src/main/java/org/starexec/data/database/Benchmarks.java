@@ -154,27 +154,64 @@ public class Benchmarks {
 		// Discard the valid attribute, we don't need it
 		attrs.remove(R.VALID_BENCHMARK_ATTRIBUTE);
 		log.info("bench is valid.  Adding " + attrs.entrySet().size() + " attributes");
-		// For each attribute (key, value)...
-		int count = 0;
-		for (String key : attrs.keySet()) {
-			String val = attrs.get(key);
-			if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {
-				log.warn("addAttributeSetToDbIfValid", "Skipping empty attribute for benchmark " + benchmark.getId() +
-						" (key='" + key + "', val='" + val + "')");
-				continue;
+		
+		// Use batch inserts to avoid N+1 problem
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.AddBenchAttr(?, ?, ?)")) {
+			int count = 0;
+			for (Map.Entry<String, String> entry : attrs.entrySet()) {
+				String key = entry.getKey();
+				String val = entry.getValue();
+				
+				if (Util.isNullOrEmpty(key) || Util.isNullOrEmpty(val)) {
+					log.warn("addAttributeSetToDbIfValid", "Skipping empty attribute for benchmark " + benchmark.getId() +
+							" (key='" + key + "', val='" + val + "')");
+					continue;
+				}
+				
+				if (key.length() > MAX_ATTRIBUTE_LENGTH || val.length() > MAX_ATTRIBUTE_LENGTH) {
+					log.warn("addAttributeSetToDbIfValid", "Skipping attribute exceeding max length for benchmark " + 
+							benchmark.getId() + " (key='" + key + "')");
+					continue;
+				}
+				
+				ps.setInt(1, benchmark.getId());
+				ps.setString(2, key);
+				ps.setString(3, val);
+				ps.addBatch();
+				count++;
+				log.debug("Adding att number " + count + " " + key + ", " + val + " to bench " + benchmark.getId());
 			}
-			// Add the attribute to the database
-			count++;
-			log.debug("Adding att number " + count + " " + key + ", " + val + " to bench " + benchmark.getId());
-
-			if (!Benchmarks.addBenchAttr(con, benchmark.getId(), key, val)) {
-				Uploads.setBenchmarkErrorMessage(
-						statusId, "Problem adding the following attribute-value pair to the db, for benchmark " +
-								benchmark.getId() + ": " + key + ", " + val);
-				return false;
+			
+			if (count > 0) {
+				try {
+					int[] results = ps.executeBatch();
+					// Check for any failures in the batch
+					for (int i = 0; i < results.length; i++) {
+						if (results[i] == java.sql.Statement.EXECUTE_FAILED) {
+							log.warn("addAttributeSetToDbIfValid", "Batch item " + i + " failed for benchmark " + benchmark.getId());
+						}
+					}
+				} catch (java.sql.BatchUpdateException batchEx) {
+					log.error("addAttributeSetToDbIfValid", "Batch execution failed for benchmark " + benchmark.getId(), batchEx);
+					int[] updateCounts = batchEx.getUpdateCounts();
+					for (int i = 0; i < updateCounts.length; i++) {
+						if (updateCounts[i] == java.sql.Statement.EXECUTE_FAILED) {
+							log.error("addAttributeSetToDbIfValid", "Attribute at batch index " + i + " failed for benchmark " + benchmark.getId());
+						}
+					}
+					Uploads.setBenchmarkErrorMessage(
+							statusId, "Problem adding attributes to the db for benchmark " + benchmark.getId() + 
+							" (failed at batch index " + updateCounts.length + ")");
+					return false;
+				}
 			}
+			return true;
+		} catch (SQLException e) {
+			log.error("addAttributeSetToDbIfValid", "SQL error for benchmark " + benchmark.getId(), e);
+			Uploads.setBenchmarkErrorMessage(
+					statusId, "Problem adding attributes to the db for benchmark " + benchmark.getId());
+			return false;
 		}
-		return true;
 	}
 
 	/**
@@ -970,7 +1007,7 @@ public class Benchmarks {
 		return false;
 	}
 
-	private static Benchmark constructBenchmark(File f, int typeId, boolean downloadable, int userId) {
+	protected static Benchmark constructBenchmark(File f, int typeId, boolean downloadable, int userId) {
 		Benchmark b = new Benchmark();
 		Processor t = new Processor();
 		t.setId(typeId);

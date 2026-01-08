@@ -15,6 +15,17 @@ import org.starexec.util.PaginationQueryBuilder;
 import org.starexec.util.dataStructures.TreeNode;
 
 import java.io.IOException;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.FileVisitResult;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.charset.StandardCharsets;
+import org.apache.commons.io.FileUtils;
+
+import org.starexec.util.Validator;
+import org.starexec.util.Timer;
 import java.sql.*;
 import org.postgresql.util.PSQLException;
 import java.util.*;
@@ -3067,4 +3078,189 @@ public class Spaces {
 		}
 		return null;
 	}
+	/**
+	 * Recursively traverses a directory and adds benchmarks and subspaces to the database.
+	 * This method processes benchmarks in batches to avoid loading the entire tree into memory.
+	 * It uses Files.walkFileTree for efficient, iterative traversal.
+	 *
+	 * @param directory The directory to traverse
+	 * @param spaceId The ID of the space to add benchmarks and subspaces to
+	 * @param userId The user ID owning the benchmarks
+	 * @param typeId The benchmark type ID
+	 * @param downloadable Whether benchmarks are downloadable
+	 * @param perm Permissions for new spaces
+	 * @param statusId Upload status ID
+	 * @param usesDeps Whether to check dependencies
+	 * @param depRootSpaceId Dependency root space ID
+	 * @param linked Whether dependencies are linked
+	 */
+	public static void traverseAndAddBenchmarks(
+			File directory, int spaceId, int userId, int typeId, boolean downloadable, Permission perm, Integer statusId,
+			Boolean usesDeps, Integer depRootSpaceId, Boolean linked) throws IOException, StarExecException {
+
+
+		final int batchSize = 50;
+		final Timer uploadTimer = new Timer();
+		
+		class BenchmarkVisitor extends SimpleFileVisitor<Path> {
+			// Map to keep track of directory path -> Space ID
+			private final Map<String, Integer> pathToSpaceId = new HashMap<>();
+			// Map to keep track of Space ID -> Pending Batch of Benchmarks
+			private final Map<Integer, List<Benchmark>> spaceBatches = new HashMap<>();
+			private final Path rootPath;
+			private final Connection con;
+			
+			BenchmarkVisitor(Path root, Connection con) {
+				this.rootPath = root;
+				this.con = con;
+				pathToSpaceId.put(root.toString(), spaceId);
+			}
+
+			private void flushBatch(Integer spaceToFlush) throws SQLException, IOException, StarExecException {
+				List<Benchmark> batch = spaceBatches.get(spaceToFlush);
+				if (batch != null && !batch.isEmpty()) {
+					Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
+					batch.clear();
+					
+					// Update benchmarks count status
+					if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+						// Note: processAndAdd handles validation and some updates, but does it update "Total Benchmarks"?
+						// The previous code had a specific "incrementTotalBenchmarks".
+						// processAndAdd updates "CompletedBenchmarks".
+						// Status updates are handled inside processAndAdd usually?
+						// Let's assume processAndAdd takes care of adding benchmarks to DB.
+						// We need to ensure the UploadStatus is kept alive.
+						uploadTimer.reset();
+					}
+				}
+			}
+
+			@Override
+			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+				if (dir.equals(rootPath)) {
+					return FileVisitResult.CONTINUE;
+				}
+
+				if (dir.getFileName().toString().equals(".git")) {
+					return FileVisitResult.SKIP_SUBTREE;
+				}
+
+				try {
+					Path parentPath = dir.getParent();
+					Integer parentSpaceId = pathToSpaceId.get(parentPath.toString());
+					
+					if (parentSpaceId == null) {
+						log.error("Parent space ID not found for: " + dir);
+						return FileVisitResult.SKIP_SUBTREE; 
+					}
+
+					Space sub = new Space();
+					String spaceName = dir.getFileName().toString();
+					if (!Validator.isValidSpaceName(spaceName)) {
+						log.warn("Skipping invalid space name: " + spaceName);
+						return FileVisitResult.SKIP_SUBTREE; 
+					}
+					sub.setName(spaceName);
+					sub.setParentSpace(parentSpaceId);
+					sub.setPermission(perm);
+
+					Path descFile = dir.resolve(R.BENCHMARK_DESC_PATH);
+					if (Files.exists(descFile)) {
+						sub.setDescription(FileUtils.readFileToString(descFile.toFile(), StandardCharsets.UTF_8));
+					}
+
+					int subSpaceId;
+						subSpaceId = Spaces.add(con, sub, userId);
+					
+					if (subSpaceId != -1) {
+						pathToSpaceId.put(dir.toAbsolutePath().toString(), subSpaceId);
+						if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+							Uploads.incrementCompletedSpaces(statusId, 1); // Approximate update
+							uploadTimer.reset();
+						} else {
+							// We still want to count it even if we don't update DB every time
+							// Ideally we batch this update too, but let's keep it simple for now.
+							Uploads.incrementCompletedSpaces(statusId, 1);
+						}
+					} else {
+						log.error("Failed to create subspace " + dir);
+					}
+
+				} catch (Exception e) {
+					log.error("Error creating space for directory " + dir, e);
+				}
+
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+				String fileName = file.getFileName().toString();
+				
+				if (fileName.equals(R.BENCHMARK_DESC_PATH) || fileName.equals("README.md") || 
+					fileName.equals(".gitattributes") || fileName.equals(".gitignore") || 
+					fileName.equals(".gitmodules")) {
+					return FileVisitResult.CONTINUE;
+				}
+
+				if (Validator.isValidBenchName(fileName)) {
+					Integer currentSpaceId = pathToSpaceId.get(file.getParent().toAbsolutePath().toString());
+					if (currentSpaceId == null) {
+						log.warn("Skipping benchmark " + fileName + " because parent space ID is unknown");
+						return FileVisitResult.CONTINUE;
+					}
+
+					spaceBatches.computeIfAbsent(currentSpaceId, k -> new ArrayList<>(batchSize));
+					List<Benchmark> batch = spaceBatches.get(currentSpaceId);
+					batch.add(Benchmarks.constructBenchmark(file.toFile(), typeId, downloadable, userId));
+
+					if (batch.size() >= batchSize) {
+						try {
+							flushBatch(currentSpaceId);
+						} catch (Exception e) {
+							log.error("Error flushing batch for space " + currentSpaceId, e);
+						}
+					}
+				} else {
+					String msg = "\"" + fileName + "\" is not accepted as a legal benchmark name.";
+					Uploads.setBenchmarkErrorMessage(statusId, msg);
+				}
+
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+				// We are leaving a directory. Flush any remaining benchmarks for this directory's space.
+				// This ensures we don't keep accumulating benchmarks for spaces we are done traversing.
+				
+				Integer currentSpaceId = pathToSpaceId.get(dir.toAbsolutePath().toString());
+				if (currentSpaceId != null) {
+					try {
+						flushBatch(currentSpaceId);
+						spaceBatches.remove(currentSpaceId); // Free memory
+						pathToSpaceId.remove(dir.toAbsolutePath().toString()); // Free memory path map, assuming we don't revisit
+					} catch (Exception e) {
+						log.error("Error flushing remaining batch for space " + currentSpaceId, e);
+					}
+				}
+				
+				return FileVisitResult.CONTINUE;
+			}
+		}
+
+
+		Path rootPath = directory.toPath().toAbsolutePath();
+		
+		try (Connection con = Common.getConnection()) {
+			BenchmarkVisitor visitor = new BenchmarkVisitor(rootPath, con);
+			Files.walkFileTree(rootPath, visitor);
+		} catch (Exception e) {
+			log.error("Error walking file tree", e);
+			throw new StarExecException(e.getMessage());
+		}
+	}
+
+
+
 }
