@@ -948,6 +948,18 @@ verify-deps:
 	@echo "${BOLD}Podman rootless configuration:${RESET}"
 	@echo -n "  cgroup delegation: "
 	@./scripts/check-cgroup-delegation.sh >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ needs configuration (run 'make fix-cgroup-delegation')${RESET}"
+	@# Check for common rootless Podman issue (missing /run/user/UID)
+	@if [ -z "$$XDG_RUNTIME_DIR" ] && [ ! -w "/run/user/$$(id -u)" ]; then \
+		echo ""; \
+		echo "${RED}✗ Error: XDG_RUNTIME_DIR not set and /run/user/$$(id -u) is not writable.${RESET}"; \
+		echo "  This is common on lab/shared machines without full PAM integration."; \
+		echo "  Podman cannot start without a place to store runtime data."; \
+		echo ""; \
+		echo "  ${BOLD}Solution:${RESET} Run this before make:"; \
+		echo "    ${BLUE}export XDG_RUNTIME_DIR=/tmp/run-$$(id -u) && mkdir -p \$$XDG_RUNTIME_DIR${RESET}"; \
+		echo ""; \
+		exit 1; \
+	fi
 	@echo "${GREEN}✓ All required dependencies satisfied${RESET}"
 
 lint:
