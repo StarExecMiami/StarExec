@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [UMprod, dev, containerised]
     paths:
-      - 'src/**'
+      - 'starexec-app/**'
       - 'pom.xml'
       - '.github/workflows/security-scan.yml'
   push:

@@ -4,7 +4,7 @@ on:
   push:
     branches: [UMprod, containerised]
     paths:
-      - "src/**"
+      - "starexec-app/**"
       - "Dockerfile"
       - "docker/migrations.sh"
       - "pom.xml"
