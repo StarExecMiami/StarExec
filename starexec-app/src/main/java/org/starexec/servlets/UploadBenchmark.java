@@ -257,6 +257,10 @@ public class UploadBenchmark extends HttpServlet {
 		//update upload status
 		Uploads.fileExtractComplete(statusId);
 
+		// Count total benchmarks immediately to give user feedback
+		int totalBenchmarks = Benchmarks.countBenchmarksInDirectory(uniqueDir);
+		Uploads.setTotalBenchmarks(statusId, totalBenchmarks);
+
 
 		log.debug("has dependencies = " + hasDependencies);
 		log.debug("linked = " + linked);
@@ -349,6 +353,10 @@ public class UploadBenchmark extends HttpServlet {
 			//update upload status
 			//This was apart of the orignial archive process so I left the message update
 			Uploads.fileExtractComplete(statusId);
+
+			// Count total benchmarks immediately to give user feedback
+			int totalBenchmarks = Benchmarks.countBenchmarksInDirectory(gitSpace);
+			Uploads.setTotalBenchmarks(statusId, totalBenchmarks);
 
 
 			log.debug("has dependencies = " + hasDependencies);

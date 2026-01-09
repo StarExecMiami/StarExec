@@ -1099,10 +1099,8 @@ public class Benchmarks {
 		}
 
 		space.setDescription(spaceDescription);
-		int benchCounter = 0;
 		int spaceCounter = 0;
 		Timer spaceTimer = new Timer();
-		Timer benchTimer = new Timer();
 		for (File f : directory.listFiles()) {
 
 			// If it's a sub-directory
@@ -1123,20 +1121,12 @@ public class Benchmarks {
 				}
 			}
 
-			else if ((!f.getName().equals(R.BENCHMARK_DESC_PATH)) && (!f.getName().equals("README.md")) &&
-					(!f.getName().equals(".gitattributes")) && (!f.getName().equals(".gitignore")) &&
-					(!f.getName().equals(".gitmodules")) && (!f.getName().equals(".git")))
+			else if (!Validator.shouldIgnoreFile(f.getName()) && !f.getName().equals(".git"))
 
 			{ // Not a description file, readme, .gitattributes, .gitmodules, and .gitignore
 
 				if (Validator.isValidBenchName(f.getName())) {
 					space.addBenchmark(constructBenchmark(f, typeId, downloadable, userId));
-					benchCounter++;
-					if (benchTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
-						Uploads.incrementTotalBenchmarks(statusId, benchCounter);// for upload status page
-						benchCounter = 0;
-						benchTimer.reset();
-					}
 				} else {
 					String msg = "\"" + f.getName() + "\" is not accepted as a legal benchmark name.";
 					Uploads.setBenchmarkErrorMessage(statusId, msg);
@@ -1144,7 +1134,6 @@ public class Benchmarks {
 				}
 			}
 		}
-		Uploads.incrementTotalBenchmarks(statusId, benchCounter);// for upload status page
 		Uploads.incrementTotalSpaces(statusId, spaceCounter);// for upload status page
 
 		return space;
@@ -2220,6 +2209,44 @@ public class Benchmarks {
 			Common.safeClose(con);
 		}
 		return false;
+	}
+
+	/**
+	 * Recursively counts the number of valid benchmarks in a directory.
+	 * This mirrors the traversal logic in Spaces.traverseAndAddBenchmarks to ensure consistency.
+	 *
+	 * @param directory The root directory to start counting from
+	 * @return The total number of valid benchmarks found
+	 */
+	public static int countBenchmarksInDirectory(File directory) {
+		final java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(0);
+		try {
+			java.nio.file.Files.walkFileTree(directory.toPath(), new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+				@Override
+				public java.nio.file.FileVisitResult visitFile(java.nio.file.Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+					String fileName = file.getFileName().toString();
+					if (Validator.shouldIgnoreFile(fileName)) {
+						return java.nio.file.FileVisitResult.CONTINUE;
+					}
+
+					if (Validator.isValidBenchName(fileName)) {
+						count.incrementAndGet();
+					}
+					return java.nio.file.FileVisitResult.CONTINUE;
+				}
+
+				@Override
+				public java.nio.file.FileVisitResult preVisitDirectory(java.nio.file.Path dir, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+					if (dir.getFileName().toString().equals(".git")) {
+						return java.nio.file.FileVisitResult.SKIP_SUBTREE;
+					}
+					return java.nio.file.FileVisitResult.CONTINUE;
+				}
+			});
+		} catch (IOException e) {
+			log.error("Error counting benchmarks in directory " + directory, e);
+		}
+		return count.get();
 	}
 
 	/**

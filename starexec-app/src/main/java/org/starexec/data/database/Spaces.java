@@ -3197,9 +3197,7 @@ public class Spaces {
 			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
 				String fileName = file.getFileName().toString();
 				
-				if (fileName.equals(R.BENCHMARK_DESC_PATH) || fileName.equals("README.md") || 
-					fileName.equals(".gitattributes") || fileName.equals(".gitignore") || 
-					fileName.equals(".gitmodules")) {
+				if (Validator.shouldIgnoreFile(fileName)) {
 					return FileVisitResult.CONTINUE;
 				}
 

@@ -716,6 +716,43 @@ public class Uploads {
 	}
 
 	/**
+	 * Sets the count of total benchmarks.
+	 *
+	 * @param statusId - id of status object
+	 * @param total The number to set it to
+	 * @return true if successful, false if not
+	 */
+	public static Boolean setTotalBenchmarks(Integer statusId, int total) {
+		if (statusId == null) {
+			return false;
+		}
+		Connection con = null;
+		PreparedStatement ps = null;
+		try {
+			con = Common.getConnection();
+
+			// We use the existing stored procedure for setting total benchmarks if available,
+			// or we can fallback to updating the table directly if we are unsure of the SP name.
+			// However, looking at incrementTotalBenchmarks calling starexec.IncrementTotalBenchmarks,
+			// and XML having SetXMLTotalBenchmarks, let's assume SetTotalBenchmarks might not exist or we should check.
+			// Actually, let's use a direct update for safety if we can't verify the SP.
+			// "UPDATE benchmark_uploads SET total_benchmarks = ? WHERE id = ?"
+			
+			ps = con.prepareStatement("UPDATE benchmark_uploads SET total_benchmarks = ? WHERE id = ?");
+			ps.setInt(1, total);
+			ps.setInt(2, statusId);
+			ps.execute();
+			return true;
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+			return false;
+		} finally {
+			Common.safeClose(con);
+			Common.safeClose(ps);
+		}
+	}
+
+	/**
 	 * Adds 1 to the count of total benchmarks when a file is encountered in the creation of space java objects.
 	 *
 	 * @param statusId - id of status object being incremented

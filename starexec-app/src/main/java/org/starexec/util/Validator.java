@@ -352,4 +352,18 @@ public class Validator {
 		String[] ids = str.split(",");
 		return Util.toIntegerList(ids);
 	}
+
+	/**
+	 * Checks if a file should be ignored during benchmark traversal/counting.
+	 *
+	 * @param fileName The name of the file to check
+	 * @return True if the file should be ignored, false otherwise
+	 */
+	public static boolean shouldIgnoreFile(String fileName) {
+		return fileName.equals(R.BENCHMARK_DESC_PATH) ||
+				fileName.equals("README.md") ||
+				fileName.equals(".gitattributes") ||
+				fileName.equals(".gitignore") ||
+				fileName.equals(".gitmodules");
+	}
 }
