@@ -15,7 +15,8 @@ deploymentMode: local
 image:
   repository: ghcr.io/starexecmiami/starexec
   tag: latest
-  pullPolicy: IfNotPresent
+  # pullPolicy: IfNotPresent # Be careful: IfNotPresent with 'latest' prevents updates
+  pullPolicy: Always # Recommended for 'latest' tags to ensure backend logic changes are picked up
 
 # ============================================================================
 # APPLICATION CONFIGURATION

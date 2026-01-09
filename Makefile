@@ -106,7 +106,8 @@ help:
 	@echo "  build                  Build container image (uses cache)"
 	@echo "  build-fresh            Build without cache (slower, guaranteed fresh)"
 	@echo "  build-prod             Build production image with registry tag"
-	@echo "  image                  Ensure image exists (pull from GHCR if needed)"
+	@echo "  image                  Ensure image exists (pulls rolling tags automatically)"
+	@echo "  pull                   Force update all images from registry"
 	@echo ""
 	@echo "Deployment Targets:"
 	@echo "  deploy-podman          Deploy to Podman (ensures image + render + apply)"
@@ -200,18 +201,37 @@ build-prod:
 
 image:
 	@echo "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
-	@if podman image inspect $(RELEASE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
+	@# For 'latest' or 'dev' tags, we should at least attempt to check for updates from the registry
+	@if [ "$(IMAGE_TAG)" = "latest" ] || [ "$(IMAGE_TAG)" = "dev" ]; then \
+		echo "Rolling tag detected ($(IMAGE_TAG)). Checking registry for updates..."; \
+		if $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
+			echo "${GREEN}✓ Successfully checked/pulled $(IMAGE_NAME):$(IMAGE_TAG)${RESET}"; \
+			$(PODMAN_CMD) tag $(IMAGE_NAME):$(IMAGE_TAG) $(RELEASE_NAME):$(IMAGE_TAG) 2>/dev/null || true; \
+		else \
+			echo "${YELLOW}⚠️  Could not reach registry. Proceeding with local image if available...${RESET}"; \
+		fi; \
+	fi
+	@if $(PODMAN_CMD) image inspect $(RELEASE_NAME):$(IMAGE_TAG) >/dev/null 2>&1; then \
 		echo "${GREEN}✓ Image $(RELEASE_NAME):$(IMAGE_TAG) found locally${RESET}"; \
 	else \
 		echo "Image not found locally at $(RELEASE_NAME):$(IMAGE_TAG)"; \
 		echo "Attempting to pull from registry..."; \
-		if podman pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
-			echo "${GREEN}✓ Successfully pulled $(RELEASE_NAME):$(IMAGE_TAG) from registry${RESET}"; \
+		if $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
+			$(PODMAN_CMD) tag $(IMAGE_NAME):$(IMAGE_TAG) $(RELEASE_NAME):$(IMAGE_TAG); \
+			echo "${GREEN}✓ Successfully pulled and tagged $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"; \
 		else \
 			echo "⚠️  Image not available in registry. Building locally..."; \
 			$(MAKE) build; \
 		fi; \
 	fi
+
+# Force an update of the local images from the registry
+pull:
+	@echo "Updating images from registry..."
+	$(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG)
+	$(PODMAN_CMD) tag $(IMAGE_NAME):$(IMAGE_TAG) $(RELEASE_NAME):$(IMAGE_TAG)
+	$(MAKE) pull-job-runner
+	@echo "${GREEN}✓ All images updated and tagged${RESET}"
 
 # Build the job-runner image used by PodmanBackend for solver execution
 # Production images are pulled from GHCR: ghcr.io/starexecmiami/starexec-job-runner
@@ -1037,9 +1057,9 @@ docs:
 	@echo "" >> docs/reference/makefile-targets.md
 	@echo "## Target Categories" >> docs/reference/makefile-targets.md
 	@echo "" >> docs/reference/makefile-targets.md
-	@echo "### Build Targets" >> docs/reference/makefile-targets.md
+	@echo "### Build & Image Management" >> docs/reference/makefile-targets.md
 	@echo "" >> docs/reference/makefile-targets.md
-	@grep -E "^(build|image)" Makefile | grep ":" | sed 's/:.*//' | awk '{print "- `" $$1 "` - Build container image"}' >> docs/reference/makefile-targets.md
+	@grep -E "^(build|image|pull)" Makefile | grep ":" | sed 's/:.*//' | grep -v "pull-job-runner" | awk '{print "- `" $$1 "` - Build or update container images"}' >> docs/reference/makefile-targets.md
 	@echo "" >> docs/reference/makefile-targets.md
 	@echo "### Deployment Targets" >> docs/reference/makefile-targets.md
 	@echo "" >> docs/reference/makefile-targets.md

@@ -113,6 +113,24 @@ make build-cached
 podman pull ghcr.io/starexecmiami/starexec:latest
 ```
 
+## Image and Registry Issues
+
+### Changes not appearing after push
+
+**Problem:** You pushed a backend change to the remote repository, but `make start` still runs the old version.
+
+**Cause:** Podman often uses the local image if it exists. Rolling tags like `latest` or `dev` may not be automatically updated if an image with that tag already exists in the local cache, or there may be a tag synchronization issue.
+
+**Solution:**
+
+```bash
+# Update all images from the registry (handles tags and synchronization)
+make pull
+
+# Restart the application
+make start
+```
+
 ### Container Won't Start
 
 **Problem:** Container exits immediately after starting
