@@ -420,25 +420,39 @@ public class Benchmarks {
 	 * @author Tyler Jensen
 	 */
 	public static int addAndAssociate(Benchmark benchmark, Integer spaceId, Integer statusId) throws SQLException {
-		if (Benchmarks.isBenchValid(benchmark.getAttributes())) {
-			Connection con = null;
-			try {
-				con = Common.getConnection();
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			return addAndAssociate(benchmark, spaceId, statusId, con);
+		} finally {
+			Common.safeClose(con);
+		}
+	}
 
-				// Add benchmark to database
-				int benchId = Benchmarks.add(benchmark, statusId, con).getId();
-				if (benchId >= 0) {
-					if (spaceId != null) {
-						Benchmarks.associate(benchId, spaceId, con);
-					}
-					log.debug("bench successfully added");
-					return benchId;
+	/**
+	 * Adds a single benchmark to the database under the given spaceId using an existing connection
+	 *
+	 * @param benchmark The benchmark to add to the database
+	 * @param spaceId   The id of the space the benchmark will belong to
+	 * @param statusId  the id for the upload page for adding this benchmark, if
+	 *                  there is an upload page for this
+	 *                  action.
+	 *                  Otherwise, null
+	 * @param con       The open database connection to use
+	 * @return The new benchmark ID on success, -1 otherwise
+	 * @throws SQLException Any database error that gets thrown
+	 */
+	public static int addAndAssociate(Benchmark benchmark, Integer spaceId, Integer statusId, Connection con)
+			throws SQLException {
+		if (Benchmarks.isBenchValid(benchmark.getAttributes())) {
+			// Add benchmark to database
+			int benchId = Benchmarks.add(benchmark, statusId, con).getId();
+			if (benchId >= 0) {
+				if (spaceId != null) {
+					Benchmarks.associate(benchId, spaceId, con);
 				}
-			} catch (SQLException e) {
-				log.error("addAndAssociate", "rethrowing exception", e);
-				throw e;
-			} finally {
-				Common.safeClose(con);
+				log.debug("bench successfully added");
+				return benchId;
 			}
 		}
 		log.debug("Add called on invalid benchmark, no additions will be made to the database");
@@ -460,13 +474,36 @@ public class Benchmarks {
 	 */
 	protected static List<Integer> addAndAssociate(List<Benchmark> benchmarks, Integer spaceId, Integer statusId)
 			throws SQLException, StarExecException {
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			return addAndAssociate(benchmarks, spaceId, statusId, con);
+		} finally {
+			Common.safeClose(con);
+		}
+	}
+
+	/**
+	 * Adds a list of benchmarks to the database and associates them with the given
+	 * space ID using an existing connection
+	 *
+	 * @param benchmarks List of benchmarks
+	 * @param spaceId Space ID
+	 * @param statusId Upload status ID
+	 * @param con Existing database connection
+	 * @return List of new benchmark IDs
+	 * @throws SQLException
+	 * @throws StarExecException
+	 */
+	protected static List<Integer> addAndAssociate(List<Benchmark> benchmarks, Integer spaceId, Integer statusId,
+			Connection con) throws SQLException, StarExecException {
 		ArrayList<Integer> benchmarkIds = new ArrayList<>();
-		log.info("in add (list) method (no con parameter )- adding " + benchmarks.size() + " benchmarks to space " +
+		log.info("in add (list) method (using existing con) - adding " + benchmarks.size() + " benchmarks to space " +
 				spaceId);
 		int incrementCounter = 0;
 		Timer timer = new Timer();
 		for (Benchmark b : benchmarks) {
-			int id = Benchmarks.addAndAssociate(b, spaceId, statusId);
+			int id = Benchmarks.addAndAssociate(b, spaceId, statusId, con);
 			if (id < 0) {
 				String message = ("failed to add bench " + b.getName());
 				Uploads.setBenchmarkErrorMessage(statusId, message);
@@ -596,7 +633,7 @@ public class Benchmarks {
 			// Next add them to the database (must happen AFTER they are processed and have
 			// dependencies
 			// validated);
-			return Benchmarks.addAndAssociate(benchmarks, spaceId, statusId);
+			return Benchmarks.addAndAssociate(benchmarks, spaceId, statusId, con);
 		} else {
 			log.info("No benches to add with this call to addWithDeps from space " + spaceId);
 			return new ArrayList<>();
