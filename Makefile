@@ -74,6 +74,40 @@ PODMAN_NETWORK?=pasta
 PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
 PODMAN_CMD := $(if $(filter yes,$(PODMAN_REQUIRES_SUDO)),sudo podman,podman)
 
+# OCI Runtime detection and configuration
+# Podman requires an OCI runtime (crun or runc). We detect which is available.
+ifeq ($(shell which crun 2>/dev/null),)
+    ifeq ($(shell which runc 2>/dev/null),)
+        $(warning Neither 'crun' nor 'runc' OCI runtime found. Podman commands will fail.)
+        $(warning Install one of: sudo dnf install crun  OR  sudo apt-get install crun)
+        OCI_RUNTIME_AVAILABLE := no
+    else
+        OCI_RUNTIME_AVAILABLE := yes
+        OCI_RUNTIME := runc
+    endif
+else
+    OCI_RUNTIME_AVAILABLE := yes
+    OCI_RUNTIME := crun
+endif
+
+# Check if podman is configured to use a different runtime than what's available
+# Note: We use a temporary PODMAN_CMD without runtime flags to query current config
+PODMAN_CONFIG_RUNTIME := $(shell $(if $(filter yes,$(PODMAN_REQUIRES_SUDO)),sudo podman,podman) info --format '{{.Host.OCIRuntime}}' 2>/dev/null | grep -oE '(crun|runc)' || echo unknown)
+RUNTIME_MISMATCH := $(if $(filter yes,$(OCI_RUNTIME_AVAILABLE)),$(if $(filter $(OCI_RUNTIME),$(PODMAN_CONFIG_RUNTIME)),no,yes),no)
+
+# Podman runtime configuration flags
+# If there's a runtime mismatch, we need to override podman's runtime choice
+PODMAN_RUNTIME_FLAGS := $(if $(filter yes,$(RUNTIME_MISMATCH)),--runtime=$(OCI_RUNTIME),)
+
+# Update PODMAN_CMD to include runtime flags if needed
+ifeq ($(RUNTIME_MISMATCH),yes)
+    PODMAN_CMD := $(PODMAN_CMD) $(PODMAN_RUNTIME_FLAGS)
+    $(info $(YELLOW)Note: Podman configured for '$(PODMAN_CONFIG_RUNTIME)' but '$(OCI_RUNTIME)' is available. Using --runtime=$(OCI_RUNTIME)$(RESET))
+endif
+
+# Export PODMAN_CMD for use in shell scripts
+export PODMAN_CMD
+
 # ANSI Colors for UI
 GREEN  := $(shell tput -Txterm setaf 2)
 YELLOW := $(shell tput -Txterm setaf 3)
@@ -87,7 +121,7 @@ RESET  := $(shell tput -Txterm sgr0)
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
-	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show \
+	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show runtime-check \
 	logs logs-app logs-postgres test-deps verify-deps test docs \
 	start stop fix-cgroup-delegation
 
@@ -152,6 +186,7 @@ help:
 	@echo "  logs                   Show all container logs"
 	@echo "  logs-app               Show application logs (follow mode)"
 	@echo "  logs-postgres          Show PostgreSQL logs (follow mode)"
+	@echo "  runtime-check          Check OCI runtime configuration (crun/runc)"
 	@echo "  test-deps              Test job execution dependencies in container"
 	@echo "  test                   Run all unit and integration tests"
 	@echo ""
@@ -1045,6 +1080,37 @@ config-show:
 	@echo ""
 	@echo "=== Validation ==="
 	@echo "  Run 'make config-validate ENV=$(ENV)' to check for conflicts"
+
+runtime-check:
+	@echo "========================================"
+	@echo "OCI Runtime Configuration Check"
+	@echo "========================================"
+	@echo ""
+	@echo "Available Runtimes:"
+	@echo "  crun: $(if $(shell which crun 2>/dev/null),${GREEN}✓ available${RESET},${RED}✗ not found${RESET})"
+	@echo "  runc: $(if $(shell which runc 2>/dev/null),${GREEN}✓ available${RESET},${RED}✗ not found${RESET})"
+	@echo ""
+	@echo "Podman Configuration:"
+	@echo "  Current runtime: $(PODMAN_CONFIG_RUNTIME)"
+	@echo "  Detected runtime: $(OCI_RUNTIME)"
+	@echo "  Runtime mismatch: $(if $(filter yes,$(RUNTIME_MISMATCH)),${YELLOW}YES - using --runtime=$(OCI_RUNTIME)${RESET},${GREEN}NO${RESET})"
+	@echo ""
+	@echo "Effective PODMAN_CMD:"
+	@echo "  $(PODMAN_CMD)"
+	@echo ""
+	@if [ "$(OCI_RUNTIME_AVAILABLE)" = "no" ]; then \
+		echo "${RED}ERROR: No OCI runtime (crun or runc) found!${RESET}"; \
+		echo ""; \
+		echo "To fix, install one of the following:"; \
+		echo "  Fedora/RHEL/CentOS: sudo dnf install crun"; \
+		echo "  Ubuntu/Debian: sudo apt-get install crun"; \
+		echo "  Or configure podman to use runc:"; \
+		echo "    echo '[engine]' > ~/.config/containers/containers.conf"; \
+		echo '    echo '\''runtime = "runc"'\'' >> ~/.config/containers/containers.conf'; \
+		exit 1; \
+	else \
+		echo "${GREEN}✓ OCI runtime is properly configured${RESET}"; \
+	fi
 
 # ============================================================================
 # DOCUMENTATION GENERATION (prevents drift)
