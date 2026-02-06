@@ -24,9 +24,13 @@ fi
 export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
 export STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"
 export STAREXEC_DATA_VOL="${STAREXEC_DATA_VOL:-$DEFAULT_DATA_VOL}"
+export STAREXEC_SANDBOX_VOL="${STAREXEC_SANDBOX_VOL:-$VOLUME_PREFIX-$ENVIRONMENT-sandbox}"
+export STAREXEC_BACKEND_VOL="${STAREXEC_BACKEND_VOL:-$VOLUME_PREFIX-$ENVIRONMENT-backend}"
+export STAREXEC_WORK_VOL="${STAREXEC_WORK_VOL:-$VOLUME_PREFIX-$ENVIRONMENT-work}"
 export STAREXEC_POSTGRES_VOL="${STAREXEC_POSTGRES_VOL:-$DEFAULT_POSTGRES_VOL}"
+export STAREXEC_DB_HOST="${STAREXEC_DB_HOST:-localhost}"
 export IMAGE_NAME="${IMAGE_NAME:-localhost/local/starexec}"
-export IMAGE_TAG="${IMAGE_TAG:-dev}"
+export IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 # Check if template exists
 if [ ! -f "$TEMPLATE_FILE" ]; then
@@ -48,10 +52,14 @@ sed -e "s|\${STAREXEC_DB_USER:-starexec}|$STAREXEC_DB_USER|g" \
     -e "s|\${STAREXEC_DB_PASSWORD:-starexec_dev_password}|$STAREXEC_DB_PASSWORD|g" \
     -e "s|\${STAREXEC_DB_NAME:-starexec}|$STAREXEC_DB_NAME|g" \
     -e "s|\${STAREXEC_DB_PORT:-5432}|$STAREXEC_DB_PORT|g" \
+    -e "s|\${STAREXEC_DB_HOST:-localhost}|$STAREXEC_DB_HOST|g" \
     -e "s|\${STAREXEC_DATA_VOL:-starexec-dev-data}|$STAREXEC_DATA_VOL|g" \
+    -e "s|\${STAREXEC_SANDBOX_VOL:-starexec-dev-sandbox}|$STAREXEC_SANDBOX_VOL|g" \
+    -e "s|\${STAREXEC_BACKEND_VOL:-starexec-dev-backend}|$STAREXEC_BACKEND_VOL|g" \
+    -e "s|\${STAREXEC_WORK_VOL:-starexec-dev-work}|$STAREXEC_WORK_VOL|g" \
     -e "s|\${STAREXEC_POSTGRES_VOL:-starexec-dev-postgres}|$STAREXEC_POSTGRES_VOL|g" \
     -e "s|\${IMAGE_NAME:-localhost/local/starexec}:|$IMAGE_NAME:|g" \
-    -e "s|\${IMAGE_TAG:-dev}|$IMAGE_TAG|g" \
+    -e "s|\${IMAGE_TAG:-latest}|$IMAGE_TAG|g" \
     "$TEMPLATE_FILE" > "$OUTPUT_FILE"
 
 echo "✓ Generated: $OUTPUT_FILE"

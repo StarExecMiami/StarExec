@@ -71,7 +71,21 @@ APP_PORT?=7827
 
 # Network configuration
 PODMAN_NETWORK?=pasta
-PODMAN_REQUIRES_SUDO=$(shell podman system info 2>/dev/null | grep -q 'rootless.*true' && echo no || echo yes)
+PODMAN_REQUIRES_SUDO := $(shell \
+	if podman system info >/dev/null 2>&1; then \
+		if podman system info 2>/dev/null | grep -q -E 'rootless[[:space:]]*[:=][[:space:]]*true'; then \
+			echo no; \
+		else \
+			echo yes; \
+		fi; \
+	else \
+		if sudo podman system info >/dev/null 2>&1; then \
+			echo yes; \
+		else \
+			echo "warning: podman system info failed with and without sudo" >&2; \
+			echo yes; \
+		fi; \
+	fi)
 PODMAN_CMD := $(if $(filter yes,$(PODMAN_REQUIRES_SUDO)),sudo podman,podman)
 
 # OCI Runtime detection and configuration

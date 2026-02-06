@@ -14,19 +14,24 @@ DATE_STAMP=$(date +%Y%m%d-%H%M%S)
 if [ -z "${PODMAN_CMD:-}" ]; then
     PODMAN_CMD="podman"
     if command -v podman >/dev/null 2>&1; then
-        # If plain `podman system info` works, inspect its output for rootless:false
+        # Try podman system info without sudo
         if podman system info >/dev/null 2>&1; then
-            if podman system info 2>/dev/null | grep -E -q "rootless\s*[:=]\s*false"; then
+            # podman works without sudo, check if rootless
+            if podman system info 2>/dev/null | grep -q -E 'rootless[[:space:]]*[:=][[:space:]]*true'; then
+                # Rootless mode, no sudo needed
+                :
+            else
+                # Rootful mode or unknown, sudo needed
                 PODMAN_CMD="sudo podman"
             fi
         else
-            # If `podman system info` fails without sudo, try with sudo and prefer sudo if it succeeds
+            # podman failed without sudo, try with sudo
             if sudo podman system info >/dev/null 2>&1; then
-                if sudo podman system info 2>/dev/null | grep -E -q "rootless\s*[:=]\s*false"; then
-                    PODMAN_CMD="sudo podman"
-                else
-                    PODMAN_CMD="sudo podman"
-                fi
+                # podman works with sudo, sudo needed
+                PODMAN_CMD="sudo podman"
+            else
+                # Both failed, podman may be broken, keep default (will fail later)
+                echo "warning: podman system info failed with and without sudo" >&2
             fi
         fi
     fi
