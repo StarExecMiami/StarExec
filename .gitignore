@@ -3,82 +3,77 @@
 ####################################
 # Project build artifacts
 ####################################
-target/
-build/
-bin/
-dist/
-junittestoutput/
-data_dir/
-deployed-upload-test/
-WEB-INF/classes/
-WEB-INF/lib/
-META-INF/maven/
-*.war
-*.ear
-*.jar
-*.class
+**/target/
+**/build/
+**/bin/
+**/dist/
+**/junittestoutput/
+**/data_dir/
+**/deployed-upload-test/
+**/WEB-INF/
+**/*.war
+**/*.ear
+**/*.jar
+**/*.class
 
 ####################################
 # Node / front-end
 ####################################
-node/
-node_modules/
-npm-debug.log
-yarn-debug.log
-yarn-error.log
+**/node/
+**/node_modules/
+**/npm-debug.log
+**/yarn-debug.log
+**/yarn-error.log
 
 ####################################
 # Logs & temporary files
 ####################################
-*.log
-*.tmp
-output.log
-logs/
-*.swp
-*.swo
-*~
-.tmp
-.cache
+**/*.log
+**/*.tmp
+**/output.log
+**/logs/
+**/*.swp
+**/*.swo
+**/*~
+**/.tmp
+**/.cache
 
 ####################################
 # OS & Editor junk
 ####################################
-.DS_Store
-Thumbs.db
+**/.DS_Store
+**/Thumbs.db
 
 ####################################
 # IDE & Project files
 ####################################
-.classpath
-.project
-.settings/
-.idea/
-*.iml
-.vscode/
-.vscode/*
-/.history/
+**/.classpath
+**/.project
+**/.settings/
+**/.idea/
+**/*.iml
+**/.vscode/
+**/.history/
 
 ####################################
 # Sass
 ####################################
-.sass-cache/
+**/.sass-cache/
 **/*.css.map
 **/*.scss.map
 
 # Generated CSS from SCSS (keep only SCSS sources)
 # Vendor CSS files are explicitly tracked via git add -f
-starexec-app/src/main/webapp/css/**/*.css
-!starexec-app/src/main/webapp/css/datatables/*.css
-!starexec-app/src/main/webapp/css/jqueryui/*.css
-!starexec-app/src/main/webapp/css/jstree/**/*.css
-!starexec-app/src/main/webapp/css/explore/jquery.qtip.css
+**/css/**/*.css
+!**/css/datatables/*.css
+!**/css/jqueryui/*.css
+!**/css/jstree/**/*.css
+!**/css/explore/jquery.qtip.css
 
 ####################################
 # Legacy/Ant / Maven wrapper
 ####################################
-.mvn/
-.mvn/wrapper/
-.mvn/wrapper/maven-wrapper.jar
+**/.mvn/
 
 ####################################
 # Maven build artifacts
@@ -88,66 +83,62 @@ starexec-app/src/main/webapp/css/**/*.css
 ####################################
 # Python / test caches
 ####################################
-__pycache__/
-*.pyc
-.pytest_cache/
-pip-wheel-metadata/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/pip-wheel-metadata/
 
 ####################################
 # Archives, backups & DB dumps
 ####################################
-distribution/*.zip
-backups/
-*.tar.gz
-*.zip
-*.sql
-*.sql.gz
+**/*.zip
+**/backups/
+**/*.tar.gz
+**/*.sql
+**/*.sql.gz
 
 # But allow tracked migration scripts
-!starexec-app/src/main/resources/db/migration/*.sql
-!starexec-app/src/main/resources/sql/**/*.sql
-!starexec-app/src/main/java/org/starexec/config/pagination/*.sql
+!**/db/migration/*.sql
+!**/sql/**/*.sql
+!**/config/pagination/*.sql
 
 ####################################
 # Docker / Podman / Container
 ####################################
-.buildah/
-.podman/
-docker-compose.override.yml
-.docker/
-.dockerignore
-.env
-.env.*
-pvc-render.yaml
+**/.buildah/
+**/.podman/
+**/docker-compose.override.yml
+**/.docker/
+**/.dockerignore
+**/.env
+**/.env.*
+**/pvc-render.yaml
 
 ####################################
 # Render / deployment configs (ignore local secrets/overrides)
-# Note: Only ignore root-level files, not charts/starexec/values-*.yaml
 ####################################
 /render.yaml
-secret-render.yaml
-secret-*.yaml
-backups/
-/values-podman.yaml
-/values-local.yaml
-/*-local.yaml
+**/secret-render.yaml
+**/secret-*.yaml
+**/values-podman.yaml
+**/values-local.yaml
+/**/*-local.yaml
 
 ####################################
 # Keys, credentials, sensitive files
 ####################################
-*.jks
-*.keystore
-*.pem
-*.key
-*.crt
-secrets/
-credentials/
-*.env
+**/*.jks
+**/*.keystore
+**/*.pem
+**/*.key
+**/*.crt
+**/secrets/
+**/credentials/
 
 ####################################
 # Misc
 ####################################
-output/
-coverage/
-coverage-report/
-reports/
+**/output/
+**/coverage/
+**/coverage-report/
+**/reports/
