@@ -10,30 +10,31 @@ BACKUP_DIR="${BACKUP_DIR:-./backups}"
 DATE_STAMP=$(date +%Y%m%d-%H%M%S)
 
 # Podman command selection: allow override with PODMAN_CMD and auto-detect when unset
-# If PODMAN_CMD is not set, try to detect whether podman needs sudo (rootful).
 if [ -z "${PODMAN_CMD:-}" ]; then
-    PODMAN_CMD="podman"
-    if command -v podman >/dev/null 2>&1; then
-        # Try podman system info without sudo
-        if podman system info >/dev/null 2>&1; then
-            # podman works without sudo, check if rootless
-            if podman system info 2>/dev/null | grep -q -E 'rootless[[:space:]]*[:=][[:space:]]*true'; then
-                # Rootless mode, no sudo needed
-                :
-            else
-                # Rootful mode or unknown, sudo needed
-                PODMAN_CMD="sudo podman"
-            fi
-        else
-            # podman failed without sudo, try with sudo
-            if sudo podman system info >/dev/null 2>&1; then
-                # podman works with sudo, sudo needed
-                PODMAN_CMD="sudo podman"
-            else
-                # Both failed, podman may be broken, keep default (will fail later)
-                echo "warning: podman system info failed with and without sudo" >&2
-            fi
+    # 1. Detect sudo requirements
+    PODMAN_BASE="podman"
+    if ! podman system info >/dev/null 2>&1; then
+        if sudo podman system info >/dev/null 2>&1; then
+            PODMAN_BASE="sudo podman"
         fi
+    elif ! podman system info 2>/dev/null | grep -q -E 'rootless[[:space:]]*[:=][[:space:]]*true'; then
+        PODMAN_BASE="sudo podman"
+    fi
+
+    # 2. Detect OCI runtime availability
+    AVAILABLE_RUNTIME=""
+    if command -v crun >/dev/null 2>&1; then
+        AVAILABLE_RUNTIME="crun"
+    elif command -v runc >/dev/null 2>&1; then
+        AVAILABLE_RUNTIME="runc"
+    fi
+
+    # 3. Detect if podman is broken (e.g. missing configured runtime)
+    # If the base command doesn't work, try forcing the available runtime
+    if ! ${PODMAN_BASE} info >/dev/null 2>&1 && [ -n "$AVAILABLE_RUNTIME" ]; then
+        PODMAN_CMD="${PODMAN_BASE} --runtime=${AVAILABLE_RUNTIME}"
+    else
+        PODMAN_CMD="${PODMAN_BASE}"
     fi
 fi
 
