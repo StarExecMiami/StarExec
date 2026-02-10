@@ -36,7 +36,7 @@ BEGIN
 	SELECT COUNT(*) INTO errorpairs
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND (status_code BETWEEN 8 AND 17 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
+	  AND (status_code BETWEEN 8 AND 18 OR status_code = 0 OR status_code IN (21, 23, 24, 25, 26));
 	RETURN errorpairs;
 END;
 $$;
@@ -55,7 +55,7 @@ BEGIN
 	SELECT COUNT(*) INTO statusdetail
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND (status_code BETWEEN 8 AND 17 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
+	  AND (status_code BETWEEN 8 AND 18 OR status_code = 0 OR status_code IN (21, 23, 24, 25, 26));
 	RETURN statusdetail;
 END;
 $$;
@@ -70,7 +70,7 @@ SECURITY INVOKER
 AS $$
 BEGIN
 	RETURN CASE
-		WHEN EXISTS (SELECT 1 FROM job_pairs WHERE job_id = _jobid AND status_code BETWEEN 1 AND 6)
+		WHEN EXISTS (SELECT 1 FROM job_pairs WHERE job_id = _jobid AND status_code IN (1, 2, 4, 19, 20, 22))
 		THEN 'incomplete'
 		ELSE 'complete'
 	END;
@@ -91,7 +91,7 @@ BEGIN
 	SELECT COUNT(*) INTO pendingpairs
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND status_code BETWEEN 1 AND 6;
+	  AND status_code IN (1, 2, 4, 19, 20, 22);
 	RETURN pendingpairs;
 END;
 $$;

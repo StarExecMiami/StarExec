@@ -1655,19 +1655,28 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Job pair %s not found', _jobPairId);
     END IF;
-	IF (_statusCode>6 AND _statusCode<19) THEN
+	-- List of terminal status codes (ones that mean the pair is finished and won't be updated further)
+	-- 7-18: Normal completion, resource limits, and common errors
+	-- 21: Killed
+	-- 23: Not reached
+	-- 24: Benchmark dependency missing
+	-- 25: Pre-processor error
+	-- 26: Post-processor error
+	IF ((_statusCode>6 AND _statusCode<19) OR _statusCode IN (21, 23, 24, 25, 26)) THEN
 		INSERT INTO job_pair_completion (pair_id) VALUES (_jobPairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
 		-- this checks to see if the job is done and sets its completion id if so.
 		-- It checks by trying to find exactly 1 pair (for efficiency) that is not yet complete
+		-- A pair is "not yet complete" if its status is Pending (1), Enqueued (2), Running (4),
+		-- Processing Results (19), Paused (20), or Awaiting post-processor (22).
 		SELECT job_id FROM starexec.job_pairs WHERE id=_jobPairId INTO _job_id;
         IF NOT FOUND THEN
             RAISE EXCEPTION USING
                 ERRCODE = 'P0002',
                 MESSAGE = format('Job for job pair %s not found', _jobPairId);
         END IF;
-		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND (status_code<7 OR status_code>18) LIMIT 1) AS subq;
+		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND status_code IN (1, 2, 4, 19, 20, 22) LIMIT 1) AS subq;
 		IF _count = 0 THEN
 			UPDATE jobs SET completed=CURRENT_TIMESTAMP WHERE id=_job_id;
             IF NOT FOUND THEN
