@@ -873,7 +873,7 @@ status:
 	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
 	@echo ""
 	@printf "%-20s: " "Deployment State"
-	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
+	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
 		echo "${GREEN}RUNNING${RESET}"; \
 	else \
 		echo "${RED}STOPPED${RESET}"; \
@@ -881,31 +881,31 @@ status:
 	@printf "%-20s: %s\n" "Environment" "$(ENV)"
 	@printf "%-20s: %s\n" "Image" "$(RELEASE_NAME):$(IMAGE_TAG)"
 	@printf "%-20s: " "Data Volume"
-	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-data 2>/dev/null; then \
+	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-data 2>/dev/null; then \
 		echo "${GREEN}✓ exists${RESET}"; \
 	else \
 		echo "${RED}✗ missing${RESET}"; \
 	fi
 	@printf "%-20s: " "Sandbox Volume"
-	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-sandbox 2>/dev/null; then \
+	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-sandbox 2>/dev/null; then \
 		echo "${GREEN}✓ exists${RESET}"; \
 	else \
 		echo "${RED}✗ missing${RESET}"; \
 	fi
 	@printf "%-20s: " "Backend Volume"
-	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-backend 2>/dev/null; then \
+	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-backend 2>/dev/null; then \
 		echo "${GREEN}✓ exists${RESET}"; \
 	else \
 		echo "${RED}✗ missing${RESET}"; \
 	fi
 	@printf "%-20s: " "Work Volume"
-	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-work 2>/dev/null; then \
+	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-work 2>/dev/null; then \
 		echo "${GREEN}✓ exists${RESET}"; \
 	else \
 		echo "${RED}✗ missing${RESET}"; \
 	fi
 	@printf "%-20s: " "Postgres Volume"
-	@if podman volume exists $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null; then \
+	@if $(PODMAN_CMD) volume exists $(VOLUME_PREFIX)-$(ENV)-postgres 2>/dev/null; then \
 		echo "${GREEN}✓ exists${RESET}"; \
 	else \
 		echo "${RED}✗ missing${RESET}"; \
@@ -915,9 +915,9 @@ status:
 	@$(PODMAN_CMD) ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
 	@echo ""
 	@echo "${BOLD}=== Images ===${RESET}"
-	@podman images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
+	@$(PODMAN_CMD) images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
 	@echo ""
-	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
+	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
 		echo "${GREEN}✓ StarExec is RUNNING${RESET}"; \
 		echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"; \
 	else \
