@@ -1,0 +1,354 @@
+---
+# Source: starexec/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: starexec-starexec
+  labels:
+    app.kubernetes.io/name: starexec
+    app.kubernetes.io/instance: starexec
+    app.kubernetes.io/version: 2025.12
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken: false
+---
+# Source: starexec/templates/secret-postgres.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: starexec-starexec-postgres-credentials
+  labels:
+
+    app.kubernetes.io/name: starexec
+    app.kubernetes.io/instance: starexec
+    app.kubernetes.io/version: 2025.12
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+data:
+  user: "c3RhcmV4ZWM="
+  password: "c3RhcmV4ZWNfZGV2X3Bhc3N3b3Jk"
+  database: "c3RhcmV4ZWM="
+  rootPassword: "c3RhcmV4ZWNfZGV2X3Bhc3N3b3Jk"
+---
+# Source: starexec/templates/pvc-data.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: starexec-data-pvc
+  labels:
+    app: starexec
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Source: starexec/templates/pvc-postgres.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: starexec-postgres-pvc
+  labels:
+    app: starexec
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Source: starexec/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: starexec-starexec
+  labels:
+
+    app.kubernetes.io/name: starexec
+    app.kubernetes.io/instance: starexec
+    app.kubernetes.io/version: 2025.12
+    app.kubernetes.io/managed-by: Helm
+rules: []
+---
+# Source: starexec/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: starexec-starexec
+  labels:
+
+    app.kubernetes.io/name: starexec
+    app.kubernetes.io/instance: starexec
+    app.kubernetes.io/version: 2025.12
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  - kind: ServiceAccount
+    name: starexec-starexec
+roleRef:
+  kind: Role
+  name: starexec-starexec
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: starexec/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: starexec
+  labels:
+    app: starexec
+spec:
+  type: NodePort
+  selector:
+    app: starexec
+  ports:
+    - name: http
+      port: 7827
+      targetPort: 8080
+      nodePort: 30080
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+# Source: starexec/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: starexec
+  labels:
+    app: starexec
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: starexec
+  template:
+    metadata:
+      labels:
+        app: starexec
+    spec:
+      restartPolicy: Always
+      securityContext:
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "Ensuring directories exist (skipping chown)..."
+              mkdir -p /app/data /var/lib/postgresql/data
+              echo "Note: chown skipped to avoid permission errors on mounted volumes"
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            # keep default capabilities to allow filesystem ownership changes
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: starexec-data-pvc
+        - name: postgres-data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: app
+          image: "starexec:latest"
+          imagePullPolicy: Never
+          ports:
+             - name: http
+               containerPort: 8080
+               hostPort: 7827
+          env:
+            - name: STAREXEC_DB_HOST
+              value: "localhost"
+            - name: STAREXEC_DB_PORT
+              value: "5432"
+            - name: STAREXEC_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: user
+            - name: STAREXEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: password
+            - name: STAREXEC_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: database
+            - name: STAREXEC_BACKEND_TYPE
+              value: "podman"
+            - name: STAREXEC_CONTAINER_SOCKET
+              value: "unix:///run/podman/podman.sock"
+            - name: STAREXEC_CONTAINER_JOB_IMAGE
+              value: "starexec/job-runner:latest"
+            - name: STAREXEC_DATA_DIR
+              value: "/app/data"
+            - name: STAREXEC_SANDBOX_DIR
+              value: "/app/sandbox"
+            - name: SKIP_MIGRATIONS
+              value: "false"
+            - name: FLYWAY_BASELINE_ON_MIGRATE
+              value: "true"
+            - name: LOG_LEVEL
+              value: "DEBUG"
+            - name: STAREXEC_URL_PREFIX
+              value: "http"
+            - name: STAREXEC_WEB_ADDRESS
+              value: "localhost:7827"
+            - name: STAREXEC_WEB_BASE_DIR
+              value: "/opt/tomcat/webapps/starexec"
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 999
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /starexec/
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /starexec/
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+        - name: postgres
+          image: "docker.io/library/postgres:15"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: database
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-postgres-credentials
+                  key: password
+            - name: LC_COLLATE
+              value: "en_US.UTF-8"
+            - name: LC_CTYPE
+              value: "en_US.UTF-8"
+          securityContext:
+            # Run postgres container as the postgres user (non-root).
+            # Rely on the pod-level fsGroup to set group ownership on mounts.
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U starexec
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+---
+# Source: starexec/templates/migrate-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: starexec-starexec-migrations
+  labels:
+
+    app.kubernetes.io/name: starexec
+    app.kubernetes.io/instance: starexec
+    app.kubernetes.io/version: 2025.12
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+
+        app.kubernetes.io/name: starexec
+        app.kubernetes.io/instance: starexec
+        app.kubernetes.io/version: 2025.12
+        app.kubernetes.io/managed-by: Helm
+    spec:
+      serviceAccountName: starexec-starexec
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "starexec:latest"
+          imagePullPolicy: Never
+          command: ["/bin/sh","-c","/opt/starexec/bin/run-migrations.sh"]
+          env:
+            - name: STAREXEC_DB_HOST
+              value: "localhost"
+            - name: STAREXEC_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-starexec-postgres-credentials
+                  key: user
+            - name: STAREXEC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-starexec-postgres-credentials
+                  key: password
+            - name: STAREXEC_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: starexec-starexec-postgres-credentials
+                  key: database
+  backoffLimit: 1

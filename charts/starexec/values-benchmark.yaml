@@ -1,0 +1,20 @@
+# Benchmark/Precision Configuration
+# Usage: helm install starexec ./charts/starexec -f ./charts/starexec/values-benchmark.yaml
+#
+# This configuration prioritizes measurement accuracy and reproducibility over throughput.
+# It mitigates L1/L2 cache interference by enforcing:
+# 1. Single-job concurrency (or low concurrency matched to socket count)
+# 2. Strict sandbox isolation (pinning to specific cores/sockets)
+
+backend:
+  local:
+    # Set to 1 to guarantee no interference from other jobs.
+    # Set to 2 ONLY if you have 2+ physical sockets and forceSandbox=true.
+    concurrency: 1
+    
+    # Enforce strict sandboxing logic (locking sandbox1/sandbox2).
+    # This ensures jobs run on isolated sockets/cores (if supported by the env/script).
+    forceSandbox: true
+
+    # Highly recommended for benchmarks to enforce memory/time limits accurately.
+    useRunsolver: true

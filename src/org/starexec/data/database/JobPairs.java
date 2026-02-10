@@ -1839,7 +1839,7 @@ public class JobPairs {
 		CallableStatement procedure = null;
 		try {
 			con = Common.getConnection();
-			procedure = con.prepareCall("{CALL UpdateJobPairStatus(?, ?)}");
+			procedure = con.prepareCall("{CALL UpdatePairStatus(?, ?)}");
 			procedure.setInt(1, jobPairId);
 			procedure.setInt(2, status_code);
 			procedure.executeUpdate();

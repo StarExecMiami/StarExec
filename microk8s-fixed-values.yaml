@@ -1,0 +1,163 @@
+# StarExec Helm Values for MicroK8s Deployment - Fixed Version
+# ============================================================
+# This values file fixes the issues identified during deployment:
+# 1. Missing pagination SQL files in /config/pagination/
+# 2. Missing database functions and procedures
+# 3. Incorrect SKIP_MIGRATIONS setting
+# 4. Proper migration configuration
+
+# Image configuration
+image:
+  repository: ghcr.io/starexecmiami/starexec
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+volumePrefix: starexec
+
+# Backend configuration - using local backend for MicroK8s simplicity
+backend:
+  type: "local"
+  root: "/app/backend"
+  workingDir: "/app/work"
+
+# Persistence configuration for MicroK8s
+persistence:
+  enabled: true
+  storageClass: "microk8s-hostpath" # MicroK8s default storage class
+  size: 50Gi
+  usePodmanVolumes: false
+  useHostPathForPodman: false
+
+# PostgreSQL configuration
+postgres:
+  image:
+    repository: docker.io/library/postgres
+    pullPolicy: IfNotPresent
+    tag: "15"
+
+  # Use localhost for bundled PostgreSQL (same pod)
+  host: localhost
+  port: 5432
+  user: starexec
+  database: starexec
+
+  # Reference the secret we created
+  existingSecret: "starexec-postgres-credentials"
+  existingSecretKeys:
+    user: "username"
+    password: "password"
+    database: "database"
+    rootPassword: "postgres-password"
+
+  persistence:
+    enabled: true
+    storageClass: "microk8s-hostpath"
+    size: 30Gi
+
+# Application data directories
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+# Resource limits suitable for MicroK8s
+resources:
+  app:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+  postgres:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# Scalability tuning for single-node MicroK8s
+scalability:
+  numJobPairsAtATime: 5
+  nodeMultiplier: 8
+  containerMonitorPollMs: 5000
+
+# Environment variables - CRITICAL: Do NOT set SKIP_MIGRATIONS=true
+# This allows the application to run Flyway migrations automatically
+env:
+  LOG_LEVEL: "INFO"
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+  # Note: SKIP_MIGRATIONS is NOT set here, allowing migrations to run
+
+# Kubernetes configuration - disable RBAC since we're not using Kubernetes-native backend
+kubernetes:
+  enabled: false
+
+# Service configuration for MicroK8s (NodePort for easy access)
+service:
+  type: NodePort
+  port: 8080
+  nodePort: 30080
+
+# Database migration settings
+migrations:
+  enabled: true
+
+# Ingress disabled by default (can be enabled later)
+ingress:
+  enabled: false
+
+# Monitoring disabled by default
+monitoring:
+  enabled: false
+
+# Security context - run as non-root users
+securityContext:
+  app:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  postgres:
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+
+# Additional configuration for pagination SQL files
+# The Dockerfile should copy these from /build/starexec-app/src/main/java/org/starexec/config
+# If they're missing, we need to ensure they're included in the image
+# This is a note for future image builds, not a Helm value
+
+# Volume configuration for hostPath storage
+volumes:
+  data:
+    hostPath:
+      path: /tmp/starexec-data
+      type: DirectoryOrCreate
+  postgres-data:
+    hostPath:
+      path: /tmp/postgres-data
+      type: DirectoryOrCreate
+
+# Init container to fix permissions on hostPath volumes
+# This ensures the containers can write to the hostPath directories
+initContainers:
+  - name: fix-permissions
+    image: busybox
+    command:
+      [
+        "sh",
+        "-c",
+        "chown -R 1000:1000 /app/data && chown -R 999:999 /var/lib/postgresql/data",
+      ]
+    volumeMounts:
+      - name: data
+        mountPath: /app/data
+      - name: postgres-data
+        mountPath: /var/lib/postgresql/data
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault

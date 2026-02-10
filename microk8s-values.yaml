@@ -1,0 +1,102 @@
+StarExec/microk8s-values.yaml
+# StarExec Helm Values for MicroK8s Deployment
+# ===========================================
+
+# Image configuration
+image:
+  repository: ghcr.io/starexecmiami/starexec
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+volumePrefix: starexec
+
+# Backend configuration - using local backend for MicroK8s simplicity
+backend:
+  type: "local"
+  root: "/app/backend"
+  workingDir: "/app/work"
+
+# Persistence configuration for MicroK8s
+persistence:
+  enabled: true
+  storageClass: "microk8s-hostpath"  # MicroK8s default storage class
+  size: 50Gi
+  usePodmanVolumes: false
+  useHostPathForPodman: false
+
+# PostgreSQL configuration
+postgres:
+  image:
+    repository: docker.io/library/postgres
+    pullPolicy: IfNotPresent
+    tag: "15"
+
+  # Use service discovery within the cluster
+  host: postgres.starexec.svc.cluster.local
+  port: 5432
+  user: starexec
+  database: starexec
+
+  # Reference the secret we created
+  existingSecret: "starexec-postgres-credentials"
+  existingSecretKeys:
+    user: "username"
+    password: "password"
+    database: "database"
+    rootPassword: "postgres-password"
+
+  persistence:
+    enabled: true
+    storageClass: "microk8s-hostpath"
+    size: 30Gi
+
+# Application data directories
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+# Resource limits suitable for MicroK8s
+resources:
+  app:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+  postgres:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# Scalability tuning for single-node MicroK8s
+scalability:
+  numJobPairsAtATime: 5
+  nodeMultiplier: 8
+  containerMonitorPollMs: 5000
+
+# Environment variables
+env:
+  LOG_LEVEL: "INFO"
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+
+# Service configuration for MicroK8s (NodePort for easy access)
+service:
+  type: NodePort
+  port: 8080
+  nodePort: 30080
+
+# Database migration settings
+migrations:
+  enabled: true
+
+# Ingress disabled by default (can be enabled later)
+ingress:
+  enabled: false
+
+# Monitoring disabled by default
+monitoring:
+  enabled: false
