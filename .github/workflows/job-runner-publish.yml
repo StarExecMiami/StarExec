@@ -11,12 +11,17 @@
 # Triggers:
 #   - Push to main branches when job-runner files change
 #   - Manual dispatch with version input
-#   - Release tags (v*)
+#   - Release tags (must follow semantic versioning: v1.0.0 or 1.0.0)
+#
+# IMPORTANT: Release tags MUST follow semantic versioning format:
+#   • v1.0.0 (with v prefix) - RECOMMENDED
+#   • 1.0.0 (without v prefix)
+#   • v1.0 (major.minor) or v1 (major only) - also supported
 #
 # Published tags:
 #   - latest (on default branch)
 #   - <branch>-<sha> (on any branch push)
-#   - <version> (on release tags)
+#   - <major>.<minor>.<patch>, <major>.<minor>, <major> (on release tags)
 #
 # =============================================================================
 
@@ -88,6 +93,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       
+      - name: Validate release tag format
+        if: github.event_name == 'release'
+        run: |
+          VERSION_TAG="${{ github.ref_name }}"
+          echo "Release tag: $VERSION_TAG"
+          
+          # Validate semantic versioning format (v1.2.3 or 1.2.3)
+          if [[ ! $VERSION_TAG =~ ^v?[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "ERROR: Release tag must follow semantic versioning (v1.0.0 or 1.0.0)"
+            echo "   Received: $VERSION_TAG"
+            echo ""
+            echo "Please create a new release with a valid semantic version tag:"
+            echo "  • v1.0.0 (with v prefix) - RECOMMENDED"
+            echo "  • 1.0.0 (without prefix)"
+            exit 1
+          fi
+          echo "Tag format is valid semantic version"
+        
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -96,13 +119,13 @@ jobs:
           tags: |
             # Set latest tag for default branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' || github.ref == 'refs/heads/UMprod' }}
-            # Branch + short SHA
+            # Branch + short SHA (push events)
             type=sha,prefix={{branch}}-,format=short,enable=${{ github.event_name == 'push' }}
-            # Semantic version from release tag
+            # Semantic version from release tag (releases must use vX.Y.Z format)
             type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
             type=semver,pattern={{major}},enable=${{ github.event_name == 'release' }}
-            # Manual version input
+            # Manual version input (workflow_dispatch)
             type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event.inputs.version != '' }}
           labels: |
             org.opencontainers.image.title=StarExec Job Runner
