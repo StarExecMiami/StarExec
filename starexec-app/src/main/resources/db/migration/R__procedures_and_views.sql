@@ -5227,7 +5227,7 @@ BEGIN
     JOIN jobs j ON j.id = jp.job_id
     JOIN users u ON u.id = j.user_id
     JOIN jobpair_stage_data jsd ON jsd.jobpair_id = jp.id
-    WHERE jp.node_id = _nodeId AND (jp.status_code = 4 OR jp.status_code = 3) AND jsd.stage_number = jp.primary_jobpair_data;
+    WHERE jp.node_id = _nodeId AND jp.status_code = 4 AND jsd.stage_number = jp.primary_jobpair_data;
 END;
 $$ LANGUAGE plpgsql;
 
