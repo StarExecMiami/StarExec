@@ -216,7 +216,7 @@ RUN chmod +x /usr/local/bin/GetComputerInfo && \
     chown -R starexec:starexec /home/starexec/bin
 
 # Copy BCrypt credential handler to Tomcat lib (needed for Realm initialization)
-COPY --from=credential-handler /build/target/starexec-credential-handler-2.0.0.jar ${CATALINA_HOME}/lib/
+COPY --from=credential-handler /build/target/starexec-credential-handler-2.1.0.jar ${CATALINA_HOME}/lib/
 
 # Copy WAR from builder and expand it
 COPY --from=builder --chown=starexec:starexec /build/output/starexec.war ${CATALINA_HOME}/webapps/starexec.war

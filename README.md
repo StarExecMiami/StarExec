@@ -60,6 +60,7 @@ helm install starexec starexec/starexec -n starexec --create-namespace
 ## Features
 
 - Web UI for job submission, user and data management
+- **Asynchronous Benchmark Uploads** with real-time progress and heartbeat
 - Multiple backend implementations (Local/Podman/SGE/OAR/Kubernetes)
 - Container-friendly deployment (Podman/Docker Compose)
 - Flyway-based database migrations
@@ -67,7 +68,7 @@ helm install starexec starexec/starexec -n starexec --create-namespace
 
 ## Architecture
 
-**Stack:** Java 21 web application (Spring/Tomcat) → PostgreSQL database → Backend scheduler → Compute nodes
+**Stack:** Java 17 web application (Spring/Tomcat) → PostgreSQL database → Backend scheduler → Compute nodes
 
 See [Architecture Overview](docs/ARCHITECTURE.md) for detailed system design.
 
