@@ -52,6 +52,11 @@ $(document).ready(function() {
 
 	$('#radioDepth').prop('checked', true);
 	$('#radioNoPause').prop('checked', true);
+	
+	// Set initial focus to first input field
+	setTimeout(function() {
+		$('#fieldStep1 input:visible:first').focus();
+	}, 100);
 
 	// Remove all unselected rows from the DOM before submitting
 	$('#addForm').submit(function() {
@@ -553,6 +558,10 @@ function updateProgress() {
 			$('#btnBack').fadeIn('fast');
 			$('#btnPrev').fadeOut('fast');
 			$('#btnDone').fadeOut('fast');
+			// Set focus to first input field
+			setTimeout(function() {
+				$('#fieldStep1 input:visible:first').focus();
+			}, 300);
 			break;
 		case 1:	// Run space choice stage
 			$('#fieldSolverMethod').fadeIn('fast');
@@ -560,11 +569,19 @@ function updateProgress() {
 			$('#btnBack').fadeOut('fast');
 			$('#btnPrev').fadeIn('fast');
 			clearSelectedRowsOnTable($('#tblSpaceSelection'));
+			// Set focus to Previous button (logical navigation)
+			setTimeout(function() {
+				$('#btnPrev').focus();
+			}, 300);
 			break;
 		case 2:	// If quick run space method not chosen, how to select benchmarks
 			$('#fieldBenchMethod').fadeIn('fast');
 			$('#btnPrev').fadeIn('fast');
 			$('#btnDone').fadeOut('fast');
+			// Set focus to Previous button
+			setTimeout(function() {
+				$('#btnPrev').focus();
+			}, 300);
 			break;
 		case 3:	// selecting solvers and configurations
 			$('#fieldSolverSelection').fadeIn('fast');
@@ -573,11 +590,19 @@ function updateProgress() {
 			if (benchMethodVal > 0) {
 				$('#btnNext').fadeIn('fast');
 				$('#btnDone').fadeOut('fast');
+				// Set focus to Next button
+				setTimeout(function() {
+					$('#btnNext').focus();
+				}, 300);
 			}
 			//benchmarks already selected
 			else {
 				$('#btnNext').fadeOut('fast');
 				$('#btnDone').fadeIn('fast');
+				// Set focus to Submit button
+				setTimeout(function() {
+					$('#btnDone').focus();
+				}, 300);
 			}
 			break;
 		case 4:	// selecting benchmarks from the space
@@ -585,6 +610,10 @@ function updateProgress() {
 			$('#btnNext').fadeOut('fast');
 			$('#btnPrev').fadeIn('fast');
 			$('#btnDone').fadeIn('fast');
+			// Set focus to Previous button (logical navigation)
+			setTimeout(function() {
+				$('#btnPrev').focus();
+			}, 300);
 			break;
 	}
 }

@@ -98,8 +98,8 @@
 				<tr>
 					<td class="label">
 						time limit
-						<span class="ui-icon ui-icon-help"
-						      title="the maximum wallclock time (in minutes) that this processor can execute before it is terminated"></span>
+						<span aria-hidden="true" class="ui-icon ui-icon-help"
+						      title="the maximum wallclock time (in minutes) that this processor can execute before it is terminated" aria-hidden="true"></span>
 					</td>
 					<td><input type="number" name="timelimit" min="1" max="60"
 					           value="${proc.timeLimit}"/> minutes

@@ -23,11 +23,6 @@ $(document).ready(function() {
 
 	currentUserId = parseInt($("#userId").attr("value"));
 	lastSelectedUserId = null;
-	$("#exploreSpaces").button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-w"
-		}
-	});
 	usingSpaceChain = (getSpaceChain("#spaceChain").length > 1);
 
 	communityIdList = getCommunityIdList();
@@ -109,24 +104,7 @@ function initSpaceDetails() {
  * Basic initialization for jQuery UI buttons (sets style and icons)
  */
 function initButtonUI() {
-	$('.btnUp').button({
-		icons: {
-			secondary: "ui-icon-arrowthick-1-n"
-		}
-	});
-
-	$('.resetButton').button({
-		icons: {
-			secondary: "ui-icon-closethick"
-		}
-	});
-
-	$('.backButton').button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-w"
-		}
-	});
-	$("#makePublic").button();
+	// Pure CSS buttons natively inherit icons and design-system styling
 }
 
 /**

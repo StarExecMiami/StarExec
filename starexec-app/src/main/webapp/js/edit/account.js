@@ -101,8 +101,6 @@ function initUI() {
     popUp($(this).attr("enlarge"));
   });
 
-  $("button").button();
-
   var getNewBenchmarkingFramework = function () {
     var newBenchmarkingFramework = $("#editBenchmarkingFramework")
       .find(":selected")
@@ -247,29 +245,14 @@ function initUI() {
       "json"
     );
   });
-  $("#useSolver").button({
-    icons: {
-      primary: "ui-icon-check",
-    },
-  });
   $("#useSolver").click(function (e) {
     useSelectedSolver();
     e.preventDefault();
   });
 
-  $("#useBenchmark").button({
-    icons: {
-      primary: "ui-icon-check",
-    },
-  });
   $("#useBenchmark").click(function (e) {
     useSelectedBenchmark();
     e.preventDefault();
-  });
-  $("#deleteUser").button({
-    icons: {
-      primary: "ui-icon-close",
-    },
   });
   $("#deleteUser").click(function (e) {
     $("#dialog-confirm-delete-txt").text(
@@ -492,23 +475,7 @@ function attachPasswordMonitor() {
  * Initializes the JQuery icons for the buttons used on this page
  */
 function initButtonIcons() {
-  $("#addWebsite").button({
-    icons: {
-      secondary: "ui-icon-plus",
-    },
-  });
-
-  $("#changePass").button({
-    icons: {
-      secondary: "ui-icon-check",
-    },
-  });
-
-  $("#uploadPicture").button({
-    icons: {
-      primary: "ui-icon-gear",
-    },
-  });
+  // Pure CSS buttons now apply their own styles and icons natively
 }
 
 /**
@@ -541,9 +508,9 @@ function editable(attribute) {
           attribute +
           '-field" value="' +
           old +
-          '" />&nbsp;<button id="save' +
+          '" />&nbsp;<button class="btn btn-primary" id="save' +
           attribute +
-          '">save</button>&nbsp;<button id="cancel' +
+          '">save</button>&nbsp;<button class="btn btn-secondary" id="cancel' +
           attribute +
           '">cancel</button>&nbsp;</td>'
       )
@@ -554,18 +521,6 @@ function editable(attribute) {
     $("#cancel" + attribute).click(function () {
       saveChanges(this, false, attribute, old);
     });
-  });
-
-  $("#save" + attribute).button({
-    icons: {
-      secondary: "ui-icon-check",
-    },
-  });
-
-  $("#cancel" + attribute).button({
-    icons: {
-      secondary: "ui-icon-close",
-    },
   });
 }
 

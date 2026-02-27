@@ -77,7 +77,7 @@
 				<tr>
 					<td>upload method</td>
 					<td>local file<input type="radio" id="radioLocal"
-					                     name="localOrURLOrGit" value="local"/>
+					                     name="localOrURLOrGit" value="local" checked="checked"/>
               URL<input type=radio id="radioURL" name="localOrURLOrGit" value="URL"/>
                Git <input type=radio id="radioGit"
 						                   name="localOrURLOrGit" value="Git"/>
@@ -213,7 +213,7 @@
 						<button id="btnPrev" type="button">Cancel</button>
 					</td>
 					<td colspan="1">
-						<button id="btnUpload" type="submit">upload</button>
+						<button id="btnUpload" type="button" onclick="handleUploadClick(event)">upload</button>
 					</td>
 				</tr>
 				</tbody>

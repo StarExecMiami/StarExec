@@ -1,0 +1,39 @@
+<h1>Upload Status</h1>
+
+<p>This page shows the progress of your benchmark upload. You will be automatically
+redirected here after initiating an upload, or you can access it from your upload history.</p>
+
+<h2>Status Information</h2>
+<p>The page displays the following information about your upload:</p>
+<ul>
+<li><strong>Status</strong> - Current state of the upload (PENDING, PROCESSING, COMPLETED, or FAILED)</li>
+<li><strong>Total files found</strong> - Number of benchmark files discovered in the archive</li>
+<li><strong>Files processed</strong> - Number of files that have been validated and added to the database</li>
+<li><strong>Directories scanned</strong> - Number of directories processed (for 'convert' method)</li>
+<li><strong>Created at</strong> - Timestamp when the upload was initiated</li>
+</ul>
+
+<h2>Upload Methods</h2>
+<p>StarExec supports two methods for uploading benchmarks:</p>
+
+<h3>Convert</h3>
+<p>The 'convert' method preserves your archive's directory structure. Each subdirectory
+becomes a new space in StarExec, and benchmark files within those directories are placed
+in the corresponding spaces. This is useful for organizing benchmarks into hierarchical
+categories.</p>
+
+<h3>Dump</h3>
+<p>The 'dump' method discards the directory structure and places all benchmark files
+directly into the target space. This is simpler and useful when you just want to add
+benchmarks without creating a space hierarchy.</p>
+
+<h2>Troubleshooting</h2>
+<p>If your upload fails, check the error message for details. Common issues include:</p>
+<ul>
+<li>Invalid benchmark files that fail validation</li>
+<li>Duplicate benchmark names in the target space</li>
+<li>Insufficient permissions to add benchmarks to the target space</li>
+</ul>
+
+<p>After fixing the issue, you can try uploading again. Note that successfully uploaded
+benchmarks will remain in the system even if a later upload fails.</p>

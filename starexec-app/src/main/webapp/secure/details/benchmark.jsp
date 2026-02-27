@@ -199,19 +199,19 @@
 
 	</fieldset>
 	<div id="dialog-warning" title="warning" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 				id="dialog-warning-txt"></span></p>
 	</div>
 	<div id="dialog-show-anonymous-link" title="anonymous link"
 	     class="hiddenDialog">
 		<p>
-			<span class="ui-icon ui-icon-info"></span>
+			<span class="ui-icon ui-icon-info" aria-hidden="true"></span>
 			<span id="dialog-show-anonymous-link-txt"></span>
 		</p>
 	</div>
 	<div id="dialog-confirm-anonymous-link" title="confirm anonymous link"
 	     class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-info"></span><span
+		<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
 				id="dialog-confirm-anonymous-link-txt"></span></p>
 	</div>
 	<c:if test="${hasAdminReadPrivileges}">

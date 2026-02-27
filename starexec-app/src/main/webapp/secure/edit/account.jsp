@@ -124,7 +124,7 @@
 						     data-enlarge="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uorg">
 						<nav aria-label="Picture actions">
 							<ul>
-								<li><a class="btnUp" id="uploadPicture"
+								<li><a class="btn btn-primary" id="uploadPicture"
 								       href="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}">Change Picture</a>
 								</li>
 							</ul>
@@ -227,13 +227,13 @@
 						<td><a href="${fn:escapeXml(s.url)}" rel="external">${fn:escapeXml(s.name)}<img class="extLink"
 						                                     src="${starexecRoot}/images/external.png" alt="External link"/></a>
 						</td>
-						<td><button class="delWebsite" data-id="${s.id}" type="button">Delete</button></td>
+						<td><button class="btn btn-danger delWebsite" data-id="${s.id}" type="button">Delete</button></td>
 					</tr>
 				</c:forEach>
 				</tbody>
 			</table>
 
-			<button id="toggleWebsite" class="caption" type="button" aria-expanded="false" aria-controls="new_website">
+			<button id="toggleWebsite" class="btn btn-secondary caption" type="button" aria-expanded="false" aria-controls="new_website">
 				<span aria-hidden="true">+</span> Add New Website
 			</button>
 			<div id="new_website" class="hidden" aria-hidden="true">
@@ -245,7 +245,7 @@
 				<input type="url" id="website_url" aria-describedby="website-url-desc"/>
 				<span id="website-url-desc" class="sr-only">Enter the URL of the website</span>
 
-				<button id="addWebsite" type="button">Add Website</button>
+				<button id="addWebsite" type="button" class="btn btn-primary">Add Website</button>
 			</div>
 		</section>
 
@@ -287,7 +287,7 @@
 						</tr>
 					<tr>
 						<td class="notShaded" colspan="2">
-							<button id="changePass" type="submit">Change Password</button>
+							<button id="changePass" class="btn btn-primary" type="submit">Change Password</button>
 						</td>
 					</tr>
 					</tbody>
@@ -413,7 +413,7 @@
 					<td>Default Solver</td>
 					<td id="solver">
 						<p id="solverNameField"></p>
-						<button class="selectPrim clearSolver" type="button">Clear Solver</button>
+						<button class="btn btn-secondary selectPrim clearSolver" type="button">Clear Solver</button>
 					</td>
 				</tr>
 				</tbody>
@@ -422,19 +422,19 @@
 			<section class="setting-actions">
 				<h3>Profile Actions</h3>
 				<div class="action-buttons">
-					<button id="saveProfile" type="button">Save Profile Changes</button>
-					<button id="createProfile" type="button">Create New Profile</button>
-					<button id="setDefaultProfile" type="button"
+					<button id="saveProfile" class="btn btn-primary" type="button">Save Profile Changes</button>
+					<button id="createProfile" class="btn btn-primary" type="button">Create New Profile</button>
+					<button id="setDefaultProfile" class="btn btn-secondary" type="button"
 					        title="Setting a profile as a default means it will be selected automatically when visiting the job creation page">
 						Set Profile as Default
 					</button>
 					<c:set var="hasDefault" value="${defaultProfileId != null && defaultProfileId > 0}" />
-					<button id="clearDefaultProfile" type="button"
+					<button id="clearDefaultProfile" class="btn btn-secondary" type="button"
 					        title="Remove your currently selected default profile"
 					        ${hasDefault ? '' : 'disabled="disabled"'}>
 						Clear Default Profile
 					</button>
-					<button id="deleteProfile" type="button">Delete Selected Profile</button>
+					<button id="deleteProfile" class="btn btn-danger" type="button">Delete Selected Profile</button>
 				</div>
 			</section>
 		</section>
@@ -453,7 +453,7 @@
 				<!-- Will be populated using AJAX -->
 				</tbody>
 			</table>
-			<button id="useSolver" type="button">Use Selected Solver</button>
+			<button id="useSolver" class="btn btn-primary" type="button">Use Selected Solver</button>
 		</section>
 
 		<section class="benchmarks-section">
@@ -469,14 +469,14 @@
 				<!-- Will be populated using AJAX -->
 				</tbody>
 			</table>
-			<button id="useBenchmark" type="button">Use Selected Benchmark</button>
+			<button id="useBenchmark" class="btn btn-primary" type="button">Use Selected Benchmark</button>
 		</section>
 
 		<c:if test="${canDeleteUser}">
 			<section class="danger-zone">
 				<h2>Delete User</h2>
 				<p class="warning">This action cannot be undone.</p>
-				<button id="deleteUser" type="button" class="danger">Delete User</button>
+				<button id="deleteUser" type="button" class="btn btn-danger">Delete User</button>
 			</section>
 		</c:if>
 

@@ -59,7 +59,7 @@
 			</ul>
 			<div id="dialog-confirm-restart" title="confirm restart"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-confirm-restart-txt"></span></p>
 			</div>
 			<p>Starexec revision ${buildVersion} built ${buildDate}</p>

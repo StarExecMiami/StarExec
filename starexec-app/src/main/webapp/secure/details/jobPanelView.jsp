@@ -52,16 +52,16 @@
 			<label for="selectStageInput">Stage:</label>
 			<input id="selectStageInput" type="text" name="stage"
 			       value="${stageNumber}" aria-describedby="selectStageError">
-			<button id="selectStageButton" type="button">Show Stage</button>
+			<button id="selectStageButton" class="btn btn-primary" type="button">Show Stage</button>
 			<span id="selectStageError" class="error-text hidden" role="alert">Stage must be a positive integer.</span>
 		</form>
 		<fieldset id="subspaceSummaryField">
 			<legend class="expd" id="subspaceExpd">subspace summaries</legend>
 			<fieldset id="panelActions">
-				<button id="collapsePanels">Collapse All</button>
-				<button id="openPanels">Open All</button>
-				<button class="changeTime ui-button-text">Use CPU Time</button>
-				<button id="includeUnknown">Include Unknown Status</button>
+				<button id="collapsePanels" class="btn btn-secondary">Collapse All</button>
+				<button id="openPanels" class="btn btn-secondary">Open All</button>
+				<button class="btn btn-secondary changeTime ui-button-text">Use CPU Time</button>
+				<button id="includeUnknown" class="btn btn-secondary">Include Unknown Status</button>
 			</fieldset>
 		</fieldset>
 	</div>

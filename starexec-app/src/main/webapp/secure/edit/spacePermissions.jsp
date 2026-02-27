@@ -75,10 +75,10 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAllUsers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>All
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>All
 				</p> |
 				<p class="unselectAllUsers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>None
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>None
 			</div>
 		</fieldset>
 
@@ -95,42 +95,42 @@
 				<tbody>
 				<tr>
 					<td>job</td>
-					<td><span id="uaddJob" class="ui-icon ui-icon-help"></span>
+					<td><span id="uaddJob" aria-hidden="true" class="ui-icon ui-icon-help"></span>
 					</td>
 					<td><span id="uremoveJob"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 				</tr>
 
 				<tr>
 					<td>solver</td>
 					<td><span id="uaddSolver"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 					<td><span id="uremoveSolver"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 				</tr>
 
 				<tr>
 					<td>benchmark</td>
 					<td><span id="uaddBench"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 					<td><span id="uremoveBench"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 				</tr>
 
 				<tr>
 					<td>user</td>
-					<td><span id="uaddUser" class="ui-icon ui-icon-help"></span>
+					<td><span id="uaddUser" aria-hidden="true" class="ui-icon ui-icon-help"></span>
 					</td>
 					<td><span id="uremoveUser"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 				</tr>
 
 				<tr>
 					<td>space</td>
 					<td><span id="uaddSpace"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 					<td><span id="uremoveSpace"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 				</tr>
 				</tbody>
 			</table>
@@ -141,7 +141,7 @@
 				<tr>
 					<td><h2>leader</h2></td>
 					<td><span id="uleaderStatus"
-					          class="ui-icon ui-icon-help"></span></td>
+					          class="ui-icon ui-icon-help" aria-hidden="true"></span></td>
 				</tr>
 			</table>
 		</fieldset>
@@ -201,7 +201,7 @@
 				<tr id="communityLeaderStatusRow">
 					<td><h2>leader</h2></td>
 					<td><span id="communityLeaderStatus"
-					          class="ui-icon ui-icon-check"></span></td>
+					          class="ui-icon ui-icon-check" aria-hidden="true"></span></td>
 				</tr>
 			</table>
 
@@ -209,16 +209,16 @@
 
 			<table id="permChangesButtons">
 				<tr>
-					<td><input class="btnUp" type="button" id="savePermChanges"
+					<td><input class="btn btn-primary" type="button" id="savePermChanges"
 					           value="save"></input></td>
-					<td><input class="resetButton" type="button"
+					<td><input class="btn btn-secondary" type="button"
 					           id="resetPermChanges" value="reset"></input></td>
 				</tr>
 			</table>
 
 			<div id="dialog-confirm-update" title="confirm update"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-confirm-update-txt"></span></p>
 			</div>
 		</fieldset>
@@ -238,31 +238,31 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAllUsers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>All
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>All
 				</p> |
 				<p class="unselectAllUsers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>None
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>None
 			</div>
 			<hr>
 			<table id="addUsersButtons">
 				<tr>
-					<td><input class="btnUp" type="button" id="addUsersButton"
+					<td><input class="btn btn-primary" type="button" id="addUsersButton"
 					           value="add"></input></td>
 				</tr>
 			</table>
 		</fieldset>
 
 		<fieldset id="permissionActions">
-			<a id="exploreSpaces"
-			   href="${starexecRoot}/secure/explore/spaces.jsp">return to space
+			<a id="exploreSpaces" class="btn btn-secondary backButton"
+			   href="${starexecRoot}/secure/explore/spaces.jsp"><span class="ui-icon ui-icon-arrowthick-1-w"></span> return to space
 				explorer</a>
-			<a class="btnRun" id="makePublic">make public</a>
+			<a class="btn btn-primary" id="makePublic">make public</a>
 		</fieldset>
 
 	</div>
 
 	<div id="dialog-confirm-change" title="confirm change" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-info"></span><span
+		<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
 				id="dialog-confirm-change-txt"></span></p>
 	</div>
 

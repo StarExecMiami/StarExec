@@ -145,20 +145,21 @@
 			</table>
 		</star:panel>
 		<star:panel title="communities">
-			<table id="member of communities" class="shaded">
-				<thead>
-				<tr>
-					<th>communites</th>
-				</tr>
-				</thead>
-				<tbody>
-				<c:forEach var="community" items="${communitiesUserIsIn}">
-					<tr>
-						<td class="community">${community.getName()}</td>
-					</tr>
-				</c:forEach>
-				</tbody>
-			</table>
+			<div id="userCommunities" class="community-list">
+				<c:choose>
+					<c:when test="${not empty communitiesUserIsIn}">
+						<c:forEach var="community" items="${communitiesUserIsIn}">
+							<span class="badge badge--info community-badge">
+								<i class="ui-icon ui-icon-person" aria-hidden="true"></i>
+								${community.getName()}
+							</span>
+						</c:forEach>
+					</c:when>
+					<c:otherwise>
+						<p class="empty-message">This user is not a member of any communities.</p>
+					</c:otherwise>
+				</c:choose>
+			</div>
 		</star:panel>
 		<star:panel test="${owner}" title="user quotas">
 				<table id="diskUsageTable" class="shaded">
@@ -311,17 +312,17 @@
 		<c:if test="${owner}">
 			<div id="dialog-confirm-delete" title="confirm delete"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-confirm-delete-txt"></span></p>
 			</div>
 			<div id="dialog-confirm-recycle" title="confirm sending to trash"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-confirm-recycle-txt"></span></p>
 			</div>
 			<div id="dialog-confirm-copy" title="confirm copy"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-info"></span><span
+				<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
 						id="dialog-confirm-copy-txt"></span></p>
 			</div>
 		</c:if>

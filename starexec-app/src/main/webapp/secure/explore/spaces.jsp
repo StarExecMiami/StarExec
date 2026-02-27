@@ -8,27 +8,28 @@
 	int uid = SessionUtil.getUserId(request);
 	String pageTitle = "Space Explorer";
 
+	String spaceChain = "1";
 	try {
-		int spaceId = Integer.parseInt(request.getParameter("id"));
-		if (SpaceSecurity.canUserSeeSpace(spaceId, uid).isSuccess() &&
-				spaceId > 0) {
-			List<Integer> idChain = Spaces.getChainToRoot(spaceId);
-			StringBuilder stringChain = new StringBuilder();
-			for (Integer id : idChain) {
-				stringChain.append(id);
-				stringChain.append(",");
+		String idParam = request.getParameter("id");
+		if (idParam != null) {
+			int spaceId = Integer.parseInt(idParam);
+			if (SpaceSecurity.canUserSeeSpace(spaceId, uid).isSuccess() &&
+					spaceId > 0) {
+				List<Integer> idChain = Spaces.getChainToRoot(spaceId);
+				StringBuilder stringChain = new StringBuilder();
+				for (Integer id : idChain) {
+					stringChain.append(id);
+					stringChain.append(",");
+				}
+				stringChain.delete(stringChain.length() - 1, stringChain.length());
+				spaceChain = stringChain.toString();
+				pageTitle = Spaces.get(spaceId).getName();
 			}
-			stringChain.delete(stringChain.length() - 1, stringChain.length());
-			request.setAttribute("spaceChain", stringChain.toString());
-			pageTitle = Spaces.get(spaceId).getName();
-		} else {
-			request.setAttribute("spaceChain", "1");
 		}
-	} catch (NumberFormatException e) {
-		// we don't need the id, so we can just ignore errors here. It may not exist
 	} catch (Exception e) {
 		log.error("Exception", e);
 	}
+	request.setAttribute("spaceChain", spaceChain);
 
 	request.setAttribute("userId", uid);
 	request.setAttribute("isAdmin", Users.isAdmin(uid));
@@ -48,21 +49,23 @@
 		<h3 class="spaceName"></h3>
 
 		<star:userLoggedIn>
-			<a id="trashcan" class="active"></a>
+			<a id="trashcan" class="btn btn-secondary btn-icon icon-only active" aria-label="Recycle Bin">
+				<span class="ui-icon ui-icon-trash"></span>
+			</a>
 		</star:userLoggedIn>
 
 		<p id="spaceDesc" class="accent"></p>
 		<p id="spaceID" class="accent"></p>
 		<star:panel title="jobs" withCount="true" expandable="true">
 			<ul class="actionList">
-				<li><a class="btnRun" id="addJob"
-				       href="${starexecRoot}/secure/add/job.jsp">create job</a>
+				<li><a class="btn btn-secondary btnRun" id="addJob"
+				       href="${starexecRoot}/secure/add/job.jsp"><span class="ui-icon ui-icon-gear"></span> create job</a>
 				</li>
-				<li><a class="btnRun" id="addQuickJob"
-				       href="${starexecRoot}/secure/add/quickJob.jsp">quick
+				<li><a class="btn btn-secondary btnRun" id="addQuickJob"
+				       href="${starexecRoot}/secure/add/quickJob.jsp"><span class="ui-icon ui-icon-gear"></span> quick
 					job</a></li>
-				<li><a class="btnUp" id="uploadJobXML"
-				       href="${starexecRoot}/secure/add/batchJob.jsp">upload job
+				<li><a class="btn btn-secondary btnUp" id="uploadJobXML"
+				       href="${starexecRoot}/secure/add/batchJob.jsp"><span class="ui-icon ui-icon-arrowthick-1-n"></span> upload job
 					xml</a></li>
 			</ul>
 			<table id="jobs">
@@ -85,17 +88,17 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAllJobs">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>All
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>All
 				</p> |
 				<p class="unselectAllJobs">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>None
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>None
 			</div>
 		</star:panel>
 
 		<star:panel title="solvers" withCount="true" expandable="true">
 			<ul class="actionList">
-				<li><a class="btnUp" id="uploadSolver"
-				       href="${starexecRoot}/secure/add/solver.jsp">upload
+				<li><a class="btn btn-secondary btnUp" id="uploadSolver"
+				       href="${starexecRoot}/secure/add/solver.jsp"><span class="ui-icon ui-icon-arrowthick-1-n"></span> upload
 					solver</a></li>
 			</ul>
 			<table id="solvers">
@@ -109,10 +112,10 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAllSolvers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>All
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>All
 				</p> |
 				<p class="unselectAllSolvers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>None
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>None
 			</div>
 		</star:panel>
 
@@ -120,15 +123,15 @@
 			<ul class="actionList">
 				<li>
 					<button title="sorts benchmarks in the order they were added to this space"
-					        asc="true" class="sortButton" id="additionSort"
+					        asc="true" class="btn btn-secondary sortButton" id="additionSort"
 					        value="2">sort by addition order
 					</button>
 				</li>
-				<li><a class="btnUp" id="uploadBench"
-				       href="${starexecRoot}/secure/add/benchmarks.jsp">upload
+				<li><a class="btn btn-secondary btnUp" id="uploadBench"
+				       href="${starexecRoot}/secure/add/benchmarks.jsp"><span class="ui-icon ui-icon-arrowthick-1-n"></span> upload
 					benchmarks</a></li>
-				<li><a class="btnRun" id="processBenchmarks"
-				       href="${starexecRoot}/edit/processBenchmarks.jsp">process
+				<li><a class="btn btn-primary btnRun" id="processBenchmarks"
+				       href="${starexecRoot}/edit/processBenchmarks.jsp"><span class="ui-icon ui-icon-gear"></span> process
 					benchmarks</a></li>
 			</ul>
 			<table id="benchmarks">
@@ -141,10 +144,10 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAllBenchmarks">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>All
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>All
 				</p> |
 				<p class="unselectAllBenchmarks">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>None
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>None
 			</div>
 		</star:panel>
 
@@ -160,20 +163,20 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAllUsers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>All
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>All
 				</p> |
 				<p class="unselectAllUsers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>None
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>None
 			</div>
 		</star:panel>
 
 		<star:panel title="subspaces" withCount="true" expandable="true">
 			<ul class="actionList">
-				<li><a class="btnAdd" id="addSpace"
-				       href="${starexecRoot}/secure/add/space.jsp">add
+				<li><a class="btn btn-secondary btnAdd" id="addSpace"
+				       href="${starexecRoot}/secure/add/space.jsp"><span class="ui-icon ui-icon-plus"></span> add
 					subspace</a></li>
-				<li><a class="btnUp" id="uploadXML"
-				       href="${starexecRoot}/secure/add/batchSpace.jsp">upload
+				<li><a class="btn btn-secondary btnUp" id="uploadXML"
+				       href="${starexecRoot}/secure/add/batchSpace.jsp"><span class="ui-icon ui-icon-arrowthick-1-n"></span> upload
 					space xml</a></li>
 			</ul>
 			<table id="spaces">
@@ -188,15 +191,15 @@
 
 		<star:panel title="space actions" withCount="false" expandable="false">
 			<ul class="actionList">
-				<li><a class="btnEdit" id="editSpace"
-				       href="${starexecRoot}/secure/edit/space.jsp">edit
+				<li><a class="btn btn-secondary btnEdit" id="editSpace"
+				       href="${starexecRoot}/secure/edit/space.jsp"><span class="ui-icon ui-icon-pencil"></span> edit
 					space</a></li>
-				<li><a class="btnEdit" id="editSpacePermissions"
-				       href="${starexecRoot}/secure/edit/spacePermissions.jsp">edit
+				<li><a class="btn btn-secondary btnEdit" id="editSpacePermissions"
+				       href="${starexecRoot}/secure/edit/spacePermissions.jsp"><span class="ui-icon ui-icon-pencil"></span> edit
 					space permissions</a></li>
-				<li><a class="btnDown" id="downloadXML">download space xml</a>
+				<li><a class="btn btn-secondary btnDown" id="downloadXML"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download space xml</a>
 				</li>
-				<li><a class="btnDown" id="downloadSpace">download space</a>
+				<li><a class="btn btn-secondary btnDown" id="downloadSpace"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download space</a>
 				</li>
 			</ul>
 		</star:panel>
@@ -205,7 +208,7 @@
 	<br class="clear"/>
 	<div id="dialog-confirm-space-copy" title="confirm copy"
 	     class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-info"></span><span
+		<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
 				id="dialog-confirm-space-copy-txt"></span></p>
 		<select id="hier-copy-options" class="copy-options-hidden"
 		        name="copySpace">
@@ -215,7 +218,7 @@
 		</select>
 		<br class="clear"/>
 		<div id="copy-primitives-options" class="copy-options-hidden">
-			<span class="ui-icon ui-icon-info"></span>
+			<span class="ui-icon ui-icon-info" aria-hidden="true"></span>
 			<span>would you like to copy or link primitives to the new space?</span>
 			<select name="copyPrimitives" id="copyPrimitives">
 				<option value="LINK">link primitives</option>
@@ -232,11 +235,11 @@
 		</div>
 	</div>
 	<div id="dialog-confirm-copy" title="confirm copy" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-info"></span><span
+		<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
 				id="dialog-confirm-copy-txt"></span></p>
 	</div>
 	<div id="dialog-confirm-delete" title="confirm delete" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 				id="dialog-confirm-delete-txt"></span></p>
 		<div id="hierarchy-action-container" class="hidden">
 			<label for="applyActionInHierarchy">Apply Action in hierarchy?</label>
@@ -259,7 +262,7 @@
 	</div>
 	<div id="dialog-download-space" title="download space" class="hiddenDialog">
 		<div id="downloadHierarchyOptionContainer">
-			<p><span class="ui-icon ui-icon-alert"></span>do you want to
+			<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span>do you want to
 				download the single space or the hierarchy?</p><br>
 			<input type="radio" name="downloadHierarchyOption"
 			       id="downloadSingleSpace" checked="checked"/>space<br>
@@ -267,7 +270,7 @@
 			       id="downloadSpaceHierarchy"/>hierarchy</p>
 			<hr>
 		</div>
-		<p><span class="ui-icon ui-icon-alert"></span>do you want to download
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span>do you want to download
 			the benchmarks and/or the solvers?</p><br>
 		<p><input type="radio" name="downloadOption" id="downloadSolvers"/>
 			solvers only<br>
@@ -276,7 +279,7 @@
 			<input type="radio" name="downloadOption" id="downloadBoth"
 			       checked="checked"/> solvers + benchmarks<br></p>
 		<hr>
-		<p><span class="ui-icon ui-icon-alert"></span>do you want to store
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span>do you want to store
 			benchmarks/solvers in id directories?</p><br>
 		<input type="radio" name="idDirectoriesOption" id="yesIdDirectories"/>
 		yes<br>
@@ -284,7 +287,7 @@
 		       checked="checked"/> no<br>
 	</div>
 	<div id="dialog-warning" title="warning" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 				id="dialog-warning-txt"></span></p>
 	</div>
 </star:template>

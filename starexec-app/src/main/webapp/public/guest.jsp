@@ -6,11 +6,6 @@
 	<main role="main" class="guest-login-container">
 		<section aria-labelledby="guest-login-heading">
 			<h1 id="guest-login-heading" class="sr-only">Guest Login</h1>
-			<script>
-				$(document).ready(function() {
-					$('button').button();
-				});
-			</script>
 			<form method="POST" action="j_security_check" id="loginForm">
 				<fieldset>
 					<legend>Credentials</legend>
@@ -28,7 +23,7 @@
 						<tr>
 							<td></td>
 							<td>
-								<button type="submit">Login</button>
+								<button type="submit" class="btn btn-primary">Login</button>
 							</td>
 						</tr>
 					</table>

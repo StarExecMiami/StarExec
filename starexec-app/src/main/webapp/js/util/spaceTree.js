@@ -94,7 +94,11 @@ function getSpaceChain(selectorOrValue) {
  */
 function handleSpaceChain(selectorOrValue) {
 	spaceChain = getSpaceChain(selectorOrValue);
-	if (spaceChain.length < 2) {
+	if (spaceChain.length == 0) {
+		return;
+	}
+	if (spaceChain.length == 1) {
+		$.jstree._focused().select_node("#" + spaceChain[0], true);
 		return;
 	}
 	p = spaceChain[0];

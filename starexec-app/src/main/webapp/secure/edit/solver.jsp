@@ -141,7 +141,7 @@
 		</div>
 	</fieldset>
 	<div id="dialog-confirm-delete" title="confirm delete" class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 				id="dialog-confirm-delete-txt"></span></p>
 	</div>
 </star:template>

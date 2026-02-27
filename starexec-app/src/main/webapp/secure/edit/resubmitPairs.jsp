@@ -50,7 +50,7 @@
 	<span style="display:none" id="jobId" value="${jobId}"> </span>
 	<div id="dialog-confirm" title="confirm pairs rerun"
 		class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 		id="dialog-confirm-txt"></span></p>
 	</div>
 	<div id="detailPanel">

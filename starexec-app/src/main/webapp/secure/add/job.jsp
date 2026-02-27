@@ -76,6 +76,66 @@
 <star:template title="run ${space.name}"
                css="common/delaySpinner, common/table, add/job"
                js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/job, lib/jquery.dataTables.min, lib/jquery.qtip.min, add/sharedSolverConfigTableFunctions">
+	<style>
+		/* Wizard Actions - Modern Flexbox Layout (Pilot) */
+		.wizard-actions {
+		  display: flex;
+		  flex-direction: row;
+		  justify-content: flex-end;
+		  gap: 12px;
+		  padding: 1rem;
+		  margin-top: 2rem;
+		  border-top: 1px solid #393939;
+		}
+		
+		.wizard-actions #btnBack {
+		  margin-right: auto; /* The "StarExec Left" alignment */
+		}
+		
+		/* Override the existing #actionBar styles */
+		#actionBar.wizard-actions {
+		  position: static;
+		  bottom: auto;
+		  right: auto;
+		}
+		
+		@media (max-width: 767px) {
+		  .wizard-actions {
+			flex-direction: column;
+			gap: 8px;
+		  }
+		  .wizard-actions #btnBack {
+			margin-right: 0;
+			order: 3; /* Sink to bottom */
+		  }
+		  .wizard-actions #btnNext, 
+		  .wizard-actions #btnDone {
+			order: 1; /* Elevate to top */
+		  }
+		  .wizard-actions #btnPrev {
+			order: 2;
+		  }
+		  
+		  /* Override mobile styles from existing CSS */
+		  #wrapper #actionBar.wizard-actions {
+			position: static;
+			margin: 1rem 0;
+			padding: 0;
+			width: 100%;
+			text-align: center;
+		  }
+		  
+		  #wrapper #actionBar.wizard-actions button {
+			display: block;
+			float: none;
+			position: static;
+			margin: 8px auto;
+			padding: 0.5rem 1rem;
+			width: 90%;
+			max-width: 300px;
+		  }
+		}
+	</style>
 	<c:forEach items="${defaultSettings}" var="setting">
 		<star:settings setting="${setting}"/>
 	</c:forEach>
@@ -176,7 +236,7 @@
 							title="the maximum wallclock time (in seconds) that each pair can execute before it is terminated (max is any value less than 1)">
 						wallclock timeout
 						<span class="ui-icon ui-icon-help"
-						      title="Smaller values may result in faster pair scheduling in the short term. See the cluster help page for more details."></span>
+						      title="Smaller values may result in faster pair scheduling in the short term. See the cluster help page for more details." aria-hidden="true"></span>
 					</p></td>
 					<td>
 						<input type="text" name="wallclockTimeout"
@@ -385,10 +445,10 @@
 							<div class="selectConfigs">
 								<div class="selectWrap configSelectWrap">
 									<p class="selectAll selectAllConfigs"><span
-											class="ui-icon ui-icon-circlesmall-plus"></span>all
+											class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>all
 									</p> |
 									<p class="selectNone selectNoneConfigs">
-										<span class="ui-icon ui-icon-circlesmall-minus"></span>none
+										<span class="ui-icon ui-icon-circlesmall-minus" aria-hidden="true"></span>none
 									</p>
 								</div>
 								<br/>
@@ -406,9 +466,9 @@
 			</table>
 			<div class="selectWrap solverSelectWrap">
 				<p class="selectAll selectAllSolvers"><span
-						class="ui-icon ui-icon-circlesmall-plus"></span>all</p>
+						class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>all</p>
 				| <p class="selectNone selectNoneSolvers"><span
-					class="ui-icon ui-icon-circlesmall-minus"></span>none</p>
+					class="ui-icon ui-icon-circlesmall-minus" aria-hidden="true"></span>none</p>
 			</div>
 			<h6>please ensure the solver(s) you have selected are highlighted
 				(yellow) before proceeding</h6>
@@ -427,15 +487,15 @@
 			</table>
 			<div class="selectWrap">
 				<p class="selectAll selectAllBenchmarks"><span
-						class="ui-icon ui-icon-circlesmall-plus"></span>all</p>
+						class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>all</p>
 				| <p class="selectNoneBenchmarks"><span
-					class="ui-icon ui-icon-circlesmall-minus"></span>none</p>
+					class="ui-icon ui-icon-circlesmall-minus" aria-hidden="true"></span>none</p>
 			</div>
 		</fieldset>
-		<div id="actionBar">
-			<button type="submit" class="round" id="btnDone">submit</button>
-			<button type="button" class="round" id="btnNext">next</button>
-			<button type="button" class="round" id="btnPrev">Prev</button>
+		<div id="actionBar" class="wizard-actions">
+			<button type="button" class="round" id="btnPrev">Previous</button>
+			<button type="button" class="round" id="btnNext">Next</button>
+			<button type="submit" class="round" id="btnDone">Submit</button>
 			<button type="button" class="round" id="btnBack">Cancel</button>
 		</div>
 	</form>

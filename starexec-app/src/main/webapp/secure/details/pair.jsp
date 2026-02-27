@@ -442,14 +442,14 @@
 							idvButton.innerText = "visualize proof with IDV";
 							idvButton.addEventListener("click", () => window.submitProofToIDV(window.proof));
 							document.querySelector("#fieldActions > .expdContainer").appendChild(idvButton);
-							$("#idvButton").button({icons: {primary: "ui-icon-lightbulb-1-e"}});
+							$("#idvButton").button({icons: {primary: "ui-icon-lightbulb"}});
 
 							let gdvButton = document.createElement("button");
 							gdvButton.id = "gdvButton";
 							gdvButton.innerText = "verify proof with GDV";
 							gdvButton.addEventListener("click", () => window.submitProofToGDV(window.proof));
 							document.querySelector("#fieldActions > .expdContainer").appendChild(gdvButton);
-							$("#gdvButton").button({icons: {primary: "ui-icon-check-1-e"}});
+							$("#gdvButton").button({icons: {primary: "ui-icon-check"}});
 							
 						}
 					})

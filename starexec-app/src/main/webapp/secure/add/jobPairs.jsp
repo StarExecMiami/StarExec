@@ -113,10 +113,10 @@
 							<div class="selectConfigs">
 								<div class="selectWrap configSelectWrap">
 									<p class="selectAll selectAllConfigs"><span
-											class="ui-icon ui-icon-circlesmall-plus"></span>all
+											class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>all
 									</p> |
 									<p class="selectNone selectNoneConfigs">
-										<span class="ui-icon ui-icon-circlesmall-minus"></span>none
+										<span class="ui-icon ui-icon-circlesmall-minus" aria-hidden="true"></span>none
 									</p>
 								</div>
 								<br/>
@@ -143,11 +143,11 @@
 			</table>
 			<div class="selectWrap solverSelectWrap">
 				<p class="selectAll selectAllSolvers">
-					<span class="ui-icon ui-icon-circlesmall-plus"></span>all
+					<span class="ui-icon ui-icon-circlesmall-plus" aria-hidden="true"></span>all
 				</p>
 				|
 				<p class="selectNone selectNoneSolvers">
-					<span class="ui-icon ui-icon-circlesmall-minus"></span>none
+					<span class="ui-icon ui-icon-circlesmall-minus" aria-hidden="true"></span>none
 				</p>
 			</div>
 			<h6>please ensure the solver(s) you have selected are highlighted
@@ -157,7 +157,7 @@
 	</form>
 	<div id="dialog-confirm-add-delete" title="confirm add/delete"
 	     class="hiddenDialog">
-		<p><span class="ui-icon ui-icon-alert"></span><span
+		<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 				id="dialog-confirm-add-delete-txt"></span></p>
 	</div>
 </star:template>

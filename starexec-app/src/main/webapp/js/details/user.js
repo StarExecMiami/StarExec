@@ -64,7 +64,7 @@ $(document).ready(function() {
 
 	$("#recycleBinButton").button({
 		icons: {
-			secondary: "ui-icon-pencil"
+			secondary: "ui-icon-trash"
 		}
 	});
 

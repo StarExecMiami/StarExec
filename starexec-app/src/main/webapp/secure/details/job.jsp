@@ -95,13 +95,13 @@
 			<p id="displayJobSpaceID" class="accent"
 			   title="The job space is a snapshot of the space hierarchy used to create the job. It exists independently of the actual space hierarchy.">
 				job space id = ${job.primarySpace}</p>
-			<button id="matrixViewButton" type="button">matrix view</button>
-			<button id="jobPairAttributes" type="button">attributes summary
+			<button id="matrixViewButton" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-newwin"></span> matrix view</button>
+			<button id="jobPairAttributes" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-newwin"></span> attributes summary
 			</button>
 		</c:if>
-		<button id="includeUnknown">include unknown status</button>
+		<button id="includeUnknown" class="btn btn-secondary"><span class="ui-icon ui-icon-refresh"></span> include unknown status</button>
 		<c:if test="${isAnonymousPage && (job.userId == userId || isAdmin) }">
-			<button id="solverNameKeyButton" type="button">solver name key
+			<button id="solverNameKeyButton" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-newwin"></span> solver name key
 			</button>
 		</c:if>
 		<fieldset id="statsErrorField">
@@ -114,11 +114,11 @@
 			<legend class="expd" id="subspaceExpd">subspace summaries</legend>
 			<fieldset id="panelActions" class="tableActions">
 				<c:if test="${!isAnonymousPage && !isLocalJobPage}">
-					<button id="popoutPanels">Popout</button>
+					<button id="popoutPanels" class="btn btn-secondary"><span class="ui-icon ui-icon-extlink"></span> Popout</button>
 				</c:if>
-				<button id="collapsePanels">Collapse All</button>
-				<button id="openPanels">Open All</button>
-				<button class="changeTime">Use CPU Time</button>
+				<button id="collapsePanels" class="btn btn-secondary"><span class="ui-icon ui-icon-folder-collapsed"></span> Collapse All</button>
+				<button id="openPanels" class="btn btn-secondary"><span class="ui-icon ui-icon-folder-open"></span> Open All</button>
+				<button class="btn btn-secondary changeTime"><span class="ui-icon ui-icon-refresh"></span> Use CPU Time</button>
 				<label class="stageSelectorLabel"
 				       for="subspaceSummaryStageSelector">Stage: </label>
 				<select id="subspaceSummaryStageSelector" class="stageSelector">
@@ -133,7 +133,7 @@
 		<fieldset id="solverSummaryField">
 			<legend>solver summary</legend>
 			<fieldset id="statActions" class="tableActions">
-				<button class="changeTime">Use CPU Time</button>
+				<button class="btn btn-secondary changeTime"><span class="ui-icon ui-icon-refresh"></span> Use CPU Time</button>
 				<label class="stageSelectorLabel"
 				       for="solverSummaryStageSelector">Stage: </label>
 				<select id="solverSummaryStageSelector" class="stageSelector">
@@ -143,7 +143,7 @@
 					</c:forEach>
 				</select>
 				<c:if test="${ !isAnonymousPage }">
-					<button id="compareSolvers">compare selected solvers
+					<button id="compareSolvers" class="btn btn-primary"><span class="ui-icon ui-icon-arrowthick-1-s"></span> compare selected solvers
 					</button>
 				</c:if>
 			</fieldset>
@@ -230,9 +230,9 @@
 			<fieldset id="graphField">
 				<legend>graphs</legend>
 				<fieldset style="width:95%" id="graphActions" class="tableActions">
-					<button id="selectSpaceOverview" type="button">Show Space Overview</button>
-					<button id="selectSolverComparison" type="button">Show Solver Comparison</button>
-					<button id="selectPairTimeGraph" type="button">Show Pairs vs. Time</button>
+					<button id="selectSpaceOverview" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Show Space Overview</button>
+					<button id="selectSolverComparison" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Show Solver Comparison</button>
+					<button id="selectPairTimeGraph" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Show Pairs vs. Time</button>
 				</fieldset>
 				<img id="spaceOverview"
 			     		src="${starexecRoot}/images/loadingGraph.png" width="300"
@@ -250,7 +250,7 @@
 						<input type="checkbox" id="logScale"/> <span>use log scale</span>
 						<select multiple size="5" id="spaceOverviewSelections">
 						</select>
-						<button id="spaceOverviewUpdate" type="button">Update</button>
+						<button id="spaceOverviewUpdate" class="btn btn-primary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Update</button>
 					</fieldset>
 					<fieldset id="solverComparisonOptionField">
 						<legend>solver comparison options</legend>
@@ -258,11 +258,11 @@
 						</select>
 						<select id="solverChoice2">
 						</select>
-						<button id="solverComparisonUpdate" type="button">Update</button>
+						<button id="solverComparisonUpdate" class="btn btn-primary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Update</button>
 					</fieldset>
 					<fieldset id="pairTimeOptionField">
 						<legend>pair vs time options</legend>
-						<button id="pairTimeUpdate" type="button">Update</button>
+						<button id="pairTimeUpdate" class="btn btn-primary" type="button"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> Update</button>
 					</fieldset>
 				</fieldset>
 			</fieldset>
@@ -276,18 +276,18 @@
 		<fieldset id="pairTblField">
 			<legend>job pairs</legend>
 			<fieldset  style="width:95%" id="pairActions" class="tableActions">
-				<button class="changeTime">Use CPU Time</button>
+				<button class="btn btn-secondary changeTime"><span class="ui-icon ui-icon-refresh"></span> Use CPU Time</button>
 				<c:if test="${!isLocalJobPage}">
 					<button title="sorts pairs by their ids, which is the order they are submitted to be run"
-					        asc="true" class="sortButton" id="idSort" value="6">
+					        asc="true" class="btn btn-secondary sortButton" id="idSort" value="6">
 						sort by id
 					</button>
 					<button title="sorts pairs in the order they finished running"
-					        asc="true" class="sortButton" id="completionSort"
+					        asc="true" class="btn btn-secondary sortButton" id="completionSort"
 					        value="7">sort by completion order
 					</button>
 					<button title="show only job pairs that have been solved by every solver/configuration combination in this space"
-					        id="syncResults">synchronize results
+					        id="syncResults" class="btn btn-secondary"><span class="ui-icon ui-icon-gear"></span> synchronize results
 					</button>
 				</c:if>
 				<label class="stageSelectorLabel"
@@ -377,7 +377,7 @@
 							<span id="editJobNameWrapper">
 										<input id="editJobName" type="text"
 										       value="${job.name}"></input>
-										<button id="editJobNameButton">change</button>
+										<button id="editJobNameButton" class="btn btn-primary">change</button>
 									</span>
 						</td>
 					</tr>
@@ -405,7 +405,7 @@
 							<span id="editJobDescriptionWrapper">
 										<textarea id="editJobDescription"
 										          value="${job.description}"></textarea>
-										<button id="editJobDescriptionButton">change</button>
+										<button id="editJobDescriptionButton" class="btn btn-primary">change</button>
 									</span>
 						</td>
 					</tr>
@@ -503,31 +503,31 @@
 			<fieldset id="actionField">
 				<legend>actions</legend>
 				<ul id="actionList">
-					<li><a id="jobOutputDownload"
-					       href="${starexecRoot}/secure/download?type=j_outputs&id=${job.id}">job
+					<li><a id="jobOutputDownload" class="btn btn-secondary btnDown"
+					       href="${starexecRoot}/secure/download?type=j_outputs&id=${job.id}"><span class="ui-icon ui-icon-arrowthick-1-s"></span> job
 						output</a></li>
-					<li><a id="jobDownload"
-					       href="${starexecRoot}/secure/download?type=job&id=${job.id}">job
+					<li><a id="jobDownload" class="btn btn-secondary btnDown"
+					       href="${starexecRoot}/secure/download?type=job&id=${job.id}"><span class="ui-icon ui-icon-arrowthick-1-s"></span> job
 						information</a></li>
 					<c:if test="${job.userId == userId or isAdmin}">
 						<li>
-							<button type="button" id="deleteJob">delete job
+							<button type="button" class="btn btn-danger" id="deleteJob"><span class="ui-icon ui-icon-minus"></span> delete job
 							</button>
 						</li>
 						<c:if test="${not buildJob}">
 							<li>
-								<a href="${starexecRoot}/secure/edit/resubmitPairs.jsp?id=${job.id}"
-								   id="rerunPairs">rerun pairs</a></li>
+								<a class="btn btn-primary btnRun" href="${starexecRoot}/secure/edit/resubmitPairs.jsp?id=${job.id}"
+								   id="rerunPairs"><span class="ui-icon ui-icon-arrowreturnthick-1-e"></span> rerun pairs</a></li>
 						</c:if>
 						<c:if test="${isRunning}">
 							<li>
-								<button type="button" id="pauseJob">pause job
+								<button type="button" class="btn btn-secondary" id="pauseJob"><span class="ui-icon ui-icon-pause"></span> pause job
 								</button>
 							</li>
 						</c:if>
 						<c:if test="${isPaused and queueExists and (not queueIsEmpty)}">
 							<li>
-								<button type="button" id="resumeJob">resume
+								<button type="button" class="btn btn-primary" id="resumeJob"><span class="ui-icon ui-icon-play"></span> resume
 									job
 								</button>
 							</li>
@@ -538,44 +538,44 @@
 			<fieldset id="advancedActionField">
 				<legend>advanced actions</legend>
 				<ul class='actionList'>
-					<li><a id="jobXMLDownload"
-					       href="${starexecRoot}/secure/download?type=jobXML&id=${job.id}">job
+					<li><a id="jobXMLDownload" class="btn btn-secondary btnDown"
+					       href="${starexecRoot}/secure/download?type=jobXML&id=${job.id}"><span class="ui-icon ui-icon-arrowthick-1-s"></span> job
 						xml download</a></li>
-					<li><a id="downloadJobPageButton" type="button">download job
+					<li><a id="downloadJobPageButton" class="btn btn-secondary btnDown" type="button"><span class="ui-icon ui-icon-arrowthick-1-s"></span> download job
 						page</a></li>
 					<c:if test="${job.userId == userId or isAdmin}">
 						<c:if test="${(isPaused or isComplete) and (not buildJob)}">
-							<li><a id="addJobPairs"
-							       href="${starexecRoot}/secure/add/jobPairs.jsp?jobId=${job.id}">add/delete
+							<li><a id="addJobPairs" class="btn btn-secondary btnAdd"
+							       href="${starexecRoot}/secure/add/jobPairs.jsp?jobId=${job.id}"><span class="ui-icon ui-icon-arrowthick-1-n"></span> add/delete
 								job pairs</a></li>
 						</c:if>
-						<li><a id="anonymousLink">get anonymous link</a></li>
+						<li><a id="anonymousLink" class="btn btn-secondary">get anonymous link</a></li>
 					</c:if>
 					<c:if test="${isAdmin}">
-						<li><a id="clearCache">clear cache</a></li>
-						<li><a id="recompileSpaces">recompile spaces</a></li>
+						<li><a id="clearCache" class="btn btn-secondary"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> clear cache</a></li>
+						<li><a id="recompileSpaces" class="btn btn-secondary"><span class="ui-icon ui-icon-arrowrefresh-1-e"></span> recompile spaces</a></li>
 					</c:if>
 					<c:if test="${job.userId == userId or isAdmin}">
 						<c:if test="${isComplete}">
-							<li><a id="postProcess">run new postprocessor</a>
+							<li><a id="postProcess" class="btn btn-secondary"><span class="ui-icon ui-icon-arrowthick-1-n"></span> run new postprocessor</a>
 							</li>
 						</c:if>
 					</c:if>
 					<c:if test="${isPaused or isAdminPaused}">
-						<li><a id="changeQueue">Change Queue</a></li>
+						<li><a id="changeQueue" class="btn btn-secondary"><span class="ui-icon ui-icon-transferthick-e-w"></span> Change Queue</a></li>
 					</c:if>
 					<c:if test="${!isHighPriority}">
-						<li><a id="setHighPriority">set as high priority</a>
+						<li><a id="setHighPriority" class="btn btn-secondary"><span class="ui-icon ui-icon-gear"></span> set as high priority</a>
 						</li>
 					</c:if>
 					<c:if test="${isHighPriority}">
-						<li><a id="setLowPriority">set as low priority</a></li>
+						<li><a id="setLowPriority" class="btn btn-secondary"><span class="ui-icon ui-icon-gear"></span> set as low priority</a></li>
 					</c:if>
 				</ul>
 			</fieldset>
 			<div id="dialog-confirm-delete" title="confirm delete"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-confirm-delete-txt"></span></p>
 			</div>
 			<div id="dialog-return-ids" title="return ids" class="hiddenDialog">
@@ -592,7 +592,7 @@
 				<map id="solverComparisonMap800"></map>
 			</div>
 			<div id="dialog-warning" title="warning" class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-warning-txt"></span></p>
 			</div>
 			<div id="dialog-postProcess" title="run new postprocessor"
@@ -639,13 +639,13 @@
 			<div id="dialog-show-anonymous-link" title="anonymous link"
 			     class="hiddenDialog">
 				<p>
-					<span class="ui-icon ui-icon-info"></span>
+					<span class="ui-icon ui-icon-info" aria-hidden="true"></span>
 					<span id="dialog-show-anonymous-link-txt"></span>
 				</p>
 			</div>
 			<div id="dialog-confirm-anonymous-link"
 			     title="confirm anonymous link" class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-info"></span><span
+				<p><span class="ui-icon ui-icon-info" aria-hidden="true"></span><span
 						id="dialog-confirm-anonymous-link-txt"></span></p>
 			</div>
 		</c:if>

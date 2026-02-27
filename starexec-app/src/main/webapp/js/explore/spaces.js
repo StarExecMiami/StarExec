@@ -32,7 +32,7 @@ var isLeafSpace = false;
 var userIsDeveloper = false;
 $(document).ready(function() {
 	currentUserId = parseInt($("#userId").attr("value"));
-	usingSpaceChain = (getSpaceChain("#spaceChain").length > 1); //check whether to turn off cookies
+	usingSpaceChain = (getSpaceChain("#spaceChain").length > 0); //check whether to turn off cookies
 
 	determineIfUserIsDeveloper();
 
@@ -89,55 +89,6 @@ function initSpaceDetails() {
  * Basic initialization for jQuery UI buttons (sets style and icons)
  */
 function initButtonUI() {
-
-	$('.btnAdd').button({
-		icons: {
-			secondary: "ui-icon-plus"
-		}
-	});
-
-	$('.btnUp').button({
-		icons: {
-			secondary: "ui-icon-arrowthick-1-n"
-		}
-	});
-
-	$('.btnDown').button({
-		icons: {
-			secondary: "ui-icon-arrowthick-1-s"
-		}
-	});
-
-	$('.btnRun').button({
-		icons: {
-			secondary: "ui-icon-gear"
-		}
-	});
-
-	$('.btnRemove').button({
-		icons: {
-			secondary: "ui-icon-minus"
-		}
-	});
-
-	$('.btnEdit').button({
-		icons: {
-			secondary: "ui-icon-pencil"
-		}
-	});
-
-	$('#trashcan').button({
-		text: false,
-		icons: {
-			primary: "ui-icon-trash"
-		}
-	});
-
-	$('.resetButton').button({
-		icons: {
-			secondary: "ui-icon-closethick"
-		}
-	});
 	attachSortButtonFunctions();
 	log('jQuery UI buttons initialized');
 }
@@ -1728,8 +1679,7 @@ function getPermTable(tooltip, perms, type, isCommunity) {
 
 	$(permWrap)
 	.append(
-		"<div><input class=\"permButton\" type='button' value='edit' onClick='editPermissions()'></input></div>");
-	$(".permButton").button();
+		"<div><input class=\"btn btn-secondary permButton\" type='button' value='edit' onClick='editPermissions()'></input></div>");
 	// HTML to add to the wrapper to indicate someone is a leader
 	var leaderDiv = '<div class="leaderWrap"><span class="ui-icon ui-icon-star"></span><h2 class="leaderTitle">leader</h2></div>';
 
@@ -1851,7 +1801,7 @@ function getTooltipConfig(type, message) {
 											'leader',
 											theResponse.isCommunity));
 								}
-								$(".permButton").button();
+
 							}
 							return true;
 						}
@@ -1999,7 +1949,7 @@ function getTooltipConfig(type, message) {
 								.qtip('option',
 									'content.text',
 									getPermTable(tooltip, theResponse));
-								$(".permButton").button();
+
 								return true;
 							}
 						)

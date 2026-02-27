@@ -115,11 +115,9 @@
 		</section>
 	</main>
 
-	<!-- Initialize jQuery UI Button Plugin -->
+	<!-- Initialize form submission and validation -->
 	<script>
 		$(document).ready(function() {
-			// Enhance submit button with jQuery UI styling
-			$('#loginButton').button();
 
 			// Handle form validation and submission
 			$('#loginForm').on('submit', function(e) {

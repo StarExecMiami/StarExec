@@ -76,7 +76,7 @@
 			<button type="button" id="editPermissions">Update</button>
 			<div id="dialog-confirm-update" title="confirm update"
 			     class="hiddenDialog">
-				<p><span class="ui-icon ui-icon-alert"></span><span
+				<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 						id="dialog-confirm-update-txt"></span></p>
 			</div>
 

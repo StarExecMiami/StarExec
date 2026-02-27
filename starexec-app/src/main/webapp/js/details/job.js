@@ -448,36 +448,20 @@ function initUI() {
 	$("#pairTimeOptionField").hide();
 
 	$("#addJobPairs")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-n"
-		}
-	});
+	;
 
 	$("#rerunPairs")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowreturnthick-1-e"
-		}
-	});
+	;
 
 	$("#compareSolvers")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-s"
-		}
-	}).hide().click(function() {
+	.hide().click(function() {
 		var c1 = $(".first_selected").find(".configLink").attr("id");
 		var c2 = $(".second_selected").find(".configLink").attr("id");
 		window.open(DETAILS_JOB.starexecUrl + "secure/details/solverComparison.jsp?sid=" + curSpaceId + "&c1=" + c1 + "&c2=" + c2);
 	});
 
 	$('#clearCache')
-	.button({
-		icons: {
-			secondary: "ui-icon-arrowrefresh-1-e"
-		}
-	}).click(function() {
+	.click(function() {
 		$("#dialog-warning-txt")
 		.text('Are you sure you want to clear the cache for this primitive?');
 		$("#dialog-warning").dialog({
@@ -500,11 +484,7 @@ function initUI() {
 	});
 
 	$('#recompileSpaces')
-	.button({
-		icons: {
-			secondary: "ui-icon-arrowrefresh-1-e"
-		}
-	}).click(function() {
+	.click(function() {
 		$.get(
 			starexecRoot + "services/recompile/" + jobId,
 			parseReturnCode
@@ -512,28 +492,16 @@ function initUI() {
 	});
 
 	$("#downloadJobPageButton")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-s"
-		}
-	}).click(function() {
+	.click(function() {
 		createDownloadRequest("#downloadJobPageButton", "job_page");
 	});
 
 	// I think this code can be removed
 	$('#setLowPriority')
-	.button({
-		icons: {
-			primary: "ui-icon-gear"
-		}
-	});
+	;
 
 	$("#matrixViewButton")
-	.button({
-		icons: {
-			primary: "ui-icon-newwin"
-		}
-	}).click(function() {
+	.click(function() {
 		var url = DETAILS_JOB.starexecUrl + 'secure/details/jobMatrixView.jsp?stage=1&jobSpaceId=' + curSpaceId;
 		if (isLocalJobPage) {
 			window.location.href = url;
@@ -543,11 +511,7 @@ function initUI() {
 	});
 
 	$("#jobPairAttributes")
-	.button({
-		icons: {
-			primary: "ui-icon-newwin"
-		}
-	}).click(function() {
+	.click(function() {
 		var url = DETAILS_JOB.starexecUrl + 'secure/details/jobAttributes.jsp?id=' + curSpaceId;
 		if (isLocalJobPage) {
 			window.location.href = url;
@@ -557,21 +521,13 @@ function initUI() {
 	});
 
 	$("#solverNameKeyButton")
-	.button({
-		icons: {
-			primary: "ui-icon-newwin"
-		}
-	}).click(function() {
+	.click(function() {
 		var url = DETAILS_JOB.starexecUrl + 'secure/details/anonymousJobPageKey.jsp?anonId=' + DETAILS_JOB.anonymousLinkUuid;
 		popup(url);
 	});
 
 	$("#syncResults")
-	.button({
-		icons: {
-			primary: "ui-icon-gear"
-		}
-	}).click(function() {
+	.click(function() {
 		//just change the sync results boolean and update the button text.
 		syncResults = !syncResults;
 		setSyncResultsText();
@@ -579,21 +535,13 @@ function initUI() {
 	});
 
 	$("#popoutPanels")
-	.button({
-		icons: {
-			primary: "ui-icon-extlink"
-		}
-	}).click(function() {
+	.click(function() {
 		// default to primary stage
 		window.open(DETAILS_JOB.starexecUrl + "secure/details/jobPanelView.jsp?spaceid=" + curSpaceId + "&stage=1");
 	});
 
 	$("#collapsePanels")
-	.button({
-		icons: {
-			primary: "ui-icon-folder-collapsed"
-		}
-	}).click(function() {
+	.click(function() {
 		$(".panelField").each(function() {
 			var legend = $(this).children('legend:first');
 			var isOpen = $(legend).data('open');
@@ -604,11 +552,7 @@ function initUI() {
 	});
 
 	$("#openPanels")
-	.button({
-		icons: {
-			primary: "ui-icon-folder-open"
-		}
-	}).click(function() {
+	.click(function() {
 		$(".panelField").each(function() {
 			var legend = $(this).children('legend:first');
 			var isOpen = $(legend).data('open');
@@ -620,11 +564,7 @@ function initUI() {
 	});
 
 	$(".changeTime")
-	.button({
-		icons: {
-			primary: "ui-icon-refresh"
-		}
-	}).click(function() {
+	.click(function() {
 		useWallclock = !useWallclock;
 		if (useWallclock) {
 			$('.cpuTime').hide();
@@ -646,11 +586,7 @@ function initUI() {
 	});
 
 	$("#jobDownload")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-s"
-		}
-	}).unbind("click").click(function(e) {
+	.unbind("click").click(function(e) {
 		e.preventDefault();
 		$('#dialog-return-ids-txt')
 		.text(
@@ -676,21 +612,13 @@ function initUI() {
 	});
 
 	$("#jobXMLDownload")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-s"
-		}
-	}).unbind("click").click(function(e) {
+	.unbind("click").click(function(e) {
 		e.preventDefault();
 		createDownloadRequest("#jobXMLDownload", "jobXML");
 	});
 
 	$("#jobOutputDownload")
-	.button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-s"
-		}
-	}).unbind("click").click(function(e) {
+	.unbind("click").click(function(e) {
 		e.preventDefault();
 		createDownloadRequest("#jobOutputDownload", "j_outputs");
 	});
@@ -726,11 +654,7 @@ function initUI() {
 			refreshStats(curSpaceId);
 		});
 		$("#selectSpaceOverview")
-		.button({
-			icons: {
-				primary: "ui-icon-arrowrefresh-1-e"
-			}
-		}).click(function() {
+		.click(function() {
 			$("#solverComparison300").hide();
 			$("#pairTimeGraph").hide();
 			$("#spaceOverview").show();
@@ -739,11 +663,7 @@ function initUI() {
 			$("#spaceOverviewOptionField").show();
 		});
                 $("#selectSolverComparison")
-                .button({
-                        icons: {
-                                primary: "ui-icon-arrowrefresh-1-e"
-                        }
-                }).click(function() {
+                .click(function() {
                         $("#spaceOverview").hide();
                         $("#pairTimeGraph").hide();
                         $("#solverComparison300").show();
@@ -752,11 +672,7 @@ function initUI() {
                         $("#solverComparisonOptionField").show();
                 });
                 $("#selectPairTimeGraph")
-                .button({
-                        icons: {
-                                primary: "ui-icon-arrowrefresh-1-e"
-                        }
-                }).click(function() {
+                .click(function() {
                         $("#spaceOverview").hide();
                         $("#solverComparison300").hide();
                         $("#pairTimeGraph").show();
@@ -766,37 +682,22 @@ function initUI() {
                 });
 
 		$("#spaceOverviewUpdate")
-		.button({
-			icons: {
-				primary: "ui-icon-arrowrefresh-1-e"
-			}
-		}).click(function() {
+		.click(function() {
 			updateSpaceOverviewGraph();
 		});
 		$("#solverComparisonUpdate")
-		.button({
-			icons: {
-				primary: "ui-icon-arrowrefresh-1-e"
-			}
-		}).click(function() {
+		.click(function() {
 			updateSolverComparison(300, "white");
 		});
 		$("#pairTimeUpdate")
-		.button({
-			icons: {
-				primary: "ui-icon-arrowrefresh-1-e"
-			}
-		}).click(function() {
+		.click(function() {
 			updatePairJobTimeGraph();
 		});
 
 		if (star.isUserSubscribedToJob !== undefined) {
 			(function() {
-				var $notificationButton = $("<a href='#'>")
-					.button({
-						icons: {primary: "ui-icon-mail-closed"},
-					})
-				;
+				var $notificationButton = $("<a href='#' class='btn btn-secondary action-btn'>")
+					.html("<span class='ui-icon ui-icon-mail-closed'></span> <span class='btn-text'></span>");
 				var toggleSubscribe = function() {
 					var url = starexecRoot + (
 						star.isUserSubscribedToJob ?
@@ -812,11 +713,11 @@ function initUI() {
 						success: function() {
 							window.star.isUserSubscribedToJob = status;
 							updateLabel();
-							$notificationButton.button("enable");
+							$notificationButton.removeClass("disabled").css("pointer-events", "");
 						},
 						error: function() {
 							var message = "Unable to " +
-								$notificationButton.button("option", "label");
+								$notificationButton.find(".btn-text").text();
 							showMessage("error", message, 5000);
 						}
 					});
@@ -825,11 +726,12 @@ function initUI() {
 					var label = star.isUserSubscribedToJob ?
 					            "unsubscribe from email updates" :
 					            "subscribe to email updates";
-					$notificationButton.button("option", "label", label);
+					$notificationButton.find(".btn-text").text(label);
 				};
 				var notificationClick = function(e) {
 					e.preventDefault();
-					$notificationButton.button("disable");
+					if ($notificationButton.hasClass("disabled")) return;
+					$notificationButton.addClass("disabled").css("pointer-events", "none");
 					toggleSubscribe();
 				};
 
@@ -926,11 +828,7 @@ function initUI() {
 }
 
 function setupDeleteJobButton() {
-	$('#deleteJob').button({
-		icons: {
-			secondary: "ui-icon-minus"
-		}
-	}).click(function() {
+	$('#deleteJob').click(function() {
 		$('#dialog-confirm-delete-txt')
 		.text('are you sure you want to delete this job?');
 
@@ -972,12 +870,6 @@ function setupDeleteJobButton() {
 */
 function setupEverythingForUnknownStatus(subspaces) {
 	var button = $("#includeUnknown");
-	button.button(
-		{icons: {
-			primary: "ui-icon-refresh"
-		}
-	}
-	);
 	if (!isLocalJobPage) {
 		button.click(
 			function () {
@@ -1010,11 +902,6 @@ function setupEverythingForUnknownStatus(subspaces) {
 function setupSetHighPriorityButton() {
 	var setHighPrioritySelector = '#setHighPriority';
 	log('setting up high priority button.');
-	$(setHighPrioritySelector).button({
-		icons: {
-			primary: "ui-icon-gear"
-		}
-	});
 	$(setHighPrioritySelector).click(function() {
 		log('set high priority button clicked.');
 		$.post(
@@ -1037,11 +924,6 @@ function setupSetHighPriorityButton() {
 
 function setupSetLowPriorityButton() {
 	var setLowPrioritySelector = '#setLowPriority';
-	$(setLowPrioritySelector).button({
-		icons: {
-			primary: "ui-icon-gear"
-		}
-	});
 	$(setLowPrioritySelector).click(function() {
 		log('set low priority button clicked.');
 		$.post(
@@ -1061,11 +943,7 @@ function setupSetLowPriorityButton() {
 }
 
 function setupPauseJobButton() {
-	$('#pauseJob').button({
-		icons: {
-			secondary: "ui-icon-pause"
-		}
-	}).click(function() {
+	$('#pauseJob').click(function() {
 		createDialog("Pausing Job");
 		killAjaxRequests(); // Since we are reloading the page anyway...
 		window.stop();
@@ -1083,11 +961,7 @@ function setupPauseJobButton() {
 }
 
 function setupResumeJobButton() {
-	$('#resumeJob').button({
-		icons: {
-			secondary: "ui-icon-play"
-		}
-	}).click(function() {
+	$('#resumeJob').click(function() {
 		createDialog("Resuming Job");
 		killAjaxRequests(); // Since we are reloading the page anyway...
 		window.stop();
@@ -1105,11 +979,7 @@ function setupResumeJobButton() {
 }
 
 function setupChangeQueueButton() {
-	$('#changeQueue').button({
-		icons: {
-			secondary: "ui-icon-transferthick-e-w"
-		}
-	}).click(function() {
+	$('#changeQueue').click(function() {
 		$('#dialog-changeQueue-txt')
 		.text('Please select a new queue to use for this job.');
 
@@ -1146,11 +1016,7 @@ function setupChangeQueueButton() {
 }
 
 function setupPostProcessButton() {
-	$("#postProcess").button({
-		icons: {
-			primary: "ui-icon-arrowthick-1-n"
-		}
-	}).click(function() {
+	$("#postProcess").click(function() {
 		$('#dialog-postProcess-txt')
 		.text('Please select a post-processor to use for this job.');
 
@@ -1300,8 +1166,6 @@ function setupJobNameAndDescriptionEditing(
 	nameOrDescription) {
 	// Hide the wrapper when the page loads.
 	$(wrapperSelector).hide();
-	// Setup the button when the page loads.
-	$(buttonSelector).button();
 
 	$(textSelector).click(function() {
 		$(textSelector).hide();
