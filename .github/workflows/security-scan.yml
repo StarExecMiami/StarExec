@@ -37,8 +37,10 @@ jobs:
       
       - name: Run OWASP Dependency Check
         run: |
+          echo "Cleaning previous dependency check data..."
+          mvn dependency-check:purge
           echo "Running OWASP Dependency Check..."
-          mvn org.owasp:dependency-check-maven:check \
+          mvn dependency-check:check \
             -DskipProvidedScope=true \
             -DskipRuntimeScope=false \
             -DskipTestScope=true
