@@ -52,6 +52,10 @@ jobs:
             exit 1
           fi
 
+      - name: Get current date
+        id: date
+        run: echo "date=$(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -68,10 +72,12 @@ jobs:
             CHANGELOG=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"- %s (%h by %an)" --no-merges)
           fi
 
-          # Escape newlines for multi-line output
-          CHANGELOG="${CHANGELOG//'%'/'%25'}"
-          CHANGELOG="${CHANGELOG//$'\n'/'%0A'}"
-          echo "changelog=$CHANGELOG" >> $GITHUB_OUTPUT
+          # Use multiline output for GITHUB_OUTPUT
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           echo "Previous tag: $PREVIOUS_TAG"
           echo "Current tag: $CURRENT_TAG"
@@ -85,7 +91,7 @@ jobs:
           body: |
             ## Release ${{ github.ref_name }}
 
-            > **Release Date:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+            > **Release Date:** ${{ steps.date.outputs.date }}
             > **Commit:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
 
             ### 📋 Changes
