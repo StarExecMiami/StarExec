@@ -1649,12 +1649,16 @@ DECLARE
 	_job_id INT;
 	_count INT;
 BEGIN
+	-- Initialize _job_id
+	SELECT job_id INTO _job_id FROM job_pairs WHERE id = _jobPairId;
+	
 	UPDATE job_pairs SET status_code=_statusCode WHERE id=_jobPairId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job pair %s not found', _jobPairId);
     END IF;
+    
 	-- List of terminal status codes (ones that mean the pair is finished and won't be updated further)
 	-- 7-18: Normal completion, resource limits, and common errors
 	-- 21: Killed
@@ -1670,12 +1674,6 @@ BEGIN
 		-- It checks by trying to find exactly 1 pair (for efficiency) that is not yet complete
 		-- A pair is "not yet complete" if its status is Pending (1), Enqueued (2), Running (4),
 		-- Processing Results (19), Paused (20), or Awaiting post-processor (22).
-		SELECT job_id FROM starexec.job_pairs WHERE id=_jobPairId INTO _job_id;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION USING
-                ERRCODE = 'P0002',
-                MESSAGE = format('Job for job pair %s not found', _jobPairId);
-        END IF;
 		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND status_code IN (1, 2, 4, 19, 20, 22) LIMIT 1) AS subq;
 		IF _count = 0 THEN
 			UPDATE jobs SET completed=CURRENT_TIMESTAMP WHERE id=_job_id;
@@ -3255,11 +3253,14 @@ BEGIN
     INSERT INTO jobs (user_id, name, description, queue_id, primary_space,
             seed, cpuTimeout, clockTimeout, maximum_memory, paused,
             suppress_timestamp, using_dependencies, buildJob, total_pairs,
-            soft_time_limit, kill_delay, disk_size, benchmarking_framework)
+            soft_time_limit, kill_delay, disk_size, benchmarking_framework,
+            completed_pairs, errored_pairs, pending_pairs, status_code,
+            max_stages, job_type, suppress_output, node_queued)
     VALUES (_userId, _name, _desc, _queueId, _spaceId,
             _seed, _cpu, _wall, _mem, true,
             _suppressTimestamp, _usingDeps, _buildJob, _totalPairs,
-            _softTimeLimit, _killDelay, 0, _benchmarkingFramework)
+            _softTimeLimit, _killDelay, 0, _benchmarkingFramework,
+            0, 0, 0, 0, 1, 0, false, false)
     RETURNING id INTO _id;
     RETURN _id;
 END;
@@ -7757,7 +7758,12 @@ CREATE OR REPLACE FUNCTION starexec.GetSpaceJobsById(_spaceId INT)
 RETURNS TABLE(id INT, name VARCHAR(255), user_id INT, created TIMESTAMP, description TEXT, deleted BOOLEAN, paused BOOLEAN, killed BOOLEAN, buildJob BOOLEAN, disk_size BIGINT, total_pairs INT, completed_pairs INT, errored_pairs INT, pending_pairs INT, status_code INT, max_stages INT, job_type INT, timeout INT, seed INT, suppress_output BOOLEAN, node_queued BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
-    SELECT j.id, j.name, j.user_id, j.created, j.description, j.deleted, j.paused, j.killed, j.buildJob, j.disk_size, j.total_pairs, j.completed_pairs, j.errored_pairs, j.pending_pairs, j.status_code, j.max_stages, j.job_type, j.timeout, j.seed, j.suppress_output, j.node_queued
+    SELECT 
+        j.id, j.name, j.user_id, j.created, j.description, j.deleted, j.paused, j.killed, j.buildJob, j.disk_size, j.total_pairs,
+        starexec.getcompletepairs(j.id)::INT as completed_pairs,
+        starexec.geterrorpairs(j.id)::INT as errored_pairs,
+        (j.total_pairs - starexec.getcompletepairs(j.id) - starexec.geterrorpairs(j.id))::INT as pending_pairs,
+        j.status_code, j.max_stages, j.job_type, j.timeout, j.seed, j.suppress_output, j.node_queued
     FROM starexec.jobs j
     WHERE j.id IN (
         SELECT ja.job_id

@@ -36,7 +36,7 @@ BEGIN
 	SELECT COUNT(*) INTO errorpairs
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND (status_code BETWEEN 8 AND 18 OR status_code = 0 OR status_code IN (21, 23, 24, 25, 26));
+	  AND (status_code IN (8, 9, 10, 11, 12, 13, 18, 21, 23, 24, 25, 26));
 	RETURN errorpairs;
 END;
 $$;
@@ -55,7 +55,7 @@ BEGIN
 	SELECT COUNT(*) INTO statusdetail
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND (status_code BETWEEN 8 AND 18 OR status_code = 0 OR status_code IN (21, 23, 24, 25, 26));
+	  AND (status_code IN (8, 9, 10, 11, 12, 13, 18, 21, 23, 24, 25, 26));
 	RETURN statusdetail;
 END;
 $$;

@@ -93,33 +93,40 @@ END $$;
 -- Initialize pair counts from actual job_pairs data for existing jobs
 -- ============================================================================
 
--- Update completed_pairs count from actual data
+-- Update completed_pairs count from actual data (only status 7 = STATUS_COMPLETE)
 UPDATE starexec.jobs j
 SET completed_pairs = COALESCE((
     SELECT COUNT(*)
     FROM starexec.job_pairs jp
     WHERE jp.job_id = j.id
-    AND jp.status_code >= 7
+    AND jp.status_code = 7
 ), 0)
 WHERE completed_pairs = 0 OR completed_pairs IS NULL;
 
--- Update pending_pairs count from actual data
+-- Update pending_pairs count from actual data (status codes 0-6, 8-13, 18-26 are pending/error)
 UPDATE starexec.jobs j
 SET pending_pairs = COALESCE((
     SELECT COUNT(*)
     FROM starexec.job_pairs jp
     WHERE jp.job_id = j.id
-    AND jp.status_code < 7
-    AND jp.status_code >= 0
+    AND jp.status_code != 7
+    AND jp.status_code NOT IN (14, 15, 16, 17) -- exclude timeout statuses
 ), 0)
 WHERE pending_pairs = 0 OR pending_pairs IS NULL;
 
--- Update errored_pairs count from actual data (negative status codes indicate errors)
+-- Update errored_pairs count from actual data (status codes 8-13, 18, 21, 23-26 are errors)
 UPDATE starexec.jobs j
 SET errored_pairs = COALESCE((
     SELECT COUNT(*)
     FROM starexec.job_pairs jp
     WHERE jp.job_id = j.id
-    AND jp.status_code < 0
+    AND jp.status_code IN (8, 9, 10, 11, 12, 13, 18, 21, 23, 24, 25, 26)
 ), 0)
 WHERE errored_pairs = 0 OR errored_pairs IS NULL;
+
+-- ============================================================================
+-- Note: The completed_pairs, errored_pairs, and pending_pairs columns are 
+-- initialized here but not maintained. Application code should use the
+-- GetCompletePairs(), GetErrorPairs(), and GetPendingPairs() functions
+-- which calculate counts dynamically from the job_pairs table.
+-- ============================================================================
