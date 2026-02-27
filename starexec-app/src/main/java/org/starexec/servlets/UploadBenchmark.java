@@ -82,19 +82,44 @@ public class UploadBenchmark extends HttpServlet {
 			// Extract data from the multipart request
 			HashMap<String, Object> form = Util.parseMultipartRequest(request);
 			ValidatorStatusCode status = isRequestValid(form, request);
+			
 			// If the request is valid to act on...
 			if (status.isSuccess()) {
-				// create status object
 				Integer spaceId = Integer.parseInt((String) form.get(SPACE_ID));
 				Integer userId = SessionUtil.getUserId(request);
-				Integer statusId = Uploads.createBenchmarkUploadStatus(spaceId, userId);
-				log.debug("upload status id is " + statusId);
-
-				// Go ahead and process the request
-				this.handleUploadRequest(form, userId, statusId);
-				//go to upload status page
-				response.addCookie(new Cookie("New_ID", String.valueOf(statusId)));
-				response.sendRedirect(Util.docRoot("secure/details/uploadStatus.jsp?id=" + statusId));
+				
+				// Use new async pattern: save file and enqueue job
+				long jobId = handleUploadRequestAsync(form, userId, spaceId);
+				
+				if (jobId > 0) {
+					// Return 202 Accepted with job ID and initial status
+					// This eliminates race condition - client doesn't need to poll immediately
+					response.setStatus(HttpServletResponse.SC_ACCEPTED);
+					response.setContentType("application/json");
+					
+					// Fetch the job status to return in initial response
+					org.starexec.data.to.UploadJob job = 
+						org.starexec.data.database.UploadJobQueue.getJob(jobId).orElse(null);
+					
+					String json;
+					if (job != null) {
+						json = String.format(
+							"{\"jobId\": %d, \"status\": \"%s\", \"progressPercentage\": %d, \"totalFilesFound\": 0, \"totalFilesProcessed\": 0}",
+							jobId,
+							job.getStatus(),
+							job.getProgressPercentage()
+						);
+					} else {
+						// Fallback if job not found
+						json = "{\"jobId\": " + jobId + ", \"status\": \"PENDING\", \"progressPercentage\": 0, \"totalFilesFound\": 0, \"totalFilesProcessed\": 0}";
+					}
+					response.getWriter().write(json);
+				} else {
+					response.sendError(
+						HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+						"Failed to enqueue upload job"
+					);
+				}
 			} else {
 				//attach the message as a cookie so we don't need to be parsing HTML in StarexecCommand
 				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, status.getMessage()));
@@ -106,6 +131,72 @@ public class UploadBenchmark extends HttpServlet {
 			response.sendError(
 					HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "There was an error uploading the benchmarks.");
 		}
+	}
+
+	/**
+	 * Handles upload request using new async pattern.
+	 * 1. Saves uploaded file to disk
+	 * 2. Enqueues job for background processing
+	 * 3. Returns immediately with job ID
+	 *
+	 * @param form The form data from the request
+	 * @param userId The user ID
+	 * @param spaceId The target space ID
+	 * @return Job ID if successful, -1 on failure
+	 */
+	private long handleUploadRequestAsync(HashMap<String, Object> form, Integer userId, Integer spaceId) 
+			throws Exception {
+		final String method = "handleUploadRequestAsync";
+		
+		// Extract parameters
+		final String uploadMethod = (String) form.get(UPLOAD_METHOD);
+		final int typeId = Integer.parseInt((String) form.get(BENCHMARK_TYPE));
+		final boolean downloadable = Boolean.parseBoolean((String) form.get(BENCH_DOWNLOADABLE));
+		final boolean hasDependencies = Boolean.parseBoolean((String) form.get(HAS_DEPENDENCIES));
+		final boolean linked = Boolean.parseBoolean((String) form.get(LINKED));
+		final String depRootRaw = (String) form.get(DEP_ROOT_SPACE_ID);
+		final int depRootSpaceId = Validator.isValidPosInteger(depRootRaw) ? 
+				Integer.parseInt(depRootRaw) : spaceId;
+		final Permission perm = this.extractPermissions(form);
+		final String localOrUrlOrGit = (String) form.get(FILE_LOC);
+		
+		// Save uploaded file
+		File archiveFile = null;
+		if (localOrUrlOrGit.equals("local")) {
+			PartWrapper fileToUpload = (PartWrapper) form.get(BENCHMARK_FILE);
+			if (fileToUpload == null) {
+				throw new Exception("No uploaded benchmark file provided for local upload");
+			}
+			
+			// Create unique directory for this upload
+			File uniqueDir = getDirectoryForBenchmarkUpload(userId, null);
+			archiveFile = new File(uniqueDir, FilenameUtils.getName(fileToUpload.getName()));
+			fileToUpload.write(archiveFile);
+			
+			log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
+		} else {
+			// TODO: Handle URL and Git uploads
+			throw new UnsupportedOperationException("URL and Git uploads not yet supported in async mode");
+		}
+		
+		// Enqueue job for background processing
+		long jobId = UploadJobQueue.enqueueJob(
+			archiveFile.getAbsolutePath(),
+			userId,
+			spaceId,
+			uploadMethod,
+			typeId,
+			downloadable,
+			0  // Default priority
+		);
+		
+		if (jobId > 0) {
+			log.info(method, "Enqueued upload job " + jobId + " for user " + userId);
+		} else {
+			log.error(method, "Failed to enqueue upload job for user " + userId);
+		}
+		
+		return jobId;
 	}
 
 	/**
@@ -616,12 +707,23 @@ public class UploadBenchmark extends HttpServlet {
 		final String method = "isRequestValid";
 		try {
 
+			// Check for required fields and provide specific error messages for missing values
+			if (form.get(BENCHMARK_TYPE) == null || ((String) form.get(BENCHMARK_TYPE)).isEmpty()) {
+				return new ValidatorStatusCode(false, "Benchmark processor ID is required");
+			}
 			if (!Validator.isValidPosInteger((String) form.get(BENCHMARK_TYPE))) {
 				return new ValidatorStatusCode(false, "The given benchmark processor ID is not a valid integer");
 			}
 
+			if (form.get(SPACE_ID) == null || ((String) form.get(SPACE_ID)).isEmpty()) {
+				return new ValidatorStatusCode(false, "Space ID is required");
+			}
 			if (!Validator.isValidPosInteger((String) form.get(SPACE_ID))) {
 				return new ValidatorStatusCode(false, "The given space ID is not a valid integer");
+			}
+
+			if (form.get(BENCH_DOWNLOADABLE) == null || ((String) form.get(BENCH_DOWNLOADABLE)).isEmpty()) {
+				return new ValidatorStatusCode(false, "The 'bench downloadable' option is required");
 			}
 			if (!Validator.isValidBool((String) form.get(BENCH_DOWNLOADABLE))) {
 				return new ValidatorStatusCode(false, "The 'bench downloadable' option needs to be a valid boolean");
@@ -629,18 +731,28 @@ public class UploadBenchmark extends HttpServlet {
 
 			// Make sure we have a valid upload method
 			String uploadMethod = ((String) form.get(UPLOAD_METHOD));
+			if (uploadMethod == null || uploadMethod.isEmpty()) {
+				return new ValidatorStatusCode(false, "Upload method is required");
+			}
 			if (!(uploadMethod.equals("convert") || uploadMethod.equals("dump"))) {
 				return new ValidatorStatusCode(false, "The upload method needs to be either 'convert' or 'dump'");
 			}
+
+			// Check file location selection
+			String fileLoc = (String) form.get(FILE_LOC);
+			if (fileLoc == null || fileLoc.isEmpty()) {
+				return new ValidatorStatusCode(false, "Please select a file source (local, URL, or Git)");
+			}
+
 			String fileName = null;
 			// Last test, return true when we find a valid file extension
-			if (form.get(FILE_LOC).equals("local")) {
+			if (fileLoc.equals("local")) {
 				fileName = ((PartWrapper) form.get(BENCHMARK_FILE)).getName();
 				if (!Validator.isValidArchiveType(fileName)) {
 					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
 				}
 			}
-			else if (form.get(FILE_LOC).equals("URL")) {
+			else if (fileLoc.equals("URL")) {
 				fileName = (String) form.get(FILE_URL);
 				if (!Validator.isValidArchiveType(fileName)) {
 					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
@@ -655,7 +767,12 @@ public class UploadBenchmark extends HttpServlet {
 				}
 			}
 
-			Permission perm = SessionUtil.getPermission(request, Integer.parseInt((String) form.get(R.SPACE)));
+			// Validate space parameter for permission check
+			String spaceParam = (String) form.get(R.SPACE);
+			if (spaceParam == null || spaceParam.isEmpty()) {
+				return new ValidatorStatusCode(false, "Space parameter is missing");
+			}
+			Permission perm = SessionUtil.getPermission(request, Integer.parseInt(spaceParam));
 
 			log.trace(method, "perm=" + perm);
 			log.trace(method, "uploadMethod=" + uploadMethod);

@@ -30,6 +30,7 @@ import java.sql.*;
 import org.postgresql.util.PSQLException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Handles all database interaction for spaces
@@ -3078,6 +3079,235 @@ public class Spaces {
 		}
 		return null;
 	}
+	
+	/**
+	 * Recursively traverses a directory and adds benchmarks and subspaces to the database.
+	 * This version accepts a progress listener for real-time progress updates.
+	 *
+	 * @param directory The directory to traverse
+	 * @param spaceId The ID of the space to add benchmarks and subspaces to
+	 * @param userId The user ID owning the benchmarks
+	 * @param typeId The benchmark type ID
+	 * @param downloadable Whether benchmarks are downloadable
+	 * @param perm Permissions for new spaces
+	 * @param statusId Upload status ID
+	 * @param usesDeps Whether to check dependencies
+	 * @param depRootSpaceId Dependency root space ID
+	 * @param linked Whether dependencies are linked
+	 * @param progressListener Optional listener for progress updates (can be null)
+	 */
+	public static void traverseAndAddBenchmarks(
+			File directory, int spaceId, int userId, int typeId, boolean downloadable, Permission perm, Integer statusId,
+			Boolean usesDeps, Integer depRootSpaceId, Boolean linked, TraversalProgressListener progressListener) 
+			throws IOException, StarExecException {
+
+		final int batchSize = 50;
+		final Timer uploadTimer = new Timer();
+		
+		// Track overall progress
+		final AtomicInteger directoriesVisited = new AtomicInteger(0);
+		final AtomicInteger filesFound = new AtomicInteger(0);
+		final AtomicInteger filesProcessed = new AtomicInteger(0);
+		final AtomicInteger spacesCreated = new AtomicInteger(0);
+		
+		class BenchmarkVisitor extends SimpleFileVisitor<Path> {
+			// Map to keep track of directory path -> Space ID
+			private final Map<String, Integer> pathToSpaceId = new HashMap<>();
+			// Map to keep track of Space ID -> Pending Batch of Benchmarks
+			private final Map<Integer, List<Benchmark>> spaceBatches = new HashMap<>();
+			private final Path rootPath;
+			private final Connection con;
+			
+			BenchmarkVisitor(Path root, Connection con) {
+				this.rootPath = root;
+				this.con = con;
+				pathToSpaceId.put(root.toString(), spaceId);
+			}
+
+			private void flushBatch(Integer spaceToFlush) throws SQLException, IOException, StarExecException {
+				List<Benchmark> batch = spaceBatches.get(spaceToFlush);
+				if (batch != null && !batch.isEmpty()) {
+					Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
+					int processed = batch.size();
+					filesProcessed.addAndGet(processed);
+					batch.clear();
+					
+					// Notify listener
+					if (progressListener != null) {
+						progressListener.onBenchmarksProcessed(processed, filesProcessed.get());
+					}
+					
+					// Update upload status
+					if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+						uploadTimer.reset();
+					}
+				}
+			}
+
+			@Override
+			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+				directoriesVisited.incrementAndGet();
+				
+				if (dir.equals(rootPath)) {
+					return FileVisitResult.CONTINUE;
+				}
+
+				if (dir.getFileName().toString().equals(".git")) {
+					return FileVisitResult.SKIP_SUBTREE;
+				}
+
+				try {
+					Path parentPath = dir.getParent();
+					Integer parentSpaceId = pathToSpaceId.get(parentPath.toString());
+					
+					if (parentSpaceId == null) {
+						log.error("Parent space ID not found for: " + dir);
+						return FileVisitResult.SKIP_SUBTREE; 
+					}
+
+					Space sub = new Space();
+					String spaceName = dir.getFileName().toString();
+					if (!Validator.isValidSpaceName(spaceName)) {
+						log.warn("Skipping invalid space name: " + spaceName);
+						return FileVisitResult.SKIP_SUBTREE; 
+					}
+					sub.setName(spaceName);
+					sub.setParentSpace(parentSpaceId);
+					sub.setPermission(perm);
+
+					Path descFile = dir.resolve(R.BENCHMARK_DESC_PATH);
+					if (Files.exists(descFile)) {
+						sub.setDescription(FileUtils.readFileToString(descFile.toFile(), StandardCharsets.UTF_8));
+					}
+
+					int subSpaceId;
+						subSpaceId = Spaces.add(con, sub, userId);
+					
+					if (subSpaceId != -1) {
+						pathToSpaceId.put(dir.toAbsolutePath().toString(), subSpaceId);
+						spacesCreated.incrementAndGet();
+						
+						// Notify listener
+						if (progressListener != null) {
+							progressListener.onSpaceCreated(subSpaceId, spaceName);
+						}
+						
+						// Update progress periodically
+						if (spacesCreated.get() % 5 == 0 && progressListener != null) {
+							progressListener.onProgress(
+								directoriesVisited.get(), 
+								filesFound.get(), 
+								filesProcessed.get(),
+								spacesCreated.get()
+							);
+						}
+					} else {
+						log.error("Failed to create subspace " + dir);
+					}
+
+				} catch (Exception e) {
+					log.error("Error creating space for directory " + dir, e);
+				}
+
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+				String fileName = file.getFileName().toString();
+				
+				// Skip description files and hidden files
+				if (fileName.equals(R.BENCHMARK_DESC_PATH) || fileName.startsWith(".")) {
+					return FileVisitResult.CONTINUE;
+				}
+				
+				// Validate benchmark name
+				if (Validator.shouldIgnoreFile(fileName)) {
+					return FileVisitResult.CONTINUE;
+				}
+
+				if (Validator.isValidBenchName(fileName)) {
+					Integer currentSpaceId = pathToSpaceId.get(file.getParent().toAbsolutePath().toString());
+					if (currentSpaceId == null) {
+						log.warn("Skipping benchmark " + fileName + " because parent space ID is unknown");
+						return FileVisitResult.CONTINUE;
+					}
+
+					spaceBatches.computeIfAbsent(currentSpaceId, k -> new ArrayList<>(batchSize));
+					List<Benchmark> batch = spaceBatches.get(currentSpaceId);
+					batch.add(Benchmarks.constructBenchmark(file.toFile(), typeId, downloadable, userId));
+					filesFound.incrementAndGet();
+
+					if (batch.size() >= batchSize) {
+						try {
+							flushBatch(currentSpaceId);
+						} catch (Exception e) {
+							log.error("Error flushing batch for space " + currentSpaceId, e);
+							if (progressListener != null) {
+								progressListener.onError("Error flushing batch for space " + currentSpaceId + ": " + e.getMessage());
+							}
+						}
+					}
+				} else {
+					String msg = "\"" + fileName + "\" is not accepted as a legal benchmark name.";
+					log.warn("Skipping invalid benchmark: " + msg);
+					if (progressListener != null) {
+						progressListener.onError("Skipped invalid benchmark: " + msg);
+					}
+				}
+
+				return FileVisitResult.CONTINUE;
+			}
+
+			@Override
+			public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+				// Flush any remaining benchmarks in this directory's space
+				Integer spaceIdForDir = pathToSpaceId.get(dir.toAbsolutePath().toString());
+				if (spaceIdForDir != null) {
+					try {
+						flushBatch(spaceIdForDir);
+					} catch (Exception e) {
+						log.error("Error flushing batch for directory: " + dir, e);
+					}
+				}
+				
+				// Report progress at directory boundaries
+				if (progressListener != null) {
+					progressListener.onProgress(
+						directoriesVisited.get(), 
+						filesFound.get(), 
+						filesProcessed.get(),
+						spacesCreated.get()
+					);
+				}
+				
+				return FileVisitResult.CONTINUE;
+			}
+		}
+
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			BenchmarkVisitor visitor = new BenchmarkVisitor(directory.toPath(), con);
+			Files.walkFileTree(directory.toPath(), visitor);
+			
+			// Notify completion
+			if (progressListener != null) {
+				progressListener.onComplete(
+					filesFound.get(), 
+					filesProcessed.get(), 
+					spacesCreated.get()
+				);
+			}
+			
+		} catch (Exception e) {
+			log.error("traverseAndAddBenchmarks", e);
+			throw new StarExecException(e.getMessage());
+		} finally {
+			Common.safeClose(con);
+		}
+	}
+	
 	/**
 	 * Recursively traverses a directory and adds benchmarks and subspaces to the database.
 	 * This method processes benchmarks in batches to avoid loading the entire tree into memory.

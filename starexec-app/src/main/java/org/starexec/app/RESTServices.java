@@ -328,6 +328,47 @@ public class RESTServices {
 	}
 
 	/**
+	 * Gets the status of an upload job for polling from the frontend.
+	 *
+	 * @param jobId The ID of the upload job
+	 * @param request HTTP Request
+	 * @return JSON string containing job status, progress, and details
+	 */
+	@GET
+	@Path("/uploads/jobs/{jobId}")
+	@Produces("application/json")
+	public String getUploadJobStatus(@PathParam("jobId") long jobId, @Context HttpServletRequest request) {
+		final String methodName = "getUploadJobStatus";
+		int userId = SessionUtil.getUserId(request);
+
+		if (!UploadJobSecurity.canUserSeeUploadJob(jobId, userId)) {
+			log.warn(methodName, "User " + userId + " attempted to access upload job " + jobId);
+			throw RESTException.NOT_FOUND;
+		}
+
+		UploadJob job = UploadJobQueue.getJob(jobId).orElse(null);
+		if (job == null) {
+			throw RESTException.NOT_FOUND;
+		}
+
+		Map<String, Object> response = new HashMap<>();
+		response.put("id", job.getId());
+		response.put("status", job.getStatus());
+		response.put("totalFilesFound", job.getTotalFilesFound());
+		response.put("totalFilesProcessed", job.getTotalFilesProcessed());
+		response.put("totalSpacesCreated", job.getTotalSpacesCreated());
+		response.put("progressPercentage", job.getProgressPercentage());
+		response.put("errorMessage", job.getErrorMessage());
+		response.put("lastHeartbeat", job.getLastHeartbeat() != null ? job.getLastHeartbeat().getTime() : null);
+		response.put("isStuck", job.isStuck());
+		response.put("createdAt", job.getCreatedAt() != null ? job.getCreatedAt().toString() : null);
+		response.put("startedAt", job.getStartedAt() != null ? job.getStartedAt().toString() : null);
+		response.put("completedAt", job.getCompletedAt() != null ? job.getCompletedAt().toString() : null);
+
+		return gson.toJson(response);
+	}
+
+	/**
 	 * @return a text string that shows the load values for the given queue.
 	 * @param queueId the ID of the queue to get data for.
 	 * @param request HTTP Request

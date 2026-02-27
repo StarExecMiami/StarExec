@@ -1119,6 +1119,28 @@ public class RESTHelpers {
 		return convertSpacesToJsonObject(spacesToDisplay, query);
 	}
 
+	private static BenchmarkUploadStatus convertUploadJobToStatus(UploadJob job) {
+		BenchmarkUploadStatus status = new BenchmarkUploadStatus();
+		status.setId((int) job.getId()); // Note: truncation risk if IDs > 2B, but likely safe for now
+		status.setUserId(job.getUserId());
+		status.setSpaceId(job.getSpaceId());
+		status.setUploadDate(job.getCreatedAt());
+		status.setTotalBenchmarks(job.getTotalFilesFound());
+		status.setCompletedBenchmarks(job.getTotalFilesProcessed());
+		status.setTotalSpaces(job.getTotalSpacesCreated());
+		status.setCompletedSpaces(job.getTotalSpacesCreated()); // Not exactly accurate but matches UI usage
+		
+		String jobStatus = job.getStatus();
+		boolean isComplete = "COMPLETED".equals(jobStatus) || "COMPLETED_WITH_ERRORS".equals(jobStatus);
+		status.setEverythingComplete(isComplete);
+		status.setFileUploadComplete(true);
+		status.setFileExtractionComplete(true);
+		status.setProcessingBegun(!"PENDING".equals(jobStatus));
+		status.setErrorMessage(job.getErrorMessage());
+		
+		return status;
+	}
+
 	/*
 	 * Given data about a request, return a json object representing the next page
 	 * Docs by @aguo2
@@ -1176,14 +1198,31 @@ public class RESTHelpers {
 				return convertSolversToJsonObject(solversToDisplay, query);
 
 			case UPLOAD:
-				query.setTotalRecords(Uploads.getUploadCountByUser(id));
-				if (!query.hasSearchQuery()) {
-					query.setTotalRecordsAfterQuery(query.getTotalRecords());
-				} else {
-					query.setTotalRecordsAfterQuery(Uploads.getUploadCountByUser(id, query.getSearchQuery()));
+				int totalLegacy = Uploads.getUploadCountByUserLegacy(id);
+				int totalAsync = UploadJobQueue.getJobCountByUser(id);
+				query.setTotalRecords(totalLegacy + totalAsync);
+				
+				// For simplicity in pagination across two tables, we fetch all and sort
+				// This is acceptable as long as number of uploads per user is relatively small (< 1000)
+				List<BenchmarkUploadStatus> allUploads = new ArrayList<>();
+				allUploads.addAll(Uploads.getUploadsByUserForNextPage(new DataTablesQuery(0, 1000, 0, true, ""), id));
+				
+				List<UploadJob> asyncJobs = UploadJobQueue.getUserJobs(id, 1000);
+				for (UploadJob job : asyncJobs) {
+					allUploads.add(convertUploadJobToStatus(job));
 				}
-				query.setSortASC(!query.isSortASC());
-				List<BenchmarkUploadStatus> uploadsToDisplay = Uploads.getUploadsByUserForNextPage(query, id);
+				
+				// Sort by date descending
+				allUploads.sort((a, b) -> b.getUploadDate().compareTo(a.getUploadDate()));
+				
+				// Apply pagination
+				int start = query.getStartingRecord();
+				int end = Math.min(start + query.getNumRecords(), allUploads.size());
+				List<BenchmarkUploadStatus> uploadsToDisplay = (start < allUploads.size()) ? 
+						allUploads.subList(start, end) : new ArrayList<>();
+				
+				query.setTotalRecordsAfterQuery(allUploads.size());
+				
 				JsonObject obj = convertUploadsToJsonObject(uploadsToDisplay, query);
 				return obj;
 

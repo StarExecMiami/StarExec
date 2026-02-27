@@ -764,9 +764,14 @@ public class Benchmarks {
 			procCmd[0] = "./" + new File(executablePath).getName();
 			procCmd[1] = benchPath;
 			String propstr = null;
-			propstr = Util.executeSandboxCommand(procCmd, null, working);
-
-			checkProcessorOutput(propstr);
+			try {
+				propstr = Util.executeSandboxCommand(procCmd, null, working);
+				checkProcessorOutput(propstr);
+			} catch (Exception e) {
+				FileUtils.deleteQuietly(sandbox);
+				log.error("Processor failed for benchmark " + b.getName(), e);
+				throw new StarExecException("Processor failed for " + b.getName() + ": " + e.getMessage(), e);
+			}
 
 			FileUtils.deleteQuietly(sandbox);
 			// Load results into a properties file

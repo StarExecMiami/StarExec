@@ -978,6 +978,10 @@ public class Uploads {
 
 
 	public static int getUploadCountByUser(int userId) {
+		return getUploadCountByUserLegacy(userId) + UploadJobQueue.getJobCountByUser(userId);
+	}
+
+	public static int getUploadCountByUserLegacy(int userId) {
 	Connection con = null;
 	PreparedStatement ps = null;
 	ResultSet results = null;
@@ -991,7 +995,7 @@ public class Uploads {
 		return results.getInt(1);
 	    }
 	} catch (Exception e) {
-	    log.error("getUploadCountByUser", e);
+	    log.error("getUploadCountByUserLegacy", e);
 	} finally {
 	    Common.safeClose(con);
 	    Common.safeClose(ps);
@@ -1001,30 +1005,33 @@ public class Uploads {
     }
 
 
-    public static int getUploadCountByUser(int userId, String query) {
-	Connection con = null;
-	PreparedStatement ps = null;
-	ResultSet results = null;
-	try {
-	con = Common.getConnection();
-	ps = con.prepareStatement("SELECT * FROM starexec.GetUploadCountByUserWithQuery(?, ?)");
-	    ps.setInt(1, userId);
-	    ps.setString(2, query);
-	    results = ps.executeQuery();
-
-	    if (results.next()) {
-		return results.getInt(1);
-	    }
-	} catch (Exception e) {
-		log.error("getUploadCountByUser", e);
-	} finally {
-	    Common.safeClose(con);
-	    Common.safeClose(ps);
-	    Common.safeClose(results);
-	}
-	    return 0;
-
-    }
+        public static int getUploadCountByUser(int userId, String query) {
+    		return getUploadCountByUserLegacy(userId, query) + UploadJobQueue.getJobCountByUser(userId, query);
+    	}
+    
+    	public static int getUploadCountByUserLegacy(int userId, String query) {
+    	Connection con = null;
+    	PreparedStatement ps = null;
+    	ResultSet results = null;
+    	try {
+    	con = Common.getConnection();
+    	ps = con.prepareStatement("SELECT * FROM starexec.GetUploadCountByUserWithQuery(?, ?)");
+    	    ps.setInt(1, userId);
+    	    ps.setString(2, query);
+    	    results = ps.executeQuery();
+    
+    	    if (results.next()) {
+    		return results.getInt(1);
+    	    }
+    	} catch (Exception e) {
+    	    log.error("getUploadCountByUserLegacy", e);
+    	} finally {
+    	    Common.safeClose(con);
+    	    Common.safeClose(ps);
+    	    Common.safeClose(results);
+    	}
+    	return 0;
+        }
 
 // End Archie Code
 
