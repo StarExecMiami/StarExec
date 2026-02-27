@@ -29,7 +29,7 @@ tr th {
 }
 
 /* Button positioning for community edit page forms */
-/* Base button styles come from global components/buttons.scss */
+/* Base button styles come from global components/_button.scss */
 .newForm button {
   width: 90px;
   float: right;
@@ -180,7 +180,7 @@ tr th {
   font-style: italic;
 }
 
-/* Base selectPrim button style comes from components/buttons.scss */
+/* Base selectPrim button style comes from components/_button.scss */
 .selectPrim {
   float: right;
   font-size: 14px;

@@ -36,6 +36,14 @@
   --color-accent-green: #{c.$accent-green};
   --color-accent-red: #{c.$accent-red};
   
+  // --- Button-Optimized Colors (WCAG AA compliant) ---
+  --color-button-orange: #{c.$button-orange};
+  --color-button-red: #{c.$button-red};
+  --color-button-green: #{c.$button-green};
+  
+  // --- Button Text Color ---
+  --color-button-text: #{c.$button-text};
+  
   // --- Semantic Colors (mapped to accents) ---
   --color-success: #{c.$success};
   --color-warning: #{c.$warning};
@@ -133,6 +141,19 @@
   --z-index-modal: 500;
   --z-index-popover: 600;
   --z-index-tooltip: 700;
+  
+  // ===========================================================================
+  // ICON SIZE TOKENS (Responsive)
+  // ===========================================================================
+  
+  --icon-size-desktop: 16px;
+  --icon-size-tablet: 18px;
+  --icon-size-mobile: 20px;
+  
+  // Touch target sizes for different viewports
+  --touch-target-desktop: 44px;
+  --touch-target-tablet: 46px;
+  --touch-target-mobile: 48px;
 }
 
 // =============================================================================

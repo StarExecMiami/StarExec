@@ -1,0 +1,577 @@
+/**
+ * Button Component - Dark Mode Styles
+ * Shared button styling for consistent dark mode appearance
+ * WCAG 2.1 AA compliant with proper focus indicators
+ */
+
+// Import dependencies
+@import "../global/colors";
+@import "../global/helper";
+
+/* ========== Button Size Variables ========== */
+// Standardized padding and margin for all buttons
+$btn-padding-y: 0.5em;
+$btn-padding-x: 1em;
+$btn-margin: 0.25em;
+$btn-gap: 0.5em;
+
+// Small button variant
+$btn-sm-padding-y: 0.25em;
+$btn-sm-padding-x: 0.5em;
+
+// Large button variant
+$btn-lg-padding-y: 0.75em;
+$btn-lg-padding-x: 1.5em;
+
+/* ========== Touch Target Variables ========== */
+// WCAG 2.1 Success Criterion 2.5.5: Target Size (Level AAA)
+// Minimum touch target size: 44x44px (approximately 11mm)
+$touch-target-min-size: 44px;
+$touch-target-mobile-min-size: 48px; // Slightly larger for mobile
+
+// Minimum padding to ensure touch targets
+$touch-target-min-padding: 12px;
+$touch-target-mobile-min-padding: 14px;
+
+/* ========== Base Button Styles ========== */
+.btn {
+	padding: $btn-padding-y $btn-padding-x;
+	margin: $btn-margin;
+	border: 1px solid transparent;
+	@extend %rounded-corners;
+	font-size: 1em;
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.2s ease;
+	font-family: inherit;
+	line-height: 1.5;
+	text-align: center;
+	display: inline-block;
+	vertical-align: middle;
+	user-select: none;
+	box-sizing: border-box;
+	position: relative;
+	
+	// Ensure minimum touch target size
+	@extend %touch-target;
+	@extend %touch-target-mobile;
+
+	&:visited {
+		color: inherit;
+	}
+
+	&:focus {
+		outline: 2px solid $accent-orange;
+		outline-offset: 2px;
+	}
+
+	&:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	&:hover:not(:disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 8px rgba(255, 255, 255, 0.08);
+	}
+
+	&:active:not(:disabled) {
+		transform: translateY(0);
+	}
+}
+
+/* ========== Button Size Variants ========== */
+.btn-sm {
+	padding: $btn-sm-padding-y $btn-sm-padding-x;
+	font-size: 0.875em;
+	// Small buttons still need touch targets
+	min-height: $touch-target-min-size;
+	min-width: $touch-target-min-size;
+}
+
+.btn-lg {
+	padding: $btn-lg-padding-y $btn-lg-padding-x;
+	font-size: 1.125em;
+	min-height: $touch-target-min-size + 4px;
+	min-width: $touch-target-min-size + 4px;
+}
+
+/* ========== Icon Button Styles ========== */
+// For buttons that contain only icons
+.btn-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: $touch-target-min-padding;
+	position: relative;
+	
+	// Ensure minimum touch target size
+	@extend %touch-target;
+	@extend %touch-target-mobile;
+	
+	// Ensure icon is centered in touch target
+	.ui-icon {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+	}
+	
+	// Hide text for icon-only buttons
+	&.icon-only {
+		text-indent: -9999px;
+		overflow: hidden;
+		white-space: nowrap;
+		
+		// Ensure screen readers can still access the button text
+		&::after {
+			content: attr(aria-label);
+			position: absolute;
+			left: -9999px;
+		}
+	}
+}
+
+/* ========== Primary Button (Orange Accent) ========== */
+.btn-primary {
+	background-color: $button-orange;
+	color: $button-text;
+	border-color: $button-orange;
+
+	&:hover:not(:disabled) {
+		background-color: lighten($button-orange, 10%);
+		border-color: lighten($button-orange, 10%);
+	}
+
+	&:focus {
+		outline-color: $button-orange;
+	}
+}
+
+/* ========== Secondary Button (Gray) ========== */
+.btn-secondary {
+	background-color: lighten($foreground-color, 5%);
+	color: $text-main-color;  // White text on dark gray - good contrast
+	border-color: $background-color;
+
+	&:hover:not(:disabled) {
+		background-color: lighten($foreground-color, 12%);
+		border-color: $accent-orange;
+	}
+
+	&:active:not(:disabled) {
+		background-color: lighten($foreground-color, 2%);
+	}
+}
+
+/* ========== Preset/Filter Button ========== */
+.btn-preset {
+	background-color: lighten($foreground-color, 5%);
+	color: $text-main-color;
+	border-color: $background-color;
+
+	&:hover:not(:disabled) {
+		background-color: lighten($foreground-color, 12%);
+		border-color: $accent-orange;
+	}
+
+	&:active:not(:disabled) {
+		background-color: lighten($foreground-color, 2%);
+	}
+}
+
+/* ========== jQuery UI Button Overrides ========== */
+// Override jQuery UI's default light theme colors with our dark theme
+// These rules must be specific enough to override jquery-ui.css
+
+// Standardize jQuery UI button padding and margin
+.ui-button {
+	padding: $btn-padding-y $btn-padding-x !important;
+	margin: $btn-margin !important;
+	box-sizing: border-box !important;
+	
+	// Ensure touch targets for jQuery UI buttons
+	min-height: $touch-target-min-size !important;
+	min-width: $touch-target-min-size !important;
+	position: relative !important;
+}
+
+/* ========== jQuery UI Icon Button Specific Styles ========== */
+.ui-button-icon-only {
+	width: var(--touch-target-desktop) !important;
+	height: var(--touch-target-desktop) !important;
+	padding: $touch-target-min-padding !important;
+	
+	// Center the icon
+	.ui-icon {
+		position: absolute !important;
+		top: 50% !important;
+		left: 50% !important;
+		margin-top: calc(var(--icon-size-desktop) / -2) !important;
+		margin-left: calc(var(--icon-size-desktop) / -2) !important;
+	}
+}
+
+.ui-button.ui-icon-notext {
+	width: calc(var(--touch-target-desktop) + 4px) !important;
+	height: calc(var(--touch-target-desktop) + 4px) !important;
+	padding: $touch-target-min-padding !important;
+}
+
+// Reset jQuery UI's color overrides for buttons and links
+.ui-state-default,
+.ui-widget-content .ui-state-default,
+.ui-widget-header .ui-state-default,
+.ui-button,
+a.ui-button,
+a:link.ui-button,
+a:visited.ui-button,
+.ui-state-default a,
+.ui-state-default a:link,
+.ui-state-default a:visited {
+	color: $text-main-color !important;
+	background: lighten($foreground-color, 5%) !important;
+	border-color: $background-color !important;
+}
+
+// Hover states - jQuery UI uses .ui-state-hover
+.ui-state-hover,
+.ui-widget-content .ui-state-hover,
+.ui-widget-header .ui-state-hover,
+.ui-button:hover,
+a.ui-button:hover,
+.ui-state-hover a,
+.ui-state-hover a:hover,
+.ui-state-hover a:link,
+.ui-state-hover a:visited {
+	color: $text-main-color !important;
+	background: lighten($foreground-color, 12%) !important;
+	border-color: $accent-orange !important;
+}
+
+// Focus states - WCAG 2.1 AA compliant
+.ui-state-focus,
+.ui-widget-content .ui-state-focus,
+.ui-widget-header .ui-state-focus,
+.ui-button:focus,
+a.ui-button:focus,
+.ui-state-focus a,
+.ui-state-focus a:focus,
+.ui-state-focus a:link,
+.ui-state-focus a:visited {
+	color: $text-main-color !important;
+	background: lighten($foreground-color, 12%) !important;
+	border-color: $accent-orange !important;
+	outline: 2px solid $accent-orange !important;
+	outline-offset: 2px !important;
+}
+
+// Active/pressed states
+.ui-state-active,
+.ui-widget-content .ui-state-active,
+.ui-widget-header .ui-state-active,
+.ui-button:active,
+a.ui-button:active,
+.ui-button.ui-state-active:hover,
+.ui-state-active a,
+.ui-state-active a:link,
+.ui-state-active a:visited {
+	color: $text-main-color !important;
+	background: lighten($foreground-color, 2%) !important;
+	border-color: $accent-orange !important;
+}
+
+// Disabled states
+html .ui-button.ui-state-disabled:hover,
+html .ui-button.ui-state-disabled:active,
+.ui-state-disabled,
+.ui-widget-content .ui-state-disabled,
+.ui-widget-header .ui-state-disabled {
+	color: $text-main-color !important;
+	background: lighten($foreground-color, 5%) !important;
+	border-color: $background-color !important;
+	opacity: 0.5 !important;
+	cursor: not-allowed !important;
+}
+
+// Visual focus indicator override
+.ui-visual-focus {
+	box-shadow: 0 0 3px 1px $accent-orange !important;
+}
+
+.ui-button {
+	@extend .btn;
+	
+	// Remove jQuery UI's default styling
+	&.ui-corner-all {
+		@extend %rounded-corners;
+	}
+
+	// Hover transform effect
+	&:hover:not(:disabled):not(.ui-state-disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 2px 8px rgba(255, 255, 255, 0.08);
+	}
+
+	// Active press effect
+	&:active:not(:disabled):not(.ui-state-disabled) {
+		transform: translateY(0);
+	}
+}
+
+/* ========== Legacy jQuery UI Button Classes ========== */
+// These classes are used throughout the application for jQuery UI buttons
+// They now extend the unified button system for consistency
+.btnEdit,
+.btnRun,
+.btnUp,
+.btnDown,
+.btnAdd,
+.btnRemove {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+/* ========== Button Groups ========== */
+.btn-group {
+	display: inline-flex;
+	gap: $btn-gap;
+	flex-wrap: wrap;
+
+	.btn,
+	.ui-button,
+	button {
+		margin: 0;
+	}
+}
+
+/* ========== Form Actions Container ========== */
+.form-actions {
+	display: flex;
+	gap: $btn-gap;
+	flex-wrap: wrap;
+	margin-top: 1.5em;
+
+	.btn,
+	.ui-button,
+	button {
+		margin: 0;
+	}
+}
+
+
+
+/* ========== Danger Button (for destructive actions) ========== */
+.btn-danger {
+	background-color: $button-red;
+	color: $text-main-color; // White text on red is more universal
+	border-color: $button-red;
+
+	&:hover:not(:disabled) {
+		background-color: lighten($button-red, 10%);
+		border-color: lighten($button-red, 10%);
+	}
+
+	&:active:not(:disabled) {
+		background-color: lighten($button-red, 5%);
+		border-color: lighten($button-red, 5%);
+	}
+
+	&:focus {
+		outline-color: $button-red;
+	}
+}
+
+/* ========== Button Layout Utilities ========== */
+// Use these classes to position buttons without generic element selectors
+.btn-right {
+	float: right;
+}
+
+.btn-left {
+	float: left;
+}
+
+.btn-block {
+	display: block;
+	width: 100%;
+}
+
+/* ========== Mobile Responsive Touch Targets ========== */
+@include mobile {
+	// Increase touch targets on mobile devices
+	.btn,
+	.ui-button,
+	button:not([class*="btn-"]) {
+		min-height: $touch-target-mobile-min-size;
+		min-width: $touch-target-mobile-min-size;
+		padding: $touch-target-mobile-min-padding ($touch-target-mobile-min-padding * 2) !important;
+	}
+	
+	// Larger icons on mobile for better visibility
+	.ui-icon {
+		width: var(--icon-size-mobile);
+		height: var(--icon-size-mobile);
+		background-size: var(--icon-size-mobile) var(--icon-size-mobile);
+		display: inline-flex;
+		vertical-align: middle;
+	}
+	
+	// Adjust icon positioning for larger icons
+	.ui-button-icon-only .ui-icon {
+		margin-top: calc(var(--icon-size-mobile) / -2) !important;
+		margin-left: calc(var(--icon-size-mobile) / -2) !important;
+	}
+	
+	// Ensure icon-only buttons are still accessible
+	.btn-icon,
+	.ui-button-icon-only {
+		min-width: var(--touch-target-mobile);
+		min-height: var(--touch-target-mobile);
+	}
+}
+
+/* ========== Tablet Responsive Adjustments ========== */
+@include tablet {
+	// Slightly larger icons for tablet screens
+	.ui-icon {
+		width: var(--icon-size-tablet);
+		height: var(--icon-size-tablet);
+		background-size: var(--icon-size-tablet) var(--icon-size-tablet);
+	}
+	
+	// Adjust icon positioning for tablet icons
+	.ui-button-icon-only .ui-icon {
+		margin-top: calc(var(--icon-size-tablet) / -2) !important;
+		margin-left: calc(var(--icon-size-tablet) / -2) !important;
+	}
+	
+	// Tablet-optimized touch targets
+	.btn,
+	.ui-button,
+	button:not([class*="btn-"]) {
+		min-height: var(--touch-target-tablet);
+		min-width: var(--touch-target-tablet);
+	}
+	
+	.btn-icon,
+	.ui-button-icon-only {
+		min-width: var(--touch-target-tablet);
+		min-height: var(--touch-target-tablet);
+	}
+}
+
+/* ========== Accessibility & Reduced Motion Support ========== */
+// High contrast mode support
+@media (prefers-contrast: high) {
+	.btn,
+	.ui-button {
+		border: 2px solid currentColor;
+	}
+	
+	.btn-icon .ui-icon,
+	.ui-button-icon-only .ui-icon {
+		filter: contrast(1.5);
+	}
+}
+
+// Reduced motion support
+@media (prefers-reduced-motion: reduce) {
+	.btn,
+	.ui-button {
+		transition: none;
+		
+		&:hover:not(:disabled) {
+			transform: none;
+		}
+		
+		&:active:not(:disabled) {
+			transform: none;
+		}
+	}
+}
+
+// Focus styles for keyboard navigation (focus-visible polyfill support)
+.btn:focus-visible,
+.ui-button:focus-visible,
+button:focus-visible {
+	outline: 3px solid $accent-orange;
+	outline-offset: 2px;
+}
+
+/* ========== DataTables Pagination Button Fixes ========== */
+.dataTables_wrapper .dataTables_paginate .paginate_button {
+	min-width: $touch-target-min-size;
+	min-height: $touch-target-min-size;
+	padding: $touch-target-min-padding !important;
+	margin: 4px;
+	box-sizing: border-box;
+	
+	// Ensure proper touch targets on mobile
+	@include mobile {
+		min-width: $touch-target-mobile-min-size;
+		min-height: $touch-target-mobile-min-size;
+		padding: $touch-target-mobile-min-padding !important;
+	}
+}
+
+/* ========== Print Styles - Remove Touch Targets ========== */
+@media print {
+	.btn,
+	.ui-button,
+	button {
+		min-height: auto;
+		min-width: auto;
+		padding: 4px 8px !important;
+	}
+	
+	// Hide decorative icons in print
+	.ui-icon[aria-hidden="true"] {
+		display: none;
+	}
+}
+
+/* ========== Action Field Button Container ========== */
+// Common pattern for form action areas
+.action-field {
+	display: flex;
+	gap: $btn-gap;
+	flex-wrap: wrap;
+	
+	button,
+	.btn,
+	.ui-button {
+		margin: 0;
+	}
+}
+
+/* ========== Legacy Page-Specific Button Classes ========== */
+// These classes provide consistent styling for existing custom button classes
+// while maintaining backward compatibility
+.uploadBtn,
+.saveBtn,
+.submitBtn {
+	@extend .btn;
+	@extend .btn-primary;
+}
+
+.cancelBtn {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+.compareBtn {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+.selectPrim {
+	@extend .btn;
+	@extend .btn-secondary;
+}
+
+/* ========== Danger Zone Button (for account deletion etc.) ========== */
+button.danger,
+.btn.danger {
+	@extend .btn-danger;
+}

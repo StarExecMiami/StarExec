@@ -1,14 +1,25 @@
 // 1. Helpers & Utilities (must be first - provides mixins and functions)
 @import "global/helper";
+@import "global/mixins";
 
 // 2. Variables & Tokens (foundation layer)
 @import "global/colors";
+@import "global/typography";
+@import "global/spacing";
 @import "global/fonts";
+@import "global/design-tokens";
 
 // 3. Base & Reset Styles
 @import "global/html5";
 @import "global/elements";
 @import "global/scrollbar";
+
+// Global icon alignment fix
+.ui-icon {
+	display: inline-flex;
+	vertical-align: middle;
+	margin-top: -2px; // Optical adjustment for baseline alignment
+}
 
 // 4. Layout Components
 @import "global/common";
@@ -22,12 +33,7 @@
 @import "global/message";
 @import "global/statusMessage";
 @import "global/dataTable";
-@import "components/alert";
-@import "components/buttons";
-@import "components/tables";
-@import "components/explorer";
-@import "components/navigation";
-@import "components/footer";
+@import "components/index";
 
 // 6. Utilities & Responsive
 @import "global/mobile";

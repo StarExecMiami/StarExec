@@ -18,6 +18,16 @@ $accent-orange: #fa621b;
 $accent-green: #10b981;
 $accent-red: #ff0000;
 
+// --- Button-Optimized Colors (WCAG AA compliant) ---
+// These colors provide ≥4.5:1 contrast with black text (#0a0a0a)
+$button-orange: #f39c12;      // WCAG compliant orange (9.03:1 contrast)
+$button-red: #ef4444;         // WCAG compliant red (5.26:1 contrast)
+$button-green: #10b981;       // WCAG compliant green (7.80:1 contrast)
+
+// --- Button Text Color ---
+// Black provides maximum contrast on colored buttons
+$button-text: #0a0a0a;
+
 // --- Additional Color ---
 $soft-red: #ff6b6b;
 
@@ -41,7 +51,7 @@ $text-secondary: $text-accent-color;
 $text-tertiary: darken($text-accent-color, 10%);
 
 // --- Status Colors ---
-$success: $accent-green;
+$success: $button-green;      // Use darker green for better contrast
 $warning: $accent-orange;
 $error: $accent-red;
 $info: $accent-blue;

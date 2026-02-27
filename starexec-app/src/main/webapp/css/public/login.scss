@@ -23,9 +23,9 @@
 // ============================================================================
 // Alert Messages - Warnings & Errors
 // ============================================================================
-// Alert message styles are now centralized in components/alert.scss
+// Alert message styles are now centralized in components/_alert.scss
 // Legacy .warning-message and .error.message classes are automatically
-// handled by alert.scss backwards compatibility rules (@extend .alert)
+// handled by _alert.scss backwards compatibility rules (@extend .alert)
 //
 // For new markup, use:
 //   <div class="alert alert--warning">...</div>
@@ -127,16 +127,14 @@
 // ============================================================================
 
 // Import the unified button component
-@import "../components/buttons";
+@import "../components/button";
 
 .form-actions {
     margin-bottom: 20px;
 }
 
-// Login page uses blue primary button, override the default
-// Uses the btn-blue variant from the button component
+// The login page uses standard orange primary button
 .login-form .btn-primary {
-    @extend .btn-blue;
     width: 100%;
 }
 

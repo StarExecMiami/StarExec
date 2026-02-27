@@ -6,8 +6,32 @@
 	float:left;
 }
 
-.community {
-	text-align: center;
+.community-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding: 10px 0;
+
+	.community-badge {
+		display: flex;
+		align-items: center;
+		padding: 6px 12px;
+		font-size: 0.9rem;
+		
+		.ui-icon {
+			margin-right: 6px;
+			width: 16px;
+			height: 16px;
+			display: inline-block;
+			vertical-align: middle;
+		}
+	}
+
+	.empty-message {
+		color: var(--color-text-secondary);
+		font-style: italic;
+		margin: 10px 0;
+	}
 }
 
 @media only screen and (max-width: 767px) {
@@ -30,7 +54,7 @@
 	}
 
 	/* Mobile spacing adjustment for buttons */
-	/* Base button styles come from global components/buttons.scss */
+	/* Base button styles come from global components/_button.scss */
 	body button {
 		margin: 0 0 5px 0;
 	}

@@ -1,3 +1,5 @@
+@import "../global/colors";
+
 #explorerAction {
 	float: left;
 	width: auto;
@@ -16,25 +18,28 @@
 	width: 50px;
 	height: 50px;
 	background: transparent;
-	text-align: left;
 	float: right;
 	position: relative;
 	left: 10px;
-}
+	display: flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	border: 2px dashed $accent-green;
+	border-radius: 8px;
+	padding: 0 !important;
+	transition: all 0.2s ease;
 
-#trashcan:hover {
-	background-color: #008d03;
-	border-radius: 2px;
-}
+	&:hover, &.hover {
+		background-color: rgba($accent-green, 0.15);
+		border-style: solid;
+		border-radius: 8px;
+	}
 
-#trashcan.hover {
-	background-color: #008d03;
-	border-radius: 2px;
-}
-
-#trashcan .ui-icon {
-	margin-top: -8px;
-	margin-right: 10px;
+	.ui-icon {
+		position: static !important;
+		margin: 0 !important;
+		transform: scale(1.8);
+	}
 }
 
 .dragClone {

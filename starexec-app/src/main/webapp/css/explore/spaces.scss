@@ -2,12 +2,12 @@
 // SPACES PAGE STYLES
 // =============================================================================
 // Page-specific styles for the Spaces explorer page.
-// Base explorer styles are in components/explorer.scss
+// Base explorer styles are in components/_explorer.scss
 // =============================================================================
 
 @import "../global/colors";
 
-// Note: .dragClone and #exploreList base styles are now in components/explorer.scss
+// Note: .dragClone and #exploreList base styles are now in components/_explorer.scss
 
 #spaceField a.spaceLink {
 	cursor: pointer;
@@ -57,22 +57,37 @@ $select-dialog-separation: 7px;
 	top: 6px;
 }
 
+#detailPanel {
+	position: relative; // Ensure absolute children like #trashcan position correctly
+}
+
 #trashcan {
 	width: 50px;
 	height: 50px;
 	background: transparent;
 	position: absolute;
-	right: 10px;
-	top: 10px;
-	border: 1px dashed $accent-green;
-	border-radius: 2px;
+	right: 15px;
+	top: 15px;
+	border: 2px dashed $accent-green;
+	border-radius: 8px;
+	display: flex !important; // Override jQuery UI
+	align-items: center !important;
+	justify-content: center !important;
+	padding: 0 !important;
+	transition: all 0.2s ease;
+	z-index: 10;
 
 	&:hover, &.hover {
-		background-color: $accent-green;
+		background-color: rgba($accent-green, 0.15);
+		border-style: solid;
+		transform: scale(1.05);
 	}
 
 	.ui-icon {
-		transform: scale(1.5);
+		position: static !important; // Override jQuery UI absolute centering
+		margin: 0 !important;
+		transform: scale(1.8); // Slightly larger for better UX
+		display: inline-block;
 	}
 }
 

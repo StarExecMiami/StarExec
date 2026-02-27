@@ -1,0 +1,20 @@
+// =============================================================================
+// COMPONENT LIBRARY MIXINS
+// =============================================================================
+// Reusable mixins for components
+// =============================================================================
+
+@import "../global/helper";
+
+// Mixin for standard component focus state
+@mixin component-focus {
+  &:focus {
+    outline: 2px solid var(--color-accent-orange);
+    outline-offset: 2px;
+  }
+}
+
+// Mixin for component transitions
+@mixin component-transition {
+  transition: all 0.2s ease;
+}

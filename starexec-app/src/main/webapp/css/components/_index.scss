@@ -1,0 +1,36 @@
+// =============================================================================
+// COMPONENT LIBRARY MANIFEST
+// =============================================================================
+// Import all components in correct order
+// Maintain dependency order (utilities first, then base, then complex)
+// =============================================================================
+
+// Foundation
+@import "variables";
+@import "mixins";
+
+// Base components
+@import "alert";
+@import "badge";
+@import "button";
+@import "card";
+
+// Layout components
+@import "page-layout";
+@import "navigation";
+@import "footer";
+@import "explorer";
+
+// Form components
+@import "form";
+
+// Data display components
+@import "table";
+
+// Complex components
+@import "accordion";
+@import "tab";
+@import "banner";
+
+// Compatibility layers
+@import "jquery-ui-dark";

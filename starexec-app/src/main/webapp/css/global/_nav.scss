@@ -1,7 +1,7 @@
 // =============================================================================
 // NAVIGATION - LEGACY COMPATIBILITY LAYER
 // =============================================================================
-// Main navigation styles are now in components/navigation.scss
+// Main navigation styles are now in components/_navigation.scss
 // This file provides minimal overrides for backwards compatibility
 // TODO: Remove this file once all navigation HTML is updated
 // =============================================================================
@@ -21,4 +21,4 @@ nav {
 	}
 }
 
-// Legacy .round class support is handled in components/navigation.scss
+// Legacy .round class support is handled in components/_navigation.scss

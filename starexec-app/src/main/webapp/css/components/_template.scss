@@ -1,0 +1,664 @@
+// =============================================================================
+// COMPONENT TEMPLATE
+// =============================================================================
+// Template for creating new components in the StarExec component library
+// Copy this file and replace "component" with your component name
+// Remove template comments before finalizing
+// =============================================================================
+// Component: [Component Name]
+// Purpose: [Brief description of component purpose]
+// Accessibility: [Accessibility considerations]
+// Dependencies: [List dependencies]
+// Version: 1.0.0
+// Last Updated: YYYY-MM-DD
+// =============================================================================
+
+// Dependencies
+@import "../global/colors";
+@import "../global/typography";
+@import "../global/spacing";
+@import "../global/breakpoints";
+@import "../global/helper";
+
+// =============================================================================
+// COMPONENT VARIABLES
+// =============================================================================
+
+// Component-specific variables (override global defaults)
+// Use CSS custom properties when possible for runtime theming
+$component-padding: var(--spacing-4, 1rem);
+$component-margin: var(--spacing-2, 0.5rem);
+$component-border-radius: var(--border-radius-md, 8px);
+
+// Color variants - use semantic color tokens
+$component-color-primary: var(--color-primary, #f39c12);
+$component-color-secondary: var(--color-secondary, #3b82f6);
+$component-color-success: var(--color-success, #10b981);
+$component-color-danger: var(--color-danger, #ef4444);
+$component-color-warning: var(--color-warning, #f59e0b);
+
+// Size variants - use consistent sizing scale
+$component-size-sm: var(--component-size-sm, 32px);
+$component-size-md: var(--component-size-md, 44px);
+$component-size-lg: var(--component-size-lg, 56px);
+
+// Animation timing
+$component-transition-duration: var(--transition-normal, 0.2s);
+$component-transition-timing: ease;
+
+// =============================================================================
+// COMPONENT MIXINS
+// =============================================================================
+
+// Reusable mixins for component variations
+// Keep mixins focused and single-purpose
+
+// Variant mixin for different color schemes
+@mixin component-variant($color, $background, $border) {
+  color: $color;
+  background-color: $background;
+  border-color: $border;
+  
+  &:hover:not(:disabled) {
+    background-color: darken($background, 10%);
+  }
+  
+  &:focus {
+    @include focus-ring($color);
+  }
+  
+  // High contrast mode support
+  @include high-contrast;
+}
+
+// Size mixin for consistent sizing
+@mixin component-size($size) {
+  min-height: $size;
+  min-width: $size;
+  padding: calc($size / 4);
+  
+  // Ensure touch targets on mobile
+  @extend %touch-target;
+  @extend %touch-target-mobile;
+}
+
+// State mixin for interactive states
+@mixin component-state($state) {
+  @if $state == 'hover' {
+    &:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+  }
+  
+  @if $state == 'active' {
+    &:active:not(:disabled) {
+      transform: translateY(0);
+    }
+  }
+  
+  @if $state == 'disabled' {
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+  }
+  
+  @if $state == 'focus' {
+    &:focus {
+      @include focus-ring;
+    }
+    
+    &:focus:not(:focus-visible) {
+      outline: none;
+    }
+  }
+}
+
+// =============================================================================
+// BASE COMPONENT
+// =============================================================================
+
+.component {
+  // Layout
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  box-sizing: border-box;
+  
+  // Spacing
+  padding: $component-padding;
+  margin: $component-margin;
+  
+  // Typography
+  font-family: var(--font-family-base, inherit);
+  font-size: var(--font-size-base, 1rem);
+  font-weight: var(--font-weight-normal, 400);
+  line-height: var(--line-height-normal, 1.5);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  
+  // Visual
+  border: 1px solid transparent;
+  border-radius: $component-border-radius;
+  cursor: pointer;
+  user-select: none;
+  
+  // Transitions
+  transition: all $component-transition-duration $component-transition-timing;
+  
+  // Accessibility
+  @include component-state('focus');
+  
+  // Touch targets (WCAG 2.1 AAA)
+  @extend %touch-target;
+  @extend %touch-target-mobile;
+  
+  // ===========================================================================
+  // STATES
+  // ===========================================================================
+  
+  @include component-state('hover');
+  @include component-state('active');
+  @include component-state('disabled');
+  
+  // Reduced motion support
+  @include reduced-motion;
+  
+  // ===========================================================================
+  // RESPONSIVE BEHAVIOR
+  // ===========================================================================
+  
+  @include mobile {
+    padding: calc(#{$component-padding} * 1.2);
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+  
+  @include tablet {
+    padding: calc(#{$component-padding} * 1.1);
+  }
+  
+  // Print styles
+  @media print {
+    border: 1px solid #000;
+    color: #000 !important;
+    background: #fff !important;
+  }
+}
+
+// =============================================================================
+// COMPONENT VARIANTS
+// =============================================================================
+
+// Primary variant - for main actions
+.component--primary {
+  @include component-variant(
+    $color: var(--color-white, #ffffff),
+    $background: $component-color-primary,
+    $border: darken($component-color-primary, 10%)
+  );
+}
+
+// Secondary variant - for secondary actions
+.component--secondary {
+  @include component-variant(
+    $color: var(--color-text, #1f2937),
+    $background: var(--color-gray-100, #f3f4f6),
+    $border: var(--color-gray-300, #d1d5db)
+  );
+}
+
+// Success variant - for positive actions
+.component--success {
+  @include component-variant(
+    $color: var(--color-white, #ffffff),
+    $background: $component-color-success,
+    $border: darken($component-color-success, 10%)
+  );
+}
+
+// Danger variant - for destructive actions
+.component--danger {
+  @include component-variant(
+    $color: var(--color-white, #ffffff),
+    $background: $component-color-danger,
+    $border: darken($component-color-danger, 10%)
+  );
+}
+
+// Warning variant - for cautionary actions
+.component--warning {
+  @include component-variant(
+    $color: var(--color-text, #1f2937),
+    $background: $component-color-warning,
+    $border: darken($component-color-warning, 10%)
+  );
+}
+
+// Info variant - for informational actions
+.component--info {
+  @include component-variant(
+    $color: var(--color-white, #ffffff),
+    $background: $component-color-secondary,
+    $border: darken($component-color-secondary, 10%)
+  );
+}
+
+// =============================================================================
+// COMPONENT SIZES
+// =============================================================================
+
+// Small size - for compact interfaces
+.component--sm {
+  @include component-size($component-size-sm);
+  font-size: var(--font-size-sm, 0.875rem);
+  padding: calc(#{$component-padding} * 0.75);
+}
+
+// Medium size - default size
+.component--md {
+  @include component-size($component-size-md);
+  // Default size, no additional styles needed
+}
+
+// Large size - for prominent actions
+.component--lg {
+  @include component-size($component-size-lg);
+  font-size: var(--font-size-lg, 1.125rem);
+  padding: calc(#{$component-padding} * 1.25);
+}
+
+// =============================================================================
+// COMPONENT MODIFIERS
+// =============================================================================
+
+// Block modifier - full width
+.component--block {
+  display: block;
+  width: 100%;
+}
+
+// Outline modifier - transparent background
+.component--outline {
+  background-color: transparent;
+  border: 2px solid currentColor;
+  
+  &:hover:not(:disabled) {
+    background-color: rgba(currentColor, 0.1);
+  }
+}
+
+// Rounded modifier - circular shape
+.component--rounded {
+  border-radius: var(--border-radius-full, 9999px);
+}
+
+// Ghost modifier - minimal styling
+.component--ghost {
+  background-color: transparent;
+  border-color: transparent;
+  
+  &:hover:not(:disabled) {
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+}
+
+// Loading modifier - for async actions
+.component--loading {
+  position: relative;
+  color: transparent !important;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    width: 1em;
+    height: 1em;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    border-right-color: transparent;
+    animation: component-spin 0.75s linear infinite;
+  }
+}
+
+// =============================================================================
+// COMPONENT ELEMENTS
+// =============================================================================
+
+// Icon element
+.component__icon {
+  width: 1em;
+  height: 1em;
+  margin-right: var(--spacing-2, 0.5rem);
+  flex-shrink: 0;
+  
+  // Hide from screen readers if decorative
+  &[aria-hidden="true"] {
+    // No additional styles needed
+  }
+  
+  // Icon positioning variants
+  .component--icon-only & {
+    margin: 0;
+  }
+  
+  .component--icon-left & {
+    order: -1;
+    margin-right: var(--spacing-2, 0.5rem);
+    margin-left: 0;
+  }
+  
+  .component--icon-right & {
+    order: 1;
+    margin-left: var(--spacing-2, 0.5rem);
+    margin-right: 0;
+  }
+}
+
+// Text element
+.component__text {
+  // Ensure text truncation
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  
+  .component--loading & {
+    visibility: hidden;
+  }
+}
+
+// Badge element (for counts, status)
+.component__badge {
+  position: absolute;
+  top: -0.5em;
+  right: -0.5em;
+  min-width: 1.5em;
+  height: 1.5em;
+  padding: 0 0.5em;
+  border-radius: var(--border-radius-full, 9999px);
+  background-color: $component-color-danger;
+  color: var(--color-white, #ffffff);
+  font-size: 0.75em;
+  font-weight: var(--font-weight-bold, 700);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// =============================================================================
+// COMPONENT GROUPS
+// =============================================================================
+
+// Group container for multiple components
+.component-group {
+  display: flex;
+  gap: var(--spacing-2, 0.5rem);
+  flex-wrap: wrap;
+  
+  .component {
+    margin: 0;
+  }
+  
+  // Vertical group
+  &.component-group--vertical {
+    flex-direction: column;
+    align-items: stretch;
+    
+    .component {
+      width: 100%;
+    }
+  }
+  
+  // Justified group
+  &.component-group--justified {
+    .component {
+      flex: 1;
+      min-width: 0;
+    }
+  }
+}
+
+// =============================================================================
+// COMPONENT ANIMATIONS
+// =============================================================================
+
+@keyframes component-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes component-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.component--pulse {
+  animation: component-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+// =============================================================================
+// ACCESSIBILITY UTILITIES
+// =============================================================================
+
+// Screen reader only text
+.component__sr-only {
+  @include sr-only;
+}
+
+// Focus visible polyfill support
+.js-focus-visible .component:focus:not(.focus-visible) {
+  outline: none;
+}
+
+// High contrast mode support
+@media (prefers-contrast: high) {
+  .component {
+    border: 2px solid currentColor;
+    
+    &.component--outline {
+      border: 3px solid currentColor;
+    }
+  }
+}
+
+// Forced colors mode support
+@media (forced-colors: active) {
+  .component {
+    forced-color-adjust: none;
+    border-color: ButtonText;
+    
+    &:hover:not(:disabled) {
+      background-color: Highlight;
+      color: HighlightText;
+    }
+  }
+}
+
+// =============================================================================
+// JQUERY UI COMPATIBILITY
+// =============================================================================
+
+// Override jQuery UI styles for consistency
+.ui-component {
+  @extend .component;
+  
+  // Reset jQuery UI defaults
+  &.ui-state-default {
+    @extend .component--secondary;
+    
+    // Remove jQuery UI gradients
+    background-image: none !important;
+  }
+  
+  &.ui-state-hover {
+    @extend .component--secondary;
+    @include component-state('hover');
+  }
+  
+  &.ui-state-active {
+    @extend .component--primary;
+  }
+  
+  &.ui-state-focus {
+    @include component-state('focus');
+  }
+  
+  &.ui-state-disabled {
+    @include component-state('disabled');
+  }
+  
+  // jQuery UI button icons
+  .ui-icon {
+    @extend .component__icon;
+  }
+}
+
+// =============================================================================
+// COMPONENT UTILITIES
+// =============================================================================
+
+// Utility classes for quick modifications
+.component-util {
+  // Spacing utilities
+  &--no-margin {
+    margin: 0 !important;
+  }
+  
+  &--no-padding {
+    padding: 0 !important;
+  }
+  
+  // Display utilities
+  &--inline {
+    display: inline !important;
+  }
+  
+  &--block {
+    display: block !important;
+    width: 100%;
+  }
+  
+  &--hidden {
+    display: none !important;
+  }
+  
+  // Visibility utilities
+  &--visible {
+    visibility: visible !important;
+  }
+  
+  &--invisible {
+    visibility: hidden !important;
+  }
+  
+  // Interaction utilities
+  &--clickable {
+    cursor: pointer !important;
+  }
+  
+  &--not-clickable {
+    cursor: default !important;
+    pointer-events: none !important;
+  }
+}
+
+// =============================================================================
+// COMPONENT DOCUMENTATION
+// =============================================================================
+
+// Documentation styles (only included in development)
+.component-docs {
+  // Example container
+  &__example {
+    border: 1px solid var(--color-border, #d1d5db);
+    border-radius: var(--border-radius-md, 8px);
+    padding: var(--spacing-4, 1rem);
+    margin-bottom: var(--spacing-6, 1.5rem);
+    background-color: var(--color-bg-alt, #f3f4f6);
+  }
+  
+  // Code example
+  &__code {
+    font-family: var(--font-family-mono, monospace);
+    font-size: var(--font-size-sm, 0.875rem);
+    background-color: var(--color-bg-inverse, #1f2937);
+    color: var(--color-text-inverse, #ffffff);
+    padding: var(--spacing-4, 1rem);
+    border-radius: var(--border-radius-md, 8px);
+    overflow-x: auto;
+    margin: var(--spacing-4, 1rem) 0;
+  }
+  
+  // Props table
+  &__props {
+    width: 100%;
+    border-collapse: collapse;
+    
+    th, td {
+      padding: var(--spacing-2, 0.5rem);
+      border: 1px solid var(--color-border, #d1d5db);
+      text-align: left;
+    }
+    
+    th {
+      background-color: var(--color-bg-alt, #f3f4f6);
+      font-weight: var(--font-weight-semibold, 600);
+    }
+  }
+}
+
+// =============================================================================
+// DEBUG UTILITIES (Development only)
+// =============================================================================
+
+// Remove in production
+.component-debug {
+  // Outline all components for layout debugging
+  &--outline * {
+    outline: 1px solid red !important;
+  }
+  
+  // Show component boundaries
+  &--boundaries .component {
+    position: relative;
+    
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border: 1px dashed blue;
+      pointer-events: none;
+    }
+  }
+  
+  // Show touch target boundaries
+  &--touch-targets .component {
+    position: relative;
+    
+    &::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      border: 1px dashed green;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+  }
+}

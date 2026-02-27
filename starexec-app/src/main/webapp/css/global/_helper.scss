@@ -15,6 +15,18 @@
 	}
 }
 
+@mixin tablet {
+	@media only screen and (min-width: 768px) and (max-width: 1024px) {
+		@content;
+	}
+}
+
+@mixin desktop {
+	@media only screen and (min-width: 1025px) {
+		@content;
+	}
+}
+
 @mixin not-mobile {
 	@media only screen and (min-width: 768px) {
 		@content;
@@ -44,6 +56,40 @@ $helper-first-include: true !default;
 		//		top: 6px;
 		//		width: 90%;
 		line-height: 2.2;
+	}
+
+	// Touch target utilities for WCAG 2.1 compliance
+	%touch-target {
+		min-height: var(--touch-target-desktop);
+		min-width: var(--touch-target-desktop);
+		position: relative;
+	}
+	
+	%touch-target-mobile {
+		@include mobile {
+			min-height: var(--touch-target-mobile);
+			min-width: var(--touch-target-mobile);
+		}
+		
+		@include tablet {
+			min-height: var(--touch-target-tablet);
+			min-width: var(--touch-target-tablet);
+		}
+	}
+	
+	%icon-button {
+		@extend %touch-target;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 12px;
+		
+		.ui-icon {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+		}
 	}
 
 	$helper-already-imported: false;

@@ -1,0 +1,14 @@
+// =============================================================================
+// COMPONENT LIBRARY VARIABLES
+// =============================================================================
+// Component-specific variables that override global defaults
+// =============================================================================
+
+@import "../global/spacing";
+@import "../global/colors";
+
+// Default component border radius
+$component-border-radius: 4px;
+
+// Default component transition
+$component-transition: all 0.2s ease;
