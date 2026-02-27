@@ -10,7 +10,6 @@
 **/junittestoutput/
 **/data_dir/
 **/deployed-upload-test/
-**/WEB-INF/
 **/*.war
 **/*.ear
 **/*.jar
@@ -54,6 +53,7 @@
 **/*.iml
 **/.vscode/
 **/.history/
+**/.factorypath
 
 ####################################
 # Sass
@@ -96,6 +96,7 @@
 **/*.tar.gz
 **/*.sql
 **/*.sql.gz
+**/*.backup
 
 # But allow tracked migration scripts
 !**/db/migration/*.sql
@@ -142,3 +143,6 @@
 **/coverage/
 **/coverage-report/
 **/reports/
+**/*-report.json
+**/*-analysis.json
+**/test-*.html
