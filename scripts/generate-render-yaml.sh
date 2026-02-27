@@ -29,6 +29,7 @@ export STAREXEC_BACKEND_VOL="${STAREXEC_BACKEND_VOL:-$VOLUME_PREFIX-$ENVIRONMENT
 export STAREXEC_WORK_VOL="${STAREXEC_WORK_VOL:-$VOLUME_PREFIX-$ENVIRONMENT-work}"
 export STAREXEC_POSTGRES_VOL="${STAREXEC_POSTGRES_VOL:-$DEFAULT_POSTGRES_VOL}"
 export STAREXEC_DB_HOST="${STAREXEC_DB_HOST:-localhost}"
+export APP_PORT="${APP_PORT:-7827}"
 export IMAGE_NAME="${IMAGE_NAME:-localhost/local/starexec}"
 export IMAGE_TAG="${IMAGE_TAG:-latest}"
 
@@ -42,6 +43,7 @@ echo "Generating render.yaml from template..."
 echo "  Using environment:"
 echo "    DB_USER:    $STAREXEC_DB_USER"
 echo "    DB_NAME:    $STAREXEC_DB_NAME"
+echo "    APP_PORT:   $APP_PORT"
 echo "    DATA_VOL:   $STAREXEC_DATA_VOL"
 echo "    POSTGRES_VOL: $STAREXEC_POSTGRES_VOL"
 echo "    IMAGE:      $IMAGE_NAME:$IMAGE_TAG"
@@ -53,6 +55,7 @@ sed -e "s|\${STAREXEC_DB_USER:-starexec}|$STAREXEC_DB_USER|g" \
     -e "s|\${STAREXEC_DB_NAME:-starexec}|$STAREXEC_DB_NAME|g" \
     -e "s|\${STAREXEC_DB_PORT:-5432}|$STAREXEC_DB_PORT|g" \
     -e "s|\${STAREXEC_DB_HOST:-localhost}|$STAREXEC_DB_HOST|g" \
+    -e "s|\${APP_PORT:-7827}|$APP_PORT|g" \
     -e "s|\${STAREXEC_DATA_VOL:-starexec-dev-data}|$STAREXEC_DATA_VOL|g" \
     -e "s|\${STAREXEC_SANDBOX_VOL:-starexec-dev-sandbox}|$STAREXEC_SANDBOX_VOL|g" \
     -e "s|\${STAREXEC_BACKEND_VOL:-starexec-dev-backend}|$STAREXEC_BACKEND_VOL|g" \

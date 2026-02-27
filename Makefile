@@ -710,6 +710,7 @@ deploy-podman-direct:
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
+	 APP_PORT=$(APP_PORT) \
 	 IMAGE_NAME=$(RELEASE_NAME) \
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
@@ -1043,6 +1044,7 @@ template:
 		STAREXEC_BACKEND_VOL=$${STAREXEC_BACKEND_VOL:-starexec-$(ENV)-backend} \
 		STAREXEC_WORK_VOL=$${STAREXEC_WORK_VOL:-starexec-$(ENV)-work} \
 		STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
+		APP_PORT=$(APP_PORT) \
 		IMAGE_NAME=$(RELEASE_NAME) \
 		IMAGE_TAG=$(IMAGE_TAG) \
 		./scripts/generate-render-yaml.sh; \

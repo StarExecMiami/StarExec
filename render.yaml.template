@@ -61,7 +61,7 @@ spec:
       imagePullPolicy: IfNotPresent
       ports:
         - containerPort: 8080
-          hostPort: 8080
+          hostPort: ${APP_PORT:-7827}
       env:
         - name: STAREXEC_DB_HOST
           value: "${STAREXEC_DB_HOST:-localhost}"
@@ -96,7 +96,7 @@ spec:
         - name: STAREXEC_URL_PREFIX
           value: "http"
         - name: STAREXEC_WEB_ADDRESS
-          value: "localhost:7827"
+          value: "localhost:${APP_PORT:-7827}"
       volumeMounts:
         - name: data
           mountPath: /app/data
