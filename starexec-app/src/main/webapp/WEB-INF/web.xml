@@ -40,6 +40,13 @@
     </jsp-config>
 
     <!-- ========================= -->
+    <!--        Listeners           -->
+    <!-- ========================= -->
+    <listener>
+        <listener-class>org.starexec.servlets.UploadJobWorker</listener-class>
+    </listener>
+
+    <!-- ========================= -->
     <!--        Servlets            -->
     <!-- ========================= -->
     <!-- JSP Servlet -->
