@@ -143,6 +143,8 @@ RUN apk add --no-cache \
     libstdc++ \
     libgcc \
     gcompat && \
+    # Restore legacy tcsh behavior: don't error on non-matching globs
+    echo "set nonomatch" > /etc/csh.env && \
     rm -rf /var/cache/apk/*
 
 # Verify critical tools for job execution
