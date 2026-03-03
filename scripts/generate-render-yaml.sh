@@ -18,8 +18,16 @@ DEFAULT_POSTGRES_VOL="${VOLUME_PREFIX}-${ENVIRONMENT}-postgres"
 export STAREXEC_DB_USER="${STAREXEC_DB_USER:-starexec}"
 if [ -n "${STAREXEC_DB_PASSWORD_FILE:-}" ] && [ -f "${STAREXEC_DB_PASSWORD_FILE}" ]; then
     export STAREXEC_DB_PASSWORD="$(cat "${STAREXEC_DB_PASSWORD_FILE}" | tr -d '\n')"
+elif [ -n "${STAREXEC_DB_PASSWORD:-}" ]; then
+    export STAREXEC_DB_PASSWORD
 else
-    export STAREXEC_DB_PASSWORD="${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+    if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "local" ]; then
+        echo "ERROR: STAREXEC_DB_PASSWORD is not set for '$ENVIRONMENT' environment." \
+             "Set STAREXEC_DB_PASSWORD or STAREXEC_DB_PASSWORD_FILE before deploying." >&2
+        exit 1
+    fi
+    echo "WARNING: STAREXEC_DB_PASSWORD is not set. Using insecure dev default. Only acceptable for local dev." >&2
+    export STAREXEC_DB_PASSWORD="starexec_dev_password"
 fi
 export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
 export STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"

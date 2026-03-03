@@ -66,7 +66,12 @@ deploy_via_helm() {
         export STAREXEC_DB_HOST="${STAREXEC_DB_HOST:-localhost}"
         export STAREXEC_DB_PORT="${STAREXEC_DB_PORT:-5432}"
         export STAREXEC_DB_USER="${STAREXEC_DB_USER:-starexec}"
-        export STAREXEC_DB_PASSWORD="${STAREXEC_DB_PASSWORD:-starexec_dev_password}"
+        if [ -z "${STAREXEC_DB_PASSWORD:-}" ]; then
+            echo "WARNING: STAREXEC_DB_PASSWORD is not set. Using insecure dev default. Set this variable before deploying." >&2
+            export STAREXEC_DB_PASSWORD="starexec_dev_password"
+        else
+            export STAREXEC_DB_PASSWORD
+        fi
         export STAREXEC_DB_NAME="${STAREXEC_DB_NAME:-starexec}"
         envsubst < render.yaml.template > render.yaml
         # Deploy the pod
