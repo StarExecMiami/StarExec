@@ -35,6 +35,9 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       
+      - name: Clean global Dependency-Check data
+        run: rm -rf ~/.m2/repository/org/owasp/dependency-check-data
+
       - name: Run OWASP Dependency Check
         run: |
           echo "Cleaning previous dependency check data..."

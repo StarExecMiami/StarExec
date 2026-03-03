@@ -166,8 +166,6 @@
                     <artifactId>dependency-check-maven</artifactId>
                     <version>12.2.0</version>
                     <configuration>
-                        <!-- Explicitly set H2 connection string to avoid pool initialization issues -->
-                        <connectionString>jdbc:h2:file:${project.build.directory}/dependency-check/db;AUTO_SERVER=TRUE</connectionString>
                         <dataDirectory>${project.build.directory}/dependency-check-data</dataDirectory>
                         <!-- Fail build on high CVSS scores -->
                         <failBuildOnCVSS>8</failBuildOnCVSS>
