@@ -5,6 +5,50 @@
 var star = star || {};
 
 /**
+ * CSRF Protection Setup
+ *
+ * Reads the CSRF token from the <meta name="csrf-token"> tag injected by
+ * head.tag and:
+ *   1. Attaches it as the X-CSRF-Token header on every jQuery AJAX request
+ *      (covers all $.post / $.ajax / DataTables server-side requests).
+ *   2. Injects a hidden csrfToken field into every HTML form before it is
+ *      submitted, covering non-AJAX multipart and URL-encoded form POSTs.
+ */
+(function () {
+  "use strict";
+
+  var csrfToken = $('meta[name="csrf-token"]').attr("content");
+  var csrfHeader = $('meta[name="csrf-header"]').attr("content") || "X-CSRF-Token";
+
+  if (!csrfToken) {
+    return; // not on a page with a session (e.g. public pages)
+  }
+
+  // 1. Global jQuery AJAX setup — attaches header to every AJAX request
+  $.ajaxSetup({
+    beforeSend: function (xhr, settings) {
+      // Only attach to same-origin requests
+      if (settings.crossDomain) return;
+      xhr.setRequestHeader(csrfHeader, csrfToken);
+    },
+  });
+
+  // 2. Form submission — inject hidden field so URL-encoded / multipart
+  //    form submissions also carry the token as a fallback parameter.
+  $(document).on("submit", "form", function () {
+    var $form = $(this);
+    if ($form.find('input[name="csrfToken"]').length === 0) {
+      $form.append(
+        $("<input>")
+          .attr("type", "hidden")
+          .attr("name", "csrfToken")
+          .val(csrfToken)
+      );
+    }
+  });
+})();
+
+/**
  * Contains javascript relevant to all pages within starexec
  */
 

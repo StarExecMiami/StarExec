@@ -1,5 +1,5 @@
 <%@tag description="Standard html header info for all starexec pages"%>
-<%@tag import="java.util.List, org.starexec.util.Validator, org.starexec.util.Util, org.starexec.util.SessionUtil,org.starexec.data.database.Users, org.starexec.data.to.*, org.starexec.constants.*"%>
+<%@tag import="java.util.List, org.starexec.util.Validator, org.starexec.util.Util, org.starexec.util.SessionUtil, org.starexec.util.CsrfUtil, org.starexec.data.database.Users, org.starexec.data.to.*, org.starexec.constants.*"%>
 <%@tag trimDirectiveWhitespaces="true" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
@@ -14,6 +14,8 @@
 	<meta charset="utf-8" />
 	<%-- This viewport meta tag should not be deleted. Allows website to render on phones. --%>
 	<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+	<meta name="csrf-token" content="<%= CsrfUtil.getOrCreateToken(request) %>" />
+	<meta name="csrf-header" content="X-CSRF-Token" />
 	<%
 		Integer userId = SessionUtil.getUserId(request);
 
