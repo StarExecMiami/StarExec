@@ -190,7 +190,7 @@ public class GeneralSecurity {
 			return new ValidatorStatusCode(false, "You do not have permission to suspend or reinstate users");
 		}
 
-		return new ValidatorStatusCode(false);
+		return new ValidatorStatusCode(true);
 	}
 
 	/**
