@@ -42,7 +42,7 @@
 	}
 %>
 
-<star:template title="select default ${type}"
+<star:template title="Select Default ${type}"
                css="common/delaySpinner, edit/defaultPrimitive, edit/shared, common/table"
                js="common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.validate.min, edit/defaultPrimitive">
 	<span style="display:none;" id="primType" value="${type}"></span>
@@ -74,8 +74,8 @@
 					</tbody>
 				</table>
 			</fieldset>
-			<button type="button" id="cancel">cancel</button>
-			<button type="button" id="update">update</button>
+		<button type="button" id="cancel">Cancel</button>
+		<button type="button" id="update">Update</button>
 		</form>
 	</fieldset>
 </star:template>

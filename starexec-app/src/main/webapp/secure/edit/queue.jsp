@@ -35,7 +35,7 @@
 	}
 %>
 
-<star:template title="edit ${queue.name}"
+<star:template title="Edit ${queue.name}"
                js="lib/jquery.validate.min, edit/queue"
                css="edit/shared, edit/queue">
 	<form id="editQueueForm">

@@ -58,7 +58,7 @@
 	}
 %>
 
-<star:template title="upload benchmarks to ${space.name}"
+<star:template title="Upload Benchmarks to ${space.name}"
                css="common/delaySpinner, add/benchmark"
                js="common/delaySpinner, lib/jquery.validate.min, add/benchmarks, lib/jquery.qtip.min">
 	<form id="uploadForm" enctype="multipart/form-data" method="POST"
@@ -213,7 +213,7 @@
 						<button id="btnPrev" type="button">Cancel</button>
 					</td>
 					<td colspan="1">
-						<button id="btnUpload" type="button" onclick="handleUploadClick(event)">upload</button>
+						<button id="btnUpload" type="button" onclick="handleUploadClick(event)">Upload</button>
 					</td>
 				</tr>
 				</tbody>

@@ -33,7 +33,7 @@
 	<!-- Date selection form -->
 	<form id="dateselector" method="post" action="#" role="search">
 		<fieldset>
-			<legend>Filter by Date Range</legend>
+			<legend>Filter by date range</legend>
 
 			<div class="form-group">
 				<label for="dateselector_start">Start Date:</label>
@@ -69,7 +69,7 @@
 
 	<!-- Results table -->
 	<fieldset class="results-fieldset">
-		<legend>Error Results</legend>
+		<legend>Error results</legend>
 		<div class="table-wrapper">
 			<table id="jobpairErrors" class="display" role="grid" aria-label="Job pair errors"></table>
 		</div>

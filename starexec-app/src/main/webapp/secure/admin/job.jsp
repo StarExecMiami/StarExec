@@ -18,11 +18,11 @@
 		<ul class="actionList">
 			<c:if test="${isSystemPaused}">
 				<li>
-					<button type="button" id="resumeAll">resume all</button>
+					<button type="button" id="resumeAll">Resume all</button>
 				</li>
 			</c:if><c:if test="${not isSystemPaused}">
 			<li>
-				<button type="button" id="pauseAll">pause all</button>
+				<button type="button" id="pauseAll">Pause all</button>
 			</li>
 		</c:if>
 		</ul>

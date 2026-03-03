@@ -63,7 +63,7 @@
 		return;
 	}
 %>
-<star:template title="edit ${fn:escapeXml(proc.name)}"
+<star:template title="Edit ${fn:escapeXml(proc.name)}"
                css="details/shared, edit/processor, edit/shared, shared/copyToStardev"
                js="lib/jquery.validate.min, edit/processor, shared/copyToStardev">
 	<star:primitiveTypes/>
@@ -117,9 +117,9 @@
 	</form>
 	<fieldset id="actionField">
 		<legend>actions</legend>
-		<button type="button" id="delete">delete</button>
-		<button type="button" id="cancel">cancel</button>
-		<button type="button" id="update">update</button>
+	<button type="button" id="cancel">Cancel</button>
+	<button type="button" id="delete">Delete</button>
+	<button type="button" id="update">Update</button>
 		<c:if test="${hasAdminReadPrivileges}">
 			<star:copyToStardevButton/>
 		</c:if>

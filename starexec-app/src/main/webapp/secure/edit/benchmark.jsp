@@ -66,7 +66,7 @@
 	}
 %>
 
-<star:template title="edit ${bench.name}"
+<star:template title="Edit ${bench.name}"
                js="lib/jquery.validate.min, edit/benchmark"
                css="edit/shared, edit/benchmark">
 	<form id="editBenchmarkForm">

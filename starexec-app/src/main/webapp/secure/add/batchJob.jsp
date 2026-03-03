@@ -34,7 +34,7 @@
 		return;
 	}
 %>
-<star:template title="upload XML configuration for a job in ${space.name}"
+<star:template title="Upload XML Configuration for ${space.name}"
                css="common/delaySpinner, add/batchJob"
                js="common/delaySpinner, lib/jquery.validate.min, add/batchSpace">
 	<form method="POST" enctype="multipart/form-data"

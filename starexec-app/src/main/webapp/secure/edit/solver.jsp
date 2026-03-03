@@ -66,7 +66,7 @@
 	}
 %>
 
-<star:template title="edit ${fn:escapeXml(solver.name)}"
+<star:template title="Edit ${fn:escapeXml(solver.name)}"
                js="lib/jquery.validate.min, edit/solver"
                css="edit/shared, edit/solver">
 	<form id="editSolverForm">

@@ -73,7 +73,7 @@
 %>
 
 <jsp:useBean id="now" class="java.util.Date"/>
-<star:template title="run ${space.name}"
+<star:template title="Run Job in ${space.name}"
                css="common/delaySpinner, common/table, add/job"
                js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/job, lib/jquery.dataTables.min, lib/jquery.qtip.min, add/sharedSolverConfigTableFunctions">
 	<style>
@@ -492,11 +492,11 @@
 					class="ui-icon ui-icon-circlesmall-minus" aria-hidden="true"></span>none</p>
 			</div>
 		</fieldset>
-		<div id="actionBar" class="wizard-actions">
-			<button type="button" class="round" id="btnPrev">Previous</button>
-			<button type="button" class="round" id="btnNext">Next</button>
-			<button type="submit" class="round" id="btnDone">Submit</button>
-			<button type="button" class="round" id="btnBack">Cancel</button>
-		</div>
+	<div id="actionBar" class="wizard-actions">
+		<button type="button" class="round" id="btnBack">Cancel</button>
+		<button type="button" class="round" id="btnPrev">Previous</button>
+		<button type="button" class="round" id="btnNext">Next</button>
+		<button type="submit" class="round" id="btnDone">Submit</button>
+	</div>
 	</form>
 </star:template>

@@ -93,7 +93,7 @@
 	}
 %>
 
-<star:template title="edit ${fn:escapeXml(com.name)}"
+<star:template title="Edit ${fn:escapeXml(com.name)}"
                js="common/defaultSettings, lib/jquery.dataTables.min, lib/jquery.validate.min, edit/community"
                css="common/table, edit/community">
 	<star:settings setting="${setting}"/>
@@ -182,7 +182,7 @@
 			                                              id="website_name"/>
 			<label for="website_url">url </label><input type="text"
 			                                            id="website_url"/>
-			<button id="addWebsite">add</button>
+			<button id="addWebsite">Add</button>
 		</div>
 	</fieldset>
 	<fieldset id="benchmarkField">
@@ -253,7 +253,7 @@
 				</tr>
 				<tr>
 					<td colspan="2">
-						<button id="addType" type="submit">add</button>
+						<button id="addType" type="submit">Add</button>
 					</td>
 				</tr>
 			</table>
@@ -455,7 +455,7 @@
 				</tr>
 				<tr>
 					<td colspan="2">
-						<button id="addPreProcessor" type="submit">add</button>
+						<button id="addPreProcessor" type="submit">Add</button>
 					</td>
 				</tr>
 			</table>
@@ -531,7 +531,7 @@
 				</tr>
 				<tr>
 					<td colspan="2">
-						<button id="addPostProcessor" type="submit">add</button>
+						<button id="addPostProcessor" type="submit">Add</button>
 					</td>
 				</tr>
 			</table>
@@ -607,8 +607,7 @@
 				</tr>
 				<tr>
 					<td colspan="2">
-						<button id="addUpdateProcessor" type="submit">add
-						</button>
+					<button id="addUpdateProcessor" type="submit">Add</button>
 					</td>
 				</tr>
 			</table>

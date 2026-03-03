@@ -3,7 +3,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 
-<star:template title="Password reset" css="accounts/password_reset" js="accounts/temp_pass">
+<star:template title="Password Reset" css="accounts/password_reset" js="accounts/temp_pass">
 	<main role="main" class="temp-pass-container">
 		<section aria-labelledby="temp-pass-heading">
 			<h1 id="temp-pass-heading" class="sr-only">Temporary Password Generated</h1>

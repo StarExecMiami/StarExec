@@ -329,7 +329,7 @@
 		</c:choose>
 		<c:if test="${!isLocalJobPage}">
 			<c:if test="${rerun}">
-				<button id="rerunPair">rerun pair</button>
+				<button id="rerunPair">Rerun pair</button>
 			</c:if>
 		</c:if>
 

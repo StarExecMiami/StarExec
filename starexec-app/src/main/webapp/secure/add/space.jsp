@@ -39,7 +39,7 @@
 	}
 %>
 
-<star:template title="add subspace to ${space.name}" css="add/space"
+<star:template title="Add Subspace to ${space.name}" css="add/space"
                js="lib/jquery.validate.min, add/space">
 	<form id="addForm" method="post" action="${pageContext.request.contextPath}/secure/add/space">
 		<input type="hidden" name="parent" value="${space.id}"/>
@@ -159,7 +159,7 @@
 						<button id="btnPrev" type="button">Cancel</button>
 					</td>
 					<td colspan="1">
-						<button id="btnCreate">create</button>
+						<button id="btnCreate">Create</button>
 					</td>
 				</tr>
 				</tbody>

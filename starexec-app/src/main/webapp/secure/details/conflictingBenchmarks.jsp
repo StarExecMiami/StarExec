@@ -51,7 +51,7 @@
 		js="details/solverConflicts, util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/shared, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
 		css="details/solverConflicts, common/table, common/delaySpinner, explore/common, details/shared">
 	<fieldset>
-		<legend>Conflicting Benchmarks</legend>
+		<legend>Conflicting benchmarks</legend>
 		<p class="field-hint">These benchmarks produced conflicting results for <strong>${solver.name}</strong> with configuration <strong>${configuration.name}</strong>.</p>
 		<table class="conflictsTable shaded" aria-label="List of benchmarks with conflicting results">
 			<thead>

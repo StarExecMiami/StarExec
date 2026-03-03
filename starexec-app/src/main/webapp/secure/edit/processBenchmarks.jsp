@@ -31,7 +31,7 @@
 	}
 %>
 
-<star:template title="process benchmarks"
+<star:template title="Process Benchmarks"
                css="common/delaySpinner, common/table, edit/processBenchmarks, edit/shared"
                js=" common/delaySpinner, lib/jquery.validate.min, edit/processBenchmarks ">
 
@@ -106,8 +106,8 @@
 		</fieldset>
 		<fieldset id="actionField">
 			<legend>actions</legend>
-			<button type="button" id="cancel">cancel</button>
-			<button type="submit" id="process">process</button>
+		<button type="button" id="cancel">Cancel</button>
+		<button type="submit" id="process">Process</button>
 		</fieldset>
 	</form>
 

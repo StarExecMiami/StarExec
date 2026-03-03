@@ -2,7 +2,7 @@
 %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
-<star:template title="create a stress test" css="admin/testing"
+<star:template title="Create a Stress Test" css="admin/testing"
                js="lib/jquery.validate.min, admin/stressTest">
 	<form method="POST" action="${starexecRoot}/secure/add/stressTest"
 	      id="createStressTestForm">

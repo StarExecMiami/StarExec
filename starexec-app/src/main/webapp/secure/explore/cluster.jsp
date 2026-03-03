@@ -17,7 +17,7 @@
 		<p class="accent" id="queueID"></p>
 
 		<fieldset id="descriptionContainer">
-			<legend class="Queue Description">Queue Description</legend>
+			<legend class="Queue Description">Queue description</legend>
 			<div id="queueDescriptionWrapper">
 				<p id="queueDescriptionText"></p>
 			</div>
@@ -29,11 +29,11 @@
 		</fieldset>
 
 		<fieldset id="detailField">
-			<legend class="expd" id="clusterExpd">Job Pairs</legend>
+			<legend class="expd" id="clusterExpd">Job pairs</legend>
 			<table id="details" class="shaded">
 				<thead>
 				<tr>
-					<th>Submit Time</th>
+					<th>Submit time</th>
 					<th>Job</th>
 					<th>User</th>
 					<th id="benchHead">Benchmark</th>

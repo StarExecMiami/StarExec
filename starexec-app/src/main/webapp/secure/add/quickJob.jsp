@@ -79,7 +79,7 @@
 	}
 %>
 <jsp:useBean id="now" class="java.util.Date"/>
-<star:template title="run quick job"
+<star:template title="Run Quick Job"
                css="common/delaySpinner, common/table, add/quickJob"
                js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/quickJob, lib/jquery.dataTables.min, lib/jquery.qtip.min">
 	<c:forEach items="${defaultSettings}" var="setting">
@@ -278,11 +278,11 @@
 				<!-- Will be populated using AJAX -->
 				</tbody>
 			</table>
-			<button id="useSolver">use selected solver</button>
+			<button id="useSolver">Use selected solver</button>
 		</fieldset>
 		<div id="actionBar">
-			<button type="submit" class="round" id="btnDone">submit</button>
-			<button type="button" class="round" id="btnBack">Cancel</button>
+		<button type="button" class="round" id="btnBack">Cancel</button>
+		<button type="submit" class="round" id="btnDone">Submit</button>
 		</div>
 	</form>
 	<div id="dialog-createSettingsProfile" title="Create Settings Profile" class="hiddenDialog" role="dialog" aria-labelledby="dialog-createSettingsProfile-title">

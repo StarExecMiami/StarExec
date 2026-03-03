@@ -74,7 +74,7 @@
 	}
 %>
 
-<star:template title="upload status"
+<star:template title="Upload Status"
                js="common/delaySpinner, details/shared, lib/jquery.dataTables.min"
                css="details/shared, common/table, details/uploadStatus">
 	
@@ -132,11 +132,10 @@
 						$('#uploadProgressBarFill').css('width', progress + '%');
 						$('#uploadProgressText').text(progress + '%');
 						
-						// Update details table
-						$('#statusValue').text(status);
-						$('#totalFoundValue').text(found);
-						$('#processedValue').text(processed);
-						$('#spacesCreatedValue').text((data.totalSpacesCreated || 0) + ' (directories scanned)');
+					// Update details table
+					$('#totalFoundValue').text(found);
+					$('#processedValue').text(processed);
+					$('#spacesCreatedValue').text(data.totalSpacesCreated || 0);
 						
 						// Update Pulse (Heartbeat)
 						if (data.lastHeartbeat) {
@@ -166,25 +165,27 @@
 							}
 						}
 
-						if (status === 'COMPLETED') {
-							clearInterval(pollInterval);
-							$('#statusValue').css('color', 'green');
-							$('#uploadProgressText').text('Upload complete!');
-							$('#uploadProgressBarFill').css('background', '#4CAF50');
-						} else if (status === 'COMPLETED_WITH_ERRORS') {
-							clearInterval(pollInterval);
-							$('#statusValue').css('color', '#ff9800');
-							$('#statusValue').text('COMPLETED (WITH ERRORS)');
-							$('#uploadProgressText').text('Upload finished with some errors.');
-							$('#uploadProgressBarFill').css('background', '#ff9800');
-							$('#errorMessageRow').show();
-							$('#errorMessageValue').text(data.errorMessage || 'Some files were skipped. Check below for details.');
-						} else if (status === 'FAILED') {
-							clearInterval(pollInterval);
-							$('#statusValue').css('color', 'red');
-							$('#errorMessageRow').show();
-							$('#errorMessageValue').text(data.errorMessage || 'Unknown error');
-							$('#uploadProgressBarFill').css('background', '#f44336');
+					if (status === 'COMPLETED') {
+						clearInterval(pollInterval);
+						$('#uploadProgressText').text('Upload complete!');
+						$('#uploadProgressText').css('color', 'green');
+						$('#uploadProgressBarFill').css('background', '#4CAF50');
+						$('#uploadProgressBarFill').css('width', '100%');
+					} else if (status === 'COMPLETED_WITH_ERRORS') {
+						clearInterval(pollInterval);
+						$('#uploadProgressText').text('Upload finished with some errors.');
+						$('#uploadProgressText').css('color', '#ff9800');
+						$('#uploadProgressBarFill').css('background', '#ff9800');
+						$('#uploadProgressBarFill').css('width', '100%');
+						$('#errorMessageRow').show();
+						$('#errorMessageValue').text(data.errorMessage || 'Some files were skipped. Check below for details.');
+					} else if (status === 'FAILED') {
+						clearInterval(pollInterval);
+						$('#uploadProgressText').text('Upload failed.');
+						$('#uploadProgressText').css('color', 'red');
+						$('#errorMessageRow').show();
+						$('#errorMessageValue').text(data.errorMessage || 'Unknown error');
+						$('#uploadProgressBarFill').css('background', '#f44336');
 						} else {
 							// Adaptive polling logic
 							if (processed === lastProcessed) {
@@ -209,71 +210,66 @@
 							}
 						}
 					}
-				).fail(function() {
-					$('#statusValue').text('OFFLINE (retrying...)');
-					$('#statusValue').css('color', 'orange');
-					// If request fails, slow down polling
-					pollIntervalMs = Math.min(pollIntervalMs + 5000, maxPollIntervalMs);
-					startPolling();
-				});
+			).fail(function() {
+				$('#uploadProgressText').text('Connection lost, retrying...');
+				$('#uploadProgressText').css('color', 'orange');
+				// If request fails, slow down polling
+				pollIntervalMs = Math.min(pollIntervalMs + 5000, maxPollIntervalMs);
+				startPolling();
+			});
 			}
 		</script>
 		
-		<%-- New System: Modern Progress Display --%>
-		<fieldset>
-			<legend>upload progress</legend>
-			<div style="margin: 20px 0;">
-				<div id="uploadProgressBar" style="width: 100%; height: 30px; border: 1px solid #ccc; background: #fff; border-radius: 4px; overflow: hidden;">
-					<div id="uploadProgressBarFill" style="height: 100%; width: 0%; background: #2196F3; transition: width 0.3s;"></div>
-				</div>
-				<div id="uploadProgressText" style="text-align: center; margin-top: 10px; font-weight: bold;">Loading...</div>
-			</div>
-		</fieldset>
-		
-		<fieldset>
-			<legend>details</legend>
-			<table class="shaded">
-				<thead>
-				<tr>
-					<th>attribute</th>
-					<th>value</th>
-				</tr>
-				</thead>
-				<tbody>
-				<tr>
-					<td>status</td>
-					<td id="statusValue">${newJob.status}</td>
-				</tr>
-				<tr>
-					<td>total files found</td>
-					<td id="totalFoundValue">${newJob.totalFilesFound}</td>
-				</tr>
-				<tr>
-					<td>files processed</td>
-					<td id="processedValue">${newJob.totalFilesProcessed}</td>
-				</tr>
-				<tr>
-					<td>directories scanned</td>
-					<td id="spacesCreatedValue">${newJob.totalSpacesCreated}</td>
-				</tr>
-				<tr>
-					<td>last active (pulse)</td>
-					<td id="lastActiveValue">
-						<span id="pulseIndicator" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#ccc; margin-right:5px;"></span>
-						<span id="lastActiveTime">Checking...</span>
-					</td>
-				</tr>
-				<tr>
-					<td>created at</td>
-					<td><fmt:formatDate pattern="MMM dd yyyy HH:mm" value="${newJob.createdAt}"/></td>
-				</tr>
-				<tr id="errorMessageRow" style="${(not empty newJob.errorMessage or newJob.status eq 'COMPLETED_WITH_ERRORS') ? '' : 'display: none;'}">
-					<td style="color: #f44336;">error log</td>
-					<td id="errorMessageValue" style="color: #f44336; white-space: pre-wrap;">${newJob.errorMessage}</td>
-				</tr>
-				</tbody>
-			</table>
-		</fieldset>
+	<%-- New System: Modern Progress Display --%>
+	<fieldset>
+		<legend>details</legend>
+		<table class="shaded">
+			<thead>
+			<tr>
+				<th>attribute</th>
+				<th>value</th>
+			</tr>
+			</thead>
+			<tbody>
+			<tr>
+				<td>progress</td>
+				<td>
+					<div id="uploadProgressBar" style="width: 100%; height: 20px; border: 1px solid #ccc; background: #fff; border-radius: 4px; overflow: hidden;">
+						<div id="uploadProgressBarFill" style="height: 100%; width: 0%; background: #2196F3; transition: width 0.3s;"></div>
+					</div>
+					<div id="uploadProgressText" style="margin-top: 6px; font-weight: bold;">Loading...</div>
+				</td>
+			</tr>
+			<tr>
+				<td>total files found</td>
+				<td id="totalFoundValue">${newJob.totalFilesFound}</td>
+			</tr>
+			<tr>
+				<td>files processed</td>
+				<td id="processedValue">${newJob.totalFilesProcessed}</td>
+			</tr>
+			<tr>
+				<td>directories scanned</td>
+				<td id="spacesCreatedValue">${newJob.totalSpacesCreated}</td>
+			</tr>
+			<tr>
+				<td>last active (pulse)</td>
+				<td id="lastActiveValue">
+					<span id="pulseIndicator" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#ccc; margin-right:5px;"></span>
+					<span id="lastActiveTime">Checking...</span>
+				</td>
+			</tr>
+			<tr>
+				<td>created at</td>
+				<td><fmt:formatDate pattern="MMM dd yyyy HH:mm" value="${newJob.createdAt}"/></td>
+			</tr>
+			<tr id="errorMessageRow" style="${(not empty newJob.errorMessage or newJob.status eq 'COMPLETED_WITH_ERRORS') ? '' : 'display: none;'}">
+				<td style="color: #f44336;">error log</td>
+				<td id="errorMessageValue" style="color: #f44336; white-space: pre-wrap;">${newJob.errorMessage}</td>
+			</tr>
+			</tbody>
+		</table>
+	</fieldset>
 	</c:if>
 	
 	<%-- OLD SYSTEM: Legacy static table --%>

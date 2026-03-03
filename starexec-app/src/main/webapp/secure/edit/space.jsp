@@ -91,7 +91,7 @@
 		return;
 	}
 %>
-<star:template title="edit ${space.name}"
+<star:template title="Edit ${space.name}"
                js="lib/jquery.validate.min, edit/space"
                css="edit/shared, edit/space">
 	<form id="editSpaceForm">
@@ -199,8 +199,8 @@
 				</c:if>
 				</tbody>
 			</table>
-			<button type="button" id="update">update</button>
-			<button type="button" id="btnPrev">Cancel</button>
+		<button type="button" id="btnPrev">Cancel</button>
+		<button type="button" id="update">Update</button>
 		</fieldset>
 	</form>
 </star:template>

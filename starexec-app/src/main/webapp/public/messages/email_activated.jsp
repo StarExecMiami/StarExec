@@ -1,7 +1,7 @@
 <%@page contentType="text/html" pageEncoding="UTF-8" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 
-<star:template title="account activation">
+<star:template title="Account Activation">
 	<main role="main" class="message-container">
 		<section aria-labelledby="activation-heading">
 			<h1 id="activation-heading" class="sr-only">Account Activation Successful</h1>

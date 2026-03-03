@@ -42,7 +42,7 @@
 		return;
 	}
 %>
-<star:template title="add to ${solver.name}" css="add/configuration"
+<star:template title="Add Configuration to ${solver.name}" css="add/configuration"
                js="lib/jquery.validate.min, add/configuration">
 	<form method="POST" enctype="multipart/form-data"
 	      action="${starexecRoot}/secure/upload/configurations"
@@ -77,8 +77,8 @@
 				</tr>
 				</tbody>
 			</table>
-			<button class="cancelBtn" type="button">cancel</button>
-			<button class="uploadBtn" type="submit">upload</button>
+		<button class="cancelBtn" type="button">Cancel</button>
+		<button class="uploadBtn" type="submit">Upload</button>
 		</fieldset>
 	</form>
 	<form method="POST" action="${starexecRoot}/secure/save/configurations"
@@ -114,8 +114,8 @@
 				</tr>
 				</tbody>
 			</table>
-			<button class="cancelBtn" type="button">cancel</button>
-			<button class="saveBtn" type="submit">save</button>
+		<button class="cancelBtn" type="button">Cancel</button>
+		<button class="saveBtn" type="submit">Save</button>
 		</fieldset>
 	</form>
 </star:template>

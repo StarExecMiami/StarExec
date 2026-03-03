@@ -134,8 +134,8 @@
 						<table id="personal" class="shaded" role="table" aria-label="Personal information">
 							<thead>
 							<tr>
-								<th class="label" scope="col">Attribute</th>
-								<th scope="col">Current Value</th>
+							<th class="label" scope="col">Attribute</th>
+							<th scope="col">Current value</th>
 							</tr>
 							</thead>
 							<tbody>
@@ -200,8 +200,8 @@
 			<table id="siteSettingTable" role="table" aria-label="Site settings">
 				<thead>
 				<tr>
-					<th scope="col">Setting</th>
-					<th scope="col">Current Value</th>
+				<th scope="col">Setting</th>
+				<th scope="col">Current value</th>
 				</tr>
 				</thead>
 				<tbody>

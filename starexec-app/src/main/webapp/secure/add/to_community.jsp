@@ -36,7 +36,7 @@
 	}
 %>
 
-<star:template title="join ${com.name}" css="add/to_community"
+<star:template title="Join ${com.name}" css="add/to_community"
                js="lib/jquery.validate.min, lib/jquery.qtip.min, add/to_community">
 	<c:if test="${requestExists}">
 		<div class="pending-notice">

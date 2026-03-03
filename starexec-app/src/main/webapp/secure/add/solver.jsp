@@ -50,7 +50,7 @@
 		return;
 	}
 %>
-<star:template title="upload solver to ${space.name}"
+<star:template title="Upload Solver to ${space.name}"
                css="common/delaySpinner, add/solver"
                js="common/delaySpinner ,lib/jquery.validate.min, add/solver">
 	<span id="defaultProfile" style="display:none"
@@ -169,7 +169,7 @@
 						<button id="btnPrev" type="button">Cancel</button>
 					</td>
 					<td colspan="1">
-						<button id="btnUpload" type="submit">upload</button>
+						<button id="btnUpload" type="submit">Upload</button>
 					</td>
 				</tr>
 

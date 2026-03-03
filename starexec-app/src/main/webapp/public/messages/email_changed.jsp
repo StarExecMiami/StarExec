@@ -11,7 +11,7 @@
 	}
 %>
 <%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
-<star:template title="email changed">
+<star:template title="Email Changed">
 	<main role="main" class="message-container">
 		<section aria-labelledby="email-changed-heading">
 			<h1 id="email-changed-heading" class="sr-only">Email Changed Successfully</h1>

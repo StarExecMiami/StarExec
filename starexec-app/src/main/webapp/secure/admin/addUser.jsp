@@ -15,7 +15,7 @@
 	request.setAttribute("msgLen", DB.MSG_LEN);
 %>
 
-<star:template title="user registration"
+<star:template title="User Registration"
                css="common/table, explore/common, admin/admin, jqueryui/jquery-ui"
                js="lib/jquery.validate.min, lib/jquery-ui.min, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, add/user">
 	<p class="registration">create a new user account</p>

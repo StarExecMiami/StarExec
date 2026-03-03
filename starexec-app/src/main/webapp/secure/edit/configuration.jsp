@@ -58,7 +58,7 @@
 	}
 %>
 
-<star:template title="edit ${config.name}" css="edit/configuration"
+<star:template title="Edit ${config.name}" css="edit/configuration"
                js="lib/jquery.validate.min, edit/configuration">
 	<form id="editConfigForm">
 		<fieldset>

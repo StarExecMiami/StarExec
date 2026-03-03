@@ -2,7 +2,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 
-<star:template title="thank you!">
+<star:template title="Thank You!">
 	<main role="main" class="message-container">
 		<section aria-labelledby="response-heading">
 			<h1 id="response-heading" class="sr-only">Request Processed</h1>

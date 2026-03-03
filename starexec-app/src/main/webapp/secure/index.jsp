@@ -24,7 +24,7 @@
 	request.setAttribute("isSuspended", isSuspended);
 	request.setAttribute("userRole", userRole);
 %>
-<star:template title="Starexec Preview">
+<star:template title="StarExec Preview">
 	<main role="main" class="starexec-preview">
 		<c:if test="${isUnauthorized}">
 			<div class="alert alert--info alert--spacious" role="alert" aria-labelledby="unauthorized-heading">

@@ -8,7 +8,7 @@
 	// Generate CSRF token for form protection
 	request.setAttribute("csrfToken", CsrfUtil.getOrCreateToken(request));
 %>
-<star:template title="Password reset" css="accounts/password_reset"
+<star:template title="Password Reset" css="accounts/password_reset"
                js="lib/jquery.validate.min, accounts/password_reset">
 	<main role="main" class="password-reset-container">
 		<section aria-labelledby="reset-heading">

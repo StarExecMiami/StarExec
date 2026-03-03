@@ -35,7 +35,7 @@
 	<!-- Date filter form -->
 	<form id="dateselector" method="get" action="#" role="search">
 		<fieldset>
-			<legend>Date Range</legend>
+			<legend>Date range</legend>
 
 			<div class="form-group">
 				<label for="analytics_start">Start Date:</label>
@@ -83,7 +83,7 @@
 
 	<!-- Results table -->
 	<fieldset class="results-fieldset">
-		<legend>Event Totals</legend>
+		<legend>Event totals</legend>
 		<div class="table-wrapper">
 			<table id="analytics_results" class="display" role="grid" aria-label="Analytics events summary"></table>
 		</div>

@@ -45,7 +45,7 @@
 		return;
 	}
 %>
-<star:template title="edit permissions"
+<star:template title="Edit Permissions"
                js="util/spaceTree, common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree, edit/spacePermissions, util/datatablesUtility, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min, shared/sharedFunctions"
                css="common/delaySpinner, common/table, explore/common, explore/spaces, edit/spacePermissions">
 	<span id="userId" value="${userId}"></span>
