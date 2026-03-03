@@ -21,7 +21,8 @@ public class ClearCacheManager {
 				scriptTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
 			}
 			catch (IOException e) {
-				log.error("Error reading the jobscript at "+f,e);
+				log.error("Error reading the clearCacheScript at " + f + " — cache clearing will be unavailable", e);
+				return;
 			}
 			scriptTemplate = scriptTemplate.replace("$$SANDBOX_USER_ONE$$", R.SANDBOX_USER_ONE);
 			scriptTemplate = scriptTemplate.replace("$$WORKING_DIR_BASE$$", R.BACKEND_WORKING_DIR);
@@ -55,9 +56,9 @@ public class ClearCacheManager {
 			if(!f.setExecutable(true, false) || !f.setReadable(true, false)) {
 				log.error("Can't change owner permissions on jobscript file. This will prevent the grid engine from being able to open the file. Script path: " + scriptPath);
 			}
-			FileWriter out = new FileWriter(f);
+		try (FileWriter out = new FileWriter(f)) {
 			out.write(currentScript);
-			out.close();
+		}
 			R.BACKEND.submitScript(scriptPath, R.BACKEND_WORKING_DIR, logPath.getAbsolutePath());
 		}
 	}
