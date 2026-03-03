@@ -3,15 +3,12 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%
-	String password = "Password0410!!";
-
 	request.setAttribute("coms", Communities.getAll());
 	request.setAttribute("firstNameLen", DB.USER_FIRST_LEN);
 	request.setAttribute("lastNameLen", DB.USER_LAST_LEN);
 	request.setAttribute("institutionLen", DB.INSTITUTION_LEN);
 	request.setAttribute("emailLen", DB.EMAIL_LEN);
 	request.setAttribute("passwordLen", DB.PASSWORD_LEN);
-	request.setAttribute("password", password);
 	request.setAttribute("msgLen", DB.MSG_LEN);
 %>
 

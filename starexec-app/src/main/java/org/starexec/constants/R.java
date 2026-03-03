@@ -276,7 +276,6 @@ public class R {
 
     // Admin user info
     public static final int ADMIN_USER_ID = 9; // user id to use when administrator
-    public static final String ADMIN_USER_PASSWORD = "admin";
     public static final String DEFAULT_QUEUE_NAME = "all.q"; // The name of the default queue
     public static final int DEFAULT_QUEUE_ID = 1;
     // Test info
@@ -289,7 +288,6 @@ public class R {
     public static final int PUBLIC_CPU_LIMIT = 30;
     public static final int PUBLIC_CLOCK_TIMEOUT = 30;
     public static final String PUBLIC_USER_EMAIL = "public";
-    public static final String PUBLIC_USER_PASSWORD = "public";
     // Job Manager (JM) constants
     public static final String JOBFILE_FORMAT = "job_%d.bash"; // The filename format (with standard java string
                                                                // formatting) for generated jobscript files
