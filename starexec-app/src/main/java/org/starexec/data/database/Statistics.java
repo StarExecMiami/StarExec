@@ -42,6 +42,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
 
 /**
@@ -56,7 +57,7 @@ public class Statistics {
 	 * pairs to render a graph.
 	 */
 	public static final String OVERSIZED_GRAPH_ERROR = "big";
-	private static HashMap<Integer, QueueGraphData> queueGraphDataHashMap = new HashMap<Integer, QueueGraphData>();
+	private static ConcurrentHashMap<Integer, QueueGraphData> queueGraphDataHashMap = new ConcurrentHashMap<>();
 
 	/**
 	 * Adds a data point to the enqueued pairs dataset and generates a graph of the

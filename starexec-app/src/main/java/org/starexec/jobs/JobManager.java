@@ -31,6 +31,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.nio.charset.StandardCharsets;
 
@@ -44,7 +45,7 @@ public abstract class JobManager {
 
 	private static String mainTemplate = null; // initialized below
 
-	private static Map<Integer, LoadBalanceMonitor> queueToMonitor = new HashMap<>();
+	private static ConcurrentHashMap<Integer, LoadBalanceMonitor> queueToMonitor = new ConcurrentHashMap<>();
 
 	/**
 	 * Returns the string representation of the LoadBalanceMonitor for the given
@@ -57,8 +58,9 @@ public abstract class JobManager {
 	 */
 	public static String getLoadRepresentationForQueue(int queueId) {
 		log.debug("getLoadRepresentationForQueue", "retrieving load data for queue: " + queueId);
-		if (queueToMonitor.containsKey(queueId)) {
-			return queueToMonitor.get(queueId).toString();
+		LoadBalanceMonitor monitor = queueToMonitor.get(queueId);
+		if (monitor != null) {
+			return monitor.toString();
 		}
 		String knownQueues = queueToMonitor.keySet().toString();
 		log.warn(
@@ -76,7 +78,7 @@ public abstract class JobManager {
 	 */
 	public synchronized static void clearLoadBalanceMonitors() {
 		log.debug("Clearing out all load balancing data");
-		queueToMonitor = new HashMap<>();
+		queueToMonitor = new ConcurrentHashMap<>();
 		JobPairs.getAndClearTimeDeltas(-1);
 	}
 
@@ -153,7 +155,8 @@ public abstract class JobManager {
 		try {
 			mainTemplate = FileUtils.readFileToString(f, StandardCharsets.UTF_8);
 		} catch (IOException e) {
-			log.error("Error reading the jobscript at " + f, e);
+			log.error("Error reading the jobscript at " + f + " — job submission will be unavailable", e);
+			return;
 		}
 		mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
 		mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
@@ -902,11 +905,11 @@ public abstract class JobManager {
 			return "";
 		}
 
-		FileWriter out = new FileWriter(f);
+	try (FileWriter out = new FileWriter(f)) {
 		out.write(jobScript);
-		out.close();
+	}
 
-		log.trace("writeJobScript finishes for pair " + pair.getId());
+	log.trace("writeJobScript finishes for pair " + pair.getId());
 		return scriptPath;
 	}
 
@@ -1042,11 +1045,11 @@ public abstract class JobManager {
 							"being able to open the file. File path: " + dependFilePath);
 			return;
 		}
-		log.debug("dependencies file = " + sb.toString());
-		FileWriter out = new FileWriter(f);
+	log.debug("dependencies file = " + sb.toString());
+	try (FileWriter out = new FileWriter(f)) {
 		out.write(sb.toString());
-		out.close();
-		log.debug("done writing dependency file");
+	}
+	log.debug("done writing dependency file");
 	}
 
 	/**
