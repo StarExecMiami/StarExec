@@ -4680,15 +4680,74 @@ public class Jobs {
                 );
                 return false;
             }
-            boolean success = true;
-            for (JobPair jp : pairs) {
-                success = success && Jobs.rerunPair(jp.getId());
-            }
-            return success;
+            return Jobs.rerunPairsBatch(pairs, jobId);
         } catch (Exception e) {
             log.error("setAllPairsToPending", e);
         }
         return false;
+    }
+
+    /**
+     * Resets a list of job pairs back to PENDING_SUBMIT in a batch, using a
+     * single PostgreSQL function call for the bulk DB operations.
+     *
+     * <p>This method replaces the O(n×k) pattern that arose from calling
+     * {@link #rerunPair(int)} inside a loop.  The Java layer still handles the
+     * per-pair kill operation (which requires HPC backend interaction) and the
+     * per-job cache invalidation.
+     *
+     * @param pairs   The job pairs to rerun (must all belong to the same job).
+     * @param jobId   The job ID owning the pairs.
+     * @return True if all operations succeeded.
+     */
+    public static boolean rerunPairsBatch(List<JobPair> pairs, int jobId) {
+        if (pairs == null || pairs.isEmpty()) return true;
+        if (Jobs.isReadOnly(jobId)) return false;
+
+        // 1. Kill any pairs that are actively running/enqueued (requires backend).
+        for (JobPair p : pairs) {
+            int code = p.getStatus().getCode().getVal();
+            if (code != StatusCode.STATUS_PENDING_SUBMIT.getVal()
+                    && code < StatusCode.STATUS_COMPLETE.getVal()) {
+                JobPairs.killPair(p.getId(), p.getBackendExecId());
+            }
+        }
+
+        // 2. Batch DB reset: disk size, completion table, status codes.
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement("SELECT starexec.RerunJobPairsBatch(?::int[])");
+            Integer[] ids = pairs.stream()
+                    .filter(p -> p.getStatus().getCode().getVal()
+                            != StatusCode.STATUS_PENDING_SUBMIT.getVal())
+                    .map(JobPair::getId)
+                    .toArray(Integer[]::new);
+            if (ids.length == 0) return true;
+            Array sqlArray = con.createArrayOf("integer", ids);
+            ps.setArray(1, sqlArray);
+            ps.execute();
+        } catch (Exception e) {
+            log.error("rerunPairsBatch", e);
+            return false;
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+
+        // 3. Clear job stats cache once per job (not once per pair).
+        boolean cacheCleared = Jobs.removeCachedJobStats(jobId);
+
+        // 4. Clear backend tracking state for each pair.
+        for (JobPair p : pairs) {
+            try {
+                R.BACKEND.clearPairTracking(p.getId());
+            } catch (Exception e) {
+                log.warn("rerunPairsBatch: could not clear pair tracking for pairId=" + p.getId(), e);
+            }
+        }
+        return cacheCleared;
     }
 
     /**
@@ -4848,12 +4907,44 @@ public class Jobs {
     public static boolean setPairsToPending(int jobId, int statusCode) {
         if (Jobs.isReadOnly(jobId)) return false;
         try {
-            boolean success = true;
-            List<Integer> pairs = Jobs.getPairsByStatus(jobId, statusCode);
-            for (Integer id : pairs) {
-                success = success && Jobs.rerunPair(id);
+            List<Integer> pairIds = Jobs.getPairsByStatus(jobId, statusCode);
+            if (pairIds == null || pairIds.isEmpty()) return true;
+
+            // Kill pairs that are actively running/enqueued in the backend.
+            // STATUS_COMPLETE = 7; pairs with code 2..6 are still in-flight.
+            boolean needsKill = statusCode >= StatusCode.STATUS_ENQUEUED.getVal()
+                    && statusCode < StatusCode.STATUS_COMPLETE.getVal();
+            if (needsKill) {
+                for (Integer id : pairIds) {
+                    JobPairs.killPair(id, 0);
+                }
             }
-            return success;
+
+            // Batch DB reset: disk size, completion table, status codes.
+            Connection con = null;
+            PreparedStatement ps = null;
+            try {
+                con = Common.getConnection();
+                ps = con.prepareStatement("SELECT starexec.RerunJobPairsBatch(?::int[])");
+                Array sqlArray = con.createArrayOf("integer", pairIds.toArray(new Integer[0]));
+                ps.setArray(1, sqlArray);
+                ps.execute();
+            } catch (Exception e) {
+                log.error("setPairsToPending batch DB reset", e);
+                return false;
+            } finally {
+                Common.safeClose(ps);
+                Common.safeClose(con);
+            }
+
+            // Clear job stats cache once per job, then per-pair backend tracking.
+            boolean cacheCleared = Jobs.removeCachedJobStats(jobId);
+            for (Integer id : pairIds) {
+                try { R.BACKEND.clearPairTracking(id); } catch (Exception e) {
+                    log.warn("setPairsToPending: could not clear pair tracking for pairId=" + id, e);
+                }
+            }
+            return cacheCleared;
         } catch (Exception e) {
             log.error("setPairsToPending", e);
         }
