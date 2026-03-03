@@ -293,7 +293,7 @@ function getDetails(id, type, parent_node) {
 	jobPairTable.fnClearTable();	//immediately get rid of the current data, which makes it look more responsive
 	//get the queue, not that the global is set later so we can't use it
 	if (!(id === undefined)) {
-		$.get(starexecRoot + "/services/queue/" + id + "/getDesc").done(
+		$.get(starexecRoot + "services/queue/" + id + "/getDesc").done(
 			function(data) {
 				if (data === undefined) {
 					$("#queueDescriptionText").text("")

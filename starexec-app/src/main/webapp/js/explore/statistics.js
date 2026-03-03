@@ -187,7 +187,7 @@ function updateCommunityOverview() {
 						"an internal error occured while processing your request: please try again",
 						5000);
 					$("#communityOverview")
-					.attr("src", starexecRoot + "/images/noDisplayGraph.png");
+					.attr("src", starexecRoot + "images/noDisplayGraph.png");
 					$("#graph").hide();
 					break;
 				default:

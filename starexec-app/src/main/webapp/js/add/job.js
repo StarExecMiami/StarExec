@@ -23,7 +23,7 @@ $(document).ready(function() {
 	//see if we are in readOnly mode and redirect appropriatly	
 	$.get(starexecRoot + "services/isReadOnly", function(response) {
 		if (response == "true") {
-			window.location.href = starexecRoot + "/secure/add/addJobLocked.jsp";
+			window.location.href = starexecRoot + "secure/add/addJobLocked.jsp";
 		}
 	  }).fail(function(xhr, status, error) {
 		console.log("Error: " + error);
