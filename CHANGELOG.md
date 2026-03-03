@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-03-03
+
+### Security
+- Fixed critical authorization bug: `GeneralSecurity.canUserSuspendOrReinstateUser()` always returned `false`, making user suspension impossible for all administrators.
+- Implemented centralized `CsrfFilter` covering all 27 state-modifying servlets and the public registration endpoint. Previously only the password reset flow was protected.
+- Corrected CSRF API client exemption: replaced User-Agent pattern matching (spoofable via `Apache-HttpClient/` wildcard) with verification of the `StarExecCommand` custom header that the CLI sends on every request and that browsers cannot include in cross-site requests without a CORS preflight.
+- Removed hardcoded credentials from `R.java` (`ADMIN_USER_PASSWORD`, `PUBLIC_USER_PASSWORD`) and `addUser.jsp` (hardcoded default admin password).
+- Deleted publicly accessible debug page `/public/test_hash.jsp` that printed default admin credentials and SHA-512 hash without authentication.
+- Added automatic `X-CSRF-Token` header injection to all jQuery AJAX POST requests and hidden `csrfToken` field injection to all HTML form submissions (including multipart) via `master.js`.
+- Added CSRF token meta tags (`csrf-token`, `csrf-header`) to the global `head.tag` included on every page.
+
+### Added
+- New Flyway migration `V0025`: PL/pgSQL function `RerunJobPairsBatch(int[])` that resets an arbitrary array of job pairs to `PENDING_SUBMIT` in a single database round-trip, replacing the previous N+1 loop (~10 queries per pair). Includes per-item poison-pill isolation via `BEGIN...EXCEPTION WHEN OTHERS THEN...END` so a single corrupt pair cannot abort the entire batch.
+- New Flyway migration `V0026`: 13 missing performance indexes on `job_pairs`, `jobs`, `solvers`, `configurations`, `benchmarks`, `logins`, `job_spaces`, and `jobpair_stage_data`. Applied with `CREATE INDEX CONCURRENTLY` to avoid table locks during deployment. Runs outside a transaction (`-- flyway:executeInTransaction=false`) to satisfy PostgreSQL's constraint on concurrent index builds.
+
+### Fixed
+- `Statistics.java`: replaced non-thread-safe static `HashMap` with `ConcurrentHashMap` for `queueGraphDataHashMap`, eliminating potential `ConcurrentModificationException` and infinite loop under concurrent Tomcat threads.
+- `JobManager.java`: replaced non-thread-safe `HashMap` with `ConcurrentHashMap` for `queueToMonitor`; eliminated TOCTOU race condition in `getLoadRepresentationForQueue` between `containsKey()` and `get()`.
+- `JobManager.initMainTemplateIf()` and `ClearCacheManager.initScriptTemplateIf()`: added `return` in `catch (IOException)` block to prevent guaranteed `NullPointerException` when the template file cannot be read.
+- `Common.doRollback()`: rollback is now conditional on `!con.getAutoCommit()`, preventing spurious rollback attempts and misleading "Database transaction rollback" log entries after every successful commit.
+- `Common.beginTransaction()`: propagates `SQLException` instead of silencing it, ensuring callers detect connection failures rather than proceeding with auto-commit active.
+- Resource leaks fixed with `try-with-resources` in `PartWrapper.java` (`FileOutputStream`), `ClearCacheManager.java` (`FileWriter`), and `Connection.java` (two `FileOutputStream` locations).
+
+### Changed
+- `generate-render-yaml.sh`: fail-fast with `exit 1` when `STAREXEC_DB_PASSWORD` is unset in non-`dev`/`local` environments. Previously only emitted a `WARNING` to stderr that automated pipelines routinely ignore.
+- Deployment scripts (`deploy-podman.sh`, `generate-render-yaml.sh`): dev environments emit an explicit `WARNING` when the default database password is used; non-dev environments abort immediately with an `ERROR`.
+
 ## [2.1.0] - 2026-02-27
 
 ### Added
