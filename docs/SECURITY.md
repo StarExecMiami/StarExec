@@ -385,6 +385,48 @@ server:
 3. **Implement 2FA** (future enhancement)
 4. **Rate limit login attempts**
 
+### CSRF Protection
+
+StarExec enforces Cross-Site Request Forgery (CSRF) protection via a centralized
+`CsrfFilter` registered in `WEB-INF/web.xml`.
+
+**Coverage:** All `POST` requests to `/secure/*` and `/public/registration/*`.
+
+**How it works:**
+
+1. On page load, every JSP embeds a per-session token in a `<meta name="csrf-token">` tag.
+2. The global `master.js` reads that token and automatically:
+   - Injects an `X-CSRF-Token` header on all jQuery AJAX POST requests.
+   - Appends a hidden `csrfToken` field to every HTML form submission (including multipart).
+3. `CsrfFilter` validates the token using a constant-time comparison. Requests with a
+   missing or mismatched token receive **HTTP 403 Forbidden**.
+
+**API client exemption:**
+
+Non-browser clients (StarExecCommand CLI, scripts) are exempt from CSRF validation
+provided they include the custom header:
+
+```
+StarExecCommand: StarExecCommand
+```
+
+This header is automatically sent by `Connection.setHeaders()` in the Java CLI client.
+For `curl` or Python scripts, add it explicitly:
+
+```bash
+curl -H "StarExecCommand: StarExecCommand" -X POST ...
+```
+
+Browsers cannot include arbitrary custom headers in cross-site requests without a CORS
+preflight, making this a reliable, non-spoofable exemption signal.
+
+**Verification:**
+
+```bash
+# Confirm CsrfFilter is registered (should print the filter mapping)
+grep -A5 "CsrfFilter" starexec-app/src/main/webapp/WEB-INF/web.xml
+```
+
 ### Authorization
 
 **Role-based access control:**
@@ -577,6 +619,7 @@ sudo usermod -aG backup starexec
 - [ ] Review user permissions
 - [ ] Enable audit logging
 - [ ] Scan container images
+- [ ] Verify CSRF filter is active: `grep CsrfFilter starexec-app/src/main/webapp/WEB-INF/web.xml`
 
 ### Post-Production
 

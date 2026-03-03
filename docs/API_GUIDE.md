@@ -30,7 +30,7 @@ StarExec uses **cookie-based session authentication**. You must:
 ```bash
 # Get initial JSESSIONID
 curl -c cookies.txt -b cookies.txt \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   "https://starexec.ccs.miami.edu/starexec/secure/index.jsp"
 ```
 
@@ -39,7 +39,7 @@ curl -c cookies.txt -b cookies.txt \
 ```bash
 # Login with credentials (form-based authentication)
 curl -c cookies.txt -b cookies.txt \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   -L \
   -d "j_username=YOUR_EMAIL&j_password=YOUR_PASSWORD&cookieexists=false" \
   "https://starexec.ccs.miami.edu/starexec/secure/j_security_check"
@@ -50,7 +50,7 @@ curl -c cookies.txt -b cookies.txt \
 ```bash
 # Check if logged in (should return "true")
 curl -c cookies.txt -b cookies.txt \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   "https://starexec.ccs.miami.edu/starexec/services/session/logged-in"
 ```
 
@@ -58,7 +58,9 @@ curl -c cookies.txt -b cookies.txt \
 
 ### Important Notes
 
-- **User-Agent**: Set to `StarExecCommand` or `Apache-HttpClient` for proper API detection
+- **API Header**: All POST requests **must** include `-H "StarExecCommand: StarExecCommand"`.
+  This header identifies the client as a non-browser API caller and exempts it from CSRF
+  token validation. The `User-Agent` header is no longer used for API client detection.
 - **Cookies**: The JSESSIONID cookie must be sent with ALL subsequent requests
 - **Cookie Persistence**: Use a cookie jar (`-c cookies.txt -b cookies.txt` in curl)
 
@@ -101,7 +103,7 @@ curl -c cookies.txt -b cookies.txt \
 ```bash
 curl -X POST \
   -c cookies.txt -b cookies.txt \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "sid=12345" \
   -d "name=TestJob-$(date +%Y%m%d-%H%M%S)" \
@@ -215,7 +217,7 @@ zip job.zip job.xml
 # Upload
 curl -X POST \
   -c cookies.txt -b cookies.txt \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   -F "space=12345" \
   -F "f=@job.zip" \
   "https://starexec.ccs.miami.edu/starexec/secure/upload/jobXML"
@@ -238,7 +240,7 @@ curl -X POST \
    ```
    Should return `true`.
 
-2. **Check User-Agent header**: Must be `StarExecCommand` or include `Apache-HttpClient`
+2. **Check API header**: POST requests must include `-H "StarExecCommand: StarExecCommand"`. Without this header the CSRF filter returns HTTP 403.
 
 3. **Ensure cookies are being sent**: Use `-b cookies.txt` with every request
 
@@ -288,19 +290,19 @@ rm -f "$COOKIES"
 
 echo "=== Step 1: Getting initial session ==="
 curl -s -c "$COOKIES" -b "$COOKIES" \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   "$STAREXEC_URL/secure/index.jsp" > /dev/null
 
 echo "=== Step 2: Logging in ==="
 curl -s -c "$COOKIES" -b "$COOKIES" \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   -L \
   -d "j_username=$USERNAME&j_password=$PASSWORD&cookieexists=false" \
   "$STAREXEC_URL/secure/j_security_check" > /dev/null
 
 echo "=== Step 3: Verifying login ==="
 LOGGED_IN=$(curl -s -b "$COOKIES" \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   "$STAREXEC_URL/services/session/logged-in")
 
 if [ "$LOGGED_IN" != "true" ]; then
@@ -311,7 +313,7 @@ echo "Login successful!"
 
 echo "=== Step 4: Submitting quick job ==="
 RESPONSE=$(curl -s -D - -c "$COOKIES" -b "$COOKIES" \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "sid=$SPACE_ID" \
   --data-urlencode "name=APITest-$(date +%Y%m%d-%H%M%S)" \
@@ -344,7 +346,7 @@ fi
 
 echo "=== Step 5: Logging out ==="
 curl -s -X POST -b "$COOKIES" \
-  -A "StarExecCommand" \
+  -H "StarExecCommand: StarExecCommand" \
   "$STAREXEC_URL/services/session/logout" > /dev/null
 
 echo "Done!"

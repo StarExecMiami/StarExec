@@ -104,7 +104,7 @@ psql -h localhost -p 5432 -U starexec -d starexec
 
 StarExec uses [Flyway](https://flywaydb.org/) for database schema management:
 
-1. SQL migration files are stored in `sql/`
+1. SQL migration files are stored in `src/main/resources/db/migration/`
 2. Files are named: `V{version}__{description}.sql`
 3. Flyway tracks applied migrations in `flyway_schema_history`
 4. Migrations run automatically on application startup
@@ -117,6 +117,15 @@ V2__Add_users_table.sql         # Version 2
 V3.1__Add_email_column.sql      # Version 3.1
 V10__Performance_indexes.sql    # Version 10
 ```
+
+### Notable Migrations
+
+| Migration | Description |
+|-----------|-------------|
+| `V0001__baseline_schema.sql` | Full schema baseline |
+| `V0021__bcrypt_only_passwords.sql` | BCrypt password migration |
+| `V0025__batch_rerun_and_indexes.sql` | PL/pgSQL function `RerunJobPairsBatch(int[])` for efficient batch job pair resets (replaces N+1 loop) |
+| `V0026__add_missing_indexes.sql` | 13 performance indexes on hot-path columns; runs non-transactionally (`-- flyway:executeInTransaction=false`) to allow `CREATE INDEX CONCURRENTLY` |
 
 ### Checking Migration Status
 
@@ -152,16 +161,23 @@ make stop && make start
 
 ### Creating New Migrations
 
-1. Create a new file in `sql/`:
+1. Create a new file in `src/main/resources/db/migration/`:
    ```bash
-   touch sql/V{next_version}__Description.sql
+   touch src/main/resources/db/migration/V{next_version}__Description.sql
    ```
 
 2. Add SQL statements:
    ```sql
-   -- V15__Add_job_priority.sql
+   -- V0027__Add_job_priority.sql
    ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0;
    CREATE INDEX idx_jobs_priority ON jobs(priority);
+   ```
+
+   If the migration contains `CREATE INDEX CONCURRENTLY`, add the following annotation
+   at the top of the file so Flyway does not wrap it in a transaction (PostgreSQL forbids
+   `CONCURRENTLY` inside a transaction block):
+   ```sql
+   -- flyway:executeInTransaction=false
    ```
 
 3. Test locally:
@@ -369,8 +385,15 @@ log_min_duration_statement = 1000 # Log queries > 1 second
 
 ### Index Optimization
 
+Performance-critical indexes on `job_pairs`, `jobs`, `solvers`, `configurations`,
+`benchmarks`, `logins`, `job_spaces`, and `jobpair_stage_data` are created automatically
+by Flyway migration **V0026** using `CREATE INDEX CONCURRENTLY`. Do not create them
+manually — Flyway will detect duplicate index names and fail.
+
+To diagnose missing indexes on other columns:
+
 ```sql
--- Find missing indexes (slow queries)
+-- Find tables with high sequential scan counts (candidates for new indexes)
 SELECT 
   schemaname, tablename, 
   seq_scan, seq_tup_read,
@@ -378,12 +401,6 @@ SELECT
 FROM pg_stat_user_tables
 WHERE seq_scan > 1000
 ORDER BY seq_tup_read DESC;
-
--- Create common indexes
-CREATE INDEX IF NOT EXISTS idx_job_pairs_job_id ON job_pairs(job_id);
-CREATE INDEX IF NOT EXISTS idx_job_pairs_status ON job_pairs(status_code);
-CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status_code);
-CREATE INDEX IF NOT EXISTS idx_solvers_space ON solvers(space_id);
 ```
 
 ### Query Analysis
