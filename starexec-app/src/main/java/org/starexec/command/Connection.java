@@ -2059,9 +2059,9 @@ public class Connection {
 			File out = new File(filePath);
 			File parent = new File(out.getAbsolutePath().substring(0, out.getAbsolutePath().lastIndexOf(File.separator)));
 			parent.mkdirs();
-			FileOutputStream outs = new FileOutputStream(out);
-			IOUtils.copy(response.getEntity().getContent(), outs);
-			outs.close();
+			try (FileOutputStream outs = new FileOutputStream(out)) {
+				IOUtils.copy(response.getEntity().getContent(), outs);
+			}
 			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);
 
 			return 0;
@@ -2324,15 +2324,15 @@ public class Connection {
 			File out = new File(filePath);
 			File parent = new File(out.getAbsolutePath().substring(0, out.getAbsolutePath().lastIndexOf(File.separator)));
 			parent.mkdirs();
-			FileOutputStream outs = new FileOutputStream(out);
-			IOUtils.copy(response.getEntity().getContent(), outs);
-			outs.close();
+			try (FileOutputStream outs = new FileOutputStream(out)) {
+				IOUtils.copy(response.getEntity().getContent(), outs);
+			}
 			client.getParams().setParameter(ClientPNames.HANDLE_REDIRECTS, true);
 
 			/* If it's not a valid zipfile we need to return SUCCESS_NOFILE
-			 * if the request was a new output request, otherwise throw the
-			 * exception. Don't return anything if it is a valid zipfile.
-			 */
+			* if the request was a new output request, otherwise throw the
+			* exception. Don't return anything if it is a valid zipfile.
+			*/
 			Optional<Integer> errorCode = checkIfValidZipFile(out);
 			if (errorCode.isPresent()) {
 				return errorCode.get();

@@ -59,9 +59,9 @@ public class PartWrapper {
 	 * @throws IOException
 	 */
 	public void write(File f) throws IOException {
-		FileOutputStream output = new FileOutputStream(f);
-    	IOUtils.copy(this.p.getInputStream(), output);
-    	output.close();
+		try (FileOutputStream output = new FileOutputStream(f)) {
+			IOUtils.copy(this.p.getInputStream(), output);
+		}
 	}
 	
 }
