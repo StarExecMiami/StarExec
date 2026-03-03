@@ -88,9 +88,9 @@
 					<td><input name="benchFile" type="file"
 					           id="benchFile"/>
               <input name="url" type="text"
-					           id="fileURL"/>
+					           id="fileURL" style="display:none"/>
                <input name="git" type="text"
- 					           id="gitURL" /> </td>
+ 					           id="gitURL" style="display:none"/> </td>
 				</tr>
 				<tr>
 					<td class="label"><p>upload method</p></td>

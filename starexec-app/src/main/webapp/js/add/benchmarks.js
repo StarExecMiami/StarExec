@@ -179,6 +179,10 @@ function attachFormValidation() {
 		$("#benchFile").blur().focus();
 	});
 
+	//initially hide URL/Git inputs since local file is the default
+	$('#fileURL').fadeOut(0);
+	$('#gitURL').fadeOut(0);
+
 	//initially hide dependency related fields
 	$('#depSpaces').fadeOut(0);
 	$('#depLinked').fadeOut(0);
