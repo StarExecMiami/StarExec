@@ -142,24 +142,36 @@ public class Common {
 	}
 
 	/**
-	 * Begins a transaction by turning off auto-commit
+	 * Begins a transaction by turning off auto-commit.
+	 *
+	 * @throws SQLException if the underlying JDBC call fails.  Callers must
+	 *     propagate this exception; silencing it would leave the connection in
+	 *     autoCommit mode while the caller believes it is transactional.
 	 */
-	protected static void beginTransaction(Connection con) {
-		try {
-			con.setAutoCommit(false);
-		} catch (SQLException e) {
-			// Ignore any errors
-		}
+	protected static void beginTransaction(Connection con) throws SQLException {
+		con.setAutoCommit(false);
 	}
 
 	/**
-	 * Rolls back any actions not committed to the database
+	 * Rolls back any actions not committed to the database.
+	 *
+	 * <p>The rollback is only attempted when the connection is actively in a
+	 * transaction (i.e. autoCommit is {@code false}).  This prevents the
+	 * spurious "Database transaction rollback" log entry that used to appear
+	 * on every successful operation because callers placed this method
+	 * unconditionally in their {@code finally} blocks — even after a
+	 * successful {@link #endTransaction} which already restored autoCommit.
 	 */
 	protected static void doRollback(Connection con) {
+		if (con == null) {
+			return;
+		}
 		try {
-			con.rollback();
-			con.setAutoCommit(true);
-			log.warn("Database transaction rollback.");
+			if (!con.getAutoCommit()) {
+				con.rollback();
+				con.setAutoCommit(true);
+				log.warn("doRollback", "Database transaction rollback.");
+			}
 		} catch (SQLException e) {
 			// Ignore any errors
 		}
