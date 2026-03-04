@@ -20,10 +20,22 @@ import java.security.MessageDigest;
  * CORS preflight, so this header is a reliable, non-spoofable signal from a
  * same-process HTTP client (not a browser).
  *
- * <p>The CSRF token is expected either as:
+ * <p>The CSRF token is accepted from:
  * <ul>
- *   <li>The {@code X-CSRF-Token} request header (AJAX / multipart uploads), or
- *   <li>The {@code csrfToken} form parameter (regular URL-encoded forms).
+ *   <li>The {@code X-CSRF-Token} request header — set by the global jQuery
+ *       {@code $.ajaxSetup} in master.js for all AJAX requests.
+ *   <li>The {@code csrfToken} query-string or form parameter — set by the
+ *       master.js form-submit handler:
+ *       <ul>
+ *         <li>URL-encoded forms: injected as a hidden {@code <input>} field.
+ *         <li>Multipart forms: appended to the form {@code action} URL as a
+ *             query parameter. This is required because Tomcat cannot expose
+ *             {@code multipart/form-data} body parameters via
+ *             {@code request.getParameter()} at the filter level (the
+ *             servlet's {@code @MultipartConfig} has not yet been applied to
+ *             the request object when the filter chain runs). Query-string
+ *             parameters are always readable regardless of body content-type.
+ *       </ul>
  * </ul>
  *
  * @see CsrfUtil
