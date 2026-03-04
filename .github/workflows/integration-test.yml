@@ -20,6 +20,10 @@ on:
       - "pom.xml"
   workflow_dispatch:
 
+concurrency:
+  group: integration-test-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -344,7 +348,10 @@ jobs:
     steps:
       - name: Report test results
         run: |
-          if [ "${{ needs.verify-migrations.result }}" = "success" ] && [ "${{ needs.integration-test.result }}" = "success" ]; then
+          MIGRATIONS_RESULT="${{ needs.verify-migrations.result }}"
+          INTEGRATION_RESULT="${{ needs.integration-test.result }}"
+
+          if [ "$MIGRATIONS_RESULT" = "success" ] && [ "$INTEGRATION_RESULT" = "success" ]; then
             echo "## ✅ All Integration Tests Passed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Migrations:** ✅ Verified and packaged correctly" >> $GITHUB_STEP_SUMMARY
@@ -352,11 +359,18 @@ jobs:
             echo "**Credentials:** ✅ Properly redacted in logs" >> $GITHUB_STEP_SUMMARY
             echo "**Application:** ✅ Healthy and responding" >> $GITHUB_STEP_SUMMARY
             echo "**Database:** ✅ Migrations applied successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "$MIGRATIONS_RESULT" = "cancelled" ] || [ "$INTEGRATION_RESULT" = "cancelled" ]; then
+            echo "## ⚠️ Integration Tests Cancelled" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Verify Migrations:** $MIGRATIONS_RESULT" >> $GITHUB_STEP_SUMMARY
+            echo "**Integration Tests:** $INTEGRATION_RESULT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This run was superseded by a newer run. No action needed." >> $GITHUB_STEP_SUMMARY
           else
             echo "## ❌ Integration Tests Failed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Verify Migrations:** ${{ needs.verify-migrations.result }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Integration Tests:** ${{ needs.integration-test.result }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Verify Migrations:** $MIGRATIONS_RESULT" >> $GITHUB_STEP_SUMMARY
+            echo "**Integration Tests:** $INTEGRATION_RESULT" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "See job logs above for details." >> $GITHUB_STEP_SUMMARY
             exit 1
