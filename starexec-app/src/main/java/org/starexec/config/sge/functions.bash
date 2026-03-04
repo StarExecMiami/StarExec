@@ -15,6 +15,13 @@
 # Include the predefined status codes and functions
 . $SCRIPT_DIR/status_codes.bash
 
+# Strict mode: exit on command failure, unset variable use, and pipe failures.
+# Ensures staging failures (e.g. cp) terminate the script and the EXIT trap can send status.
+set -euo pipefail
+
+# Idempotency flag for EXIT trap: when true, trap must not send status again (e.g. after verifyWorkspace or SIGTERM).
+STATUS_SENT=false
+
 #################################################################################
 # Container Mode Support
 # When CONTAINER_MODE=true, write status/stats to files instead of database
@@ -500,7 +507,7 @@ function cleanForNextStage {
 	safeRm local-solver-directory "$LOCAL_SOLVER_DIR"
 
 	# Clear the local benchmark, as it will be replaced by the output of this stage
-	rm "$LOCAL_BENCH_PATH"
+	rm -f "$LOCAL_BENCH_PATH"
 }
 
 # Kills all of a sandboxes processes if their job pair becomes deadlocked
@@ -925,7 +932,7 @@ function copyOutputNoStats {
 function copyOutput {
 	updateStats $VARFILE $WATCHFILE $2 $3 $4
 
-	if [ "$POST_PROCESSOR_PATH" != "" ]; then
+	if [ "${POST_PROCESSOR_PATH:-}" != "" ]; then
 		log "getting postprocessor"
 		mkdir $OUT_DIR/postProcessor
 		safeCpAll "copying post processor" "$POST_PROCESSOR_PATH" "$OUT_DIR/postProcessor"
@@ -959,7 +966,7 @@ function copyOutput {
 		processAttributes $OUT_DIR/attributes.txt $1
 
 		# In CONTAINER_MODE, copy attributes.txt to STAREXEC_OUTPUT_DIR for LocalJobMonitor to find
-		if [ "$CONTAINER_MODE" = "true" ] && [ -n "$STAREXEC_OUTPUT_DIR" ]; then
+		if [ "$CONTAINER_MODE" = "true" ] && [ -n "${STAREXEC_OUTPUT_DIR:-}" ]; then
 			if [ -f "$OUT_DIR/attributes.txt" ]; then
 				mkdir -p "$STAREXEC_OUTPUT_DIR"
 				cp "$OUT_DIR/attributes.txt" "$STAREXEC_OUTPUT_DIR/attributes.txt"
@@ -1013,7 +1020,7 @@ function checkIfBenchmarkDependenciesExists {
 }
 
 function copyBenchmarkDependencies {
-	if [ "$PRIMARY_PREPROCESSOR_PATH" != "" ]; then
+	if [ "${PRIMARY_PREPROCESSOR_PATH:-}" != "" ]; then
 		mkdir $OUT_DIR/preProcessor
 		safeCpAll "copying pre processor" "$PRIMARY_PREPROCESSOR_PATH" "$OUT_DIR/preProcessor"
 		chmod -R gu+rwx $OUT_DIR/preProcessor
@@ -1025,7 +1032,7 @@ function copyBenchmarkDependencies {
 		log "Axiom location = '${BENCH_DEPENDS_ARRAY[i]}'"
 		NEW_D=$(dirname "$LOCAL_BENCH_DIR/${LOCAL_DEPENDS_ARRAY[i]}")
 		mkdir -p $NEW_D
-		if [ "$PRIMARY_PREPROCESSOR_PATH" != "" ]; then
+		if [ "${PRIMARY_PREPROCESSOR_PATH:-}" != "" ]; then
 			log "copying benchmark ${BENCH_DEPENDS_ARRAY[i]} to $LOCAL_BENCH_DIR/${LOCAL_DEPENDS_ARRAY[i]} on execution host..."
 			"./process" "${BENCH_DEPENDS_ARRAY[i]}" $RAND_SEED > "$LOCAL_BENCH_DIR/${LOCAL_DEPENDS_ARRAY[i]}"
 		else
@@ -1185,7 +1192,7 @@ function copyDependencies {
 	log "benchmark copy complete"
 
 	#doing benchmark preprocessing here if the pre_processor actually exists
-	if [ "$PRE_PROCESSOR_PATH" != "" ]; then
+	if [ "${PRE_PROCESSOR_PATH:-}" != "" ]; then
 		mkdir -p $OUT_DIR/preProcessor
 		safeCpAll "copying preProcessor" "$PRE_PROCESSOR_PATH" $OUT_DIR/preProcessor
 		chmod -R gu+rwx $OUT_DIR/preProcessor
@@ -1211,7 +1218,7 @@ function copyDependencies {
 		fi
 
 		#use the processed benchmark in subsequent steps
-		rm "$LOCAL_BENCH_PATH"
+		rm -f "$LOCAL_BENCH_PATH"
 		mv "$PROCESSED_BENCH_PATH" "$LOCAL_BENCH_PATH"
 	fi
 }
@@ -1362,19 +1369,21 @@ function verifyWorkspace {
 	if ! [ -x "$LOCAL_CONFIG_PATH" ]; then
 		log "job error: could not locate the configuration script '$CONFIG_NAME' on the execution host"
 		#get rid of the cache, as if we're here then something is probably wrong with it
-		rm -r "$SOLVER_CACHE_PATH"
+		rm -rf "$SOLVER_CACHE_PATH" || true
+		STATUS_SENT=true
 		sendStatus $ERROR_RUNSCRIPT
-	else
-		log "execution host solver configuration verified"
+		exit 1
 	fi
+	log "execution host solver configuration verified"
 
 	# Make sure the benchmark exists before the job runs
 	if ! [ -r "$LOCAL_BENCH_PATH" ]; then
 		log "job error: could not locate the readable benchmark '$BENCH_NAME' on the execution host."
+		STATUS_SENT=true
 		sendStatus $ERROR_BENCHMARK
-	else
-		log "execution host benchmark verified"
+		exit 1
 	fi
+	log "execution host benchmark verified"
 }
 
 # Marks this pair as having had a runscript error
@@ -1424,5 +1433,13 @@ function isOutputValid {
 }
 
 function exitJobscript {
+	local EXIT_CODE=${1:-0}
+	# On non-zero exit, ensure orchestrator receives a terminal status (fail closed).
+	# Do not run commands that can fail and mask the original exit code.
+	if [ "$EXIT_CODE" -ne 0 ] && [ "$STATUS_SENT" != "true" ]; then
+		STATUS_SENT=true
+		sendStatus $ERROR_BENCHMARK || true
+	fi
 	echo "Jobscript ending."
+	exit "$EXIT_CODE"
 }

@@ -137,7 +137,7 @@ NUM_STAGES=${#STAGE_NUMBERS[@]}
 
 trap "limitExceeded 'file write' $EXCEED_FILE_WRITE" SIGXFSZ
 trap 'echo "Jobscript received USR2."' USR2
-trap exitJobscript EXIT
+trap 'exitJobscript $?' EXIT
 
 #==========================================================================
 # Execute (prolog will take care of data staging)
@@ -327,7 +327,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	if [ $BUILD_JOB == "true" ]; then
 		cd $WORKING_DIR/solver
-		rm "$LOCAL_BENCH_PATH"
+		rm -f "$LOCAL_BENCH_PATH"
 		LOCAL_BENCH_PATH=""
 	else
 		cd $WORKING_DIR/solver/bin
