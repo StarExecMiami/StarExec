@@ -27,7 +27,7 @@
 				<legend>graphs</legend>
 				<p align="center"><img id="communityOverview"
 				                       src="${starexecRoot}/images/loadingGraph.png"
-				                       width="300" height="300" hidden/></p>
+				                       width="300" height="300" alt="Community statistics overview chart" hidden/></p>
 				<ul class="actionList">
 					<li>
 						<button class="compareBtn" id="compareUsers"

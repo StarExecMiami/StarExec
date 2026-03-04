@@ -39,7 +39,7 @@
 		}
 
 
-		// Only add "since" to the title suffix if their is a last report.
+		// Only add "since" to the title suffix if there is a last report.
 		String titleSuffix = "";
 		if (!lastReportDay.isEmpty()) {
 			titleSuffix = "since " + lastReportDay;
@@ -112,8 +112,10 @@
 						value="reports for ${reportsForOneQueue.get(0).getQueueName()}"/></legend>
 				<table>
 					<thead>
-					<th>event</th>
-					<th>occurrences</th>
+					<tr>
+						<th>event</th>
+						<th>occurrences</th>
+					</tr>
 					</thead>
 					<tbody>
 					<c:forEach items="${reportsForOneQueue}" var="report">
@@ -132,7 +134,9 @@
 				<legend>past reports</legend>
 				<table>
 					<thead>
-					<th>file</th>
+					<tr>
+						<th>file</th>
+					</tr>
 					</thead>
 					<tbody>
 					<c:forEach items="${pastReports}" var="report">

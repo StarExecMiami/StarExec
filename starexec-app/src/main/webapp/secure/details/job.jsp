@@ -236,12 +236,12 @@
 				</fieldset>
 				<img id="spaceOverview"
 			     		src="${starexecRoot}/images/loadingGraph.png" width="300"
-			     		height="300"/>
+			     		height="300" alt="Space overview chart"/>
 				<img id="solverComparison300" width="300" height="300"
 			     		src="${starexecRoot}/images/loadingGraph.png"
-			     		usemap="#solverComparisonMap300"/>
+			     		usemap="#solverComparisonMap300" alt="Solver comparison chart"/>
 				<img id="pairTimeGraph" width="300" height="300" 
-			     		src="${starexecRoot}/images/loadingGraph.png"/>
+			     		src="${starexecRoot}/images/loadingGraph.png" alt="Completed pairs vs time chart"/>
 				<br>
 				<fieldset id="optionField">
 					<legend>options</legend>
@@ -588,7 +588,7 @@
 			<div id="dialog-solverComparison" title="solver comparison chart"
 			     class="hiddenDialog">
 				<img src="" id="solverComparison800"
-				     usemap="#solverComparisonMap800"/>
+				     usemap="#solverComparisonMap800" alt="Solver comparison chart (large)"/>
 				<map id="solverComparisonMap800"></map>
 			</div>
 			<div id="dialog-warning" title="warning" class="hiddenDialog">
@@ -630,11 +630,11 @@
 			</div>
 			<div id="dialog-spaceOverview" title="space overview chart"
 			     class="hiddenDialog">
-				<img src="" id="bigSpaceOverview"/>
+				<img src="" id="bigSpaceOverview" alt="Space overview chart (large)"/>
 			</div>
 			<div id="dialog-pairTimeGraph" title="completed pairs vs time chart"
 			     class="hiddenDialog">
-				<img src="" id="bigPairTimeGraph"/>
+				<img src="" id="bigPairTimeGraph" alt="Completed pairs vs time chart (large)"/>
 			</div>
 			<div id="dialog-show-anonymous-link" title="anonymous link"
 			     class="hiddenDialog">

@@ -63,7 +63,7 @@
 		<fieldset id="graphs">
 			<legend>graphs</legend>
 			<%-- "default the queuegraph image to all.q (1) because all.q always exists" --%>
-			<img id="queuegraph" src="${starexecRoot}/secure/clustergraphs/1_queuegraph.png" width="400" height="400"/>
+			<img id="queuegraph" src="${starexecRoot}/secure/clustergraphs/1_queuegraph.png" width="400" height="400" alt="Enqueued pairs over time for selected queue"/>
 		</fieldset>
 	</div>
 </star:template>
