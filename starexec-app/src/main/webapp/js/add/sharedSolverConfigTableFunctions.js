@@ -83,7 +83,7 @@ function registerSolverConfigTableRowSelectionEventHandler() {
 					// Add the number of boxes that were checked to numCheck.
 					numCheck += numberOfConfigsNamedDefault;
 				} else if (numberOfConfigsNamedDefault === 0) {
-					// If their are no default configs and there is only one config then select that one
+					// If there are no default configs and there is only one config then select that one
 					// by default.
 					var numberOfConfigsForSelectedSolver = $(this)
 					.find('input[type=checkbox]').length;

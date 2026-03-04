@@ -7,14 +7,16 @@ var commName; // Current community's name
 
 // When the document is ready to be executed on
 $(document).ready(function() {
-	// Set the path to the css theme fr the jstree plugin
+	// Set the path to the css theme for the jstree plugin
 	$.jstree._themes = starexecRoot + "css/jstree/";
 
 	var id = -1;
 	var userId = $('#userId').attr('value');
 	log('User Id is: ' + userId);
 
-	var dataTableConfig = new star.DataTableConfig();
+	var dataTableConfig = new star.DataTableConfig({
+		"language": { "emptyTable": "No members or leaders to display." }
+	});
 	memberTable = $('#members').dataTable(dataTableConfig);
 	leaderTable = $('#leaders').dataTable(dataTableConfig);
 
@@ -203,8 +205,8 @@ function populateDetails(jsonData) {
 
 		var hiddenUserId = '<input type="hidden" value="' + user.id + '" >';
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="blank">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png"/></a>' + hiddenUserId;
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png"/></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>' + hiddenUserId;
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
 		if (!user.isPublic) {
 			memberTable.fnAddData([userLink, user.institution, emailLink]);
 		} else {
@@ -221,8 +223,8 @@ function populateDetails(jsonData) {
 	leaderTable.fnClearTable();
 	$.each(jsonData.leaders, function(i, user) {
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="blank">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" /></a>';
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" /></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
 		leaderTable.fnAddData([userLink, user.institution, emailLink]);
 	});
 

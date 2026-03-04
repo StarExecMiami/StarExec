@@ -35,6 +35,7 @@ jQuery(function($) {
 			"sAjaxSource": starexecRoot + "services/jobs/admin/pagination",
 			"sServerMethod": "GET",
 			"order": [[5, "desc"]],
+			"language": { "emptyTable": "No jobs to display." },
 			"aoColumns": [
 				{
 					"mRender": formatJob,

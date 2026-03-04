@@ -113,7 +113,7 @@ function initButtonUI() {
  * @author Tyler Jensen & Todd Elvers & Skylar Stark changes Julio Cervantes
  */
 function initSpaceExplorer() {
-	// Set the path to the css theme for the jstreeplugin
+	// Set the path to the css theme for the jstree plugin
 	jsTree = makeSpaceTree("#exploreList", !usingSpaceChain);
 	jsTree.bind("select_node.jstree", function(event, data) {
 		// When a node is clicked, get its ID and display the info in the details pane

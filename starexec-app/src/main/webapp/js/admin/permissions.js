@@ -27,7 +27,7 @@ $(document).ready(function() {
 
 	var user_id = getUrlVars()["id"];
 
-	// Set the path to the css theme fr the jstree plugin
+	// Set the path to the css theme for the jstree plugin
 	$.jstree._themes = starexecRoot + "css/jstree/";
 
 	// Initialize the jstree plugin for the community list

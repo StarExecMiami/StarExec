@@ -5,11 +5,12 @@ var qIdForQueueGraph = 1; // queue id used to select which queuegraph image is d
                           // all.q always exists
 
 // updateQueueGraph() changes the queuegraph image on the cluster page to be the most current one and of the queue
-// currently selected in the Active Queues list (which queue is selected is represented by qIdForQueueGraph)
-// Alexander Brown, 11/20
+// currently selected in the Active Queues list (which queue is selected is represented by qIdForQueueGraph).
+// Explicit queueId and timestamp in the URL guarantee context alignment and cache-busting.
 function updateQueueGraph() {
     var d = new Date();
-    $("#queuegraph").attr("src", starexecRoot + "secure/clustergraphs/"+qIdForQueueGraph+"_queuegraph.png?" + d.getTime());
+    var url = starexecRoot + "secure/clustergraphs/" + qIdForQueueGraph + "_queuegraph.png?queueId=" + qIdForQueueGraph + "&t=" + d.getTime();
+    $("#queuegraph").attr("src", url).attr("alt", "Enqueued pairs over time for queue " + qIdForQueueGraph);
 }
 
 // When the document is ready to be executed on
@@ -21,7 +22,7 @@ $(document).ready(function() {
 
 	//Set up row click to send to pair details page
 	$('#details tbody').on("click", "a", function(event) {
-		event.stopPropogation();
+		event.stopPropagation();
 	});
 
 	$("#details tbody").on("click", "tr", function(event) {
@@ -72,12 +73,23 @@ $(document).ready(function() {
 });
 
 function initClusterExplorer() {
-	// Set the path to the css theme fr the jstree plugin
+	// Set the path to the css theme for the jstree plugin
 	$.jstree._themes = starexecRoot + "css/jstree/";
 
 	$("#exploreList").bind("loaded.jstree", function(e, data) {
-		// Register a callback for when the jstree has finished loading
 		addNodeCountsToTree();
+		// Sync graph with current selection (e.g. from cookie) so initial view matches selected queue
+		var sel = $("#exploreList").jstree("get_selected", true);
+		if (sel && sel.length > 0) {
+			var node = sel[0];
+			var rel = node.attr ? node.attr("rel") : null;
+			if (rel === "active_queue" || rel === "inactive_queue") {
+				qIdForQueueGraph = node.attr("id");
+			} else if (node.parent && node.parent !== "#") {
+				qIdForQueueGraph = node.parent;
+			}
+			updateQueueGraph();
+		}
 	}).jstree({
 		// Initialize the jstree plugin for the explorer list
 		"json_data": {
@@ -158,6 +170,7 @@ function initDataTables() {
 		"bFilter": false,
 		"sAjaxSource": starexecRoot + "services/cluster/",
 		"fnServerData": fnPaginationHandler,
+		"language": { "emptyTable": "No job pairs in this queue or on this node." },
 		"columns": [
 			{
 				"title": "Created",
@@ -215,6 +228,7 @@ function initDataTables() {
 		"sServerMethod": "GET",
 		"bServerSide": false,
 		"bFilter": false,
+		"language": { "emptyTable": "No running jobs in this queue." },
 		"order": [
 			[4, "desc"],
 			[0, "asc"]

@@ -183,7 +183,7 @@ function refreshSolverWebsites() {
 	
 	// Injects the clickable delete button that's always present
 	$.each(jsonData, function(i, site) {
-		$('#websites tbody').append('<tr><td><a href="' + site.url + '">' + site.name + '<img class="extLink" src="'+starexecRoot+'images/external.png"/></a></td><td><a class="delWebsite" id="' + site.id + '">delete</a></td></tr>');
+		$('#websites tbody').append('<tr><td><a href="' + site.url + '">' + site.name + '<img class="extLink" src="'+starexecRoot+'images/external.png" alt=""/></a></td><td><a class="delWebsite" id="' + site.id + '">delete</a></td></tr>');
 	});
 }*/
 

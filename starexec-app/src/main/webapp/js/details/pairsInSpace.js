@@ -49,7 +49,7 @@ function initUI() {
 	});
 
 	$('#pairTbl tbody').on("click", "a", function(event) {
-		event.stopPropogation();
+		event.stopPropagation();
 	});
 
 	//Set up row click to send to pair details page

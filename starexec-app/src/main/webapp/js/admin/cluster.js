@@ -5,7 +5,7 @@ var curQueueId;
 jQuery(function($) {
 	"use strict";
 
-	// Set the path to the css theme fr the jstree plugin
+	// Set the path to the css theme for the jstree plugin
 	$.jstree._themes = starexecRoot + "css/jstree/";
 
 	var reloadOnSucess = function(returnCode) {
@@ -260,7 +260,8 @@ jQuery(function($) {
 	.dataTable(new star.DataTableConfig({
 		"bServerSide": true,
 		"sAjaxSource": starexecRoot + "services/queues/pending/pagination",
-		"fnServerData": fnPaginationHandler
+		"fnServerData": fnPaginationHandler,
+		"language": { "emptyTable": "No queue reservation requests." }
 	}))
 	;
 

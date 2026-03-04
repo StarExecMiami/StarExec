@@ -1,5 +1,5 @@
 jQuery(function($) {
-	// Set the path to the css theme fr the jstree plugin
+	// Set the path to the css theme for the jstree plugin
 	$.jstree._themes = starexecRoot + "css/jstree/";
 
 	var id = -1;

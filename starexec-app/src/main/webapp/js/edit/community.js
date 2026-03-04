@@ -37,8 +37,8 @@ function populateDetails(jsonData) {
 	leaderTable.fnClearTable();
 	$.each(jsonData.leaders, function(i, user) {
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="blank">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" /></a>';
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" /></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
 		var deleteUser = '<input type="button" onclick="removeUser(' + user.id + ', ' + id + ')" value="X"/>';
 		var demoteUser = '<input type="button" onclick="demoteUser(' + user.id + ', ' + id + ')" value="Demote"/>';
 
@@ -60,8 +60,8 @@ function populateDetails(jsonData) {
 	$.each(jsonData.space.users, function(i, user) {
 		var hiddenUserId = '<input type="hidden" value="' + user.id + '" >';
 		var fullName = user.firstName + ' ' + user.lastName;
-		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="blank">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png"/></a>' + hiddenUserId;
-		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png"/></a>';
+		var userLink = '<a href="' + starexecRoot + 'secure/details/user.jsp?id=' + user.id + '" target="_blank" rel="noopener noreferrer">' + fullName + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>' + hiddenUserId;
+		var emailLink = '<a href="mailto:' + user.email + '">' + user.email + '<img class="extLink" src="' + starexecRoot + 'images/external.png" alt=""/></a>';
 		var deleteUser = '<input type="button" onclick="removeUser(' + user.id + ', ' + id + ')" value="X"/>';
 		var promoteUser = '<input type="button" onclick="promoteUser(' + user.id + ', ' + id + ')" value="Promote"/>';
 
