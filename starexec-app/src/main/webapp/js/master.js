@@ -11,8 +11,14 @@ var star = star || {};
  * head.tag and:
  *   1. Attaches it as the X-CSRF-Token header on every jQuery AJAX request
  *      (covers all $.post / $.ajax / DataTables server-side requests).
- *   2. Injects a hidden csrfToken field into every HTML form before it is
- *      submitted, covering non-AJAX multipart and URL-encoded form POSTs.
+ *   2. For URL-encoded forms: injects a hidden csrfToken field (readable via
+ *      request.getParameter() in Tomcat filters).
+ *   3. For multipart/form-data forms: appends csrfToken to the action URL as
+ *      a query parameter. Tomcat's CsrfFilter cannot read body parameters from
+ *      multipart requests via request.getParameter() at the filter level
+ *      (before the servlet's @MultipartConfig is applied to the request).
+ *      Query-string parameters are always available via request.getParameter()
+ *      regardless of body content-type.
  */
 (function () {
   "use strict";
@@ -33,17 +39,30 @@ var star = star || {};
     },
   });
 
-  // 2. Form submission — inject hidden field so URL-encoded / multipart
-  //    form submissions also carry the token as a fallback parameter.
+  // 2. Form submission handler
   $(document).on("submit", "form", function () {
     var $form = $(this);
-    if ($form.find('input[name="csrfToken"]').length === 0) {
-      $form.append(
-        $("<input>")
-          .attr("type", "hidden")
-          .attr("name", "csrfToken")
-          .val(csrfToken)
-      );
+    var enctype = ($form.attr("enctype") || "").toLowerCase();
+    var isMultipart = enctype.indexOf("multipart") >= 0;
+
+    if (isMultipart) {
+      // For multipart forms: add token to the action URL query string so
+      // Tomcat's filter can read it via request.getParameter() at filter level.
+      var action = $form.attr("action") || "";
+      if (action.indexOf("csrfToken=") < 0) {
+        var sep = action.indexOf("?") >= 0 ? "&" : "?";
+        $form.attr("action", action + sep + "csrfToken=" + encodeURIComponent(csrfToken));
+      }
+    } else {
+      // For URL-encoded forms: inject hidden field.
+      if ($form.find('input[name="csrfToken"]').length === 0) {
+        $form.append(
+          $("<input>")
+            .attr("type", "hidden")
+            .attr("name", "csrfToken")
+            .val(csrfToken)
+        );
+      }
     }
   });
 })();
