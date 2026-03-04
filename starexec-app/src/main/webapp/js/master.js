@@ -39,32 +39,39 @@ var star = star || {};
     },
   });
 
-  // 2. Form submission handler
-  $(document).on("submit", "form", function () {
-    var $form = $(this);
+  function injectCsrfToken(form) {
+    var $form = $(form);
     var enctype = ($form.attr("enctype") || "").toLowerCase();
     var isMultipart = enctype.indexOf("multipart") >= 0;
 
     if (isMultipart) {
-      // For multipart forms: add token to the action URL query string so
-      // Tomcat's filter can read it via request.getParameter() at filter level.
       var action = $form.attr("action") || "";
-      if (action.indexOf("csrfToken=") < 0) {
-        var sep = action.indexOf("?") >= 0 ? "&" : "?";
-        $form.attr("action", action + sep + "csrfToken=" + encodeURIComponent(csrfToken));
+      try {
+        var url = new URL(action, window.location.origin);
+        if (!url.searchParams.has("csrfToken")) {
+          url.searchParams.append("csrfToken", csrfToken);
+          var isAbsolute = action.indexOf("://") > 0 || action.indexOf("//") === 0;
+          var newAction = isAbsolute ? url.href : url.pathname + url.search + url.hash;
+          $form.attr("action", newAction);
+        }
+      } catch (e) {
+        if (action.indexOf("csrfToken=") < 0) {
+          var sep = action.indexOf("?") >= 0 ? "&" : "?";
+          $form.attr("action", action + sep + "csrfToken=" + encodeURIComponent(csrfToken));
+        }
       }
     } else {
-      // For URL-encoded forms: inject hidden field.
       if ($form.find('input[name="csrfToken"]').length === 0) {
-        $form.append(
-          $("<input>")
-            .attr("type", "hidden")
-            .attr("name", "csrfToken")
-            .val(csrfToken)
-        );
+        $form.append($("<input>", { type: "hidden", name: "csrfToken", value: csrfToken }));
       }
     }
-  });
+  }
+
+  document.addEventListener("submit", function (e) {
+    if (e.target && e.target.tagName === "FORM") {
+      injectCsrfToken(e.target);
+    }
+  }, true);
 })();
 
 /**
@@ -249,8 +256,8 @@ jQuery(function ($) {
   /* Everything in here depends on DataTables
    * If DataTables are not used on this page, we can just return
    *
-   * It would be ideal if we could put this in a seperate file that was
-   * only called when DataTables are used, but that would invlove some
+   * It would be ideal if we could put this in a separate file that was
+   * only called when DataTables are used, but that would involve some
    * refactoring.
    */
   var extpager;
