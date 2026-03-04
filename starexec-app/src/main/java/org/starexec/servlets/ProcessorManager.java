@@ -1,10 +1,9 @@
 package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.fileupload.servlet.ServletFileUpload;
-import org.apache.commons.fileupload.disk.DiskFileItemFactory;
-import org.apache.commons.fileupload.FileItem;
+import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
 import org.starexec.constants.R;
+import org.starexec.util.PartWrapper;
 import org.starexec.data.database.Processors;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Processor;
@@ -27,14 +26,13 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.List;
 
 /**
  * Servlet which handles incoming requests to add and update processors
  *
  * @author Tyler Jensen
  */
-@MultipartConfig
+@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = 512L * 1024L * 1024L, maxRequestSize = 512L * 1024L * 1024L)
 public class ProcessorManager extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(ProcessorManager.class);
 
@@ -67,19 +65,8 @@ public class ProcessorManager extends HttpServlet {
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
 		try {
-			// Line 67 and surrounding code - ensure using correct ServletFileUpload class
 			if (ServletFileUpload.isMultipartContent(request)) {
-				DiskFileItemFactory factory = new DiskFileItemFactory();
-				ServletFileUpload upload = new ServletFileUpload(factory);
-				List<FileItem> items = upload.parseRequest(request);
-				HashMap<String, Object> form = new HashMap<>();
-				for (FileItem item : items) {
-					if (item.isFormField()) {
-						form.put(item.getFieldName(), item.getString());
-					} else {
-						form.put(item.getFieldName(), item);
-					}
-				}
+				HashMap<String, Object> form = Util.parseMultipartRequest(request);
 				String action = (String) form.get(ACTION);
 
 				// Make sure we have an action parameter
@@ -235,7 +222,7 @@ public class ProcessorManager extends HttpServlet {
 
 			if (uploadMethod.equals(LOCAL_UPLOAD_METHOD)) {
 				// Save the uploaded file to disk
-				FileItem processorFile = (FileItem) form.get(PROCESSOR_FILE);
+				PartWrapper processorFile = (PartWrapper) form.get(PROCESSOR_FILE);
 				archiveFile = new File(uniqueDir, FilenameUtils.getName(processorFile.getName()));
 				processorFile.write(archiveFile);
 			} else {
@@ -349,7 +336,7 @@ public class ProcessorManager extends HttpServlet {
 			String fileName;
 
 			if (uploadMethod.equals(LOCAL_UPLOAD_METHOD)) {
-				fileName = ((FileItem) form.get(PROCESSOR_FILE)).getName();
+				fileName = ((PartWrapper) form.get(PROCESSOR_FILE)).getName();
 			} else {
 				fileName = (String) form.get(PROCESSOR_URL);
 			}
