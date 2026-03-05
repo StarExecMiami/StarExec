@@ -208,8 +208,9 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         String method = "processJob";
         log.info(method, "Starting processing for job " + job.getId());
         
-        // Track extraction directory for cleanup
-        String extractPath = null;
+        // Track extraction directory for failure-only cleanup
+        File extractDir = null;
+        boolean processingSucceeded = false;
         
         // Track extraction count
         final AtomicInteger extractedCount = new AtomicInteger(0);
@@ -226,13 +227,14 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 throw new IOException("Archive file not found: " + archivePath);
             }
             
-            // Create extraction directory
+            // Create extraction directory under the benchmark storage path.
+            // IMPORTANT: This directory must remain on disk permanently because the
+            // paths stored in the DB point directly to files inside it. Jobs copy
+            // benchmark files from these paths at runtime.
             String extractDirName = "upload_" + job.getId() + "_" + System.currentTimeMillis();
-            File extractDir = new File(archiveFile.getParent(), extractDirName);
-            extractPath = extractDir.getAbsolutePath();
+            extractDir = new File(archiveFile.getParent(), extractDirName);
             
-            // Extract safely (handles zip bombs, path traversal, cleanup)
-            // This also returns the count of extracted files for progress tracking
+            // Extract safely (handles zip bombs, path traversal, cleanup on failure)
             log.info(method, "Extracting archive for job " + job.getId());
             ArchiveExtractor.extractWithCleanup(archivePath, extractDir.toPath(), extractedCount);
             
@@ -246,8 +248,6 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             // "dump" method can use the new async processor
             if ("convert".equals(job.getUploadMethod())) {
                 log.info(method, "Using legacy path for 'convert' method to create subspaces");
-                // For convert method, we need to use the old synchronous code that creates subspaces
-                // This requires passing the same parameters as the old system
                 handleConvertMethod(job, extractDir);
             } else {
                 // dump method - use the new async processor
@@ -258,7 +258,18 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             
             // Step 3: Mark as completed
             UploadJobQueue.completeJob(job.getId());
+            processingSucceeded = true;
             log.info(method, "Completed job " + job.getId());
+            
+            // Step 4: Delete only the source archive file now that extraction is done.
+            // The extracted directory must NOT be deleted — DB paths point to it.
+            try {
+                if (archiveFile.exists() && archiveFile.delete()) {
+                    log.info(method, "Deleted source archive: " + archivePath);
+                }
+            } catch (Exception deleteEx) {
+                log.warn(method, "Could not delete source archive (non-fatal): " + archivePath, deleteEx);
+            }
             
         } catch (Exception e) {
             log.error(method, "Failed to process job " + job.getId(), e);
@@ -271,13 +282,14 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             UploadJobQueue.failJob(job.getId(), errorMessage);
             
         } finally {
-            // Step 4: Cleanup extracted files (guaranteed)
-            if (extractPath != null) {
+            // Only delete the extraction directory when processing FAILED — the files
+            // were never registered in the DB so there is nothing to preserve.
+            if (!processingSucceeded && extractDir != null) {
                 try {
-                    ArchiveExtractor.cleanup(extractPath);
-                    log.info(method, "Cleaned up extraction directory for job " + job.getId());
+                    ArchiveExtractor.cleanup(extractDir.getAbsolutePath());
+                    log.info(method, "Cleaned up extraction directory after failure for job " + job.getId());
                 } catch (Exception cleanupEx) {
-                    log.warn(method, "Failed to cleanup extraction directory: " + extractPath, cleanupEx);
+                    log.warn(method, "Failed to cleanup extraction directory: " + extractDir.getAbsolutePath(), cleanupEx);
                 }
             }
         }
