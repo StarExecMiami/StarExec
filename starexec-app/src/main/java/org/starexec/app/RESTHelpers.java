@@ -1023,7 +1023,7 @@ public class RESTHelpers {
 
 		}
 
-		return convertBenchmarksToJsonObject(benchmarksToDisplay, query);
+		return convertBenchmarksToJsonObject(benchmarksToDisplay, query, id);
 	}
 
 	public static JsonObject getNextJobPageForSpaceExplorer(int id, HttpServletRequest request) {
@@ -1091,7 +1091,7 @@ public class RESTHelpers {
 			query.setTotalRecordsAfterQuery(Solvers.getCountInSpace(id, query.getSearchQuery()));
 		}
 
-		return convertSolversToJsonObject(solversToDisplay, query);
+		return convertSolversToJsonObject(solversToDisplay, query, id);
 	}
 
 	public static JsonObject getNextSpacePageForSpaceExplorer(int id, HttpServletRequest request) {
@@ -1426,6 +1426,11 @@ public class RESTHelpers {
 	}
 
 	private static StringBuilder getBenchLinkPrefix(Benchmark bench, PrimitivesToAnonymize primitivesToAnonymize) {
+		return getBenchLinkPrefix(bench, primitivesToAnonymize, -1);
+	}
+
+	private static StringBuilder getBenchLinkPrefix(Benchmark bench, PrimitivesToAnonymize primitivesToAnonymize,
+			int contextSpaceId) {
 		StringBuilder sb = new StringBuilder();
 		sb.append("<a");
 		// Set the tooltip to be the benchmark's description
@@ -1435,6 +1440,9 @@ public class RESTHelpers {
 			sb.append("\" ");
 			sb.append("href=\"").append(Util.docRoot("secure/details/benchmark.jsp?id="));
 			sb.append(bench.getId());
+			if (contextSpaceId > 0) {
+				sb.append("&contextSpaceId=").append(contextSpaceId);
+			}
 			sb.append("\" target=\"_blank\"");
 		}
 		sb.append(">");
@@ -1454,7 +1462,11 @@ public class RESTHelpers {
 	}
 
 	private static String getBenchLink(Benchmark bench) {
-		StringBuilder sb = getBenchLinkPrefix(bench, PrimitivesToAnonymize.NONE);
+		return getBenchLink(bench, -1);
+	}
+
+	private static String getBenchLink(Benchmark bench, int contextSpaceId) {
+		StringBuilder sb = getBenchLinkPrefix(bench, PrimitivesToAnonymize.NONE, contextSpaceId);
 		sb.append(getHiddenBenchLink(bench));
 		return sb.toString();
 	}
@@ -1480,6 +1492,14 @@ public class RESTHelpers {
 	}
 
 	private static String getSolverLink(int solverId, String solverName, PrimitivesToAnonymize primitivesToAnonymize) {
+		return getSolverLink(solverId, solverName, primitivesToAnonymize, -1);
+	}
+
+	/**
+	 * Builds solver details link; when contextSpaceId > 0 appends it for "back" context (M:N spaces).
+	 */
+	private static String getSolverLink(int solverId, String solverName, PrimitivesToAnonymize primitivesToAnonymize,
+			int contextSpaceId) {
 		StringBuilder sb = new StringBuilder();
 		sb.append("<a title=\"");
 		sb.append(solverName);
@@ -1488,6 +1508,9 @@ public class RESTHelpers {
 		if (!AnonymousLinks.areSolversAnonymized(primitivesToAnonymize)) {
 			sb.append("href=\"").append(Util.docRoot("secure/details/solver.jsp?id="));
 			sb.append(solverId);
+			if (contextSpaceId > 0) {
+				sb.append("&contextSpaceId=").append(contextSpaceId);
+			}
 			sb.append("\" target=\"_blank\"");
 		}
 		sb.append(">");
@@ -1931,6 +1954,13 @@ public class RESTHelpers {
 	 * @author Eric Burns
 	 */
 	public static JsonObject convertSolversToJsonObject(List<Solver> solvers, DataTablesQuery query) {
+		return convertSolversToJsonObject(solvers, query, -1);
+	}
+
+	/**
+	 * Same as convertSolversToJsonObject(List, DataTablesQuery) but adds contextSpaceId to links for "back" navigation (M:N).
+	 */
+	public static JsonObject convertSolversToJsonObject(List<Solver> solvers, DataTablesQuery query, int contextSpaceId) {
 		/*
 		 * Generate the HTML for the next DataTable page of entries
 		 */
@@ -1948,7 +1978,7 @@ public class RESTHelpers {
 			// Create the solver "details" link and append the hidden input
 			// element
 			sb = new StringBuilder();
-			sb.append(getSolverLink(solver.getId(), solver.getName(), PrimitivesToAnonymize.NONE));
+			sb.append(getSolverLink(solver.getId(), solver.getName(), PrimitivesToAnonymize.NONE, contextSpaceId));
 			sb.append(hiddenSolverId);
 			String solverLink = sb.toString();
 
@@ -2012,12 +2042,20 @@ public class RESTHelpers {
 	 * @author Eric Burns
 	 */
 	public static JsonObject convertBenchmarksToJsonObject(List<Benchmark> benchmarks, DataTablesQuery query) {
+		return convertBenchmarksToJsonObject(benchmarks, query, -1);
+	}
+
+	/**
+	 * Same as convertBenchmarksToJsonObject(List, DataTablesQuery) but adds contextSpaceId to links for "back" navigation (M:N).
+	 */
+	public static JsonObject convertBenchmarksToJsonObject(List<Benchmark> benchmarks, DataTablesQuery query,
+			int contextSpaceId) {
 		/*
 		 * Generate the HTML for the next DataTable page of entries
 		 */
 		JsonArray dataTablePageEntries = new JsonArray();
 		for (Benchmark bench : benchmarks) {
-			String benchLink = getBenchLink(bench);
+			String benchLink = getBenchLink(bench, contextSpaceId);
 			// Create the benchmark type tag
 			// Set the tooltip to be the benchmark type's description
 			String typeSpan = "<span title=\"" + bench.getType().getDescription() + "\">" + bench.getType().getName()

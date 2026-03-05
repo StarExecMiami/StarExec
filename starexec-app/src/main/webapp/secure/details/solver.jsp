@@ -212,7 +212,7 @@
 			<c:if test="${usr.id == user.id || hasAdminReadPrivileges}">
 				<a href="${starexecRoot}/secure/add/configuration.jsp?sid=${solver.id}"
 				   id="uploadConfig">add configuration</a>
-				<a href="${starexecRoot}/secure/edit/solver.jsp?id=${solver.id}"
+				<a href="${starexecRoot}/secure/edit/solver.jsp?id=${solver.id}<c:if test="${not empty param.contextSpaceId}">&contextSpaceId=${param.contextSpaceId}</c:if>"
 				   id="editLink">edit</a>
 				<a href="${starexecRoot}/services/solvers/${solver.id}/buildoutput"
 				   target="_blank" id="downBuildInfo">see build info</a>

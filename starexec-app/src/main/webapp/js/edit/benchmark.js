@@ -88,7 +88,12 @@ function attachButtonActions() {
 						function(returnCode) {
 							s = parseReturnCode(returnCode);
 							if (s) {
-								window.location = starexecRoot + 'secure/explore/spaces.jsp';
+								var url = starexecRoot + 'secure/explore/spaces.jsp';
+								var contextSpaceId = $('input[name="contextSpaceId"]').val();
+								if (contextSpaceId) {
+									url += '?id=' + encodeURIComponent(contextSpaceId);
+								}
+								window.location = url;
 							}
 						},
 						"json"

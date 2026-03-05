@@ -186,9 +186,9 @@ public class AddSpace extends HttpServlet {
 						"There was an internal error adding the space to the starexec database"
 				);
 			} else {
-				// On success, redirect to the space explorer so they can see changes
+				// On success, redirect to the space explorer on the new space so they can see changes
 				response.addCookie(new Cookie("New_ID", String.valueOf(newSpaceId)));
-				response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp"));
+				response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp?id=" + newSpaceId));
 			}
 		} catch (Exception e) {
 			log.warn("Caught Exception in AddSpace.doPost", e);

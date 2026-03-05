@@ -64,7 +64,16 @@
 		}
 		
 		request.setAttribute("isNewSystem", isNewSystem);
-		
+
+		// Space id for "back" link: new system has getSpaceId(), legacy has getSpaceId()
+		Integer returnSpaceId = null;
+		if (isNewSystem && newJob != null) {
+			returnSpaceId = newJob.getSpaceId();
+		} else if (oldStatus != null) {
+			returnSpaceId = oldStatus.getSpaceId();
+		}
+		request.setAttribute("returnSpaceId", returnSpaceId);
+
 	} catch (NumberFormatException nfe) {
 		response.sendError(HttpServletResponse.SC_BAD_REQUEST, "The given upload status id was in an invalid format");
 		return;
@@ -361,6 +370,6 @@
 		</c:if>
 	</c:if>
 
-	<a id="returnLink" href="${starexecRoot}/secure/explore/spaces.jsp">back</a>
+	<a id="returnLink" href="${starexecRoot}/secure/explore/spaces.jsp<c:if test="${returnSpaceId != null && returnSpaceId > 0}">?id=${returnSpaceId}</c:if>">back</a>
 
 </star:template>

@@ -254,7 +254,7 @@
 
 		<fieldset id="permissionActions">
 			<a id="exploreSpaces" class="btn btn-secondary backButton"
-			   href="${starexecRoot}/secure/explore/spaces.jsp"><span class="ui-icon ui-icon-arrowthick-1-w"></span> return to space
+			   href="${starexecRoot}/secure/explore/spaces.jsp?id=${param.id}"><span class="ui-icon ui-icon-arrowthick-1-w"></span> return to space
 				explorer</a>
 			<a class="btn btn-primary" id="makePublic">make public</a>
 		</fieldset>

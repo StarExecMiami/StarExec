@@ -1,5 +1,5 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
-        import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Permissions, org.starexec.data.database.Solvers,org.starexec.data.database.Websites, org.starexec.data.security.GeneralSecurity, org.starexec.data.to.Solver, org.starexec.data.to.Website.WebsiteType, org.starexec.util.SessionUtil" %>
+        import="org.starexec.constants.DB,org.starexec.constants.R,org.starexec.data.database.Permissions, org.starexec.data.database.Solvers,org.starexec.data.database.Websites, org.starexec.data.security.GeneralSecurity, org.starexec.data.security.SpaceSecurity, org.starexec.data.to.Solver, org.starexec.data.to.Website.WebsiteType, org.starexec.util.SessionUtil" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
@@ -24,6 +24,16 @@
 				request.setAttribute("sites", Websites.getAllForHTML(solverId,
 				                                                     WebsiteType.SOLVER
 				));
+				// Validate contextSpaceId for "back" link (IDOR: only expose if user can see that space)
+				String contextSpaceIdParam = request.getParameter("contextSpaceId");
+				if (contextSpaceIdParam != null && !contextSpaceIdParam.trim().isEmpty()) {
+					try {
+						int contextSpaceId = Integer.parseInt(contextSpaceIdParam.trim());
+						if (contextSpaceId > 0 && SpaceSecurity.canUserSeeSpace(contextSpaceId, userId).isSuccess()) {
+							request.setAttribute("contextSpaceId", contextSpaceId);
+						}
+					} catch (NumberFormatException ignored) { }
+				}
 				if (s.isDownloadable()) {
 					request.setAttribute("isDownloadable", "checked");
 					request.setAttribute("isNotDownloadable", "");
@@ -70,7 +80,7 @@
                js="lib/jquery.validate.min, edit/solver"
                css="edit/shared, edit/solver">
 	<form id="editSolverForm">
-
+		<c:if test="${not empty contextSpaceId}"><input type="hidden" name="contextSpaceId" value="${contextSpaceId}"/></c:if>
 		<fieldset>
 			<legend>solver details</legend>
 			<table id="solverDetails" class="shaded">

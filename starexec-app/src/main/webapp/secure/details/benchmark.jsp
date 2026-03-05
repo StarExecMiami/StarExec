@@ -184,7 +184,7 @@
 
 			<c:if test="${usr.id == user.id || hasAdminReadPrivileges}">
 				<a id="editLink"
-				   href="${starexecRoot}/secure/edit/benchmark.jsp?id=${bench.id}">edit</a>
+				   href="${starexecRoot}/secure/edit/benchmark.jsp?id=${bench.id}<c:if test="${not empty param.contextSpaceId}">&contextSpaceId=${param.contextSpaceId}</c:if>">edit</a>
 			</c:if>
 		</c:if>
 

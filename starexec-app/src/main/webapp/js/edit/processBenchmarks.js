@@ -20,7 +20,12 @@ function initUI() {
 	});
 
 	$("#cancel").click(function() {
-		window.location = href = starexecRoot + "secure/explore/spaces.jsp";
+		var url = starexecRoot + "secure/explore/spaces.jsp";
+		var sid = $("#sid").val();
+		if (sid) {
+			url += "?id=" + encodeURIComponent(sid);
+		}
+		window.location = url;
 	});
 
 	// Updates the database to reflect the newly inputed processor details

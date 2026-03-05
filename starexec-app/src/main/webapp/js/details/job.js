@@ -849,7 +849,12 @@ function setupDeleteJobButton() {
 						function(returnCode) {
 							var s = parseReturnCode(returnCode);
 							if (s) {
-								window.location = starexecRoot + 'secure/explore/spaces.jsp';
+								var url = starexecRoot + 'secure/explore/spaces.jsp';
+								var spaceId = typeof DETAILS_JOB !== 'undefined' && DETAILS_JOB.rootJobSpaceId;
+								if (spaceId) {
+									url += '?id=' + encodeURIComponent(spaceId);
+								}
+								window.location = url;
 							}
 						},
 						"json"

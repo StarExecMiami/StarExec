@@ -1,20 +1,31 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
-        import="org.starexec.data.database.Spaces,org.starexec.data.database.Users,org.starexec.data.security.SpaceSecurity, org.starexec.util.SessionUtil, org.starexec.logger.StarLogger, java.util.List" %>
+        import="org.starexec.data.database.Spaces,org.starexec.data.database.Users,org.starexec.data.security.SpaceSecurity, org.starexec.util.SessionUtil, org.starexec.logger.StarLogger, java.util.List, javax.servlet.http.Cookie" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
 <%
+	// Response varies by cookie (Last-Space-Id); prevent caching stale HTML (see plan 1.3).
+	response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+	response.setHeader("Pragma", "no-cache");
+	response.setHeader("Vary", "Cookie");
+
 	final StarLogger log = StarLogger.getLogger(getClass());
 	int uid = SessionUtil.getUserId(request);
 	String pageTitle = "Space Explorer";
+	final String COOKIE_LAST_SPACE_ID = "starexec_last_space_id";
+	String contextPath = request.getContextPath();
+	if (contextPath == null || contextPath.isEmpty()) {
+		contextPath = "/";
+	}
 
 	String spaceChain = "1";
+	int effectiveSpaceId = -1;
 	try {
 		String idParam = request.getParameter("id");
-		if (idParam != null) {
+		if (idParam != null && !idParam.isEmpty()) {
 			int spaceId = Integer.parseInt(idParam);
-			if (SpaceSecurity.canUserSeeSpace(spaceId, uid).isSuccess() &&
-					spaceId > 0) {
+			if (SpaceSecurity.canUserSeeSpace(spaceId, uid).isSuccess() && spaceId > 0) {
+				effectiveSpaceId = spaceId;
 				List<Integer> idChain = Spaces.getChainToRoot(spaceId);
 				StringBuilder stringChain = new StringBuilder();
 				for (Integer id : idChain) {
@@ -24,6 +35,45 @@
 				stringChain.delete(stringChain.length() - 1, stringChain.length());
 				spaceChain = stringChain.toString();
 				pageTitle = Spaces.get(spaceId).getName();
+				// Set cookie so future requests without id can fall back to this space (plan 1.2: HttpOnly, Secure, SameSite=Lax).
+				String cookieValue = COOKIE_LAST_SPACE_ID + "=" + spaceId + "; Path=" + contextPath + "; Max-Age=" + (365 * 24 * 60 * 60) + "; HttpOnly; Secure; SameSite=Lax";
+				response.addHeader("Set-Cookie", cookieValue);
+			}
+		} else {
+			// No id in URL: use cookie if valid (plan 1). Note: cookie is domain-wide, not per-tab (plan 1.1).
+			Cookie[] cookies = request.getCookies();
+			if (cookies != null) {
+				for (Cookie c : cookies) {
+					if (COOKIE_LAST_SPACE_ID.equals(c.getName())) {
+						String val = c.getValue();
+						if (val != null && !val.isEmpty()) {
+							try {
+								int cookieSpaceId = Integer.parseInt(val.trim());
+								if (cookieSpaceId > 0 && SpaceSecurity.canUserSeeSpace(cookieSpaceId, uid).isSuccess()) {
+									effectiveSpaceId = cookieSpaceId;
+									List<Integer> idChain = Spaces.getChainToRoot(cookieSpaceId);
+									StringBuilder stringChain = new StringBuilder();
+									for (Integer id : idChain) {
+										stringChain.append(id);
+										stringChain.append(",");
+									}
+									stringChain.delete(stringChain.length() - 1, stringChain.length());
+									spaceChain = stringChain.toString();
+									pageTitle = Spaces.get(cookieSpaceId).getName();
+								}
+								break;
+							} catch (NumberFormatException nfe) {
+								// invalid cookie value
+							}
+						}
+						// If we did not use it (invalid or no permission), clear the cookie
+						if (effectiveSpaceId <= 0) {
+							String clearCookieHeader = COOKIE_LAST_SPACE_ID + "=; Path=" + contextPath + "; Max-Age=0; HttpOnly; Secure; SameSite=Lax";
+							response.addHeader("Set-Cookie", clearCookieHeader);
+						}
+						break;
+					}
+				}
 			}
 		}
 	} catch (Exception e) {

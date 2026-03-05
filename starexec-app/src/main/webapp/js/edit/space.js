@@ -103,7 +103,12 @@ function attachButtonActions() {
 				function(returnCode) {
 					s = parseReturnCode(returnCode);
 					if (s) {
-						window.location = starexecRoot + 'secure/explore/spaces.jsp';
+						var spaceId = $('input[name="spaceId"]').val() || getParameterByName("id");
+						var url = starexecRoot + 'secure/explore/spaces.jsp';
+						if (spaceId) {
+							url += '?id=' + encodeURIComponent(spaceId);
+						}
+						window.location = url;
 					}
 				},
 				"json"

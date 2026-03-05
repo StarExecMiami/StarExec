@@ -205,6 +205,13 @@ public class Status {
 	}
 
 	/**
+	 * @param code the status code to set for this status (nullable; null becomes STATUS_UNKNOWN)
+	 */
+	public void setCode(Integer code) {
+		this.code = code == null ? StatusCode.STATUS_UNKNOWN : StatusCode.toStatusCode(code);
+	}
+
+	/**
 	 * @param code the status code to set for this status
 	 */
 	public void setCode(int code) {
