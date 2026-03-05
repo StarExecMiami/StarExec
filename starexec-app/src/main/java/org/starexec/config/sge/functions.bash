@@ -211,11 +211,12 @@ function limitMem {
 	local NODE_MEM=$(vmstat -s | head -1 | sed 's/K total memory//')
 
 	#then, convert kb to mb
-	((NODE_MEM = NODE_MEM / 1024))
+	# Using $((  )) not (( )) to avoid set -e aborting when result is 0 (e.g. low-memory node)
+	NODE_MEM=$(( NODE_MEM / 1024 ))
 	log "node memory in megabytes = $NODE_MEM"
 
 	#then, set to half the memory
-	((NODE_MEM = NODE_MEM / NUM_SLOTS))
+	NODE_MEM=$(( NODE_MEM / NUM_SLOTS ))
 	log "node memory after accounting for pairs allowed to run on node = $NODE_MEM"
 
 	if ((MAX_MEM > NODE_MEM)); then
@@ -560,7 +561,7 @@ function copyOutputIncrementally {
 		if ((DISK_QUOTA_EXCEEDED == 1)); then
 			break
 		fi
-		((TIMEOUT = TIMEOUT - PERIOD))
+		TIMEOUT=$(( TIMEOUT - PERIOD ))
 	done
 	log "done copying incremental output: the pair's timeout has been reached"
 }
@@ -641,7 +642,8 @@ function dbExec {
 	do
 		log "Unable to connect to database."
 		sleep 20
-		((--ATTEMPT))
+		# Using $((  )) not (( --ATTEMPT )) to avoid set -e aborting when ATTEMPT reaches 0
+		ATTEMPT=$(( ATTEMPT - 1 ))
 		false # set $? to fail on last iteration
 	done
 }
@@ -768,7 +770,7 @@ function processAttributes {
 		if [[ -z $line ]]; then
 			continue # line is empty, can be skipped
 		fi
-		((a++))
+		a=$(( a + 1 ))
 		key=${line%=*}   # everything before '='
 		value=${line#*=} # everything after  '='
 		# Only process if key and value are both non-null strings
@@ -851,8 +853,9 @@ function updateStats {
 	ROUNDED_WALLCLOCK_TIME=$( printf "%.0f" $WALLCLOCK_TIME )
 	ROUNDED_CPU_TIME=$( printf "%.0f" $CPU_TIME )
 
-	((STAREXEC_WALLCLOCK_LIMIT = STAREXEC_WALLCLOCK_LIMIT - ROUNDED_WALLCLOCK_TIME))
-	((STAREXEC_CPU_LIMIT = STAREXEC_CPU_LIMIT - ROUNDED_CPU_TIME))
+	# Using $((  )) not (( )) to avoid set -e aborting when remaining time reaches 0
+	STAREXEC_WALLCLOCK_LIMIT=$(( STAREXEC_WALLCLOCK_LIMIT - ROUNDED_WALLCLOCK_TIME ))
+	STAREXEC_CPU_LIMIT=$(( STAREXEC_CPU_LIMIT - ROUNDED_CPU_TIME ))
 
 	EXEC_HOST=$(hostname)
 	getTotalOutputSizeToCopy $3 $4
@@ -1008,15 +1011,20 @@ function setupBenchexecCgroups {
 	echo $$ > /sys/fs/cgroup/freezer/system.slice/benchexec-cgroup.service/tasks
 }
 
+# BUG FIX: original function had inverted bash return code semantics (returned 1 for "all
+# deps found", 0 for "dep missing"). With `set -euo pipefail`, returning non-zero from a
+# standalone function call aborts the script before the caller can capture $?. Corrected
+# to standard bash convention: return 0 = all dependencies exist (success), return 1 =
+# a dependency file is missing (failure). Call site updated to match.
 function checkIfBenchmarkDependenciesExists {
 	for (( i = 0 ; i < ${#BENCH_DEPENDS_ARRAY[@]} ; i++ )); do
 		log "Checking if axiom at location exists: '${BENCH_DEPENDS_ARRAY[i]}'"
 		if [ ! -f "${BENCH_DEPENDS_ARRAY[i]}" ]; then
-			log "${BENCH_DEPENDS_ARRAY[i]} did not exists, returning 0."
-			return 0
+			log "${BENCH_DEPENDS_ARRAY[i]} did not exist, returning 1 (missing)."
+			return 1
 		fi
 	done
-	return 1
+	return 0
 }
 
 function copyBenchmarkDependencies {
@@ -1242,7 +1250,7 @@ function saveFileAsBenchmark {
 	fi
 
 	CURRENT_BENCH_NAME=${FILE_NAME%%.*}$BENCH_NAME_ADDON$CURRENT_STAGE_NUMBER
-	((MAX_BENCH_NAME_LENGTH = BENCH_NAME_LENGTH_LIMIT - ${#CURRENT_BENCH_SUFFIX}))
+	MAX_BENCH_NAME_LENGTH=$(( BENCH_NAME_LENGTH_LIMIT - ${#CURRENT_BENCH_SUFFIX} ))
 	CURRENT_BENCH_NAME=${CURRENT_BENCH_NAME:0:$MAX_BENCH_NAME_LENGTH}
 	CURRENT_BENCH_NAME="$CURRENT_BENCH_NAME$CURRENT_BENCH_SUFFIX"
 	CURRENT_BENCH_PATH=$BENCH_SAVE_DIR/$SPACE_PATH/$PAIR_ID/$CURRENT_STAGE_NUMBER
@@ -1281,7 +1289,7 @@ function setRemainingDiskQuota {
 	fi
 	log "user disk usage is $DISK_USAGE"
 	# include a 1 GiB buffer
-	((REMAINING_DISK_QUOTA = DISK_QUOTA - DISK_USAGE + 1073741824))
+	REMAINING_DISK_QUOTA=$(( DISK_QUOTA - DISK_USAGE + 1073741824 ))
 	log "remaining user disk quota: $REMAINING_DISK_QUOTA"
 	if ((REMAINING_DISK_QUOTA < 0)); then
 		REMAINING_DISK_QUOTA=0
@@ -1321,7 +1329,7 @@ function getTotalOutputSizeToCopy {
 
 	if (($1 == 3)); then
 		# user is requesting two copies
-		((STDOUT_SIZE = STDOUT_SIZE * 2))
+		STDOUT_SIZE=$(( STDOUT_SIZE * 2 ))
 	fi
 	log "found the following stdout size: $STDOUT_SIZE"
 
@@ -1331,10 +1339,10 @@ function getTotalOutputSizeToCopy {
 
 	if (($2 == 3)); then
 		# user is requesting two copies
-		((OTHER_SIZE = OTHER_SIZE * 2))
+		OTHER_SIZE=$(( OTHER_SIZE * 2 ))
 	fi
 	log "found the following other files size: $OTHER_SIZE"
-	((DISK_SIZE = OTHER_SIZE + STDOUT_SIZE))
+	DISK_SIZE=$(( OTHER_SIZE + STDOUT_SIZE ))
 	log "returning the following disk size: $DISK_SIZE"
 }
 

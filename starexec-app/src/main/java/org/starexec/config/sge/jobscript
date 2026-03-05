@@ -72,10 +72,14 @@ export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
 
 # Array of secondary benchmarks starexec paths
-declare -a BENCH_DEPENDS_ARRAY
+# BUG FIX: bash 5.3 changed nounset semantics — `declare -a arr` without assignment
+# is treated as "unbound" inside functions under `set -u`, causing
+# "BENCH_DEPENDS_ARRAY: unbound variable" at checkIfBenchmarkDependenciesExists.
+# Using `arr=()` (explicit empty assignment) satisfies nounset in all bash versions.
+BENCH_DEPENDS_ARRAY=()
 
 # Array of secondary benchmarks execution host paths
-declare -a LOCAL_DEPENDS_ARRAY
+LOCAL_DEPENDS_ARRAY=()
 
 #==========================================================================
 # Arrays of stage information written from Java
@@ -121,9 +125,14 @@ $$EXTRA_SAVE_OPTION_ARRAY$$
 
 NUM_STAGES=${#STAGE_NUMBERS[@]}
 
-((NUM_BENCH_INPUTS = ${#BENCH_INPUT_PATHS[@]} - 1)) # we terminate the array with an empty string, so the number is the size-1
-
-
+# BUG FIX: Using $((  )) arithmetic expansion instead of (( )) compound command.
+# With `set -euo pipefail` (set in functions.bash), `(( expr ))` returns exit code 1
+# when the result is 0, which aborts the script BEFORE the EXIT trap is registered
+# (trap 'exitJobscript $?' EXIT is set below). When BENCH_INPUT_PATHS has only the
+# terminating empty string, ${#BENCH_INPUT_PATHS[@]} - 1 == 0, causing all jobs with
+# no benchmark inputs to silently exit without writing status.json, leaving pairs
+# stuck in ENQUEUED status forever.
+NUM_BENCH_INPUTS=$(( ${#BENCH_INPUT_PATHS[@]} - 1 )) # we terminate the array with an empty string, so the number is the size-1
 
 
 
@@ -183,13 +192,12 @@ decodePathArrays
 $$STAGE_DEPENDENCY_ARRAY$$
 fillDependArrays
 
-checkIfBenchmarkDependenciesExists
-dependenciesExist=$?
-log "dependenciesExist was $dependenciesExist"
-if ((dependenciesExist == 0)); then
+if ! checkIfBenchmarkDependenciesExists; then
+	log "Missing benchmark dependencies, aborting."
 	sendStatus "$ERROR_BENCH_DEPENDENCY_MISSING"
 	exit 0
 fi
+log "All benchmark dependencies verified."
 #todo: alter the way we copy runsolver over so it only happens once
 copyBenchmarkDependencies
 
@@ -339,7 +347,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	ls -l "$OUT_DIR"
 
 	if [ "$BENCHMARKING_FRAMEWORK" == "$BENCHEXEC" ]; then
-		((MEM_IN_BYTES = CURRENT_STAGE_MEMORY * 1000000))
+		MEM_IN_BYTES=$(( CURRENT_STAGE_MEMORY * 1000000 ))
 
 		log "Setting up cpuset cgroup..."
 		echo $$ > /sys/fs/cgroup/cpuset/system.slice/benchexec-cgroup.service/tasks
@@ -472,17 +480,21 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	# move the working directory back to the top level sandbox
 	cd $WORKING_DIR
 	if ((RESULTS_INTERVAL > 0)); then
-		kill $COPY_OUTPUT_INCREMENTALLY_PID
+		# suppress set -e: background process may already be dead
+		kill $COPY_OUTPUT_INCREMENTALLY_PID 2>/dev/null || true
 	fi
 
 	# If runsolver finishes then stop the killDeadlockedJobPair function.
 	log "Runsolver finished. Killing the defensive killall function."
-	kill $KILL_DEADLOCKED_JOB_PAIR_PID
-	KILL_EXIT_STATUS=$?
+	# BUG FIX: `kill` returns 1 when the process is already dead (deadlocked job case).
+	# With set -e that would abort before KILL_EXIT_STATUS=$? is reached. Use || to
+	# capture the exit code without triggering set -e.
+	KILL_EXIT_STATUS=0
+	kill $KILL_DEADLOCKED_JOB_PAIR_PID 2>/dev/null || KILL_EXIT_STATUS=$?
 	JOB_PAIR_DEADLOCKED=false
-	if ((KILL_EXIT_STATUS == 1)); then
+	if ((KILL_EXIT_STATUS != 0)); then
 		#killDeadlockedJobPair was dead so the job pair
-		log "Job pair was deadlocked."
+		log "Job pair was deadlocked (kill returned $KILL_EXIT_STATUS)."
 		JOB_PAIR_DEADLOCKED=true
 	fi
 
@@ -490,7 +502,8 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	ls -lhR "$OUT_DIR"
 
 	log "recording header of job pair output"
-	head -5 "$STDOUT_FILE"
+	# suppress set -e: file may be empty or missing if solver produced no output
+	head -5 "$STDOUT_FILE" || true
 
 	if [ ! -s "$VARFILE" ]; then
 		echo "Varfile could not be found. Terminating job pair."
@@ -514,7 +527,9 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	# check for which cores we are on
 	log "epilog checking for information on cores, from runsolver's watch file:"
-	grep 'cores:' "$WATCHFILE"
+	# BUG FIX: grep returns exit code 1 when no match is found. With set -e that
+	# aborts the script. "cores:" is absent in container mode (SUPPRESS_TIMESTAMP).
+	grep 'cores:' "$WATCHFILE" || true
 
 	# this also does post processing
 	copyOutput "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
