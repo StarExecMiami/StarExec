@@ -423,6 +423,29 @@ public class LocalBackend implements Backend {
                                     pairId +
                                     ") completed successfully with exit code " +
                                     exitCode);
+                    // Safety net: if the wrapper (runsolver) exits 0 but no status.json
+                    // was written (e.g. the job script aborted before its EXIT trap was
+                    // registered), mark the pair as ERROR_RUNSCRIPT so it doesn't stay
+                    // stuck in ENQUEUED forever. The monitor will not find status.json
+                    // in this case, so we must act here.
+                    if (pairId > 0 && jobMonitor != null) {
+                        File statusFile = new File(new File(job.logPath).getParent(), "status.json");
+                        if (!statusFile.exists()) {
+                            log.error(
+                                    "Job " + job.execId + " (pairId=" + pairId +
+                                    ") exited 0 but produced no status.json at " +
+                                    statusFile.getAbsolutePath() +
+                                    ". This typically means the job script aborted before" +
+                                    " the EXIT trap was registered (e.g. arithmetic with" +
+                                    " set -e). Marking pair as ERROR_RUNSCRIPT.");
+                            try {
+                                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_RUNSCRIPT.getVal());
+                            } catch (Exception e) {
+                                log.error("Failed to set error status for pairId=" + pairId, e);
+                            }
+                            jobMonitor.clearPairTracking(pairId);
+                        }
+                    }
                 } else {
                     job.state = LocalJob.JobState.FAILED;
                     failedJobCount.incrementAndGet();
