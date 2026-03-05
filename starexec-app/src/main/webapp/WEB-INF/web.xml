@@ -69,6 +69,16 @@
         <load-on-startup>3</load-on-startup>
     </servlet>
 
+    <!-- Job matrix view: controller forwards to view-only JSP (TD-001) -->
+    <servlet>
+        <servlet-name>JobMatrixViewController</servlet-name>
+        <servlet-class>org.starexec.servlets.JobMatrixViewController</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>JobMatrixViewController</servlet-name>
+        <url-pattern>/secure/details/jobMatrixView.jsp</url-pattern>
+    </servlet-mapping>
+
     <!-- Application-specific Servlets -->
     <!-- Grouped by functional area -->
     <servlet>
