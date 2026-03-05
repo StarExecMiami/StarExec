@@ -27,6 +27,7 @@ import org.starexec.data.to.pipelines.StageAttributes.SaveResultsOption;
 import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.TimePair;
 import org.starexec.exceptions.StarExecDatabaseException;
+import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -1752,7 +1753,7 @@ public class Jobs {
         int jobId,
         int since,
         boolean getCompletedPairsOnly
-    ) {
+    ) throws StarExecException {
         final String method = "getDetailed";
         log.info("getting detailed info for job " + jobId);
         Connection con = null;
@@ -1788,15 +1789,17 @@ public class Jobs {
             }
 
             return j;
+        } catch (StarExecException e) {
+            throw e;
         } catch (Exception e) {
             log.error("getDetailed", "jobId: " + jobId, e);
+            return null;
         } finally {
+            // Close in reverse order of acquisition: ResultSet -> Statement -> Connection
             Common.safeClose(results);
-            Common.safeClose(con);
             Common.safeClose(procedure);
+            Common.safeClose(con);
         }
-
-        return null;
     }
 
     /**
@@ -3921,11 +3924,11 @@ public class Jobs {
      * @param jobId ID of job to return
      * @return A job populated with all details and pairs
      */
-    public static Job getJobForMatrix(int jobId) {
+    public static Job getJobForMatrix(int jobId) throws StarExecException {
         return getDetailed(jobId, 0, false);
     }
 
-    private static List<JobPair> getAllPairs(int jobId) {
+    private static List<JobPair> getAllPairs(int jobId) throws StarExecDatabaseException {
         final String methodName = "getAllPairs";
         Connection con = null;
         ResultSet results = null;
@@ -3947,12 +3950,13 @@ public class Jobs {
             return getPairsDetailed(jobId, results, false);
         } catch (Exception e) {
             log.error(methodName, e);
+            throw new StarExecDatabaseException("Failed to load job pairs for job " + jobId + ": " + e.getMessage(), e);
         } finally {
-            Common.safeClose(con);
+            // Close in reverse order of acquisition: ResultSet -> Statement -> Connection
             Common.safeClose(results);
             Common.safeClose(procedure);
+            Common.safeClose(con);
         }
-        return null;
     }
 
     /**
