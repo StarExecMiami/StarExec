@@ -3,6 +3,7 @@ package org.starexec.util.matrixView;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.to.Job;
+import org.starexec.exceptions.StarExecException;
 import org.starexec.logger.StarLogger;
 
 import javax.servlet.http.HttpServletResponse;
@@ -13,13 +14,11 @@ public class MatrixViewUtil {
 
 	private static final StarLogger log = StarLogger.getLogger(MatrixViewUtil.class);
 
-	public static Job getJobIfAvailableToUser(int jobId, int userId, HttpServletResponse response) throws IOException {
+	public static Job getJobIfAvailableToUser(int jobId, int userId, HttpServletResponse response) throws IOException, StarExecException {
 		final String method = "getJobIfAvailableToUser";
 		log.entry(method);
 		if(Permissions.canUserSeeJob(jobId,userId).isSuccess()) {
 			Job job = Jobs.get(jobId);
-			log.debug(method, "Number of job pairs in job with id=" + jobId + " is " + job.getJobPairs().size() );
-			
 			int jobSpaceId=job.getPrimarySpace();
 			
 			if (jobSpaceId>0) {

@@ -39,58 +39,56 @@ public class Matrix {
 	 * @param jobSpaceId the job space to filter the pairs by
 	 * @author Albert Giegerich
 	 */
-	private Matrix(List<JobPair> jobPairs, final Integer jobSpaceId, final int stageNumber) {
+	private Matrix(List<JobPair> jobPairs, final Integer jobSpaceId, final int stageNumber) throws StarExecException {
 		final String method = "Matrix constructor";
 		log.entry(method);
-		try {
-			log.debug(method, "Found "+jobPairs.size()+" job pairs.");
-			String jobSpaceName = Spaces.getJobSpace(jobSpaceId).getName();
-			initializeMatrixFields(jobSpaceName, jobSpaceId);
-
-
-			Set<Benchmark> uniqueBenchmarks = new HashSet<>();
-			Set<Pair<Solver,Configuration>> uniqueSolverConfigs = new HashSet<>();
-
-			// Maps benchmark and solver-configuration vectors to the data that should appear in the cell where the two
-			// vectors intersect.
-			HashMap<Pair<Benchmark,Pair<Solver,Configuration>>,MatrixElement> vectorIntersectionToCellDataMap =
-                    new HashMap<>();
-
-			// Build the sets and the map that were just defined.
-			for (JobPair pair : jobPairs) {
-				addToUniqueVectorListsAndIntersectionMap(uniqueBenchmarks, uniqueSolverConfigs, vectorIntersectionToCellDataMap, pair, stageNumber);
-				if (!this.hasMultipleStages) {
-					this.hasMultipleStages = testForMultipleStages(pair);
-				}
-			}
-
-
-			log.debug(method,"Sorting benchmarks and solver-config pairs.");
-			// Sort the benchmarks alphabetically by name ignoring case.
-			ArrayList<Benchmark> uniqueBenchmarkList = new ArrayList<>(uniqueBenchmarks);
-			uniqueBenchmarkList.sort(NameableComparators.getCaseInsensitiveAlphabeticalComparator());
-
-			ArrayList<Pair<Solver,Configuration>> uniqueSolverConfigList =
-                    new ArrayList<>(uniqueSolverConfigs);
-			// Names of solver config will be "solver (config)", sort the solverConfigs
-			// alphabetically by name, ignore case.
-			uniqueSolverConfigList.sort((sc1, sc2) -> {
-				String solverName1 = sc1.getLeft().getName();
-				String solverName2 = sc2.getLeft().getName();
-				String configName1 = sc1.getRight().getName();
-				String configName2 = sc2.getRight().getName();
-				String sc1Name = String.format("%s (%s)", solverName1, configName1);
-				String sc2Name = String.format("%s (%s)", solverName2, configName2);
-				return sc1Name.compareToIgnoreCase(sc2Name);
-			});
-
-			// Populate the matrix.
-			populateRowAndColumnHeaders(uniqueBenchmarkList, uniqueSolverConfigList);
-			populateMatrixData(uniqueBenchmarkList, uniqueSolverConfigList, vectorIntersectionToCellDataMap);
-			log.exit(method);
-		} catch (Exception e) {
-			log.warn(method, "Error in constructing matrix for matrix view page." + e.getMessage());
+		JobSpace jobSpace = Spaces.getJobSpace(jobSpaceId);
+		if (jobSpace == null) {
+			throw new StarExecException("Job space not found for id " + jobSpaceId);
 		}
+		String jobSpaceName = jobSpace.getName();
+		initializeMatrixFields(jobSpaceName, jobSpaceId);
+
+		log.debug(method, "Found "+jobPairs.size()+" job pairs.");
+		Set<Benchmark> uniqueBenchmarks = new HashSet<>();
+		Set<Pair<Solver,Configuration>> uniqueSolverConfigs = new HashSet<>();
+
+		// Maps benchmark and solver-configuration vectors to the data that should appear in the cell where the two
+		// vectors intersect.
+		HashMap<Pair<Benchmark,Pair<Solver,Configuration>>,MatrixElement> vectorIntersectionToCellDataMap =
+				new HashMap<>();
+
+		// Build the sets and the map that were just defined.
+		for (JobPair pair : jobPairs) {
+			addToUniqueVectorListsAndIntersectionMap(uniqueBenchmarks, uniqueSolverConfigs, vectorIntersectionToCellDataMap, pair, stageNumber);
+			if (!this.hasMultipleStages) {
+				this.hasMultipleStages = testForMultipleStages(pair);
+			}
+		}
+
+		log.debug(method,"Sorting benchmarks and solver-config pairs.");
+		// Sort the benchmarks alphabetically by name ignoring case.
+		ArrayList<Benchmark> uniqueBenchmarkList = new ArrayList<>(uniqueBenchmarks);
+		uniqueBenchmarkList.sort(NameableComparators.getCaseInsensitiveAlphabeticalComparator());
+
+		ArrayList<Pair<Solver,Configuration>> uniqueSolverConfigList =
+				new ArrayList<>(uniqueSolverConfigs);
+		// Names of solver config will be "solver (config)", sort the solverConfigs
+		// alphabetically by name, ignore case.
+		uniqueSolverConfigList.sort((sc1, sc2) -> {
+			String solverName1 = sc1.getLeft().getName();
+			String solverName2 = sc2.getLeft().getName();
+			String configName1 = sc1.getRight().getName();
+			String configName2 = sc2.getRight().getName();
+			String sc1Name = String.format("%s (%s)", solverName1, configName1);
+			String sc2Name = String.format("%s (%s)", solverName2, configName2);
+			return sc1Name.compareToIgnoreCase(sc2Name);
+		});
+
+		// Populate the matrix.
+		populateRowAndColumnHeaders(uniqueBenchmarkList, uniqueSolverConfigList);
+		populateMatrixData(uniqueBenchmarkList, uniqueSolverConfigList, vectorIntersectionToCellDataMap);
+		log.exit(method);
 	}
 
 
@@ -101,7 +99,11 @@ public class Matrix {
 	public static Matrix getMatrixForJobSpaceFromJobAndStageNumber(Job job, int jobSpaceId, int stageNumber) throws StarExecException {
 		final String method = "getMatricesByJobSpaceFromJobStage";
 		log.entry(method);
-		log.debug(method, "Found "+job.getJobPairs().size()+" job pairs.");
+		List<JobPair> jobPairs = Objects.requireNonNull(
+				job.getJobPairs(),
+				"Job pairs must be initialized before generating matrix"
+		);
+		log.debug(method, "Found "+jobPairs.size()+" job pairs.");
 		/*
 		List<Matrix> matricesByJobSpace = new LinkedList<Matrix>();
 		*/
@@ -112,9 +114,11 @@ public class Matrix {
 		}
 		try {
 			matrixForJobSpace = new Matrix(jobPairsAssociatedWithJobSpaceId, jobSpaceId, stageNumber);
+		} catch (StarExecException e) {
+			throw e;
 		} catch (Exception e) {
 			log.warn("Error encountered while attempting to generate matrices for job matrix display.", e);
-			throw new StarExecException("Error encountered while attempting to generate matrices for job matrix display.");
+			throw new StarExecException("Error encountered while attempting to generate matrices for job matrix display.", e);
 		}
 		return matrixForJobSpace;
 	}

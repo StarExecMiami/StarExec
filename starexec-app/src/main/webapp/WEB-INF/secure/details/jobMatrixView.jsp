@@ -1,47 +1,7 @@
-<%@page contentType="text/html" pageEncoding="UTF-8"
-        import="org.starexec.data.database.Spaces,
-                org.starexec.data.to.Job,
-                org.starexec.data.to.JobSpace,
-                org.starexec.util.SessionUtil,
-                org.starexec.util.matrixView.Matrix,
-                org.starexec.util.matrixView.MatrixViewUtil"
-
-%>
+<%@page contentType="text/html" pageEncoding="UTF-8"%>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
-<%
-	try {
-		int userId = SessionUtil.getUserId(request);
-		int stageNumber = Integer.parseInt(request.getParameter("stage"));
-		int jobSpaceId = Integer.parseInt(request.getParameter("jobSpaceId"));
-		JobSpace space = Spaces.getJobSpace(jobSpaceId);
-		Job job = MatrixViewUtil
-				.getJobIfAvailableToUser(space.getJobId(), userId, response);
-
-		Matrix matrix = Matrix.getMatrixForJobSpaceFromJobAndStageNumber(job,
-		                                                                 jobSpaceId,
-		                                                                 stageNumber
-		);
-
-		request.setAttribute("matrix", matrix);
-
-		request.setAttribute("job", job);
-		request.setAttribute("jobSpaceId", jobSpaceId);
-		request.setAttribute("stage", stageNumber);
-	} catch (NumberFormatException nfe) {
-		response.sendError(
-				HttpServletResponse.SC_BAD_REQUEST,
-				"The given job id was in an invalid format"
-		);
-		return;
-	} catch (Exception e) {
-		response.sendError(
-				HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
-		return;
-	}
-
-%>
 <star:template title="${job.name}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/jobMatrixView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min"
                css="details/jobMatrixView, common/dataTable, common/dataTables.fixedColumns">
