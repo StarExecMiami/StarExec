@@ -24,8 +24,7 @@ table {
 
 fieldset {
 	width: 600px;
-	margin-top: 30px;
-	margin-bottom: 20px;
+	margin: 30px auto 20px;
 }
 
 // =============================================================================
@@ -75,11 +74,34 @@ fieldset {
 }
 
 #showPicture {
-	height: 160px;
+	height: 8rem;
+	width: auto;
+	object-fit: contain;
+	cursor: pointer;
+	border-radius: 50%;
+	transition: all 0.2s ease;
+
+	&:hover {
+		opacity: 0.8;
+	}
+
+	&:focus {
+		outline: 2px solid currentColor;
+		outline-offset: 2px;
+	}
+
+	&:focus:not(:focus-visible) {
+		outline: none;
+	}
+
+	&:focus-visible {
+		outline: 2px solid currentColor;
+		outline-offset: 2px;
+	}
 }
 
 #uploadPicture {
-	margin-left: 12px;
+	margin-left: 0;
 	margin-top: 4px;
 	width: 107px;
 }
@@ -98,6 +120,10 @@ fieldset {
 
 #picSection {
 	width: 133px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.5rem;
 }
 
 #solverDetail tbody tr td:first-child {
@@ -182,7 +208,7 @@ fieldset {
 
 #solverInfo {
 	tbody tr:hover {
-		background-color: $accent-red;
+		background-color: rgba($accent-orange, 0.15);
 	}
 
 	thead tr:hover {
@@ -205,7 +231,7 @@ fieldset {
 		}
 
 		tbody tr:hover {
-			background-color: $accent-red !important;
+			background-color: rgba($accent-orange, 0.15) !important;
 		}
 	}
 }

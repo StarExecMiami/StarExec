@@ -39,7 +39,6 @@
 			margin: -20px 0 15px 25px;
 			display: inline-block;
 			font-size: 1em;
-			text-transform: lowercase;
 		}
 
 		> h3 {
@@ -135,10 +134,6 @@ tr .label {
 	}
 }
 
-input {
-	width: 50%;
-}
-
 // Legacy fieldset list styling
 fieldset ul li {
 	list-style: none;
@@ -162,7 +157,7 @@ fieldset ul li {
 	font-size: smaller;
 }
 
-/* Editable cell hover states - indicates clickability */
+/* Editable cells — dashed underline + text cursor signals click-to-edit affordance */
 #editfirstname,
 #editlastname,
 #editinstitution,
@@ -170,8 +165,11 @@ fieldset ul li {
 #editpairquota,
 #editpagesize,
 #editemail {
-	cursor: pointer;
-	transition: background-color 0.2s ease;
+	cursor: text;
+	border-bottom: 1px dashed rgba($accent-orange, 0.45);
+	border-radius: 2px;
+	padding: 2px 4px;
+	transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 #editfirstname:hover,
@@ -181,7 +179,18 @@ fieldset ul li {
 #editpairquota:hover,
 #editpagesize:hover,
 #editemail:hover {
-	background-color: rgba(220, 111, 4, 0.1);
+	background-color: rgba($accent-orange, 0.1);
+	border-bottom-color: $accent-orange;
+}
+
+/* Visible unit label next to number inputs (e.g. "s", "MB") */
+.input-unit {
+	display: inline-block;
+	margin-left: 4px;
+	font-size: 0.85em;
+	color: $text-accent-color;
+	vertical-align: middle;
+	user-select: none;
 }
 
 .caption {
@@ -196,8 +205,19 @@ fieldset ul li {
 	margin-top: 10px;
 }
 
-input[type="text"] {
-	width: 50%;
+// Inputs within the personal info and settings tables use 50% width to align
+// with the two-column label/value layout. Scoped to avoid affecting dialogs and other components.
+#infoTable input[type="text"],
+#infoTable input[type="email"],
+#infoTable input[type="url"],
+#infoTable input[type="number"],
+.account-edit section input[type="text"],
+.account-edit section input[type="email"],
+.account-edit section input[type="url"],
+.account-edit section input[type="number"] {
+	min-width: 200px;
+	width: auto;
+	max-width: 400px;
 }
 
 #toggleWebsite {
@@ -213,7 +233,15 @@ input[type="text"] {
 }
 
 #showPicture {
-	height: 160px;
+	height: 8rem;
+	margin: 0.5rem;
+	cursor: pointer;
+	border-radius: 50%;
+	transition: all 0.2s ease;
+
+	&:hover {
+		opacity: 0.8;
+	}
 }
 
 #userDetail {
@@ -226,7 +254,7 @@ input[type="text"] {
 
 #personal {
 	tbody tr:hover {
-		background-color: $accent-red;
+		background-color: rgba($accent-orange, 0.15);
 	}
 
 	thead tr:hover {
@@ -240,6 +268,15 @@ input[type="text"] {
 
 #picSection {
 	width: 133px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.5rem;
+
+	ul {
+		list-style: none;
+		padding-left: 0;
+	}
 }
 
 #infoTable {
@@ -253,14 +290,13 @@ input[type="text"] {
 		}
 
 		tbody tr:hover {
-			background-color: $accent-red !important;
+			background-color: rgba($accent-orange, 0.15) !important;
 		}
 	}
 }
 
 #uploadPicture {
-	margin-left: 2px;
-	margin-top: -6px;
+	margin: 1rem;
 	width: 107px;
 }
 
@@ -272,8 +308,16 @@ input[type="text"] {
 }
 
 @media only screen and (max-width: 767px) {
+	#infoTable tr {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
 	#wrapper #picSection {
-		display: none;
+		margin-bottom: 1rem;
+		width: 100%;
+		text-align: center;
 	}
 
 	body {
@@ -287,10 +331,6 @@ input[type="text"] {
 	}
 
 	#wrapper {
-		#showPicture, #picSection ul {
-			display: none;
-		}
-
 		#userDetail {
 			width: 100%;
 		}
@@ -305,6 +345,4 @@ input[type="text"] {
 			}
 		}
 	}
-
-	/*Hide the "change image" button*/
 }

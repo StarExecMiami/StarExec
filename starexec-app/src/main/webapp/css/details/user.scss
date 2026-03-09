@@ -3,7 +3,8 @@
 }
 
 #detailPanel.userDetailPanel {
-	float:left;
+	margin: 0 auto;
+	width: fit-content;
 }
 
 .community-list {
@@ -34,9 +35,39 @@
 	}
 }
 
+#infoTable {
+	width: auto;
+	margin: 1.5rem auto;
+	border-collapse: separate;
+	border-spacing: 2.5rem 0;
+
+	tr {
+		display: table-row;
+	}
+
+	td {
+		display: table-cell;
+		vertical-align: middle;
+		padding: 0;
+	}
+}
+
 @media only screen and (max-width: 767px) {
+	#infoTable {
+		width: 100%;
+		border-spacing: 0 1rem;
+	}
+	
+	#infoTable tr {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
 	#picSection {
-		display: none;
+		margin-bottom: 1rem;
+		width: 100%;
+		text-align: center;
 	}
 
 	#wrapper #detailPanel.userDetailPanel {
@@ -53,13 +84,13 @@
 		display: none;
 	}
 
-	/* Mobile spacing adjustment for buttons */
-	/* Base button styles come from global components/_button.scss */
-	body button {
+	/* Mobile spacing for action list buttons only */
+	.actionList button {
 		margin: 0 0 5px 0;
 	}
 
-	body td, body th {
+	/* Center column headers; keep data cells left-aligned for readability */
+	body th {
 		text-align: center;
 	}
 }

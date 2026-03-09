@@ -92,5 +92,9 @@ $helper-first-include: true !default;
 		}
 	}
 
+	.clear {
+		clear: both;
+	}
+
 	$helper-already-imported: false;
 }

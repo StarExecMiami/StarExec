@@ -1,5 +1,204 @@
+@import "../global/helper";
+@import "../global/colors";
+
+// =============================================================================
+// UPLOAD STATUS PAGE
+// =============================================================================
+
+// --- Animations ---
+
+@keyframes pulse-red {
+	0% { opacity: 1; transform: scale(1); }
+	50% { opacity: 0.5; transform: scale(1.2); }
+	100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulse-green {
+	0% { opacity: 1; transform: scale(1); }
+	50% { opacity: 0.8; transform: scale(1.2); }
+	100% { opacity: 1; transform: scale(1); }
+}
+
+.pulse-stuck {
+	animation: pulse-red 1s infinite;
+	box-shadow: 0 0 5px $accent-red;
+}
+
+.pulse-active {
+	animation: pulse-green 2s infinite;
+	box-shadow: 0 0 5px $accent-green;
+}
+
+// --- Section Heading ---
+
+.upload-section-title {
+	max-width: 650px;
+	margin: 24px auto 16px;
+	font-size: 1.15em;
+	font-weight: 600;
+	color: $text-main-color;
+	border-bottom: 1px solid lighten($foreground-color, 10%);
+	padding-bottom: 8px;
+
+	&--error {
+		color: $soft-red;
+	}
+}
+
+// --- Table Wrapper ---
+
+.upload-table-wrapper {
+	max-width: 650px;
+	margin: 0 auto 24px;
+
+	.shaded {
+		width: 100%;
+		border-collapse: collapse;
+		background-color: $foreground-color;
+		border-radius: 8px;
+		overflow: hidden;
+
+		thead tr {
+			background-color: lighten($foreground-color, 3%);
+		}
+
+		th {
+			font-weight: 600;
+			text-transform: capitalize;
+			color: $text-main-color;
+			padding: 10px 14px;
+			text-align: left;
+			border-bottom: 1px solid lighten($foreground-color, 8%);
+		}
+
+		td {
+			padding: 10px 14px;
+			color: $text-main-color;
+			border-bottom: 1px solid lighten($foreground-color, 5%);
+		}
+
+		// Label column
+		td:first-child {
+			color: $text-accent-color;
+			font-weight: 500;
+			white-space: nowrap;
+			width: 220px;
+		}
+
+		tbody tr:last-child td {
+			border-bottom: none;
+		}
+	}
+}
+
+// --- Progress Bar ---
+
+#uploadProgressBar {
+	position: relative;
+	width: 100%;
+	height: 22px;
+	border: 1px solid lighten($foreground-color, 10%);
+	background: $background-color;
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+#uploadProgressBarFill {
+	height: 100%;
+	width: 0%;
+	background: linear-gradient(90deg, $accent-orange, lighten($accent-orange, 8%));
+	transition: width 0.4s ease;
+	border-radius: 6px 0 0 6px;
+}
+
+#uploadPercentageText {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	text-align: center;
+	line-height: 22px;
+	font-weight: 600;
+	font-size: 12px;
+	color: $text-main-color;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+// --- Phase Text ---
+
+#uploadPhaseText {
+	margin-bottom: 8px;
+	font-weight: 600;
+	font-size: 1.05em;
+}
+
+// --- Pulse Indicator ---
+
+#pulseIndicator {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: $text-accent-color;
+	margin-right: 6px;
+	vertical-align: middle;
+}
+
+// --- Velocity / Elapsed ---
+
+.upload-separator {
+	color: $text-accent-color;
+	margin: 0 8px;
+}
+
+.upload-velocity {
+	color: $text-accent-color;
+}
+
+// --- Error Row ---
+
+#errorMessageRow {
+	td:first-child {
+		color: $soft-red;
+		font-weight: 600;
+	}
+
+	#errorMessageValue {
+		color: $soft-red;
+		white-space: pre-wrap;
+		font-family: "Source Code Pro", Consolas, monospace;
+		font-size: 0.9em;
+	}
+}
+
+// --- Footer ---
+
+.upload-footer {
+	max-width: 650px;
+	margin: 24px auto 0;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.upload-footer-hint {
+	color: $text-accent-color;
+	font-style: italic;
+	font-size: 0.9em;
+}
+
+// --- Responsive ---
 
 @media only screen and (max-width: 767px) {
+	.upload-table-wrapper {
+		max-width: 100%;
+	}
+
+	.upload-table-wrapper .shaded td:first-child {
+		width: auto;
+	}
+
 	body td, body th {
 		text-align: center;
 	}

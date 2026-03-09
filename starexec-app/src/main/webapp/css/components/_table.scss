@@ -14,52 +14,52 @@
 // These variables ensure consistency and make theming easy.
 
 // Base spacing
-$table-cell-padding-y: 10px !default;
-$table-cell-padding-x: 10px !default;
+$table-cell-padding-y: 12px !default;
+$table-cell-padding-x: 16px !default;
 $table-cell-padding: $table-cell-padding-y $table-cell-padding-x !default;
 
 // Compact variant
-$table-cell-padding-compact-y: 6px !default;
-$table-cell-padding-compact-x: 8px !default;
+$table-cell-padding-compact-y: 8px !default;
+$table-cell-padding-compact-x: 12px !default;
 $table-cell-padding-compact: $table-cell-padding-compact-y $table-cell-padding-compact-x !default;
 
 // Spacious variant
-$table-cell-padding-spacious-y: 1em !default;
-$table-cell-padding-spacious-x: 1em !default;
+$table-cell-padding-spacious-y: 1.25em !default;
+$table-cell-padding-spacious-x: 1.25em !default;
 $table-cell-padding-spacious: $table-cell-padding-spacious-y $table-cell-padding-spacious-x !default;
 
 // Colors - using design system colors
 $table-bg: transparent !default;
-$table-bg-alt: $foreground-color !default;                    // #222222
+$table-bg-alt: $foreground-color !default;
 $table-bg-header: $background-color !default;                 // #111111
-$table-bg-hover: $accent-red !default;                        // #ae0000
-$table-bg-selected: $accent-orange !default;                  // #dc6f04
-$table-bg-odd: $foreground-color !default;                    // #222222
-$table-bg-even: $background-color !default;                   // #111111
-$table-bg-empty: $foreground-color !default;                  // #222222
+$table-bg-hover: lighten($foreground-color, 3%) !default;     // subtle highlight instead of red
+$table-bg-selected: rgba($accent-orange, 0.15) !default;      // subtle orange selection
+$table-bg-odd: $foreground-color !default;                    // solid bg (no heavy zebra)
+$table-bg-even: $foreground-color !default;                   // solid bg (no heavy zebra)
+$table-bg-empty: $foreground-color !default;
 
 // Text colors
 $table-text-color: $text-main-color !default;                 // #ffffff
-$table-text-header: $text-main-color !default;                // #ffffff
-$table-text-selected: $text-main-color !default;              // #ffffff
-$table-text-muted: $text-accent-color !default;               // #666666
+$table-text-header: $text-accent-color !default;              // muted modern headers
+$table-text-selected: $text-main-color !default;
+$table-text-muted: $text-accent-color !default;               // #999999
 
 // Borders
-$table-border-color: $background-color !default;              // #111111
+$table-border-color: lighten($foreground-color, 5%) !default; // delicate line separators
 $table-border-width: 1px !default;
 $table-border: $table-border-width solid $table-border-color !default;
-$table-border-header: 2px solid $table-border-color !default;
+$table-border-header: 1px solid lighten($foreground-color, 12%) !default;
 
 // Links in tables
 $table-link-color: $accent-orange !default;
-$table-link-hover-color: darken($accent-orange, 15%) !default;
+$table-link-hover-color: lighten($accent-orange, 10%) !default;
 
 // Focus state
-$table-focus-outline: 2px solid $accent-orange !default;
-$table-focus-outline-offset: -2px !default;
+$table-focus-outline: 2px solid rgba($accent-orange, 0.5) !default;
+$table-focus-outline-offset: 2px !default;
 
 // Transition
-$table-transition: background-color 0.15s ease !default;
+$table-transition: background-color 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease !default;
 
 // =============================================================================
 // TABLE MIXINS
@@ -84,6 +84,9 @@ $table-transition: background-color 0.15s ease !default;
     padding: $table-cell-padding;
     text-align: left;
     font-weight: 600;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     color: $table-text-header;
     vertical-align: middle;
   }
@@ -130,7 +133,7 @@ $table-transition: background-color 0.15s ease !default;
 @mixin table-striped {
   tbody tr {
     &:nth-child(odd) {
-      background-color: $table-bg-odd;
+      background-color: lighten($table-bg-odd, 2%);
     }
     
     &:nth-child(even) {
@@ -399,12 +402,14 @@ tbody tr.row_selected {
     background-color: $input-background;
     border: 1px solid $table-border-color;
     color: $input-text;
-    padding: 0.5em;
-    border-radius: 2px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    transition: $table-transition;
     
     &:focus {
-      outline: $table-focus-outline;
+      outline: none;
       border-color: $accent-orange;
+      box-shadow: 0 0 0 3px rgba($accent-orange, 0.15);
     }
   }
   
@@ -413,8 +418,15 @@ tbody tr.row_selected {
     background-color: $input-background;
     border: 1px solid $table-border-color;
     color: $input-text;
-    padding: 0.25em 0.5em;
-    border-radius: 2px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: $table-transition;
+
+    &:focus {
+      outline: none;
+      border-color: $accent-orange;
+      box-shadow: 0 0 0 3px rgba($accent-orange, 0.15);
+    }
   }
   
   // Pagination buttons
@@ -422,19 +434,26 @@ tbody tr.row_selected {
     color: $table-text-color !important;
     background-color: transparent;
     border-color: transparent;
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-left: 4px;
+    transition: $table-transition;
     
     &:hover,
     &:active {
       color: $table-text-color !important;
-      background-color: $accent-orange !important;
-      border-color: $accent-orange !important;
+      background-color: lighten($foreground-color, 8%) !important;
+      border-color: transparent !important;
+      box-shadow: none !important;
     }
     
     &.current,
     &.current:hover {
-      color: $background-color !important;
-      background-color: $table-text-color !important;
-      border-color: $table-text-color !important;
+      color: $table-text-color !important;
+      background-color: $accent-orange !important;
+      border-color: transparent !important;
+      font-weight: 600;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
     }
     
     &.disabled,
@@ -443,7 +462,7 @@ tbody tr.row_selected {
       color: $table-text-muted !important;
       background-color: transparent !important;
       border-color: transparent !important;
-      cursor: default;
+      cursor: not-allowed;
     }
   }
   
@@ -625,6 +644,35 @@ fieldset {
   
   .dataTables_wrapper {
     width: 100% !important;
+  }
+}
+
+// =============================================================================
+// LEGACY COMPATIBILITY (Migrated from common/table.scss)
+// =============================================================================
+
+.processing {
+  margin-right: 8px;
+  margin-bottom: -4px;
+}
+
+.qtip .processing {
+  margin-top: 45px;
+  text-align: center;
+}
+
+td {
+  &.group {
+    background-color: lighten($foreground-color, 4%);
+    border-bottom: 1px solid $accent-orange;
+    border-top: 1px solid $accent-orange;
+    color: $text-main-color;
+  }
+
+  &.details {
+    background-color: lighten($foreground-color, 4%);
+    border: 1px solid $accent-orange;
+    color: $text-main-color;
   }
 }
 

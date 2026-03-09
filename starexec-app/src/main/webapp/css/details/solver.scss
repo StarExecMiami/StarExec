@@ -1,7 +1,15 @@
 
 @media only screen and (max-width: 767px) {
+	#infoTable tr {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
 	#picSection {
-		display: none;
+		margin-bottom: 1rem;
+		width: 100%;
+		text-align: center;
 	}
 
 	#wrapper fieldset {
