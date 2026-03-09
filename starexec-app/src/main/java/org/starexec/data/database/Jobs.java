@@ -1746,7 +1746,12 @@ public class Jobs {
      * @author Eric Burns
      */
     public static Job getDetailed(int jobId, int since) {
-        return getDetailed(jobId, since, true);
+        try {
+            return getDetailed(jobId, since, true);
+        } catch (StarExecException e) {
+            log.error("getDetailed", "jobId: " + jobId + ", since: " + since, e);
+            return null;
+        }
     }
 
     private static Job getDetailed(
@@ -4732,6 +4737,20 @@ public class Jobs {
             Array sqlArray = con.createArrayOf("integer", ids);
             ps.setArray(1, sqlArray);
             ps.execute();
+        } catch (java.sql.SQLException e) {
+            log.error("rerunPairsBatch: batch update failed (e.g., corrupt pair). Falling back to individual updates.", e);
+            boolean allSuccess = true;
+            Integer[] ids = pairs.stream()
+                    .filter(p -> p.getStatus().getCode().getVal()
+                            != StatusCode.STATUS_PENDING_SUBMIT.getVal())
+                    .map(JobPair::getId)
+                    .toArray(Integer[]::new);
+            for (Integer id : ids) {
+                if (!rerunPair(id)) {
+                    allSuccess = false;
+                }
+            }
+            return allSuccess;
         } catch (Exception e) {
             log.error("rerunPairsBatch", e);
             return false;
@@ -4933,6 +4952,15 @@ public class Jobs {
                 Array sqlArray = con.createArrayOf("integer", pairIds.toArray(new Integer[0]));
                 ps.setArray(1, sqlArray);
                 ps.execute();
+            } catch (java.sql.SQLException e) {
+                log.error("setPairsToPending: batch update failed. Falling back to individual updates.", e);
+                boolean allSuccess = true;
+                for (Integer id : pairIds) {
+                    if (!Jobs.rerunPair(id)) {
+                        allSuccess = false;
+                    }
+                }
+                return allSuccess;
             } catch (Exception e) {
                 log.error("setPairsToPending batch DB reset", e);
                 return false;

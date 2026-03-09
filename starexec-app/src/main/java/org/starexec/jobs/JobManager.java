@@ -521,7 +521,7 @@ public abstract class JobManager {
 
 							log.trace("About to submit pair " + pair.getId());
 
-							int execId = R.BACKEND.submitScript(scriptPath, R.BACKEND_WORKING_DIR, logPath);
+							int execId = R.BACKEND.submitScript(pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath);
 
 							log.trace("Just submitted pair " + pair.getId());
 

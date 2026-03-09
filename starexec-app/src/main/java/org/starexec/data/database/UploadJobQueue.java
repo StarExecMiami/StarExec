@@ -19,8 +19,9 @@ public class UploadJobQueue {
     // SQL statements
     private static final String INSERT_JOB_SQL = 
         "INSERT INTO upload_jobs (archive_path, user_id, space_id, upload_method, " +
-        "benchmark_type_id, downloadable, priority, archive_size) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        "benchmark_type_id, downloadable, priority, archive_size, " +
+        "has_dependencies, dep_root_space_id, linked) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
     private static final String CLAIM_JOB_SQL = 
         "UPDATE upload_jobs " +
@@ -58,37 +59,12 @@ public class UploadJobQueue {
         "WHERE id = ? AND user_id = ? AND status IN ('PENDING', 'PROCESSING')";
     
     /**
-     * Enqueues a new upload job for asynchronous processing.
+     * Enqueues a new upload job for asynchronous processing using the UploadJobRequest object.
      * 
-     * @param archivePath Path to the uploaded archive file
-     * @param userId User who initiated the upload
-     * @param spaceId Target space for benchmarks
-     * @param uploadMethod 'convert' or 'dump'
-     * @param benchmarkTypeId Processor type ID
-     * @param downloadable Whether benchmarks are downloadable
-     * @param priority Job priority (higher = processed sooner)
+     * @param request The immutable request containing all job parameters
      * @return The ID of the created job, or -1 on failure
      */
-    public static long enqueueJob(String archivePath, int userId, int spaceId, 
-                                  String uploadMethod, int benchmarkTypeId, 
-                                  boolean downloadable, int priority) {
-        // Get archive file size for SJF scheduling
-        long archiveSize = 0;
-        File archiveFile = new File(archivePath);
-        if (archiveFile.exists()) {
-            archiveSize = archiveFile.length();
-        }
-        
-        return enqueueJob(archivePath, userId, spaceId, uploadMethod, 
-                        benchmarkTypeId, downloadable, priority, archiveSize);
-    }
-    
-    /**
-     * Enqueues a new upload job with explicit archive size for SJF scheduling.
-     */
-    public static long enqueueJob(String archivePath, int userId, int spaceId, 
-                                  String uploadMethod, int benchmarkTypeId, 
-                                  boolean downloadable, int priority, long archiveSize) {
+    public static long enqueueJob(UploadJob.UploadJobRequest request) {
         Connection con = null;
         PreparedStatement ps = null;
         ResultSet keys = null;
@@ -97,14 +73,20 @@ public class UploadJobQueue {
             con = Common.getConnection();
             ps = con.prepareStatement(INSERT_JOB_SQL, Statement.RETURN_GENERATED_KEYS);
             
-            ps.setString(1, archivePath);
-            ps.setInt(2, userId);
-            ps.setInt(3, spaceId);
-            ps.setString(4, uploadMethod);
-            ps.setInt(5, benchmarkTypeId);
-            ps.setBoolean(6, downloadable);
-            ps.setInt(7, priority);
-            ps.setLong(8, archiveSize);
+            ps.setString(1, request.getArchivePath());
+            ps.setInt(2, request.getUserId());
+            ps.setInt(3, request.getSpaceId());
+            ps.setString(4, request.getUploadMethod());
+            ps.setInt(5, request.getBenchmarkTypeId());
+            ps.setBoolean(6, request.isDownloadable());
+            ps.setInt(7, request.getPriority());
+            ps.setLong(8, request.getArchiveSize());
+            ps.setBoolean(9, request.isHasDependencies());
+            
+            // Null-safe handling for Integer field
+            ps.setObject(10, request.getDepRootSpaceId().orElse(null), java.sql.Types.INTEGER);
+            
+            ps.setBoolean(11, request.isLinked());
             
             int affected = ps.executeUpdate();
             if (affected == 0) {
@@ -115,7 +97,7 @@ public class UploadJobQueue {
             keys = ps.getGeneratedKeys();
             if (keys.next()) {
                 long jobId = keys.getLong(1);
-                log.info("enqueueJob", "Enqueued upload job " + jobId + " for user " + userId + " (priority: " + priority + ")");
+                log.info("enqueueJob", "Enqueued upload job " + jobId + " for user " + request.getUserId() + " (priority: " + request.getPriority() + ")");
                 return jobId;
             }
             
@@ -149,28 +131,7 @@ public class UploadJobQueue {
             
             // Atomic UPDATE ... RETURNING - rows come directly in ResultSet
             if (rs.next()) {
-                UploadJob job = new UploadJob();
-                job.setId(rs.getLong("id"));
-                job.setArchivePath(rs.getString("archive_path"));
-                job.setUserId(rs.getInt("user_id"));
-                job.setSpaceId(rs.getInt("space_id"));
-                job.setUploadMethod(rs.getString("upload_method"));
-                job.setBenchmarkTypeId(rs.getInt("benchmark_type_id"));
-                job.setDownloadable(rs.getBoolean("downloadable"));
-                job.setPriority(rs.getInt("priority"));
-                job.setStatus(rs.getString("status"));
-                job.setTotalFilesFound(rs.getInt("total_files_found"));
-                job.setTotalFilesProcessed(rs.getInt("total_files_processed"));
-                job.setTotalSpacesCreated(rs.getInt("total_spaces_created"));
-                job.setRetryCount(rs.getInt("retry_count"));
-                job.setMaxRetries(rs.getInt("max_retries"));
-                job.setCreatedAt(rs.getTimestamp("created_at"));
-                job.setStartedAt(rs.getTimestamp("started_at"));
-                job.setLastHeartbeat(rs.getTimestamp("last_heartbeat"));
-                job.setLastProcessedPath(rs.getString("last_processed_path"));
-                job.setLastProcessedIndex(rs.getInt("last_processed_index"));
-                job.setExtractPath(rs.getString("extract_path"));
-                
+                UploadJob job = mapResultSetToJob(rs);
                 log.info("claimJob", "Claimed upload job " + job.getId() + " for processing");
                 return Optional.of(job);
             }
@@ -568,6 +529,10 @@ public class UploadJobQueue {
         job.setLastHeartbeat(rs.getTimestamp("last_heartbeat"));
         job.setPriority(rs.getInt("priority"));
         job.setScheduledAfter(rs.getTimestamp("scheduled_after"));
+        job.setHasDependencies(rs.getBoolean("has_dependencies"));
+        int depRoot = rs.getInt("dep_root_space_id");
+        job.setDepRootSpaceId(rs.wasNull() ? null : depRoot);
+        job.setLinked(rs.getBoolean("linked"));
         return job;
     }
 }

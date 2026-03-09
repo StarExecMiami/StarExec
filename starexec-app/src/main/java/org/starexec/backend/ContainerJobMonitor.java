@@ -5,6 +5,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.*;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
@@ -218,11 +220,16 @@ public class ContainerJobMonitor {
                         "Error processing completed job " + info.pairId,
                         e
                     );
-                    // Mark as error so we don't keep retrying
+                    // Mark as error so we don't keep retrying.
+                    // stageNumber is unknown at this point; default to 1 so that
+                    // UpdatePairStatusPrecise still fires the job_pair_completion
+                    // side effects and marks any stage-2+ rows as NOT_REACHED.
                     try {
-                        JobPairs.setStatusForPairAndStages(
+                        JobPairs.setPairStatusPrecise(
                             info.pairId,
-                            StatusCode.ERROR_RUNSCRIPT.getVal()
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
                         );
                         // Still remove the container to avoid infinite loop
                         backend.removeCompletedContainer(info.containerId);
@@ -266,23 +273,26 @@ public class ContainerJobMonitor {
         throws Exception {
         Path outputPath = Paths.get(info.outputDir);
 
-        // First, try to get the actual pair ID from status.json
-        // This is more reliable than the container label which may have timestamp
+        // Read pairId and stageNumber from status.json. Using Gson rather than
+        // regex avoids silent breakage on whitespace or field-order changes.
         int pairId = info.pairId;
+        int stageNumber = 1; // safe default if status.json is absent or incomplete
         Path statusJson = outputPath.resolve("status.json");
         if (Files.exists(statusJson)) {
             try {
                 String json = Files.readString(statusJson);
-                Matcher m = Pattern.compile(
-                    "\"pairId\"\\s*:\\s*(\\d+)"
-                ).matcher(json);
-                if (m.find()) {
-                    pairId = Integer.parseInt(m.group(1));
+                JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+                if (obj.has("pairId")) {
+                    pairId = obj.get("pairId").getAsInt();
                     log.debug("Extracted pairId from status.json: " + pairId);
+                }
+                if (obj.has("stageNumber")) {
+                    stageNumber = obj.get("stageNumber").getAsInt();
+                    log.debug("Extracted stageNumber from status.json: " + stageNumber);
                 }
             } catch (Exception e) {
                 log.warn(
-                    "Failed to read pairId from status.json, using label value: " +
+                    "Failed to read status.json, using label values: pairId=" +
                         info.pairId,
                     e
                 );
@@ -314,9 +324,9 @@ public class ContainerJobMonitor {
         Properties attributes = parseAttributes(outputPath);
 
         // 4. Update database
-        updateDatabase(pairId, stats, status, attributes);
+        updateDatabase(pairId, stageNumber, stats, status, attributes);
 
-        log.info("Completed job " + pairId + " processed: status=" + status);
+        log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
 
     /**
@@ -562,15 +572,25 @@ public class ContainerJobMonitor {
 
     /**
      * Updates the database with job results.
+     *
+     * <p>Uses {@link JobPairs#setPairStatusPrecise} (single JDBC transaction via
+     * {@code UpdatePairStatusPrecise}) to atomically set the terminal stage to
+     * {@code status} and all later stages to STATUS_NOT_REACHED, eliminating
+     * the dirty-read window in the former double-call pattern.</p>
      */
     private void updateDatabase(
         int pairId,
+        int stageNumber,
         RunsolverStats stats,
         StatusCode status,
         Properties attributes
     ) throws Exception {
-        // Update pair status
-        JobPairs.setStatusForPairAndStages(pairId, status.getVal());
+        JobPairs.setPairStatusPrecise(
+            pairId,
+            stageNumber,
+            status.getVal(),
+            StatusCode.STATUS_NOT_REACHED.getVal()
+        );
 
         // Persist run stats (if available) using JobPairs.updateRunSolverStats
         try {

@@ -2563,32 +2563,36 @@ public class Benchmarks {
 
 	/**
 	 * Validates the dependencies for a list of benchmarks (usually all benches of a
-	 * single space)
+	 * single space). For each benchmark that declares dependencies via
+	 * {@code starexec-dependency-N} attributes, the method resolves each dependency
+	 * path against the already-in-DB space hierarchy rooted at {@code depRootSpaceId}
+	 * and populates {@link Benchmark#getDependencies()} in memory so that
+	 * {@link #addAndAssociate} can persist the {@code bench_dependency} rows.
 	 *
-	 * @param benchmarks The list of benchmarks that might have dependencies
-	 * @param spaceId    the id of the space where the axiom benchmarks lie
-	 * @param linked     true if the depRootSpace is the same as the first directory
-	 *                   in the include statement
-	 * @return the data structure that has information about dependencies
-	 * @author Eric Burns
+	 * <p>NOTE: This method must be called <em>before</em> the benchmarks are inserted
+	 * (so that we can reject the batch on failure), which means the declaring
+	 * benchmarks themselves are NOT yet in the database. The SQL batch helper
+	 * {@link #resolveDependenciesBatch} requires the declaring benchmark to already
+	 * be in {@code bench_assoc}/{@code bench_attributes} and therefore cannot be used
+	 * here. Instead, each dependency path is resolved by walking the space tree with
+	 * direct DB lookups.
+	 *
+	 * @param benchmarks      The list of benchmarks that might have dependencies
+	 * @param depRootSpaceId  the id of the space where the axiom benchmarks lie
+	 * @param linked          true if the depRootSpace is the same as the first directory
+	 *                        in the include statement
+	 * @param statusID        upload status tracker (may be null)
+	 * @return true if all dependencies were resolved successfully
+	 * @author Eric Burns (original), fixed by refactoring
 	 */
-	private static boolean validateDependencies(List<Benchmark> benchmarks, Integer spaceId, Boolean linked,
+	private static boolean validateDependencies(List<Benchmark> benchmarks, Integer depRootSpaceId, Boolean linked,
 			Integer statusID) {
-		Map<String, Integer> dependencyOwners = new LinkedHashMap<>();
 		for (Benchmark benchmark : benchmarks) {
-			for (String includePath : getDependencyIncludePaths(benchmark)) {
-				dependencyOwners.putIfAbsent(includePath, benchmark.getUserId());
-			}
-		}
-
-		Map<String, BenchmarkDependency> resolvedDependencies = resolveDependencyBatch(spaceId, linked,
-				dependencyOwners);
-		for (Benchmark benchmark : benchmarks) {
-			String out = validateIndBenchDependencies(benchmark, resolvedDependencies);
+			String out = validateIndBenchDependencies(benchmark, depRootSpaceId, linked);
 			if (!"true".equals(out)) {
-				log.warn("Dependent benchs not found for Bench " + benchmark.getName());
+				log.warn("validateDependencies", "Dependent benchmarks not found for " + benchmark.getName());
 				Uploads.addFailedBenchmark(statusID, benchmark.getName(),
-						"Dependancy check failed for this benchmark. Failed search for " + out + ".");
+						"Dependency check failed for this benchmark. Failed search for " + out + ".");
 				return false;
 			}
 		}
@@ -2596,17 +2600,18 @@ public class Benchmarks {
 	}
 
 	/**
-	 * Validates the dependencies for a benchmark. Adds the dependencies to the
-	 * benchmark as well
+	 * Validates the dependencies for a single benchmark by walking the space hierarchy.
+	 * Populates {@link Benchmark#getDependencies()} so they can be persisted later.
 	 *
-	 * @param bench                The benchmark that might have dependencies
-	 * @param resolvedDependencies pre-resolved dependency map keyed by include path
-	 * @return "true" if the dependencies are valid, the name of the failed
-	 *         dependency if otherwise
-	 * @author Benton McCune
+	 * @param bench          The benchmark whose declared dependencies are validated
+	 * @param depRootSpaceId Root space to start dependency path resolution from
+	 * @param linked         Whether the first path segment equals the depRoot space name
+	 * @param con            An open DB connection to reuse
+	 * @return {@code "true"} on success, or the failing include-path on failure
+	 * @author Benton McCune (original), fixed by refactoring
 	 */
 	private static String validateIndBenchDependencies(
-			Benchmark bench, Map<String, BenchmarkDependency> resolvedDependencies) {
+			Benchmark bench, Integer depRootSpaceId, Boolean linked) {
 		String includePath = "";
 		try {
 			List<String> includePaths = getDependencyIncludePaths(bench);
@@ -2614,12 +2619,13 @@ public class Benchmarks {
 			for (String path : includePaths) {
 				includePath = path;
 				log.debug("validateIndBenchDependencies", "Dependency Path is " + includePath);
-				BenchmarkDependency dependency = resolvedDependencies.get(includePath);
-				if (dependency == null) {
+
+				int axiomId = findDependentBench(depRootSpaceId, includePath, linked, 0);
+				if (axiomId < 0) {
 					log.warn("validateIndBenchDependencies", "Dependent Bench not found for " + bench.getName());
 					return includePath;
 				}
-				bench.addDependency(dependency);
+				bench.addDependency(new BenchmarkDependency(bench.getId(), axiomId, includePath));
 			}
 		} catch (Exception e) {
 			log.error("validateIndBenchDependencies", "validate dependency failed on bench " + bench.getName(), e);
@@ -2628,29 +2634,35 @@ public class Benchmarks {
 		return "true";
 	}
 
-	private static Map<String, BenchmarkDependency> resolveDependencyBatch(
-			Integer spaceId, Boolean linked, Map<String, Integer> dependencyOwners) {
-		Map<String, BenchmarkDependency> resolved = new HashMap<>();
-		if (dependencyOwners.isEmpty()) {
-			return resolved;
-		}
+	/**
+	 * Resolves all benchmark dependencies within a space hierarchy using an atomic SQL batch.
+	 * This replaces the inefficient N+1 Java-layer iteration.
+	 * 
+	 * @param spaceId The root space ID to resolve dependencies for
+	 */
+	public static void resolveDependenciesBatch(int spaceId) {
 		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet rs = null;
 		try {
 			con = Common.getConnection();
-			for (Map.Entry<String, Integer> entry : dependencyOwners.entrySet()) {
-				String includePath = entry.getKey();
-				Integer userId = entry.getValue();
-				int depBenchId = findDependentBench(spaceId, includePath, linked, userId, con);
-				if (depBenchId > 0) {
-					resolved.put(includePath, new BenchmarkDependency(0, depBenchId, includePath));
-				}
+			ps = con.prepareStatement("SELECT * FROM starexec.InsertResolvedDependencies(?)");
+			ps.setInt(1, spaceId);
+			rs = ps.executeQuery();
+			
+			if (rs.next()) {
+				int inserted = rs.getInt("inserted_count");
+				int total = rs.getInt("total_found");
+				log.info("resolveDependenciesBatch", "Successfully resolved " + inserted + "/" + total + 
+						" benchmark dependencies in space hierarchy " + spaceId);
 			}
 		} catch (Exception e) {
-			log.error("resolveDependencyBatch", e);
+			log.error("resolveDependenciesBatch", "Failed to perform batch dependency resolution for space " + spaceId, e);
 		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
 			Common.safeClose(con);
 		}
-		return resolved;
 	}
 
 	private static List<String> getDependencyIncludePaths(Benchmark bench) {

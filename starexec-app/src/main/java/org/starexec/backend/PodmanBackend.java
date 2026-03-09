@@ -12,6 +12,12 @@ import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
 import com.github.dockerjava.zerodep.ZerodepDockerHttpClient;
+import com.github.dockerjava.api.model.Event;
+import com.github.dockerjava.api.model.EventType;
+import com.github.dockerjava.api.async.ResultCallbackTemplate;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -19,7 +25,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Queues;
 import org.starexec.logger.StarLogger;
@@ -107,8 +118,34 @@ public class PodmanBackend implements Backend {
     private int nextExecId = 1000;
     private final Object execIdLock = new Object();
 
+    // Map container ID to pair ID for event tracking with 30-day TTL to prevent memory leaks
+    private final Cache<String, Integer> containerIdToPairId = CacheBuilder.newBuilder()
+        .maximumSize(10000)
+        .expireAfterWrite(30, TimeUnit.DAYS)
+        .build();
+
+    // Executor for offloading database updates from the event listener I/O thread
+    private final ExecutorService dbUpdateExecutor = new ThreadPoolExecutor(
+        2, 2, // core and max pool size
+        0L, TimeUnit.MILLISECONDS, // keep-alive time
+        new ArrayBlockingQueue<>(10000), // STRICTLY BOUNDED QUEUE
+        new java.util.concurrent.ThreadFactory() {
+            private final java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger(1);
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "PodmanDbUpdater-" + counter.getAndIncrement());
+                t.setDaemon(true);
+                return t;
+            }
+        },
+        new ThreadPoolExecutor.DiscardPolicy() // Rejection handler
+    );
+
     // Monitor for processing completed container jobs
     private ContainerJobMonitor jobMonitor;
+
+    // Cached node ID for database updates to avoid N+1 queries
+    private int cachedNodeId = -1;
 
     /**
      * Initializes the Docker/Podman client.
@@ -196,10 +233,19 @@ public class PodmanBackend implements Backend {
             // Ensure a virtual queue exists for container jobs
             ensureContainerQueueExists();
 
+            // Cache the node ID to avoid database queries during job submission
+            cachedNodeId = org.starexec.data.database.Cluster.getNodeIdByName(CONTAINER_WORKER_NODE);
+            if (cachedNodeId <= 0) {
+                log.warn("Could not find nodeId for " + CONTAINER_WORKER_NODE + " during initialization. Pair host mapping may be delayed.");
+            }
+
             // Start the job completion monitor
             this.jobMonitor = new ContainerJobMonitor(this);
             this.jobMonitor.start();
             log.info("ContainerJobMonitor started");
+
+            // Subscribe to container events
+            startContainerEventListener();
         } catch (Exception e) {
             log.error("Fatal error initializing PodmanBackend", e);
             throw new IllegalStateException(
@@ -224,6 +270,65 @@ public class PodmanBackend implements Backend {
      * JobManager's requirement for at least one node associated with a queue.
      */
     public static final String CONTAINER_WORKER_NODE = "container-worker-1";
+
+    private void startContainerEventListener() {
+        try {
+            dockerClient.eventsCmd()
+                .withEventTypeFilter("container")
+                .withEventFilter("start", "die")
+                .exec(new ResultCallbackTemplate<ResultCallbackTemplate<?, Event>, Event>() {
+                    @Override
+                    public void onNext(Event event) {
+                        try {
+                            String action = event.getAction();
+                            String containerId = event.getId();
+
+                            if (containerId == null || action == null) return;
+
+                            // Only care about containers we track
+                            Integer pairId = containerIdToPairId.getIfPresent(containerId);
+                            if (pairId == null) return;
+
+                            log.debug("Container event received: action=" + action + " pairId=" + pairId);
+
+                            if ("start".equals(action)) {
+                                if (cachedNodeId > 0 && pairId > 0) {
+                                    dbUpdateExecutor.submit(() -> {
+                                        try {
+                                            org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, cachedNodeId);
+                                        } catch (Exception ex) {
+                                            log.error("Failed to update pair execution host for pair " + pairId, ex);
+                                        }
+                                    });
+                                }
+                            } else if ("die".equals(action)) {
+                                // Container is dead; completion monitor will pick it up
+                                // We keep it in the map until cleanup
+                            }
+                        } catch (Exception ex) {
+                            log.error("Error processing container event", ex);
+                        }
+                    }
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                        log.error("Container event listener error", throwable);
+                        // Re-subscribe on error after delay
+                        new Thread(() -> {
+                            try {
+                                Thread.sleep(5000);
+                                startContainerEventListener();
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                            }
+                        }).start();
+                    }
+                });
+            log.info("Subscribed to container event stream");
+        } catch (Exception e) {
+            log.error("Failed to start container event listener", e);
+        }
+    }
 
     /**
      * Ensures a virtual queue exists for container job submission.
@@ -354,6 +459,21 @@ public class PodmanBackend implements Backend {
      */
     @Override
     public void destroyIf() {
+        // Stop the db update executor
+        if (dbUpdateExecutor != null) {
+            dbUpdateExecutor.shutdown();
+            try {
+                if (!dbUpdateExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    log.warn("Forcing shutdown of dbUpdateExecutor");
+                    dbUpdateExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                log.error("Shutdown of dbUpdateExecutor interrupted", e);
+                dbUpdateExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+
         // Stop the job monitor first
         if (jobMonitor != null) {
             try {
@@ -411,6 +531,7 @@ public class PodmanBackend implements Backend {
      */
     @Override
     public int submitScript(
+        int pairId,
         String scriptPath,
         String workingDirectory,
         String logPath
@@ -441,6 +562,7 @@ public class PodmanBackend implements Backend {
                 }
 
                 return doSubmitScript(
+                    pairId,
                     jobName,
                     scriptPath,
                     workingDirectory,
@@ -503,6 +625,7 @@ public class PodmanBackend implements Backend {
      * Internal method to actually submit the job script.
      */
     private int doSubmitScript(
+        int pairId,
         String jobName,
         String scriptPath,
         String workingDirectory,
@@ -613,16 +736,21 @@ public class PodmanBackend implements Backend {
             }
         }
 
-        // Start container
-        dockerClient.startContainerCmd(containerId).exec();
-        log.info("Container started: " + containerId);
-
         // Generate and store execution ID
         int execId;
         synchronized (execIdLock) {
             execId = nextExecId++;
         }
         execIdToContainerId.put(execId, containerId);
+
+        // Put pair ID in tracking map BEFORE starting the container to avoid race condition
+        if (pairId > 0 && containerId != null) {
+            containerIdToPairId.put(containerId, pairId);
+        }
+
+        // Start container
+        dockerClient.startContainerCmd(containerId).exec();
+        log.info("Container started: " + containerId);
 
         // Notify the job monitor that new work has been submitted
         // This resets the adaptive poll interval to base for responsive job detection
@@ -1494,6 +1622,7 @@ public class PodmanBackend implements Backend {
      * @param containerId The container ID to remove
      */
     public void removeCompletedContainer(String containerId) {
+        containerIdToPairId.invalidate(containerId);
         try {
             dockerClient
                 .removeContainerCmd(containerId)

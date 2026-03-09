@@ -59,7 +59,7 @@ public class ClearCacheManager {
 		try (FileWriter out = new FileWriter(f)) {
 			out.write(currentScript);
 		}
-			R.BACKEND.submitScript(scriptPath, R.BACKEND_WORKING_DIR, logPath.getAbsolutePath());
+			R.BACKEND.submitScript(-1, scriptPath, R.BACKEND_WORKING_DIR, logPath.getAbsolutePath());
 		}
 	}
 }

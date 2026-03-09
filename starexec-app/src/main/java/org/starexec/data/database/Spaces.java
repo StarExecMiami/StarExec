@@ -3127,19 +3127,22 @@ public class Spaces {
 			private void flushBatch(Integer spaceToFlush) throws SQLException, IOException, StarExecException {
 				List<Benchmark> batch = spaceBatches.get(spaceToFlush);
 				if (batch != null && !batch.isEmpty()) {
-					Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
-					int processed = batch.size();
-					filesProcessed.addAndGet(processed);
-					batch.clear();
-					
-					// Notify listener
-					if (progressListener != null) {
-						progressListener.onBenchmarksProcessed(processed, filesProcessed.get());
-					}
-					
-					// Update upload status
-					if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
-						uploadTimer.reset();
+					try {
+						Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
+					} finally {
+						int processed = batch.size();
+						filesProcessed.addAndGet(processed);
+						batch.clear();
+						
+						// Notify listener
+						if (progressListener != null) {
+							progressListener.onBenchmarksProcessed(processed, filesProcessed.get());
+						}
+						
+						// Update upload status
+						if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+							uploadTimer.reset();
+						}
 					}
 				}
 			}
@@ -3349,18 +3352,21 @@ public class Spaces {
 			private void flushBatch(Integer spaceToFlush) throws SQLException, IOException, StarExecException {
 				List<Benchmark> batch = spaceBatches.get(spaceToFlush);
 				if (batch != null && !batch.isEmpty()) {
-					Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
-					batch.clear();
-					
-					// Update benchmarks count status
-					if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
-						// Note: processAndAdd handles validation and some updates, but does it update "Total Benchmarks"?
-						// The previous code had a specific "incrementTotalBenchmarks".
-						// processAndAdd updates "CompletedBenchmarks".
-						// Status updates are handled inside processAndAdd usually?
-						// Let's assume processAndAdd takes care of adding benchmarks to DB.
-						// We need to ensure the UploadStatus is kept alive.
-						uploadTimer.reset();
+					try {
+						Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
+					} finally {
+						batch.clear();
+						
+						// Update benchmarks count status
+						if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+							// Note: processAndAdd handles validation and some updates, but does it update "Total Benchmarks"?
+							// The previous code had a specific "incrementTotalBenchmarks".
+							// processAndAdd updates "CompletedBenchmarks".
+							// Status updates are handled inside processAndAdd usually?
+							// Let's assume processAndAdd takes care of adding benchmarks to DB.
+							// We need to ensure the UploadStatus is kept alive.
+							uploadTimer.reset();
+						}
 					}
 				}
 			}

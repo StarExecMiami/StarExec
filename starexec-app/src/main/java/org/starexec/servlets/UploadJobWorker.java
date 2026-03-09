@@ -322,19 +322,29 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         // Create progress listener for real-time updates
         TraversalProgressListener listener = createProgressListener(job);
         
-        // Use the legacy method that creates subspaces
-        // This mirrors the logic in UploadBenchmark.handleUploadRequest for "convert" method
+        // Use the legacy method that creates subspaces.
+        // hasDependencies, depRootSpaceId and linked come from the upload form and were
+        // persisted in upload_jobs so that the worker can resolve starexec-dependency-N
+        // attributes and insert the corresponding bench_dependency rows.
+        boolean usesDeps = job.isHasDependencies();
+        Integer depRootSpaceId = job.getDepRootSpaceId();
+        // Fall back to the target space when no explicit dep-root was chosen.
+        if (usesDeps && depRootSpaceId == null) {
+            depRootSpaceId = spaceId;
+        }
+        boolean linked = job.isLinked();
+
         Spaces.traverseAndAddBenchmarks(
-            extractDir, 
-            spaceId, 
-            userId, 
-            typeId, 
-            downloadable, 
-            perm, 
+            extractDir,
+            spaceId,
+            userId,
+            typeId,
+            downloadable,
+            perm,
             null, // statusId - not used in new system
-            false, // usesDeps
-            null, // depRootSpaceId
-            false, // linked
+            usesDeps,
+            depRootSpaceId,
+            linked,
             listener // progress listener
         );
         

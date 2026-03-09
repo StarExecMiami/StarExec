@@ -1,11 +1,92 @@
 package org.starexec.data.to;
 
+import java.io.Serializable;
 import java.sql.Timestamp;
+import java.util.Optional;
 
 /**
  * Represents an asynchronous upload job in the queue.
  */
 public class UploadJob {
+    /**
+     * Immutable request object for enqueuing a new upload job.
+     * Uses the Builder pattern to handle the many parameters of an upload.
+     */
+    public static class UploadJobRequest implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final String archivePath;
+        private final int userId;
+        private final int spaceId;
+        private final String uploadMethod;
+        private final int benchmarkTypeId;
+        private final boolean downloadable;
+        private final int priority;
+        private final long archiveSize;
+        private final boolean hasDependencies;
+        private final Integer depRootSpaceId; // Nullable internally
+        private final boolean linked;
+
+        private UploadJobRequest(Builder builder) {
+            this.archivePath = builder.archivePath;
+            this.userId = builder.userId;
+            this.spaceId = builder.spaceId;
+            this.uploadMethod = builder.uploadMethod;
+            this.benchmarkTypeId = builder.benchmarkTypeId;
+            this.downloadable = builder.downloadable;
+            this.priority = builder.priority;
+            this.archiveSize = builder.archiveSize;
+            this.hasDependencies = builder.hasDependencies;
+            this.depRootSpaceId = builder.depRootSpaceId;
+            this.linked = builder.linked;
+        }
+
+        public String getArchivePath() { return archivePath; }
+        public int getUserId() { return userId; }
+        public int getSpaceId() { return spaceId; }
+        public String getUploadMethod() { return uploadMethod; }
+        public int getBenchmarkTypeId() { return benchmarkTypeId; }
+        public boolean isDownloadable() { return downloadable; }
+        public int getPriority() { return priority; }
+        public long getArchiveSize() { return archiveSize; }
+        public boolean isHasDependencies() { return hasDependencies; }
+        public Optional<Integer> getDepRootSpaceId() { return Optional.ofNullable(depRootSpaceId); }
+        public boolean isLinked() { return linked; }
+
+        public static class Builder {
+            private String archivePath;
+            private int userId;
+            private int spaceId;
+            private String uploadMethod = "convert";
+            private int benchmarkTypeId;
+            private boolean downloadable = true;
+            private int priority = 0;
+            private long archiveSize;
+            private boolean hasDependencies = false;
+            private Integer depRootSpaceId;
+            private boolean linked = false;
+
+            public Builder archivePath(String val) { this.archivePath = val; return this; }
+            public Builder userId(int val) { this.userId = val; return this; }
+            public Builder spaceId(int val) { this.spaceId = val; return this; }
+            public Builder uploadMethod(String val) { this.uploadMethod = val; return this; }
+            public Builder benchmarkTypeId(int val) { this.benchmarkTypeId = val; return this; }
+            public Builder downloadable(boolean val) { this.downloadable = val; return this; }
+            public Builder priority(int val) { this.priority = val; return this; }
+            public Builder archiveSize(long val) { this.archiveSize = val; return this; }
+            public Builder hasDependencies(boolean val) { this.hasDependencies = val; return this; }
+            public Builder depRootSpaceId(Integer val) { this.depRootSpaceId = val; return this; }
+            public Builder linked(boolean val) { this.linked = val; return this; }
+
+            public UploadJobRequest build() {
+                if (archivePath == null) throw new IllegalStateException("archivePath required");
+                if (userId <= 0) throw new IllegalStateException("valid userId required");
+                if (spaceId <= 0) throw new IllegalStateException("valid spaceId required");
+                return new UploadJobRequest(this);
+            }
+        }
+    }
+
     private long id;
     private String archivePath;
     private int userId;
@@ -13,6 +94,9 @@ public class UploadJob {
     private String uploadMethod; // 'convert' or 'dump'
     private int benchmarkTypeId;
     private boolean downloadable;
+    private boolean hasDependencies;
+    private Integer depRootSpaceId;
+    private boolean linked;
     
     private String status; // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
     private int totalFilesFound;
@@ -55,6 +139,15 @@ public class UploadJob {
     
     public boolean isDownloadable() { return downloadable; }
     public void setDownloadable(boolean downloadable) { this.downloadable = downloadable; }
+    
+    public boolean isHasDependencies() { return hasDependencies; }
+    public void setHasDependencies(boolean hasDependencies) { this.hasDependencies = hasDependencies; }
+    
+    public Integer getDepRootSpaceId() { return depRootSpaceId; }
+    public void setDepRootSpaceId(Integer depRootSpaceId) { this.depRootSpaceId = depRootSpaceId; }
+    
+    public boolean isLinked() { return linked; }
+    public void setLinked(boolean linked) { this.linked = linked; }
     
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }

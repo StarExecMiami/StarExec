@@ -182,6 +182,7 @@ public class KubernetesBackend implements Backend {
 
     @Override
     public synchronized int submitScript(
+        int pairId,
         String scriptPath,
         String workingDirectoryPath,
         String logPath

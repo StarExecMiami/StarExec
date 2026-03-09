@@ -176,6 +176,11 @@ public class EnvironmentConfig {
         return getEnv("STAREXEC_EMAIL_FROM", "starexec@localhost");
     }
 
+    // Local Backend Configuration
+    public static String getLocalCoreList() {
+        return getEnv("STAREXEC_LOCAL_CORE_LIST", "");
+    }
+    
     // Backend Configuration
     public static String getBackendType() {
         return getEnv("STAREXEC_BACKEND_TYPE", "local");
@@ -310,7 +315,8 @@ public class EnvironmentConfig {
      * Default: 10000ms (10 seconds) to balance responsiveness with CPU savings.
      */
     public static long getAdaptivePollMaxInterval() {
-        return Long.parseLong(getEnv("STAREXEC_POLL_MAX_INTERVAL_MS", "10000"));
+        // Enforce a sensible ceiling (e.g. 120 seconds max) to prevent SGE head node DDoS
+        return Long.parseLong(getEnv("STAREXEC_POLL_MAX_INTERVAL_MS", "120000"));
     }
 
     /**

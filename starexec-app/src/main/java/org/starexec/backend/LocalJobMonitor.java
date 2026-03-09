@@ -5,6 +5,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.*;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
@@ -377,12 +379,22 @@ public class LocalJobMonitor {
      * @return true if the job has a terminal status (complete/failed), false if
      *         intermediate (running)
      */
+    /** Immutable carrier for the two fields read from status.json. */
+    private static final class StatusAndStage {
+        final StatusCode status;
+        final int stageNumber;
+        StatusAndStage(StatusCode status, int stageNumber) {
+            this.status = status;
+            this.stageNumber = stageNumber;
+        }
+    }
+
     private boolean processCompletedJob(int pairId, String logDir)
             throws Exception {
         Path outputDir = Paths.get(logDir);
 
-        // 1. Read status from status.json
-        StatusCode status = readStatus(outputDir, pairId);
+        // 1. Read status and stageNumber from status.json (single Gson parse)
+        StatusAndStage ss = readStatusFile(outputDir, pairId);
 
         // 2. Parse runsolver stats if available
         RunSolverStats stats = parseRunSolverStats(outputDir);
@@ -391,55 +403,53 @@ public class LocalJobMonitor {
         Properties attributes = parseAttributes(outputDir);
 
         // 4. Update database
-        updateDatabase(pairId, status, stats, attributes);
+        updateDatabase(pairId, ss.status, ss.stageNumber, stats, attributes);
 
         // 5. Check if status is terminal (completed or failed)
         // If so, remove from tracking. If running/processing, keep tracking.
-        if (status.finishedRunning() || status.failed() || status == StatusCode.STATUS_COMPLETE) {
+        if (ss.status.finishedRunning() || ss.status.failed() || ss.status == StatusCode.STATUS_COMPLETE) {
             trackedPairs.remove(logDir);
-            log.info("Job execution finished for pairId=" + pairId + " with status=" + status);
+            log.info("Job execution finished for pairId=" + pairId + " with status=" + ss.status);
             return true;
         } else {
-            log.debug("Job still running (status=" + status + "), continuing to monitor pairId=" + pairId);
+            log.debug("Job still running (status=" + ss.status + "), continuing to monitor pairId=" + pairId);
             return false;
         }
     }
 
     /**
-     * Reads the status code from status.json.
+     * Reads status and stageNumber from status.json using Gson.
+     *
+     * <p>Returns {@link StatusCode#ERROR_RUNSCRIPT} with stageNumber=1 if the
+     * file is missing, unreadable, or lacks the required fields — identical
+     * sentinel behaviour to the former regex-only readStatus().</p>
      */
-    private StatusCode readStatus(Path outputDir, int pairId) {
+    private StatusAndStage readStatusFile(Path outputDir, int pairId) {
         Path statusFile = outputDir.resolve("status.json");
         if (!Files.exists(statusFile)) {
             log.warn("No status.json found for pairId=" + pairId);
-            return StatusCode.ERROR_RUNSCRIPT;
+            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
         }
 
         try {
             String json = Files.readString(statusFile);
+            JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
 
-            // Simple regex-based JSON parsing
-            Matcher statusMatcher = Pattern.compile(
-                    "\"status\"\\s*:\\s*(\\d+)").matcher(json);
-            if (statusMatcher.find()) {
-                int statusCode = Integer.parseInt(statusMatcher.group(1));
-                StatusCode resolved = StatusCode.toStatusCode(statusCode);
-                log.debug(
-                        "Read status " +
-                                statusCode +
-                                " (" +
-                                resolved +
-                                ") from status.json for pairId=" +
-                                pairId);
-                return resolved;
+            if (!obj.has("status")) {
+                log.warn("Could not parse status from status.json for pairId=" + pairId);
+                return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
             }
 
-            log.warn(
-                    "Could not parse status from status.json for pairId=" + pairId);
-            return StatusCode.ERROR_RUNSCRIPT;
+            int statusCode = obj.get("status").getAsInt();
+            StatusCode resolved = StatusCode.toStatusCode(statusCode);
+            int stageNumber = obj.has("stageNumber") ? obj.get("stageNumber").getAsInt() : 1;
+
+            log.debug("Read status " + statusCode + " (" + resolved +
+                    ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
+            return new StatusAndStage(resolved, stageNumber);
         } catch (IOException e) {
             log.error("Failed to read status.json for pairId=" + pairId, e);
-            return StatusCode.ERROR_RUNSCRIPT;
+            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
         }
     }
 
@@ -579,16 +589,26 @@ public class LocalJobMonitor {
 
     /**
      * Updates the database with job results.
+     *
+     * <p>Uses {@link JobPairs#setPairStatusPrecise} (single JDBC transaction
+     * via {@code UpdatePairStatusPrecise}) to atomically set the terminal stage
+     * to {@code status} and all later stages to STATUS_NOT_REACHED, eliminating
+     * the dirty-read window present in the former double-call pattern.</p>
      */
     private void updateDatabase(
             int pairId,
             StatusCode status,
+            int stageNumber,
             RunSolverStats stats,
             Properties attributes) throws Exception {
-        // Update pair status
         log.info(
-                "Updating database for pairId=" + pairId + " with status=" + status);
-        JobPairs.setStatusForPairAndStages(pairId, status.getVal());
+                "Updating database for pairId=" + pairId + " with status=" + status
+                + " stageNumber=" + stageNumber);
+        JobPairs.setPairStatusPrecise(
+                pairId,
+                stageNumber,
+                status.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal());
 
         // Update attributes if any
         if (!attributes.isEmpty()) {

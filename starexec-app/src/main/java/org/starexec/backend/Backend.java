@@ -48,12 +48,14 @@ public interface Backend {
     boolean isError(int execCode);
 
     /**
+     * @param pairId : the id of the job pair being submitted, or -1 if none
      * @param scriptPath : the full path to the jobscript file
      * @param workingDirectoryPath  :  path to a directory that can be used for scratch space (read/write)
      * @param logPath  :  path to a directory that should be used to store jobscript logs
      * @return an identifier for the task that submitScript starts, should allow a user to identify which task/script to kill
      **/
     int submitScript(
+        int pairId,
         String scriptPath,
         String workingDirectoryPath,
         String logPath

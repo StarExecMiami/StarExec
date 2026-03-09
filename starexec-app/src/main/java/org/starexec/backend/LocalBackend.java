@@ -129,6 +129,7 @@ public class LocalBackend implements Backend {
 
     // Thread pool for concurrent job execution
     private ExecutorService executorService;
+    private String coreList;
     private int maxConcurrency;
     private int jobTimeoutSeconds;
     private int gracefulShutdownSeconds;
@@ -148,6 +149,12 @@ public class LocalBackend implements Backend {
     // Job completion monitor (reads status files and updates database)
     private LocalJobMonitor jobMonitor;
 
+    // Cached node ID for database updates to avoid N+1 queries
+    private int cachedNodeId = -1;
+
+    // Core leasing for physical isolation
+    private LinkedBlockingQueue<Integer> availableCores;
+
     // Cached container detection result (null = not yet checked)
     private static volatile Boolean isRunningInContainer = null;
     private static final Object CONTAINER_CHECK_LOCK = new Object();
@@ -158,6 +165,7 @@ public class LocalBackend implements Backend {
     private static class LocalJob {
 
         final int execId;
+        final int pairId;
         final String scriptPath;
         final String workingDirectoryPath;
         final String logPath;
@@ -168,6 +176,7 @@ public class LocalBackend implements Backend {
         volatile JobState state;
         volatile long startedAt;
         volatile long completedAt;
+        volatile Integer coreId; // The leased CPU core ID
 
         enum JobState {
             PENDING, // Submitted but not yet started
@@ -180,10 +189,12 @@ public class LocalBackend implements Backend {
 
         LocalJob(
                 int execId,
+                int pairId,
                 String scriptPath,
                 String workingDirectoryPath,
                 String logPath) {
             this.execId = execId;
+            this.pairId = pairId;
             this.scriptPath = scriptPath;
             this.workingDirectoryPath = workingDirectoryPath;
             this.logPath = logPath;
@@ -256,33 +267,6 @@ public class LocalBackend implements Backend {
     }
 
     /**
-     * Extracts the pair ID from a log file path.
-     * Log paths are formatted as: .../jobId/jobSpaceId/pairId.txt
-     *
-     * @param logPath The full path to the log file
-     * @return The pair ID, or -1 if it cannot be extracted
-     */
-    private int extractPairIdFromLogPath(String logPath) {
-        try {
-            if (logPath == null || logPath.isEmpty()) {
-                return -1;
-            }
-            // Extract filename without extension
-            File f = new File(logPath);
-            String filename = f.getName();
-            if (filename.endsWith(".txt")) {
-                String pairIdStr = filename.substring(0, filename.length() - 4);
-                return Integer.parseInt(pairIdStr);
-            }
-        } catch (NumberFormatException e) {
-            log.debug("Could not extract pair ID from log path: " + logPath);
-        } catch (Exception e) {
-            log.debug("Error extracting pair ID from log path: " + logPath, e);
-        }
-        return -1;
-    }
-
-    /**
      * Cleans up artifacts from previous runs in the output directory.
      * This prevents the LocalJobMonitor from detecting old status files
      * and marking the job as complete before it even starts.
@@ -325,8 +309,7 @@ public class LocalBackend implements Backend {
         job.state = LocalJob.JobState.RUNNING;
         job.startedAt = System.currentTimeMillis();
 
-        // Extract pair ID from logPath (format: .../pairId.txt)
-        int pairId = extractPairIdFromLogPath(job.logPath);
+        int pairId = job.pairId;
 
         // CLEANUP: Delete artifacts from previous runs BEFORE registering with monitor
         // This prevents the race condition where monitor sees old status.json
@@ -366,8 +349,24 @@ public class LocalBackend implements Backend {
         // Future optimization: Use ProcessHandle.onExit() for async job completion.
 
         try {
+            // Lease a core for physical isolation
+            Integer leasedCore = availableCores.poll(jobTimeoutSeconds, TimeUnit.SECONDS);
+            if (leasedCore == null) {
+                throw new IOException("Timeout waiting for an available CPU core");
+            }
+            job.coreId = leasedCore;
+
             // Start the job process
             job.process = startJobProcess(job);
+
+            // Update execution host mapping now that the process is alive
+            if (job.process != null && job.process.isAlive() && pairId > 0 && cachedNodeId > 0) {
+                try {
+                    org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, cachedNodeId);
+                } catch (Exception e) {
+                    log.error("Failed to update pair execution host for pair " + pairId, e);
+                }
+            }
 
             // Wait for completion with timeout and zombie detection
             long startTime = System.currentTimeMillis();
@@ -533,6 +532,10 @@ public class LocalBackend implements Backend {
                 }
             }
         } finally {
+            if (job.coreId != null) {
+                availableCores.offer(job.coreId);
+                job.coreId = null;
+            }
             job.completedAt = System.currentTimeMillis();
             // Remove from active jobs immediately
             activeJobs.remove(job.execId);
@@ -574,20 +577,24 @@ public class LocalBackend implements Backend {
 
         ProcessBuilder builder = new ProcessBuilder();
 
+        List<String> command = new ArrayList<>();
+        command.add("taskset");
+        command.add("-c");
+        command.add(String.valueOf(job.coreId));
+
         if (useRunsolver &&
                 R.RUNSOLVER_PATH != null &&
                 Files.exists(Path.of(R.RUNSOLVER_PATH))) {
             // Wrap with runsolver for resource limiting
-            builder.command(
-                    R.RUNSOLVER_PATH,
-                    "-w",
-                    job.logPath + ".watcher",
-                    "-v",
-                    job.logPath + ".var",
-                    "-W",
-                    String.valueOf(jobTimeoutSeconds),
-                    "--",
-                    job.scriptPath);
+            command.add(R.RUNSOLVER_PATH);
+            command.add("-w");
+            command.add(job.logPath + ".watcher");
+            command.add("-v");
+            command.add(job.logPath + ".var");
+            command.add("-W");
+            command.add(String.valueOf(jobTimeoutSeconds));
+            command.add("--");
+            command.add(job.scriptPath);
         } else {
             // Direct execution
             if (useRunsolver) {
@@ -596,8 +603,11 @@ public class LocalBackend implements Backend {
                                 R.RUNSOLVER_PATH +
                                 "), falling back to direct execution without resource limits");
             }
-            builder.command("/bin/bash", job.scriptPath);
+            command.add("/bin/bash");
+            command.add(job.scriptPath);
         }
+
+        builder.command(command);
 
         builder.directory(new File(job.workingDirectoryPath));
         builder.redirectErrorStream(true);
@@ -746,6 +756,7 @@ public class LocalBackend implements Backend {
      */
     @Override
     public synchronized int submitScript(
+            int pairId,
             String scriptPath,
             String workingDirectoryPath,
             String logPath) {
@@ -783,6 +794,7 @@ public class LocalBackend implements Backend {
             int execId = generateExecId();
             LocalJob job = new LocalJob(
                     execId,
+                    pairId,
                     scriptPath,
                     workingDirectoryPath,
                     logPath);
@@ -1142,17 +1154,26 @@ public class LocalBackend implements Backend {
      * Loads configuration from environment variables.
      */
     private void loadConfiguration() {
-        // Concurrency level
-        maxConcurrency = getEnvInt(
-                "STAREXEC_LOCAL_CONCURRENCY",
-                DEFAULT_CONCURRENCY);
-        if (maxConcurrency < 1) {
-            log.warn(
-                    "Invalid concurrency " +
-                            maxConcurrency +
-                            ", using default: " +
-                            DEFAULT_CONCURRENCY);
-            maxConcurrency = DEFAULT_CONCURRENCY;
+        // Concurrency level and Core Pinning
+        coreList = EnvironmentConfig.getLocalCoreList();
+        if (coreList != null && !coreList.trim().isEmpty()) {
+            // If core list is provided, concurrency is bounded by the number of configured cores
+            String[] cores = coreList.split(",");
+            maxConcurrency = cores.length;
+            log.info("Using explicitly configured core list for CPU pinning: " + coreList + " (Concurrency: " + maxConcurrency + ")");
+        } else {
+            maxConcurrency = getEnvInt(
+                    "STAREXEC_LOCAL_CONCURRENCY",
+                    DEFAULT_CONCURRENCY);
+            if (maxConcurrency < 1) {
+                log.warn(
+                        "Invalid concurrency " +
+                                maxConcurrency +
+                                ", using default: " +
+                                DEFAULT_CONCURRENCY);
+                maxConcurrency = DEFAULT_CONCURRENCY;
+            }
+            log.warn("STAREXEC_LOCAL_CORE_LIST not set. CPU pinning will use blind sequential assignment (0 to " + (maxConcurrency - 1) + "). This may cause SMT/L3 cache thrashing.");
         }
 
         // Job timeout
@@ -1229,6 +1250,27 @@ public class LocalBackend implements Backend {
                     "Could not determine hostname, using default: " + nodeName);
         }
 
+        // Initialize available cores for CPU pinning
+        availableCores = new LinkedBlockingQueue<>();
+        if (coreList != null && !coreList.trim().isEmpty()) {
+            String[] cores = coreList.split(",");
+            for (String core : cores) {
+                try {
+                    availableCores.offer(Integer.parseInt(core.trim()));
+                } catch (NumberFormatException e) {
+                    log.error("Invalid core ID in STAREXEC_LOCAL_CORE_LIST: " + core);
+                }
+            }
+            // CRITICAL: Ensure maxConcurrency exactly matches the number of valid cores leased
+            // to prevent executor threads from blocking indefinitely waiting for a core.
+            maxConcurrency = availableCores.size();
+        } else {
+            // Fallback to blind sequential assignment if not configured
+            for (int i = 0; i < maxConcurrency; i++) {
+                availableCores.offer(i);
+            }
+        }
+
         // Create thread pool with custom thread factory for better naming
         ThreadFactory threadFactory = new ThreadFactory() {
             private final AtomicInteger counter = new AtomicInteger(1);
@@ -1263,6 +1305,12 @@ public class LocalBackend implements Backend {
         // Create and start job completion monitor
         jobMonitor = new LocalJobMonitor();
         jobMonitor.start();
+
+        // Cache the node ID to avoid database queries during job submission
+        cachedNodeId = org.starexec.data.database.Cluster.getNodeIdByName(nodeName);
+        if (cachedNodeId <= 0) {
+            log.warn("Could not find nodeId for " + nodeName + " during initialization. Pair host mapping may be delayed.");
+        }
 
         log.info("LocalBackend initialized successfully");
         log.info("  Node name: " + nodeName);

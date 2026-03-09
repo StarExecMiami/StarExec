@@ -1012,11 +1012,12 @@ public class Connection {
 		HttpResponse response = null;
 		try {
 			int userId = getUserID();
-			String url = baseURL + C.URL_USERSETTING + setting + "/" + userId + "/" + val;
-			url = url.replace(" ", "%20"); // encodes white space, which can't
-			// be used in a URL
+			String url = baseURL + C.URL_EDIT_USER + userId;
 			HttpPost post = new HttpPost(url);
 			post = (HttpPost) setHeaders(post);
+			// Payload in body (no PII in URL)
+			String json = "{\"attribute\":\"" + setting.replace("\\", "\\\\").replace("\"", "\\\"") + "\",\"value\":\"" + val.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
+			post.setEntity(new org.apache.http.entity.StringEntity(json, org.apache.http.entity.ContentType.APPLICATION_JSON));
 			response = executeGetOrPost(post);
 			JsonObject obj = JsonHandler.getJsonObject(response);
 

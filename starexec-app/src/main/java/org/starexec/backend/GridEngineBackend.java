@@ -115,6 +115,7 @@ public class GridEngineBackend implements Backend {
      * the command we run is qsub -b n -v TMPDIR={$workingDirectoryPath} -o {$logPath} -terse {$scriptPath}
      **/
     public int submitScript(
+        int pairId,
         String scriptPath,
         String workingDirectoryPath,
         String logPath

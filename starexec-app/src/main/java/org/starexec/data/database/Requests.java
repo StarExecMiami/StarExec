@@ -537,6 +537,50 @@ public class Requests {
 	}
 
 	/**
+	 * Atomically tries to add or update a change-email request with rate limiting (5 minutes per user).
+	 * Uses INSERT ... ON CONFLICT DO UPDATE with a WHERE condition so that we only update if the last
+	 * request was more than 5 minutes ago (or null). Returns true if a row was inserted/updated (caller
+	 * may send verification email), false if rate limit applied (no email should be sent).
+	 *
+	 * @param userId   The id of the user making the request.
+	 * @param newEmail The new email the user wants to change to.
+	 * @param code     The unique code for the verification link.
+	 * @return true if the request was recorded (RETURNING returned a row), false if rate limit applied.
+	 * @throws StarExecDatabaseException Whenever there is a database error.
+	 */
+	public static boolean tryAddChangeEmailRequest(int userId, String newEmail, String code)
+			throws StarExecDatabaseException {
+		// Table may live in public or starexec depending on deployment; try starexec first (search_path).
+		final String sql =
+				"INSERT INTO change_email_requests (user_id, new_email, code, requested_at) "
+						+ "VALUES (?, ?, ?, NOW()) "
+						+ "ON CONFLICT (user_id) DO UPDATE SET "
+						+ "new_email = EXCLUDED.new_email, code = EXCLUDED.code, requested_at = NOW() "
+						+ "WHERE change_email_requests.requested_at IS NULL "
+						+ "   OR change_email_requests.requested_at < NOW() - INTERVAL '5 minutes' "
+						+ "RETURNING user_id";
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet rs = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement(sql);
+			ps.setInt(1, userId);
+			ps.setString(2, newEmail);
+			ps.setString(3, code);
+			rs = ps.executeQuery();
+			return rs.next();
+		} catch (SQLException e) {
+			throw new StarExecDatabaseException(
+					"Error in tryAddChangeEmailRequest for user id=" + userId, e);
+		} finally {
+			Common.safeClose(rs);
+			Common.safeClose(ps);
+			Common.safeClose(con);
+		}
+	}
+
+	/**
 	 * Retrieves a request to change email addresses
 	 *
 	 * @param userId The ID of the request to retrieve

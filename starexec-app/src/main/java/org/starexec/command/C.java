@@ -35,7 +35,8 @@ public class C {
 	public static final String URL_DOWNLOAD = "secure/download";
 
 	public static final String URL_LOGOUT = "services/session/logout";
-	public static final String URL_USERSETTING = "services/edit/user/";
+	/** Base path for edit user (POST with JSON body: { "attribute": "...", "value": "..." }) */
+	public static final String URL_EDIT_USER = "services/edit/user/";
 	public static final String URL_UPLOADSOLVER = "secure/upload/solvers";
 	public static final String URL_UPLOADBENCHMARKS = "/secure/upload/benchmarks";
 	public static final String URL_UPLOADPROCESSOR = "secure/processors/manager";

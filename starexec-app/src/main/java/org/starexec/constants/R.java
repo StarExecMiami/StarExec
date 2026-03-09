@@ -191,7 +191,7 @@ public class R {
     public static final String PRIMITIVE_NAME_PATTERN = "^[\\w\\-\\. \\+\\^=,!?:$%#@]+$";
     public static final String SPACE_NAME_PATTERN = "^[\\w\\-\\. \\+\\^=,!?:$%#@]{1," + DB.SPACE_NAME_LEN + "}$";
 
-    public static final String REQUEST_MESSAGE = "^[\\w\\]\\[\\!\"#\\$%&'()\\*\\+,\\./:;=\\?@\\^_`{\\|}~\\- ]{2," +
+    public static final String REQUEST_MESSAGE = "^[\\w\\s\\]\\[\\!\"#\\$%&'()\\*\\+,\\./:;=\\?@\\^_`{\\|}~\\-]{2," +
             DB.MSG_LEN +
             "}$";
     public static final String PRIMITIVE_DESC_PATTERN = "^[^<>\"\'%;)(&\\+-]{0," + DB.SPACE_DESC_LEN + "}$";

@@ -1262,5 +1262,86 @@ public class Queues {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
 		}}
+
+	public static void recordQueueSize(int qId, int size) {
+		Connection con = null;
+		PreparedStatement procedure = null;
+		try {
+			con = Common.getConnection();
+			procedure = con.prepareStatement("INSERT INTO queue_metrics_history(queue_id, recorded_at, queue_size) VALUES (?, NOW(), ?) ON CONFLICT (queue_id, recorded_at) DO UPDATE SET queue_size = EXCLUDED.queue_size");
+			procedure.setInt(1, qId);
+			procedure.setInt(2, size);
+			procedure.execute();
+		} catch (Exception e) {
+			log.error("recordQueueSize", e);
+		} finally {
+			Common.safeClose(con);
+			Common.safeClose(procedure);
+		}
+	}
+
+	public static void pruneOldQueueMetrics(int hours) {
+		Connection con = null;
+		PreparedStatement procedure = null;
+		try {
+			con = Common.getConnection();
+			procedure = con.prepareStatement("DELETE FROM queue_metrics_history WHERE recorded_at < NOW() - (? * INTERVAL '1 hour')");
+			procedure.setInt(1, hours);
+			procedure.execute();
+		} catch (Exception e) {
+			log.error("pruneOldQueueMetrics", e);
+		} finally {
+			Common.safeClose(con);
+			Common.safeClose(procedure);
+		}
+	}
+
+	public static List<QueueMetric> getQueueMetricsHistory(int queueId, int windowHours) {
+		Connection con = null;
+		PreparedStatement procedure = null;
+		ResultSet results = null;
+		List<QueueMetric> metrics = new java.util.LinkedList<>();
+		try {
+			con = Common.getConnection();
+			String query;
+			if (windowHours < 1) {
+				query = "SELECT EXTRACT(EPOCH FROM recorded_at) * 1000 AS time_ms, queue_size " +
+						"FROM queue_metrics_history " +
+						"WHERE queue_id = ? AND recorded_at >= NOW() - (? * INTERVAL '1 hour') " +
+						"ORDER BY recorded_at ASC";
+			} else if (windowHours < 6) {
+				query = "SELECT EXTRACT(EPOCH FROM date_trunc('minute', recorded_at)) * 1000 AS time_ms, " +
+						"CAST(ROUND(AVG(queue_size)) AS INTEGER) AS queue_size " +
+						"FROM queue_metrics_history " +
+						"WHERE queue_id = ? AND recorded_at >= NOW() - (? * INTERVAL '1 hour') " +
+						"GROUP BY date_trunc('minute', recorded_at) " +
+						"ORDER BY 1 ASC";
+			} else {
+				query = "SELECT FLOOR(EXTRACT(EPOCH FROM recorded_at) / 300) * 300000 AS time_ms, " +
+						"CAST(ROUND(AVG(queue_size)) AS INTEGER) AS queue_size " +
+						"FROM queue_metrics_history " +
+						"WHERE queue_id = ? AND recorded_at >= NOW() - (? * INTERVAL '1 hour') " +
+						"GROUP BY 1 " +
+						"ORDER BY 1 ASC";
+			}
+			
+			procedure = con.prepareStatement(query);
+			procedure.setInt(1, queueId);
+			procedure.setInt(2, windowHours);
+			results = procedure.executeQuery();
+			
+			while (results.next()) {
+				metrics.add(new QueueMetric(results.getLong("time_ms"), results.getInt("queue_size")));
+			}
+			return metrics;
+		} catch (Exception e) {
+			log.error("getQueueMetricsHistory", e);
+		} finally {
+			Common.safeClose(con);
+			Common.safeClose(procedure);
+			Common.safeClose(results);
+		}
+		return metrics;
+	}
 }
 

@@ -173,24 +173,30 @@ public class UploadBenchmark extends HttpServlet {
 			archiveFile = new File(uniqueDir, FilenameUtils.getName(fileToUpload.getName()));
 			fileToUpload.write(archiveFile);
 			
-			log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
-		} else {
-			// TODO: Handle URL and Git uploads
-			throw new UnsupportedOperationException("URL and Git uploads not yet supported in async mode");
-		}
-		
-		// Enqueue job for background processing
-		long jobId = UploadJobQueue.enqueueJob(
-			archiveFile.getAbsolutePath(),
-			userId,
-			spaceId,
-			uploadMethod,
-			typeId,
-			downloadable,
-			0  // Default priority
-		);
-		
-		if (jobId > 0) {
+		log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
+	} else {
+		// TODO: Handle URL and Git uploads
+		throw new UnsupportedOperationException("URL and Git uploads not yet supported in async mode");
+	}
+	
+	// Enqueue job using the new immutable request builder.
+	// This captures all parameters and the archive size for SJF scheduling.
+	UploadJob.UploadJobRequest uploadRequest = new UploadJob.UploadJobRequest.Builder()
+		.archivePath(archiveFile.getAbsolutePath())
+		.userId(userId)
+		.spaceId(spaceId)
+		.uploadMethod(uploadMethod)
+		.benchmarkTypeId(typeId)
+		.downloadable(downloadable)
+		.archiveSize(archiveFile.length())
+		.hasDependencies(hasDependencies)
+		.depRootSpaceId(depRootSpaceId)
+		.linked(linked)
+		.build();
+
+	long jobId = UploadJobQueue.enqueueJob(uploadRequest);
+	
+	if (jobId > 0) {
 			log.info(method, "Enqueued upload job " + jobId + " for user " + userId);
 		} else {
 			log.error(method, "Failed to enqueue upload job for user " + userId);

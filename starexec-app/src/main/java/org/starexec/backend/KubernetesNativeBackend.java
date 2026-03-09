@@ -294,6 +294,7 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public int submitScript(
+        int pairId,
         String scriptPath,
         String workingDirectoryPath,
         String logPath

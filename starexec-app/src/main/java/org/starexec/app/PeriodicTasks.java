@@ -155,6 +155,13 @@ class PeriodicTasks {
             () -> 5,
             TimeUnit.SECONDS
         ),
+        CLEAN_QUEUE_METRICS(
+            true,
+            CLEAN_QUEUE_METRICS_TASK,
+            0,
+            () -> 1,
+            TimeUnit.HOURS
+        ),
         CHECK_STUCK_JOBS(
             true,
             CHECK_STUCK_JOBS_TASK,
@@ -279,16 +286,12 @@ class PeriodicTasks {
             @Override
             protected void dorun() {
                 try {
-                    // previous implementation for just one queue graph; commented out by Alexander Brown 11/20
-                    //		    int num_enqueued = Util.executeCommand("qstat -u tomcat -s p").split("\r\n|\r|\n").length - 2;
-                    //		    if(num_enqueued < 0) num_enqueued = 0; //Adjust for the top two lines being headings.
-                    //		    Statistics.addQueuePlotPoint(num_enqueued);
-
-                    // loop through the SGE cluster queues, calling the function to create the queue graph for each one
                     List<Queue> activeQueues = Queues.getAllActive();
                     if (activeQueues != null) {
                         for (Queue q : activeQueues) {
-                            Statistics.addQueuePlotPoint(q.getId());
+                            int qId = q.getId();
+                            int size = Queues.getSizeOfQueue(qId);
+                            Queues.recordQueueSize(qId, size);
                         }
                     }
                 } catch (Exception e) {
@@ -296,6 +299,20 @@ class PeriodicTasks {
                 }
             }
         };
+
+    private static final String cleanQueueMetricsTaskName = "cleanQueueMetricsTask";
+    private static final Runnable CLEAN_QUEUE_METRICS_TASK = new RobustRunnable(
+        cleanQueueMetricsTaskName
+    ) {
+        @Override
+        protected void dorun() {
+            try {
+                Queues.pruneOldQueueMetrics(24);
+            } catch (Exception e) {
+                log.error("Error pruning old queue metrics", e);
+            }
+        }
+    };
 
     private static final String submitJobTasksName = "submitJobTasks";
     // Create a task that submits jobs that have pending/rejected job pairs

@@ -1471,10 +1471,16 @@ public class JobPairs {
         if (f.isDirectory()) {
             // means this is a job created after stages were implemented
             return new File(f, stageNumber + ".txt").getAbsolutePath();
-        } else {
-            // if we get down here, it means that this pair did NOT use stages.
+        } 
+        
+        // Let's see if the path already ends with .txt (e.g. getPairStdout found the single-stage file)
+        if (path.endsWith(".txt")) {
             return path;
         }
+        
+        // If it's not a directory and doesn't end with .txt, it's the fallback base name.
+        // We need to assume it's a single-stage file that hasn't been created yet.
+        return path + ".txt";
     }
 
     /**
@@ -2167,6 +2173,54 @@ public class JobPairs {
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         } finally {
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    /**
+     * Atomically updates a job pair's terminal stage status and marks all later
+     * stages as STATUS_NOT_REACHED, with full transactional safety.
+     *
+     * <p>
+     * Replaces the non-atomic {@link #setStatusForPairAndStages} double-call
+     * pattern in the container execution path. A single JDBC transaction wraps
+     * the stored procedure call so no dirty-read window exists between the
+     * pair-level and stage-level updates.
+     * </p>
+     *
+     * @param pairId          The job pair ID
+     * @param stageNumber     The stage that reached the terminal status (1-based)
+     * @param terminalStatus  Status code for the pair and the terminal stage
+     * @param notReachedStatus Status code for stages after {@code stageNumber}
+     * @return True on success and false otherwise
+     */
+    public static boolean setPairStatusPrecise(
+        int pairId,
+        int stageNumber,
+        int terminalStatus,
+        int notReachedStatus
+    ) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+            ps = con.prepareStatement(
+                "CALL starexec.UpdatePairStatusPrecise(?, ?, ?, ?)"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, stageNumber);
+            ps.setInt(3, terminalStatus);
+            ps.setInt(4, notReachedStatus);
+            ps.execute();
+            Common.endTransaction(con);
+            return true;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(ps);
             Common.safeClose(con);
         }
         return false;

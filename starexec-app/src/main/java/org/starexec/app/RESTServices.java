@@ -8,6 +8,7 @@ import org.starexec.constants.R;
 import org.starexec.constants.R.DefaultSettingAttribute;
 import org.starexec.data.database.*;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
+import org.starexec.data.to.EditUserAttributeRequest;
 import org.starexec.data.security.*;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Website.WebsiteType;
@@ -30,12 +31,17 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
+import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * Class which handles all RESTful web service requests.
@@ -73,6 +79,23 @@ public class RESTServices {
 
 	public static final ValidatorStatusCode ERROR_LOG_SUBSCRIPTION_SUCCESS = new ValidatorStatusCode(true,
 			"User subscribed successfully.");
+
+	/** Dedicated executor for SMTP (Bulkhead): never run blocking I/O on ForkJoinPool.commonPool(). */
+	private static final ExecutorService emailExecutor = Executors.newFixedThreadPool(10,
+			new ThreadFactory() {
+				private int count = 0;
+				@Override
+				public Thread newThread(Runnable r) {
+					Thread t = new Thread(r);
+					t.setName("smtp-worker-" + (++count));
+					return t;
+				}
+			});
+
+	/** Exposed for graceful shutdown via ServletContextListener. */
+	public static ExecutorService getEmailExecutor() {
+		return emailExecutor;
+	}
 
 	@GET
 	@Path("/queue/{qid}/getDesc")
@@ -360,6 +383,18 @@ public class RESTServices {
 		response.put("progressPercentage", job.getProgressPercentage());
 		response.put("errorMessage", job.getErrorMessage());
 		response.put("lastHeartbeat", job.getLastHeartbeat() != null ? job.getLastHeartbeat().getTime() : null);
+		
+		// Calculate precise elapsed time on the server to prevent client clock drift & handle page reloads
+		long elapsedTimeMs = 0;
+		if (job.getStartedAt() != null) {
+			long endTime = (job.getCompletedAt() != null) ? job.getCompletedAt().getTime() : System.currentTimeMillis();
+			elapsedTimeMs = Math.max(0, endTime - job.getStartedAt().getTime());
+		} else if (job.getCreatedAt() != null) {
+			long endTime = (job.getCompletedAt() != null) ? job.getCompletedAt().getTime() : System.currentTimeMillis();
+			elapsedTimeMs = Math.max(0, endTime - job.getCreatedAt().getTime());
+		}
+		response.put("elapsedTimeMs", elapsedTimeMs);
+		
 		response.put("isStuck", job.isStuck());
 		response.put("createdAt", job.getCreatedAt() != null ? job.getCreatedAt().toString() : null);
 		response.put("startedAt", job.getStartedAt() != null ? job.getStartedAt().toString() : null);
@@ -632,6 +667,26 @@ public class RESTServices {
 	public String getQueueDetails(@PathParam("id") int id, @Context HttpServletRequest request) {
 		log.debug("getting queue details");
 		return gson.toJson(Queues.get(id));
+	}
+
+	/**
+	 *
+	 * @param queueId ID of the queue to get metrics history for
+	 * @param windowHours The time window in hours to get data for
+	 * @param request HTTP Request
+	 * @return json object containing queue metrics history data
+	 */
+	@GET
+	@Path("/cluster/queues/{id}/metrics/history")
+	@Produces("application/json")
+	public String getQueueMetricsHistory(@PathParam("id") int queueId, @QueryParam("windowHours") @DefaultValue("24") int windowHours, @Context HttpServletRequest request) {
+		log.debug("getting queue metrics history for queue " + queueId);
+		JsonObject response = new JsonObject();
+		response.addProperty("queueId", queueId);
+		response.addProperty("queueName", Queues.getNameById(queueId));
+		java.util.List<QueueMetric> metrics = Queues.getQueueMetricsHistory(queueId, windowHours);
+		response.add("data", gson.toJsonTree(metrics));
+		return gson.toJson(response);
 	}
 
 	/**
@@ -1257,37 +1312,48 @@ public class RESTServices {
 				return gson.toJson(ERROR_DATABASE);
 			}
 			log.info("R.COMM_INFO_MAP: " + R.COMM_INFO_MAP);
-			JsonObject graphs = null;
 
 			List<Space> communities = Communities.getAll();
 
-			graphs = Statistics.makeCommunityGraphs(communities, R.COMM_INFO_MAP);
-			if (graphs == null) {
-				log.warn("makeCommunityGraphs returned null (indicating an error)");
-				return gson.toJson(ERROR_DATABASE);
+			// A community created after the last cache build will be absent from
+			// COMM_INFO_MAP, causing silent zeros. Force a full rebuild instead.
+			boolean cacheStale = communities != null
+					&& communities.stream().anyMatch(c -> R.COMM_INFO_MAP.get(c.getId()) == null);
+			if (cacheStale) {
+				log.info(methodName, "Community missing from COMM_INFO_MAP — forcing cache rebuild.");
+				Communities.updateCommunityMap();
+				communities = Communities.getAll();
 			}
+
 			JsonObject info = new JsonObject();
 			for (Space c : communities) {
 				String name = c.getName();
 				int id = c.getId();
 
-				JsonObject Comm = new JsonObject();
-				if (R.COMM_INFO_MAP.get(id) == null) {
-					Comm.addProperty("users", "0");
-					Comm.addProperty("solvers", "0");
-					Comm.addProperty("benchmarks", "0");
-					Comm.addProperty("jobs", "0");
-					Comm.addProperty("job_pairs", "0");
-					Comm.addProperty("disk_usage", "0");
-				} else {
-					Comm.addProperty("users", R.COMM_INFO_MAP.get(id).get("users").toString());
-					Comm.addProperty("solvers", R.COMM_INFO_MAP.get(id).get("solvers").toString());
-					Comm.addProperty("benchmarks", R.COMM_INFO_MAP.get(id).get("benchmarks").toString());
-					Comm.addProperty("jobs", R.COMM_INFO_MAP.get(id).get("jobs").toString());
-					Comm.addProperty("job_pairs", R.COMM_INFO_MAP.get(id).get("job_pairs").toString());
-					Comm.addProperty("disk_usage",
-							Util.byteCountToDisplaySize(R.COMM_INFO_MAP.get(id).get("disk_usage")));
-				}
+			JsonObject Comm = new JsonObject();
+			if (R.COMM_INFO_MAP.get(id) == null) {
+				Comm.addProperty("users", "0");
+				Comm.addProperty("solvers", "0");
+				Comm.addProperty("benchmarks", "0");
+				Comm.addProperty("jobs", "0");
+				Comm.addProperty("job_pairs", "0");
+				Comm.addProperty("disk_usage", "0");
+				// disk_usage_bytes kept as Long for backward-compat with any existing consumers.
+				// disk_usage_bytes_str is the safe String representation; use it in JS to avoid
+				// IEEE 754 precision loss for values exceeding Number.MAX_SAFE_INTEGER (~9 PB).
+				Comm.addProperty("disk_usage_bytes", 0L);
+				Comm.addProperty("disk_usage_bytes_str", "0");
+			} else {
+				Comm.addProperty("users", R.COMM_INFO_MAP.get(id).get("users").toString());
+				Comm.addProperty("solvers", R.COMM_INFO_MAP.get(id).get("solvers").toString());
+				Comm.addProperty("benchmarks", R.COMM_INFO_MAP.get(id).get("benchmarks").toString());
+				Comm.addProperty("jobs", R.COMM_INFO_MAP.get(id).get("jobs").toString());
+				Comm.addProperty("job_pairs", R.COMM_INFO_MAP.get(id).get("job_pairs").toString());
+				Comm.addProperty("disk_usage",
+						Util.byteCountToDisplaySize(R.COMM_INFO_MAP.get(id).get("disk_usage")));
+				Comm.addProperty("disk_usage_bytes", R.COMM_INFO_MAP.get(id).get("disk_usage"));
+				Comm.addProperty("disk_usage_bytes_str", R.COMM_INFO_MAP.get(id).get("disk_usage").toString());
+			}
 
 				info.add(name, Comm);
 			}
@@ -1296,7 +1362,6 @@ public class RESTServices {
 			Date last_update = new Date(R.COMM_ASSOC_LAST_UPDATE);
 
 			JsonObject json = new JsonObject();
-			json.add("graphs", graphs);
 			json.add("info", info);
 			json.addProperty("date", last_update.toString());
 
@@ -2272,37 +2337,97 @@ public class RESTServices {
 	}
 
 	/**
-	 * Updates information in the database using a POST. Attribute and
-	 * new value are included in the path. First validates that the new value
-	 * is legal, then updates the database and session information accordingly.
-	 * 
-	 * @param attribute Name of attribute to update
-	 * @param userId    The ID of the user to update
-	 * @param newValue  The new value to assign to the specified attribute
-	 * @param request   HTTP request
+	 * Updates user information from JSON body. Payload in body avoids PII in URL/logs.
+	 * For email, returns a generic success message and sends verification asynchronously (Bulkhead).
 	 *
-	 * @return a json string containing '0' if the update was successful, else
-	 *         a json string containing '1'
-	 * @author Skylar Stark
+	 * @Consumes is intentionally omitted: RESTEasy 3.x checks for a registered JSON MessageBodyReader
+	 * even when there is no entity parameter, causing a 415 if none is present. The body is read
+	 * directly from HttpServletRequest.getInputStream() and parsed with Gson instead.
 	 */
 	@POST
-	@Path("/edit/user/{attr}/{userId}/{val}")
-	@Produces("application/json")
-	public String editUserInfo(@PathParam("attr") String attribute, @PathParam("userId") int userId,
-			@PathParam("val") String newValue, @Context HttpServletRequest request) {
+	@Path("/edit/user/{userId}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String editUserInfoFromBody(@PathParam("userId") int userId,
+			@Context HttpServletRequest request) {
+		EditUserAttributeRequest body;
+		try {
+			String json = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			body = gson.fromJson(json, EditUserAttributeRequest.class);
+		} catch (IOException | JsonSyntaxException e) {
+			log.error("Failed to parse JSON body for editUserInfoFromBody, userId=" + userId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "Invalid request body"));
+		}
+		if (body == null || body.getAttribute() == null || body.getValue() == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Missing attribute or value"));
+		}
+		String attribute = body.getAttribute();
+		String newValue = body.getValue();
+
 		int requestUserId = SessionUtil.getUserId(request);
-		log.debug("requestUserId" + requestUserId);
 		ValidatorStatusCode status = UserSecurity.canUpdateData(userId, requestUserId, attribute, newValue);
-		log.debug("status = " + status);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
 
+		if ("email".equals(attribute)) {
+			boolean callerIsAdmin = GeneralSecurity.hasAdminWritePrivileges(requestUserId);
+			boolean changingOwnEmail = (userId == requestUserId);
+			return handleEmailChange(userId, newValue, request, callerIsAdmin && !changingOwnEmail);
+		}
+		return editUserInfoInternal(attribute, userId, newValue, request);
+	}
+
+	private static final String EMAIL_CHANGE_GENERIC_MESSAGE =
+			"If the email is valid and available, a verification link has been sent.";
+
+	/**
+	 * Handles an email change request.
+	 * When an admin changes another user's email, the change is applied directly (no verification needed).
+	 * When a user changes their own email, a verification link is sent to the new address.
+	 */
+	private String handleEmailChange(int userId, String newEmail, HttpServletRequest request, boolean adminDirectChange) {
+		if (Users.getUserByEmail(newEmail)) {
+			// Email already registered: do not reveal; optional notify owner (async)
+			CompletableFuture.runAsync(() -> { /* optional: Mail.notifyEmailChangeAttemptToExistingOwner(newEmail); */ }, emailExecutor);
+			if (adminDirectChange) {
+				return gson.toJson(new ValidatorStatusCode(false, "That email address is already registered to another account"));
+			}
+			return gson.toJson(new ValidatorStatusCode(true, EMAIL_CHANGE_GENERIC_MESSAGE));
+		}
+
+		// Admin changing another user's email: apply immediately, no verification needed
+		if (adminDirectChange) {
+			try {
+				Users.updateEmail(userId, newEmail);
+				return gson.toJson(new ValidatorStatusCode(true, "Email address updated successfully"));
+			} catch (StarExecDatabaseException e) {
+				log.error("Admin direct email update failed for userId=" + userId, e);
+				return gson.toJson(new ValidatorStatusCode(false, "Database error updating email"));
+			}
+		}
+
+		String code = UUID.randomUUID().toString();
+		boolean claimed;
+		try {
+			claimed = Requests.tryAddChangeEmailRequest(userId, newEmail, code);
+		} catch (StarExecDatabaseException e) {
+			log.error("tryAddChangeEmailRequest failed for user " + userId, e);
+			return gson.toJson(new ValidatorStatusCode(true, EMAIL_CHANGE_GENERIC_MESSAGE));
+		}
+		if (claimed) {
+			final String to = newEmail;
+			CompletableFuture.runAsync(() -> Mail.sendEmailChangeValidation(to, code), emailExecutor);
+		}
+		return gson.toJson(new ValidatorStatusCode(true, EMAIL_CHANGE_GENERIC_MESSAGE));
+	}
+
+	/**
+	 * Internal: updates firstname, lastname, institution, diskquota, pairquota, pagesize.
+	 * Email is handled by handleEmailChange.
+	 */
+	private String editUserInfoInternal(String attribute, int userId, String newValue, HttpServletRequest request) {
 		boolean success = false;
 		String messageToUser = null;
-		// Go through all the cases, depending on what attribute we are changing.
-		// First, validate that it is in legal form. Then, try to update the database.
-		// Finally, update the current session data
 		switch (attribute) {
 			case "firstname":
 				try {
@@ -2343,43 +2468,15 @@ public class RESTServices {
 					success = false;
 				}
 				break;
-			case "email":
-				log.info("User with id=" + userId + " has requested to change their email to " + newValue);
-				success = true;
-				if (!Users.getUserByEmail(newValue)) {
-					try {
-						String code = UUID.randomUUID().toString();
-						// Add the request to the database.
-						Requests.addChangeEmailRequest(userId, newValue, code);
-						// Send a validation email to the new email address. using a unique
-						// code to safely reference this user's entry in verification hyperlinks
-						Mail.sendEmailChangeValidation(newValue, code);
-						log.debug("Email sent to user with id=" + userId + " at address " + newValue +
-								" to validate email change request.");
-						messageToUser = "A verification email has been sent to the new email address.";
-					} catch (StarExecDatabaseException e) {
-						log.error("(editUserInfo) an error occurred while trying to add a change email request.", e);
-						messageToUser = "Internal error: could not complete email change request.";
-						success = false;
-					}
-				} else {
-					messageToUser = "A user with that email already exists.";
-					success = false;
-				}
-				break;
 			case "diskquota":
-				log.debug("diskquota");
 				success = Users.setDiskQuota(userId, Long.parseLong(newValue));
-				log.debug("success = " + success);
 				if (success) {
 					SessionUtil.getUser(request).setDiskQuota(Long.parseLong(newValue));
 					messageToUser = "Edit successful.";
 				}
 				break;
 			case "pairquota":
-				log.debug("pairquota");
 				success = Users.setPairQuota(userId, Integer.parseInt(newValue));
-				log.debug("success = " + success);
 				if (success) {
 					SessionUtil.getUser(request).setPairQuota(Integer.parseInt(newValue));
 					messageToUser = "Edit successful.";
@@ -2402,17 +2499,17 @@ public class RESTServices {
 					success = false;
 				}
 				break;
+			default:
+				return gson.toJson(new ValidatorStatusCode(false, "The given attribute does not exist"));
 		}
 
-		String json = null;
 		if (success) {
-			json = gson.toJson(new ValidatorStatusCode(true, messageToUser));
+			return gson.toJson(new ValidatorStatusCode(true, messageToUser));
 		} else if (messageToUser != null) {
-			json = gson.toJson(new ValidatorStatusCode(false, messageToUser));
+			return gson.toJson(new ValidatorStatusCode(false, messageToUser));
 		} else {
-			json = gson.toJson(ERROR_DATABASE);
+			return gson.toJson(ERROR_DATABASE);
 		}
-		return json;
 	}
 
 	/**
