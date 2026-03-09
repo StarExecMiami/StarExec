@@ -67,7 +67,7 @@ RETURNS TABLE(event_name TEXT, event_count BIGINT, user_count BIGINT) AS $$
 	BEGIN
 		RETURN QUERY
 		SELECT
-			ae.name as event_name,
+			ae.name::TEXT as event_name,
 			SUM(ah.count) as event_count,
 			COUNT(distinct au.user_id) as user_count
 		FROM starexec.analytics_historical ah
@@ -262,11 +262,13 @@ $$ LANGUAGE plpgsql;
 -- Adds a new dependency for a benchmark
 -- Author: Benton McCune
 DROP FUNCTION IF EXISTS starexec.AddBenchDependency(INT, INT, TEXT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddBenchDependency(_primary_bench_id INT, _secondary_benchId INT, _include_path TEXT)
+CREATE OR REPLACE FUNCTION starexec.AddBenchDependency(_primary_bench_id INT, _secondary_bench_id INT, _include_path TEXT)
 RETURNS VOID AS $$
 BEGIN
 	INSERT INTO bench_dependency (primary_bench_id, secondary_bench_id, include_path)
-	VALUES (_primary_bench_id, _secondary_benchId, _include_path);
+	VALUES (_primary_bench_id, _secondary_bench_id, _include_path)
+	ON CONFLICT (primary_bench_id, secondary_bench_id) 
+	DO UPDATE SET include_path = EXCLUDED.include_path;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -331,6 +333,106 @@ BEGIN
 	SELECT b.id, b.name, b.path, bd.include_path
 	FROM starexec.benchmarks b JOIN bench_dependency bd ON b.id = bd.secondary_bench_id
 	WHERE bd.primary_bench_id = _pBenchId;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Performs batch resolution of benchmark dependencies for all benchmarks in a space hierarchy.
+-- Uses a true Recursive CTE to walk the space hierarchy segment-by-segment as defined in include_path.
+-- Author: AI Assistant (Refactoring v3)
+DROP FUNCTION IF EXISTS starexec.ResolveBenchmarkDependenciesBatch(INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.ResolveBenchmarkDependenciesBatch(_root_space_id INT)
+RETURNS TABLE(p_id INT, s_id INT, inc_path TEXT) AS $$
+BEGIN
+	RETURN QUERY
+	WITH RECURSIVE 
+	-- 1. Extract all declared dependencies for benchmarks in the given space hierarchy
+	raw_deps AS (
+		SELECT b.id as bench_id, ba.attr_value::TEXT as include_path,
+		       string_to_array(ba.attr_value, '/') as segments,
+		       array_length(string_to_array(ba.attr_value, '/'), 1) as total_segments
+		FROM starexec.benchmarks b
+		JOIN starexec.bench_attributes ba ON b.id = ba.bench_id
+		JOIN starexec.bench_assoc ba2 ON b.id = ba2.bench_id
+		WHERE ba2.space_id IN (
+			-- Include the root space and all its descendants via closure table
+			SELECT descendant FROM starexec.closure WHERE ancestor = _root_space_id
+		)
+		  AND ba.attr_key LIKE 'starexec-dependency-%'
+		  AND ba.attr_value IS NOT NULL AND ba.attr_value != ''
+	),
+	-- 2. Walk the path segment-by-segment using the set_assoc table
+	path_walk AS (
+		-- Base case: Starting segments for each dependency
+		SELECT 
+			rd.bench_id, rd.include_path, rd.segments, rd.total_segments,
+			1 as current_level,
+			_root_space_id as current_space_id,
+			CAST(NULL AS INT) as resolved_bench_id,
+			FALSE as is_resolved
+		FROM raw_deps rd
+		
+		UNION ALL
+		
+		-- Recursive step: descend into subspaces or find the target benchmark
+		SELECT 
+			pw.bench_id, pw.include_path, pw.segments, pw.total_segments,
+			pw.current_level + 1,
+			CASE 
+				WHEN pw.current_level < pw.total_segments THEN s.id
+				ELSE pw.current_space_id
+			END,
+			CASE 
+				WHEN pw.current_level = pw.total_segments THEN b.id
+				ELSE NULL
+			END,
+			(pw.current_level = pw.total_segments AND b.id IS NOT NULL)
+		FROM path_walk pw
+		-- For intermediate directory segments, join with spaces via set_assoc
+		LEFT JOIN starexec.set_assoc sa ON sa.space_id = pw.current_space_id
+		LEFT JOIN starexec.spaces s ON s.id = sa.child_id 
+									AND s.name = pw.segments[pw.current_level]
+									AND pw.current_level < pw.total_segments
+		-- For the final segment, join with benchmarks table via bench_assoc
+		LEFT JOIN starexec.bench_assoc ba_target ON ba_target.space_id = pw.current_space_id 
+									AND pw.current_level = pw.total_segments
+		LEFT JOIN starexec.benchmarks b ON b.id = ba_target.bench_id 
+									AND b.name = pw.segments[pw.current_level]
+		WHERE pw.current_level <= pw.total_segments
+		  AND NOT pw.is_resolved
+		  -- Keep walking only if we found the next segment (space or benchmark)
+		  AND (s.id IS NOT NULL OR b.id IS NOT NULL)
+	)
+	SELECT bench_id, resolved_bench_id, include_path
+	FROM path_walk
+	WHERE is_resolved = TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Atomic batch insertion of resolved dependencies for a space hierarchy.
+-- Uses ON CONFLICT to ensure idempotency.
+-- Returns counts of successful and failed resolutions.
+-- Author: AI Assistant (Refactoring v3)
+DROP FUNCTION IF EXISTS starexec.InsertResolvedDependencies(INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.InsertResolvedDependencies(_root_space_id INT)
+RETURNS TABLE(inserted_count INT, total_found INT) AS $$
+DECLARE
+	v_inserted INT := 0;
+	v_total INT := 0;
+BEGIN
+	-- 1. Perform batch resolution and insert into bench_dependency
+	INSERT INTO starexec.bench_dependency (primary_bench_id, secondary_bench_id, include_path)
+	SELECT r.p_id, r.s_id, r.inc_path
+	FROM starexec.ResolveBenchmarkDependenciesBatch(_root_space_id) r
+	ON CONFLICT (primary_bench_id, secondary_bench_id) 
+	DO UPDATE SET include_path = EXCLUDED.include_path;
+	
+	GET DIAGNOSTICS v_inserted = ROW_COUNT;
+	
+	-- 2. Count total resolutions found
+	SELECT COUNT(*) INTO v_total
+	FROM starexec.ResolveBenchmarkDependenciesBatch(_root_space_id);
+	
+	RETURN QUERY SELECT v_inserted, v_total;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3976,7 +4078,7 @@ CREATE OR REPLACE FUNCTION starexec.GetJobAttributesTableHeaders(_jobSpaceId INT
 RETURNS TABLE(attr_value TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ja.attr_value
+    SELECT ja.attr_value::TEXT
     FROM starexec.job_attributes ja
     INNER JOIN job_pairs jp ON ja.pair_id = jp.id
     WHERE ja.attr_key = 'starexec-result' AND jp.job_space_id = _jobSpaceId
@@ -4021,7 +4123,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ja.attr_value,
+    SELECT ja.attr_value::TEXT,
            COUNT(ja.attr_value)::BIGINT AS attr_count,
            SUM(jsd.wallclock)::BIGINT AS wallclock,
            SUM(jsd.cpu)::BIGINT AS cpu
@@ -5713,11 +5815,12 @@ DROP FUNCTION IF EXISTS starexec.AddChangeEmailRequest CASCADE;
 CREATE OR REPLACE FUNCTION starexec.AddChangeEmailRequest(_userId INT, _newEmail VARCHAR(64), _code VARCHAR(36))
 RETURNS VOID AS $$
 BEGIN
-    INSERT INTO change_email_requests (user_id, new_email, code)
-    VALUES (_userId, _newEmail, _code)
+    INSERT INTO change_email_requests (user_id, new_email, code, requested_at)
+    VALUES (_userId, _newEmail, _code, NOW())
     ON CONFLICT (user_id) DO UPDATE SET
         new_email = EXCLUDED.new_email,
-        code = EXCLUDED.code;
+        code = EXCLUDED.code,
+        requested_at = NOW();
 END;
 $$ LANGUAGE plpgsql;
 
