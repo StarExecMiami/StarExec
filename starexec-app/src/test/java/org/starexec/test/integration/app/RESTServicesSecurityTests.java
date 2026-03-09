@@ -398,14 +398,42 @@ public class RESTServicesSecurityTests extends TestSequence {
 		}
 	}
 
+	private javax.servlet.http.HttpServletRequest getMockRequestWithBody(int userId, Object body) {
+		try {
+			javax.servlet.http.HttpServletRequest request = TestUtil.getMockHttpRequest(userId);
+			String json = new Gson().toJson(body);
+			java.io.InputStream bais = new java.io.ByteArrayInputStream(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			javax.servlet.ServletInputStream sis = new javax.servlet.ServletInputStream() {
+				@Override public int read() throws java.io.IOException { return bais.read(); }
+				@Override public boolean isFinished() { return false; }
+				@Override public boolean isReady() { return true; }
+				@Override public void setReadListener(javax.servlet.ReadListener readListener) {}
+			};
+			org.mockito.Mockito.when(request.getInputStream()).thenReturn(sis);
+			return request;
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+
 	@StarexecTest
 	private void editUserInfoTest() {
-		assertResultIsInvalid(services.editUserInfo("firstname", admin.getId(), "newname",
-				TestUtil.getMockHttpRequest(user.getId())));
-		assertResultIsInvalid(
-				services.editUserInfo("badattr", user.getId(), "newname", TestUtil.getMockHttpRequest(user.getId())));
-		assertResultIsInvalid(services.editUserInfo("firstname", user.getId(), TestUtil.getRandomAlphaString(500),
-				TestUtil.getMockHttpRequest(user.getId())));
+		EditUserAttributeRequest body = new EditUserAttributeRequest();
+		
+		body.setAttribute("firstname");
+		body.setValue("newname");
+		assertResultIsInvalid(services.editUserInfoFromBody(admin.getId(),
+				getMockRequestWithBody(user.getId(), body)));
+				
+		body.setAttribute("badattr");
+		body.setValue("newname");
+		assertResultIsInvalid(services.editUserInfoFromBody(user.getId(),
+				getMockRequestWithBody(user.getId(), body)));
+				
+		body.setAttribute("firstname");
+		body.setValue(TestUtil.getRandomAlphaString(500));
+		assertResultIsInvalid(services.editUserInfoFromBody(user.getId(),
+				getMockRequestWithBody(user.getId(), body)));
 	}
 
 	@StarexecTest

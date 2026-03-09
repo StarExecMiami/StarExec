@@ -50,7 +50,7 @@ public class LocalBackendTests {
 
         backend = new LocalBackend();
         backend.initialize(""); // Initialize the backend
-        existingJobId = backend.submitScript(
+        existingJobId = backend.submitScript(-1, 
             scriptPath.toString(),
             workDir.toString(),
             logPath.toString()
@@ -74,7 +74,7 @@ public class LocalBackendTests {
         Files.createDirectory(newWork);
         Path newLog = tempDir.resolve("log2.txt");
 
-        int newId = backend.submitScript(
+        int newId = backend.submitScript(-1, 
             newScript.toString(),
             newWork.toString(),
             newLog.toString()
@@ -119,7 +119,7 @@ public class LocalBackendTests {
         Files.createDirectory(newWork);
         Path newLog = tempDir.resolve("log3.txt");
 
-        backend.submitScript(
+        backend.submitScript(-1, 
             newScript.toString(),
             newWork.toString(),
             newLog.toString()

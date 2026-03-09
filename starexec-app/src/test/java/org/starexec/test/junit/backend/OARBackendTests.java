@@ -73,7 +73,7 @@ public class OARBackendTests {
 	public void submitScriptGetIdTest() throws IOException {
 		BDDMockito.given(Util.executeCommand(new String[] {"oarsub","-O", "","-E","","-d","",
 				"-l","/cpuset=1","-S",""})).willReturn(submitScriptResults);
-		int id = backend.submitScript("", "", "");
+		int id = backend.submitScript(-1, "", "", "");
 		Assert.assertEquals(id, 23);
 	}
 }
