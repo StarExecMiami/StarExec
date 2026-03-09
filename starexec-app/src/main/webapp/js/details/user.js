@@ -10,7 +10,7 @@ var spaceName;
 * Event listener for page load. We are using https://datatables.net/
 */
 $(document).ready(function() {
-	userId = $("#userId").attr("value");
+	userId = $("#userId").data("user-id");
 	// Hide loading images by default
 	$('legend img').hide();
 
@@ -43,11 +43,11 @@ $(document).ready(function() {
 	});
 
 	$(".recycleSelected").click(function() {
-		recycleSelected($(this).attr("prim"));
+		recycleSelected($(this).data("prim"));
 	});
 
 	$(".recycleOrphaned").click(function() {
-		recycleOrphaned($(this).attr("prim"));
+		recycleOrphaned($(this).data("prim"));
 	});
 
 	$("#deleteJob").click(deleteSelectedJobs);
@@ -197,13 +197,13 @@ function stackTrace() {
 
 //prints ao to see contents
 function printao(elements) {
-	String = '{';
-	var len = elements.length
+	var jsonStr = '{';
+	var len = elements.length;
 	for (let i = 0; i < len - 1; i++) {
-		String += printaoElement(elements[i]) + ",";
+		jsonStr += printaoElement(elements[i]) + ",";
 	}
-	String += elements[len - 1];
-	console.log(elements); 
+	jsonStr += elements[len - 1];
+	console.log(elements);
 }
 
 /*this handles the pagination of the page.

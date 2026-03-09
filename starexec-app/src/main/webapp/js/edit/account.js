@@ -61,9 +61,8 @@ function attachFormValidation() {
 function initDataTables() {
   $("#personal").dataTable({
     sDom: 'rt<"bottom"><"clear">',
-    aaSorting: [],
     bPaginate: false,
-    bSort: true,
+    bSort: false,
   });
 }
 
@@ -98,7 +97,18 @@ function initUI() {
   editable("email");
   // If the client's picture is clicked on, pop it up in a JQuery modal window
   $("#showPicture").click(function (event) {
-    popUp($(this).attr("enlarge"));
+    var uri = $(this).attr("data-enlarge") || $(this).attr("enlarge");
+    if (uri) {
+      popUp(uri);
+    }
+  });
+
+  $("#showPicture").on("keydown", function (event) {
+    var uri = $(this).attr("data-enlarge") || $(this).attr("enlarge");
+    if (uri && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      popUp(uri);
+    }
   });
 
   var getNewBenchmarkingFramework = function () {
@@ -213,7 +223,9 @@ function initUI() {
         s = parseReturnCode(returnData);
       },
       "json"
-    );
+    ).fail(function () {
+      showMessage("error", "Internal error setting default profile", 5000);
+    });
   });
 
   //clear the user's default profile
@@ -243,7 +255,9 @@ function initUI() {
         }
       },
       "json"
-    );
+    ).fail(function () {
+      showMessage("error", "Internal error deleting profile", 5000);
+    });
   });
   $("#useSolver").click(function (e) {
     useSelectedSolver();
@@ -284,6 +298,10 @@ function initUI() {
     sAjaxSource: starexecRoot + "services/",
     sServerMethod: "POST",
     fnServerData: fnSolverPaginationHandler,
+    language: {
+      emptyTable: "No solvers found.",
+      sProcessing: "loading solvers\u2026",
+    },
   });
   $("#solverList").on("mousedown", "tr", function () {
     if ($(this).hasClass("row_selected")) {
@@ -302,6 +320,10 @@ function initUI() {
     sAjaxSource: starexecRoot + "services/",
     sServerMethod: "POST",
     fnServerData: fnBenchmarkPaginationHandler,
+    language: {
+      emptyTable: "No benchmarks found.",
+      sProcessing: "loading benchmarks\u2026",
+    },
   });
   $("#benchmarkList").on("mousedown", "tr", function () {
     if ($(this).hasClass("row_selected")) {
@@ -508,7 +530,7 @@ function editable(attribute) {
           attribute +
           '-field" value="' +
           old +
-          '" />&nbsp;<button class="btn btn-primary" id="save' +
+          '" />&nbsp;<button class="btn btn-secondary" id="save' +
           attribute +
           '">save</button>&nbsp;<button class="btn btn-secondary" id="cancel' +
           attribute +
@@ -555,33 +577,52 @@ function saveChanges(obj, save, attr, old) {
       newVal = convertToBytes(newVal);
     }
 
-    $.post(
-      starexecRoot + "services/edit/user/" + attr + "/" + userId + "/" + newVal,
-      function (returnCode) {
+    // Payload in body (no PII in URL); POST /edit/user/{userId} with JSON body
+    var url = starexecRoot + "services/edit/user/" + userId;
+    var payload = { attribute: attr, value: newVal };
+    if (attr === "email") {
+      $("#save" + attr).prop("disabled", true);
+    }
+    $.ajax({
+      url: url,
+      type: "POST",
+      contentType: "application/json",
+      data: JSON.stringify(payload),
+      dataType: "json",
+      success: function (returnCode) {
+        if (attr === "email") {
+          $("#save" + attr).prop("disabled", false);
+        }
         s = parseReturnCode(returnCode);
         if (s) {
-          // Change newVal to original in case above code modified newVal before call to post
           newVal = unmodifiedNewVal;
-
-          // Hide the input box and replace it with the table cell
+          var msg = returnCode && returnCode.message ? returnCode.message : null;
+          if (msg) {
+            showMessage("success", msg, 5000);
+          }
           $(obj)
             .closest("td")
             .after('<td id="edit' + attr + '">' + newVal + "</td>")
             .remove();
-          // Make the value editable again
           editable(attr);
         } else {
+          var errMsg = returnCode && returnCode.message ? returnCode.message : null;
+          if (errMsg) {
+            showMessage("error", errMsg, 5000);
+          }
           $(obj)
             .closest("td")
             .after('<td id="edit' + attr + '">' + old + "</td>")
             .remove();
-          // Make the value editable again
           editable(attr);
         }
       },
-      "json"
-    ).fail(function () {
-      showMessage("error", "Internal error updating user information", 5000);
+      error: function () {
+        if (attr === "email") {
+          $("#save" + attr).prop("disabled", false);
+        }
+        showMessage("error", "Internal error updating user information", 5000);
+      }
     });
   } else {
     // Hide the input box and replace it with the table cell

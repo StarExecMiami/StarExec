@@ -4,19 +4,212 @@ var selectedId = 0;  // ID of the selected primitive
 var qIdForQueueGraph = 1; // queue id used to select which queuegraph image is displayed; default is 1 because
                           // all.q always exists
 
-// updateQueueGraph() changes the queuegraph image on the cluster page to be the most current one and of the queue
-// currently selected in the Active Queues list (which queue is selected is represented by qIdForQueueGraph).
-// Explicit queueId and timestamp in the URL guarantee context alignment and cache-busting.
+/**
+ * StarExec QueueGraph Module
+ * Handles periodic updates and display of the enqueued pairs graph.
+ */
+star.QueueGraph = (function($) {
+    var config = {
+        elementId: "#queuegraph",
+        initialInterval: 5000,     // Start at 5s
+        minInterval: 5000,         // Min: 5s
+        maxInterval: 60000,        // Max: 60s (1 minute)
+        backoffMultiplier: 1.5,
+        idleThreshold: 3,
+        chart: null,
+        dataPoints: 24             // Default time window in hours
+    };
+
+    var state = {
+        queueId: 1,
+        currentInterval: config.initialInterval,
+        consecutiveEmpty: 0,
+        timer: null,
+        isUpdating: false
+    };
+
+    function fetchData() {
+        return $.ajax({
+            url: starexecRoot + "services/cluster/queues/" + state.queueId + "/metrics/history",
+            data: { windowHours: config.dataPoints }, // Pass the selected time window to the backend
+            dataType: "json"
+        });
+    }
+
+    function updateChart() {
+        if (state.isUpdating) return;
+        state.isUpdating = true;
+
+        fetchData()
+            .done(function(response) {
+                var hasData = response.data && response.data.length > 0;
+
+                if (hasData) {
+                    state.consecutiveEmpty = 0;
+                    state.currentInterval = config.initialInterval;
+                    renderChart(response.data);
+                } else {
+                    state.consecutiveEmpty++;
+                    if (state.consecutiveEmpty > config.idleThreshold) {
+                        // Backoff: increase interval
+                        state.currentInterval = Math.min(
+                            state.currentInterval * config.backoffMultiplier,
+                            config.maxInterval
+                        );
+                    }
+                }
+            })
+            .always(function() {
+                state.isUpdating = false;
+                scheduleNext();
+            });
+    }
+
+    function scheduleNext() {
+        clearTimeout(state.timer);
+        state.timer = setTimeout(updateChart, state.currentInterval);
+    }
+
+    function renderChart(dataPoints) {
+        var ctx = $(config.elementId)[0].getContext('2d');
+        var labels = dataPoints.map(function(p) {
+            return new Date(p.time).toLocaleTimeString();
+        });
+        var sizes = dataPoints.map(function(p) { return p.size; });
+
+        if (config.chart) {
+            config.chart.data.labels = labels;
+            config.chart.data.datasets[0].data = sizes;
+            config.chart.update('none'); // No animation for performance
+        } else {
+            // StarExec dark theme colors from _colors.scss
+            var textColor = '#f8f8f8';
+            var axisColor = '#999999';
+            var gridColor = '#2d2d2d';
+            var accentColor = '#fa621b'; // $accent-orange
+            var accentFill = 'rgba(250, 98, 27, 0.2)';
+
+            // Make the Chart background transparent so the dark container shows through
+            Chart.defaults.backgroundColor = 'transparent';
+
+            config.chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Enqueued Pairs',
+                        data: sizes,
+                        borderColor: accentColor,
+                        tension: 0.3,
+                        fill: true,
+                        backgroundColor: accentFill,
+                        pointBackgroundColor: accentColor,
+                        pointBorderColor: '#0a0a0a',
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointHoverBackgroundColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 0 },
+                    color: textColor,
+                    layout: {
+                        padding: 10
+                    },
+                    plugins: {
+                        legend: { 
+                            display: true,
+                            labels: { color: textColor }
+                        },
+                        tooltip: { 
+                            mode: 'index', 
+                            intersect: false,
+                            backgroundColor: 'rgba(31, 31, 31, 0.9)', // $foreground-color
+                            titleColor: textColor,
+                            bodyColor: textColor,
+                            borderColor: gridColor,
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: axisColor
+                            },
+                            ticks: { 
+                                maxTicksLimit: 10,
+                                color: axisColor 
+                            },
+                            grid: {
+                                color: gridColor,
+                                drawBorder: false
+                            }
+                        },
+                        y: {
+                            display: true,
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Number of Enqueued Pairs',
+                                color: axisColor
+                            },
+                            ticks: { 
+                                color: axisColor 
+                            },
+                            grid: {
+                                color: gridColor,
+                                drawBorder: false
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    return {
+        init: function(queueId) {
+            if (queueId) state.queueId = queueId;
+            
+            // Add event listener to static select menu
+            $("#timeWindowSelect").off("change").on("change", function() {
+                config.dataPoints = parseInt($(this).val());
+                state.currentInterval = config.initialInterval;
+                clearTimeout(state.timer);
+                updateChart();
+            });
+            
+            updateChart();
+        },
+        setQueue: function(queueId) {
+            if (state.queueId !== queueId) {
+                state.queueId = queueId;
+                state.currentInterval = config.initialInterval;
+                clearTimeout(state.timer);
+                updateChart();
+            }
+        },
+        refresh: function() {
+            state.currentInterval = config.initialInterval;
+            updateChart();
+        }
+    };
+})(jQuery);
+
+// Compatibility function for existing calls
 function updateQueueGraph() {
-    var d = new Date();
-    var url = starexecRoot + "secure/clustergraphs/" + qIdForQueueGraph + "_queuegraph.png?queueId=" + qIdForQueueGraph + "&t=" + d.getTime();
-    $("#queuegraph").attr("src", url).attr("alt", "Enqueued pairs over time for queue " + qIdForQueueGraph);
+    star.QueueGraph.setQueue(qIdForQueueGraph);
 }
 
 // When the document is ready to be executed on
 $(document).ready(function() {
-    // call updateQueueGraph() periodically (time in ms)
-    window.setInterval( updateQueueGraph, 5000 );
+    // Start the queue graph updates
+    star.QueueGraph.init(qIdForQueueGraph);
 
 	initDataTables();
 

@@ -33,7 +33,18 @@ $(document).ready(function() {
 	});
 
 	$('img').click(function(event) {
-		PopUp($(this).attr('enlarge'));
+		var uri = $(this).attr('enlarge');
+		if (uri) {
+			PopUp(uri);
+		}
+	});
+
+	$('#showPicture').on('keydown', function(event) {
+		var uri = $(this).attr('enlarge');
+		if (uri && (event.key === 'Enter' || event.key === ' ')) {
+			event.preventDefault();
+			PopUp(uri);
+		}
 	});
 
 });

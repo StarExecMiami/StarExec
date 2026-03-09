@@ -32,6 +32,11 @@ function initUI() {
 	// when the 'update' button is pressed 
 	// Remove all unselected rows from the DOM before submitting
 	$('#processBenchForm').submit(function() {
+		// Ensure CSRF token is present (defensive: capture-phase listener in master.js may not run before this handler in some edge cases)
+		var token = $('meta[name="csrf-token"]').attr("content");
+		if (token && $('#processBenchForm').find('input[name="csrfToken"]').length === 0) {
+			$('#processBenchForm').prepend($("<input>", { type: "hidden", name: "csrfToken", value: token }));
+		}
 		$('#processorSelectionTable tbody')
 		.children('tr')
 		.not('.row_selected')
