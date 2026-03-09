@@ -51,11 +51,19 @@ jobs:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           echo "Running OWASP Dependency Check..."
+          # Only pass the API key flag if the secret is actually configured.
+          # An empty key causes NvdCveClient to throw a format-validation error
+          # before nvdApiFailOnError=false can gate it. Omitting the flag entirely
+          # runs the scan unauthenticated (5 req/30s instead of 50 req/30s).
+          NVD_KEY_FLAG=""
+          if [ -n "${NVD_API_KEY}" ]; then
+            NVD_KEY_FLAG="-Dnvd.api.key=${NVD_API_KEY}"
+          fi
           mvn dependency-check:check \
             -DskipProvidedScope=true \
             -DskipRuntimeScope=false \
             -DskipTestScope=true \
-            -Dnvd.api.key=${NVD_API_KEY} \
+            ${NVD_KEY_FLAG} \
             -Dnvd.api.failOnError=false
       
       - name: Upload dependency check report
