@@ -110,7 +110,8 @@
 **/.podman/
 **/docker-compose.override.yml
 **/.docker/
-**/.dockerignore
+# Track .dockerignore — it is a committed project file, not a local override
+!.dockerignore
 **/.env
 **/.env.*
 **/pvc-render.yaml
