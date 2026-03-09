@@ -60,6 +60,7 @@ VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
 FORCE?=0
 DRY_RUN?=0
+LOCAL?=0
 
 # Container naming (derived from RELEASE_NAME for consistency)
 APP_CONTAINER=$(RELEASE_NAME)-app
@@ -227,30 +228,33 @@ help:
 
 build:
 	@echo "Building image: $(RELEASE_NAME):$(IMAGE_TAG)"
-	podman build -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
-	@podman images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
+	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-fresh:
 	@echo "Building fresh image (no cache): $(RELEASE_NAME):$(IMAGE_TAG)"
-	podman build --no-cache -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build --no-cache -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Fresh image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
-	@podman images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
+	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-prod:
 	@echo "Building production image"
 	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-1.0.0}; \
-	podman build -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
+	$(PODMAN_CMD) build -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "${GREEN}✓ Production image built successfully ${RESET}"
 	@echo "  Image: $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
-	@podman images --format "  Size: {{.Size}}" $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION
+	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION
 	@echo "Push with: podman push $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
 
 image:
 	@echo "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
 	@# For 'latest' or 'dev' tags, we should at least attempt to check for updates from the registry
-	@if [ "$(IMAGE_TAG)" = "latest" ] || [ "$(IMAGE_TAG)" = "dev" ]; then \
+	@# Set LOCAL=1 to skip the registry pull and always use the locally-built image.
+	@if [ "$(LOCAL)" = "1" ]; then \
+		echo "${YELLOW}LOCAL=1: Skipping registry pull, using local image only${RESET}"; \
+	elif [ "$(IMAGE_TAG)" = "latest" ] || [ "$(IMAGE_TAG)" = "dev" ]; then \
 		echo "Rolling tag detected ($(IMAGE_TAG)). Checking registry for updates..."; \
 		if $(PODMAN_CMD) pull $(IMAGE_NAME):$(IMAGE_TAG) 2>/dev/null; then \
 			echo "${GREEN}✓ Successfully checked/pulled $(IMAGE_NAME):$(IMAGE_TAG)${RESET}"; \
@@ -291,18 +295,18 @@ JOB_RUNNER_LOCAL_IMAGE?=starexec/job-runner
 # Pull the production job-runner image from GHCR (recommended)
 pull-job-runner:
 	@echo "Pulling job-runner image from GHCR: $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)"
-	podman pull $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
+	$(PODMAN_CMD) pull $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
 	@echo "${GREEN}✓ Job runner image pulled successfully: ${RESET}"
-	@podman images --format "  Size: {{.Size}}" $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
+	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(JOB_RUNNER_IMAGE):$(JOB_RUNNER_TAG)
 
 # Build job-runner locally (for development only)
 build-job-runner:
 	@echo "Building job-runner image locally (Alpine): $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)"
 	@echo "Note: Production deployments should use 'make pull-job-runner' instead"
-	podman build -t $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG) -f docker/job-runner.Dockerfile .
+	$(PODMAN_CMD) build -t $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG) -f docker/job-runner.Dockerfile .
 	@echo "${GREEN}✓ Job runner image built successfully: ${RESET}"
 	@echo "  Image: $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)"
-	@podman images --format "  Size: {{.Size}}" $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)
+	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(JOB_RUNNER_LOCAL_IMAGE):$(JOB_RUNNER_TAG)
 
 # ============================================================================
 # VOLUME MANAGEMENT (Podman Named Volumes - RECOMMENDED APPROACH)
@@ -318,7 +322,7 @@ volumes-list:
 volumes-backup: verify-deps
 	@echo "Backing up volumes for environment: $(ENV)"
 	@# Safety check: warn if containers are running during backup
-	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
+	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
 		echo ""; \
 		echo "${YELLOW}⚠️  WARNING: StarExec containers are currently RUNNING${RESET}"; \
 		echo "${YELLOW}   For a consistent backup, consider stopping first:${RESET}"; \
@@ -345,7 +349,7 @@ volumes-restore: verify-deps
 	@# =========================================================================
 	@echo "Restore requires timestamp. Available backups:"
 	@# Safety check: ensure containers are stopped before restore
-	@if podman pod exists $(POD_NAME) 2>/dev/null || podman pod exists starexec 2>/dev/null; then \
+	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
 		echo ""; \
 		echo "${RED}╔══════════════════════════════════════════════════════════════╗${RESET}"; \
 		echo "${RED}║  ⚠️  DANGER: StarExec is currently RUNNING!                   ║${RESET}"; \
@@ -449,7 +453,7 @@ volumes-help:
 
 db-shell:
 	@echo "Opening PostgreSQL shell (container must be running)"
-	@if ! podman container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
+	@if ! $(PODMAN_CMD) container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
 		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
 		exit 1; \
 	fi
@@ -462,7 +466,7 @@ db-shell:
 	); \
 	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
-	PGPASSWORD="$$DB_PASS" podman exec -it $(DB_CONTAINER) psql -U "$$DB_USER" -d "$$DB_NAME"
+	PGPASSWORD="$$DB_PASS" $(PODMAN_CMD) exec -it $(DB_CONTAINER) psql -U "$$DB_USER" -d "$$DB_NAME"
 
 db-dump:
 	@echo "Creating PostgreSQL dump (uses volume script if available)"
@@ -556,7 +560,7 @@ migrate-podman:
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
-	@if ! podman container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
+	@if ! $(PODMAN_CMD) container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
 		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
 		exit 1; \
 	fi
@@ -571,7 +575,7 @@ migrate-podman:
 	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
 	DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
 	for i in 1 2 3 4 5; do \
-		if podman exec $(DB_CONTAINER) pg_isready -h localhost -p 5432 -U"$$DB_USER" >/dev/null 2>&1; then \
+		if $(PODMAN_CMD) exec $(DB_CONTAINER) pg_isready -h localhost -p 5432 -U"$$DB_USER" >/dev/null 2>&1; then \
 			echo "PostgreSQL is ready"; \
 			break; \
 		fi; \
@@ -606,23 +610,39 @@ define cleanup_deployment
 	@# The label 'app.kubernetes.io/instance' is standard for Helm.
 	@POD_IDS=$$($(PODMAN_CMD) pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Id}}"); \
 	if [ -n "$$POD_IDS" ]; then \
-		echo "  Removing existing pod(s) with label app.kubernetes.io/instance=$(RELEASE_NAME)"; \
-		echo "$$POD_IDS" | xargs $(PODMAN_CMD) pod rm -f || { \
-			echo "⚠️  Pod removal reported error (likely network cleanup race), verifying..."; \
-			REMAINING=$$($(PODMAN_CMD) pod ls --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" -q); \
-			if [ -n "$$REMAINING" ]; then \
-				echo "${RED}❌ Error: Pods still exist: $$REMAINING${RESET}"; \
-				exit 1; \
+		echo "  Initiating graceful shutdown (10s timeout) for pods with label app.kubernetes.io/instance=$(RELEASE_NAME)..."; \
+		for pod in $$POD_IDS; do \
+			$(PODMAN_CMD) pod stop -t 10 $$pod || true; \
+			echo "  Attempting forceful removal of pod $$pod..."; \
+			if ! $(PODMAN_CMD) pod rm -f $$pod 2>/dev/null; then \
+				echo "  ⚠️  Initial removal failed. Verifying pod state..."; \
+				if $(PODMAN_CMD) pod exists $$pod; then \
+					echo "  ⏳ Pod hanging. Allowing network namespaces to settle (3s)..."; \
+					sleep 3; \
+					echo "  🔄 Retrying removal with extended timeout..."; \
+					$(PODMAN_CMD) pod rm -f -t 30 $$pod || { \
+						echo "${RED}❌ CRITICAL: Podman deadlock on pod $$pod${RESET}"; \
+						exit 1; \
+					}; \
+				else \
+					echo "  ${GREEN}✓ Phantom failure: Pod $$pod was removed successfully.${RESET}"; \
+				fi; \
 			else \
-				echo "${GREEN}✓ Pods successfully removed despite error message${RESET}"; \
+				echo "  ${GREEN}✓ Pod $$pod removed cleanly.${RESET}"; \
 			fi; \
-		}; \
+		done; \
 	fi
 	@# Fallback for older naming scheme to ensure full cleanup during transition
 	@for pod in starexec starexec-pod $(POD_NAME); do \
 		if $(PODMAN_CMD) pod exists $$pod 2>/dev/null; then \
 			echo "  Removing existing pod by legacy name: $$pod"; \
-			$(PODMAN_CMD) pod rm -f $$pod 2>/dev/null || true; \
+			$(PODMAN_CMD) pod stop -t 10 $$pod || true; \
+			if ! $(PODMAN_CMD) pod rm -f $$pod 2>/dev/null; then \
+				if $(PODMAN_CMD) pod exists $$pod; then \
+					sleep 3; \
+					$(PODMAN_CMD) pod rm -f -t 30 $$pod || exit 1; \
+				fi; \
+			fi; \
 		fi \
 	done
 	@# Clean up secrets associated with the release. Note: 'label' filter not supported for secrets in some Podman versions.
@@ -808,9 +828,9 @@ clean-cache:
 		exit 1; \
 	fi
 	@echo "Pruning system..."
-	@podman system prune -a -f || { echo "${RED}✗ Error during system prune${RESET}"; exit 1; }
+	@$(PODMAN_CMD) system prune -a -f || { echo "${RED}✗ Error during system prune${RESET}"; exit 1; }
 	@echo "Pruning builder cache..."
-	@podman builder prune -a -f 2>/dev/null || true
+	@$(PODMAN_CMD) builder prune -a -f 2>/dev/null || true
 	@echo "${GREEN}✓ Build cache cleared successfully${RESET}"
 
 clean-all: clean-podman volumes-delete
@@ -936,18 +956,28 @@ LOG_LINES_DB?=30
 
 logs:
 	@echo "=== Application Logs (last $(LOG_LINES_APP) lines) ==="
-	@$(PODMAN_CMD) logs --tail $(LOG_LINES_APP) $($(PODMAN_CMD) ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1) 2>&1 || echo "App container not running"
+	@CONTAINER=$$($(PODMAN_CMD) ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		$(PODMAN_CMD) logs --tail $(LOG_LINES_APP) "$$CONTAINER" 2>&1; \
+	else \
+		echo "App container not running"; \
+	fi
 	@echo ""
 	@echo "=== PostgreSQL Logs (last $(LOG_LINES_DB) lines) ==="
-	@podman logs --tail $(LOG_LINES_DB) $$(podman ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1) 2>&1 || echo "Postgres container not running"
+	@$(PODMAN_CMD) logs --tail $(LOG_LINES_DB) $$($(PODMAN_CMD) ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1) 2>&1 || echo "Postgres container not running"
 
 logs-app:
 	@echo "Following application logs (Ctrl+C to stop)..."
-	@podman logs -f $$(podman ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1)
+	@CONTAINER=$$($(PODMAN_CMD) ps --filter "ancestor=$(RELEASE_NAME)" --format "{{.Names}}" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		$(PODMAN_CMD) logs -f "$$CONTAINER"; \
+	else \
+		echo "App container not running"; \
+	fi
 
 logs-postgres:
 	@echo "Following PostgreSQL logs (Ctrl+C to stop)..."
-	@podman logs -f $$(podman ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1)
+	@$(PODMAN_CMD) logs -f $$($(PODMAN_CMD) ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1)
 
 test: test-deps
 	@mvn test
@@ -956,26 +986,26 @@ test-deps:
 	@echo "${BOLD}Testing job execution dependencies in container...${RESET}"
 	@echo ""
 	@echo "${BOLD}=== Installed Packages ===${RESET}"
-	@podman exec $(APP_CONTAINER) apk list --installed | grep -E "bash|util-linux|postgresql-client|procps" || true
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) apk list --installed | grep -E "bash|util-linux|postgresql-client|procps" || true
 	@echo ""
 	@echo "${BOLD}=== Tool Versions ===${RESET}"
-	@podman exec $(APP_CONTAINER) bash -c "echo 'bash:' && bash --version | head -1"
-	@podman exec $(APP_CONTAINER) bash -c "echo 'flock:' && flock --version"
-	@podman exec $(APP_CONTAINER) bash -c "echo 'lscpu:' && lscpu --version"
-	@podman exec $(APP_CONTAINER) bash -c "echo 'psql:' && psql --version"
-	@podman exec $(APP_CONTAINER) bash -c "echo 'ps:' && ps --version"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "echo 'bash:' && bash --version | head -1"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "echo 'flock:' && flock --version"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "echo 'lscpu:' && lscpu --version"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "echo 'psql:' && psql --version"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "echo 'ps:' && ps --version"
 	@echo ""
 	@echo "${BOLD}=== Command Availability ===${RESET}"
-	@podman exec $(APP_CONTAINER) bash -c "which bash flock lscpu psql ps runsolver"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "which bash flock lscpu psql ps runsolver"
 	@echo ""
 	@echo "${BOLD}=== Test ps -p Command ===${RESET}"
-	@podman exec $(APP_CONTAINER) bash -c 'ps -p $$$$ -o pid,cmd'
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c 'ps -p $$$$ -o pid,cmd'
 	@echo ""
 	@echo "${BOLD}=== Test flock -w Command ===${RESET}"
-	@podman exec $(APP_CONTAINER) bash -c "timeout 2 flock -x -w 1 /tmp/test.lock echo 'flock -w works!'"
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) bash -c "timeout 2 flock -x -w 1 /tmp/test.lock echo 'flock -w works!'"
 	@echo ""
 	@echo "${BOLD}=== CPU Info ===${RESET}"
-	@podman exec $(APP_CONTAINER) lscpu | head -10
+	@$(PODMAN_CMD) exec $(APP_CONTAINER) lscpu | head -10
 	@echo ""
 	@echo "${GREEN}✓ All job execution dependencies validated${RESET}"
 
