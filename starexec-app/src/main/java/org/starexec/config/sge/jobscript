@@ -270,10 +270,12 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		LOCAL_CONFIG_PATH="$LOCAL_SOLVER_DIR/bin/starexec_run_$CONFIG_NAME"
 	fi
 
+	SOFT_TIME_LIMIT_FLAG=""
 	if [ $SOFT_TIME_LIMIT -ne 0 ]; then
 		SOFT_TIME_LIMIT_FLAG="--softtimelimit $SOFT_TIME_LIMIT"
 	fi
 
+	KILL_DELAY_FLAG=""
 	if [ $KILL_DELAY -ne 0 ]; then
 		KILL_DELAY_FLAG="-d $KILL_DELAY"
 	fi
@@ -561,13 +563,25 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		fi
 	elif [ "$BENCHMARKING_FRAMEWORK" == "$RUNSOLVER" ]; then
 		log "Checking for errors for runsolver."
-		if (grep 'job error:' "$SGE_STDOUT_PATH" > /dev/null) then
-			ERROR_DETECTED=true
-		elif (grep 'wall clock time exceeded' "$WATCHFILE" ) || [ "$JOB_PAIR_DEADLOCKED" = true ]; then
-			sendWallclockExceededStatus
+		# SGE_STDOUT_PATH only exists under Grid Engine; in container mode use WATCHFILE.
+		_err_source="${SGE_STDOUT_PATH:-$WATCHFILE}"
+		
+		# Mitigate I/O race condition: wait up to 2 seconds for the kernel to flush buffers
+		# after runsolver process termination. This is safer than a global 'sync'.
+		for i in {1..20}; do
+			if [ -s "$_err_source" ]; then
+				break
+			fi
+			sleep 0.1
+		done
+
+		if [ -s "$_err_source" ] && grep -q 'job error:' "$_err_source"; then
 			ERROR_DETECTED=true
 		elif (grep 'CPU time exceeded' "$WATCHFILE" ) then
 			sendCpuExceededStatus
+			ERROR_DETECTED=true
+		elif (grep 'wall clock time exceeded' "$WATCHFILE" ) || [ "$JOB_PAIR_DEADLOCKED" = true ]; then
+			sendWallclockExceededStatus
 			ERROR_DETECTED=true
 		elif (grep 'VSize exceeded' "$WATCHFILE" ) then
 			sendExceedMemStatus
@@ -589,7 +603,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 		if ((STAGE_INDEX == NUM_STAGES - 1)); then
 			log "job finished successfully"
-			sendStatus "$STATUS_COMPLETE"
+			sendStatus "$STATUS_COMPLETE" "${STAGE_NUMBERS[STAGE_INDEX]}"
 		fi
 		log "STAREXEC job $PAIR_ID completed successfully"
 	else
@@ -597,6 +611,14 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		sendStatusToLaterStages "$STATUS_NOT_REACHED" "${STAGE_NUMBERS[STAGE_INDEX]}"
 		setRunStatsToZeroForLaterStages "${STAGE_NUMBERS[STAGE_INDEX]}"
 		cleanUpAfterKilledBuildJob
+		# Clean up working directory before exiting — same work as the normal
+		# post-stage cleanup, but we must do it here because the break below
+		# skips the universal cleanForNextStage call that follows this block.
+		cleanForNextStage
+		# A terminal error in any stage means later stages have no valid input;
+		# executing them wastes compute and produces uninterpretable results.
+		# LocalJobMonitor will mark unseen stages as STATUS_NOT_REACHED.
+		break
 	fi
 
 	if [ $BUILD_JOB == "true" ]; then
