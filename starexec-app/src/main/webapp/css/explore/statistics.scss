@@ -1,6 +1,41 @@
+// Override the global fieldset { width: 600px } rule from shared.css.
+// max-width prevents illegible ultra-wide bars on 4K/ultrawide monitors;
+// auto width + margin: 0 auto centres the content at any viewport size.
+#statistics,
+#statsTableField,
+#graph {
+	width: auto;
+	max-width: 1200px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+// Active state for the graph-type toggle buttons
+.compareBtn {
+	&.active,
+	&[aria-pressed="true"] {
+		outline: 2px solid var(--color-accent-blue, #3b82f6);
+		outline-offset: 2px;
+		font-weight: 700;
+	}
+}
+
+// Empty state shown when the community info object has no entries
+#communityEmptyState {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	color: var(--color-text-secondary, #999);
+	font-style: italic;
+}
+
 @media only screen and (max-width: 767px) {
-	#statistics {
+	#statistics,
+	#statsTableField,
+	#graph {
 		width: 100%;
+		max-width: 100%;
 	}
 
 	#statsTable {
@@ -11,10 +46,6 @@
 		font-size: 12px;
 	}
 
-	#graph {
-		width: 85%;
-	}
-
 	body td {
 		text-align: center;
 	}
@@ -23,7 +54,7 @@
 		text-align: center;
 	}
 
-	#statsTable tr > *:nth-child(3), #statsTable tr > *:nth-child(4), #statsTable tr > *:nth-child(5), #statsTable tr > *:nth-child(6)  {
+	#statsTable tr > *:nth-child(3), #statsTable tr > *:nth-child(4), #statsTable tr > *:nth-child(5), #statsTable tr > *:nth-child(6) {
 		display: none;
 	}
 }
