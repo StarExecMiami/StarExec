@@ -669,7 +669,13 @@ function sendStatusToLaterStages {
 	local STATUS=$(($1))
 	log "sending status for stage numbers greater than $STAGE_NUMBER"
 	if isContainerMode; then
-		containerWriteStatus $STATUS $STAGE_NUMBER
+		# Container mode: status.json is a single file — writing NOT_REACHED here
+		# would overwrite the terminal status (e.g. EXCEED_RUNTIME) just recorded
+		# for the current stage. The jobscript loop breaks immediately after this
+		# call, so no later stage will write a competing status.json. LocalJobMonitor
+		# reads the stageNumber from status.json and calls UpdatePairStatusPrecise
+		# to atomically mark subsequent stages as STATUS_NOT_REACHED in the DB.
+		log "Container mode: later-stage status marking delegated to LocalJobMonitor"
 	else
 		dbExec "CALL UpdateLaterStageStatuses($PAIR_ID, $STAGE_NUMBER, $STATUS)"
 	fi
@@ -685,9 +691,10 @@ function setRunStatsToZeroForLaterStages {
 
 function sendStatus {
 	local STATUS=$(($1))
+	local STAGE_NUM=${2:-0}
 	log "sending job status $STATUS"
 	if isContainerMode; then
-		containerWriteStatus $STATUS 0
+		containerWriteStatus "$STATUS" "$STAGE_NUM"
 	else
 		dbExec "CALL UpdatePairStatus($PAIR_ID, $STATUS)"
 	fi
