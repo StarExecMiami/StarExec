@@ -24,11 +24,16 @@
 		return;
 	}
 %>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Move Nodes to Queue"
                js="util/selectInDatatable, admin/moveNodes, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
                css="common/table, details/shared, explore/common, explore/spaces, admin/admin">
 	<form id="addForm" method="POST" action="${starexecRoot}/secure/move/nodes"
 	      class="queue">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<fieldset id="fieldStep1">
 			<legend>Move nodes to queue</legend>
 			<table id="tblConfig" class="shaded contentTbl">

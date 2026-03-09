@@ -22,11 +22,16 @@
 		return;
 	}
 %>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Create Queue"
                js="add/queue, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min,lib/jquery.validate.min"
                css="common/table, details/shared, explore/common, explore/spaces, admin/admin">
 	<form id="addForm" method="POST" action="${starexecRoot}/secure/add/queue"
 	      class="queue">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<fieldset id="fieldStep1">
 			<legend>Add a queue</legend>
 			<table id="tblConfig" class="shaded contentTbl">

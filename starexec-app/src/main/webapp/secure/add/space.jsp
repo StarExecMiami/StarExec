@@ -39,9 +39,14 @@
 	}
 %>
 
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Add Subspace to ${space.name}" css="add/space"
                js="lib/jquery.validate.min, add/space">
 	<form id="addForm" method="post" action="${pageContext.request.contextPath}/secure/add/space">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<input type="hidden" name="parent" value="${space.id}"/>
 		<fieldset>
 			<legend>new space</legend>

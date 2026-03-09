@@ -58,11 +58,15 @@
 	}
 %>
 
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Upload Benchmarks to ${space.name}"
                css="common/delaySpinner, add/benchmark"
                js="common/delaySpinner, lib/jquery.validate.min, add/benchmarks, lib/jquery.qtip.min">
 	<form id="uploadForm" enctype="multipart/form-data" method="POST"
-	      action="${starexecRoot}/secure/upload/benchmarks">
+	      action="${starexecRoot}/secure/upload/benchmarks?csrfToken=${csrfToken}">
 		<input type="hidden" name="space" value="${space.id}"/>
 		<fieldset>
 			<legend>upload benchmarks</legend>
@@ -192,7 +196,8 @@
 					<td><select id="depRoot" name="depRoot">
 						<c:forEach var="uSp" items="${userSpaces}">
 							<option value="${uSp.id}"
-							        title="${uSp.description}">${uSp.name}
+							        title="${uSp.description}"
+							        <c:if test="${uSp.id == space.id}">selected="selected"</c:if>>${uSp.name}
 								(${uSp.id})
 							</option>
 						</c:forEach>

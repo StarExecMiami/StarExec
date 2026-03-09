@@ -34,12 +34,16 @@
 		return;
 	}
 %>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template
 		title="upload XML representation of space hierarchy to ${space.name}"
 		css="common/delaySpinner, add/batchSpace"
 		js="common/delaySpinner, lib/jquery.validate.min, add/batchSpace">
 	<form method="POST" enctype="multipart/form-data"
-	      action="${starexecRoot}/secure/upload/space" id="upForm"
+	      action="${starexecRoot}/secure/upload/space?csrfToken=${csrfToken}" id="upForm"
 	      aria-labelledby="upload-legend">
 		<input type="hidden" name="space" value="${space.id}"/>
 		<fieldset>

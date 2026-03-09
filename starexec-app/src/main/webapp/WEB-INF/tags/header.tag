@@ -14,11 +14,11 @@
 		
 	</div>
 	<c:if test="${!isLocalJobPage}">
-		<c:if test="${empty user || (user.role != 'unauthorized' && user.role != 'suspended')}">
+		<c:if test="${empty sessionScope.user || (sessionScope.user.role != 'unauthorized' && sessionScope.user.role != 'suspended')}">
 		<div id="starexecNavWrapper">
 			<nav role="navigation" aria-label="Main navigation">
 				<ul role="menubar">
-					<c:if test="${user.role == 'admin' || user.role == 'developer'}">
+					<c:if test="${sessionScope.user.role == 'admin' || sessionScope.user.role == 'developer'}">
 						<li role="none">
 							<a href="#" role="menuitem" aria-haspopup="true" aria-expanded="false">Admin</a>
 							<ul class="subnav" role="menu" aria-label="Admin submenu">
@@ -33,11 +33,11 @@
 							</ul>
 						</li>
 					</c:if>
-					<c:if test="${not empty user}">
-						<li role="none">
-							<a href="#" role="menuitem" aria-haspopup="true" aria-expanded="false">Account</a>
-							<ul class="subnav" role="menu" aria-label="Account submenu">
-								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/details/user.jsp?id=${user.id}">Profile</a></li>
+				<c:if test="${not empty sessionScope.user}">
+					<li role="none">
+						<a href="#" role="menuitem" aria-haspopup="true" aria-expanded="false">Account</a>
+						<ul class="subnav" role="menu" aria-label="Account submenu">
+							<li role="none"><a role="menuitem" href="${starexecRoot}/secure/details/user.jsp?id=${sessionScope.user.id}">Profile</a></li>
 								<li role="none"><button type="button" role="menuitem" id="logoutLink" class="menu-button">Logout</button></li>
 							</ul>
 						</li>

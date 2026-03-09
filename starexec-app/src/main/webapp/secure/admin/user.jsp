@@ -22,20 +22,20 @@
 			</div>
 		</c:if>
 		<ul id="actionList">
-			<li><a type="btnRun" id="addUser"
+			<li><a id="addUser"
 			       href="${starexecRoot}/secure/admin/addUser.jsp">Create New
 				User</a></li>
 		</ul>
-		<table id="users">
+		<table id="users" role="table" aria-label="User administration table">
 			<thead>
 			<tr>
-				<th style="width:${columnWidth};">name</th>
-				<th style="width:${columnWidth};">institution</th>
-				<th style="width:200px;">email</th>
-				<th style="width:${columnWidth};">permissions</th>
-				<th style="width:${columnWidth};">suspend</th>
-				<th style="width:${columnWidth};">reports</th>
-				<th style="width:${columnWidth};">developer</th>
+				<th scope="col" style="width:${columnWidth};">name</th>
+				<th scope="col" style="width:${columnWidth};">institution</th>
+				<th scope="col" style="width:200px;">email</th>
+				<th scope="col" style="width:${columnWidth};">permissions</th>
+				<th scope="col" style="width:${columnWidth};">suspend</th>
+				<th scope="col" style="width:${columnWidth};">reports</th>
+				<th scope="col" style="width:${columnWidth};">developer</th>
 			</tr>
 			</thead>
 		</table>

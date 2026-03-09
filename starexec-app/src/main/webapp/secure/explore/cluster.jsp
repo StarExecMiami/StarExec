@@ -2,7 +2,7 @@
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 
 <star:template title="Compute Cluster"
-               js="common/format, lib/jquery.dataTables.min, lib/jquery.jstree, shared/sharedFunctions, explore/cluster, lib/jquery.progressbar.min, lib/jquery.heatcolor.0.0.1.min"
+               js="lib/chart.min, common/format, lib/jquery.dataTables.min, lib/jquery.jstree, shared/sharedFunctions, explore/cluster, lib/jquery.progressbar.min, lib/jquery.heatcolor.0.0.1.min"
                css="explore/cluster, common/table, explore/common, shared/cluster">
 	<div id="explorer">
 		<h3>Active Queues</h3>
@@ -61,9 +61,15 @@
 		</fieldset>
 
 		<fieldset id="graphs">
-			<legend>graphs</legend>
-			<%-- "default the queuegraph image to all.q (1) because all.q always exists" --%>
-			<img id="queuegraph" src="${starexecRoot}/secure/clustergraphs/1_queuegraph.png" width="400" height="400" alt="Enqueued pairs over time for selected queue"/>
+			<legend>Graphs</legend>
+			<select id="timeWindowSelect" class="form-select">
+				<option value="1">Last 1 Hour (Real-time)</option>
+				<option value="6">Last 6 Hours</option>
+				<option value="24" selected>Last 24 Hours</option>
+			</select>
+			<div id="queueGraphContainer">
+				<canvas id="queuegraph" aria-label="Enqueued pairs over time chart"></canvas>
+			</div>
 		</fieldset>
 	</div>
 </star:template>

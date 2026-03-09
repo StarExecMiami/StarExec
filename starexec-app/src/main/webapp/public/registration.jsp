@@ -13,6 +13,10 @@
     request.setAttribute("msgLen", DB.MSG_LEN);
 %>
 
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="User Registration"
                css="accounts/registration, components/form"
                js="lib/jquery.validate.min, lib/jquery.validate.password, accounts/registration">
@@ -43,6 +47,7 @@
               action="${starexecRoot}/public/registration/manager"
               id="regForm" 
               class="registration-form">
+          <input type="hidden" name="csrfToken" value="${csrfToken}"/>
           
           <!-- Personal Information Section -->
           <section class="form-section" aria-labelledby="personal-info-heading">

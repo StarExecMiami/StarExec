@@ -31,12 +31,17 @@
 	}
 %>
 
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Process Benchmarks"
                css="common/delaySpinner, common/table, edit/processBenchmarks, edit/shared"
                js=" common/delaySpinner, lib/jquery.validate.min, edit/processBenchmarks ">
 
 	<form id="processBenchForm" method="post"
 	      action="${starexecRoot}/secure/process/benchmarks">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<input type="hidden" name="sid" id="sid" value="${sid}"/>
 		<fieldset>
 			<legend>benchmark processors</legend>

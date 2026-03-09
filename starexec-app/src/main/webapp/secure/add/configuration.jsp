@@ -42,10 +42,14 @@
 		return;
 	}
 %>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Add Configuration to ${solver.name}" css="add/configuration"
                js="lib/jquery.validate.min, add/configuration">
 	<form method="POST" enctype="multipart/form-data"
-	      action="${starexecRoot}/secure/upload/configurations"
+	      action="${starexecRoot}/secure/upload/configurations?csrfToken=${csrfToken}"
 	      id="uploadConfigForm">
 		<input type="hidden" name="solverId" value="${solver.id}"/>
 		<fieldset id="upload">
@@ -83,6 +87,7 @@
 	</form>
 	<form method="POST" action="${starexecRoot}/secure/save/configurations"
 	      id="saveConfigForm">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<input type="hidden" name="solverId" value="${solver.id}"/>
 		<fieldset id="save">
 			<legend>write a configuration</legend>

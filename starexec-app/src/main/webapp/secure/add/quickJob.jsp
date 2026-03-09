@@ -79,6 +79,10 @@
 	}
 %>
 <jsp:useBean id="now" class="java.util.Date"/>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Run Quick Job"
                css="common/delaySpinner, common/table, add/quickJob"
                js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/quickJob, lib/jquery.dataTables.min, lib/jquery.qtip.min">
@@ -90,6 +94,7 @@
 	<%-- Space ID field using data attribute for JavaScript access --%>
 	<input type="hidden" id="spaceIdField" data-space-id="${spaceId}" />
 	<form id="addForm" method="post" action="${starexecRoot}/secure/add/job">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<input type="hidden" name="runChoice" value="quickJob"/>
 		<input type="hidden" name="seed" value="0"/>
 		<input type="hidden" name="sid" value="${spaceId}"/>

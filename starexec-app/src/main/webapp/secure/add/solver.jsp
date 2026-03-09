@@ -50,6 +50,10 @@
 		return;
 	}
 %>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Upload Solver to ${space.name}"
                css="common/delaySpinner, add/solver"
                js="common/delaySpinner ,lib/jquery.validate.min, add/solver">
@@ -57,7 +61,7 @@
 	      value="${defaultProfile}"></span>
 
 	<form method="POST" enctype="multipart/form-data"
-	      action="${starexecRoot}/secure/upload/solvers" id="upForm"
+	      action="${starexecRoot}/secure/upload/solvers?csrfToken=${csrfToken}" id="upForm"
 	      flag="false">
 		<input type="hidden" name="space" value="${space.id}"/>
 		<fieldset>

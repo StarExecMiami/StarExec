@@ -54,6 +54,9 @@
     <listener>
         <listener-class>org.starexec.servlets.UploadJobWorker</listener-class>
     </listener>
+    <listener>
+        <listener-class>org.starexec.servlets.EmailExecutorContextListener</listener-class>
+    </listener>
 
     <!-- ========================= -->
     <!--        Servlets            -->

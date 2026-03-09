@@ -107,7 +107,8 @@
 			<star:settings setting="${setting}"/>
 		</c:forEach>
 
-		<div id="popDialog" role="dialog" aria-labelledby="popDialog-title" aria-hidden="true">
+		<div id="popDialog" role="dialog" aria-labelledby="popDialog-title" aria-modal="true" aria-hidden="true">
+			<h2 id="popDialog-title" class="sr-only">Profile picture</h2>
 			<img id="popImage" src="" alt="Profile picture"/>
 		</div>
 
@@ -117,19 +118,13 @@
 			<h2>Personal Information</h2>
 			<table id="infoTable" data-user-id="${userId}" role="presentation">
 				<tr>
-					<td id="picSection">
-						<img id="showPicture"
-						     src="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uthn"
-						     alt="User profile picture"
-						     data-enlarge="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uorg">
-						<nav aria-label="Picture actions">
-							<ul>
-								<li><a class="btn btn-primary" id="uploadPicture"
-								       href="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}">Change Picture</a>
-								</li>
-							</ul>
-						</nav>
-					</td>
+					<star:picSection thumbSrc="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uthn"
+					                 enlargeSrc="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uorg"
+					                 altText="User profile picture"
+					                 showChangeLink="true"
+					                 changeLinkUrl="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}"
+					                 changeLinkLabel="Change Picture"
+					                 useDataEnlarge="true" />
 					<td id="userDetail">
 						<table id="personal" class="shaded" role="table" aria-label="Personal information">
 							<thead>
@@ -160,7 +155,7 @@
 					</td>
 				</tr>
 			</table>
-			<p class="help-text">(Click the current value of an attribute to edit it)</p>
+			<p class="help-text">(Click on a value to edit it, then click Save or Cancel to confirm)</p>
 		</section>
 
 		<c:if test="${hasAdminReadPrivileges}">
@@ -227,7 +222,7 @@
 						<td><a href="${fn:escapeXml(s.url)}" rel="external">${fn:escapeXml(s.name)}<img class="extLink"
 						                                     src="${starexecRoot}/images/external.png" alt="External link"/></a>
 						</td>
-						<td><button class="btn btn-danger delWebsite" data-id="${s.id}" type="button">Delete</button></td>
+						<td><button class="btn btn-secondary delWebsite" data-id="${s.id}" type="button">Delete</button></td>
 					</tr>
 				</c:forEach>
 				</tbody>
@@ -241,11 +236,11 @@
 				<input type="text" id="website_name" aria-describedby="website-name-desc"/>
 				<span id="website-name-desc" class="sr-only">Enter the name of the website</span>
 
-				<label for="website_url">URL:</label>
-				<input type="url" id="website_url" aria-describedby="website-url-desc"/>
-				<span id="website-url-desc" class="sr-only">Enter the URL of the website</span>
+			<label for="website_url">URL:</label>
+			<input type="url" id="website_url" placeholder="https://example.com" aria-describedby="website-url-desc"/>
+			<span id="website-url-desc" class="sr-only">Enter the URL of the website, e.g. https://example.com</span>
 
-				<button id="addWebsite" type="button" class="btn btn-primary">Add Website</button>
+				<button id="addWebsite" type="button" class="btn btn-secondary">Add Website</button>
 			</div>
 		</section>
 
@@ -272,8 +267,8 @@
 							<td>
 								<input type="password" id="password" name="pwd" required aria-describedby="password-desc" autocomplete="new-password"/>
 								<span id="password-desc" class="sr-only">Enter your new password</span>
-								<div class="password-meter" id="pwd-meter" aria-live="polite">
-								<div class="password-meter-message" aria-live="assertive"></div>
+							<div class="password-meter" id="pwd-meter">
+							<div class="password-meter-message" aria-live="assertive" aria-atomic="true"></div>
 								<div class="password-meter-bg">
 									<div class="password-meter-bar"></div>
 								</div>
@@ -287,7 +282,7 @@
 						</tr>
 					<tr>
 						<td class="notShaded" colspan="2">
-							<button id="changePass" class="btn btn-primary" type="submit">Change Password</button>
+							<button id="changePass" class="btn btn-secondary" type="submit">Change Password</button>
 						</td>
 					</tr>
 					</tbody>
@@ -370,35 +365,38 @@
 				</tr>
 				<star:benchmarkingFrameworkRow/>
 				<tr>
-					<td title="The wallclock timeout that will be selected by default for new jobs">
-						Wallclock Timeout
-					</td>
-					<td id="editClockTimeout">
-						<label for="wallclockTimeout" class="sr-only">Wallclock timeout in seconds</label>
-						<input type="number" name="wallclockTimeout" id="wallclockTimeout" min="1" aria-describedby="wallclock-desc"/>
-						<span id="wallclock-desc" class="sr-only">Enter timeout in seconds</span>
-					</td>
-				</tr>
-				<tr>
-					<td title="The cpu timeout that will be selected by default for new jobs">
-						CPU Timeout
-					</td>
-					<td id="editCpuTimeout">
-						<label for="cpuTimeout" class="sr-only">CPU timeout in seconds</label>
-						<input type="number" name="cpuTimeout" id="cpuTimeout" min="1" aria-describedby="cpu-desc"/>
-						<span id="cpu-desc" class="sr-only">Enter timeout in seconds</span>
-					</td>
-				</tr>
-				<tr>
-					<td title="The maximum memory that will be selected by default for new jobs">
-						Maximum Memory
-					</td>
-					<td id="editMaxMem">
-						<label for="maxMem" class="sr-only">Maximum memory in MB</label>
-						<input type="number" name="maxMem" id="maxMem" min="1" aria-describedby="memory-desc"/>
-						<span id="memory-desc" class="sr-only">Enter memory limit in MB</span>
-					</td>
-				</tr>
+				<td title="The wallclock timeout that will be selected by default for new jobs">
+					Wallclock Timeout
+				</td>
+				<td id="editClockTimeout">
+					<label for="wallclockTimeout" class="sr-only">Wallclock timeout in seconds</label>
+					<input type="number" name="wallclockTimeout" id="wallclockTimeout" min="1" aria-describedby="wallclock-desc"/>
+					<span class="input-unit" aria-hidden="true">s</span>
+					<span id="wallclock-desc" class="sr-only">Enter timeout in seconds</span>
+				</td>
+			</tr>
+			<tr>
+				<td title="The cpu timeout that will be selected by default for new jobs">
+					CPU Timeout
+				</td>
+				<td id="editCpuTimeout">
+					<label for="cpuTimeout" class="sr-only">CPU timeout in seconds</label>
+					<input type="number" name="cpuTimeout" id="cpuTimeout" min="1" aria-describedby="cpu-desc"/>
+					<span class="input-unit" aria-hidden="true">s</span>
+					<span id="cpu-desc" class="sr-only">Enter timeout in seconds</span>
+				</td>
+			</tr>
+			<tr>
+				<td title="The maximum memory that will be selected by default for new jobs">
+					Maximum Memory
+				</td>
+				<td id="editMaxMem">
+					<label for="maxMem" class="sr-only">Maximum memory in MB</label>
+					<input type="number" name="maxMem" id="maxMem" min="1" aria-describedby="memory-desc"/>
+					<span class="input-unit" aria-hidden="true">MB</span>
+					<span id="memory-desc" class="sr-only">Enter memory limit in MB</span>
+				</td>
+			</tr>
 				<tr>
 					<td>Dependencies Enabled</td>
 					<td>
@@ -422,8 +420,8 @@
 			<section class="setting-actions">
 				<h3>Profile Actions</h3>
 				<div class="action-buttons">
-					<button id="saveProfile" class="btn btn-primary" type="button">Save Profile Changes</button>
-					<button id="createProfile" class="btn btn-primary" type="button">Create New Profile</button>
+					<button id="saveProfile" class="btn btn-secondary" type="button">Save Profile Changes</button>
+					<button id="createProfile" class="btn btn-secondary" type="button">Create New Profile</button>
 					<button id="setDefaultProfile" class="btn btn-secondary" type="button"
 					        title="Setting a profile as a default means it will be selected automatically when visiting the job creation page">
 						Set Profile as Default
@@ -434,7 +432,7 @@
 					        ${hasDefault ? '' : 'disabled="disabled"'}>
 						Clear Default Profile
 					</button>
-					<button id="deleteProfile" class="btn btn-danger" type="button">Delete Selected Profile</button>
+					<button id="deleteProfile" class="btn btn-secondary" type="button">Delete Selected Profile</button>
 				</div>
 			</section>
 		</section>
@@ -453,7 +451,7 @@
 				<!-- Will be populated using AJAX -->
 				</tbody>
 			</table>
-			<button id="useSolver" class="btn btn-primary" type="button">Use Selected Solver</button>
+			<button id="useSolver" class="btn btn-secondary" type="button">Use Selected Solver</button>
 		</section>
 
 		<section class="benchmarks-section">
@@ -469,24 +467,26 @@
 				<!-- Will be populated using AJAX -->
 				</tbody>
 			</table>
-			<button id="useBenchmark" class="btn btn-primary" type="button">Use Selected Benchmark</button>
+			<button id="useBenchmark" class="btn btn-secondary" type="button">Use Selected Benchmark</button>
 		</section>
 
 		<c:if test="${canDeleteUser}">
 			<section class="danger-zone">
 				<h2>Delete User</h2>
 				<p class="warning">This action cannot be undone.</p>
-				<button id="deleteUser" type="button" class="btn btn-danger">Delete User</button>
+				<button id="deleteUser" type="button" class="btn btn-secondary">Delete User</button>
 			</section>
 		</c:if>
 
 		<!-- Dialogs -->
-		<div id="dialog-confirm-delete" title="Confirm Delete" class="hiddenDialog" role="dialog" aria-labelledby="dialog-confirm-delete-title">
+		<div id="dialog-confirm-delete" title="Confirm Delete" class="hiddenDialog" role="dialog" aria-modal="true" aria-labelledby="dialog-confirm-delete-title">
+			<h2 id="dialog-confirm-delete-title" class="sr-only">Confirm Delete</h2>
 			<p><span class="ui-icon ui-icon-alert" aria-hidden="true"></span><span
 					id="dialog-confirm-delete-txt"></span></p>
 		</div>
 
-		<div id="dialog-createSettingsProfile" title="Create Settings Profile" class="hiddenDialog" role="dialog" aria-labelledby="dialog-createSettingsProfile-title">
+		<div id="dialog-createSettingsProfile" title="Create Settings Profile" class="hiddenDialog" role="dialog" aria-modal="true" aria-labelledby="dialog-createSettingsProfile-title">
+			<h2 id="dialog-createSettingsProfile-title" class="sr-only">Create Settings Profile</h2>
 			<p><span id="dialog-createSettingsProfile-txt"></span></p>
 			<div>
 				<label for="settingName">Profile Name:</label>

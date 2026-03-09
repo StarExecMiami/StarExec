@@ -36,6 +36,10 @@
 	}
 %>
 
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Join ${com.name}" css="add/to_community"
                js="lib/jquery.validate.min, lib/jquery.qtip.min, add/to_community">
 	<c:if test="${requestExists}">
@@ -46,6 +50,7 @@
 	</c:if>
 	<c:if test="${not requestExists}">
 	<form method="POST" action="to_community/request" id="inviteForm">
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<fieldset>
 			<legend>community information</legend>
 			<table id="communityInformation" class="shaded">

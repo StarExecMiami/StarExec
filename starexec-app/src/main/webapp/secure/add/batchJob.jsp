@@ -34,11 +34,15 @@
 		return;
 	}
 %>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Upload XML Configuration for ${space.name}"
                css="common/delaySpinner, add/batchJob"
                js="common/delaySpinner, lib/jquery.validate.min, add/batchSpace">
 	<form method="POST" enctype="multipart/form-data"
-	      action="${starexecRoot}/secure/upload/jobXML" id="upForm"
+	      action="${starexecRoot}/secure/upload/jobXML?csrfToken=${csrfToken}" id="upForm"
 	      aria-labelledby="upload-legend">
 		<input type="hidden" name="space" value="${space.id}"/>
 		<fieldset>

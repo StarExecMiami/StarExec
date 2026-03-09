@@ -93,6 +93,10 @@
 	}
 %>
 
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Edit ${fn:escapeXml(com.name)}"
                js="common/defaultSettings, lib/jquery.dataTables.min, lib/jquery.validate.min, edit/community"
                css="common/table, edit/community">
@@ -211,7 +215,7 @@
 		</table>
 		<span id="toggleBenchType" class="caption">+ add new</span>
 		<form id="newTypeForm" class="newForm" enctype="multipart/form-data"
-		      method="POST" action="${starexecRoot}/secure/processors/manager">
+		      method="POST" action="${starexecRoot}/secure/processors/manager?csrfToken=${csrfToken}">
 			<input type="hidden" name="com" value="${com.id}"/>
 			<input type="hidden" name="action" value="add"/>
 			<input type="hidden" name="type" value="bench"/>
@@ -412,7 +416,7 @@
 		<span id="togglePreProcessor" class="caption">+ add new</span>
 		<form id="addPreProcessorForm" class="newForm"
 		      enctype="multipart/form-data" method="POST"
-		      action="${starexecRoot}/secure/processors/manager">
+		      action="${starexecRoot}/secure/processors/manager?csrfToken=${csrfToken}">
 			<input type="hidden" name="com" value="${com.id}"/>
 			<input type="hidden" name="action" value="add"/>
 			<input type="hidden" name="type" value="pre"/>
@@ -488,7 +492,7 @@
 		<span id="togglePostProcessor" class="caption">+ add new</span>
 		<form id="addPostProcessorForm" class="newForm"
 		      enctype="multipart/form-data" method="POST"
-		      action="${starexecRoot}/secure/processors/manager">
+		      action="${starexecRoot}/secure/processors/manager?csrfToken=${csrfToken}">
 			<input type="hidden" name="com" value="${com.id}"/>
 			<input type="hidden" name="action" value="add"/>
 			<input type="hidden" name="type" value="post"/>
@@ -564,7 +568,7 @@
 		<span id="toggleUpdateProcessor" class="caption">+ add new</span>
 		<form id="addUpdateProcessorForm" class="newForm"
 		      enctype="multipart/form-data" method="POST"
-		      action="${starexecRoot}/secure/processors/manager">
+		      action="${starexecRoot}/secure/processors/manager?csrfToken=${csrfToken}">
 			<input type="hidden" name="com" value="${com.id}"/>
 			<input type="hidden" name="action" value="add"/>
 			<input type="hidden" name="type" value="update"/>

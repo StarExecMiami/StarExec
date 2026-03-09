@@ -33,8 +33,9 @@
                js="common/delaySpinner, details/shared, details/solver, shared/copyToStardev, lib/jquery.dataTables.min"
                css="common/delaySpinner, common/table, shared/copyToStardev, details/shared, details/solver">
 	<star:primitiveTypes/>
-	<div id="popDialog">
-		<img id="popImage" src=""/>
+	<div id="popDialog" role="dialog" aria-labelledby="popDialog-title" aria-modal="true">
+		<h2 id="popDialog-title" class="sr-only">Profile picture</h2>
+		<img id="popImage" src="" alt="" aria-hidden="true"/>
 	</div>
 	<span style="display:none;" id="isAnonymousPage"
 	      value="${ isAnonymousPage }"></span>
@@ -47,15 +48,11 @@
 		<legend>details</legend>
 		<table id="infoTable">
 			<tr>
-				<td id="picSection">
-					<img id="showPicture"
-					     src="${starexecRoot}/secure/get/pictures?Id=${solver.id}&type=sthn"
-					     enlarge="${starexecRoot}/secure/get/pictures?Id=${solver.id}&type=sorg"><br>
-					<c:if test="${ !isAnonymousPage && usr.id == user.id }">
-						<a id="uploadPicture"
-						   href="${starexecRoot}/secure/add/picture.jsp?type=solver&Id=${solver.id}">change</a>
-					</c:if>
-				</td>
+				<star:picSection thumbSrc="${starexecRoot}/secure/get/pictures?Id=${solver.id}&type=sthn"
+				                 enlargeSrc="${starexecRoot}/secure/get/pictures?Id=${solver.id}&type=sorg"
+				                 altText="Solver image"
+				                 showChangeLink="${!isAnonymousPage && usr.id == user.id}"
+				                 changeLinkUrl="${starexecRoot}/secure/add/picture.jsp?type=solver&Id=${solver.id}" />
 				<td id="solverDetail" class="detail">
 					<table id="solverInfo" class="shaded">
 						<thead>

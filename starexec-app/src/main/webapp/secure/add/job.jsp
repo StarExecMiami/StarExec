@@ -73,6 +73,10 @@
 %>
 
 <jsp:useBean id="now" class="java.util.Date"/>
+<%
+	request.setAttribute("csrfToken", org.starexec.util.CsrfUtil.getOrCreateToken(request));
+%>
+
 <star:template title="Run Job in ${space.name}"
                css="common/delaySpinner, common/table, add/job"
                js="common/defaultSettings, common/delaySpinner, lib/jquery.validate.min, add/job, lib/jquery.dataTables.min, lib/jquery.qtip.min, add/sharedSolverConfigTableFunctions">
@@ -145,6 +149,7 @@
 	      value="${defaultProfile}"></span>
 	<form id="addForm" method="post" action="${starexecRoot}/secure/add/job">
 		<input type="hidden" name="sid" id="spaceIdInput" value="${space.id}"/>
+		<input type="hidden" name="csrfToken" value="${csrfToken}"/>
 		<fieldset id="fieldStep1">
 			<legend>configure job</legend>
 			<table id="tblConfig" class="shaded contentTbl">

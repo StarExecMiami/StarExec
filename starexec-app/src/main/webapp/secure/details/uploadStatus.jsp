@@ -87,17 +87,7 @@
                js="common/delaySpinner, details/shared, lib/jquery.dataTables.min"
                css="details/shared, common/table, details/uploadStatus">
 	
-	<style>
-		@keyframes pulse-red {
-			0% { opacity: 1; transform: scale(1); }
-			50% { opacity: 0.5; transform: scale(1.2); }
-			100% { opacity: 1; transform: scale(1); }
-		}
-		.pulse-stuck {
-			animation: pulse-red 1s infinite;
-			box-shadow: 0 0 5px red;
-		}
-	</style>
+
 
 	<%-- NEW SYSTEM: Modern async UI with JavaScript polling --%>
 	<c:if test="${isNewSystem}">
@@ -109,6 +99,47 @@
 			var maxPollIntervalMs = 30000;
 			var lastProcessed = -1;
 			
+			class VelocityTracker {
+				constructor(windowSize = 5) {
+					this.windowSize = windowSize;
+					this.dataPoints = []; // Array of { timestamp, filesProcessed }
+				}
+
+				addDataPoint(filesProcessed, timestampMs = Date.now()) {
+					this.dataPoints.push({ files: filesProcessed, time: timestampMs });
+					
+					if (this.dataPoints.length > this.windowSize) {
+						this.dataPoints.shift();
+					}
+				}
+
+				getVelocity() {
+					if (this.dataPoints.length < 2) {
+						return null; // Not enough data to establish a derivative
+					}
+
+					const oldest = this.dataPoints[0];
+					const newest = this.dataPoints[this.dataPoints.length - 1];
+					
+					const deltaTimeSec = (newest.time - oldest.time) / 1000;
+					const deltaFiles = newest.files - oldest.files;
+
+					if (deltaTimeSec === 0) return 0.00; 
+
+					return Math.max(0, (deltaFiles / deltaTimeSec));
+				}
+			}
+
+			var velocityTracker = new VelocityTracker(5);
+
+			// Format elapsed time (milliseconds to mm:ss)
+			function formatElapsed(ms) {
+				var totalSeconds = Math.floor(ms / 1000);
+				var minutes = Math.floor(totalSeconds / 60);
+				var seconds = totalSeconds % 60;
+				return minutes > 0 ? minutes + "m " + seconds + "s" : seconds + "s";
+			}
+
 			// Helper function to properly join URL paths (avoids double slashes)
 			function joinPath(base, path) {
 				if (!base) return path;
@@ -139,12 +170,29 @@
 						
 						// Update progress bar
 						$('#uploadProgressBarFill').css('width', progress + '%');
-						$('#uploadProgressText').text(progress + '%');
+						$('#uploadPercentageText').text(progress + '%');
 						
-					// Update details table
-					$('#totalFoundValue').text(found);
-					$('#processedValue').text(processed);
-					$('#spacesCreatedValue').text(data.totalSpacesCreated || 0);
+						// Update details table
+						$('#totalFoundValue').text(found);
+						$('#processedValue').text(processed);
+						$('#spacesCreatedValue').text(data.totalSpacesCreated || 0);
+						
+						// Time Estimation & Velocity
+						var elapsedMs = data.elapsedTimeMs || 0;
+						$('#elapsedTimeValue').text(formatElapsed(Math.max(0, elapsedMs)));
+						
+						if (status !== 'COMPLETED' && status !== 'COMPLETED_WITH_ERRORS' && status !== 'FAILED') {
+							velocityTracker.addDataPoint(processed);
+							var velocity = velocityTracker.getVelocity();
+							
+							if (velocity !== null) {
+								if (velocity === 0 && !data.isStuck && found > 0) {
+									$('#velocityValue').text('(Processing...)');
+								} else {
+									$('#velocityValue').text(velocity.toFixed(2) + ' files/s');
+								}
+							}
+						}
 						
 						// Update Pulse (Heartbeat)
 						if (data.lastHeartbeat) {
@@ -159,42 +207,48 @@
 							
 							// Color code the pulse
 							if (data.isStuck) {
-								$('#pulseIndicator').css('background', 'red');
+								$('#pulseIndicator').css({'background': 'red', 'border-radius': '0'}); // Square
 								$('#pulseIndicator').addClass('pulse-stuck');
 								$('#lastActiveValue').css('color', 'red');
 								$('#lastActiveTime').text(timeStr + ' (STALLED)');
 							} else if (secondsAgo < 60) {
-								$('#pulseIndicator').css('background', '#4CAF50'); // Green
+								$('#pulseIndicator').css({'background': '#4CAF50', 'border-radius': '50%'}); // Circle
 								$('#pulseIndicator').removeClass('pulse-stuck');
+								$('#pulseIndicator').addClass('pulse-active');
 								$('#lastActiveValue').css('color', 'inherit');
 							} else {
-								$('#pulseIndicator').css('background', '#FFC107'); // Amber
-								$('#pulseIndicator').removeClass('pulse-stuck');
+								$('#pulseIndicator').css({'background': '#FFC107', 'border-radius': '50%'}); // Circle
+								$('#pulseIndicator').removeClass('pulse-stuck pulse-active');
 								$('#lastActiveValue').css('color', 'inherit');
 							}
 						}
 
-					if (status === 'COMPLETED') {
-						clearInterval(pollInterval);
-						$('#uploadProgressText').text('Upload complete!');
-						$('#uploadProgressText').css('color', 'green');
-						$('#uploadProgressBarFill').css('background', '#4CAF50');
-						$('#uploadProgressBarFill').css('width', '100%');
-					} else if (status === 'COMPLETED_WITH_ERRORS') {
-						clearInterval(pollInterval);
-						$('#uploadProgressText').text('Upload finished with some errors.');
-						$('#uploadProgressText').css('color', '#ff9800');
-						$('#uploadProgressBarFill').css('background', '#ff9800');
-						$('#uploadProgressBarFill').css('width', '100%');
-						$('#errorMessageRow').show();
-						$('#errorMessageValue').text(data.errorMessage || 'Some files were skipped. Check below for details.');
-					} else if (status === 'FAILED') {
-						clearInterval(pollInterval);
-						$('#uploadProgressText').text('Upload failed.');
-						$('#uploadProgressText').css('color', 'red');
-						$('#errorMessageRow').show();
-						$('#errorMessageValue').text(data.errorMessage || 'Unknown error');
-						$('#uploadProgressBarFill').css('background', '#f44336');
+						if (status === 'COMPLETED') {
+							clearInterval(pollInterval);
+							$('#uploadPhaseText').text('Upload complete!');
+							$('#uploadPhaseText').css('color', 'green');
+							$('#uploadPercentageText').text('100%');
+							$('#uploadProgressBarFill').css('background', '#4CAF50');
+							$('#uploadProgressBarFill').css('width', '100%');
+							$('#velocityValue').text('Done');
+						} else if (status === 'COMPLETED_WITH_ERRORS') {
+							clearInterval(pollInterval);
+							$('#uploadPhaseText').text('Upload finished with some errors.');
+							$('#uploadPhaseText').css('color', '#ff9800');
+							$('#uploadPercentageText').text('100%');
+							$('#uploadProgressBarFill').css('background', '#ff9800');
+							$('#uploadProgressBarFill').css('width', '100%');
+							$('#velocityValue').text('Done');
+							$('#errorMessageRow').show();
+							$('#errorMessageValue').text(data.errorMessage || 'Some files were skipped. Check below for details.');
+						} else if (status === 'FAILED') {
+							clearInterval(pollInterval);
+							$('#uploadPhaseText').text('Upload failed.');
+							$('#uploadPhaseText').css('color', 'red');
+							$('#velocityValue').text('Failed');
+							$('#errorMessageRow').show();
+							$('#errorMessageValue').text(data.errorMessage || 'Unknown error');
+							$('#uploadProgressBarFill').css('background', '#f44336');
 						} else {
 							// Adaptive polling logic
 							if (processed === lastProcessed) {
@@ -213,40 +267,56 @@
 							lastProcessed = processed;
 							
 							if (found === 0) {
-								$('#uploadProgressText').text('Scanning archive...');
+								$('#uploadPhaseText').text('Scanning archive...');
 							} else {
-								$('#uploadProgressText').text(processed + ' of ' + found + ' benchmarks');
+								$('#uploadPhaseText').text(processed + ' of ' + found + ' benchmarks');
 							}
 						}
 					}
-			).fail(function() {
-				$('#uploadProgressText').text('Connection lost, retrying...');
-				$('#uploadProgressText').css('color', 'orange');
-				// If request fails, slow down polling
-				pollIntervalMs = Math.min(pollIntervalMs + 5000, maxPollIntervalMs);
-				startPolling();
-			});
+				).fail(function() {
+					$('#uploadPhaseText').text('Connection lost, retrying...');
+					$('#uploadPhaseText').css('color', 'orange');
+					// If request fails, slow down polling
+					pollIntervalMs = Math.min(pollIntervalMs + 5000, maxPollIntervalMs);
+					startPolling();
+				});
 			}
 		</script>
 		
 	<%-- New System: Modern Progress Display --%>
-	<fieldset>
-		<legend>details</legend>
+	<h3 class="upload-section-title">Upload Progress</h3>
+	<div class="upload-table-wrapper">
 		<table class="shaded">
 			<thead>
 			<tr>
-				<th>attribute</th>
-				<th>value</th>
+				<th>Attribute</th>
+				<th>Value</th>
 			</tr>
 			</thead>
 			<tbody>
 			<tr>
 				<td>progress</td>
 				<td>
-					<div id="uploadProgressBar" style="width: 100%; height: 20px; border: 1px solid #ccc; background: #fff; border-radius: 4px; overflow: hidden;">
-						<div id="uploadProgressBarFill" style="height: 100%; width: 0%; background: #2196F3; transition: width 0.3s;"></div>
+					<div id="uploadPhaseText">Loading...</div>
+					<div id="uploadProgressBar">
+						<div id="uploadProgressBarFill"></div>
+						<div id="uploadPercentageText">0%</div>
 					</div>
-					<div id="uploadProgressText" style="margin-top: 6px; font-weight: bold;">Loading...</div>
+				</td>
+			</tr>
+			<tr>
+				<td>last active (pulse)</td>
+				<td id="lastActiveValue">
+					<span id="pulseIndicator"></span>
+					<strong id="lastActiveTime">Checking...</strong>
+				</td>
+			</tr>
+			<tr>
+				<td>elapsed time / velocity</td>
+				<td>
+					<span id="elapsedTimeValue">0s</span>
+					<span class="upload-separator">|</span>
+					<span id="velocityValue" class="upload-velocity">(Calculating...)</span>
 				</td>
 			</tr>
 			<tr>
@@ -262,34 +332,27 @@
 				<td id="spacesCreatedValue">${newJob.totalSpacesCreated}</td>
 			</tr>
 			<tr>
-				<td>last active (pulse)</td>
-				<td id="lastActiveValue">
-					<span id="pulseIndicator" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#ccc; margin-right:5px;"></span>
-					<span id="lastActiveTime">Checking...</span>
-				</td>
-			</tr>
-			<tr>
 				<td>created at</td>
 				<td><fmt:formatDate pattern="MMM dd yyyy HH:mm" value="${newJob.createdAt}"/></td>
 			</tr>
 			<tr id="errorMessageRow" style="${(not empty newJob.errorMessage or newJob.status eq 'COMPLETED_WITH_ERRORS') ? '' : 'display: none;'}">
-				<td style="color: #f44336;">error log</td>
-				<td id="errorMessageValue" style="color: #f44336; white-space: pre-wrap;">${newJob.errorMessage}</td>
+				<td>error log</td>
+				<td id="errorMessageValue">${newJob.errorMessage}</td>
 			</tr>
 			</tbody>
 		</table>
-	</fieldset>
+	</div>
 	</c:if>
 	
 	<%-- OLD SYSTEM: Legacy static table --%>
 	<c:if test="${not isNewSystem}">
-		<fieldset>
-			<legend>details</legend>
+		<h3 class="upload-section-title">Upload Progress (Legacy)</h3>
+		<div class="upload-table-wrapper">
 			<table class="shaded">
 				<thead>
 				<tr>
-					<th>attribute</th>
-					<th>value</th>
+					<th>Attribute</th>
+					<th>Value</th>
 				</tr>
 				</thead>
 				<tbody>
@@ -344,15 +407,15 @@
 				</tr>
 				</tbody>
 			</table>
-		</fieldset>
+		</div>
 		<c:if test="${not empty badBenches}">
-			<fieldset>
-				<legend>failed benchmarks</legend>
+			<h3 class="upload-section-title upload-section-title--error">Failed Benchmarks</h3>
+			<div class="upload-table-wrapper">
 				<table class="shaded">
 					<thead>
 					<tr>
-						<th>name</th>
-						<th>output</th>
+						<th>Name</th>
+						<th>Output</th>
 					</tr>
 					</thead>
 					<tbody>
@@ -366,10 +429,13 @@
 					</c:forEach>
 					</tbody>
 				</table>
-			</fieldset>
+			</div>
 		</c:if>
 	</c:if>
 
-	<a id="returnLink" href="${starexecRoot}/secure/explore/spaces.jsp<c:if test="${returnSpaceId != null && returnSpaceId > 0}">?id=${returnSpaceId}</c:if>">back</a>
+	<div class="upload-footer">
+		<a id="returnLink" href="${starexecRoot}/secure/explore/spaces.jsp<c:if test="${returnSpaceId != null && returnSpaceId > 0}">?id=${returnSpaceId}</c:if>">back</a>
+		<span class="upload-footer-hint">(Upload continues in the background &mdash; safe to navigate away)</span>
+	</div>
 
 </star:template>

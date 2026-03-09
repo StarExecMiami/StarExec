@@ -81,9 +81,10 @@
 <star:template title="${t_user.fullName}"
                js="util/draggable, util/spaceTree, common/delaySpinner, common/alerts, details/user, lib/jquery.dataTables.min, lib/jquery.jstree, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min"
                css="explore/common, details/user, common/delaySpinner, common/table, details/shared">
-	<span id="userId" value="${userId}"></span>
-	<div id="popDialog">
-		<img id="popImage" src=""/>
+	<span id="userId" data-user-id="${userId}"></span>
+	<div id="popDialog" role="dialog" aria-labelledby="popDialog-title" aria-modal="true">
+		<h2 id="popDialog-title" class="sr-only">Profile picture</h2>
+		<img id="popImage" src="" alt="" aria-hidden="true"/>
 	</div>
 	<div id="explorer">
 		<h3>Spaces</h3>
@@ -96,15 +97,13 @@
 		<star:panel title="details" expandable="false">
 			<table id="infoTable">
 				<tr>
-					<td id="picSection">
-						<img id="showPicture"
-						     src="${starexecRoot}/secure/get/pictures?Id=${t_user.id}&type=uthn"
-						     enlarge="${starexecRoot}/secure/get/pictures?Id=${t_user.id}&type=uorg"><br>
-					</td>
+					<star:picSection thumbSrc="${starexecRoot}/secure/get/pictures?Id=${t_user.id}&type=uthn"
+				                 enlargeSrc="${starexecRoot}/secure/get/pictures?Id=${t_user.id}&type=uorg"
+				                 altText="User profile picture" />
 					<td id="userDetail" class="detail">
 						<table id="personal" class="shaded">
 							<tr>
-								<td>e-mail address</td>
+								<td>Email Address</td>
 								<td>
 									<a href="mailto:${t_user.email}">${t_user.email}<img
 											class="extLink"
@@ -112,21 +111,21 @@
 								</td>
 							</tr>
 							<tr>
-								<td>institution</td>
+								<td>Institution</td>
 								<td>${t_user.institution}</td>
 							</tr>
 							<tr>
-								<td>member since</td>
+								<td>Member Since</td>
 								<td><fmt:formatDate pattern="MMM dd yyyy"
 								                    value="${t_user.createDate}"/></td>
 							</tr>
 							<tr>
-								<td>member type</td>
+								<td>Member Type</td>
 								<td>${t_user.role}</td>
 							</tr>
 							<c:if test="${not empty sites}">
 								<tr>
-									<td>websites</td>
+									<td>Websites</td>
 									<td>
 										<ul>
 											<c:forEach var="site"
@@ -162,13 +161,13 @@
 			</div>
 		</star:panel>
 		<star:panel test="${owner}" title="user quotas">
-				<table id="diskUsageTable" class="shaded">
-					<thead>
-					<tr>
-						<th>attribute</th>
-						<th>value</th>
-					</tr>
-					</thead>
+				<table id="diskUsageTable" class="shaded" role="table" aria-label="User disk quotas">
+				<thead>
+				<tr>
+					<th scope="col">attribute</th>
+					<th scope="col">value</th>
+				</tr>
+				</thead>
 					<tbody>
 					<tr>
 						<td>disk quota</td>
@@ -190,67 +189,68 @@
 				</table>
 		</star:panel>
 		<star:panel test="${owner}" title="solvers" withCount="true">
-				<ul class="actionList">
-					<li>
-						<button prim="solver" id="recycleSolver"
-								class="recycleButton recycleSelected">
-								move selected to trash bin
-						</button>
-					</li>
-					<li>
-						<button title="This will move all of the solvers you own that are not in any spaces to the trash bin."
-						        prim="solver" id="recycleOrphanedSolvers"
-								class="recycleButton recycleOrphaned">
-								move orphaned to trash bin
-						</button>
-				</ul>
-				<table id="solvers" uid="${t_user.id}" class="selectableTable">
-					<thead>
-					<tr>
-						<th>name</th>
-						<th>description</th>
-						<th>type</th>
-					</tr>
-					</thead>
-				</table>
+			<ul class="actionList">
+				<li>
+					<button data-prim="solver" id="recycleSolver"
+							class="recycleButton recycleSelected">
+							move selected to trash bin
+					</button>
+				</li>
+				<li>
+					<button title="This will move all of the solvers you own that are not in any spaces to the trash bin."
+					        data-prim="solver" id="recycleOrphanedSolvers"
+							class="recycleButton recycleOrphaned">
+							move orphaned to trash bin
+					</button>
+				</li>
+			</ul>
+			<table id="solvers" uid="${t_user.id}" class="selectableTable">
+				<thead>
+				<tr>
+					<th scope="col">name</th>
+					<th scope="col">description</th>
+					<th scope="col">type</th>
+				</tr>
+				</thead>
+			</table>
 		</star:panel>
 		<star:panel test="${owner}" title="benchmarks" withCount="true">
 				<ul class="actionList">
-					<li>
-						<button prim="benchmark" id="recycleBench"
-								class="recycleButton recycleSelected">
-								move selected to trash bin
-						</button>
-					</li>
-					<li>
-						<button title="This will move all of the benchmarkss you own that are not in any spaces to the trash bin"
-						        prim="benchmark" id="recycleOrphanedBench"
-								class="recycleButton recycleOrphaned">
-								move orphaned to trash bin
-						</button>
-					</li>
+				<li>
+					<button data-prim="benchmark" id="recycleBench"
+							class="recycleButton recycleSelected">
+							move selected to trash bin
+					</button>
+				</li>
+				<li>
+					<button title="This will move all of the benchmarks you own that are not in any spaces to the trash bin"
+					        data-prim="benchmark" id="recycleOrphanedBench"
+							class="recycleButton recycleOrphaned">
+							move orphaned to trash bin
+					</button>
+				</li>
 				</ul>
-				<table id="benchmarks" uid="${t_user.id}"
-				       class="selectableTable">
-					<thead>
-					<tr>
-						<th> name</th>
-						<th> type</th>
-					</tr>
-					</thead>
-				</table>
+			<table id="benchmarks" uid="${t_user.id}"
+			       class="selectableTable">
+				<thead>
+				<tr>
+					<th scope="col">name</th>
+					<th scope="col">type</th>
+				</tr>
+				</thead>
+			</table>
 		</star:panel>
 		<star:panel test="${owner}" title="uploads" withCount="true">
-			         <table id="uploads" uid="${t_user.id}"
-			               class="selectableTable">
-				        <thead>
-				        <tr>
-						<th> uploadDate</th>
-					        <th> totalBenchmarks</th>
-					        <th> completed</th>
-				        </tr>
-				        </thead>
-			         </table>
+		         <table id="uploads" uid="${t_user.id}"
+		               class="selectableTable">
+			        <thead>
+			        <tr>
+					<th scope="col">uploadDate</th>
+				        <th scope="col">totalBenchmarks</th>
+				        <th scope="col">completed</th>
+			        </tr>
+			        </thead>
+		         </table>
 		</star:panel>
 		<star:panel test="${owner}" title="jobs" withCount="true">
 				<ul class="actionList">
@@ -268,45 +268,45 @@
 						</button>
 					</li>
 				</ul>
-				<table id="jobs" uid="${t_user.id}" class="selectableTable">
-					<thead>
-					<tr>
-						<th>name</th>
-						<th>status</th>
-						<th>completed</th>
-						<th>total</th>
-						<th>failed</th>
-						<th>time</th>
-						<th>disk size</th>
-					</tr>
-					</thead>
-				</table>
+			<table id="jobs" uid="${t_user.id}" class="selectableTable">
+				<thead>
+				<tr>
+					<th scope="col">name</th>
+					<th scope="col">status</th>
+					<th scope="col">completed</th>
+					<th scope="col">total</th>
+					<th scope="col">failed</th>
+					<th scope="col">time</th>
+					<th scope="col">disk size</th>
+				</tr>
+				</thead>
+			</table>
 		</star:panel>
 		<star:panel test="${owner}" title="user actions" id="actionField" expandable="false">
 				<ul class="actionList">
-					<li><a id="editButton"
-					       href="${starexecRoot}/secure/edit/account.jsp?id=${t_user.id}">edit</a>
-					</li>
-					<li><a id="showSpaceExplorer">show space explorer</a></li>
-					<li><a id="recycleBinButton"
-					       href="${starexecRoot}/secure/details/recycleBin.jsp">manage
-						trash bin</a></li>
+				<li><a id="editButton"
+				       href="${starexecRoot}/secure/edit/account.jsp?id=${t_user.id}">edit</a>
+				</li>
+				<li><a id="showSpaceExplorer" role="button" tabindex="0">show space explorer</a></li>
+				<li><a id="recycleBinButton"
+				       href="${starexecRoot}/secure/details/recycleBin.jsp">manage
+					trash bin</a></li>
 
-					<c:if test="${!t_user.subscribedToErrorLogs && canSubscribeToErrorLogs}">
-						<li><a id="subscribeToErrorLogs">subscribe to error
-							logs</a></li>
-					</c:if>
+				<c:if test="${!t_user.subscribedToErrorLogs && canSubscribeToErrorLogs}">
+					<li><a id="subscribeToErrorLogs" role="button" tabindex="0">subscribe to error
+						logs</a></li>
+				</c:if>
 
-					<c:if test="${t_user.subscribedToErrorLogs && canSubscribeToErrorLogs}">
-						<li><a id="unsubscribeFromErrorLogs">unsubscribe from
-							error logs</a></li>
-					</c:if>
+				<c:if test="${t_user.subscribedToErrorLogs && canSubscribeToErrorLogs}">
+					<li><a id="unsubscribeFromErrorLogs" role="button" tabindex="0">unsubscribe from
+						error logs</a></li>
+				</c:if>
 
-					<li><a id="linkOrphanedButton"
-					       title="This will add all of your 'orphaned' solvers, benchmarks, and jobs to the space selected in the space explorer on the left. An item is 'orphaned' if it is not linked to any spaces">
-						associate orphaned primitives with space
-					</a></li>
-				</ul>
+				<li><a id="linkOrphanedButton" role="button" tabindex="0"
+				       title="This will add all of your 'orphaned' solvers, benchmarks, and jobs to the space selected in the space explorer on the left. An item is 'orphaned' if it is not linked to any spaces">
+					associate orphaned primitives with space
+				</a></li>
+			</ul>
 		</star:panel>
 
 		<c:if test="${owner}">

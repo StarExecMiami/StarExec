@@ -1,7 +1,7 @@
 <%@page contentType="text/html" pageEncoding="UTF-8" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
 <star:template title="Community Statistics"
-               js="common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree,lib/jquery.qtip.min, explore/statistics"
+               js="common/delaySpinner, lib/jquery.dataTables.min, lib/jquery.jstree,lib/jquery.qtip.min, lib/chart.min, explore/statistics"
                css="common/delaySpinner, common/table, details/shared,explore/jquery.qtip, explore/common, explore/statistics">
 	<div id="mainPanel">
 		<fieldset id="statistics">
@@ -14,7 +14,7 @@
 						<th>name</th>
 						<th id="userHeader">users</th>
 						<th id="solverHeader">solvers</th>
-						<th id="benchHeader">bench</th>
+						<th id="benchHeader">benchmarks</th>
 						<th id="jobHeader">jobs</th>
 						<th id="jobPairHeader">job<br>pairs</th>
 						<th id="diskUseHeader">disk use</th>
@@ -25,46 +25,42 @@
 
 			<fieldset id="graph" hidden>
 				<legend>graphs</legend>
-				<p align="center"><img id="communityOverview"
-				                       src="${starexecRoot}/images/loadingGraph.png"
-				                       width="300" height="300" alt="Community statistics overview chart" hidden/></p>
+				<div id="communityOverviewContainer" class="chart-container" style="position: relative; height: 400px; width: 100%;">
+					<canvas id="communityOverviewCanvas" aria-hidden="true" role="presentation"></canvas>
+					<div id="communityEmptyState" hidden>No community data available.</div>
+				</div>
 				<ul class="actionList">
 					<li>
 						<button class="compareBtn" id="compareUsers"
-						        type="button">users
+						        type="button" aria-pressed="false">users
 						</button>
 					</li>
 					<li>
 						<button class="compareBtn" id="compareSolvers"
-						        type="button">solvers
+						        type="button" aria-pressed="false">solvers
 						</button>
 					</li>
 					<li>
 						<button class="compareBtn" id="compareBenches"
-						        type="button">benches
+						        type="button" aria-pressed="false">benchmarks
 						</button>
 					</li>
 					<li>
 						<button class="compareBtn" id="compareJobs"
-						        type="button">jobs
+						        type="button" aria-pressed="false">jobs
 						</button>
 					</li>
 					<li>
 						<button class="compareBtn" id="compareJobPairs"
-						        type="button">job pairs
+						        type="button" aria-pressed="false">job pairs
 						</button>
 					</li>
 					<li>
 						<button class="compareBtn" id="compareDiskUse"
-						        type="button">disk use
+						        type="button" aria-pressed="false">disk use
 						</button>
 					</li>
 				</ul>
-			</fieldset>
-
-			<fieldset hidden>
-				<button id="refreshStats" type="button">refresh statistics
-				</button>
 			</fieldset>
 
 		</fieldset>
