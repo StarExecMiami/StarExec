@@ -4,13 +4,13 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM UTC
   pull_request:
-    branches: [UMprod, dev, containerised]
+    branches: [UMprod, dev, containerised, fb1]
     paths:
       - 'starexec-app/**'
       - 'pom.xml'
       - '.github/workflows/security-scan.yml'
   push:
-    branches: [UMprod, dev, containerised]
+    branches: [UMprod, dev, containerised, fb1]
     paths:
       - 'pom.xml'
   workflow_dispatch:
@@ -35,18 +35,28 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       
-      - name: Clean global Dependency-Check data
-        run: rm -rf ~/.m2/repository/org/owasp/dependency-check-data
+      - name: Set NVD cache date key
+        run: echo "YEAR_MONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
+
+      - name: Cache NVD vulnerability database
+        uses: actions/cache@v4
+        with:
+          path: target/dependency-check-data
+          key: ${{ runner.os }}-nvd-data-${{ env.YEAR_MONTH }}
+          restore-keys: |
+            ${{ runner.os }}-nvd-data-
 
       - name: Run OWASP Dependency Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          echo "Cleaning previous dependency check data..."
-          mvn dependency-check:purge
           echo "Running OWASP Dependency Check..."
           mvn dependency-check:check \
             -DskipProvidedScope=true \
             -DskipRuntimeScope=false \
-            -DskipTestScope=true
+            -DskipTestScope=true \
+            -Dnvd.api.key=${NVD_API_KEY} \
+            -Dnvd.api.failOnError=false
       
       - name: Upload dependency check report
         if: always()
