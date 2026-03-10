@@ -1,0 +1,47 @@
+title = "StarExec Secret Detection Configuration"
+
+[extend]
+# Extend the upstream default ruleset (maintained by gitleaks team).
+# This gives us all standard detectors (AWS, GH tokens, JWT, etc.)
+# without duplicating their maintenance burden.
+useDefault = true
+
+[allowlist]
+description = "Allowlist for known-safe patterns in this codebase"
+
+# ------------------------------------------------------------
+# Path exclusions
+# Source paths we trust to contain only dummy/fixture content.
+# ------------------------------------------------------------
+paths = [
+  # JUnit/integration test fixtures — dummy credentials expected here
+  '''starexec-app/src/test/''',
+
+  # Legacy HTML documentation — may contain redacted example output
+  '''web-docs/''',
+
+  # The LEGACY.md doc describes old Ant/Tomcat setup with example values
+  '''docs/LEGACY.md''',
+]
+
+# ------------------------------------------------------------
+# Stopwords
+# If a detected secret value contains any of these strings,
+# gitleaks suppresses the finding. Use for unmistakable
+# non-secrets only — do not add real secret substrings here.
+# ------------------------------------------------------------
+stopwords = [
+  # Generic placeholders used in documentation and config examples
+  "changeme",
+  "CHANGEME",
+  "change_me",
+  "your-password",
+  "your-secret",
+  "YOUR_SECRET",
+  "placeholder",
+  "example",
+  "dummy",
+  "fixture",
+  "localhost",
+  "test-only",
+]
