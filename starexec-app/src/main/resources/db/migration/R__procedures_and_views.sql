@@ -9384,6 +9384,63 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Atomically sets the status of a job pair and its stages with precision:
+-- - Sets job_pairs.status_code = terminalStatus for the pair
+-- - Sets jobpair_stage_data.status_code = terminalStatus for the terminal stage (stageNumber)
+-- - Sets jobpair_stage_data.status_code = notReachedStatus for all stages after stageNumber
+-- - Fires the job_pair_completion side-effects (insertion + job completion check) if terminalStatus is terminal
+-- This replaces the non-atomic two-call sequence of UpdatePairStatus + UpdateLaterStageStatuses.
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatusPrecise(_pairId INT, _stageNumber INT, _terminalStatus INT, _notReachedStatus INT)
+AS $$
+DECLARE
+	_job_id INT;
+	_count INT;
+BEGIN
+	-- Get the job_id for the completion check below
+	SELECT job_id INTO _job_id FROM job_pairs WHERE id = _pairId;
+
+	-- Set the pair-level status
+	UPDATE job_pairs SET status_code = _terminalStatus WHERE id = _pairId;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Job pair %s not found', _pairId);
+	END IF;
+
+	-- Set the terminal stage to terminalStatus
+	UPDATE jobpair_stage_data SET status_code = _terminalStatus
+	WHERE jobpair_id = _pairId AND stage_number = _stageNumber;
+
+	-- Set all stages after the terminal stage to notReachedStatus
+	UPDATE jobpair_stage_data SET status_code = _notReachedStatus
+	WHERE jobpair_id = _pairId AND stage_number > _stageNumber;
+
+	-- Fire job_pair_completion side-effects if terminalStatus is a terminal status code.
+	-- Terminal codes: 7-18 (normal completion, resource limits, common errors), 21 (killed),
+	-- 23 (not reached), 24 (benchmark dependency missing), 25 (pre-processor error), 26 (post-processor error)
+	IF ((_terminalStatus > 6 AND _terminalStatus < 19) OR _terminalStatus IN (21, 23, 24, 25, 26)) THEN
+		INSERT INTO job_pair_completion (pair_id) VALUES (_pairId)
+		ON CONFLICT (pair_id) DO NOTHING;
+
+		-- Check if all pairs in the job are now complete; if so, stamp jobs.completed
+		SELECT COUNT(*) INTO _count FROM (
+			SELECT id FROM starexec.job_pairs
+			WHERE job_id = _job_id AND status_code IN (1, 2, 4, 19, 20, 22)
+			LIMIT 1
+		) AS subq;
+		IF _count = 0 THEN
+			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			IF NOT FOUND THEN
+				RAISE EXCEPTION USING
+					ERRCODE = 'P0002',
+					MESSAGE = format('Job %s for job pair %s not found', _job_id, _pairId);
+			END IF;
+		END IF;
+	END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Determines if User is Leader of Space
 -- Author: Benton McCune
 DROP FUNCTION IF EXISTS starexec.IsLeader(INT, INT) CASCADE;

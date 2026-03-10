@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-03-10
+
+### Breaking Changes
+- REST endpoint `POST /services/edit/user/{attr}/{userId}/{val}` removed;
+  replaced by `POST /services/edit/user/{userId}` with JSON body
+  (EditUserAttributeRequest DTO). External API clients must be updated.
+- `Backend.submitScript()` interface gains `int pairId` as first parameter.
+  Third-party Backend implementations outside this repository must be updated.
+- `Statistics.addQueuePlotPoint()` and `Statistics.makeCommunityGraphs()`
+  deleted. Any caller outside this repository will fail to compile.
+- `getAdaptivePollMaxInterval()` default changed from 10 000 ms to 120 000 ms.
+  Deployments not setting `STAREXEC_POLL_MAX_INTERVAL_MS` will poll 12× slower.
+- `checkIfBenchmarkDependenciesExists` return-code convention inverted
+  (0 = success, 1 = failure, correcting a longstanding bug). External scripts
+  sourcing `functions.bash` using the old convention are broken.
+
+### New Features
+- Queue metrics history: new `queue_metrics_history` table, REST endpoint
+  `GET /cluster/queues/{id}/metrics/history`, and hourly pruning task.
+- Job Matrix View servlet and JSP (`JobMatrixViewController`).
+- Email change rate limiting: 5-minute cooldown enforced via DB constraint.
+- CPU core pinning for `LocalBackend` via `taskset` and `STAREXEC_LOCAL_CORE_LIST`.
+- Graceful SMTP thread pool shutdown via `EmailExecutorContextListener`.
+- Benchmark dependency resolution: `ResolveBenchmarkDependenciesBatch` and
+  `InsertResolvedDependencies` stored procedures; `AddBenchDependency` is now
+  idempotent via `ON CONFLICT ... DO UPDATE`.
+
+### Bug Fixes
+- `V0026`: Removed `CONCURRENTLY` and `flyway:executeInTransaction=false`
+  from index creation (fixes Flyway advisory lock deadlock on fresh installs).
+- `V0103`: `RerunJobPairsBatch` rewritten as pure set-based SQL, eliminating
+  `SubtransControlLock` contention.
+- `functions.bash`: Added `set -euo pipefail`; fixed `(( N = expr ))` vs
+  `N=$(( expr ))` arithmetic under `set -e`.
+- `jobscript`: Fixed `trap 'exitJobscript $?' EXIT`, uninitialized array,
+  and arithmetic expressions.
+- `LocalBackend`: Safety net for missing `status.json` on exit-0 prevents
+  pairs stuck in ENQUEUED state.
+- JSON monitors: Replaced fragile regex parsing of `status.json` with Gson.
+- PostgreSQL type resolution: Added explicit `::TEXT` casts in
+  `GetJobAttributesTable*` and `analytics_historical` views.
+- `UpdatePairStatusPrecise`: Added missing stored procedure that atomically
+  sets pair and stage statuses; its absence caused `PSQLException` on every
+  job-pair completion event in container and local backends.
+
+### Security
+- OWASP dependency-check `failBuildOnCVSS` raised to 11 (report-only mode).
+  Security findings now appear in CI reports without blocking builds.
+- NVD database caching added to `security-scan.yml`.
+
+### Internal / Cleanup
+- 23 `.backup` test files deleted (~3,500 lines).
+- Generated `.css` files de-tracked from git (now build artifacts).
+- IDE config files (`.idea/`) removed.
+
 ## [2.2.0] - 2026-03-03
 
 ### Security
