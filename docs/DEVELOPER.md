@@ -720,6 +720,9 @@ make deploy-podman APP_PORT=8080
 - **[API Guide](API_GUIDE.md)** - REST API reference
 - **[Configuration](CONFIGURATION.md)** - Configuration options
 - **[Troubleshooting](TROUBLESHOOTING.md)** - Common issues
+- **[Test Resources](test-resources.md)** - Maven test profiles and test-data fixtures
+- **[Database Standards](DATABASE_STANDARDS.md)** - Schema conventions and FK constraints
+- **[Local Backend Isolation](LOCAL_BACKEND_ISOLATION.md)** - CPU pinning for reproducible benchmark results
 
 ### External Resources
 

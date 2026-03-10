@@ -1,6 +1,6 @@
 # Legacy Documentation
 
-This document consolidates historical documentation from the original StarExec system, preserved for reference. For current deployment and development, see the main [README](README.markdown).
+This document consolidates historical documentation from the original StarExec system, preserved for reference. For current deployment and development, see the main [README](../README.md).
 
 ---
 
@@ -443,9 +443,9 @@ These documents record specific investigations and their resolutions.
 ### Modern Resources
 
 - [Current Repository](https://github.com/StarExecMiami/StarExec)
-- [Main Documentation](README.markdown)
-- [Quick Start Guide](docs/QUICKSTART.md)
-- [Deployment Guide](docs/DEPLOYMENT.md)
+- [Main Documentation](../README.md)
+- [Quick Start Guide](QUICKSTART.md)
+- [Deployment Guide](DEPLOYMENT.md)
 
 ---
 
@@ -459,4 +459,4 @@ If you need specific historical documentation that isn't included here:
 
 ---
 
-**Note:** This document is for historical reference only. For current usage, see the main [README](README.markdown) and [docs/](docs/) directory.
+**Note:** This document is for historical reference only. For current usage, see the main [README](../README.md) and [docs/](docs/) directory.

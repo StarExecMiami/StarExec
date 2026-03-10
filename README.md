@@ -35,27 +35,30 @@ helm install starexec starexec/starexec -n starexec --create-namespace
 
 ## Documentation
 
-### Core Documentation
-- **[Quick Start Guide](docs/QUICKSTART.md)** - Get running in 10 minutes
-- **[Deployment Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
-- **[Configuration Reference](docs/CONFIGURATION.md)** - All configuration options
-- **[Volume Management](docs/VOLUMES.md)** - Backup, restore, and volume operations
+Documentation is organized using the [Diátaxis](https://diataxis.fr) framework.
 
-### Operations
+### Tutorial — Learning by doing
+- **[Quick Start Guide](docs/QUICKSTART.md)** - Get running in 10 minutes (Docker Compose, Podman, or Kubernetes)
+
+### How-to — Accomplish specific goals
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
+- **[Volume Management](docs/VOLUMES.md)** - Backup, restore, and volume operations
 - **[Database Management](docs/DATABASE.md)** - Migrations, backups, and troubleshooting
 - **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 - **[Security Guide](docs/SECURITY.md)** - Security best practices and considerations
-
-### Advanced Topics
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and components
-- **[Backend Configuration](docs/BACKENDS.md)** - Local, Podman, Kubernetes, SGE, OAR
 - **[Performance Tuning](docs/PERFORMANCE.md)** - Capacity and optimization
 - **[Observability](docs/OBSERVABILITY.md)** - Logging and debugging
-
-### Development
 - **[Developer Guide](docs/DEVELOPER.md)** - Setting up development environment
 - **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
-- **[Legacy Documentation](docs/LEGACY.md)** - Ant/Tomcat-based setup
+
+### Reference — Consult while working
+- **[Configuration Reference](docs/CONFIGURATION.md)** - All environment variables and Helm values
+- **[Backend Configuration](docs/BACKENDS.md)** - Local, Podman, Kubernetes, SGE, OAR reference
+- **[API Guide](docs/API_GUIDE.md)** - REST API endpoints and usage
+
+### Explanation — Understand why
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and components
+- **[Legacy Documentation](docs/LEGACY.md)** - Ant/Tomcat-based setup history
 
 ## Features
 

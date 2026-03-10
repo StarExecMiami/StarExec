@@ -113,6 +113,18 @@ make build-cached
 podman pull ghcr.io/starexecmiami/starexec:latest
 ```
 
+### Make Hangs Waiting for sudo Password
+
+**Problem:** `make` stalls mid-run on a target such as `make build` or `make test-deps`
+
+**Cause:** When `$(PODMAN_CMD)` resolves to `sudo podman` (rootful mode), `sudo` re-prompts for a password once the credential cache expires (default 5–15 minutes). On an interactive terminal the prompt may be swallowed by `make`'s output buffering; on CI runners this is a non-issue when `NOPASSWD` is set in `sudoers`.
+
+**Solution:** Refresh the credential cache immediately before starting a long build:
+
+```bash
+sudo -v && make test-deps
+```
+
 ## Image and Registry Issues
 
 ### Changes not appearing after push
@@ -368,6 +380,40 @@ WHERE jp.job_id = <JOB_ID>;
    podman exec starexec-app ls -la /app/data/solvers/
    ```
 
+4. **[ROOT CAUSE — FIXED in jobscript] `(( ))` arithmetic kills script before EXIT trap**
+
+   **Symptom:** LocalJobMonitor shows `checked N pairs, found 0 status files` indefinitely. Job watcher file shows `Child status: 1`, `Real time: ~0.011s`. The pair log (e.g. `1.txt`) is empty.
+
+   **Root cause (confirmed):**
+   In `jobscript` (the SGE job template), line 124 used the bash compound command `(( ))` to compute `NUM_BENCH_INPUTS`:
+   ```bash
+   ((NUM_BENCH_INPUTS = ${#BENCH_INPUT_PATHS[@]} - 1))
+   ```
+   `functions.bash` is sourced *before* this line and enables `set -euo pipefail`. When a job has no benchmark inputs, `BENCH_INPUT_PATHS[0]=""` is the only element, so the expression evaluates to `0`. In bash, `(( 0 ))` returns **exit code 1**, which `set -e` treats as a fatal error. The script aborts **before line 140** where `trap 'exitJobscript $?' EXIT` is registered. With no EXIT trap, no `status.json` is written. Meanwhile, runsolver (which wraps the script) **exits with 0** even when its child exits with 1, so `LocalBackend` sees a successful exit. `LocalJobMonitor` waits for a `status.json` that never arrives, leaving all pairs stuck in `ENQUEUED` forever.
+
+   **Fix applied:** `jobscript` now uses arithmetic *expansion* `$(( ))` which never returns a non-zero exit code:
+   ```bash
+   NUM_BENCH_INPUTS=$(( ${#BENCH_INPUT_PATHS[@]} - 1 ))
+   ```
+   A secondary safety net was added to `LocalBackend`: if the process exits 0 but no `status.json` exists, the pair is immediately marked `ERROR_RUNSCRIPT`.
+
+   **How to diagnose before the fix:**
+   ```bash
+   # Check watcher file for a pair (e.g. pair_1)
+   podman exec starexec-pod-app cat /app/data/logs/1/1/pair_1/1.txt.watcher
+   # Look for: Child status: 1 AND Real time: ~0.01s → early script crash
+   
+   # Confirm no status.json
+   podman exec starexec-pod-app ls /app/data/logs/1/1/pair_1/
+   
+   # Reproduce in container (should exit 1 before the fix, 0 after)
+   podman exec starexec-pod-app bash -c '
+     set -euo pipefail
+     BENCH_INPUT_PATHS[0]=""
+     (( NUM_BENCH_INPUTS = ${#BENCH_INPUT_PATHS[@]} - 1 )) && echo OK || echo FAILS_WITH_SET_E
+   '
+   ```
+
 ### Jobs Never Complete
 
 **Problem:** Jobs stuck in RUNNING status
@@ -403,6 +449,38 @@ cat /var/starexec/output/<JOB_ID>/*/status.json
 
 3. **Solver crashed without output**
    - Check solver logs in job output directory
+
+### Jobs Start but No status.json (LocalBackend in container)
+
+**Problem:** Logs show `LocalJobMonitor - Monitor poll: checked N pairs, found 0 status files`. Jobs are enqueued and the monitor has registered them (they started), but no job writes `status.json`, so pairs never complete.
+
+**Diagnostics:**
+
+```bash
+# Confirm backend: logs should show LocalJobMonitor (LocalBackend), not ContainerJobMonitor
+podman logs starexec-pod-app 2>&1 | grep -E "LocalJobMonitor|PodmanBackend initialized"
+
+# See if any job process is running inside the app container
+podman exec starexec-pod-app ps aux | grep -E "bash|runsolver"
+
+# Inspect one job’s log (path from job pair output dir, e.g. under JOB_LOG_DIRECTORY)
+podman exec starexec-pod-app cat /path/to/pair_12345.txt
+
+# Run one job script manually to see the real error (replace paths with real pair paths)
+podman exec -e CONTAINER_MODE=true -e STAREXEC_OUTPUT_DIR=/tmp/out starexec-pod-app \
+  bash /path/to/sge_scripts/<script> 2>&1
+```
+
+**Common causes:**
+
+1. **Script fails before writing status** (e.g. `SCRIPT_DIR` or `functions.bash` missing in container, or `runsolver` not installed).
+   - Fix: Install runsolver in the image or set `STAREXEC_LOCAL_USE_RUNSOLVER=false` and ensure script/solver paths exist inside the container.
+
+2. **Jobs blocked in executor** (e.g. few worker threads and scripts hang).
+   - Fix: Set `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` so stuck jobs are killed; check `STAREXEC_LOCAL_CONCURRENCY`.
+
+3. **Queue full so no new submissions:** `Not adding more job pairs to queue X, which has N pairs enqueued` — those N pairs are already submitted but not completing.
+   - Fix: Resolve why they don’t write status (above); or reset pairs to PENDING and fix environment, then re-run.
 
 ## Kubernetes Issues
 
