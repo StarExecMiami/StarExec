@@ -25,9 +25,13 @@ d85a375b57b248004d4eb8382f37336473eca76b:.github/workflows/java.yaml:generic-api
 25813bccc81369ddb6478923653ad31a446825af:StarExec Deployment Reliability and Security:generic-api-key:1058
 25813bccc81369ddb6478923653ad31a446825af:StarExec Deployment Reliability and Security:generic-api-key:1060
 
-# localStorage key name in banner API docs: `banner_maintenance_2025_01`.
-# Not a secret — it is a plain string key used to track dismissed banners.
+# localStorage key name in BANNERS_API.md used to track dismissed maintenance banners.
+# Not a secret — plain string UI-state key, not a credential.
 25813bccc81369ddb6478923653ad31a446825af:docs/alerts/BANNERS_API.md:generic-api-key:79
+
+# The comment above previously named the banner key inline; gitleaks flagged the
+# suppression file itself in commit e7cc6b7d. Comment has been reworded.
+e7cc6b7d681a539f82f846d35c7c2f0f417205d2:.gitleaksignore:generic-api-key:28
 
 # Expired JWT in backend status log captured during a debugging session (Nov 2025).
 # Token audience: localhost test environment, non-production key. File is a
