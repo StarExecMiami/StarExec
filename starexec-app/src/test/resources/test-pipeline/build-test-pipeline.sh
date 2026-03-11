@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Script para gestionar los recursos de test-pipeline de StarExec
-# Uso: ./build-test-pipeline.sh [compile|package|clean|help]
+# Script to manage StarExec test-pipeline resources
+# Usage: ./build-test-pipeline.sh [compile|package|clean|help]
 
 set -e
 
@@ -10,63 +10,63 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 PIPELINE_DIR="$SCRIPT_DIR"
 
 usage() {
-    echo "Uso: $0 [comando]"
+    echo "Usage: $0 [command]"
     echo ""
-    echo "Comandos disponibles:"
-    echo "  compile  - Compila el DummySolver.c"
-    echo "  package  - Crea los archivos .tar para subir a StarExec"
-    echo "  clean    - Limpia archivos generados"
-    echo "  help     - Muestra esta ayuda"
+    echo "Available commands:"
+    echo "  compile  - Compiles DummySolver.c"
+    echo "  package  - Creates .tar files for uploading to StarExec"
+    echo "  clean    - Cleans up generated files"
+    echo "  help     - Shows this help"
     echo ""
-    echo "Ejemplo: $0 package"
+    echo "Example: $0 package"
 }
 
 compile_solver() {
-    echo "Compilando DummySolver.c..."
+    echo "Compiling DummySolver.c..."
     cd "$PIPELINE_DIR"
     
     if ! command -v gcc &> /dev/null; then
-        echo "Error: gcc no está instalado"
+        echo "Error: gcc is not installed"
         exit 1
     fi
     
     gcc -o dummySolver DummySolver.c
-    echo "✓ DummySolver compilado exitosamente"
+    echo "✓ DummySolver compiled successfully"
 }
 
 package_resources() {
-    echo "Empaquetando recursos para StarExec..."
+    echo "Packaging resources for StarExec..."
     cd "$PIPELINE_DIR"
     
-    # Compilar si no existe el ejecutable
+    # Compile if executable does not exist
     if [[ ! -f "dummySolver" ]]; then
         compile_solver
     fi
     
-    # Crear archivo tar del solver
+    # Create solver tarball
     tar -cf dummySolver.tar dummySolver
-    echo "✓ dummySolver.tar creado"
+    echo "✓ dummySolver.tar created"
     
-    # Crear archivo tar del benchmark
+    # Create benchmark tarball
     tar -cf benchmark.tar bench.txt
-    echo "✓ benchmark.tar creado"
+    echo "✓ benchmark.tar created"
     
     echo ""
-    echo "Recursos listos para subir a StarExec:"
+    echo "Resources ready to upload to StarExec:"
     echo "  - dummySolver.tar (solver)"
     echo "  - benchmark.tar (benchmark)"
-    echo "  - test.xml (configuración de job)"
+    echo "  - test.xml (job configuration)"
 }
 
 clean_generated() {
-    echo "Limpiando archivos generados..."
+    echo "Cleaning up generated files..."
     cd "$PIPELINE_DIR"
     
     rm -f dummySolver
     rm -f dummySolver.tar
     rm -f benchmark.tar
     
-    echo "✓ Archivos generados eliminados"
+    echo "✓ Generated files removed"
 }
 
 main() {
@@ -84,7 +84,7 @@ main() {
             usage
             ;;
         *)
-            echo "Error: Comando desconocido '$1'"
+            echo "Error: Unknown command '$1'"
             echo ""
             usage
             exit 1

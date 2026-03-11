@@ -1,9 +1,9 @@
--- V0102: Agregar UNIQUE constraint a bench_dependency para garantizar idempotencia
--- y permitir ON CONFLICT DO NOTHING / UPDATE.
+-- V0102: Add UNIQUE constraint to bench_dependency to ensure idempotency
+-- and allow ON CONFLICT DO NOTHING / UPDATE.
 
--- Intentar agregar el constraint. Si ya existen duplicados, fallará, lo cual es correcto
--- para que el administrador limpie los datos inconsistentes antes de proceder.
--- Sin embargo, en un entorno de desarrollo/fresco, esto pasará sin problemas.
+-- Try to add the constraint. If duplicates already exist, it will fail, which is correct
+-- so the administrator can clean up inconsistent data before proceeding.
+-- However, in a fresh or development environment, this will pass without issues.
 
 DO $$
 BEGIN
