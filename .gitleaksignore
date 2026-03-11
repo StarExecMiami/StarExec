@@ -1,0 +1,35 @@
+# Known-safe false positives — verified and documented below.
+# Format: <commit>:<file>:<rule>:<line>
+
+# se_admin MySQL password for starexec.acorn.miami.edu.
+# Appeared in GitHub Actions java.yaml (Feb-Jun 2025) and AGENTS.md (Feb 2026).
+# Credential rotated Mar 2026. All files deleted or sanitised. History-rewrite
+# of widely-merged branches deferred; suppress known fingerprints instead.
+507308f4cae3aa9bd37b07ca60b095502dfe0c82:.github/workflows/java.yaml:generic-api-key:20
+d85a375b57b248004d4eb8382f37336473eca76b:.github/workflows/java.yaml:generic-api-key:26
+91db057a80385db2cfc769f3a8c4388e4e519145:.github/workflows/java.yaml:generic-api-key:20
+6fa2f715d06169fac9ab419c3274de38b13356fd:.github/workflows/java.yaml:generic-api-key:16
+25813bccc81369ddb6478923653ad31a446825af:AGENTS.md:generic-api-key:14
+
+# University of Iowa SGE/Tomcat/MySQL deployment (stardev.cs.uiowa.edu, 2013).
+# Files removed from repo Jan 2018. Domain www.starexec.org confirmed
+# DNS_PROBE_FINISHED_NXDOMAIN — deployment fully decommissioned.
+5efdd62042424ec92e9f103b11505b46ae5831a1:stardev.properties:generic-api-key:5
+5efdd62042424ec92e9f103b11505b46ae5831a1:production.properties:generic-api-key:5
+
+# Render.com deployment template and Kubernetes manifest doc — both use the
+# obvious dev placeholder `starexec_dev_password` (base64: c3RhcmV4ZWNfZGV2X3Bhc3N3b3Jk).
+# Not a real secret; files exist only in historical commit 25813bccc.
+25813bccc81369ddb6478923653ad31a446825af:render_new.yaml:generic-api-key:28
+25813bccc81369ddb6478923653ad31a446825af:render_new.yaml:generic-api-key:30
+25813bccc81369ddb6478923653ad31a446825af:StarExec Deployment Reliability and Security:generic-api-key:1058
+25813bccc81369ddb6478923653ad31a446825af:StarExec Deployment Reliability and Security:generic-api-key:1060
+
+# localStorage key name in banner API docs: `banner_maintenance_2025_01`.
+# Not a secret — it is a plain string key used to track dismissed banners.
+25813bccc81369ddb6478923653ad31a446825af:docs/alerts/BANNERS_API.md:generic-api-key:79
+
+# Expired JWT in backend status log captured during a debugging session (Nov 2025).
+# Token audience: localhost test environment, non-production key. File is a
+# developer scratch log never intended for commit; credential has been rotated.
+9905632995cb40d34a174dd4abd09d9ecfaf3a17:BACKEND_LOGIN_STATUS.txt:generic-api-key:175

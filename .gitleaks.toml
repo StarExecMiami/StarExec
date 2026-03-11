@@ -9,13 +9,12 @@ useDefault = true
 [allowlist]
 description = "Allowlist for known-safe patterns in this codebase"
 
-# ------------------------------------------------------------
 # Path exclusions
 # Source paths we trust to contain only dummy/fixture content.
-# ------------------------------------------------------------
 paths = [
   # JUnit/integration test fixtures — dummy credentials expected here
   '''starexec-app/src/test/''',
+  '''benchmark-service/src/test/''',
 
   # Legacy HTML documentation — may contain redacted example output
   '''web-docs/''',
@@ -24,12 +23,10 @@ paths = [
   '''docs/LEGACY.md''',
 ]
 
-# ------------------------------------------------------------
 # Stopwords
 # If a detected secret value contains any of these strings,
 # gitleaks suppresses the finding. Use for unmistakable
 # non-secrets only — do not add real secret substrings here.
-# ------------------------------------------------------------
 stopwords = [
   # Generic placeholders used in documentation and config examples
   "changeme",

@@ -37,6 +37,9 @@
 **/.tmp
 **/.cache
 
+# Terminal session dumps (e.g., output redirected from make/deploy commands)
+ops.txt
+
 ####################################
 # OS & Editor junk
 ####################################
