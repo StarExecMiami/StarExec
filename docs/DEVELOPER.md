@@ -152,6 +152,17 @@ make build-fresh
 make build-prod IMAGE_TAG=v1.2.3
 ```
 
+### Security Considerations: Cache Freshness
+
+Note: Relying entirely on cached images via `--pull=missing` means your local environment will not receive upstream security patches for base images (Alpine, OpenJDK, Node.js). If a CVE is published for `eclipse-temurin:17-jre-alpine` or `node:20-alpine`, your cached copy remains vulnerable.
+
+**Recommendation:** Run `make build-fresh` periodically (at minimum weekly, ideally before each major feature branch or CI merge) to ensure parity with the CI environment and receive upstream security patches.
+
+```bash
+# Refresh base images and rebuild
+make build-fresh
+```
+
 ### Build Artifacts
 
 | Artifact | Location | Description |

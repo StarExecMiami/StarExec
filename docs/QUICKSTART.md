@@ -82,13 +82,26 @@ You should see:
    ```
 
 4. Start StarExec:
-   ```bash
-   make start
-   ```
+    ```bash
+    make start
+    ```
 
 5. Access the application:
-   - URL: `http://localhost:7827/starexec`
-   - Default credentials: `admin:admin`
+    - URL: `http://localhost:7827/starexec`
+    - Default credentials: `admin:admin`
+
+### Optional: Cache Base Images for Offline Builds
+
+The Makefile-based Podman workflow supports pre-caching base images. This is useful if you plan to work offline or experience intermittent network connectivity:
+
+```bash
+# Pre-fetch all base images (run once while online)
+make cache-images
+```
+
+This command is specific to the **Podman/Makefile deployment** (Method 2). It does not apply to Method 1 (Docker Compose), which manages image layers through `docker compose up --build`.
+
+After running `make cache-images`, subsequent builds will use the cached layers even without internet access.
 
 ### Expected Output
 

@@ -113,6 +113,56 @@ make build-cached
 podman pull ghcr.io/starexecmiami/starexec:latest
 ```
 
+### Build Fails with Registry Timeout ("server misbehaving")
+
+**Problem:** `make build` or `make start` fails with:
+```
+Error: creating build container: initializing source docker://node:20-alpine: 
+pinging container registry registry-1.docker.io: Get "https://registry-1.docker.io/v2/": 
+dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: server misbehaving
+make: *** [Makefile:231: build] Error 125
+```
+
+**Root Cause:** Podman cannot reach the Docker Hub registry. Base images are not cached locally. This may indicate no internet connectivity, DNS failure, or firewall blocking.
+
+**Solution:**
+
+**If you have not yet run `make cache-images`:**
+
+1. Restore internet connectivity (or configure DNS/firewall rules)
+2. Pre-cache all base images:
+   ```bash
+   make cache-images
+   ```
+3. Retry your build:
+   ```bash
+   make stop nuke build start status ENV=dev FORCE=1
+   ```
+
+**If you have already run `make cache-images`:**
+
+1. Use strict offline build mode (fails fast instead of timing out):
+   ```bash
+   make build-offline
+   ```
+
+2. If the error persists, internet may be required to pull a missing image. Restore connectivity and run:
+   ```bash
+   make build-fresh
+   ```
+
+**Pull Policy Reference:**
+
+The Makefile now supports three pull policies for container base images:
+
+| Command | Flag | Behavior | Use Case |
+|---------|------|----------|----------|
+| `make build` | `--pull=missing` | Use local cache if available; pull from registry if absent | Normal development (default) |
+| `make build-fresh` | `--pull=always` | Always fetch fresh base images from registry | Updating cached layers or debugging stale cache issues |
+| `make build-offline` | `--pull=never` | Fail immediately if base image is not cached locally | Strict offline environments (after `make cache-images`) |
+
+**Note:** For Podman/Makefile deployments only — Docker Compose does not support these targets.
+
 ### Make Hangs Waiting for sudo Password
 
 **Problem:** `make` stalls mid-run on a target such as `make build` or `make test-deps`

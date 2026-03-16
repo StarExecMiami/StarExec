@@ -130,7 +130,7 @@ BLUE   := $(shell tput -Txterm setaf 4)
 RESET  := $(shell tput -Txterm sgr0)
 BOLD   := $(shell tput -Txterm bold)
 
-.PHONY: help build build-fresh build-prod image \
+.PHONY: help build build-fresh build-prod build-offline cache-images image \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
@@ -151,9 +151,11 @@ help:
 	@echo "Usage: make <target> [ENV=<env>]"
 	@echo ""
 	@echo "Build Targets:"
-	@echo "  build                  Build container image (uses cache)"
-	@echo "  build-fresh            Build without cache (slower, guaranteed fresh)"
+	@echo "  build                  Build container image (--pull=missing: uses local cache if available)"
+	@echo "  build-fresh            Force pull all base images and rebuild (--pull=always --no-cache)"
 	@echo "  build-prod             Build production image with registry tag"
+	@echo "  build-offline          Build strictly from local cache (--pull=never); fails fast if image absent"
+	@echo "  cache-images           Pre-fetch all base images for offline builds (run once while online)"
 	@echo "  image                  Ensure image exists (pulls rolling tags automatically)"
 	@echo "  pull                   Force update all images from registry"
 	@echo ""
@@ -228,13 +230,13 @@ help:
 
 build:
 	@echo "Building image: $(RELEASE_NAME):$(IMAGE_TAG)"
-	$(PODMAN_CMD) build -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build --pull=missing -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-fresh:
 	@echo "Building fresh image (no cache): $(RELEASE_NAME):$(IMAGE_TAG)"
-	$(PODMAN_CMD) build --no-cache -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build --no-cache --pull=always -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Fresh image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
@@ -242,11 +244,34 @@ build-prod:
 	@echo "Building production image"
 	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-2.3.0}; \
-	$(PODMAN_CMD) build -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
+	$(PODMAN_CMD) build --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "${GREEN}✓ Production image built successfully ${RESET}"
 	@echo "  Image: $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION
 	@echo "Push with: podman push $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
+
+# Pre-fetch all base images required by the Dockerfile.
+# Run once while online; subsequent offline builds will use the local cache.
+# Base images:
+#   node:20-alpine             Stage 1 - SCSS/CSS asset compilation
+#   alpine:3.19                Stage 2 - runsolver build
+#   maven:3.9-eclipse-temurin-17-alpine  Stage 3 & 4 - credential handler + app build
+#   eclipse-temurin:17-jre-alpine        Stage 5 - runtime
+cache-images:
+	@echo "Pre-fetching base images for offline builds..."
+	$(PODMAN_CMD) pull docker.io/library/node:20-alpine
+	$(PODMAN_CMD) pull docker.io/library/alpine:3.19
+	$(PODMAN_CMD) pull docker.io/library/maven:3.9-eclipse-temurin-17-alpine
+	$(PODMAN_CMD) pull docker.io/library/eclipse-temurin:17-jre-alpine
+	@echo "${GREEN}✓ All base images cached. Offline builds now available via 'make build' or 'make build-offline'.${RESET}"
+
+# Build strictly from local cache. Fails immediately if any base image is absent
+# rather than hanging on a registry timeout. Run 'make cache-images' first if needed.
+build-offline:
+	@echo "Building from local cache only (--pull=never)..."
+	$(PODMAN_CMD) build --pull=never -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	@echo "${GREEN}✓ Offline build complete: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
+	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 image:
 	@echo "Checking for image: $(RELEASE_NAME):$(IMAGE_TAG)"
