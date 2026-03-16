@@ -2371,8 +2371,8 @@ public class RESTServices {
 
 		if ("email".equals(attribute)) {
 			boolean callerIsAdmin = GeneralSecurity.hasAdminWritePrivileges(requestUserId);
-			boolean changingOwnEmail = (userId == requestUserId);
-			return handleEmailChange(userId, newValue, request, callerIsAdmin && !changingOwnEmail);
+			// Admins always bypass email verification, including when changing their own address.
+			return handleEmailChange(userId, newValue, request, callerIsAdmin);
 		}
 		return editUserInfoInternal(attribute, userId, newValue, request);
 	}
@@ -2382,8 +2382,8 @@ public class RESTServices {
 
 	/**
 	 * Handles an email change request.
-	 * When an admin changes another user's email, the change is applied directly (no verification needed).
-	 * When a user changes their own email, a verification link is sent to the new address.
+	 * When the caller is an admin (including when changing their own email), the change is applied
+	 * directly without verification. Regular users receive a verification link at the new address.
 	 */
 	private String handleEmailChange(int userId, String newEmail, HttpServletRequest request, boolean adminDirectChange) {
 		if (Users.getUserByEmail(newEmail)) {

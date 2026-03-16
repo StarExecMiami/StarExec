@@ -595,21 +595,20 @@ function saveChanges(obj, save, attr, old) {
         }
         s = parseReturnCode(returnCode);
         if (s) {
-          newVal = unmodifiedNewVal;
-          var msg = returnCode && returnCode.message ? returnCode.message : null;
-          if (msg) {
-            showMessage("success", msg, 5000);
+          if (attr === "email") {
+            $(obj)
+              .closest("td")
+              .after('<td id="edit' + attr + '">' + old + "</td>")
+              .remove();
+          } else {
+            newVal = unmodifiedNewVal;
+            $(obj)
+              .closest("td")
+              .after('<td id="edit' + attr + '">' + newVal + "</td>")
+              .remove();
           }
-          $(obj)
-            .closest("td")
-            .after('<td id="edit' + attr + '">' + newVal + "</td>")
-            .remove();
           editable(attr);
         } else {
-          var errMsg = returnCode && returnCode.message ? returnCode.message : null;
-          if (errMsg) {
-            showMessage("error", errMsg, 5000);
-          }
           $(obj)
             .closest("td")
             .after('<td id="edit' + attr + '">' + old + "</td>")
