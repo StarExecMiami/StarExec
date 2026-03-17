@@ -42,7 +42,7 @@
 				(( :pairType = 'all') OR
 				( :pairType='resource' AND job_pairs.status_code>=14 AND job_pairs.status_code<=17) OR
 				( :pairType = 'incomplete' AND job_pairs.status_code!=7 AND !(job_pairs.status_code>=14 AND job_pairs.status_code<=17)) OR
-				( :pairType='failed' AND ((job_pairs.status_code>=8 AND job_pairs.status_code<=13) OR job_pairs.status_code=18)) OR
+				( :pairType='failed' AND ((job_pairs.status_code>=8 AND job_pairs.status_code<=13) OR job_pairs.status_code IN (18,21,23,24,25,26))) OR
 				( :pairType ='complete' AND (job_pairs.status_code=7 OR (job_pairs.status_code>=14 AND job_pairs.status_code<=17))) OR
 				( :pairType= 'unknown' AND job_pairs.status_code=7 AND (job_attributes.attr_value='starexec-unknown'OR bench_attributes.attr_value IS NULL)) OR
 				( :pairType = 'solved' AND job_pairs.status_code=7 AND job_attributes.attr_value=bench_attributes.attr_value) OR

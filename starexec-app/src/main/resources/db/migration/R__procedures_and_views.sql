@@ -1400,7 +1400,7 @@ BEGIN
 	FROM starexec.community_assoc ca
 	JOIN job_assoc ja ON ja.space_id = ca.space_id
 	JOIN job_pairs jp ON jp.job_id = ja.job_id
-	WHERE jp.status_code IN (7,14,15,16,17)
+	WHERE jp.status_code >= 7  -- finishedRunning(): any terminal code (7+)
 	GROUP BY ca.comm_id;
 END;
 $$ LANGUAGE plpgsql;
@@ -2277,7 +2277,7 @@ BEGIN
 	((_type = 'all') OR
 	(_type='resource' AND job_pairs.status_code>=14 AND job_pairs.status_code<=17) OR
 	(_type = 'incomplete' AND job_pairs.status_code!=7 AND NOT (job_pairs.status_code>=14 AND job_pairs.status_code<=17)) OR
-	(_type='failed' AND ((job_pairs.status_code>=8 AND job_pairs.status_code<=13) OR job_pairs.status_code=18)) OR
+	(_type='failed' AND ((job_pairs.status_code>=8 AND job_pairs.status_code<=13) OR job_pairs.status_code IN (18,21,23,24,25,26))) OR
 	(_type ='complete' AND (job_pairs.status_code=7 OR (job_pairs.status_code>=14 AND job_pairs.status_code<=17))) OR
 	(_type= 'unknown' AND job_pairs.status_code=7 AND job_attributes.attr_value='starexec-unknown') OR
 	(_type = 'solved' AND job_pairs.status_code=7 AND (job_attributes.attr_value=bench_attributes.attr_value OR bench_attributes.attr_value is null)) OR
@@ -2572,17 +2572,17 @@ BEGIN
 	SELECT total_pairs INTO total_pairs_val FROM starexec.jobs WHERE id=_jobId;
 
 	-- Get complete pairs
-	SELECT COUNT(*) INTO complete_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND status_code=7;
+	SELECT COUNT(*) INTO complete_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND status_code >= 7;
 
 	-- Get pending pairs
 	SELECT COUNT(*) INTO pending_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND (status_code BETWEEN 1 AND 6 OR status_code=22);
 
 	-- Get error pairs
-	SELECT COUNT(*) INTO error_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND (status_code BETWEEN 8 AND 17 OR status_code=0);
+	SELECT COUNT(*) INTO error_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND (status_code BETWEEN 8 AND 18 OR status_code=0 OR status_code BETWEEN 24 AND 26);
 
 	-- Calculate runtime (difference between earliest completed pair's start time and latest completed pair's end time)
 	SELECT EXTRACT(EPOCH FROM (MAX(end_time) - MIN(start_time))) * 1000000 INTO runtime_val
-	FROM starexec.job_pairs WHERE job_id=_jobId AND status_code=7;
+	FROM starexec.job_pairs WHERE job_id=_jobId AND status_code >= 7;
 
 	RETURN QUERY SELECT total_pairs_val, complete_pairs_val, pending_pairs_val, error_pairs_val, runtime_val;
 END;
@@ -9276,7 +9276,7 @@ DECLARE
 BEGIN
     SELECT COUNT(*) INTO completePairs
     FROM starexec.job_pairs
-    WHERE job_id = _jobId AND status_code = 7;
+    WHERE job_id = _jobId AND status_code >= 7;
 
     RETURN completePairs;
 END;
@@ -9292,7 +9292,7 @@ DECLARE
 BEGIN
     SELECT COUNT(*) INTO errorPairs
     FROM starexec.job_pairs
-    WHERE job_id = _jobId AND (status_code BETWEEN 8 AND 17 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
+    WHERE job_id = _jobId AND (status_code BETWEEN 8 AND 18 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
 
     RETURN errorPairs;
 END;
