@@ -254,6 +254,72 @@ public class EnvironmentConfig {
     }
 
     /**
+     * Enables or disables live SSE streaming for job pair logs.
+     */
+    public static boolean isPairLogStreamEnabled() {
+        return Boolean.parseBoolean(
+            getEnv("STAREXEC_PAIR_LOG_STREAM_ENABLED", "true")
+        );
+    }
+
+    /**
+     * Maximum number of concurrent live log streams.
+     */
+    public static int getPairLogStreamMaxActive() {
+        return getEnvInt("STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE", 100);
+    }
+
+    /**
+     * Poll interval for checking newly appended log bytes.
+     */
+    public static long getPairLogStreamPollIntervalMs() {
+        return Long.parseLong(
+            getEnv("STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS", "1000")
+        );
+    }
+
+    /**
+     * Poll interval for checking pair terminal status.
+     */
+    public static long getPairLogStreamStatusPollIntervalMs() {
+        return Long.parseLong(
+            getEnv("STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS", "5000")
+        );
+    }
+
+    /**
+     * Heartbeat interval for SSE comment frames.
+     */
+    public static long getPairLogStreamHeartbeatSeconds() {
+        return Long.parseLong(
+            getEnv("STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS", "15")
+        );
+    }
+
+    /**
+     * Maximum duration for a single live log stream connection.
+     */
+    public static long getPairLogStreamMaxDurationSeconds() {
+        return Long.parseLong(
+            getEnv("STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS", "1800")
+        );
+    }
+
+    /**
+     * Maximum bytes emitted in a single SSE chunk event.
+     */
+    public static int getPairLogStreamReadChunkBytes() {
+        return getEnvInt("STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES", 8192);
+    }
+
+    /**
+     * Retry-After seconds when stream capacity is saturated.
+     */
+    public static int getPairLogStreamRetryAfterSeconds() {
+        return getEnvInt("STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS", 10);
+    }
+
+    /**
      * Number of job pairs to submit per job per cycle.
      * Higher values increase throughput but may cause queue congestion.
      * Default: 5

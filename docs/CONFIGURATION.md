@@ -86,6 +86,26 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `4096` | Memory per container (4GB) |
 | `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `1` | CPU cores per container |
 
+### Live Log Streaming (SSE)
+
+These settings tune the live pair log stream endpoint (`/services/jobs/pairs/{id}/log/stream`).
+
+| Variable | Default | Recommended (prod, benchmark-priority) | Description |
+|----------|---------|------------------------------------------|-------------|
+| `STAREXEC_PAIR_LOG_STREAM_ENABLED` | `true` | `true` | Enable/disable live SSE pair log streaming |
+| `STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE` | `100` | `30` | Max concurrent active live log streams |
+| `STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS` | `1000` | `2500` | Interval for checking newly appended log bytes |
+| `STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS` | `5000` | `15000` | Interval for polling pair terminal status |
+| `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` | `8192` | `8192` | Max bytes emitted per SSE chunk event |
+| `STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS` | `15` | `25` | Heartbeat comment interval to keep connections alive |
+| `STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS` | `1800` | `900` | Max lifetime for one stream connection |
+| `STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS` | `10` | `10` | Retry-After value when stream capacity is saturated |
+
+**Operational guidance:**
+- Lower `MAX_ACTIVE` first if benchmark throughput drops.
+- Increase `POLL_INTERVAL_MS` and `STATUS_POLL_INTERVAL_MS` before increasing capacity.
+- Keep `READ_CHUNK_BYTES` moderate to avoid bursty memory/network usage.
+
 ## Helm Values Configuration
 
 ### Structure
@@ -239,8 +259,21 @@ make deploy-podman ENV=ci
 ```bash
 # Production deployment requires password
 export STAREXEC_DB_PASSWORD="$(generate-secure-password)"
+
+# Live log streaming (benchmark-priority profile)
+export STAREXEC_PAIR_LOG_STREAM_ENABLED=true
+export STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE=30
+export STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS=2500
+export STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS=15000
+export STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES=8192
+export STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS=25
+export STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS=900
+export STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS=10
+
 make deploy-podman ENV=prod
 ```
+
+These values prioritize benchmark execution throughput over live log latency.
 
 ## Advanced Configuration
 
@@ -261,6 +294,17 @@ resources:
   limits:
     memory: 16Gi
     cpu: 8
+
+# SSE live log stream tuning (benchmark-priority profile)
+env:
+  STAREXEC_PAIR_LOG_STREAM_ENABLED: "true"
+  STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE: "30"
+  STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS: "2500"
+  STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS: "15000"
+  STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES: "8192"
+  STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS: "25"
+  STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS: "900"
+  STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS: "10"
 ```
 
 Deploy with custom values:

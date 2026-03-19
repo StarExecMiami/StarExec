@@ -704,6 +704,37 @@ echo "Diagnostics collected: $OUTPUT_DIR.tar.gz"
 4. **Automate health checks**
 5. **Document runbooks** for common alerts
 
+### Live Log Streaming Monitoring Checklist
+
+If using `/services/jobs/pairs/{id}/log/stream`, track these signals to ensure
+streaming does not degrade benchmark execution:
+
+1. **Active stream saturation**
+   - Warning: active streams > 70% of `STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE` for 5m
+   - Critical: > 90% for 2m
+
+2. **Rate limiting pressure**
+   - Warning: HTTP 429 rate for stream endpoint > 1%
+   - Critical: > 5% sustained for 5m
+
+3. **API responsiveness**
+   - Warning: non-stream API p95 latency > 20% above baseline
+   - Critical: > 50% above baseline
+
+4. **Benchmark throughput regression**
+   - Warning: pair throughput < 95% of baseline
+   - Critical: < 90% of baseline
+
+5. **Servlet/thread pressure**
+   - Warning: busy request threads > 75%
+   - Critical: > 90%
+
+**Tuning order for incidents:**
+1) reduce `STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE`
+2) increase `STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS`
+3) increase `STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS`
+4) increase `STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS` / reduce max duration
+
 ### Debugging Best Practices
 
 1. **Check logs first** - most issues leave traces

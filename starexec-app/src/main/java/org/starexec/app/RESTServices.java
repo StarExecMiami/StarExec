@@ -4,6 +4,7 @@ import com.google.gson.*;
 import com.google.gson.annotations.Expose;
 import org.apache.commons.io.FileUtils;
 import org.starexec.command.Connection;
+import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.constants.R.DefaultSettingAttribute;
 import org.starexec.data.database.*;
@@ -33,8 +34,11 @@ import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import javax.ws.rs.core.StreamingOutput;
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
@@ -42,6 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Class which handles all RESTful web service requests.
@@ -96,6 +101,9 @@ public class RESTServices {
 	public static ExecutorService getEmailExecutor() {
 		return emailExecutor;
 	}
+
+	private static final AtomicInteger activePairLogStreams = new AtomicInteger(0);
+	private static final byte[] NEWLINE = "\n".getBytes(StandardCharsets.UTF_8);
 
 	@GET
 	@Path("/queue/{qid}/getDesc")
@@ -442,6 +450,246 @@ public class RESTServices {
 			throw RESTException.NOT_FOUND;
 		}
 		return log;
+	}
+
+	@GET
+	@Path("/jobs/pairs/{id}/log/stream")
+	@Produces("text/event-stream")
+	public Response streamJobPairLog(@PathParam("id") int id, @Context HttpServletRequest request) {
+		if (!EnvironmentConfig.isPairLogStreamEnabled()) {
+			return Response.status(Response.Status.SERVICE_UNAVAILABLE)
+					.type(MediaType.TEXT_PLAIN)
+					.entity("live log streaming is disabled")
+					.build();
+		}
+
+		if (!isPairAccessibleForStream(id, request)) {
+			return Response.status(Response.Status.NOT_FOUND)
+					.type(MediaType.TEXT_PLAIN)
+					.entity("not available")
+					.build();
+		}
+
+		JobPair pair = JobPairs.getPair(id);
+		if (pair == null) {
+			return Response.status(Response.Status.NOT_FOUND)
+					.type(MediaType.TEXT_PLAIN)
+					.entity("not available")
+					.build();
+		}
+
+		final int maxActive = Math.max(1, EnvironmentConfig.getPairLogStreamMaxActive());
+		if (!tryAcquirePairLogStreamSlot(maxActive)) {
+			return Response.status(Response.Status.TOO_MANY_REQUESTS)
+					.header("Retry-After", String.valueOf(EnvironmentConfig.getPairLogStreamRetryAfterSeconds()))
+					.type(MediaType.TEXT_PLAIN)
+					.entity("too many active live log streams")
+					.build();
+		}
+
+		final String lastEventId = request.getHeader("Last-Event-ID");
+
+		return Response.ok((StreamingOutput) output -> {
+			try {
+				streamPairLogEvents(id, output, lastEventId);
+			} catch (RuntimeException e) {
+				log.warn("streamJobPairLog", "Live log stream failed for pair " + id, e);
+				throw new WebApplicationException(Response.status(Response.Status.SERVICE_UNAVAILABLE)
+						.type(MediaType.TEXT_PLAIN)
+						.entity("stream unavailable")
+						.build());
+			} finally {
+				releasePairLogStreamSlot();
+			}
+		}, "text/event-stream")
+				.header("Cache-Control", "no-cache")
+				.header("Connection", "keep-alive")
+				.header("X-Accel-Buffering", "no")
+				.build();
+	}
+
+	private static boolean isPairAccessibleForStream(int pairId, HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		ValidatorStatusCode canSee = JobSecurity.canUserSeeJobWithPair(pairId, userId);
+		return canSee.isSuccess();
+	}
+
+	private static boolean tryAcquirePairLogStreamSlot(int maxActive) {
+		while (true) {
+			int current = activePairLogStreams.get();
+			if (current >= maxActive) {
+				return false;
+			}
+			if (activePairLogStreams.compareAndSet(current, current + 1)) {
+				return true;
+			}
+		}
+	}
+
+	private static void releasePairLogStreamSlot() {
+		activePairLogStreams.updateAndGet(current -> current > 0 ? current - 1 : 0);
+	}
+
+	private static void streamPairLogEvents(int pairId, OutputStream output, String lastEventId) {
+		final String method = "streamPairLogEvents";
+		final long startedAt = System.currentTimeMillis();
+		final long maxDurationMillis = Math.max(1L, EnvironmentConfig.getPairLogStreamMaxDurationSeconds()) * 1000L;
+		final long pollIntervalMillis = Math.max(100L, EnvironmentConfig.getPairLogStreamPollIntervalMs());
+		final long statusPollIntervalMillis = Math.max(1000L, EnvironmentConfig.getPairLogStreamStatusPollIntervalMs());
+		final long heartbeatIntervalMillis = Math.max(1L, EnvironmentConfig.getPairLogStreamHeartbeatSeconds()) * 1000L;
+		final int maxChunkBytes = Math.max(256, EnvironmentConfig.getPairLogStreamReadChunkBytes());
+
+		String logPath = JobPairs.getLogPath(pairId);
+		if (Util.isNullOrEmpty(logPath)) {
+			writeSseEvent(output, "error", "{\"code\":\"NOT_AVAILABLE\",\"message\":\"not available\"}");
+			return;
+		}
+
+		File logFile = new File(logPath);
+		long offset = resolveInitialOffset(logFile, lastEventId);
+		long lastStatusCheckAt = 0L;
+		long lastHeartbeatAt = 0L;
+
+		while (true) {
+			long now = System.currentTimeMillis();
+			if (now - startedAt >= maxDurationMillis) {
+				writeSseEvent(output, "error", "{\"code\":\"STREAM_TIMEOUT\",\"message\":\"stream timeout reached\"}");
+				return;
+			}
+
+			if (now - lastStatusCheckAt >= statusPollIntervalMillis) {
+				JobPair pair = JobPairs.getPair(pairId);
+				if (pair == null) {
+					writeSseEvent(output, "error", "{\"code\":\"NOT_AVAILABLE\",\"message\":\"not available\"}");
+					return;
+				}
+				if (!pair.getStatus().getCode().incomplete()) {
+					if (logFile.exists()) {
+						offset = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+						if (offset < 0L) {
+							return;
+						}
+					}
+					writeSseEvent(output, "complete", "{\"pairId\":" + pairId + "}");
+					return;
+				}
+				lastStatusCheckAt = now;
+			}
+
+			if (logFile.exists()) {
+				offset = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+				if (offset < 0L) {
+					return;
+				}
+			}
+
+			now = System.currentTimeMillis();
+			if (now - lastHeartbeatAt >= heartbeatIntervalMillis) {
+				if (!writeSseComment(output, "hb " + now)) {
+					return;
+				}
+				lastHeartbeatAt = now;
+			}
+
+			try {
+				Thread.sleep(pollIntervalMillis);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				log.warn(method, "Interrupted while streaming pair log for pair " + pairId, e);
+				writeSseEvent(output, "error", "{\"code\":\"INTERRUPTED\",\"message\":\"stream interrupted\"}");
+				return;
+			}
+		}
+	}
+
+	private static long resolveInitialOffset(File logFile, String lastEventId) {
+		if (!Util.isNullOrEmpty(lastEventId)) {
+			try {
+				long parsed = Long.parseLong(lastEventId.trim());
+				if (parsed >= 0L) {
+					return parsed;
+				}
+			} catch (NumberFormatException ignored) {
+				// fall through to tail-from-end behavior
+			}
+		}
+		return logFile.exists() ? logFile.length() : 0L;
+	}
+
+	private static long streamAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset, int maxChunkBytes) {
+		long fileSize = logFile.length();
+		long offset = currentOffset;
+
+		if (fileSize < offset) {
+			offset = 0L;
+			if (!writeSseEvent(output, "reset", "{\"pairId\":" + pairId + ",\"offset\":0}")) {
+				return -1L;
+			}
+		}
+
+		if (fileSize <= offset) {
+			return offset;
+		}
+
+		long start = offset;
+		long bytesToRead = Math.min((long) maxChunkBytes, fileSize - offset);
+		byte[] bytes = new byte[(int) bytesToRead];
+
+		try (RandomAccessFile raf = new RandomAccessFile(logFile, "r")) {
+			raf.seek(offset);
+			int read = raf.read(bytes);
+			if (read <= 0) {
+				return offset;
+			}
+			offset += read;
+			String text = new String(bytes, 0, read, StandardCharsets.UTF_8).replace("\r\n", "\n");
+			String data = "{\"pairId\":" + pairId +
+					",\"offsetStart\":" + start +
+					",\"offsetEnd\":" + offset +
+					",\"text\":" + gson.toJson(text) + "}";
+			if (!writeSseEventWithId(output, String.valueOf(offset), "chunk", data)) {
+				return -1L;
+			}
+			return offset;
+		} catch (IOException e) {
+			log.warn("streamAvailableBytes", "Failed reading pair log stream for pair " + pairId, e);
+			writeSseEvent(output, "error", "{\"code\":\"LOG_READ_FAILED\",\"message\":\"log read failed\"}");
+			return -1L;
+		}
+	}
+
+	private static boolean writeSseComment(OutputStream output, String comment) {
+		try {
+			output.write((":" + comment).getBytes(StandardCharsets.UTF_8));
+			output.write(NEWLINE);
+			output.write(NEWLINE);
+			output.flush();
+			return true;
+		} catch (IOException e) {
+			return false;
+		}
+	}
+
+	private static boolean writeSseEvent(OutputStream output, String eventName, String dataJson) {
+		return writeSseEventWithId(output, null, eventName, dataJson);
+	}
+
+	private static boolean writeSseEventWithId(OutputStream output, String id, String eventName, String dataJson) {
+		try {
+			if (!Util.isNullOrEmpty(id)) {
+				output.write(("id: " + id).getBytes(StandardCharsets.UTF_8));
+				output.write(NEWLINE);
+			}
+			output.write(("event: " + eventName).getBytes(StandardCharsets.UTF_8));
+			output.write(NEWLINE);
+			output.write(("data: " + dataJson).getBytes(StandardCharsets.UTF_8));
+			output.write(NEWLINE);
+			output.write(NEWLINE);
+			output.flush();
+			return true;
+		} catch (IOException e) {
+			return false;
+		}
 	}
 
 	/**

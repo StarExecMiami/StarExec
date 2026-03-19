@@ -12,6 +12,7 @@ This guide documents how to interact with StarExec programmatically via HTTP req
 2. [Quick Job Submission](#quick-job-submission)
 3. [Job XML Upload](#job-xml-upload)
 4. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
+5. [Live Job Pair Log Streaming (SSE)](#live-job-pair-log-streaming-sse)
 
 ---
 
@@ -222,6 +223,41 @@ curl -X POST \
   -F "f=@job.zip" \
   "https://starexec.ccs.miami.edu/starexec/secure/upload/jobXML"
 ```
+
+---
+
+## Live Job Pair Log Streaming (SSE)
+
+StarExec provides a live stream endpoint for job pair logs using
+**Server-Sent Events (SSE)**.
+
+**Endpoint**: `GET /starexec/services/jobs/pairs/{pairId}/log/stream`  
+**Content-Type**: `text/event-stream`
+
+### Behavior
+
+- `chunk` events stream appended log text incrementally.
+- `complete` event is emitted when the pair reaches a terminal status.
+- `error` event indicates stream timeout or transient read failure.
+- heartbeat comments are sent periodically to keep the connection alive.
+
+The stream supports reconnect resume using SSE `Last-Event-ID` when the
+client reconnects.
+
+### Example: curl
+
+```bash
+curl -N -b cookies.txt \
+  -H "StarExecCommand: StarExecCommand" \
+  "https://starexec.ccs.miami.edu/starexec/services/jobs/pairs/123456/log/stream"
+```
+
+### Notes
+
+- The existing non-streaming endpoint remains available:
+  `GET /starexec/services/jobs/pairs/{pairId}/log`
+- If stream capacity is saturated, the API can return **HTTP 429** with
+  `Retry-After`.
 
 ---
 

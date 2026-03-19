@@ -26,6 +26,17 @@ This guide covers:
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Match solver requirements |
 | `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | 1 | 1 for single-threaded, more for parallel |
 
+### Live Log Streaming Parameters (SSE)
+
+| Parameter | Default | Benchmark-priority recommendation |
+|-----------|---------|-----------------------------------|
+| `STAREXEC_PAIR_LOG_STREAM_MAX_ACTIVE` | 100 | 30 |
+| `STAREXEC_PAIR_LOG_STREAM_POLL_INTERVAL_MS` | 1000 | 2500 |
+| `STAREXEC_PAIR_LOG_STREAM_STATUS_POLL_INTERVAL_MS` | 5000 | 15000 |
+| `STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS` | 15 | 25 |
+| `STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS` | 1800 | 900 |
+| `STAREXEC_PAIR_LOG_STREAM_READ_CHUNK_BYTES` | 8192 | 8192 |
+
 ### Performance Targets
 
 | Metric | Target | Critical |
@@ -35,6 +46,22 @@ This guide covers:
 | Queue depth | 50-100 | > 500 (backlog) |
 | Job timeout rate | < 1% | > 5% (timeout too low) |
 | Database response | < 50ms | > 200ms (bottleneck) |
+
+### Live Log Streaming Guardrails
+
+When live log streaming is enabled, protect benchmark throughput with these goals:
+
+| Metric | Target | Critical |
+|--------|--------|----------|
+| Active streams / max | < 70% sustained | > 90% sustained |
+| Stream 429 rate | < 1% | > 5% sustained |
+| Non-stream API p95 latency | < +20% vs baseline | > +50% vs baseline |
+| Benchmark pair throughput | >= 95% of baseline | < 90% of baseline |
+
+**Overhead model (rough):**
+- File polls/sec ≈ `activeStreams / (POLL_INTERVAL_MS / 1000)`
+- Status DB QPS ≈ `activeStreams / (STATUS_POLL_INTERVAL_MS / 1000)`
+- Max stream egress ≈ `activeStreams × READ_CHUNK_BYTES / (POLL_INTERVAL_MS / 1000)`
 
 ---
 

@@ -18,10 +18,13 @@ import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
 
 import javax.servlet.http.HttpServletResponse;
+import javax.ws.rs.core.Response;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * This class contains tests for RESTServices that should get rejected for
@@ -368,6 +371,43 @@ public class RESTServicesSecurityTests extends TestSequence {
 			Assert.fail("No exception raised");
 		} catch (RESTException e) {
 		}
+	}
+
+	@StarexecTest
+	private void streamJobPairLogSecurityTest() {
+		Response unauthorized = services.streamJobPairLog(job.getJobPairs().get(0).getId(),
+				TestUtil.getMockHttpRequest(user.getId()));
+		Assert.assertEquals(404, unauthorized.getStatus());
+
+		Response invalidPair = services.streamJobPairLog(-1,
+				TestUtil.getMockHttpRequest(admin.getId()));
+		Assert.assertEquals(404, invalidPair.getStatus());
+	}
+
+	@StarexecTest
+	private void streamJobPairLogRateLimitTest() {
+		try {
+			setActivePairLogStreams(100);
+			Response response = services.streamJobPairLog(job.getJobPairs().get(0).getId(),
+					TestUtil.getMockHttpRequest(admin.getId()));
+			Assert.assertEquals(429, response.getStatus());
+			Object retryAfter = response.getHeaders().getFirst("Retry-After");
+			Assert.assertNotNull(retryAfter);
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		} finally {
+			try {
+				setActivePairLogStreams(0);
+			} catch (Exception ignored) {
+			}
+		}
+	}
+
+	private static void setActivePairLogStreams(int value) throws Exception {
+		Field field = RESTServices.class.getDeclaredField("activePairLogStreams");
+		field.setAccessible(true);
+		AtomicInteger counter = (AtomicInteger) field.get(null);
+		counter.set(value);
 	}
 
 	@StarexecTest

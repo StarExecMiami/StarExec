@@ -303,7 +303,14 @@
 				<legend><img alt="loading" src="${starexecRoot}/images/loader.gif"> job
 					log
 				</legend>
-				<star:displayTextContents text="${log}" lang="log"/>
+				<div id="liveLogControls">
+					<span id="liveLogBadge" class="liveLogBadge liveLogBadge--idle">Live: off</span>
+					<label for="liveLogAutoScroll">
+						<input type="checkbox" id="liveLogAutoScroll" checked="checked"/>
+						auto-scroll
+					</label>
+				</div>
+				<pre id="jobLogContent" class="prettyprint lang-log">${log}</pre>
 				<a href="${starexecRoot}/services/jobs/pairs/${pair.id}/log"
 				   target="_blank" class="popoutLink">popout</a>
 			</fieldset>
