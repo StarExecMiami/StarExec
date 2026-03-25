@@ -4746,9 +4746,13 @@ public class Jobs {
                     .map(JobPair::getId)
                     .toArray(Integer[]::new);
             for (Integer id : ids) {
-                if (!rerunPair(id)) {
+                JobPair pairForId = pairs.stream().filter(p -> p.getId() == id).findFirst().orElse(null);
+                if (pairForId == null || !rerunSinglePairViaBatchFunction(pairForId, jobId)) {
                     allSuccess = false;
                 }
+            }
+            if (allSuccess) {
+                allSuccess = Jobs.removeCachedJobStats(jobId);
             }
             return allSuccess;
         } catch (Exception e) {
@@ -4764,6 +4768,9 @@ public class Jobs {
 
         // 4. Clear backend tracking state for each pair.
         for (JobPair p : pairs) {
+            if (p.getStatus().getCode().getVal() == StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
+                continue;
+            }
             try {
                 R.BACKEND.clearPairTracking(p.getId());
             } catch (Exception e) {
@@ -4771,6 +4778,30 @@ public class Jobs {
             }
         }
         return cacheCleared;
+    }
+
+    private static boolean rerunSinglePairViaBatchFunction(JobPair pair, int jobId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement("SELECT starexec.RerunJobPairsBatch(?::int[])");
+            Array sqlArray = con.createArrayOf("integer", new Integer[] { pair.getId() });
+            ps.setArray(1, sqlArray);
+            ps.execute();
+            try {
+                R.BACKEND.clearPairTracking(pair.getId());
+            } catch (Exception e) {
+                log.warn("rerunSinglePairViaBatchFunction: could not clear pair tracking for pairId=" + pair.getId(), e);
+            }
+            return true;
+        } catch (Exception e) {
+            log.error("rerunSinglePairViaBatchFunction: failed for pairId=" + pair.getId() + " in jobId=" + jobId, e);
+            return false;
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
     }
 
     /**
@@ -4785,7 +4816,6 @@ public class Jobs {
     public static boolean rerunPair(int pairId) {
         try {
             log.debug("got a request to rerun pair id = " + pairId);
-            boolean success = true;
             JobPair p = JobPairs.getPair(pairId);
             if (Jobs.isReadOnly(p.getJobId())) return false;
             Status status = p.getStatus();
@@ -4796,40 +4826,10 @@ public class Jobs {
             ) {
                 return true;
             }
-            if (
-                status.getCode().getVal() < StatusCode.STATUS_COMPLETE.getVal()
-            ) {
-                JobPairs.killPair(pairId, p.getBackendExecId());
-            }
-            JobPairs.setJobPairDiskSizeToZero(pairId);
-            JobPairs.removePairFromCompletedTable(pairId);
-            JobPairs.setPairStatus(
-                pairId,
-                Status.StatusCode.STATUS_PENDING_SUBMIT.getVal()
-            );
-            JobPairs.setAllPairStageStatus(
-                pairId,
-                Status.StatusCode.STATUS_PENDING_SUBMIT.getVal()
-            );
-            // the cache must be cleared AFTER changing the pair status code!
-            success = success && Jobs.removeCachedJobStats(p.getJobId());
 
-            // CRITICAL FIX: Notify backend to clear pair tracking state
-            // For LocalBackend, this clears the pair from the monitor's processedStatusFiles set
-            // so that when the pair is rerun and completes, the new status.json will be processed.
-            // Without this, rerun pairs get stuck in ENQUEUED status because the monitor skips
-            // the status file (thinking it's already been processed).
-            try {
-                R.BACKEND.clearPairTracking(pairId);
-            } catch (Exception e) {
-                log.warn(
-                    "Could not clear pair tracking for pairId=" + pairId,
-                    e
-                );
-                // Don't fail the rerun if backend tracking fails - other backends may not support it
-            }
-
-            return success;
+            // Delegate to the batch path so status reset and attempt increment are
+            // handled atomically by the same SQL function.
+            return rerunPairsBatch(Collections.singletonList(p), p.getJobId());
         } catch (Exception e) {
             log.error("rerunPair", e);
         }

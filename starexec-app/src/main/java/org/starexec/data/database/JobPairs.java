@@ -1,14 +1,19 @@
 package org.starexec.data.database;
 
 import com.google.common.collect.ImmutableSet;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import java.io.File;
 import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.*;
 import java.util.Map.Entry;
 import org.apache.commons.io.FileUtils;
+import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Status.StatusCode;
@@ -18,6 +23,7 @@ import org.starexec.data.to.pipelines.PairStageProcessorTriple;
 import org.starexec.data.to.tuples.ConfigAttrMapPair;
 import org.starexec.data.to.tuples.PairIdJobId;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.Hash;
 import org.starexec.util.Util;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -29,6 +35,56 @@ import org.w3c.dom.NodeList;
 public class JobPairs {
 
     private static final StarLogger log = StarLogger.getLogger(JobPairs.class);
+    private static final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+
+    private static final int MANIFEST_STATE_COLLECTING = 0;
+    private static final int MANIFEST_STATE_FINALIZING = 1;
+    private static final int MANIFEST_STATE_FINAL = 2;
+    private static final int MANIFEST_STATE_FINAL_DERIVED = 3;
+    private static final int MANIFEST_STATE_FAILED = 4;
+
+    private static final int MANIFEST_PROVENANCE_LIVE = 0;
+    private static final int MANIFEST_PROVENANCE_DERIVED_LEGACY = 1;
+
+    public static final class PairReproManifestResult {
+        public final int pairId;
+        public final int attemptNo;
+        public final int state;
+        public final int provenance;
+        public final int schemaVersion;
+        public final String manifestJson;
+        public final String manifestSha256;
+        public final Integer sourceStatusCode;
+        public final Timestamp createdAt;
+        public final Timestamp updatedAt;
+        public final Timestamp finalizedAt;
+
+        private PairReproManifestResult(
+            int pairId,
+            int attemptNo,
+            int state,
+            int provenance,
+            int schemaVersion,
+            String manifestJson,
+            String manifestSha256,
+            Integer sourceStatusCode,
+            Timestamp createdAt,
+            Timestamp updatedAt,
+            Timestamp finalizedAt
+        ) {
+            this.pairId = pairId;
+            this.attemptNo = attemptNo;
+            this.state = state;
+            this.provenance = provenance;
+            this.schemaVersion = schemaVersion;
+            this.manifestJson = manifestJson;
+            this.manifestSha256 = manifestSha256;
+            this.sourceStatusCode = sourceStatusCode;
+            this.createdAt = createdAt;
+            this.updatedAt = updatedAt;
+            this.finalizedAt = finalizedAt;
+        }
+    }
 
     private static void addJobPairInputs(List<JobPair> pairs, Connection con) {
         final String methodName = "addJobPairInputs";
@@ -2164,16 +2220,32 @@ public class JobPairs {
         int statusCode
     ) {
         Connection con = null;
+        boolean success = false;
+        Integer attemptNoForFinalize = null;
         try {
             con = Common.getConnection();
-            return (
+            Common.beginTransaction(con);
+            success = (
                 setPairStatus(pairId, statusCode, con) &&
                 setAllPairStageStatus(pairId, statusCode, con)
             );
+            if (!success) {
+                Common.doRollback(con);
+                return false;
+            }
+            if (success && isTerminalStatusCode(statusCode)) {
+                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+            }
+            Common.endTransaction(con);
+            return success;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
+            Common.doRollback(con);
         } finally {
             Common.safeClose(con);
+            if (success && isTerminalStatusCode(statusCode) && attemptNoForFinalize != null) {
+                finalizePairManifest(pairId, attemptNoForFinalize, statusCode);
+            }
         }
         return false;
     }
@@ -2203,6 +2275,7 @@ public class JobPairs {
     ) {
         Connection con = null;
         PreparedStatement ps = null;
+        Integer attemptNoForFinalize = null;
         try {
             con = Common.getConnection();
             Common.beginTransaction(con);
@@ -2214,7 +2287,13 @@ public class JobPairs {
             ps.setInt(3, terminalStatus);
             ps.setInt(4, notReachedStatus);
             ps.execute();
+            if (isTerminalStatusCode(terminalStatus)) {
+                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+            }
             Common.endTransaction(con);
+            if (isTerminalStatusCode(terminalStatus) && attemptNoForFinalize != null) {
+                finalizePairManifest(pairId, attemptNoForFinalize, terminalStatus);
+            }
             return true;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
@@ -2424,14 +2503,30 @@ public class JobPairs {
      */
     public static boolean setPairStatus(int pairId, int statusCode) {
         Connection con = null;
+        boolean success = false;
+        Integer attemptNoForFinalize = null;
 
         try {
             con = Common.getConnection();
-            return setPairStatus(pairId, statusCode, con);
+            Common.beginTransaction(con);
+            success = setPairStatus(pairId, statusCode, con);
+            if (!success) {
+                Common.doRollback(con);
+                return false;
+            }
+            if (success && isTerminalStatusCode(statusCode)) {
+                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+            }
+            Common.endTransaction(con);
+            return success;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
+            Common.doRollback(con);
         } finally {
             Common.safeClose(con);
+            if (success && isTerminalStatusCode(statusCode) && attemptNoForFinalize != null) {
+                finalizePairManifest(pairId, attemptNoForFinalize, statusCode);
+            }
         }
 
         return false;
@@ -2906,5 +3001,476 @@ public class JobPairs {
             Common.safeClose(ps);
         }
         return false;
+    }
+
+    public static String getManifestStateName(int state) {
+        switch (state) {
+            case MANIFEST_STATE_COLLECTING:
+                return "COLLECTING";
+            case MANIFEST_STATE_FINALIZING:
+                return "FINALIZING";
+            case MANIFEST_STATE_FINAL:
+                return "FINAL";
+            case MANIFEST_STATE_FINAL_DERIVED:
+                return "FINAL_DERIVED";
+            case MANIFEST_STATE_FAILED:
+                return "FAILED";
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    public static String getManifestProvenanceName(int provenance) {
+        switch (provenance) {
+            case MANIFEST_PROVENANCE_LIVE:
+                return "LIVE";
+            case MANIFEST_PROVENANCE_DERIVED_LEGACY:
+                return "DERIVED_LEGACY";
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    public static boolean incrementPairAttempt(int pairId) {
+        Connection con = null;
+        PreparedStatement ensurePs = null;
+        PreparedStatement updatePs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            ensurePs = con.prepareStatement(
+                "INSERT INTO starexec.job_pair_attempts(pair_id, current_attempt_no, updated_at) VALUES (?, 1, NOW()) ON CONFLICT (pair_id) DO NOTHING"
+            );
+            ensurePs.setInt(1, pairId);
+            ensurePs.executeUpdate();
+
+            updatePs = con.prepareStatement(
+                "UPDATE starexec.job_pair_attempts SET current_attempt_no = current_attempt_no + 1, updated_at = NOW() WHERE pair_id = ?"
+            );
+            updatePs.setInt(1, pairId);
+            updatePs.executeUpdate();
+
+            Common.endTransaction(con);
+            return true;
+        } catch (Exception e) {
+            log.error("incrementPairAttempt", e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(ensurePs);
+            Common.safeClose(updatePs);
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    public static boolean upsertPairManifestCollecting(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            int attemptNo = getOrCreateCurrentAttemptNo(con, pairId);
+            String manifestJson = buildManifestJson(pairId, attemptNo, MANIFEST_PROVENANCE_LIVE, false, null);
+            if (Util.isNullOrEmpty(manifestJson)) {
+                Common.endTransaction(con);
+                return false;
+            }
+            String digest = getSha256(manifestJson);
+
+            ps = con.prepareStatement(
+                "INSERT INTO starexec.job_pair_repro_manifests(pair_id, attempt_no, state, provenance, schema_version, manifest_json, manifest_sha256, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, 1, ?::jsonb, ?, NOW(), NOW()) " +
+                    "ON CONFLICT (pair_id, attempt_no) DO UPDATE SET manifest_json = EXCLUDED.manifest_json, " +
+                    "manifest_sha256 = EXCLUDED.manifest_sha256, updated_at = NOW() " +
+                    "WHERE starexec.job_pair_repro_manifests.state IN (0, 1, 4)"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, attemptNo);
+            ps.setInt(3, MANIFEST_STATE_COLLECTING);
+            ps.setInt(4, MANIFEST_PROVENANCE_LIVE);
+            ps.setString(5, manifestJson);
+            ps.setString(6, digest);
+            ps.executeUpdate();
+
+            Common.endTransaction(con);
+            return true;
+        } catch (Exception e) {
+            log.error("upsertPairManifestCollecting", e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    public static boolean finalizePairManifest(int pairId, Integer sourceStatusCode) {
+        Connection con = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+            int attemptNo = getOrCreateCurrentAttemptNo(con, pairId, true);
+            Common.endTransaction(con);
+            return finalizePairManifest(pairId, attemptNo, sourceStatusCode);
+        } catch (Exception e) {
+            log.error("finalizePairManifest", e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    public static boolean finalizePairManifest(int pairId, int attemptNo, Integer sourceStatusCode) {
+        Connection con = null;
+        PreparedStatement ensureRowPs = null;
+        PreparedStatement updatePs = null;
+        PreparedStatement selectPs = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            ensureRowPs = con.prepareStatement(
+                "INSERT INTO starexec.job_pair_repro_manifests(pair_id, attempt_no, state, provenance, schema_version, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, 1, NOW(), NOW()) ON CONFLICT (pair_id, attempt_no) DO NOTHING"
+            );
+            ensureRowPs.setInt(1, pairId);
+            ensureRowPs.setInt(2, attemptNo);
+            ensureRowPs.setInt(3, MANIFEST_STATE_COLLECTING);
+            ensureRowPs.setInt(4, MANIFEST_PROVENANCE_LIVE);
+            ensureRowPs.executeUpdate();
+
+            String manifestJson = buildManifestJson(pairId, attemptNo, MANIFEST_PROVENANCE_LIVE, true, sourceStatusCode);
+            if (Util.isNullOrEmpty(manifestJson)) {
+                Common.endTransaction(con);
+                return false;
+            }
+            String digest = getSha256(manifestJson);
+
+            updatePs = con.prepareStatement(
+                "UPDATE starexec.job_pair_repro_manifests SET state=?, provenance=?, schema_version=1, " +
+                    "manifest_json=?::jsonb, manifest_sha256=?, source_status_code=?, finalized_at=NOW(), updated_at=NOW() " +
+                    "WHERE pair_id=? AND attempt_no=? AND state IN (0,1,4)"
+            );
+            updatePs.setInt(1, MANIFEST_STATE_FINAL);
+            updatePs.setInt(2, MANIFEST_PROVENANCE_LIVE);
+            updatePs.setString(3, manifestJson);
+            updatePs.setString(4, digest);
+            if (sourceStatusCode == null) {
+                updatePs.setNull(5, Types.INTEGER);
+            } else {
+                updatePs.setInt(5, sourceStatusCode);
+            }
+            updatePs.setInt(6, pairId);
+            updatePs.setInt(7, attemptNo);
+            int updated = updatePs.executeUpdate();
+
+            if (updated == 0) {
+                selectPs = con.prepareStatement(
+                    "SELECT state, manifest_sha256 FROM starexec.job_pair_repro_manifests WHERE pair_id=? AND attempt_no=?"
+                );
+                selectPs.setInt(1, pairId);
+                selectPs.setInt(2, attemptNo);
+                rs = selectPs.executeQuery();
+                if (!rs.next()) {
+                    Common.endTransaction(con);
+                    return false;
+                }
+                int state = rs.getInt("state");
+                String currentDigest = rs.getString("manifest_sha256");
+                if ((state == MANIFEST_STATE_FINAL || state == MANIFEST_STATE_FINAL_DERIVED) && digest.equals(currentDigest)) {
+                    Common.endTransaction(con);
+                    return true;
+                }
+                Common.endTransaction(con);
+                return false;
+            }
+
+            Common.endTransaction(con);
+            return true;
+        } catch (Exception e) {
+            log.error("finalizePairManifest", e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ensureRowPs);
+            Common.safeClose(updatePs);
+            Common.safeClose(selectPs);
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    public static PairReproManifestResult getPairReproManifest(int pairId, Integer requestedAttemptNo) {
+        Connection con = null;
+        try {
+            con = Common.getConnection();
+            if (requestedAttemptNo != null && requestedAttemptNo < 1) {
+                return null;
+            }
+
+            if (requestedAttemptNo == null) {
+                PairReproManifestResult latestFinal = getLatestFinalManifestRow(con, pairId);
+                if (latestFinal != null) {
+                    return latestFinal;
+                }
+            }
+
+            int attemptNo = requestedAttemptNo == null ? getOrCreateCurrentAttemptNo(con, pairId) : requestedAttemptNo;
+
+            PairReproManifestResult existing = getManifestRow(con, pairId, attemptNo);
+            if (existing != null) {
+                return existing;
+            }
+
+            if (requestedAttemptNo != null) {
+                return null;
+            }
+
+            JobPair pair = getPair(pairId);
+            if (pair == null) {
+                return null;
+            }
+
+            if (pair.getStatus().getCode().incomplete()) {
+                if (!upsertPairManifestCollecting(pairId)) {
+                    return null;
+                }
+            } else {
+                if (!createLegacyDerivedManifest(con, pairId, attemptNo, pair.getStatus().getCode().getVal())) {
+                    return null;
+                }
+            }
+
+            return getManifestRow(con, pairId, attemptNo);
+        } catch (Exception e) {
+            log.error("getPairReproManifest", e);
+        } finally {
+            Common.safeClose(con);
+        }
+        return null;
+    }
+
+    private static PairReproManifestResult getLatestFinalManifestRow(Connection con, int pairId) throws SQLException {
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            ps = con.prepareStatement(
+                "SELECT pair_id, attempt_no, state, provenance, schema_version, manifest_json::text AS manifest_json, " +
+                    "manifest_sha256, source_status_code, created_at, updated_at, finalized_at " +
+                    "FROM starexec.job_pair_repro_manifests " +
+                    "WHERE pair_id=? AND state IN (?, ?) ORDER BY attempt_no DESC LIMIT 1"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, MANIFEST_STATE_FINAL);
+            ps.setInt(3, MANIFEST_STATE_FINAL_DERIVED);
+            rs = ps.executeQuery();
+            if (!rs.next()) {
+                return null;
+            }
+            Integer sourceStatusCode = rs.getObject("source_status_code") == null ? null : rs.getInt("source_status_code");
+            return new PairReproManifestResult(
+                rs.getInt("pair_id"),
+                rs.getInt("attempt_no"),
+                rs.getInt("state"),
+                rs.getInt("provenance"),
+                rs.getInt("schema_version"),
+                rs.getString("manifest_json"),
+                rs.getString("manifest_sha256"),
+                sourceStatusCode,
+                rs.getTimestamp("created_at"),
+                rs.getTimestamp("updated_at"),
+                rs.getTimestamp("finalized_at")
+            );
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+        }
+    }
+
+    private static boolean createLegacyDerivedManifest(Connection con, int pairId, int attemptNo, Integer sourceStatusCode)
+        throws SQLException {
+        PreparedStatement ps = null;
+        try {
+            String manifestJson = buildManifestJson(pairId, attemptNo, MANIFEST_PROVENANCE_DERIVED_LEGACY, true, sourceStatusCode);
+            if (Util.isNullOrEmpty(manifestJson)) {
+                return false;
+            }
+            String digest = getSha256(manifestJson);
+
+            ps = con.prepareStatement(
+                "INSERT INTO starexec.job_pair_repro_manifests(pair_id, attempt_no, state, provenance, schema_version, " +
+                    "manifest_json, manifest_sha256, source_status_code, created_at, updated_at, finalized_at) " +
+                    "VALUES (?, ?, ?, ?, 1, ?::jsonb, ?, ?, NOW(), NOW(), NOW()) ON CONFLICT (pair_id, attempt_no) DO NOTHING"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, attemptNo);
+            ps.setInt(3, MANIFEST_STATE_FINAL_DERIVED);
+            ps.setInt(4, MANIFEST_PROVENANCE_DERIVED_LEGACY);
+            ps.setString(5, manifestJson);
+            ps.setString(6, digest);
+            if (sourceStatusCode == null) {
+                ps.setNull(7, Types.INTEGER);
+            } else {
+                ps.setInt(7, sourceStatusCode);
+            }
+            ps.executeUpdate();
+            return true;
+        } finally {
+            Common.safeClose(ps);
+        }
+    }
+
+    private static PairReproManifestResult getManifestRow(Connection con, int pairId, int attemptNo) throws SQLException {
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            ps = con.prepareStatement(
+                "SELECT pair_id, attempt_no, state, provenance, schema_version, manifest_json::text AS manifest_json, " +
+                    "manifest_sha256, source_status_code, created_at, updated_at, finalized_at " +
+                    "FROM starexec.job_pair_repro_manifests WHERE pair_id=? AND attempt_no=?"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, attemptNo);
+            rs = ps.executeQuery();
+            if (!rs.next()) {
+                return null;
+            }
+            Integer sourceStatusCode = rs.getObject("source_status_code") == null ? null : rs.getInt("source_status_code");
+            return new PairReproManifestResult(
+                rs.getInt("pair_id"),
+                rs.getInt("attempt_no"),
+                rs.getInt("state"),
+                rs.getInt("provenance"),
+                rs.getInt("schema_version"),
+                rs.getString("manifest_json"),
+                rs.getString("manifest_sha256"),
+                sourceStatusCode,
+                rs.getTimestamp("created_at"),
+                rs.getTimestamp("updated_at"),
+                rs.getTimestamp("finalized_at")
+            );
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+        }
+    }
+
+    private static int getOrCreateCurrentAttemptNo(Connection con, int pairId) throws SQLException {
+        return getOrCreateCurrentAttemptNo(con, pairId, false);
+    }
+
+    private static int getOrCreateCurrentAttemptNo(Connection con, int pairId, boolean lockForUpdate) throws SQLException {
+        PreparedStatement ensurePs = null;
+        PreparedStatement selectPs = null;
+        ResultSet rs = null;
+        try {
+            ensurePs = con.prepareStatement(
+                "INSERT INTO starexec.job_pair_attempts(pair_id, current_attempt_no, updated_at) VALUES (?, 1, NOW()) ON CONFLICT (pair_id) DO NOTHING"
+            );
+            ensurePs.setInt(1, pairId);
+            ensurePs.executeUpdate();
+
+            selectPs = con.prepareStatement(
+                lockForUpdate
+                    ? "SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=? FOR UPDATE"
+                    : "SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id=?"
+            );
+            selectPs.setInt(1, pairId);
+            rs = selectPs.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("current_attempt_no");
+            }
+            return 1;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ensurePs);
+            Common.safeClose(selectPs);
+        }
+    }
+
+    private static String buildManifestJson(
+        int pairId,
+        int attemptNo,
+        int provenance,
+        boolean finalized,
+        Integer sourceStatusCode
+    ) {
+        JobPair pair = getPair(pairId);
+        if (pair == null) {
+            return null;
+        }
+
+        Job job = Jobs.get(pair.getJobId());
+        Map<String, Object> manifest = new LinkedHashMap<>();
+        manifest.put("manifestVersion", "1.0.0");
+        manifest.put("schemaVersion", 1);
+        manifest.put("pairId", pairId);
+        manifest.put("attemptNo", attemptNo);
+        manifest.put("jobId", pair.getJobId());
+
+        Map<String, Object> provenanceMap = new LinkedHashMap<>();
+        provenanceMap.put("type", getManifestProvenanceName(provenance));
+        provenanceMap.put("generatedAt", new Timestamp(System.currentTimeMillis()).toString());
+        manifest.put("provenance", provenanceMap);
+
+        Map<String, Object> execution = new LinkedHashMap<>();
+        execution.put("backendType", EnvironmentConfig.getBackendType());
+        execution.put("pairStatusCode", pair.getStatus().getCode().getVal());
+        execution.put("finalized", finalized);
+        if (sourceStatusCode != null) {
+            execution.put("sourceStatusCode", sourceStatusCode);
+        }
+        if (job != null) {
+            execution.put("benchmarkingFramework", String.valueOf(job.getBenchmarkingFramework()));
+            execution.put("cpuTimeout", job.getCpuTimeout());
+            execution.put("wallclockTimeout", job.getWallclockTimeout());
+            execution.put("maxMemory", job.getMaxMemory());
+        }
+        manifest.put("execution", execution);
+
+        Map<String, Object> inputs = new LinkedHashMap<>();
+        inputs.put("benchId", pair.getBench().getId());
+        inputs.put("benchName", pair.getBench().getName());
+        if (!pair.getStages().isEmpty()) {
+            JoblineStage stage = pair.getStages().get(0);
+            if (stage.getSolver() != null) {
+                inputs.put("solverId", stage.getSolver().getId());
+                inputs.put("solverName", stage.getSolver().getName());
+            }
+            if (stage.getConfiguration() != null) {
+                inputs.put("configId", stage.getConfiguration().getId());
+                inputs.put("configName", stage.getConfiguration().getName());
+            }
+        }
+        manifest.put("inputs", inputs);
+
+        List<String> warnings = new ArrayList<>();
+        if (provenance == MANIFEST_PROVENANCE_DERIVED_LEGACY) {
+            warnings.add("legacy-derived-manifest");
+        }
+        manifest.put("warnings", warnings);
+        return gson.toJson(manifest);
+    }
+
+    private static String getSha256(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(raw.getBytes(StandardCharsets.UTF_8));
+            return Hash.getHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            log.error("getSha256", e);
+            return null;
+        }
+    }
+
+    private static boolean isTerminalStatusCode(int statusCode) {
+        return !StatusCode.toStatusCode(statusCode).incomplete();
     }
 }
