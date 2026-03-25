@@ -254,6 +254,13 @@ public class EnvironmentConfig {
     }
 
     /**
+     * Maximum size of a resumable upload chunk in bytes.
+     */
+    public static int getUploadSessionChunkSizeBytes() {
+        return getEnvInt("STAREXEC_UPLOAD_SESSION_CHUNK_SIZE_BYTES", 2 * 1024 * 1024);
+    }
+
+    /**
      * Enables or disables live SSE streaming for job pair logs.
      */
     public static boolean isPairLogStreamEnabled() {

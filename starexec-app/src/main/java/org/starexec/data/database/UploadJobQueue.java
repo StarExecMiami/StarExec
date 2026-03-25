@@ -1,9 +1,9 @@
 package org.starexec.data.database;
 
 import org.starexec.logger.StarLogger;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.to.UploadJob;
 
-import java.io.File;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,8 +20,8 @@ public class UploadJobQueue {
     private static final String INSERT_JOB_SQL = 
         "INSERT INTO upload_jobs (archive_path, user_id, space_id, upload_method, " +
         "benchmark_type_id, downloadable, priority, archive_size, " +
-        "has_dependencies, dep_root_space_id, linked) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "has_dependencies, dep_root_space_id, linked, upload_session_id) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
     private static final String CLAIM_JOB_SQL = 
         "UPDATE upload_jobs " +
@@ -54,9 +54,31 @@ public class UploadJobQueue {
     private static final String RETRY_JOB_SQL = 
         "SELECT starexec.retry_upload_job(?)";
     
-    private static final String CANCEL_JOB_SQL = 
-        "UPDATE upload_jobs SET status = 'CANCELLED', completed_at = CURRENT_TIMESTAMP " +
-        "WHERE id = ? AND user_id = ? AND status IN ('PENDING', 'PROCESSING')";
+    private static final String CANCEL_PENDING_JOB_SQL =
+        "UPDATE upload_jobs SET status = 'CANCELLED', completed_at = CURRENT_TIMESTAMP, cancel_requested = FALSE " +
+        "WHERE id = ? AND user_id = ? AND status = 'PENDING'";
+
+    private static final String REQUEST_CANCEL_JOB_SQL =
+        "UPDATE upload_jobs SET cancel_requested = TRUE, last_heartbeat = CURRENT_TIMESTAMP " +
+        "WHERE id = ? AND user_id = ? AND status = 'PROCESSING'";
+
+    private static final String CANCEL_PENDING_JOB_AS_ADMIN_SQL =
+        "UPDATE upload_jobs SET status = 'CANCELLED', completed_at = CURRENT_TIMESTAMP, cancel_requested = FALSE " +
+        "WHERE id = ? AND status = 'PENDING'";
+
+    private static final String REQUEST_CANCEL_JOB_AS_ADMIN_SQL =
+        "UPDATE upload_jobs SET cancel_requested = TRUE, last_heartbeat = CURRENT_TIMESTAMP " +
+        "WHERE id = ? AND status = 'PROCESSING'";
+
+    private static final String MARK_JOB_CANCELLED_SQL =
+        "UPDATE upload_jobs SET status = 'CANCELLED', cancel_requested = FALSE, completed_at = CURRENT_TIMESTAMP, " +
+        "last_heartbeat = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('PROCESSING', 'PENDING')";
+
+    private static final String GET_CANCEL_REQUESTED_SQL =
+        "SELECT cancel_requested FROM upload_jobs WHERE id = ?";
+
+    private static final String UPDATE_EXTRACT_PATH_SQL =
+        "UPDATE upload_jobs SET extract_path = ? WHERE id = ?";
     
     /**
      * Enqueues a new upload job for asynchronous processing using the UploadJobRequest object.
@@ -87,6 +109,7 @@ public class UploadJobQueue {
             ps.setObject(10, request.getDepRootSpaceId().orElse(null), java.sql.Types.INTEGER);
             
             ps.setBoolean(11, request.isLinked());
+            ps.setObject(12, request.getUploadSessionId().orElse(null), java.sql.Types.BIGINT);
             
             int affected = ps.executeUpdate();
             if (affected == 0) {
@@ -252,9 +275,13 @@ public class UploadJobQueue {
             cs = con.prepareCall(COMPLETE_JOB_SQL);
             cs.setLong(1, jobId);
             cs.execute();
-            
-            log.info("completeJob", "Completed upload job " + jobId);
-            return true;
+
+            UploadJob job = getJob(jobId).orElse(null);
+            if (job != null && ("COMPLETED".equals(job.getStatus()) || "COMPLETED_WITH_ERRORS".equals(job.getStatus()))) {
+                log.info("completeJob", "Completed upload job " + jobId);
+                return true;
+            }
+            return false;
             
         } catch (SQLException e) {
             log.error("completeJob", "Failed to complete job " + jobId, e);
@@ -446,14 +473,16 @@ public class UploadJobQueue {
     public static boolean retryJob(long jobId) {
         Connection con = null;
         CallableStatement cs = null;
+        ResultSet rs = null;
         
         try {
             con = Common.getConnection();
             cs = con.prepareCall(RETRY_JOB_SQL);
             cs.setLong(1, jobId);
-            
-            int affected = cs.executeUpdate();
-            if (affected > 0) {
+
+            cs.execute();
+            rs = cs.getResultSet();
+            if (rs != null && rs.next() && rs.getBoolean(1)) {
                 log.info("retryJob", "Scheduled retry for job " + jobId);
                 return true;
             }
@@ -464,6 +493,7 @@ public class UploadJobQueue {
             log.error("retryJob", "Failed to retry job " + jobId, e);
             return false;
         } finally {
+            Common.safeClose(rs);
             Common.safeClose(cs);
             Common.safeClose(con);
         }
@@ -483,13 +513,28 @@ public class UploadJobQueue {
         
         try {
             con = Common.getConnection();
-            ps = con.prepareStatement(CANCEL_JOB_SQL);
+            boolean adminCancel = GeneralSecurity.hasAdminWritePrivileges(userId);
+            ps = con.prepareStatement(adminCancel ? CANCEL_PENDING_JOB_AS_ADMIN_SQL : CANCEL_PENDING_JOB_SQL);
             ps.setLong(1, jobId);
-            ps.setInt(2, userId);
+            if (!adminCancel) {
+                ps.setInt(2, userId);
+            }
             
             int affected = ps.executeUpdate();
             if (affected > 0) {
                 log.info("cancelJob", "Cancelled job " + jobId + " by user " + userId);
+                return true;
+            }
+
+            Common.safeClose(ps);
+            ps = con.prepareStatement(adminCancel ? REQUEST_CANCEL_JOB_AS_ADMIN_SQL : REQUEST_CANCEL_JOB_SQL);
+            ps.setLong(1, jobId);
+            if (!adminCancel) {
+                ps.setInt(2, userId);
+            }
+            affected = ps.executeUpdate();
+            if (affected > 0) {
+                log.info("cancelJob", "Requested cancellation for processing job " + jobId + " by user " + userId);
                 return true;
             }
             
@@ -497,6 +542,64 @@ public class UploadJobQueue {
             
         } catch (SQLException e) {
             log.error("cancelJob", "Failed to cancel job " + jobId, e);
+            return false;
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+    }
+
+    public static boolean isCancelRequested(long jobId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(GET_CANCEL_REQUESTED_SQL);
+            ps.setLong(1, jobId);
+            rs = ps.executeQuery();
+            return rs.next() && rs.getBoolean(1);
+        } catch (SQLException e) {
+            log.error("isCancelRequested", "Failed to check cancellation for job " + jobId, e);
+            return false;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+    }
+
+    public static boolean markJobCancelled(long jobId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(MARK_JOB_CANCELLED_SQL);
+            ps.setLong(1, jobId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            log.error("markJobCancelled", "Failed to mark job " + jobId + " as cancelled", e);
+            return false;
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+    }
+
+    public static boolean updateExtractPath(long jobId, String extractPath) {
+        Connection con = null;
+        PreparedStatement ps = null;
+
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(UPDATE_EXTRACT_PATH_SQL);
+            ps.setString(1, extractPath);
+            ps.setLong(2, jobId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            log.error("updateExtractPath", "Failed to update extract path for job " + jobId, e);
             return false;
         } finally {
             Common.safeClose(ps);
@@ -533,6 +636,12 @@ public class UploadJobQueue {
         int depRoot = rs.getInt("dep_root_space_id");
         job.setDepRootSpaceId(rs.wasNull() ? null : depRoot);
         job.setLinked(rs.getBoolean("linked"));
+        long uploadSessionId = rs.getLong("upload_session_id");
+        job.setUploadSessionId(rs.wasNull() ? null : uploadSessionId);
+        job.setLastProcessedPath(rs.getString("last_processed_path"));
+        job.setLastProcessedIndex(rs.getInt("last_processed_index"));
+        job.setExtractPath(rs.getString("extract_path"));
+        job.setCancelRequested(rs.getBoolean("cancel_requested"));
         return job;
     }
 }

@@ -26,6 +26,7 @@ public class UploadJob {
         private final boolean hasDependencies;
         private final Integer depRootSpaceId; // Nullable internally
         private final boolean linked;
+        private final Long uploadSessionId;
 
         private UploadJobRequest(Builder builder) {
             this.archivePath = builder.archivePath;
@@ -39,6 +40,7 @@ public class UploadJob {
             this.hasDependencies = builder.hasDependencies;
             this.depRootSpaceId = builder.depRootSpaceId;
             this.linked = builder.linked;
+            this.uploadSessionId = builder.uploadSessionId;
         }
 
         public String getArchivePath() { return archivePath; }
@@ -52,6 +54,7 @@ public class UploadJob {
         public boolean isHasDependencies() { return hasDependencies; }
         public Optional<Integer> getDepRootSpaceId() { return Optional.ofNullable(depRootSpaceId); }
         public boolean isLinked() { return linked; }
+        public Optional<Long> getUploadSessionId() { return Optional.ofNullable(uploadSessionId); }
 
         public static class Builder {
             private String archivePath;
@@ -65,6 +68,7 @@ public class UploadJob {
             private boolean hasDependencies = false;
             private Integer depRootSpaceId;
             private boolean linked = false;
+            private Long uploadSessionId;
 
             public Builder archivePath(String val) { this.archivePath = val; return this; }
             public Builder userId(int val) { this.userId = val; return this; }
@@ -77,6 +81,7 @@ public class UploadJob {
             public Builder hasDependencies(boolean val) { this.hasDependencies = val; return this; }
             public Builder depRootSpaceId(Integer val) { this.depRootSpaceId = val; return this; }
             public Builder linked(boolean val) { this.linked = val; return this; }
+            public Builder uploadSessionId(Long val) { this.uploadSessionId = val; return this; }
 
             public UploadJobRequest build() {
                 if (archivePath == null) throw new IllegalStateException("archivePath required");
@@ -97,6 +102,7 @@ public class UploadJob {
     private boolean hasDependencies;
     private Integer depRootSpaceId;
     private boolean linked;
+    private Long uploadSessionId;
     
     private String status; // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
     private int totalFilesFound;
@@ -117,6 +123,7 @@ public class UploadJob {
     private String lastProcessedPath;
     private int lastProcessedIndex;
     private String extractPath;
+    private boolean cancelRequested;
     
     // Getters and setters
     public long getId() { return id; }
@@ -148,6 +155,9 @@ public class UploadJob {
     
     public boolean isLinked() { return linked; }
     public void setLinked(boolean linked) { this.linked = linked; }
+
+    public Long getUploadSessionId() { return uploadSessionId; }
+    public void setUploadSessionId(Long uploadSessionId) { this.uploadSessionId = uploadSessionId; }
     
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
@@ -196,6 +206,9 @@ public class UploadJob {
     
     public String getExtractPath() { return extractPath; }
     public void setExtractPath(String extractPath) { this.extractPath = extractPath; }
+
+    public boolean isCancelRequested() { return cancelRequested; }
+    public void setCancelRequested(boolean cancelRequested) { this.cancelRequested = cancelRequested; }
     
     /**
      * Checks if this is a retry (has previous progress).
@@ -209,6 +222,10 @@ public class UploadJob {
      */
     public boolean isTerminal() {
         return "COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status);
+    }
+
+    public boolean canRetry() {
+        return retryCount < maxRetries && ("FAILED".equals(status) || "CANCELLED".equals(status));
     }
     
     /**
@@ -226,10 +243,11 @@ public class UploadJob {
      * Gets the progress percentage (0-100).
      */
     public int getProgressPercentage() {
-        if (totalFilesFound == 0) {
+        if (totalFilesFound <= 0) {
             return 0;
         }
-        return (int) ((totalFilesProcessed * 100.0) / totalFilesFound);
+        int safeProcessed = Math.max(0, Math.min(totalFilesProcessed, totalFilesFound));
+        return (int) Math.min(100, Math.round((safeProcessed * 100.0) / totalFilesFound));
     }
     
     @Override

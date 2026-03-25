@@ -50,4 +50,18 @@ public interface TraversalProgressListener {
      * @param errorMessage The description of the error
      */
     void onError(String errorMessage);
+
+    /**
+     * Called after a durable batch commit so retries can resume from the last
+     * known-safe benchmark path.
+     */
+    default void onBatchCommitted(String lastProcessedPath, int totalProcessed) {
+    }
+
+    /**
+     * Allows callers to cooperatively stop a long-running traversal.
+     */
+    default boolean isCancellationRequested() {
+        return false;
+    }
 }

@@ -23,4 +23,16 @@ public class UploadJobSecurity {
 		}
 		return job.getUserId() == userId || GeneralSecurity.hasAdminReadPrivileges(userId);
 	}
+
+	/**
+	 * Checks whether a user may mutate an upload job (cancel/retry).
+	 * Owners can manage their own jobs; administrators need write privileges.
+	 */
+	public static boolean canUserManageUploadJob(long jobId, int userId) {
+		UploadJob job = UploadJobQueue.getJob(jobId).orElse(null);
+		if (job == null) {
+			return false;
+		}
+		return job.getUserId() == userId || GeneralSecurity.hasAdminWritePrivileges(userId);
+	}
 }
