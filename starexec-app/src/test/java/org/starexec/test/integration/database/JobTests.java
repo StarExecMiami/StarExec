@@ -170,10 +170,31 @@ public class JobTests extends TestSequence {
 		List<Integer> solverIds= new ArrayList<>();
 		solverIds.add(solver.getId());
 		Job temp=loader.loadJobIntoDatabase(space.getId(), user.getId(), -1, postProc.getId(), solverIds, benchmarkIds,cpuTimeout,wallclockTimeout,gbMemory);
+		int pairId = temp.getJobPairs().get(0).getId();
+		Assert.assertTrue(JobPairs.setStatusForPairAndStages(pairId, StatusCode.STATUS_COMPLETE.getVal()));
+		Assert.assertTrue(JobPairs.finalizePairManifest(pairId, StatusCode.STATUS_COMPLETE.getVal()));
+		Assert.assertNotNull(JobPairs.getPairReproManifest(pairId, null));
 		Assert.assertFalse(Jobs.isJobDeleted(temp.getId()));
 		Assert.assertTrue(Jobs.delete(temp.getId()));
 		Assert.assertTrue(Jobs.isJobDeleted(temp.getId()));
 		Assert.assertTrue(Jobs.deleteAndRemove(temp.getId()));
+	}
+
+	@StarexecTest
+	private void rerunPairIncrementsManifestAttemptTest() {
+		int pairId = job.getJobPairs().get(0).getId();
+		Assert.assertTrue(JobPairs.setStatusForPairAndStages(pairId, StatusCode.STATUS_COMPLETE.getVal()));
+		JobPairs.PairReproManifestResult initialManifest = JobPairs.getPairReproManifest(pairId, null);
+		Assert.assertNotNull(initialManifest);
+
+		Assert.assertTrue(Jobs.rerunPair(pairId));
+		Assert.assertTrue(JobPairs.upsertPairManifestCollecting(pairId));
+
+		JobPairs.PairReproManifestResult nextAttemptManifest =
+				JobPairs.getPairReproManifest(pairId, initialManifest.attemptNo + 1);
+		Assert.assertNotNull(nextAttemptManifest);
+		Assert.assertEquals(initialManifest.attemptNo + 1, nextAttemptManifest.attemptNo);
+		Assert.assertEquals("COLLECTING", JobPairs.getManifestStateName(nextAttemptManifest.state));
 	}
 
 	@StarexecTest

@@ -13,6 +13,7 @@ This guide documents how to interact with StarExec programmatically via HTTP req
 3. [Job XML Upload](#job-xml-upload)
 4. [Common Issues & Troubleshooting](#common-issues--troubleshooting)
 5. [Live Job Pair Log Streaming (SSE)](#live-job-pair-log-streaming-sse)
+6. [Pair Reproducibility Manifest](#pair-reproducibility-manifest)
 
 ---
 
@@ -258,6 +259,34 @@ curl -N -b cookies.txt \
   `GET /starexec/services/jobs/pairs/{pairId}/log`
 - If stream capacity is saturated, the API can return **HTTP 429** with
   `Retry-After`.
+
+---
+
+## Pair Reproducibility Manifest
+
+StarExec provides a per-attempt reproducibility manifest for job pairs.
+
+**Endpoint**: `GET /starexec/services/jobs/pairs/{pairId}/reproducibility-manifest`  
+**Content-Type**: `application/json`
+
+### Query parameters
+
+- `attempt` (optional): explicit attempt number. If omitted, StarExec returns
+  the latest finalized attempt when available.
+
+### Response fields (summary)
+
+- `pairId`, `attemptNo`
+- `state` (`COLLECTING`, `FINALIZING`, `FINAL`, `FINAL_DERIVED`, `FAILED`)
+- `provenance` (`LIVE`, `DERIVED_LEGACY`)
+- `schemaVersion`
+- `manifestSha256`
+- `manifest` (sanitized, allowlisted metadata)
+
+### Security semantics
+
+- `403` if the user is authenticated but cannot view the pair's owning job.
+- `404` if the pair or requested attempt does not exist.
 
 ---
 

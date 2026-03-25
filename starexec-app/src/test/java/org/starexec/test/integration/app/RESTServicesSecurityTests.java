@@ -403,6 +403,34 @@ public class RESTServicesSecurityTests extends TestSequence {
 		}
 	}
 
+	@StarexecTest
+	private void getPairReproManifestSecurityTest() {
+		Response unauthorized = services.getPairReproducibilityManifest(
+				job.getJobPairs().get(0).getId(),
+				null,
+				TestUtil.getMockHttpRequest(user.getId()));
+		Assert.assertEquals(403, unauthorized.getStatus());
+
+		Response missingPair = services.getPairReproducibilityManifest(
+				-1,
+				null,
+				TestUtil.getMockHttpRequest(admin.getId()));
+		Assert.assertEquals(404, missingPair.getStatus());
+
+		Response success = services.getPairReproducibilityManifest(
+				job.getJobPairs().get(0).getId(),
+				null,
+				TestUtil.getMockHttpRequest(admin.getId()));
+		Assert.assertEquals(200, success.getStatus());
+		Assert.assertTrue(String.valueOf(success.getEntity()).contains("\"pairId\""));
+
+		Response missingAttempt = services.getPairReproducibilityManifest(
+				job.getJobPairs().get(0).getId(),
+				99999,
+				TestUtil.getMockHttpRequest(admin.getId()));
+		Assert.assertEquals(404, missingAttempt.getStatus());
+	}
+
 	private static void setActivePairLogStreams(int value) throws Exception {
 		Field field = RESTServices.class.getDeclaredField("activePairLogStreams");
 		field.setAccessible(true);

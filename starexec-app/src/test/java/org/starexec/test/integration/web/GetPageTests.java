@@ -6,6 +6,7 @@ import org.starexec.constants.R;
 import org.starexec.constants.Web;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Queues;
+import org.starexec.data.database.UploadJobQueue;
 import org.starexec.data.database.Uploads;
 import org.starexec.data.to.*;
 import org.starexec.data.to.enums.ProcessorType;
@@ -51,6 +52,7 @@ public class GetPageTests extends TestSequence {
 	Space testCommunity=null;
 	Queue q=null;
 	BenchmarkUploadStatus benchUpload = null;
+	UploadJob asyncBenchUpload = null;
 	SpaceXMLUploadStatus spaceUpload = null;
 	@StarexecTest
 	private void getSpaceExplorerTest(){
@@ -411,6 +413,22 @@ public class GetPageTests extends TestSequence {
 	}
 
 	@StarexecTest
+	private void getAsyncBenchmarkUploadTest() {
+		try {
+			String uploadStatusPage = "secure/details/uploadStatus.jsp?id=" + asyncBenchUpload.getId();
+			HtmlStatusCodePair userHtml = con.getPageHtml(uploadStatusPage);
+			Assert.assertEquals(userHtml.statusCode, 200);
+			Assert.assertTrue("Async upload status page did not render the polling script.",
+					userHtml.html.contains("var uploadJobId = " + asyncBenchUpload.getId()));
+			Assert.assertTrue("Async upload status page did not render the progress bar.",
+					userHtml.html.contains("uploadProgressBarFill"));
+			Assert.assertTrue(adminCon.canGetPage(uploadStatusPage));
+		} catch (IOException e) {
+			Assert.fail();
+		}
+	}
+
+	@StarexecTest
 	private void getSpaceUploadTest() {
 		Assert.assertTrue(con.canGetPage("secure/details/XMLuploadStatus.jsp?id="+spaceUpload.getId()));
 	}
@@ -479,6 +497,17 @@ public class GetPageTests extends TestSequence {
 		settings=loader.loadDefaultSettingsProfileIntoDatabase(user.getId());
 
 		benchUpload = Uploads.getBenchmarkStatus(Uploads.createBenchmarkUploadStatus(space1.getId(), user.getId()));
+		long asyncBenchUploadId = UploadJobQueue.enqueueJob(new UploadJob.UploadJobRequest.Builder()
+				.archivePath(new File(downloadDir, "async-upload-test.zip").getAbsolutePath())
+				.userId(user.getId())
+				.spaceId(space1.getId())
+				.uploadMethod("dump")
+				.benchmarkTypeId(proc.getId())
+				.downloadable(true)
+				.archiveSize(1024L)
+				.build());
+		asyncBenchUpload = UploadJobQueue.getJob(asyncBenchUploadId).orElse(null);
+		Assert.assertNotNull("Failed to create async upload job for GetPageTests.", asyncBenchUpload);
 		spaceUpload = Uploads.getSpaceXMLStatus(Uploads.createSpaceXMLUploadStatus(user.getId()));
 	}
 
