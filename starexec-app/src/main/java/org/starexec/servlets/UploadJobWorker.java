@@ -1,24 +1,21 @@
 package org.starexec.servlets;
 
 import org.starexec.constants.R;
-import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.UploadJobQueue;
 import org.starexec.data.processing.BoundedUploadProcessor;
 import org.starexec.data.to.Permission;
-import org.starexec.data.to.Space;
 import org.starexec.data.to.TraversalProgressListener;
 import org.starexec.data.to.UploadJob;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.ArchiveExtractor;
-import org.starexec.util.Util;
 
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,10 +33,19 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     private static final int POLL_INTERVAL_MS = 5000; // 5 seconds
     private static final int SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final int MAX_CONCURRENT_JOBS = 3; // Allow up to 3 concurrent job processing
+    private static final long ORPHAN_RETENTION_HOURS = 24;
     
     private final AtomicBoolean running = new AtomicBoolean(true);
     private ExecutorService workerExecutor;
     private Thread workerThread;
+
+    private static class UploadCancellationException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        UploadCancellationException(String message) {
+            super(message);
+        }
+    }
     
     @Override
     public void contextInitialized(ServletContextEvent sce) {
@@ -67,7 +73,12 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     
     /**
      * Cleans up orphaned extraction directories from previous crashes.
-     * Scans for old directories and removes those not belonging to active jobs.
+     *
+     * Safety constraints:
+     * - Only touches directories created by resumable upload sessions
+     *   (upload-session-* under benchmark/{userId}/{yyyyMMdd}/)
+     * - Only deletes extraction directories with worker-owned prefix (upload_)
+     * - Never traverses arbitrary benchmark hierarchy directories
      */
     private void cleanupOrphanedExtractions() {
         String method = "cleanupOrphanedExtractions";
@@ -85,21 +96,42 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             if (userDirs != null) {
                 for (File userDir : userDirs) {
                     if (!userDir.isDirectory()) continue;
-                    
-                    File[] subdirs = userDir.listFiles();
-                    if (subdirs == null) continue;
-                    
-                    for (File subdir : subdirs) {
-                        if (!subdir.isDirectory()) continue;
-                        
-                        // Clean directories older than 24 hours
-                        long ageHours = (System.currentTimeMillis() - subdir.lastModified()) / (1000 * 60 * 60);
-                        if (ageHours > 24) {
-                            try {
-                                org.apache.commons.io.FileUtils.deleteDirectory(subdir);
-                                cleanedCount++;
-                            } catch (Exception e) {
-                                log.warn(method, "Failed to clean: " + subdir.getAbsolutePath(), e);
+
+                    File[] dateDirs = userDir.listFiles();
+                    if (dateDirs == null) continue;
+
+                    for (File dateDir : dateDirs) {
+                        if (!dateDir.isDirectory() || !looksLikeDateDirectory(dateDir.getName())) {
+                            continue;
+                        }
+
+                        File[] sessionDirs = dateDir.listFiles();
+                        if (sessionDirs == null) continue;
+
+                        for (File sessionDir : sessionDirs) {
+                            if (!sessionDir.isDirectory() || !sessionDir.getName().startsWith("upload-session-")) {
+                                continue;
+                            }
+
+                            File[] extractionDirs = sessionDir.listFiles();
+                            if (extractionDirs == null) continue;
+
+                            for (File extractionDir : extractionDirs) {
+                                if (!extractionDir.isDirectory() || !extractionDir.getName().startsWith("upload_")) {
+                                    continue;
+                                }
+
+                                long ageHours = (System.currentTimeMillis() - extractionDir.lastModified()) / (1000 * 60 * 60);
+                                if (ageHours <= ORPHAN_RETENTION_HOURS) {
+                                    continue;
+                                }
+
+                                try {
+                                    org.apache.commons.io.FileUtils.deleteDirectory(extractionDir);
+                                    cleanedCount++;
+                                } catch (Exception e) {
+                                    log.warn(method, "Failed to clean: " + extractionDir.getAbsolutePath(), e);
+                                }
                             }
                         }
                     }
@@ -112,6 +144,18 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             
         } catch (Exception e) {
             log.error(method, "Error during cleanup", e);
+        }
+    }
+
+    private boolean looksLikeDateDirectory(String name) {
+        if (name == null || !name.matches("\\d{8}")) {
+            return false;
+        }
+        try {
+            LocalDate.parse(name, DateTimeFormatter.BASIC_ISO_DATE);
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
     
@@ -211,37 +255,26 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         // Track extraction directory for failure-only cleanup
         File extractDir = null;
         boolean processingSucceeded = false;
+        boolean preserveArtifactsForRetry = false;
         
         // Track extraction count
         final AtomicInteger extractedCount = new AtomicInteger(0);
         
         try {
-            // Update progress heartbeat
-            UploadJobQueue.updateProgress(job.getId(), 0, 0, 0, null, 0);
-            
-            // Step 1: Extract archive safely with zip bomb protection
+            UploadJobQueue.touchJob(job.getId());
+            ensureNotCancelled(job.getId());
+
             String archivePath = job.getArchivePath();
-            File archiveFile = new File(archivePath);
-            
-            if (!archiveFile.exists()) {
-                throw new IOException("Archive file not found: " + archivePath);
+            File archiveFile = new File(job.getArchivePath());
+            extractDir = prepareExtraction(job, archiveFile, extractedCount);
+            ensureNotCancelled(job.getId());
+
+            if (extractedCount.get() > 0) {
+                UploadJobQueue.updateProgress(job.getId(), extractedCount.get(), null, null, null, null);
+                log.info(method, "Extracted " + extractedCount.get() + " files from archive");
+            } else {
+                log.info(method, "Reusing extracted directory for retry: " + extractDir.getAbsolutePath());
             }
-            
-            // Create extraction directory under the benchmark storage path.
-            // IMPORTANT: This directory must remain on disk permanently because the
-            // paths stored in the DB point directly to files inside it. Jobs copy
-            // benchmark files from these paths at runtime.
-            String extractDirName = "upload_" + job.getId() + "_" + System.currentTimeMillis();
-            extractDir = new File(archiveFile.getParent(), extractDirName);
-            
-            // Extract safely (handles zip bombs, path traversal, cleanup on failure)
-            log.info(method, "Extracting archive for job " + job.getId());
-            ArchiveExtractor.extractWithCleanup(archivePath, extractDir.toPath(), extractedCount);
-            
-            // Update progress with total found BEFORE processing begins
-            int totalFound = extractedCount.get();
-            UploadJobQueue.updateProgress(job.getId(), totalFound, 0, 0, null, 0);
-            log.info(method, "Extracted " + totalFound + " files from archive");
             
             // Step 2: Process based on upload method
             // "convert" method requires subspace creation - use legacy synchronous path
@@ -255,9 +288,16 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 BoundedUploadProcessor processor = new BoundedUploadProcessor(job, extractDir);
                 processor.process();
             }
+
+            ensureNotCancelled(job.getId());
             
             // Step 3: Mark as completed
-            UploadJobQueue.completeJob(job.getId());
+            if (!UploadJobQueue.completeJob(job.getId())) {
+                if (UploadJobQueue.isCancelRequested(job.getId())) {
+                    throw new UploadCancellationException("Upload job cancellation requested");
+                }
+                throw new IOException("Failed to mark upload job as completed");
+            }
             processingSucceeded = true;
             log.info(method, "Completed job " + job.getId());
             
@@ -271,8 +311,20 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 log.warn(method, "Could not delete source archive (non-fatal): " + archivePath, deleteEx);
             }
             
+        } catch (UploadCancellationException e) {
+            preserveArtifactsForRetry = job.getRetryCount() < job.getMaxRetries();
+            UploadJobQueue.markJobCancelled(job.getId());
+            log.info(method, "Cancelled job " + job.getId() + " cooperatively");
         } catch (Exception e) {
+            if (isCancellationException(e, job.getId())) {
+                preserveArtifactsForRetry = job.getRetryCount() < job.getMaxRetries();
+                UploadJobQueue.markJobCancelled(job.getId());
+                log.info(method, "Cancelled job " + job.getId() + " during processing");
+                return;
+            }
+
             log.error(method, "Failed to process job " + job.getId(), e);
+            preserveArtifactsForRetry = job.getRetryCount() < job.getMaxRetries();
             
             // Mark job as failed
             String errorMessage = e.getMessage();
@@ -284,7 +336,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         } finally {
             // Only delete the extraction directory when processing FAILED — the files
             // were never registered in the DB so there is nothing to preserve.
-            if (!processingSucceeded && extractDir != null) {
+            if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null) {
                 try {
                     ArchiveExtractor.cleanup(extractDir.getAbsolutePath());
                     log.info(method, "Cleaned up extraction directory after failure for job " + job.getId());
@@ -293,6 +345,21 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 }
             }
         }
+    }
+
+    private boolean isCancellationException(Throwable throwable, long jobId) {
+        if (UploadJobQueue.isCancelRequested(jobId)) {
+            return true;
+        }
+
+        Throwable cursor = throwable;
+        while (cursor != null) {
+            if (cursor instanceof UploadCancellationException || cursor instanceof InterruptedException) {
+                return true;
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
     }
     
     /**
@@ -345,7 +412,8 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             usesDeps,
             depRootSpaceId,
             linked,
-            listener // progress listener
+            listener,
+            job.getLastProcessedPath()
         );
         
         log.info(method, "Completed subspace creation for job " + job.getId());
@@ -358,6 +426,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         return new TraversalProgressListener() {
             private int lastUpdateTime = 0;
             private static final int MIN_UPDATE_INTERVAL_MS = 1000; // Update at most every second
+            private String lastCommittedPath = job.getLastProcessedPath();
             
             @Override
             public void onSpaceCreated(int spaceId, String spacePath) {
@@ -376,11 +445,11 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                     lastUpdateTime = (int) now;
                     UploadJobQueue.updateProgress(
                         job.getId(),
-                        null,
+                        filesFound,
                         filesProcessed,
                         spacesCreated,
-                        null,
-                        null
+                        lastCommittedPath,
+                        filesProcessed > 0 ? filesProcessed - 1 : null
                     );
                     // Also touch the job to update last_heartbeat
                     UploadJobQueue.touchJob(job.getId());
@@ -394,11 +463,11 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 // Final update
                 UploadJobQueue.updateProgress(
                     job.getId(),
-                    null,
+                    totalFilesFound,
                     totalFilesProcessed,
                     totalSpacesCreated,
-                    null,
-                    null
+                    lastCommittedPath,
+                    totalFilesProcessed > 0 ? totalFilesProcessed - 1 : null
                 );
             }
 
@@ -415,6 +484,54 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                     errorCount++;
                 }
             }
+
+            @Override
+            public void onBatchCommitted(String lastProcessedPath, int totalProcessed) {
+                lastCommittedPath = lastProcessedPath;
+                UploadJobQueue.updateProgress(
+                    job.getId(),
+                    null,
+                    totalProcessed,
+                    null,
+                    lastProcessedPath,
+                    totalProcessed > 0 ? totalProcessed - 1 : null
+                );
+            }
+
+            @Override
+            public boolean isCancellationRequested() {
+                return UploadJobQueue.isCancelRequested(job.getId());
+            }
         };
+    }
+
+    private File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
+        String method = "prepareExtraction";
+
+        if (job.getExtractPath() != null && !job.getExtractPath().isEmpty()) {
+            File existingExtractDir = new File(job.getExtractPath());
+            if (existingExtractDir.exists() && existingExtractDir.isDirectory()) {
+                return existingExtractDir;
+            }
+        }
+
+        if (!archiveFile.exists()) {
+            throw new IOException("Archive file not found: " + job.getArchivePath());
+        }
+
+        String extractDirName = "upload_" + job.getId() + "_" + System.currentTimeMillis();
+        File extractDir = new File(archiveFile.getParent(), extractDirName);
+
+        log.info(method, "Extracting archive for job " + job.getId());
+        ArchiveExtractor.extractWithCleanup(job.getArchivePath(), extractDir.toPath(), extractedCount);
+        UploadJobQueue.updateExtractPath(job.getId(), extractDir.getAbsolutePath());
+        job.setExtractPath(extractDir.getAbsolutePath());
+        return extractDir;
+    }
+
+    private void ensureNotCancelled(long jobId) throws UploadCancellationException {
+        if (UploadJobQueue.isCancelRequested(jobId)) {
+            throw new UploadCancellationException("Upload job cancellation requested");
+        }
     }
 }

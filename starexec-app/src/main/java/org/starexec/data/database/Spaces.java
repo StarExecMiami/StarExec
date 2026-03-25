@@ -3098,11 +3098,23 @@ public class Spaces {
 	 */
 	public static void traverseAndAddBenchmarks(
 			File directory, int spaceId, int userId, int typeId, boolean downloadable, Permission perm, Integer statusId,
-			Boolean usesDeps, Integer depRootSpaceId, Boolean linked, TraversalProgressListener progressListener) 
+			Boolean usesDeps, Integer depRootSpaceId, Boolean linked, TraversalProgressListener progressListener)
+			throws IOException, StarExecException {
+		traverseAndAddBenchmarks(
+			directory, spaceId, userId, typeId, downloadable, perm, statusId,
+			usesDeps, depRootSpaceId, linked, progressListener, null
+		);
+	}
+
+	public static void traverseAndAddBenchmarks(
+			File directory, int spaceId, int userId, int typeId, boolean downloadable, Permission perm, Integer statusId,
+			Boolean usesDeps, Integer depRootSpaceId, Boolean linked, TraversalProgressListener progressListener,
+			String resumeAfterPath)
 			throws IOException, StarExecException {
 
 		final int batchSize = 50;
 		final Timer uploadTimer = new Timer();
+		final String normalizedResumeAfterPath = resumeAfterPath == null ? null : new File(resumeAfterPath).getAbsolutePath();
 		
 		// Track overall progress
 		final AtomicInteger directoriesVisited = new AtomicInteger(0);
@@ -3124,31 +3136,37 @@ public class Spaces {
 				pathToSpaceId.put(root.toString(), spaceId);
 			}
 
+			private void throwIfCancelled() throws IOException {
+				if (progressListener != null && progressListener.isCancellationRequested()) {
+					throw new IOException("Upload job cancellation requested");
+				}
+			}
+
 			private void flushBatch(Integer spaceToFlush) throws SQLException, IOException, StarExecException {
 				List<Benchmark> batch = spaceBatches.get(spaceToFlush);
 				if (batch != null && !batch.isEmpty()) {
-					try {
-						Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
-					} finally {
-						int processed = batch.size();
-						filesProcessed.addAndGet(processed);
-						batch.clear();
-						
-						// Notify listener
-						if (progressListener != null) {
-							progressListener.onBenchmarksProcessed(processed, filesProcessed.get());
-						}
-						
-						// Update upload status
-						if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
-							uploadTimer.reset();
-						}
+					String lastProcessedPath = batch.get(batch.size() - 1).getPath();
+					int processed = batch.size();
+					Benchmarks.processAndAdd(batch, spaceToFlush, depRootSpaceId, linked, statusId, usesDeps, con);
+					filesProcessed.addAndGet(processed);
+					batch.clear();
+					
+					// Notify listener
+					if (progressListener != null) {
+						progressListener.onBenchmarksProcessed(processed, filesProcessed.get());
+						progressListener.onBatchCommitted(lastProcessedPath, filesProcessed.get());
+					}
+					
+					// Update upload status
+					if (uploadTimer.getTime() > R.UPLOAD_STATUS_TIME_BETWEEN_UPDATES) {
+						uploadTimer.reset();
 					}
 				}
 			}
 
 			@Override
 			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+				throwIfCancelled();
 				directoriesVisited.incrementAndGet();
 				
 				if (dir.equals(rootPath)) {
@@ -3184,14 +3202,24 @@ public class Spaces {
 					}
 
 					int subSpaceId;
+					Integer existingSubSpaceId = null;
+					if (normalizedResumeAfterPath != null) {
+						existingSubSpaceId = Spaces.getSubSpaceIDbyName(parentSpaceId, userId, spaceName, con);
+					}
+					if (existingSubSpaceId != null && existingSubSpaceId > 0) {
+						subSpaceId = existingSubSpaceId;
+					} else {
 						subSpaceId = Spaces.add(con, sub, userId);
+					}
 					
 					if (subSpaceId != -1) {
 						pathToSpaceId.put(dir.toAbsolutePath().toString(), subSpaceId);
-						spacesCreated.incrementAndGet();
+						if (existingSubSpaceId == null || existingSubSpaceId <= 0) {
+							spacesCreated.incrementAndGet();
+						}
 						
 						// Notify listener
-						if (progressListener != null) {
+						if (progressListener != null && (existingSubSpaceId == null || existingSubSpaceId <= 0)) {
 							progressListener.onSpaceCreated(subSpaceId, spaceName);
 						}
 						
@@ -3217,6 +3245,7 @@ public class Spaces {
 
 			@Override
 			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+				throwIfCancelled();
 				String fileName = file.getFileName().toString();
 				
 				// Skip description files and hidden files
@@ -3230,6 +3259,10 @@ public class Spaces {
 				}
 
 				if (Validator.isValidBenchName(fileName)) {
+					String absolutePath = file.toAbsolutePath().toString();
+					if (normalizedResumeAfterPath != null && absolutePath.compareTo(normalizedResumeAfterPath) <= 0) {
+						return FileVisitResult.CONTINUE;
+					}
 					Integer currentSpaceId = pathToSpaceId.get(file.getParent().toAbsolutePath().toString());
 					if (currentSpaceId == null) {
 						log.warn("Skipping benchmark " + fileName + " because parent space ID is unknown");
@@ -3264,6 +3297,7 @@ public class Spaces {
 
 			@Override
 			public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+				throwIfCancelled();
 				// Flush any remaining benchmarks in this directory's space
 				Integer spaceIdForDir = pathToSpaceId.get(dir.toAbsolutePath().toString());
 				if (spaceIdForDir != null) {

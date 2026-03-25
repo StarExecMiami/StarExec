@@ -31,17 +31,28 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.*;
+import javax.ws.rs.Path;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.StreamingOutput;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -104,6 +115,7 @@ public class RESTServices {
 
 	private static final AtomicInteger activePairLogStreams = new AtomicInteger(0);
 	private static final byte[] NEWLINE = "\n".getBytes(StandardCharsets.UTF_8);
+	private static final int MAX_UPLOAD_SESSION_CREATE_BODY_BYTES = 64 * 1024;
 
 	@GET
 	@Path("/queue/{qid}/getDesc")
@@ -404,11 +416,458 @@ public class RESTServices {
 		response.put("elapsedTimeMs", elapsedTimeMs);
 		
 		response.put("isStuck", job.isStuck());
+		response.put("cancelRequested", job.isCancelRequested());
+		response.put("canRetry", job.canRetry());
+		response.put("canCancel", ("PENDING".equals(job.getStatus()) || "PROCESSING".equals(job.getStatus()))
+			&& !job.isCancelRequested());
+		response.put("retryCount", job.getRetryCount());
+		response.put("maxRetries", job.getMaxRetries());
+		response.put("uploadSessionId", job.getUploadSessionId());
 		response.put("createdAt", job.getCreatedAt() != null ? job.getCreatedAt().toString() : null);
 		response.put("startedAt", job.getStartedAt() != null ? job.getStartedAt().toString() : null);
 		response.put("completedAt", job.getCompletedAt() != null ? job.getCompletedAt().toString() : null);
 
 		return gson.toJson(response);
+	}
+
+	@POST
+	@Path("/uploads/sessions")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String createUploadSession(@Context HttpServletRequest request) {
+		if (UploadSecurity.uploadsFrozen()) {
+			return gson.toJson(new ValidatorStatusCode(false, "Uploads are temporarily frozen"));
+		}
+
+		UploadSessionCreateRequest body;
+		try {
+			String json = readRequestBodyWithLimit(request.getInputStream(), MAX_UPLOAD_SESSION_CREATE_BODY_BYTES);
+			body = gson.fromJson(json, UploadSessionCreateRequest.class);
+		} catch (IOException | JsonSyntaxException e) {
+			log.error("createUploadSession", "Failed to parse upload session request", e);
+			return gson.toJson(new ValidatorStatusCode(false, "Invalid request body"));
+		}
+
+		ValidatorStatusCode validation = validateUploadSessionCreateRequest(body, request);
+		if (!validation.isSuccess()) {
+			return gson.toJson(validation);
+		}
+
+		int userId = SessionUtil.getUserId(request);
+		UploadSession session = UploadSessions.createSession(userId, body).orElse(null);
+		if (session == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to create upload session"));
+		}
+
+		return gson.toJson(buildUploadSessionPayload(session));
+	}
+
+	@GET
+	@Path("/uploads/sessions/{sessionId}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String getUploadSession(@PathParam("sessionId") long sessionId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (!UploadSessionSecurity.canUserSeeUploadSession(sessionId, userId)) {
+			throw RESTException.NOT_FOUND;
+		}
+
+		UploadSession session = UploadSessions.getSession(sessionId).orElse(null);
+		if (session == null) {
+			throw RESTException.NOT_FOUND;
+		}
+		return gson.toJson(buildUploadSessionPayload(session));
+	}
+
+	@PUT
+	@Path("/uploads/sessions/{sessionId}/chunks/{chunkIndex}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String uploadSessionChunk(@PathParam("sessionId") long sessionId,
+			@PathParam("chunkIndex") int chunkIndex,
+			@Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (!UploadSessionSecurity.canUserManageUploadSession(sessionId, userId)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to modify this upload session"));
+		}
+
+		UploadSession session = UploadSessions.getSession(sessionId).orElse(null);
+		if (session == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session not found"));
+		}
+		if (!session.isUploadOpen()) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session is not accepting chunks"));
+		}
+		if (chunkIndex < 0 || chunkIndex >= session.getTotalChunks()) {
+			return gson.toJson(new ValidatorStatusCode(false, "Chunk index is out of range"));
+		}
+		long expectedOffset = (long) chunkIndex * session.getChunkSize();
+		long remainingBytes = session.getTotalBytes() - expectedOffset;
+		long maxChunkBytes = Math.min(session.getChunkSize(), remainingBytes);
+		maxChunkBytes = Math.min(maxChunkBytes, Math.max(1, EnvironmentConfig.getUploadSessionChunkSizeBytes()));
+
+		long contentLength = request.getContentLengthLong();
+		if (contentLength == 0) {
+			return gson.toJson(new ValidatorStatusCode(false, "Received an empty upload chunk"));
+		}
+		if (contentLength > maxChunkBytes) {
+			return gson.toJson(new ValidatorStatusCode(false, "Chunk size exceeds the expected range"));
+		}
+
+		java.nio.file.Path stagingPath = Paths.get(session.getStagingPath());
+		java.nio.file.Path chunksDir = Paths.get(session.getStagingPath() + ".chunks");
+		java.nio.file.Path finalChunkPath = chunksDir.resolve("chunk_" + chunkIndex + ".bin");
+		java.nio.file.Path tempChunkPath = chunksDir.resolve("chunk_" + chunkIndex + "." + UUID.randomUUID() + ".tmp");
+
+		try {
+			java.nio.file.Path parent = stagingPath.getParent();
+			if (parent != null) {
+				Files.createDirectories(parent);
+			}
+			Files.createDirectories(chunksDir);
+		} catch (IOException e) {
+			log.error("uploadSessionChunk", "Failed to prepare upload staging directory for session " + sessionId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to prepare upload staging directory"));
+		}
+
+		if (UploadSessions.isChunkRecorded(sessionId, chunkIndex) && Files.exists(finalChunkPath)) {
+			UploadSession updated = UploadSessions.getSession(sessionId).orElse(session);
+			return gson.toJson(buildUploadSessionPayload(updated));
+		}
+
+		long written = 0L;
+		boolean shouldCleanupTemp = true;
+		byte[] buffer = new byte[8192];
+		try {
+			try (InputStream in = request.getInputStream();
+					 OutputStream out = Files.newOutputStream(tempChunkPath,
+						 StandardOpenOption.CREATE,
+					 StandardOpenOption.TRUNCATE_EXISTING,
+					 StandardOpenOption.WRITE)) {
+				int read;
+				while ((read = in.read(buffer)) != -1) {
+					if (written + read > maxChunkBytes) {
+						return gson.toJson(new ValidatorStatusCode(false, "Chunk size exceeds the expected range"));
+					}
+					out.write(buffer, 0, read);
+					written += read;
+				}
+				out.flush();
+			}
+
+			if (written <= 0) {
+				return gson.toJson(new ValidatorStatusCode(false, "Received an empty upload chunk"));
+			}
+
+			boolean chunkAlreadyExists = false;
+			try {
+				moveWithAtomicFallbackNoReplace(tempChunkPath, finalChunkPath);
+				shouldCleanupTemp = false;
+			} catch (FileAlreadyExistsException e) {
+				chunkAlreadyExists = true;
+			}
+
+			if (!UploadSessions.recordChunkIfAbsent(sessionId, chunkIndex, (int) written)) {
+				if (chunkAlreadyExists && UploadSessions.isChunkRecorded(sessionId, chunkIndex)) {
+					UploadSession updated = UploadSessions.getSession(sessionId).orElse(session);
+					return gson.toJson(buildUploadSessionPayload(updated));
+				}
+				return gson.toJson(new ValidatorStatusCode(false, "Failed to update upload session progress"));
+			}
+		} catch (IOException e) {
+			log.error("uploadSessionChunk", "Failed to persist chunk for session " + sessionId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to store upload chunk"));
+		} finally {
+			if (shouldCleanupTemp) {
+				try {
+					Files.deleteIfExists(tempChunkPath);
+				} catch (IOException cleanupError) {
+					log.debug("uploadSessionChunk", "Failed to cleanup temp chunk file for session " + sessionId, cleanupError);
+				}
+			}
+		}
+
+		UploadSession updated = UploadSessions.getSession(sessionId).orElse(session);
+		return gson.toJson(buildUploadSessionPayload(updated));
+	}
+
+	@POST
+	@Path("/uploads/sessions/{sessionId}/finalize")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String finalizeUploadSession(@PathParam("sessionId") long sessionId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (!UploadSessionSecurity.canUserManageUploadSession(sessionId, userId)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to finalize this upload session"));
+		}
+
+		UploadSession session = UploadSessions.getSession(sessionId).orElse(null);
+		if (session == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session not found"));
+		}
+		if ("COMPLETE".equals(session.getStatus()) && session.getJobId() != null) {
+			Map<String, Object> response = new HashMap<>();
+			response.put("success", true);
+			response.put("jobId", session.getJobId());
+			response.put("sessionId", session.getId());
+			return gson.toJson(response);
+		}
+		if (session.getBytesReceived() != session.getTotalBytes() || session.getNextChunkIndex() != session.getTotalChunks()) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload is incomplete and cannot be finalized"));
+		}
+		if (!UploadSessions.markFinalizing(sessionId) && !"FINALIZING".equals(session.getStatus())) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session is not ready to finalize"));
+		}
+
+		java.nio.file.Path chunksDir = Paths.get(session.getStagingPath() + ".chunks");
+		java.nio.file.Path targetArchive = Paths.get(session.getStagingPath());
+		java.nio.file.Path finalArchivePath = (targetArchive.getParent() == null)
+			? Paths.get(UploadSessions.sanitizeFileName(session.getFileName()))
+			: targetArchive.getParent().resolve(UploadSessions.sanitizeFileName(session.getFileName()));
+
+		ValidatorStatusCode assembleStatus = assembleUploadSessionChunks(session, chunksDir, finalArchivePath);
+		if (!assembleStatus.isSuccess()) {
+			UploadSessions.failSession(sessionId, assembleStatus.getMessage());
+			return gson.toJson(new ValidatorStatusCode(false, assembleStatus.getMessage()));
+		}
+
+		if (!UploadSessions.updateStagingPath(sessionId, finalArchivePath.toAbsolutePath().toString())) {
+			UploadSessions.failSession(sessionId, "Failed to update finalized archive path");
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to persist the finalized archive path"));
+		}
+
+		File finalArchive = finalArchivePath.toFile();
+
+		long jobId = UploadJobQueue.enqueueJob(new UploadJob.UploadJobRequest.Builder()
+			.archivePath(finalArchive.getAbsolutePath())
+			.userId(session.getUserId())
+			.spaceId(session.getSpaceId())
+			.uploadMethod(session.getUploadMethod())
+			.benchmarkTypeId(session.getBenchmarkTypeId())
+			.downloadable(session.isDownloadable())
+			.archiveSize(session.getTotalBytes())
+			.hasDependencies(session.isHasDependencies())
+			.depRootSpaceId(session.getDepRootSpaceId())
+			.linked(session.isLinked())
+			.uploadSessionId(session.getId())
+			.build());
+
+		if (jobId <= 0) {
+			UploadSessions.failSession(sessionId, "Failed to enqueue upload job");
+			return gson.toJson(new ValidatorStatusCode(false, "Failed to schedule upload processing"));
+		}
+
+		UploadSessions.completeSession(sessionId, jobId);
+		Map<String, Object> response = new HashMap<>();
+		response.put("success", true);
+		response.put("sessionId", sessionId);
+		response.put("jobId", jobId);
+		return gson.toJson(response);
+	}
+
+	private static void moveWithAtomicFallback(java.nio.file.Path source, java.nio.file.Path target) throws IOException {
+		try {
+			Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+		} catch (AtomicMoveNotSupportedException e) {
+			Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+		}
+	}
+
+	private static String readRequestBodyWithLimit(InputStream in, int maxBytes) throws IOException {
+		byte[] buffer = new byte[4096];
+		int total = 0;
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		int read;
+
+		while ((read = in.read(buffer)) != -1) {
+			total += read;
+			if (total > maxBytes) {
+				throw new IOException("Request body too large");
+			}
+			out.write(buffer, 0, read);
+		}
+
+		return out.toString(StandardCharsets.UTF_8.name());
+	}
+
+	private static void moveWithAtomicFallbackNoReplace(java.nio.file.Path source, java.nio.file.Path target) throws IOException {
+		if (Files.exists(target)) {
+			throw new FileAlreadyExistsException(target.toString());
+		}
+		try {
+			Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+		} catch (AtomicMoveNotSupportedException e) {
+			Files.move(source, target);
+		}
+	}
+
+	private ValidatorStatusCode assembleUploadSessionChunks(UploadSession session, java.nio.file.Path chunksDir, java.nio.file.Path outputFile) {
+		java.nio.file.Path tempOutput = Paths.get(session.getStagingPath() + ".assembling");
+		try (FileChannel out = FileChannel.open(
+			tempOutput,
+			StandardOpenOption.CREATE,
+			StandardOpenOption.TRUNCATE_EXISTING,
+			StandardOpenOption.WRITE
+		)) {
+			long targetOffset = 0L;
+			for (int i = 0; i < session.getTotalChunks(); i++) {
+				java.nio.file.Path chunkPath = chunksDir.resolve("chunk_" + i + ".bin");
+				if (!Files.exists(chunkPath)) {
+					return new ValidatorStatusCode(false, "Missing chunk " + i);
+				}
+				try (FileChannel in = FileChannel.open(chunkPath, StandardOpenOption.READ)) {
+					long size = in.size();
+					long pos = 0L;
+					while (pos < size) {
+						long transferred = out.transferFrom(in, targetOffset, size - pos);
+						if (transferred <= 0) {
+							return new ValidatorStatusCode(false, "Failed assembling chunk " + i);
+						}
+						pos += transferred;
+						targetOffset += transferred;
+					}
+				}
+			}
+			out.force(true);
+		} catch (IOException e) {
+			log.error("assembleUploadSessionChunks", "Failed assembling chunks for session " + session.getId(), e);
+			return new ValidatorStatusCode(false, "Failed to finalize upload assembly");
+		}
+
+		try {
+			long assembledSize = Files.size(tempOutput);
+			if (assembledSize != session.getTotalBytes()) {
+				Files.deleteIfExists(tempOutput);
+				return new ValidatorStatusCode(false, "Uploaded archive size does not match the expected size");
+			}
+			moveWithAtomicFallback(tempOutput, outputFile);
+		} catch (IOException e) {
+			log.error("assembleUploadSessionChunks", "Failed finalizing assembled archive for session " + session.getId(), e);
+			return new ValidatorStatusCode(false, "Failed to finalize the uploaded archive");
+		}
+
+		return new ValidatorStatusCode(true);
+	}
+
+	@POST
+	@Path("/uploads/sessions/{sessionId}/abort")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String abortUploadSession(@PathParam("sessionId") long sessionId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (!UploadSessionSecurity.canUserManageUploadSession(sessionId, userId)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to abort this upload session"));
+		}
+
+		UploadSession session = UploadSessions.getSession(sessionId).orElse(null);
+		if (session == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session not found"));
+		}
+		if (session.getJobId() != null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session has already been finalized"));
+		}
+
+		boolean aborted = UploadSessions.abortSession(sessionId);
+		UploadSessions.cleanupSessionFiles(session);
+		return gson.toJson(new ValidatorStatusCode(aborted || "ABORTED".equals(session.getStatus()), "Upload session aborted"));
+	}
+
+	@POST
+	@Path("/uploads/jobs/{jobId}/cancel")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String cancelUploadJob(@PathParam("jobId") long jobId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (!UploadJobSecurity.canUserManageUploadJob(jobId, userId)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to cancel this upload job"));
+		}
+
+		UploadJob job = UploadJobQueue.getJob(jobId).orElse(null);
+		if (job == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload job not found"));
+		}
+		if (job.isTerminal()) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload job is already finished"));
+		}
+		if (job.isCancelRequested()) {
+			return gson.toJson(new ValidatorStatusCode(true, "Cancellation already requested"));
+		}
+		return UploadJobQueue.cancelJob(jobId, userId)
+			? gson.toJson(new ValidatorStatusCode(true, "Cancellation requested"))
+			: gson.toJson(new ValidatorStatusCode(false, "Unable to cancel upload job"));
+	}
+
+	@POST
+	@Path("/uploads/jobs/{jobId}/retry")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String retryUploadJob(@PathParam("jobId") long jobId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		if (!UploadJobSecurity.canUserManageUploadJob(jobId, userId)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to retry this upload job"));
+		}
+
+		UploadJob job = UploadJobQueue.getJob(jobId).orElse(null);
+		if (job == null) {
+			return gson.toJson(new ValidatorStatusCode(false, "Upload job not found"));
+		}
+		if (!job.canRetry()) {
+			return gson.toJson(new ValidatorStatusCode(false, "This upload job cannot be retried"));
+		}
+		return UploadJobQueue.retryJob(jobId)
+			? gson.toJson(new ValidatorStatusCode(true, "Retry scheduled"))
+			: gson.toJson(new ValidatorStatusCode(false, "Unable to schedule retry"));
+	}
+
+	private ValidatorStatusCode validateUploadSessionCreateRequest(UploadSessionCreateRequest body, HttpServletRequest request) {
+		if (body == null) {
+			return new ValidatorStatusCode(false, "Missing request body");
+		}
+		if (body.getFileName() == null || body.getFileName().trim().isEmpty()) {
+			return new ValidatorStatusCode(false, "Archive file name is required");
+		}
+		String cleanFileName = UploadSessions.sanitizeFileName(body.getFileName());
+		if (!Validator.isValidArchiveType(cleanFileName)) {
+			return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
+		}
+		if (body.getTotalBytes() <= 0) {
+			return new ValidatorStatusCode(false, "Archive size must be greater than zero");
+		}
+		if (body.getSpaceId() <= 0) {
+			return new ValidatorStatusCode(false, "Space ID is required");
+		}
+		if (body.getBenchmarkTypeId() <= 0 || Processors.get(body.getBenchmarkTypeId()) == null) {
+			return new ValidatorStatusCode(false, "Benchmark processor ID is invalid");
+		}
+		if (!"convert".equals(body.getUploadMethod()) && !"dump".equals(body.getUploadMethod())) {
+			return new ValidatorStatusCode(false, "The upload method needs to be either 'convert' or 'dump'");
+		}
+
+		int userId = SessionUtil.getUserId(request);
+		Permission perm = SessionUtil.getPermission(request, body.getSpaceId());
+		if (perm == null || (!perm.canAddBenchmark() && "dump".equals(body.getUploadMethod()))) {
+			return new ValidatorStatusCode(false, "You do not have permission to upload benchmarks to this space");
+		}
+		if ("convert".equals(body.getUploadMethod()) && !(perm.canAddBenchmark() && perm.canAddSpace())) {
+			return new ValidatorStatusCode(false, "You do not have permission to upload benchmarks and subspaces to this space");
+		}
+		if (body.isHasDependencies() && body.getDepRootSpaceId() != null &&
+				!SpaceSecurity.canUserSeeSpace(body.getDepRootSpaceId(), userId).isSuccess()) {
+			return new ValidatorStatusCode(false, "You do not have permission to use the selected dependency root space");
+		}
+
+		return new ValidatorStatusCode(true);
+	}
+
+	private Map<String, Object> buildUploadSessionPayload(UploadSession session) {
+		Map<String, Object> response = new HashMap<>();
+		response.put("success", true);
+		response.put("id", session.getId());
+		response.put("spaceId", session.getSpaceId());
+		response.put("fileName", session.getFileName());
+		response.put("status", session.getStatus());
+		response.put("bytesReceived", session.getBytesReceived());
+		response.put("totalBytes", session.getTotalBytes());
+		response.put("chunkSize", session.getChunkSize());
+		response.put("nextChunkIndex", session.getNextChunkIndex());
+		response.put("totalChunks", session.getTotalChunks());
+		response.put("progressPercentage", session.getProgressPercentage());
+		response.put("jobId", session.getJobId());
+		response.put("errorMessage", session.getErrorMessage());
+		return response;
 	}
 
 	/**
@@ -450,6 +909,55 @@ public class RESTServices {
 			throw RESTException.NOT_FOUND;
 		}
 		return log;
+	}
+
+	@GET
+	@Path("/jobs/pairs/{id}/reproducibility-manifest")
+	@Produces(MediaType.APPLICATION_JSON)
+	public Response getPairReproducibilityManifest(
+		@PathParam("id") int pairId,
+		@QueryParam("attempt") Integer attempt,
+		@Context HttpServletRequest request
+	) {
+		int userId = SessionUtil.getUserId(request);
+		ValidatorStatusCode canSee = JobSecurity.canUserSeeJobWithPair(pairId, userId);
+		if (!canSee.isSuccess()) {
+			JobPair pair = JobPairs.getPair(pairId);
+			if (pair == null) {
+				return Response.status(Response.Status.NOT_FOUND)
+					.type(MediaType.TEXT_PLAIN)
+					.entity("not available")
+					.build();
+			}
+			return Response.status(Response.Status.FORBIDDEN)
+				.type(MediaType.TEXT_PLAIN)
+				.entity("not available")
+				.build();
+		}
+
+		JobPairs.PairReproManifestResult manifest = JobPairs.getPairReproManifest(pairId, attempt);
+		if (manifest == null) {
+			return Response.status(Response.Status.NOT_FOUND)
+				.type(MediaType.TEXT_PLAIN)
+				.entity("not available")
+				.build();
+		}
+
+		Map<String, Object> responseBody = new LinkedHashMap<>();
+		responseBody.put("success", true);
+		responseBody.put("pairId", manifest.pairId);
+		responseBody.put("attemptNo", manifest.attemptNo);
+		responseBody.put("state", JobPairs.getManifestStateName(manifest.state));
+		responseBody.put("provenance", JobPairs.getManifestProvenanceName(manifest.provenance));
+		responseBody.put("schemaVersion", manifest.schemaVersion);
+		responseBody.put("manifestSha256", manifest.manifestSha256);
+		responseBody.put("finalizedAt", manifest.finalizedAt == null ? null : manifest.finalizedAt.toInstant().toString());
+		responseBody.put("createdAt", manifest.createdAt == null ? null : manifest.createdAt.toInstant().toString());
+		responseBody.put("updatedAt", manifest.updatedAt == null ? null : manifest.updatedAt.toInstant().toString());
+		responseBody.put("sourceStatusCode", manifest.sourceStatusCode);
+		responseBody.put("manifest", gson.fromJson(manifest.manifestJson, JsonElement.class));
+
+		return Response.ok(gson.toJson(responseBody), MediaType.APPLICATION_JSON).build();
 	}
 
 	@GET

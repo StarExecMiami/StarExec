@@ -24,8 +24,10 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -53,6 +55,7 @@ public class BoundedUploadProcessor {
     private final AtomicInteger totalFilesFound = new AtomicInteger(0);
     private final AtomicInteger totalFilesProcessed = new AtomicInteger(0);
     private final AtomicInteger totalSpacesCreated = new AtomicInteger(0);
+    private volatile String lastProcessedPath;
     
     // Job context
     private final UploadJob job;
@@ -75,6 +78,7 @@ public class BoundedUploadProcessor {
     public void process() throws IOException, SQLException, InterruptedException {
         String method = "process";
         log.info(method, "Starting bounded upload processing for job " + job.getId());
+        throwIfCancelled();
         
         // Phase 1: Collect all file paths in deterministic order
         List<String> sortedFilePaths = collectSortedFilePaths();
@@ -102,6 +106,9 @@ public class BoundedUploadProcessor {
         Files.walkFileTree(directory.toPath(), new SimpleFileVisitor<Path>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                if (UploadJobQueue.isCancelRequested(job.getId())) {
+                    throw new IOException("Upload job cancellation requested");
+                }
                 if (dir.equals(directory.toPath()) || dir.getFileName().toString().equals(".git")) {
                     return FileVisitResult.CONTINUE;
                 }
@@ -113,6 +120,9 @@ public class BoundedUploadProcessor {
             
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                if (UploadJobQueue.isCancelRequested(job.getId())) {
+                    throw new IOException("Upload job cancellation requested");
+                }
                 String fileName = file.getFileName().toString();
                 if (Validator.shouldIgnoreFile(fileName)) {
                     return FileVisitResult.CONTINUE;
@@ -139,6 +149,9 @@ public class BoundedUploadProcessor {
                 return index + 1;
             }
         }
+        if (job.getLastProcessedIndex() > 0 && job.getLastProcessedIndex() < sortedPaths.size()) {
+            return job.getLastProcessedIndex() + 1;
+        }
         return 0;
     }
     
@@ -150,18 +163,18 @@ public class BoundedUploadProcessor {
         BlockingQueue<String> queue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
         
         try {
-            executor.submit(() -> {
+            Future<?> producerFuture = executor.submit(() -> {
                 try {
                     producePaths(queue, sortedPaths, startIndex);
-                } catch (IOException e) {
-                    log.error("producePaths failed", e);
+                } catch (IOException | InterruptedException e) {
+                    throw new RuntimeException(e);
                 }
             });
-            executor.submit(() -> {
+            Future<?> consumerFuture = executor.submit(() -> {
                 try {
-                    consumeAndInsert(queue);
+                    consumeAndInsert(queue, startIndex);
                 } catch (SQLException | InterruptedException e) {
-                    log.error("consumeAndInsert failed", e);
+                    throw new RuntimeException(e);
                 }
             });
             
@@ -172,68 +185,92 @@ public class BoundedUploadProcessor {
                 executor.shutdownNow();
                 throw new IOException("Processing timed out");
             }
+            producerFuture.get();
+            consumerFuture.get();
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof IOException) {
+                throw (IOException)cause;
+            }
+            if (cause instanceof SQLException) {
+                throw (SQLException)cause;
+            }
+            if (cause instanceof InterruptedException) {
+                throw (InterruptedException)cause;
+            }
+            throw new IOException("Processing failed", cause);
         } catch (Exception e) {
             executor.shutdownNow();
+            if (e instanceof InterruptedException) {
+                throw (InterruptedException)e;
+            }
             throw new IOException("Processing failed", e);
         }
     }
     
-    private void producePaths(BlockingQueue<String> queue, List<String> paths, int startIndex) throws IOException {
+    private void producePaths(BlockingQueue<String> queue, List<String> paths, int startIndex)
+            throws IOException, InterruptedException {
         try {
             for (int i = startIndex; i < paths.size(); i++) {
-                if (Thread.currentThread().isInterrupted()) break;
+                throwIfCancelled();
                 queue.put(paths.get(i));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw e;
         } finally {
             traversalComplete.set(true);
         }
     }
     
-    private void consumeAndInsert(BlockingQueue<String> queue) throws SQLException, InterruptedException {
+    private void consumeAndInsert(BlockingQueue<String> queue, int startIndex) throws SQLException, InterruptedException {
         List<BenchmarkMetadata> batch = new ArrayList<>(BATCH_SIZE);
         int batchCount = 0;
         
-        try {
-            while (!traversalComplete.get() || !queue.isEmpty()) {
-                String path = queue.poll(1, TimeUnit.SECONDS);
-                if (path != null) {
-                    batch.add(createMetadata(path));
-                    
-                    // Drain more
-                    List<String> drained = new ArrayList<>();
-                    queue.drainTo(drained, BATCH_SIZE - batch.size());
-                    for (String p : drained) {
-                        batch.add(createMetadata(p));
-                    }
-                    
-                    if (batch.size() >= BATCH_SIZE) {
-                        insertBatch(batch);
-                        batchCount++;
-                        batch.clear();
-                        
-                        if (batchCount % PROGRESS_UPDATE_BATCHES == 0) {
-                            UploadJobQueue.updateProgress(job.getId(), null,
-                                    totalFilesProcessed.get(), totalSpacesCreated.get(),
-                                    null, totalFilesProcessed.get());
-                            UploadJobQueue.touchJob(job.getId());
-                        }
+        while (!traversalComplete.get() || !queue.isEmpty()) {
+            throwIfCancelled();
+            String path = queue.poll(1, TimeUnit.SECONDS);
+            if (path != null) {
+                batch.add(createMetadata(path));
+
+                // Drain more
+                List<String> drained = new ArrayList<>();
+                queue.drainTo(drained, BATCH_SIZE - batch.size());
+                for (String p : drained) {
+                    batch.add(createMetadata(p));
+                }
+
+                if (batch.size() >= BATCH_SIZE) {
+                    insertBatch(batch);
+                    batchCount++;
+                    batch.clear();
+
+                    if (batchCount % PROGRESS_UPDATE_BATCHES == 0) {
+                        Integer lastProcessedIndex = totalFilesProcessed.get() > 0
+                                ? startIndex + totalFilesProcessed.get() - 1
+                                : null;
+                        UploadJobQueue.updateProgress(job.getId(), null,
+                                totalFilesProcessed.get(), totalSpacesCreated.get(),
+                                lastProcessedPath, lastProcessedIndex);
+                        UploadJobQueue.touchJob(job.getId());
                     }
                 }
             }
-            
-            if (!batch.isEmpty()) {
-                insertBatch(batch);
-            }
-            
-            UploadJobQueue.updateProgress(job.getId(), null,
-                    totalFilesProcessed.get(), totalSpacesCreated.get(),
-                    null, totalFilesProcessed.get());
-            
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
+
+        if (!batch.isEmpty()) {
+            insertBatch(batch);
+        }
+
+        Integer finalLastProcessedIndex = totalFilesProcessed.get() > 0
+                ? startIndex + totalFilesProcessed.get() - 1
+                : null;
+        UploadJobQueue.updateProgress(job.getId(), null,
+                totalFilesProcessed.get(), totalSpacesCreated.get(),
+                lastProcessedPath, finalLastProcessedIndex);
     }
     
     private BenchmarkMetadata createMetadata(String path) {
@@ -251,14 +288,21 @@ public class BoundedUploadProcessor {
         
         try {
             Common.runInTransaction((Connection con) -> {
-                List<Integer> ids = insertBenchmarksBatch(batch, con);
+                insertBenchmarksBatch(batch, con);
                 totalFilesProcessed.addAndGet(batch.size());
+                lastProcessedPath = batch.get(batch.size() - 1).getPath();
             });
         } catch (Exception e) {
             String errorMsg = "Batch insert failed for " + batch.size() + " files: " + e.getMessage();
             log.error(errorMsg, e);
             UploadJobQueue.appendError(job.getId(), errorMsg);
             throw new SQLException(errorMsg, e);
+        }
+    }
+
+    private void throwIfCancelled() throws InterruptedException {
+        if (Thread.currentThread().isInterrupted() || UploadJobQueue.isCancelRequested(job.getId())) {
+            throw new InterruptedException("Upload job cancellation requested");
         }
     }
     
@@ -290,11 +334,6 @@ public class BoundedUploadProcessor {
             }
         }
         return ids;
-    }
-    
-    private boolean isConnectionFailure(SQLException e) {
-        String state = e.getSQLState();
-        return state != null && (state.startsWith("08") || state.equals("57P01") || state.equals("57P02") || state.equals("57P03"));
     }
     
     private static class BenchmarkMetadata {
