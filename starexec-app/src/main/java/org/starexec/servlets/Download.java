@@ -286,6 +286,9 @@ public class Download extends HttpServlet {
 		log.info("Request for job " + jobId + " csv from user " + userId);
 
 		Job job = Jobs.get(jobId);
+		if (job == null) {
+			throw new IllegalStateException("Job " + jobId + " could not be loaded for CSV download");
+		}
 		HashMap<Integer, HashMap<Integer, Properties>> props = null;
 		if (since == null) {
 			job.setJobPairs(Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), PrimitivesToAnonymize.NONE));
@@ -320,7 +323,7 @@ public class Download extends HttpServlet {
 		Jobs.loadPropertiesIntoPairs(job.getJobPairs(), props);
 		log.debug("about to create a job CSV with " + job.getJobPairs().size() + " pairs");
 		String jobFile = CreateJobCSV(job, returnIds, onlyCompleted);
-		ArchiveUtil.createAndOutputZip(new File(jobFile), response.getOutputStream(), "Job"+jobId, false);
+		ArchiveUtil.createAndOutputZip(new File(jobFile), response.getOutputStream(), "Job" + jobId, false);
 
 		return true;
 	}
@@ -1087,10 +1090,14 @@ public class Download extends HttpServlet {
 			);
 			response.getOutputStream().close();
 		} catch (Exception e) {
-			log.warn("Caught Exception in Download.doGet"+ e.getMessage());
-			response.getOutputStream().close();
-			//this won't work because we have already opened the response output stream
-			//response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			log.error("Caught exception in Download.doGet", e);
+			if (!response.isCommitted()) {
+				response.reset();
+				response.sendError(
+						HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+						"Failed to generate download"
+				);
+			}
 		} finally {
 			log.exit(methodName);
 		}
