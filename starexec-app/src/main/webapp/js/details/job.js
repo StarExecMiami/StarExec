@@ -17,6 +17,18 @@ var getPanelTableInitializer;
 var openAjaxRequests = [];
 var includeUnknown = false;
 
+function getResponsiveDialogConfig(preferredWidth) {
+	var viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+	var viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+	var maxWidth = Math.max(320, viewportWidth - 32);
+	return {
+		width: Math.min(preferredWidth, maxWidth),
+		maxWidth: maxWidth,
+		height: 'auto',
+		maxHeight: Math.max(260, Math.floor(viewportHeight * 0.9))
+	};
+}
+
 $(document).ready(function() {
     initializeGlobalPageVariables();
 	initUI();
@@ -591,11 +603,14 @@ function initUI() {
 		$('#dialog-return-ids-txt')
 		.text(
 			'do you want ids for job pairs, solvers, and benchmarks to be included in the CSV?');
+		var returnIdsDialogConfig = getResponsiveDialogConfig(460);
 
 		$('#dialog-return-ids').dialog({
 			modal: true,
-			width: 380,
-			height: 200,
+			width: returnIdsDialogConfig.width,
+			maxWidth: returnIdsDialogConfig.maxWidth,
+			height: returnIdsDialogConfig.height,
+			maxHeight: returnIdsDialogConfig.maxHeight,
 			buttons: {
 				'download': function() {
 					$('#dialog-return-ids').dialog('close');

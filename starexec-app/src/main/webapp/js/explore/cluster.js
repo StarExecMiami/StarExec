@@ -70,16 +70,37 @@ star.QueueGraph = (function($) {
         state.timer = setTimeout(updateChart, state.currentInterval);
     }
 
+    function getAdaptivePointStyle(pointCount) {
+        // Overplotting mitigation: decrease marker prominence as density increases.
+        // Keep hover/hit targets usable for accessibility and discoverability.
+        if (pointCount <= 60) {
+            return { radius: 3, hoverRadius: 6, hitRadius: 3, borderWidth: 1 };
+        }
+        if (pointCount <= 180) {
+            return { radius: 2, hoverRadius: 5, hitRadius: 3, borderWidth: 1 };
+        }
+        if (pointCount <= 400) {
+            return { radius: 1, hoverRadius: 4, hitRadius: 2, borderWidth: 1 };
+        }
+        return { radius: 0, hoverRadius: 3, hitRadius: 2, borderWidth: 0 };
+    }
+
     function renderChart(dataPoints) {
         var ctx = $(config.elementId)[0].getContext('2d');
         var labels = dataPoints.map(function(p) {
             return new Date(p.time).toLocaleTimeString();
         });
         var sizes = dataPoints.map(function(p) { return p.size; });
+        var pointStyle = getAdaptivePointStyle(dataPoints.length);
 
         if (config.chart) {
             config.chart.data.labels = labels;
-            config.chart.data.datasets[0].data = sizes;
+            var dataset = config.chart.data.datasets[0];
+            dataset.data = sizes;
+            dataset.pointRadius = pointStyle.radius;
+            dataset.pointHoverRadius = pointStyle.hoverRadius;
+            dataset.pointHitRadius = pointStyle.hitRadius;
+            dataset.pointBorderWidth = pointStyle.borderWidth;
             config.chart.update('none'); // No animation for performance
         } else {
             // StarExec dark theme colors from _colors.scss
@@ -105,8 +126,10 @@ star.QueueGraph = (function($) {
                         backgroundColor: accentFill,
                         pointBackgroundColor: accentColor,
                         pointBorderColor: '#0a0a0a',
-                        pointRadius: 3,
-                        pointHoverRadius: 6,
+                        pointRadius: pointStyle.radius,
+                        pointHoverRadius: pointStyle.hoverRadius,
+                        pointHitRadius: pointStyle.hitRadius,
+                        pointBorderWidth: pointStyle.borderWidth,
                         pointHoverBackgroundColor: '#fff'
                     }]
                 },

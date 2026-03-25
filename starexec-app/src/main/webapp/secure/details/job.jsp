@@ -580,10 +580,15 @@
 			</div>
 			<div id="dialog-return-ids" title="return ids" class="hiddenDialog">
 				<p><span id="dialog-return-ids-txt"></span></p>
-				<input type="checkbox" name="includeids" id="includeids"
-				       checked="checked"/>include ids<br>
-				<input type="checkbox" name="getcompleted" id="getcompleted"/>completed
-				pairs only<br>
+				<div class="dialog-option-row">
+					<input type="checkbox" name="includeids" id="includeids"
+					       checked="checked"/>
+					<label for="includeids">include ids</label>
+				</div>
+				<div class="dialog-option-row">
+					<input type="checkbox" name="getcompleted" id="getcompleted"/>
+					<label for="getcompleted">completed pairs only</label>
+				</div>
 			</div>
 			<div id="dialog-solverComparison" title="solver comparison chart"
 			     class="hiddenDialog">

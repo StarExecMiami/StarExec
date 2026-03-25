@@ -62,7 +62,7 @@ $(document).ready(function() {
 		log('Input value is ' + stageToRedirectTo);
 		if (isInt(stageToRedirectTo)) {
 			log('Input value is an integer, redirecting.');
-			window.location.replace(starexecRoot + 'secure/details/jobMatrixView.jsp?id=' + jobId + '&stage=' + stageToRedirectTo);
+			window.location.replace(starexecRoot + 'secure/details/jobMatrixView.jsp?jobSpaceId=' + jobSpaceId + '&stage=' + stageToRedirectTo);
 		} else {
 			log('Input value is not an integer, showing error message.');
 			$('#selectStageError').removeClass('hidden');

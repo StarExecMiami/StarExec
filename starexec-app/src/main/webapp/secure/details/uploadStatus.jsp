@@ -98,6 +98,7 @@
 			var minPollIntervalMs = 5000;
 			var maxPollIntervalMs = 30000;
 			var lastProcessed = -1;
+			var actionInFlight = false;
 			
 			class VelocityTracker {
 				constructor(windowSize = 5) {
@@ -150,6 +151,8 @@
 			}
 			
 			$(document).ready(function() {
+				$('#cancelUploadJobBtn').on('click', requestUploadJobCancel);
+				$('#retryUploadJobBtn').on('click', requestUploadJobRetry);
 				updateUploadProgress();
 				startPolling();
 			});
@@ -158,30 +161,91 @@
 				if (pollInterval) clearInterval(pollInterval);
 				pollInterval = setInterval(updateUploadProgress, pollIntervalMs);
 			}
+
+			function updateJobControls(data) {
+				var canCancel = data.canCancel && !actionInFlight;
+				var canRetry = data.canRetry && !actionInFlight;
+				$('#jobStatusValue').text(data.cancelRequested && data.status === 'PROCESSING' ? 'CANCELLING' : data.status);
+				$('#cancelUploadJobBtn').toggle(canCancel);
+				$('#retryUploadJobBtn').toggle(canRetry);
+				if (data.cancelRequested && data.status === 'PROCESSING') {
+					$('#jobControlMessage').text('Cancellation requested. The worker will stop at the next safe checkpoint.');
+				} else if (data.status === 'CANCELLED') {
+					$('#jobControlMessage').text('Processing was cancelled.');
+				} else if (data.status === 'FAILED' && data.canRetry) {
+					$('#jobControlMessage').text('Processing failed. You can retry from the last durable checkpoint.');
+				} else if (data.status === 'PENDING') {
+					$('#jobControlMessage').text('Waiting for a worker to pick up this upload.');
+				} else {
+					$('#jobControlMessage').text('');
+				}
+			}
+
+			function requestUploadJobCancel() {
+				if (actionInFlight) {
+					return;
+				}
+				actionInFlight = true;
+				updateJobControls({canCancel: false, canRetry: false, cancelRequested: true, status: 'PROCESSING'});
+				$.post(joinPath(starexecRoot, '/services/uploads/jobs/') + uploadJobId + '/cancel')
+					.always(function() {
+						actionInFlight = false;
+						updateUploadProgress();
+					});
+			}
+
+			function requestUploadJobRetry() {
+				if (actionInFlight) {
+					return;
+				}
+				actionInFlight = true;
+				$('#jobControlMessage').text('Scheduling retry...');
+				$.post(joinPath(starexecRoot, '/services/uploads/jobs/') + uploadJobId + '/retry')
+					.done(function(response) {
+						if (response && response.success) {
+							pollIntervalMs = minPollIntervalMs;
+							startPolling();
+						} else {
+							$('#jobControlMessage').text((response && response.message) || 'Retry could not be scheduled.');
+						}
+					})
+					.fail(function() {
+						$('#jobControlMessage').text('Retry could not be scheduled.');
+					})
+					.always(function() {
+						actionInFlight = false;
+						updateUploadProgress();
+					});
+			}
 			
 			function updateUploadProgress() {
 				$.getJSON(
 					joinPath(starexecRoot, '/services/uploads/jobs/') + uploadJobId,
 					function(data) {
-						var progress = data.progressPercentage;
-						var processed = data.totalFilesProcessed;
-						var found = data.totalFilesFound;
+						var rawProgress = Number(data.progressPercentage);
+						var rawProcessed = Number(data.totalFilesProcessed);
+						var rawFound = Number(data.totalFilesFound);
+						var found = isNaN(rawFound) ? 0 : Math.max(0, rawFound);
+						var processed = isNaN(rawProcessed) ? 0 : Math.max(0, rawProcessed);
+						if (found > 0) {
+							processed = Math.min(processed, found);
+						}
+						var progress = isNaN(rawProgress) ? 0 : Math.max(0, Math.min(100, rawProgress));
 						var status = data.status;
+						updateJobControls(data);
 						
 						// Update progress bar
 						$('#uploadProgressBarFill').css('width', progress + '%');
 						$('#uploadPercentageText').text(progress + '%');
 						
-						// Update details table
-						$('#totalFoundValue').text(found);
-						$('#processedValue').text(processed);
+						// Update remaining detail rows
 						$('#spacesCreatedValue').text(data.totalSpacesCreated || 0);
 						
 						// Time Estimation & Velocity
 						var elapsedMs = data.elapsedTimeMs || 0;
 						$('#elapsedTimeValue').text(formatElapsed(Math.max(0, elapsedMs)));
 						
-						if (status !== 'COMPLETED' && status !== 'COMPLETED_WITH_ERRORS' && status !== 'FAILED') {
+						if (status !== 'COMPLETED' && status !== 'COMPLETED_WITH_ERRORS' && status !== 'FAILED' && status !== 'CANCELLED') {
 							velocityTracker.addDataPoint(processed);
 							var velocity = velocityTracker.getVelocity();
 							
@@ -249,6 +313,16 @@
 							$('#errorMessageRow').show();
 							$('#errorMessageValue').text(data.errorMessage || 'Unknown error');
 							$('#uploadProgressBarFill').css('background', '#f44336');
+						} else if (status === 'CANCELLED') {
+							clearInterval(pollInterval);
+							$('#uploadPhaseText').text('Upload processing cancelled.');
+							$('#uploadPhaseText').css('color', '#666');
+							$('#velocityValue').text('Cancelled');
+							$('#uploadProgressBarFill').css('background', '#9e9e9e');
+						} else if (status === 'PENDING') {
+							$('#uploadPhaseText').text('Upload is queued for processing...');
+						} else if (data.cancelRequested) {
+							$('#uploadPhaseText').text('Cancelling after current safe checkpoint...');
 						} else {
 							// Adaptive polling logic
 							if (processed === lastProcessed) {
@@ -282,9 +356,9 @@
 				});
 			}
 		</script>
-		
-	<%-- New System: Modern Progress Display --%>
-	<h3 class="upload-section-title">Upload Progress</h3>
+	</c:if>
+	
+	<h3 class="upload-section-title">Upload Progress<c:if test="${not isNewSystem}"> (Legacy)</c:if></h3>
 	<div class="upload-table-wrapper">
 		<table class="shaded">
 			<thead>
@@ -294,120 +368,115 @@
 			</tr>
 			</thead>
 			<tbody>
-			<tr>
-				<td>progress</td>
-				<td>
-					<div id="uploadPhaseText">Loading...</div>
-					<div id="uploadProgressBar">
-						<div id="uploadProgressBarFill"></div>
-						<div id="uploadPercentageText">0%</div>
-					</div>
-				</td>
-			</tr>
-			<tr>
-				<td>last active (pulse)</td>
-				<td id="lastActiveValue">
-					<span id="pulseIndicator"></span>
-					<strong id="lastActiveTime">Checking...</strong>
-				</td>
-			</tr>
-			<tr>
-				<td>elapsed time / velocity</td>
-				<td>
-					<span id="elapsedTimeValue">0s</span>
-					<span class="upload-separator">|</span>
-					<span id="velocityValue" class="upload-velocity">(Calculating...)</span>
-				</td>
-			</tr>
-			<tr>
-				<td>total files found</td>
-				<td id="totalFoundValue">${newJob.totalFilesFound}</td>
-			</tr>
-			<tr>
-				<td>files processed</td>
-				<td id="processedValue">${newJob.totalFilesProcessed}</td>
-			</tr>
-			<tr>
-				<td>directories scanned</td>
-				<td id="spacesCreatedValue">${newJob.totalSpacesCreated}</td>
-			</tr>
-			<tr>
-				<td>created at</td>
-				<td><fmt:formatDate pattern="MMM dd yyyy HH:mm" value="${newJob.createdAt}"/></td>
-			</tr>
-			<tr id="errorMessageRow" style="${(not empty newJob.errorMessage or newJob.status eq 'COMPLETED_WITH_ERRORS') ? '' : 'display: none;'}">
-				<td>error log</td>
-				<td id="errorMessageValue">${newJob.errorMessage}</td>
-			</tr>
+			<c:choose>
+				<c:when test="${isNewSystem}">
+					<tr>
+						<td>progress</td>
+						<td>
+							<div id="uploadPhaseText">Loading...</div>
+							<div id="uploadProgressBar">
+								<div id="uploadProgressBarFill"></div>
+								<div id="uploadPercentageText">0%</div>
+							</div>
+						</td>
+					</tr>
+					<tr>
+						<td>last active (pulse)</td>
+						<td id="lastActiveValue">
+							<span id="pulseIndicator"></span>
+							<strong id="lastActiveTime">Checking...</strong>
+						</td>
+					</tr>
+					<tr>
+						<td>elapsed time / velocity</td>
+						<td>
+							<span id="elapsedTimeValue">0s</span>
+							<span class="upload-separator">|</span>
+							<span id="velocityValue" class="upload-velocity">(Calculating...)</span>
+						</td>
+					</tr>
+					<tr>
+						<td>job status</td>
+						<td id="jobStatusValue">${newJob.status}</td>
+					</tr>
+					<tr>
+						<td>directories scanned</td>
+						<td id="spacesCreatedValue">${newJob.totalSpacesCreated}</td>
+					</tr>
+					<tr>
+						<td>created at</td>
+						<td><fmt:formatDate pattern="MMM dd yyyy HH:mm" value="${newJob.createdAt}"/></td>
+					</tr>
+					<tr id="jobControlsRow">
+						<td>controls</td>
+						<td>
+							<button type="button" id="cancelUploadJobBtn" style="${(newJob.status eq 'PENDING' or newJob.status eq 'PROCESSING') and not newJob.cancelRequested ? '' : 'display: none;'}">cancel processing</button>
+							<button type="button" id="retryUploadJobBtn" style="${(newJob.status eq 'FAILED' or newJob.status eq 'CANCELLED') and newJob.retryCount lt newJob.maxRetries ? '' : 'display: none;'}">retry</button>
+							<span id="jobControlMessage" class="upload-control-message"></span>
+						</td>
+					</tr>
+					<tr id="errorMessageRow" style="${(not empty newJob.errorMessage or newJob.status eq 'COMPLETED_WITH_ERRORS') ? '' : 'display: none;'}">
+						<td>error log</td>
+						<td id="errorMessageValue">${newJob.errorMessage}</td>
+					</tr>
+				</c:when>
+				<c:otherwise>
+					<tr>
+						<td>upload date</td>
+						<td><fmt:formatDate pattern="MMM dd yyyy"
+						                    value="${status.uploadDate}"/></td>
+					</tr>
+					<tr>
+						<td>file upload complete</td>
+						<td>${status.fileUploadComplete}</td>
+					</tr>
+					<tr>
+						<td>file extraction complete</td>
+						<td>${status.fileExtractionComplete}</td>
+					</tr>
+					<tr>
+						<td>begun validating</td>
+						<td>${status.processingBegun}</td>
+					</tr>
+					<tr>
+						<td>total benchmarks</td>
+						<td>${status.totalBenchmarks}</td>
+					</tr>
+					<tr>
+						<td>validated benchmarks</td>
+						<td>${status.validatedBenchmarks}</td>
+					</tr>
+					<tr>
+						<td>benchmarks failing validation</td>
+						<td>${status.failedBenchmarks}</td>
+					</tr>
+					<tr>
+						<td>completed benchmarks</td>
+						<td>${status.completedBenchmarks}</td>
+					</tr>
+					<tr>
+						<td>total spaces</td>
+						<td>${status.totalSpaces}</td>
+					</tr>
+					<tr>
+						<td>completed spaces</td>
+						<td>${status.completedSpaces}</td>
+					</tr>
+					<tr>
+						<td>entire upload complete</td>
+						<td>${status.everythingComplete}</td>
+					</tr>
+					<tr>
+						<td>upload error message</td>
+						<td>${status.errorMessage}</td>
+					</tr>
+				</c:otherwise>
+			</c:choose>
 			</tbody>
 		</table>
 	</div>
-	</c:if>
 	
-	<%-- OLD SYSTEM: Legacy static table --%>
 	<c:if test="${not isNewSystem}">
-		<h3 class="upload-section-title">Upload Progress (Legacy)</h3>
-		<div class="upload-table-wrapper">
-			<table class="shaded">
-				<thead>
-				<tr>
-					<th>Attribute</th>
-					<th>Value</th>
-				</tr>
-				</thead>
-				<tbody>
-				<tr>
-					<td>upload date</td>
-					<td><fmt:formatDate pattern="MMM dd yyyy"
-					                    value="${status.uploadDate}"/></td>
-				</tr>
-				<tr>
-					<td>file upload complete</td>
-					<td>${status.fileUploadComplete}</td>
-				</tr>
-				<tr>
-					<td>file extraction complete</td>
-					<td>${status.fileExtractionComplete}</td>
-				</tr>
-				<tr>
-					<td>begun validating</td>
-					<td>${status.processingBegun}</td>
-				</tr>
-				<tr>
-					<td>total benchmarks</td>
-					<td>${status.totalBenchmarks}</td>
-				</tr>
-				<tr>
-					<td>validated benchmarks</td>
-					<td>${status.validatedBenchmarks}</td>
-				</tr>
-				<tr>
-					<td>benchmarks failing validation</td>
-					<td>${status.failedBenchmarks}</td>
-				</tr>
-				<tr>
-					<td>completed benchmarks</td>
-					<td>${status.completedBenchmarks}</td>
-				</tr>
-				<tr>
-					<td>total spaces</td>
-					<td>${status.totalSpaces}</td>
-				</tr>
-				<tr>
-					<td>completed spaces</td>
-					<td>${status.completedSpaces}</td>
-				</tr>
-				<tr>
-					<td>entire upload complete</td>
-					<td>${status.everythingComplete}</td>
-				</tr>
-				<tr>
-					<td>upload error message</td>
-					<td>${status.errorMessage}</td>
-				</tr>
-				</tbody>
-			</table>
-		</div>
 		<c:if test="${not empty badBenches}">
 			<h3 class="upload-section-title upload-section-title--error">Failed Benchmarks</h3>
 			<div class="upload-table-wrapper">

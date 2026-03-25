@@ -86,8 +86,12 @@ public class JobMatrixViewController extends HttpServlet {
 			log.exit(method);
 		} catch (StarExecException e) {
 			log.warn(method, "Error building matrix or loading job for jobSpaceId=" + jobSpaceId + ", stage=" + stageNumber, e);
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-					e.getMessage() != null ? e.getMessage() : "Error loading matrix");
+			String message = e.getMessage() != null ? e.getMessage() : "Error loading matrix";
+			if (message.contains("must be initialized") || message.contains("could not be obtained")) {
+				response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, message);
+			} else {
+				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, message);
+			}
 			return;
 		} catch (Exception e) {
 			log.error(method, "Unexpected error loading job matrix view", e);

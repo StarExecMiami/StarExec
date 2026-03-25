@@ -42,8 +42,23 @@ fieldset {
 // =============================================================================
 
 #dialog-show-anonymous-link a {
-	color: #0000EE;
+	color: $accent-orange;
 	text-decoration: underline;
+}
+
+.dialog-option-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+
+	input[type="checkbox"] {
+		margin: 0;
+	}
+
+	label {
+		cursor: pointer;
+	}
 }
 
 #popImage {

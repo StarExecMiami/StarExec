@@ -19,11 +19,20 @@ public class MatrixViewUtil {
 		log.entry(method);
 		if(Permissions.canUserSeeJob(jobId,userId).isSuccess()) {
 			Job job = Jobs.get(jobId);
+			if (job == null) {
+				throw new StarExecException("The details for this job could not be obtained");
+			}
 			int jobSpaceId=job.getPrimarySpace();
 			
 			if (jobSpaceId>0) {
 				// Get all the job pairs for the job as well as basic info.
 				job = Jobs.getJobForMatrix(jobId);
+				if (job == null) {
+					throw new StarExecException("The details for this job could not be obtained");
+				}
+				if (job.getJobPairs() == null) {
+					throw new StarExecException("Job pairs must be initialized before generating matrix");
+				}
 			} else {
 				response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "The details for this job could not be obtained");
 				return null;

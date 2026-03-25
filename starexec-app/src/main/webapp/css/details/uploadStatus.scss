@@ -156,6 +156,29 @@
 	color: $text-accent-color;
 }
 
+// --- Job Controls ---
+
+#jobControlsRow {
+	button {
+		margin-right: 8px;
+		padding: 6px 10px;
+		border: 1px solid lighten($foreground-color, 18%);
+		border-radius: 4px;
+		background: lighten($foreground-color, 6%);
+		color: $text-main-color;
+		cursor: pointer;
+	}
+
+	button:hover {
+		background: lighten($foreground-color, 10%);
+	}
+}
+
+.upload-control-message {
+	color: $text-accent-color;
+	font-size: 0.95em;
+}
+
 // --- Error Row ---
 
 #errorMessageRow {
