@@ -69,7 +69,9 @@ public class Starexec implements ServletContextListener {
             // Set build info as application attributes
             ServletContext context = sce.getServletContext();
             context.setAttribute("buildVersion", R.buildVersion);
-            context.setAttribute("buildDate", R.buildDate);
+            context.setAttribute("buildDate", R.buildDate != null
+                    ? R.buildDate : R.buildDateRaw);
+            context.setAttribute("buildUser", R.buildUser);
             context.setAttribute("starexecRoot", context.getContextPath());
             context.setAttribute("contactEmail", R.CONTACT_EMAIL);
 

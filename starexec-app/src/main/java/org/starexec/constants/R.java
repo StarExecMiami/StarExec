@@ -377,6 +377,7 @@ public class R {
 
     public static final String buildVersion = EnvironmentConfig.getBuildVersion();
     public static final String buildUser = EnvironmentConfig.getBuildUser();
+    public static final String buildDateRaw = EnvironmentConfig.getBuildDate();
     public static final Date buildDate;
 
     static {

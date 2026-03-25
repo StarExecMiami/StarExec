@@ -255,11 +255,7 @@
 			<footer class="system-status">
 				<div class="status-container">
 					<div class="status-header">
-						<h3 class="status-title">System Information</h3>
-						<span class="status-indicator">
-							<span class="status-dot status-dot--online"></span>
-							All Systems Operational
-						</span>
+						<h3 class="status-title">Build Information</h3>
 					</div>
 					<div class="status-details">
 						<div class="status-item">
