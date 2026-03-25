@@ -591,7 +591,7 @@ public abstract class JobManager {
 
 	private static Map<Integer, Boolean> getQuotaExceededMapAsync(final List<Job> jobs) {
 		final Set<Integer> userIds = jobs.stream().map(Job::getUserId).collect(Collectors.toSet());
-		final Map<Integer, Boolean> result = new HashMap<>();
+		final Map<Integer, Boolean> result = new java.util.concurrent.ConcurrentHashMap<>();
 		final List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
 		final java.util.concurrent.ExecutorService exec = java.util.concurrent.Executors.newFixedThreadPool(
 				Math.min(userIds.size(), R.MAX_THREADS));

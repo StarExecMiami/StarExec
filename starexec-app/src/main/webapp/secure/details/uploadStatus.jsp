@@ -153,8 +153,17 @@
 			$(document).ready(function() {
 				$('#cancelUploadJobBtn').on('click', requestUploadJobCancel);
 				$('#retryUploadJobBtn').on('click', requestUploadJobRetry);
-				updateUploadProgress();
-				startPolling();
+
+				// Only poll for non-terminal states to avoid unnecessary AJAX + DB load
+				var initialStatus = $('#jobStatusValue').text().trim();
+				var terminalStates = ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'CANCELLED'];
+				if (terminalStates.indexOf(initialStatus) >= 0) {
+					// Single fetch to render final state, then stop
+					updateUploadProgress();
+				} else {
+					updateUploadProgress();
+					startPolling();
+				}
 			});
 
 			function startPolling() {
@@ -259,7 +268,14 @@
 						}
 						
 						// Update Pulse (Heartbeat)
-						if (data.lastHeartbeat) {
+							var isTerminal = (status === 'COMPLETED' || status === 'COMPLETED_WITH_ERRORS' || status === 'FAILED' || status === 'CANCELLED');
+							if (isTerminal) {
+								// Terminal state: show finished indicator, not a stale timestamp
+								$('#pulseIndicator').css({'background': '#9e9e9e', 'border-radius': '50%'});
+								$('#pulseIndicator').removeClass('pulse-stuck pulse-active');
+								$('#lastActiveTime').text('Finished');
+								$('#lastActiveValue').css('color', '#999');
+							} else if (data.lastHeartbeat) {
 							var lastActive = new Date(data.lastHeartbeat);
 							var secondsAgo = Math.floor((new Date() - lastActive) / 1000);
 							var timeStr = secondsAgo < 5 ? 'Just now' : secondsAgo + 's ago';

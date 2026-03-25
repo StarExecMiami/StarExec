@@ -99,11 +99,12 @@ public class RESTServices {
 	/** Dedicated executor for SMTP (Bulkhead): never run blocking I/O on ForkJoinPool.commonPool(). */
 	private static final ExecutorService emailExecutor = Executors.newFixedThreadPool(10,
 			new ThreadFactory() {
-				private int count = 0;
+				private final java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger();
 				@Override
 				public Thread newThread(Runnable r) {
 					Thread t = new Thread(r);
-					t.setName("smtp-worker-" + (++count));
+					t.setName("smtp-worker-" + count.incrementAndGet());
+					t.setDaemon(true);
 					return t;
 				}
 			});
