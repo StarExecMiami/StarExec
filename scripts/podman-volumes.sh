@@ -38,6 +38,14 @@ if [ -z "${PODMAN_CMD:-}" ]; then
     fi
 fi
 
+# Detect rootful vs rootless once at startup and cache the result.
+# 'podman info' is expensive (enumerates storage, network, cgroups); avoid repeated calls.
+if ${PODMAN_CMD:-podman} info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qi "false"; then
+    PODMAN_IS_ROOTFUL=true
+else
+    PODMAN_IS_ROOTFUL=false
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -52,6 +60,31 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 list_volumes() {
     log_info "StarExec volumes:"
     ${PODMAN_CMD:-podman} volume ls --filter "name=${VOLUME_PREFIX}" --format "table {{.Name}}\t{{.Driver}}\t{{.Mountpoint}}"
+}
+
+# Verify postgres data volume is writable by container user 999:999 when
+# running with --userns=keep-id (same mode used by deployment).
+verify_postgres_volume_access() {
+    local pg_vol="$1"
+    ${PODMAN_CMD:-podman} run --rm \
+        --userns=keep-id \
+        --user 999:999 \
+        -v "$pg_vol:/var/lib/postgresql/data" \
+        docker.io/library/alpine:latest \
+        sh -c 'test -d /var/lib/postgresql/data && test -w /var/lib/postgresql/data && touch /var/lib/postgresql/data/.perm_test && rm -f /var/lib/postgresql/data/.perm_test'
+}
+
+# In rootless keep-id mode, repair ownership from inside a keep-id container
+# running as root. This ensures ownership is fixed in the same namespace mapping
+# used by deployment.
+repair_postgres_volume_keepid() {
+    local pg_vol="$1"
+    ${PODMAN_CMD:-podman} run --rm \
+        --userns=keep-id \
+        --user 0:0 \
+        -v "$pg_vol:/var/lib/postgresql/data" \
+        docker.io/library/alpine:latest \
+        sh -c 'chown -R 999:999 /var/lib/postgresql/data'
 }
 
 # Create named volumes if they don't exist
@@ -92,35 +125,36 @@ create_volumes() {
         log_info "Created $pg_vol"
     fi
 
-    # Always (re-)apply the UID 999 ownership on the postgres volume mountpoint.
-    # This is idempotent and safe to run even if the volume pre-existed, since the
-    # ownership may be wrong after a system reboot or volume migration.
+    # Validate write access for postgres user under --userns=keep-id and repair
+    # only if needed. Rootless keep-id environments may require host-UID ownership
+    # instead of unshare-mapped 999:999 ownership.
     local pg_mountpoint
     pg_mountpoint=$(${PODMAN_CMD:-podman} volume inspect "$pg_vol" --format '{{.Mountpoint}}' 2>/dev/null || true)
     if [ -n "$pg_mountpoint" ]; then
-        log_info "Fixing PostgreSQL volume ownership (UID/GID 999) at: $pg_mountpoint"
-        # Detect rootful vs rootless to use the correct ownership tool.
-        # In rootless mode, only 'podman unshare chown' can map host UIDs → container UIDs.
-        # In rootful mode, direct chown works and 'podman unshare' is unnecessary overhead.
-        local is_rootful=false
-        if ${PODMAN_CMD:-podman} info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qi "false"; then
-            is_rootful=true
-        fi
-        if [ "$is_rootful" = "true" ]; then
-            if chown -R 999:999 "$pg_mountpoint"; then
-                log_info "✓ PostgreSQL volume ownership set to 999:999 (rootful)"
-            else
-                log_error "Could not fix ownership for $pg_mountpoint"
-                return 1
-            fi
+        if verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
+            log_info "✓ PostgreSQL volume permissions already valid for user 999:999"
         else
-            if ${PODMAN_CMD:-podman} unshare chown -R 999:999 "$pg_mountpoint"; then
-                log_info "✓ PostgreSQL volume ownership set to 999:999 (rootless via unshare)"
+            log_warn "PostgreSQL volume not writable by user 999:999. Attempting repair..."
+
+            if [ "$PODMAN_IS_ROOTFUL" = "true" ]; then
+                if chown -R 999:999 "$pg_mountpoint" && verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
+                    log_info "✓ PostgreSQL volume ownership repaired to 999:999 (rootful)"
+                else
+                    log_error "Could not fix ownership for $pg_mountpoint"
+                    return 1
+                fi
             else
-                log_error "Could not fix ownership for $pg_mountpoint"
-                log_error "Rootless Podman requires 'podman unshare chown' — direct chown cannot map UIDs."
-                log_error "Run manually: ${PODMAN_CMD:-podman} unshare chown -R 999:999 $pg_mountpoint"
-                return 1
+                # Rootless + keep-id: first repair inside keep-id namespace, then fallback.
+                if repair_postgres_volume_keepid "$pg_vol" >/dev/null 2>&1 && verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
+                    log_info "✓ PostgreSQL volume repaired via keep-id namespace chown"
+                elif ${PODMAN_CMD:-podman} unshare chown -R 999:999 "$pg_mountpoint" && verify_postgres_volume_access "$pg_vol" >/dev/null 2>&1; then
+                    log_info "✓ PostgreSQL volume repaired via podman unshare chown 999:999"
+                else
+                    log_error "Could not fix ownership for $pg_mountpoint"
+                    log_error "Manual check: ${PODMAN_CMD:-podman} run --rm --userns=keep-id --user 999:999 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'id && ls -ld /var/lib/postgresql/data'"
+                    log_error "Manual repair: ${PODMAN_CMD:-podman} run --rm --userns=keep-id --user 0:0 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'chown -R 999:999 /var/lib/postgresql/data'"
+                    return 1
+                fi
             fi
         fi
     else

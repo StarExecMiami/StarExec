@@ -494,13 +494,32 @@ volumes-help:
 # DATABASE MANAGEMENT (PostgreSQL)
 # ============================================================================
 
-db-shell:
-	@echo "Opening PostgreSQL shell (container must be running)"
-	@if ! $(PODMAN_CMD) container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
-		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
+define resolve_postgres_container
+	PG_CONTAINER=""; \
+	for c in "$(DB_CONTAINER)" "$(RELEASE_NAME)-pod-postgres" "starexec-pod-postgres" "starexec-postgres"; do \
+		if $(PODMAN_CMD) container exists $$c >/dev/null 2>&1; then \
+			PG_CONTAINER=$$c; \
+			break; \
+		fi; \
+	done; \
+	if [ -z "$$PG_CONTAINER" ]; then \
+		for c in $$($(PODMAN_CMD) ps -a --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Names}}"); do \
+			case "$$c" in \
+				*postgres*) PG_CONTAINER=$$c; break ;; \
+			esac; \
+		done; \
+	fi; \
+	if [ -z "$$PG_CONTAINER" ]; then \
+		echo "${RED}✗ PostgreSQL container not found for release $(RELEASE_NAME).${RESET}"; \
+		echo "  Use '$(PODMAN_CMD) ps -a' to inspect containers."; \
 		exit 1; \
 	fi
-	@DB_PASS=$$( \
+endef
+
+db-shell:
+	@echo "Opening PostgreSQL shell (container must be running)"
+	@$(call resolve_postgres_container); \
+	DB_PASS=$$( \
 		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
 			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
 		else \
@@ -509,7 +528,8 @@ db-shell:
 	); \
 	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
-	PGPASSWORD="$$DB_PASS" $(PODMAN_CMD) exec -it $(DB_CONTAINER) psql -U "$$DB_USER" -d "$$DB_NAME"
+	echo "Using PostgreSQL container: $$PG_CONTAINER"; \
+	PGPASSWORD="$$DB_PASS" $(PODMAN_CMD) exec -it "$$PG_CONTAINER" psql -U "$$DB_USER" -d "$$DB_NAME"
 
 db-dump:
 	@echo "Creating PostgreSQL dump (uses volume script if available)"
@@ -617,11 +637,8 @@ migrate-podman:
 	fi
 	@echo "Running Flyway migration against Podman PostgreSQL"
 	@echo "Waiting for PostgreSQL to be ready..."
-	@if ! $(PODMAN_CMD) container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
-		echo "❌ PostgreSQL container not running. Run 'make deploy-podman' first."; \
-		exit 1; \
-	fi
-	@DB_PASS=$$( \
+	@$(call resolve_postgres_container); \
+	DB_PASS=$$( \
 		if [ -n "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -f "$${STAREXEC_DB_PASSWORD_FILE}" ] && [ -r "$${STAREXEC_DB_PASSWORD_FILE}" ]; then \
 			tr -d '\n' < "$${STAREXEC_DB_PASSWORD_FILE}"; \
 		else \
@@ -631,8 +648,9 @@ migrate-podman:
 	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
 	DB_NAME=$${STAREXEC_DB_DATABASE:-$(DB_NAME_DEFAULT)}; \
 	DB_HOST=$${DB_HOST:-$(DB_HOST_DEFAULT)}; \
+	echo "Using PostgreSQL container: $$PG_CONTAINER"; \
 	for i in 1 2 3 4 5; do \
-		if $(PODMAN_CMD) exec $(DB_CONTAINER) pg_isready -h localhost -p 5432 -U"$$DB_USER" >/dev/null 2>&1; then \
+		if $(PODMAN_CMD) exec "$$PG_CONTAINER" pg_isready -h localhost -p 5432 -U"$$DB_USER" >/dev/null 2>&1; then \
 			echo "PostgreSQL is ready"; \
 			break; \
 		fi; \
@@ -871,18 +889,15 @@ deploy-podman-cached: image
 
 wait-postgres:
 	@echo "Waiting for PostgreSQL readiness..."
-	@if ! $(PODMAN_CMD) container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
-		echo "${RED}✗ PostgreSQL container '$(DB_CONTAINER)' not found.${RESET}"; \
-		echo "  Use 'make logs-postgres' for diagnostics."; \
-		exit 1; \
-	fi
-	@DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	@$(call resolve_postgres_container); \
+	DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
 	MAX_RETRIES=$${WAIT_POSTGRES_RETRIES:-60}; \
 	WAIT_SECONDS=$${WAIT_POSTGRES_INTERVAL_SECONDS:-2}; \
 	i=1; \
 	ready=0; \
+	echo "Using PostgreSQL container: $$PG_CONTAINER"; \
 	while [ $$i -le $$MAX_RETRIES ]; do \
-		if $(PODMAN_CMD) exec $(DB_CONTAINER) pg_isready -h localhost -p 5432 -U "$$DB_USER" >/dev/null 2>&1; then \
+		if $(PODMAN_CMD) exec "$$PG_CONTAINER" pg_isready -h localhost -p 5432 -U "$$DB_USER" >/dev/null 2>&1; then \
 			ready=1; \
 			break; \
 		fi; \
@@ -892,20 +907,35 @@ wait-postgres:
 	done; \
 	if [ $$ready -ne 1 ]; then \
 		echo "${RED}✗ PostgreSQL failed readiness check after $$MAX_RETRIES attempts.${RESET}"; \
-		PG_EXIT=$$($(PODMAN_CMD) inspect $(DB_CONTAINER) --format '{{.State.ExitCode}}' 2>/dev/null || echo "unknown"); \
-		PG_RUNNING=$$($(PODMAN_CMD) inspect $(DB_CONTAINER) --format '{{.State.Running}}' 2>/dev/null || echo "unknown"); \
+		PG_EXIT=$$($(PODMAN_CMD) inspect "$$PG_CONTAINER" --format '{{.State.ExitCode}}' 2>/dev/null || echo "unknown"); \
+		PG_RUNNING=$$($(PODMAN_CMD) inspect "$$PG_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || echo "unknown"); \
 		if [ "$$PG_RUNNING" = "false" ] && [ "$$PG_EXIT" != "0" ] && [ "$$PG_EXIT" != "unknown" ]; then \
-			echo "${RED}  Container exited with code $$PG_EXIT (crash or PANIC).${RESET}"; \
-		fi; \
-		if $(PODMAN_CMD) logs $(DB_CONTAINER) 2>&1 | grep -Eqi "(invalid primary checkpoint|could not locate a valid checkpoint|PANIC:|WAL)"; then \
-			echo "${YELLOW}Detected potential PostgreSQL WAL inconsistency after unclean shutdown.${RESET}"; \
-			echo "Recommended recovery order:"; \
-			echo "  1) Restore a known-good backup: make volumes-restore ENV=$(ENV)"; \
-			echo "  2) If no backup exists, inspect logs: make logs-postgres"; \
-			echo "  3) Last resort (destructive): manual pg_resetwal in postgres volume"; \
+			echo "${RED}  Container exited with code $$PG_EXIT.${RESET}"; \
+			case "$$PG_EXIT" in \
+				137) \
+					echo "${RED}  Exit 137 = SIGKILL (OOM killer or external kill).${RESET}"; \
+					echo "${YELLOW}The host OOM killer terminated PostgreSQL. This is NOT a WAL issue.${RESET}"; \
+					echo "Recommendations:"; \
+					echo "  1) Increase container memory limit or host swap"; \
+					echo "  2) Check host memory pressure: dmesg | grep -i oom"; \
+					echo "  3) Reduce PostgreSQL shared_buffers or work_mem"; \
+					;; \
+				143) \
+					echo "${YELLOW}  Exit 143 = SIGTERM (graceful shutdown requested but Postgres did not stop in time).${RESET}"; \
+					;; \
+				*) \
+					if $(PODMAN_CMD) logs "$$PG_CONTAINER" 2>&1 | grep -Eqi "(invalid primary checkpoint|could not locate a valid checkpoint|PANIC:|WAL)"; then \
+						echo "${YELLOW}Detected potential PostgreSQL WAL inconsistency after unclean shutdown.${RESET}"; \
+						echo "Recommended recovery order:"; \
+						echo "  1) Restore a known-good backup: make volumes-restore ENV=$(ENV)"; \
+						echo "  2) If no backup exists, inspect logs: make logs-postgres"; \
+						echo "  3) Last resort (destructive): manual pg_resetwal in postgres volume"; \
+					fi; \
+					;; \
+			esac; \
 		fi; \
 		echo "Last PostgreSQL logs:"; \
-		$(PODMAN_CMD) logs $(DB_CONTAINER) --tail 80 2>&1 || true; \
+		$(PODMAN_CMD) logs --tail 80 "$$PG_CONTAINER" 2>&1 || true; \
 		exit 1; \
 	fi
 	@echo "${GREEN}✓ PostgreSQL is ready${RESET}"
@@ -1122,7 +1152,16 @@ logs-app:
 
 logs-postgres:
 	@echo "Following PostgreSQL logs (Ctrl+C to stop)..."
-	@$(PODMAN_CMD) logs -f $$($(PODMAN_CMD) ps --filter "ancestor=postgres" --format "{{.Names}}" | head -1)
+	@PG_CONTAINER=$$($(PODMAN_CMD) ps -a --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Names}}" | grep postgres | head -1); \
+	if [ -z "$$PG_CONTAINER" ]; then \
+		PG_CONTAINER=$$($(PODMAN_CMD) ps -a --filter "ancestor=postgres" --format "{{.Names}}" | head -1); \
+	fi; \
+	if [ -z "$$PG_CONTAINER" ]; then \
+		echo "No PostgreSQL container found"; \
+		exit 1; \
+	fi; \
+	echo "Using PostgreSQL container: $$PG_CONTAINER"; \
+	$(PODMAN_CMD) logs -f "$$PG_CONTAINER"
 
 test: test-deps
 	@mvn test

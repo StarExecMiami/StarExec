@@ -73,10 +73,28 @@ ensure_network() {
 wait_postgres_ready() {
     log_info "Waiting for PostgreSQL readiness..."
 
-    if ! ${PODMAN_CMD} container exists "${DB_CONTAINER}" >/dev/null 2>&1; then
-        log_error "PostgreSQL container not found: ${DB_CONTAINER}"
+    PG_CONTAINER=""
+    for c in "${DB_CONTAINER}" "${RELEASE_NAME}-pod-postgres" "starexec-pod-postgres" "starexec-postgres"; do
+        if ${PODMAN_CMD} container exists "${c}" >/dev/null 2>&1; then
+            PG_CONTAINER="${c}"
+            break
+        fi
+    done
+
+    if [ -z "${PG_CONTAINER}" ]; then
+        for c in $(${PODMAN_CMD} ps -a --filter "label=app.kubernetes.io/instance=${RELEASE_NAME}" --format "{{.Names}}" 2>/dev/null); do
+            case "${c}" in
+                *postgres*) PG_CONTAINER="${c}"; break ;;
+            esac
+        done
+    fi
+
+    if [ -z "${PG_CONTAINER}" ]; then
+        log_error "PostgreSQL container not found for release: ${RELEASE_NAME}"
         return 1
     fi
+
+    log_info "Using PostgreSQL container: ${PG_CONTAINER}"
 
     DB_USER="${STAREXEC_DB_USER:-starexec}"
     MAX_RETRIES="${WAIT_POSTGRES_RETRIES:-60}"
@@ -84,7 +102,7 @@ wait_postgres_ready() {
     i=1
 
     while [ "$i" -le "$MAX_RETRIES" ]; do
-        if ${PODMAN_CMD} exec "${DB_CONTAINER}" pg_isready -h localhost -p 5432 -U "$DB_USER" >/dev/null 2>&1; then
+        if ${PODMAN_CMD} exec "${PG_CONTAINER}" pg_isready -h localhost -p 5432 -U "$DB_USER" >/dev/null 2>&1; then
             log_info "PostgreSQL is ready"
             return 0
         fi
@@ -94,7 +112,7 @@ wait_postgres_ready() {
     done
 
     log_error "PostgreSQL did not become ready in time"
-    ${PODMAN_CMD} logs "${DB_CONTAINER}" --tail 80 2>/dev/null || true
+    ${PODMAN_CMD} logs --tail 80 "${PG_CONTAINER}" 2>/dev/null || true
     return 1
 }
 
