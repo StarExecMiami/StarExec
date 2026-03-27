@@ -33,6 +33,63 @@ make config-show ENV=dev
 
 ## Podman Issues
 
+### Rootless Prerequisites Missing (`newuidmap/newgidmap`, `/etc/subuid`, `/etc/subgid`)
+
+**Problem:** `make start` or `podman` fails with user-namespace/rootless errors.
+
+**Cause:** Rootless Podman requires:
+- `newuidmap` / `newgidmap` binaries (usually from `uidmap` package)
+- Subordinate UID/GID ranges for your user in `/etc/subuid` and `/etc/subgid`
+
+**Solution:**
+
+```bash
+# Validate quickly
+make verify-deps
+
+# Manual checks
+command -v newuidmap
+command -v newgidmap
+grep "^$USER:" /etc/subuid
+grep "^$USER:" /etc/subgid
+```
+
+If mappings are missing, ask your admin to add them and re-login.
+
+### Stale/Busy `starexec-net` Network
+
+**Problem:** Deployment fails with errors like `remove device or resource busy`, especially after forced kills.
+
+**Cause:** Stale network namespace state in rootless Podman.
+
+**Solution:**
+
+```bash
+# Safe StarExec-only reset (does not prune all networks)
+make network-reset
+
+# Then redeploy
+make start
+```
+
+Avoid `podman network prune` on shared systems unless you intentionally want global cleanup.
+
+### PostgreSQL Permission Errors on Rootless Volumes
+
+**Problem:** Postgres fails during init/start with permission denied in data directory.
+
+**Cause:** Volume mountpoint owned by host user; postgres container runs as UID/GID `999`.
+
+**Solution:**
+
+```bash
+# Recommended
+make volumes-fix-permissions ENV=dev
+
+# Manual equivalent
+podman unshare chown -R 999:999 "$(podman volume inspect starexec-dev-postgres --format '{{.Mountpoint}}')"
+```
+
 ### Permission Denied (Rootless Networking)
 
 **Problem:** `podman` commands fail with permission denied or networking errors
@@ -314,6 +371,54 @@ make migrate-repair
 # Force re-run migrations
 make migrate-podman
 ```
+
+### Flyway Advisory Lock Stuck
+
+**Problem:** `make migrate-repair` appears stuck or repeatedly fails to acquire lock.
+
+**Cause:** Another backend session still holds an advisory lock.
+
+**Solution:**
+
+```bash
+# 1) Inspect waiting/locking sessions
+make db-shell
+SELECT pid, usename, application_name, state, wait_event_type, wait_event, query
+FROM pg_stat_activity
+WHERE wait_event_type = 'Lock' OR query ILIKE '%flyway%';
+
+# 2) If safe, terminate blocker
+SELECT pg_terminate_backend(<PID>);
+
+# 3) Retry repair
+make migrate-repair
+```
+
+Only terminate sessions you recognize as stale/non-critical.
+
+### WAL Inconsistency After Forced Stop
+
+**Problem:** PostgreSQL does not become ready; logs show messages like:
+- `could not locate a valid checkpoint record`
+- `invalid primary checkpoint record`
+- `PANIC` / `WAL` recovery failures
+
+**Cause:** Unclean shutdown or abrupt host/process termination while writing WAL.
+
+**Recommended recovery order:**
+
+```bash
+# 1) Stop deployment
+make stop
+
+# 2) Restore known-good backup (preferred)
+make volumes-restore ENV=dev
+
+# 3) Start again
+make start
+```
+
+If no valid backup exists, inspect logs first (`make logs-postgres`). Use `pg_resetwal` only as a last resort and only with full awareness of data-loss risk.
 
 **For corrupted state:**
 

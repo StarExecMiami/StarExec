@@ -65,30 +65,60 @@ You should see:
 1. Install required packages (Ubuntu/Debian):
    ```bash
    sudo apt-get update
-   sudo apt-get install -y podman catatonit passt fuse-overlayfs yq
+   sudo apt-get install -y podman uidmap catatonit passt fuse-overlayfs
    ```
 
-2. Verify rootless operation:
+2. Validate rootless prerequisites (required on shared/lab machines):
+   ```bash
+   # Must exist (provided by uidmap package)
+   command -v newuidmap
+   command -v newgidmap
+
+   # Must include your username in both files
+   grep "^$USER:" /etc/subuid
+   grep "^$USER:" /etc/subgid
+   ```
+
+   If either grep returns nothing, ask your system administrator to add subordinate UID/GID ranges and then log out/log back in.
+
+3. Verify rootless operation:
    ```bash
    podman system info | grep rootless
    # Should show: rootless: true
    ```
 
-3. Clone the repository:
+4. Clone the repository:
    ```bash
    git clone https://github.com/StarExecMiami/StarExec.git
    cd StarExec
    git checkout containerised
    ```
 
-4. Start StarExec:
+5. Run dependency validation:
     ```bash
-    make start
+    make verify-deps
     ```
 
-5. Access the application:
-    - URL: `http://localhost:7827/starexec`
-    - Default credentials: `admin:admin`
+6. Start StarExec:
+     ```bash
+     make start
+     ```
+
+7. Access the application:
+     - URL: `http://localhost:7827/starexec`
+     - Default credentials: `admin:admin`
+
+### PostgreSQL Volume Permission Fix (Rootless Podman)
+
+If PostgreSQL fails to initialize with permission errors, fix the postgres volume ownership (UID/GID 999):
+
+```bash
+# Preferred helper target
+make volumes-fix-permissions ENV=dev
+
+# Equivalent manual command
+podman unshare chown -R 999:999 "$(podman volume inspect starexec-dev-postgres --format '{{.Mountpoint}}')"
+```
 
 ### Optional: Cache Base Images for Offline Builds
 
@@ -123,6 +153,12 @@ podman system migrate
 
 # Fix cgroup delegation
 make fix-cgroup-delegation
+
+# Reset stale StarExec network only (safe, no global prune)
+make network-reset
+
+# Reapply postgres UID 999 permissions
+make volumes-fix-permissions ENV=dev
 ```
 
 See [Troubleshooting Guide](TROUBLESHOOTING.md#podman-issues) for more help.

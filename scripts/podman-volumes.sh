@@ -55,25 +55,76 @@ list_volumes() {
 }
 
 # Create named volumes if they don't exist
+# Creates all 5 volumes required by StarExec:
+#   data, sandbox, backend, work  — application volumes (owned by app user)
+#   postgres                      — PostgreSQL data dir (must be owned by UID 999 inside
+#                                   the rootless user namespace, i.e. postgres:postgres)
+#
+# The UID 999 fix (CRÍTICO-2) is required because rootless Podman creates volume
+# mountpoints owned by the *host* user, but the postgres:15 image runs as UID 999.
+# Without the chown the PostgreSQL initdb fails with "could not change directory".
 create_volumes() {
     local env="${1:-dev}"
     local data_vol="${VOLUME_PREFIX}-${env}-data"
+    local sandbox_vol="${VOLUME_PREFIX}-${env}-sandbox"
+    local backend_vol="${VOLUME_PREFIX}-${env}-backend"
+    local work_vol="${VOLUME_PREFIX}-${env}-work"
     local pg_vol="${VOLUME_PREFIX}-${env}-postgres"
 
     log_info "Creating volumes for environment: ${env}"
 
-    if ${PODMAN_CMD:-podman} volume exists "$data_vol" 2>/dev/null; then
-        log_warn "Volume $data_vol already exists"
-    else
-        ${PODMAN_CMD:-podman} volume create "$data_vol"
-        log_info "Created $data_vol"
-    fi
+    for vol in "$data_vol" "$sandbox_vol" "$backend_vol" "$work_vol"; do
+        if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
+            log_warn "Volume $vol already exists (skipping)"
+        else
+            ${PODMAN_CMD:-podman} volume create "$vol"
+            log_info "Created $vol"
+        fi
+    done
 
+    # PostgreSQL volume — must be owned by UID/GID 999 inside the container namespace.
+    # We use 'podman unshare chown' so the chown runs inside the rootless user namespace
+    # (mapping host UID → container UID 999) without requiring sudo on the host.
     if ${PODMAN_CMD:-podman} volume exists "$pg_vol" 2>/dev/null; then
-        log_warn "Volume $pg_vol already exists"
+        log_warn "Volume $pg_vol already exists (skipping creation)"
     else
         ${PODMAN_CMD:-podman} volume create "$pg_vol"
         log_info "Created $pg_vol"
+    fi
+
+    # Always (re-)apply the UID 999 ownership on the postgres volume mountpoint.
+    # This is idempotent and safe to run even if the volume pre-existed, since the
+    # ownership may be wrong after a system reboot or volume migration.
+    local pg_mountpoint
+    pg_mountpoint=$(${PODMAN_CMD:-podman} volume inspect "$pg_vol" --format '{{.Mountpoint}}' 2>/dev/null || true)
+    if [ -n "$pg_mountpoint" ]; then
+        log_info "Fixing PostgreSQL volume ownership (UID/GID 999) at: $pg_mountpoint"
+        # Detect rootful vs rootless to use the correct ownership tool.
+        # In rootless mode, only 'podman unshare chown' can map host UIDs → container UIDs.
+        # In rootful mode, direct chown works and 'podman unshare' is unnecessary overhead.
+        local is_rootful=false
+        if ${PODMAN_CMD:-podman} info --format '{{.Host.Security.Rootless}}' 2>/dev/null | grep -qi "false"; then
+            is_rootful=true
+        fi
+        if [ "$is_rootful" = "true" ]; then
+            if chown -R 999:999 "$pg_mountpoint"; then
+                log_info "✓ PostgreSQL volume ownership set to 999:999 (rootful)"
+            else
+                log_error "Could not fix ownership for $pg_mountpoint"
+                return 1
+            fi
+        else
+            if ${PODMAN_CMD:-podman} unshare chown -R 999:999 "$pg_mountpoint"; then
+                log_info "✓ PostgreSQL volume ownership set to 999:999 (rootless via unshare)"
+            else
+                log_error "Could not fix ownership for $pg_mountpoint"
+                log_error "Rootless Podman requires 'podman unshare chown' — direct chown cannot map UIDs."
+                log_error "Run manually: ${PODMAN_CMD:-podman} unshare chown -R 999:999 $pg_mountpoint"
+                return 1
+            fi
+        fi
+    else
+        log_warn "Could not determine mountpoint for $pg_vol — skipping ownership fix"
     fi
 }
 
@@ -155,9 +206,9 @@ import_volume() {
         log_info "Created new volume: $volume_name"
     else
         log_warn "Volume $volume_name exists, will overwrite contents"
-        read -p "Continue? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        printf "Continue? (y/N): "
+        read -r REPLY
+        if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
             log_error "Import cancelled"
             exit 1
         fi

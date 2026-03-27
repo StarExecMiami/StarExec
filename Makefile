@@ -130,13 +130,14 @@ BLUE   := $(shell tput -Txterm setaf 4)
 RESET  := $(shell tput -Txterm sgr0)
 BOLD   := $(shell tput -Txterm bold)
 
+
 .PHONY: help build build-fresh build-prod build-offline cache-images image \
-	deploy-podman deploy-podman-helm deploy-podman-direct network-setup deploy-podman-cached undeploy-podman \
+	deploy-podman deploy-podman-helm deploy-podman-direct network-setup network-reset deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s \
-	volumes-create volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
+	volumes-create volumes-fix-permissions volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
 	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show runtime-check \
-	logs logs-app logs-postgres test-deps verify-deps test docs \
+	logs logs-app logs-postgres test-deps verify-deps wait-postgres test docs \
 	start stop fix-cgroup-delegation
 
 start: deploy-podman
@@ -340,6 +341,23 @@ build-job-runner:
 volumes-create:
 	@echo "Creating volumes for environment: $(ENV)"
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) create $(ENV)
+
+volumes-fix-permissions:
+	@echo "Fixing PostgreSQL volume permissions for environment: $(ENV)"
+	@PG_VOL="$(VOLUME_PREFIX)-$(ENV)-postgres"; \
+	if ! $(PODMAN_CMD) volume exists "$$PG_VOL" 2>/dev/null; then \
+		echo "${YELLOW}Volume $$PG_VOL does not exist yet (run make volumes-create ENV=$(ENV))${RESET}"; \
+		exit 1; \
+	fi; \
+	PG_MOUNT=$$($(PODMAN_CMD) volume inspect "$$PG_VOL" --format '{{.Mountpoint}}'); \
+	echo "  Mountpoint: $$PG_MOUNT"; \
+	if $(PODMAN_CMD) unshare chown -R 999:999 "$$PG_MOUNT" 2>/dev/null; then \
+		echo "${GREEN}✓ PostgreSQL volume ownership set to 999:999${RESET}"; \
+	else \
+		echo "${RED}✗ Failed to set ownership with podman unshare.${RESET}"; \
+		echo "Try manually: $(PODMAN_CMD) unshare chown -R 999:999 $$PG_MOUNT"; \
+		exit 1; \
+	fi
 
 volumes-list:
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) list
@@ -559,12 +577,26 @@ migrate-repair:
 		  echo "❌ Unable to reach PostgreSQL at $$DB_HOST:5432"; \
 		  exit 1; \
 	  fi; \
+	  if command -v psql >/dev/null 2>&1; then \
+		  LOCK_COUNT=$$(PGPASSWORD="$$DB_PASS" psql -h $$DB_HOST -U $$DB_USER -d $$DB_NAME -t -A -c "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'" 2>/dev/null || echo "0"); \
+		  if [ "$${LOCK_COUNT:-0}" -gt 0 ]; then \
+			  echo "${YELLOW}⚠️  Advisory locks detected before Flyway repair (count=$$LOCK_COUNT).${RESET}"; \
+			  echo "   If repair hangs, inspect blockers with:"; \
+			  echo "   SELECT pid, usename, application_name, state, query FROM pg_stat_activity WHERE wait_event_type = 'Lock';"; \
+		  fi; \
+	  fi; \
 	  echo "Running Flyway repair against $$DB_HOST:5432/$$DB_NAME"; \
 	  mvn clean flyway:repair -e \
 		-Dflyway.url=jdbc:postgresql://$$DB_HOST:5432/$$DB_NAME \
 		-Dflyway.user=$$DB_USER \
 		-Dflyway.password=$$DB_PASS \
-		-Dflyway.schemas=$$DB_NAME
+		-Dflyway.schemas=$$DB_NAME || { \
+			echo "${RED}✗ Flyway repair failed.${RESET}"; \
+			echo "If this is a stuck advisory lock issue, find and terminate blocker sessions:"; \
+			echo "  SELECT pid, usename, application_name, state, wait_event, query FROM pg_stat_activity WHERE wait_event_type = 'Lock';"; \
+			echo "  SELECT pg_terminate_backend(<pid>);"; \
+			exit 1; \
+		}
 
 
 migrate-podman:
@@ -623,11 +655,27 @@ network-setup:
 		echo "⚠️  Running in rootful mode. Consider running rootless for better security."; \
 		echo "See: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md"; \
 	fi
-	@# For rootless, Podman uses pasta/slirp4netns automatically via netavark
-	@if ! $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
-		echo "Creating network (pasta/slirp4netns handled automatically)"; \
-		$(PODMAN_CMD) network create starexec-net; \
+	@# Detect and repair stale/broken network state, not just existence.
+	@if $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
+		echo "Network starexec-net exists. Validating integrity..."; \
+		if ! $(PODMAN_CMD) network inspect starexec-net >/dev/null 2>&1; then \
+			echo "${YELLOW}⚠️  Existing network appears broken. Recreating...${RESET}"; \
+			$(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1 || true; \
+			$(PODMAN_CMD) network create starexec-net >/dev/null; \
+			echo "${GREEN}✓ Recreated network starexec-net${RESET}"; \
+		else \
+			echo "${GREEN}✓ Network starexec-net is healthy${RESET}"; \
+		fi; \
+	else \
+		echo "Creating network starexec-net (pasta/slirp4netns handled automatically)"; \
+		$(PODMAN_CMD) network create starexec-net >/dev/null; \
+		echo "${GREEN}✓ Network starexec-net created${RESET}"; \
 	fi
+
+network-reset:
+	@echo "Resetting Podman network: starexec-net"
+	@$(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1 || true
+	@$(MAKE) network-setup
 
 define cleanup_deployment
 	@echo "Cleaning up existing StarExec pods, containers, and secrets..."
@@ -668,7 +716,7 @@ define cleanup_deployment
 					$(PODMAN_CMD) pod rm -f -t 30 $$pod || exit 1; \
 				fi; \
 			fi; \
-		fi \
+		fi; \
 	done
 	@# Clean up secrets associated with the release. Note: 'label' filter not supported for secrets in some Podman versions.
 	@SECRET_NAMES=$$($(PODMAN_CMD) secret ls --filter "name=$(RELEASE_NAME)" --format "{{.Name}}") ; \
@@ -676,9 +724,36 @@ define cleanup_deployment
 		echo "  Removing secrets matching name $(RELEASE_NAME)"; \
 		echo "$$SECRET_NAMES" | xargs $(PODMAN_CMD) secret rm; \
 	fi
+	@# Safely cleanup only the StarExec network (do NOT global-prune networks).
+	@# Deterministic approach: disconnect any remaining endpoints before removal,
+	@# rather than blindly retrying and hoping the kernel GCs the veth pair.
+	@if $(PODMAN_CMD) network exists starexec-net 2>/dev/null; then \
+		echo "  Cleaning network starexec-net..."; \
+		CONNECTED=$$($(PODMAN_CMD) network inspect starexec-net --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true); \
+		if [ -n "$$CONNECTED" ]; then \
+			echo "  Disconnecting remaining endpoints: $$CONNECTED"; \
+			for ctr in $$CONNECTED; do \
+				$(PODMAN_CMD) network disconnect -f starexec-net "$$ctr" 2>/dev/null || true; \
+			done; \
+		fi; \
+		if ! $(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1; then \
+			echo "  ${YELLOW}⚠️  Network still busy after disconnect. Waiting for namespace GC (3s)...${RESET}"; \
+			sleep 3; \
+			if ! $(PODMAN_CMD) network rm starexec-net >/dev/null 2>&1; then \
+				echo "  ${YELLOW}⚠️  Could not remove starexec-net automatically.${RESET}"; \
+				echo "  ${YELLOW}   Likely cause: zombie container or dangling CNI interface.${RESET}"; \
+				echo "  ${YELLOW}   Debug with: $(PODMAN_CMD) network inspect starexec-net${RESET}"; \
+				echo "  ${YELLOW}   Force with: make network-reset${RESET}"; \
+			else \
+				echo "  ${GREEN}✓ Network starexec-net removed (after namespace GC)${RESET}"; \
+			fi; \
+		else \
+			echo "  ${GREEN}✓ Network starexec-net removed${RESET}"; \
+		fi; \
+	fi
 endef
 
-deploy-podman: verify-deps image network-setup volumes-create
+deploy-podman: verify-deps image volumes-create
 	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
 	@echo "Using values file: $(VALS)"
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
@@ -717,6 +792,7 @@ deploy-podman-helm:
 	fi
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
+	@$(MAKE) network-setup
 	@echo "Rendering deployment manifest..."
 	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
 	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
@@ -733,7 +809,8 @@ deploy-podman-helm:
 	@echo "Deploying application pod..."
 	@# Ensure pause image exists (Podman uses it automatically for pod infra)
 	@./scripts/ensure-pause-image.sh
-	@$(PODMAN_CMD) play kube --userns=keep-id render.yaml
+	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(MAKE) wait-postgres
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
@@ -750,6 +827,7 @@ deploy-podman-helm:
 deploy-podman-direct:
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
+	@$(MAKE) network-setup
 	@echo "Ensuring Podman infra image exists..."
 	@./scripts/ensure-pause-image.sh
 	@echo "Generating deployment manifest from template..."
@@ -760,9 +838,8 @@ deploy-podman-direct:
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
 	@echo "Deploying application pod..."
-	@# Ensure pause image exists (Podman uses it automatically for pod infra)
-	@./scripts/ensure-pause-image.sh
-	@$(PODMAN_CMD) play kube --userns=keep-id render.yaml
+	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(MAKE) wait-postgres
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
@@ -783,12 +860,55 @@ deploy-podman-cached: image
 	@echo "Deploying using cached render.yaml..."
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
-	@$(PODMAN_CMD) play kube --userns=keep-id render.yaml
+	@$(MAKE) network-setup
+	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
+	@$(MAKE) wait-postgres
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete (using cached manifest)!${RESET}"
 	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
 	@echo ""
 	@echo "Note: To regenerate manifest, run '${BLUE}make template${RESET}' or '${BLUE}make deploy-podman${RESET}'"
+
+wait-postgres:
+	@echo "Waiting for PostgreSQL readiness..."
+	@if ! $(PODMAN_CMD) container exists $(DB_CONTAINER) >/dev/null 2>&1; then \
+		echo "${RED}✗ PostgreSQL container '$(DB_CONTAINER)' not found.${RESET}"; \
+		echo "  Use 'make logs-postgres' for diagnostics."; \
+		exit 1; \
+	fi
+	@DB_USER=$${STAREXEC_DB_USER:-$(DB_USER_DEFAULT)}; \
+	MAX_RETRIES=$${WAIT_POSTGRES_RETRIES:-60}; \
+	WAIT_SECONDS=$${WAIT_POSTGRES_INTERVAL_SECONDS:-2}; \
+	i=1; \
+	ready=0; \
+	while [ $$i -le $$MAX_RETRIES ]; do \
+		if $(PODMAN_CMD) exec $(DB_CONTAINER) pg_isready -h localhost -p 5432 -U "$$DB_USER" >/dev/null 2>&1; then \
+			ready=1; \
+			break; \
+		fi; \
+		echo "  PostgreSQL not ready yet ($$i/$$MAX_RETRIES), retrying in $${WAIT_SECONDS}s..."; \
+		i=$$((i + 1)); \
+		sleep $$WAIT_SECONDS; \
+	done; \
+	if [ $$ready -ne 1 ]; then \
+		echo "${RED}✗ PostgreSQL failed readiness check after $$MAX_RETRIES attempts.${RESET}"; \
+		PG_EXIT=$$($(PODMAN_CMD) inspect $(DB_CONTAINER) --format '{{.State.ExitCode}}' 2>/dev/null || echo "unknown"); \
+		PG_RUNNING=$$($(PODMAN_CMD) inspect $(DB_CONTAINER) --format '{{.State.Running}}' 2>/dev/null || echo "unknown"); \
+		if [ "$$PG_RUNNING" = "false" ] && [ "$$PG_EXIT" != "0" ] && [ "$$PG_EXIT" != "unknown" ]; then \
+			echo "${RED}  Container exited with code $$PG_EXIT (crash or PANIC).${RESET}"; \
+		fi; \
+		if $(PODMAN_CMD) logs $(DB_CONTAINER) 2>&1 | grep -Eqi "(invalid primary checkpoint|could not locate a valid checkpoint|PANIC:|WAL)"; then \
+			echo "${YELLOW}Detected potential PostgreSQL WAL inconsistency after unclean shutdown.${RESET}"; \
+			echo "Recommended recovery order:"; \
+			echo "  1) Restore a known-good backup: make volumes-restore ENV=$(ENV)"; \
+			echo "  2) If no backup exists, inspect logs: make logs-postgres"; \
+			echo "  3) Last resort (destructive): manual pg_resetwal in postgres volume"; \
+		fi; \
+		echo "Last PostgreSQL logs:"; \
+		$(PODMAN_CMD) logs $(DB_CONTAINER) --tail 80 2>&1 || true; \
+		exit 1; \
+	fi
+	@echo "${GREEN}✓ PostgreSQL is ready${RESET}"
 
 undeploy-podman:
 	@echo "Removing Podman deployment (volumes preserved)"
@@ -1040,18 +1160,44 @@ fix-cgroup-delegation:
 
 verify-deps:
 	@echo "${BOLD}Validating required CLI tooling...${RESET}"
-	@echo -n "  podman: "
+	@printf "  podman: "
 	@command -v podman >/dev/null && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
-	@echo -n "  yq: "
-	@command -v yq >/dev/null && yq --version >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
-	@echo -n "  sha256sum: "
+	@printf "  sha256sum: "
 	@command -v sha256sum >/dev/null && echo "${GREEN}✓${RESET}" || { echo "${RED}✗ required${RESET}"; exit 1; }
 	@echo "${BOLD}Optional tools:${RESET}"
-	@echo -n "  helm: "
+	@printf "  helm: "
 	@command -v helm >/dev/null && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ not installed (needed for template/deploy)${RESET}"
+	@printf "  yq: "
+	@command -v yq >/dev/null 2>&1 && yq --version >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ not installed (only needed for config-show)${RESET}"
 	@echo "${BOLD}Podman rootless configuration:${RESET}"
-	@echo -n "  cgroup delegation: "
+	@printf "  cgroup delegation: "
 	@./scripts/check-cgroup-delegation.sh >/dev/null 2>&1 && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○ needs configuration (run 'make fix-cgroup-delegation')${RESET}"
+	@printf "  newuidmap/newgidmap: "
+	@if [ "$(PODMAN_REQUIRES_SUDO)" = "no" ]; then \
+		if command -v newuidmap >/dev/null 2>&1 && command -v newgidmap >/dev/null 2>&1; then \
+			echo "${GREEN}✓${RESET}"; \
+		else \
+			echo "${RED}✗ missing${RESET}"; \
+			echo "  Install uidmap package (Debian/Ubuntu: sudo apt install uidmap)"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "${YELLOW}○ skipped (rootful podman mode)${RESET}"; \
+	fi
+	@printf "  /etc/subuid + /etc/subgid: "
+	@if [ "$(PODMAN_REQUIRES_SUDO)" = "no" ]; then \
+		U=$$(id -un); \
+		if grep -q "^$$U:" /etc/subuid 2>/dev/null && grep -q "^$$U:" /etc/subgid 2>/dev/null; then \
+			echo "${GREEN}✓${RESET}"; \
+		else \
+			echo "${RED}✗ missing mapping${RESET}"; \
+			echo "  Rootless Podman requires subuid/subgid entries for user '$$U'."; \
+			echo "  Ask admin to add ranges in /etc/subuid and /etc/subgid, then relogin."; \
+			exit 1; \
+		fi; \
+	else \
+		echo "${YELLOW}○ skipped (rootful podman mode)${RESET}"; \
+	fi
 	@# Check for common rootless Podman issue (missing /run/user/UID)
 	@if [ -z "$$XDG_RUNTIME_DIR" ] && [ ! -w "/run/user/$$(id -u)" ]; then \
 		echo ""; \
