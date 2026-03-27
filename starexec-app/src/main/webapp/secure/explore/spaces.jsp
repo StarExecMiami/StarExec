@@ -124,7 +124,7 @@
 					<th id="jobNameHead">name</th>
 					<th id="jobStatusHead">status</th>
 					<th id="jobCompletedHead"><span
-							title="Job pairs that ran successfully">completed</span>
+							title="Job pairs that have finished running">completed</span>
 					</th>
 					<th id="jobTotalHead"><span
 							title="The total number of job pairs in this job">total</span>

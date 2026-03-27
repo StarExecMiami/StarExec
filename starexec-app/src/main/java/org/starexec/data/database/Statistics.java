@@ -390,9 +390,9 @@ public class Statistics {
 			}
 			for (JobPair jp : pairs1) {
 				JobPair jp2 = pairs2Map.get(jp.getBench().getId());
-				if (jp.getStatus().getCode() == Status.StatusCode.STATUS_COMPLETE) {
+				if (jp.getStatus().getCode().statComplete()) {
 					// if we can find a second pair with this benchmark
-					if (jp2 != null && jp2.getStatus().getCode() == Status.StatusCode.STATUS_COMPLETE) {
+					if (jp2 != null && jp2.getStatus().getCode().statComplete()) {
 						// points are identified by their series and item number
 						String key = series + ":" + item;
 
@@ -668,7 +668,7 @@ public class Statistics {
 		HashMap<Integer, Configuration> configs = new HashMap<>();
 		HashMap<Solver, HashMap<Configuration, List<Double>>> answer = new HashMap<>();
 		for (JobPair jp : pairs) {
-			if (jp.getStatus().getCode() != Status.StatusCode.STATUS_COMPLETE) {
+			if (!jp.getStatus().getCode().statComplete()) {
 				// we don't want to consider incomplete pairs
 				continue;
 			}

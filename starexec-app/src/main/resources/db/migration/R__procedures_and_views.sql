@@ -482,7 +482,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetBenchmarkById(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetBenchmarkById(_id INT)
-RETURNS TABLE(id INT, user_id INT, name VARCHAR, bench_type INT, uploaded TIMESTAMP, path TEXT, downloadable BOOLEAN, disk_size BIGINT, description TEXT, deleted BOOLEAN, recycled BOOLEAN, types_id INT, types_name VARCHAR, types_description TEXT, types_community INT, types_path TEXT, types_disk_size BIGINT, types_processor_type INT, types_time_limit INT, types_syntax_id INT) AS $$
+RETURNS TABLE(bench_id INT, bench_user_id INT, bench_name VARCHAR, bench_bench_type INT, bench_uploaded TIMESTAMP, bench_path TEXT, bench_downloadable BOOLEAN, bench_disk_size BIGINT, bench_description TEXT, bench_deleted BOOLEAN, bench_recycled BOOLEAN, types_id INT, types_name VARCHAR, types_description TEXT, types_community INT, types_path TEXT, types_disk_size BIGINT, types_processor_type SMALLINT, types_time_limit SMALLINT, types_syntax_id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT b.id AS bench_id,
@@ -502,8 +502,8 @@ BEGIN
         p.community AS types_community,
         p.path AS types_path,
         p.disk_size AS types_disk_size,
-        p.processor_type::INT AS types_processor_type,
-        p.time_limit::INT AS types_time_limit,
+        p.processor_type AS types_processor_type,
+        p.time_limit AS types_time_limit,
         p.syntax_id AS types_syntax_id
     FROM starexec.benchmarks b
     LEFT OUTER JOIN processors p ON b.bench_type = p.id
@@ -2681,15 +2681,13 @@ $$ LANGUAGE plpgsql;
 -- casting it here keeps the repeated procedures compatible with both column types.
 DROP FUNCTION IF EXISTS starexec.GetJobPairsPrimaryStageByJob(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobPairsPrimaryStageByJob(_id INT)
-RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, stage_number INT, stage_id INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
+RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, stage_number INT, stage_id INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, jobpair_stage_data.stage_number, jobpair_stage_data.stage_id, config.id, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, bench.id, bench.name, bench.description, bench.deleted, bench.downloadable, bench.upload_date, bench.user_id, solver.id, solver.name, solver.description, solver.deleted, solver.downloadable, solver.upload_date, solver.user_id, solver.build_status, node.name, node.status, jobSpace.name
+	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, jobpair_stage_data.stage_number, jobpair_stage_data.stage_id, node.name, node.status, jobSpace.name
 	FROM starexec.job_pairs
 	JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id=job_pairs.id
 	JOIN configurations AS config ON jobpair_stage_data.config_id = config.id
-	JOIN benchmarks AS bench ON job_pairs.bench_id = bench.id
-	JOIN solvers AS solver ON config.solver_id = solver.id
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON jobSpace.id=job_pairs.job_space_id
     WHERE job_pairs.job_id=_id AND jobpair_stage_data.stage_number=job_pairs.primary_jobpair_data
@@ -2869,15 +2867,13 @@ $$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS starexec.GetAllJobPairsByJob(INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetAllJobPairsByJob(_id INT)
-RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, stage_number INT, stage_id INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
+RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, stage_number INT, stage_id INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, jobpair_stage_data.stage_number, jobpair_stage_data.stage_id, config.id, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, bench.id, bench.name, bench.description, bench.deleted, bench.downloadable, bench.upload_date, bench.user_id, solver.id, solver.name, solver.description, solver.deleted, solver.downloadable, solver.upload_date, solver.user_id, solver.build_status, node.name, node.status, jobSpace.name
+	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, jobpair_stage_data.stage_number, jobpair_stage_data.stage_id, node.name, node.status, jobSpace.name
 	FROM starexec.job_pairs
 	JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id=job_pairs.id
 	JOIN configurations AS config ON jobpair_stage_data.config_id = config.id
-	JOIN benchmarks AS bench ON job_pairs.bench_id = bench.id
-	JOIN solvers AS solver ON config.solver_id = solver.id
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON job_pairs.job_space_id=jobSpace.id
     WHERE job_pairs.job_id=_id AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
@@ -2889,16 +2885,14 @@ $$ LANGUAGE plpgsql;
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetNewCompletedJobPairsByJob(INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetNewCompletedJobPairsByJob(_id INT, _completionId INT)
-RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, completion_id INT, stage_number INT, stage_id INT, config_id_dup INT, config_name_dup VARCHAR, config_description TEXT, config_contents TEXT, config_deleted BOOLEAN, config_upload_date TIMESTAMP, config_user_id INT, bench_id_dup INT, bench_name_dup VARCHAR, bench_description TEXT, bench_deleted BOOLEAN, bench_downloadable BOOLEAN, bench_upload_date TIMESTAMP, bench_user_id INT, solver_id_dup INT, solver_name_dup VARCHAR, solver_description TEXT, solver_deleted BOOLEAN, solver_downloadable BOOLEAN, solver_upload_date TIMESTAMP, solver_user_id INT, solver_build_status INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
+RETURNS TABLE(id INT, job_id INT, bench_id INT, status_code SMALLINT, node_id INT, job_space_id INT, path VARCHAR, bench_name VARCHAR, solver_name VARCHAR, config_name VARCHAR, solver_id INT, config_id INT, start_time TIMESTAMP, end_time TIMESTAMP, cpu DOUBLE PRECISION, wallclock DOUBLE PRECISION, user_time DOUBLE PRECISION, system_time DOUBLE PRECISION, max_vmem DOUBLE PRECISION, max_res_set BIGINT, disk_size BIGINT, sge_id INT, sandbox_num INT, queuesub_time TIMESTAMP, primary_jobpair_data INT, completion_id INT, stage_number INT, stage_id INT, node_name VARCHAR, node_status VARCHAR, job_space_name VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
-	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, complete.completion_id, jobpair_stage_data.stage_number, jobpair_stage_data.stage_id, config.id, config.name, config.description, config.contents, config.deleted, config.upload_date, config.user_id, bench.id, bench.name, bench.description, bench.deleted, bench.downloadable, bench.upload_date, bench.user_id, solver.id, solver.name, solver.description, solver.deleted, solver.downloadable, solver.upload_date, solver.user_id, solver.build_status, node.name, node.status, jobSpace.name
+	SELECT job_pairs.id, job_pairs.job_id, job_pairs.bench_id, job_pairs.status_code, job_pairs.node_id, job_pairs.job_space_id, job_pairs.path, job_pairs.bench_name, jobpair_stage_data.solver_name, jobpair_stage_data.config_name, jobpair_stage_data.solver_id, jobpair_stage_data.config_id, job_pairs.start_time, job_pairs.end_time, jobpair_stage_data.cpu, jobpair_stage_data.wallclock, jobpair_stage_data.user_time, jobpair_stage_data.system_time, jobpair_stage_data.max_vmem, CAST(jobpair_stage_data.max_res_set AS BIGINT), jobpair_stage_data.disk_size, job_pairs.sge_id, job_pairs.sandbox_num, job_pairs.queuesub_time, job_pairs.primary_jobpair_data, complete.completion_id, jobpair_stage_data.stage_number, jobpair_stage_data.stage_id, node.name, node.status, jobSpace.name
 	FROM starexec.job_pairs
 	JOIN job_pair_completion AS complete ON job_pairs.id=complete.pair_id
 	JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id=job_pairs.id
 	JOIN configurations AS config ON jobpair_stage_data.config_id = config.id
-	JOIN benchmarks AS bench ON job_pairs.bench_id = bench.id
-	JOIN solvers AS solver ON config.solver_id = solver.id
 	LEFT JOIN nodes AS node ON job_pairs.node_id=node.id
 	LEFT JOIN job_spaces AS jobSpace ON job_pairs.job_space_id=jobSpace.id
     WHERE job_pairs.job_id=_id AND complete.completion_id>_completionId AND job_pairs.primary_jobpair_data=jobpair_stage_data.stage_number
@@ -6332,10 +6326,32 @@ $$ LANGUAGE plpgsql;
 -- Author: Albert Giegerich
 DROP FUNCTION IF EXISTS starexec.GetSolverConfigResultsForBenchmarkInJob CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSolverConfigResultsForBenchmarkInJob(_jobId INT, _benchId INT, _stageNum INT)
-RETURNS TABLE(attr_value VARCHAR(128)) AS $$
+RETURNS TABLE(
+    "s.id" INT,
+    "s.user_id" INT,
+    "s.name" VARCHAR(255),
+    "s.uploaded" TIMESTAMP,
+    "s.path" TEXT,
+    "s.description" TEXT,
+    "s.downloadable" BOOLEAN,
+    "s.disk_size" BIGINT,
+    executable_type INT,
+    recycled BOOLEAN,
+    deleted BOOLEAN,
+    "s.build_status" INT,
+    "c.id" INT,
+    "c.description" TEXT,
+    "c.name" VARCHAR(128),
+    "c.solver_id" INT,
+    attr_value VARCHAR(128)
+) AS $$
 BEGIN
     RETURN QUERY
-    SELECT ja.attr_value
+    SELECT s.id, s.user_id, s.name, s.uploaded, s.path, s.description,
+            s.downloadable, s.disk_size, s.executable_type, s.recycled, s.deleted,
+            s.build_status,
+            c.id, c.description, c.name, c.solver_id,
+            ja.attr_value
     FROM starexec.jobs j JOIN job_pairs jp ON j.id = jp.job_id
             JOIN jobpair_stage_data jpsd ON jpsd.jobpair_id = jp.id
             JOIN solvers s ON jpsd.solver_id = s.id

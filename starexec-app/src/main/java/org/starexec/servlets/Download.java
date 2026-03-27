@@ -479,7 +479,9 @@ public class Download extends HttpServlet {
 				sb.append("\r\n");
 			}
 		}
-		Files.write(new File(filename).toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
+		File outputFile = new File(filename);
+		outputFile.getParentFile().mkdirs();
+		Files.write(outputFile.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
 		return filename;
 	}
 

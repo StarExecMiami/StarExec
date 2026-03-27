@@ -1826,9 +1826,11 @@ public class Jobs {
             return "incomplete";
         } else if (statusCode.failed()) {
             return "failed";
-        } else if (statusCode.resource()) {
-            // Resources (time/memory) ran out.
-            return "resource";
+        } else if (statusCode.statComplete()) {
+            // Solver ran to completion, including resource-limit outcomes (timeout,
+            // memout, file-write exceeded) which are considered completed ATP runs,
+            // not StarExec infrastructure failures.
+            return "complete";
         } else {
             return "unknown";
         }
@@ -4433,11 +4435,12 @@ public class Jobs {
                 new Hashtable<>();
             Hashtable<Integer, WorkerNode> discoveredNodes = new Hashtable<>();
             int curNode, curBench, curConfig, curSolver;
+            ResultSetUtils.ColumnIndex cols = new ResultSetUtils.ColumnIndex(results);
             while (results.next()) {
                 JobPair jp = JobPairs.resultToPair(results);
 
                 Status s = new Status();
-                s.setCode(ResultSetUtils.getInt(results, "status_code"));
+                s.setCode(cols.getInt(results, "status_code"));
 
                 jp.setStatus(s);
 
@@ -4445,7 +4448,7 @@ public class Jobs {
                 // pairs
                 if (getCompletionId) {
                     jp.setCompletionId(
-                        ResultSetUtils.getInt(
+                        cols.getInt(
                             results,
                             "complete.completion_id",
                             "complete_completion_id",
@@ -4454,7 +4457,7 @@ public class Jobs {
                     );
                 }
                 jp.setJobSpaceName(
-                    ResultSetUtils.getString(
+                    cols.getString(
                         results,
                         "jobSpace.name",
                         "jobspace_name",
@@ -4463,10 +4466,10 @@ public class Jobs {
                     )
                 );
                 returnList.add(jp);
-                curNode = ResultSetUtils.getInt(results, "node_id");
-                curBench = ResultSetUtils.getInt(results, "bench_id");
-                curConfig = ResultSetUtils.getInt(results, "config_id");
-                curSolver = ResultSetUtils.getInt(
+                curNode = cols.getInt(results, "node_id");
+                curBench = cols.getInt(results, "bench_id");
+                curConfig = cols.getInt(results, "config_id");
+                curSolver = cols.getInt(
                     results,
                     "config.solver_id",
                     "config_solver_id",
@@ -4474,59 +4477,32 @@ public class Jobs {
                 );
                 JoblineStage stage = JobPairs.resultToStage(results);
                 if (!discoveredSolvers.containsKey(curSolver)) {
-                    Solver solver = Solvers.resultSetToSolver(
-                        results,
-                        R.SOLVER
+                    Solver solver = new Solver();
+                    solver.setId(curSolver);
+                    solver.setName(
+                        cols.getString(results, "solver_name")
                     );
-                    stage.setSolver(solver);
                     discoveredSolvers.put(curSolver, solver);
                 }
                 stage.setSolver(discoveredSolvers.get(curSolver));
 
                 if (!discoveredBenchmarks.containsKey(curBench)) {
-                    Benchmark b = Benchmarks.resultToBenchmarkWithPrefix(
-                        results,
-                        "bench"
+                    Benchmark b = new Benchmark();
+                    b.setId(curBench);
+                    b.setName(
+                        cols.getString(results, "bench_name")
                     );
-                    jp.setBench(b);
                     discoveredBenchmarks.put(curBench, b);
                 }
                 jp.setBench(discoveredBenchmarks.get(curBench));
 
                 if (!discoveredConfigs.containsKey(curConfig)) {
                     Configuration c = new Configuration();
-                    c.setId(
-                        ResultSetUtils.getInt(
-                            results,
-                            "config.id",
-                            "config_id",
-                            "id"
-                        )
-                    );
+                    c.setId(curConfig);
                     c.setName(
-                        ResultSetUtils.getString(
-                            results,
-                            "config.name",
-                            "config_name",
-                            "name"
-                        )
+                        cols.getString(results, "config_name")
                     );
-                    c.setSolverId(
-                        ResultSetUtils.getInt(
-                            results,
-                            "config.solver_id",
-                            "config_solver_id",
-                            "solver_id"
-                        )
-                    );
-                    c.setDescription(
-                        ResultSetUtils.getString(
-                            results,
-                            "config.description",
-                            "config_description",
-                            "description"
-                        )
-                    );
+                    c.setSolverId(curSolver);
                     discoveredConfigs.put(curConfig, c);
                 }
                 stage.setConfiguration(discoveredConfigs.get(curConfig));
@@ -4536,7 +4512,7 @@ public class Jobs {
                 if (!discoveredNodes.containsKey(curNode)) {
                     WorkerNode node = new WorkerNode();
                     node.setName(
-                        ResultSetUtils.getString(
+                        cols.getString(
                             results,
                             "node_name",
                             "worker_node_name",
@@ -4544,7 +4520,7 @@ public class Jobs {
                         )
                     );
                     node.setId(
-                        ResultSetUtils.getInt(
+                        cols.getInt(
                             results,
                             "node_id",
                             "worker_node_id",
@@ -4552,7 +4528,7 @@ public class Jobs {
                         )
                     );
                     node.setStatus(
-                        ResultSetUtils.getString(
+                        cols.getString(
                             results,
                             "node_status",
                             "worker_node_status",

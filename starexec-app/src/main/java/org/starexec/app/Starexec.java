@@ -11,6 +11,7 @@ import org.starexec.constants.R;
 import org.starexec.constants.PaginationQueries;
 import org.starexec.data.database.Common;
 import org.starexec.logger.StarLogger;
+import org.starexec.util.Util;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -65,6 +66,11 @@ public class Starexec implements ServletContextListener {
             } catch (Exception e) {
                 log.error("Failed to initialize backend", e);
             }
+
+            // Initialize data directories (downloads, job output, etc.)
+            log.info("Initializing data directories...");
+            Util.initializeDataDirectories();
+            log.info("Data directories initialized successfully");
 
             // Set build info as application attributes
             ServletContext context = sce.getServletContext();
