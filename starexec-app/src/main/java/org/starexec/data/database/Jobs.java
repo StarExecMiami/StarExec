@@ -4417,6 +4417,14 @@ public class Jobs {
      * @author Tyler Jensen, Benton Mccune, Eric Burns
      */
 
+    /** Converts a nullable {@link Integer} from a {@link java.sql.ResultSet} column to a
+     *  primitive {@code int}, substituting 0 when the value is SQL NULL.  This avoids
+     *  {@link NullPointerException} when unboxing columns that are legitimately absent
+     *  (e.g. {@code node_id} for a pair that has not yet been dispatched). */
+    private static int nullToZero(Integer value) {
+        return value == null ? 0 : value;
+    }
+
     private static List<JobPair> getPairsDetailed(
         int jobId,
         ResultSet results,
@@ -4434,7 +4442,13 @@ public class Jobs {
             Hashtable<Integer, Benchmark> discoveredBenchmarks =
                 new Hashtable<>();
             Hashtable<Integer, WorkerNode> discoveredNodes = new Hashtable<>();
-            int curNode, curBench, curConfig, curSolver;
+            // Declared as Integer (boxed) so that a SQL NULL value returned by
+            // cols.getInt() does not trigger an NPE via auto-unboxing.  A null ID
+            // means the corresponding worker node / benchmark / config / solver is
+            // not yet associated with the pair (e.g. pair not yet dispatched), so
+            // we fall back to 0 which is the conventional "not set" sentinel used
+            // throughout the codebase (see JobPair defaults).
+            Integer curNode, curBench, curConfig, curSolver;
             ResultSetUtils.ColumnIndex cols = new ResultSetUtils.ColumnIndex(results);
             while (results.next()) {
                 JobPair jp = JobPairs.resultToPair(results);
@@ -4466,15 +4480,18 @@ public class Jobs {
                     )
                 );
                 returnList.add(jp);
-                curNode = cols.getInt(results, "node_id");
-                curBench = cols.getInt(results, "bench_id");
-                curConfig = cols.getInt(results, "config_id");
-                curSolver = cols.getInt(
+                // cols.getInt() returns null for SQL NULL values.  Coerce to 0
+                // (the "not yet assigned" sentinel) so the Hashtable key is never
+                // null and setId(int) calls below never trigger an NPE via unboxing.
+                curNode   = nullToZero(cols.getInt(results, "node_id"));
+                curBench  = nullToZero(cols.getInt(results, "bench_id"));
+                curConfig = nullToZero(cols.getInt(results, "config_id"));
+                curSolver = nullToZero(cols.getInt(
                     results,
                     "config.solver_id",
                     "config_solver_id",
                     "solver_id"
-                );
+                ));
                 JoblineStage stage = JobPairs.resultToStage(results);
                 if (!discoveredSolvers.containsKey(curSolver)) {
                     Solver solver = new Solver();
@@ -4520,12 +4537,12 @@ public class Jobs {
                         )
                     );
                     node.setId(
-                        cols.getInt(
+                        nullToZero(cols.getInt(
                             results,
                             "node_id",
                             "worker_node_id",
                             "id"
-                        )
+                        ))
                     );
                     node.setStatus(
                         cols.getString(

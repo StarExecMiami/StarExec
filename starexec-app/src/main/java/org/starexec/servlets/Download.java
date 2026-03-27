@@ -289,13 +289,26 @@ public class Download extends HttpServlet {
 		if (job == null) {
 			throw new IllegalStateException("Job " + jobId + " could not be loaded for CSV download");
 		}
+		if (job.getPrimarySpace() <= 0) {
+			log.warn("handleJob - job " + jobId + " has invalid primarySpace=" + job.getPrimarySpace()
+					+ "; no job-space closure entries will exist, CSV will contain headers only");
+		}
 		HashMap<Integer, HashMap<Integer, Properties>> props = null;
 		if (since == null) {
-			job.setJobPairs(Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), PrimitivesToAnonymize.NONE));
+			List<JobPair> pairs = Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), PrimitivesToAnonymize.NONE);
+			job.setJobPairs(pairs != null ? pairs : new ArrayList<>());
+			if (pairs == null) {
+				log.warn("handleJob - getJobPairsInJobSpaceHierarchy returned null for jobId=" + jobId
+						+ ", primarySpace=" + job.getPrimarySpace() + "; using empty list");
+			}
 			props = Jobs.getJobAttributes(jobId);
 		} else {
-			job.setJobPairs(
-					Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), since, PrimitivesToAnonymize.NONE));
+			List<JobPair> pairs = Jobs.getJobPairsInJobSpaceHierarchy(job.getPrimarySpace(), since, PrimitivesToAnonymize.NONE);
+			job.setJobPairs(pairs != null ? pairs : new ArrayList<>());
+			if (pairs == null) {
+				log.warn("handleJob - getJobPairsInJobSpaceHierarchy(since) returned null for jobId=" + jobId
+						+ ", primarySpace=" + job.getPrimarySpace() + "; using empty list");
+			}
 			props = Jobs.getNewJobAttributes(jobId, since);
 			int olderPairs = Jobs.countOlderPairs(jobId, since);
 
@@ -905,31 +918,36 @@ public class Download extends HttpServlet {
 				shortName = "Pair_Output";
 				response.addHeader("Content-Disposition", "attachment; filename=" + shortName + ".zip");
 				success = handlePairOutputs(ids, u.getId(), response, true);
-			} else if (request.getParameter(PARAM_TYPE).equals(R.SPACE_XML)) {
-				log.debug(methodName, "Handling " + R.SPACE_XML);
-				Space space = Spaces.get(Integer.parseInt(request.getParameter(PARAM_ID)));
-				shortName = space.getName() + "_XML";
-				shortName = shortName.replaceAll("\\s+", "");
-				response.addHeader("Content-Disposition", "attachment; filename=" + shortName + ".zip");
-				boolean includeAttributes = false;
-				boolean updates = false;
-				int upid = -1;
-				final String includeattrsParam = "includeattrs";
-				if (Util.paramExists(includeattrsParam, request)) {
-					includeAttributes = Boolean.parseBoolean(request.getParameter(includeattrsParam));
-					log.debug(methodName, includeattrsParam + " = " + includeAttributes);
-				}
-				final String updatesParam = "updates";
-				final String upidParam = "upid";
-				if (Util.paramExists(updatesParam, request)) {
-					updates = Boolean.parseBoolean(request.getParameter(updatesParam));
-					log.debug(methodName, updatesParam + " = " + updates);
+		} else if (request.getParameter(PARAM_TYPE).equals(R.SPACE_XML)) {
+			log.debug(methodName, "Handling " + R.SPACE_XML);
+			Space space = Spaces.get(Integer.parseInt(request.getParameter(PARAM_ID)));
+			if (space == null) {
+				response.sendError(HttpServletResponse.SC_NOT_FOUND, "Space not found");
+				return;
+			}
+			shortName = space.getName() + "_XML";
+			shortName = shortName.replaceAll("\\s+", "");
+			response.addHeader("Content-Disposition", "attachment; filename=" + shortName + ".zip");
+			boolean includeAttributes = false;
+			boolean updates = false;
+			int upid = -1;
+			final String includeattrsParam = "includeattrs";
+			if (Util.paramExists(includeattrsParam, request)) {
+				includeAttributes = Boolean.parseBoolean(request.getParameter(includeattrsParam));
+				log.debug(methodName, includeattrsParam + " = " + includeAttributes);
+			}
+			final String updatesParam = "updates";
+			final String upidParam = "upid";
+			if (Util.paramExists(updatesParam, request)) {
+				updates = Boolean.parseBoolean(request.getParameter(updatesParam));
+				log.debug(methodName, updatesParam + " = " + updates);
+				if (updates && Util.paramExists(upidParam, request)) {
 					upid = Integer.parseInt(request.getParameter(upidParam));
 					log.debug(methodName, upidParam + " = " + upid);
 				}
-
-				success = handleSpaceXML(space, u.getId(), response, includeAttributes, updates, upid);
-			} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_XML)) {
+			}
+			success = handleSpaceXML(space, u.getId(), response, includeAttributes, updates, upid);
+		} else if (request.getParameter(PARAM_TYPE).equals(R.JOB_XML)) {
 				log.debug(methodName, "Handling " + R.JOB_XML);
 				Job job = Jobs.get(Integer.parseInt(request.getParameter(PARAM_ID)));
 

@@ -256,6 +256,9 @@ public class Matrix {
 	 * @author Albert Giegerich
 	 */
 	private static String truncateAddEllipsisIfGreaterThanMax(String original) {
+		if (original == null) {
+			return "";
+		}
 		boolean originalLongerThanMax = original.length() > R.MATRIX_VIEW_COLUMN_HEADER;
 		String truncatedName = StringUtils.left(original, R.MATRIX_VIEW_COLUMN_HEADER);
 		if (originalLongerThanMax) {

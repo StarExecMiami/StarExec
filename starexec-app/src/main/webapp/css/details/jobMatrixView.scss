@@ -120,6 +120,13 @@ table.dataTable tbody td {
 	background-color: #cc3399;
 }
 
+// Backward/forward compatibility: some server-side code paths now emit
+// "complete" for ATP terminal outcomes that previously used "resource".
+// Keep both class names mapped to the same color so matrix cells remain visible.
+.complete {
+	background-color: #cc3399;
+}
+
 .unknown {
 	background-color: #90c;
 }

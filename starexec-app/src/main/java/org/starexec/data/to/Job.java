@@ -204,7 +204,9 @@ public class Job extends Identifiable implements Iterable<JobPair>, Nameable {
 				Properties props = stage.getAttributes();
 
 				if (pair.getStatus().getCode() == StatusCode.STATUS_COMPLETE) {
-					attrs.addAll(props.stringPropertyNames());
+					if (props != null) {
+						attrs.addAll(props.stringPropertyNames());
+					}
 				}
 			}
 		}
