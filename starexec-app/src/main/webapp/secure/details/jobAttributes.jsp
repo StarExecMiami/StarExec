@@ -71,7 +71,7 @@
                css="common/table, details/jobAttributes, common/dataTables.fixedColumns">
 	<span id="data" data-jobid="${jobId}" data-jobspaceid="${jobSpaceId}"/>
 
-	<div id="explorer">
+	<div id="explorer" class="jobDetails">
 		<h3>Spaces</h3>
 		<ul id="exploreList">
 		</ul>

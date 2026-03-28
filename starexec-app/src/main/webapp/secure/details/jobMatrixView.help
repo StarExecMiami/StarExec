@@ -1,0 +1,36 @@
+<h1>Job Matrix View</h1>
+
+<p>The matrix view shows the results of a job organized as a grid with benchmarks
+as rows and solver/configuration pairs as columns. Each cell displays the
+outcome of running a particular solver configuration against a particular
+benchmark.
+</p>
+
+<h2>Reading the Matrix</h2>
+<p>Each cell displays up to three values separated by slashes:
+<strong>runtime (wallclock) / cpu usage / max virtual memory</strong>.
+Use the checkboxes above the matrix to show or hide individual metrics.
+</p>
+
+<h2>Color Legend</h2>
+<p>Cells are color-coded by result status:</p>
+<ul>
+	<li><strong>Solved</strong> (green) &mdash; the solver produced a correct answer</li>
+	<li><strong>Incomplete</strong> (blue) &mdash; the pair has not finished running</li>
+	<li><strong>Unknown</strong> (orange) &mdash; the solver returned an unknown or indeterminate result</li>
+	<li><strong>Out Of Resource</strong> (purple) &mdash; the solver exceeded its time or memory limit</li>
+	<li><strong>Failed</strong> (red) &mdash; the solver crashed or produced an error</li>
+	<li><strong>Wrong</strong> (dark red) &mdash; the solver produced an incorrect answer</li>
+</ul>
+
+<h2>Stages</h2>
+<p>If the job has multiple stages, use the stage selector to switch between
+stages. Enter the stage number and click "Show Stage" to view results
+for that stage.
+</p>
+
+<h2>Navigation</h2>
+<p>Click on a solver name in the column header to view the solver's details page.
+Click on a benchmark name to view the benchmark's details page.
+Click on a cell value to view the full job pair details including output.
+</p>
