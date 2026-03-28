@@ -5,23 +5,27 @@ jQuery(function($) {
 	var rootJobSpaceId = getParameterByName('id');
 	var jobId = $('#data').data('jobid'); // Initialize the explorer list
 	var spaceExplorerJsonData = getSpaceExplorerJsonData(jobId);
-	var $table = $('attributeTable');
+	var $table = $('#attributeTable');
 
 	$('#attributeTotalsTable').dataTable({
 		'bSort': true,
 		"bPaginate": true
 	});
 
-	$table.dataTable({
-		'bSort': false,
-		'fixedColumns': true,
-		'scrollY': '300px',
-		'scrollX': '100%',
-		'scrollCollapse': true,
-		'paging': false
-	});
+	if ($table.length) {
+		$table.dataTable({
+			'bSort': false,
+			'fixedColumns': true,
+			'scrollY': '220px',
+			'scrollX': '100%',
+			'scrollCollapse': true,
+			'paging': false
+		});
 
-	$(window).resize($table.fnDraw);
+		$(window).resize(function() {
+			$table.fnDraw();
+		});
+	}
 
 	initSpaceExplorer(rootJobSpaceId, currentJobSpaceId, spaceExplorerJsonData);
 	setupChangeTimeButton();
@@ -45,13 +49,13 @@ function setupChangeTimeButton() {
 	var isWallclock = true;
 	var toggleTime = function() {
 		if (isWallclock) {
-			$('.changeTime .ui-button-text').html('use wallclock time');
+			$('.changeTime .ui-button-text').html('Use wallclock time');
 			isWallclock = false;
 			$('.cpuSum').show();
 			$('.wallclockSum').hide();
 		} else {
 			isWallclock = true;
-			$('.changeTime .ui-button-text').html('use CPU time');
+			$('.changeTime .ui-button-text').html('Use CPU time');
 			$('.wallclockSum').show();
 			$('.cpuSum').hide();
 		}

@@ -1,72 +1,124 @@
+@use "../global/colors" as c;
+@use "../global/spacing" as s;
+@use "../global/typography" as t;
+@use "../global/mixins" as m;
+
+#wrapper {
+  width: 100%;
+}
+
+// Keep explorer compact and aligned with other detail pages
 #explorer {
-	margin-right: 30px;
+  margin-right: s.$spacing-md;
+
+  h3 {
+    margin: 0 0 s.$spacing-sm;
+  }
 }
 
-
-
-
-.dataTables_scrollBody #attributeTable thead {
-	display: none;
+#detailPanel.jobAttributesDetails {
+  width: 74%;
+  float: right;
+  margin-top: s.$spacing-lg;
+  padding-left: s.$spacing-md;
+  padding-right: s.$spacing-md;
+  border-left: 3px solid c.$background-color;
+  box-sizing: border-box;
 }
 
-.bold {
-	font-weight: bold;
+.attributesTitle {
+  margin: 0 0 s.$spacing-sm;
+}
+
+.attributesControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: s.$spacing-sm;
+  margin-bottom: s.$spacing-sm;
 }
 
 .attributesLegend {
-	margin: 10px 0;
+  margin: 0;
+  color: c.$text-accent-color;
+  font-size: t.$font-size-sm;
 }
 
-div#attributeTable_wrapper {
-	width: 1000px;
-	min-height: 500px;
+.changeTime {
+  min-height: 36px;
+  padding: s.$spacing-2xs s.$spacing-sm;
 }
 
-div.DTFC_ScrollWrapper {
-	min-height: 500px;
+#attributesTableField,
+#attributeTotalsTableField {
+  width: 100%;
+  margin: 0 0 s.$spacing-md;
+  box-sizing: border-box;
 }
 
+.emptyNotice {
+  color: c.$text-accent-color;
+  font-size: t.$font-size-base;
+  margin: 0 0 s.$spacing-md;
+}
+
+// DataTables scroll behavior for attributes table
+.dataTables_scrollBody #attributeTable thead {
+  display: none;
+}
+
+div#attributeTable_wrapper,
+div#attributeTotalsTable_wrapper {
+  width: 100%;
+}
+
+div.DTFC_ScrollWrapper,
 div.dataTables_scroll {
-	min-height: 500px;
+  min-height: 0;
 }
 
 div.dataTables_scrollBody {
-	min-height: 500px;
+  min-height: 140px;
+}
+
+// Ensure first table is readable without huge empty viewport
+#attributeTable.dataTable {
+  width: 100% !important;
+}
+
+#attributeTotalsTable.dataTable {
+  width: 100% !important;
 }
 
 td {
-	/*
-	padding: 0 0 20px;
-	min-width: 240px;
-	*/
-	text-align: center;
-}
-
-
-#wrapper {
-	width: 100%;
-}
-
-#pageHeader {
-	width: 1020px;
-	margin-left: auto;
-	margin-right: auto;
-}
-
-#pageFooter {
-	width: 1024px;
-	margin-left: auto;
-	margin-right: auto;
-}
-
-.scrollable {
-	width: 100%;
-	height: 100%;
-	margin: 0;
-	padding: 0;
-	overflow: auto;
+  text-align: center;
 }
 
 .DTFC_LeftBodyWrapper {
-	background-color: #222;
+  background-color: c.$foreground-color;
+}
+
+@media (width <= 1024px) {
+  #explorer {
+    width: 100%;
+    float: none;
+    margin-right: 0;
+  }
+
+  #detailPanel.jobAttributesDetails {
+    width: 100%;
+    float: none;
+    margin-top: s.$spacing-sm;
+    padding-left: 0;
+    padding-right: 0;
+    border-left: none;
+  }
+}
+
+@media (width <= 768px) {
+  .attributesControls {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }

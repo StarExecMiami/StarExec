@@ -4275,8 +4275,34 @@ public class RESTServices {
 		}
 		if (copy) {
 			List<Benchmark> oldBenchs = Benchmarks.get(selectedBenchs, true);
+			if (oldBenchs.isEmpty()) {
+				return gson.toJson(new ValidatorStatusCode(false,
+						"Could not retrieve the selected benchmark(s) from the database. "
+						+ "They may have been deleted or recycled."));
+			}
 			List<Integer> benches = Benchmarks.copyBenchmarks(oldBenchs, requestUserId, spaceId);
-			response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(benches)));
+			List<Integer> failed = new ArrayList<>();
+			List<Integer> succeeded = new ArrayList<>();
+			for (int i = 0; i < benches.size(); i++) {
+				if (benches.get(i) < 0) {
+					failed.add(selectedBenchs.get(i));
+				} else {
+					succeeded.add(benches.get(i));
+				}
+			}
+			if (!failed.isEmpty()) {
+				if (succeeded.isEmpty()) {
+					return gson.toJson(new ValidatorStatusCode(false,
+							"Failed to copy all " + failed.size() + " benchmark(s). "
+							+ "The source files may be missing on disk. Check the server logs for details."));
+				} else {
+					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+					return gson.toJson(new ValidatorStatusCode(false,
+							succeeded.size() + " benchmark(s) copied successfully, but "
+							+ failed.size() + " failed. Check the server logs for details."));
+				}
+			}
+			response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 			return gson.toJson(new ValidatorStatusCode(true, "The selected benchmark(s) were copied successfully"));
 		} else {
 			// Return a value based on results from database operation

@@ -959,7 +959,15 @@ public class Benchmarks {
 	 */
 	public static int copyBenchmark(Benchmark b, int userId, int spaceId) {
 		try {
-			log.debug("Copying benchmark " + b.getName() + " to new user id= " + String.valueOf(userId));
+			log.debug("Copying benchmark " + b.getName() + " (id=" + b.getId()
+					+ ") to new user id=" + userId + ", spaceId=" + spaceId);
+			File benchmarkFile = new File(b.getPath());
+			if (!benchmarkFile.exists()) {
+				log.error("copyBenchmark: source file does not exist on disk: " + b.getPath()
+						+ " (benchmark id=" + b.getId() + ", name=" + b.getName() + ")");
+				return -1;
+			}
+
 			Benchmark newBenchmark = new Benchmark();
 			newBenchmark.setAttributes(b.getAttributes());
 			newBenchmark.setType(b.getType());
@@ -978,7 +986,6 @@ public class Benchmarks {
 			// this benchmark must be valid, since it is just a copy of
 			// an old benchmark that already passed validation
 			newBenchmark.getAttributes().put(R.VALID_BENCHMARK_ATTRIBUTE, "true");
-			File benchmarkFile = new File(b.getPath());
 
 			File uniqueDir = UploadBenchmark.getDirectoryForBenchmarkUpload(userId, String.valueOf(b.getId()));
 			uniqueDir.mkdirs();
@@ -987,7 +994,8 @@ public class Benchmarks {
 			FileUtils.copyFileToDirectory(benchmarkFile, uniqueDir);
 			int benchId = Benchmarks.addAndAssociate(newBenchmark, spaceId, null);
 			if (benchId < 0) {
-				log.error("Benchmark being copied could not be successfully added to the database");
+				log.error("copyBenchmark: addAndAssociate failed for benchmark '"
+						+ b.getName() + "' (source id=" + b.getId() + ") into spaceId=" + spaceId);
 				return benchId;
 			}
 			log.debug("Benchmark added successfully to the database, now adding dependency associations");
@@ -1000,7 +1008,8 @@ public class Benchmarks {
 			log.debug("Benchmark copied successfully, return new benchmark ID = " + benchId);
 			return benchId;
 		} catch (Exception e) {
-			log.error("copyBenchmark", e);
+			log.error("copyBenchmark: failed to copy benchmark '" + b.getName()
+					+ "' (id=" + b.getId() + ", path=" + b.getPath() + ")", e);
 			return -1;
 		}
 	}

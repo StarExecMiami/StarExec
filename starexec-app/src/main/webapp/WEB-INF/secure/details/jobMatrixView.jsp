@@ -4,71 +4,88 @@
 <%@taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
 <star:template title="${job.name}"
                js="util/sortButtons, util/jobDetailsUtilityFunctions, common/delaySpinner, lib/jquery.jstree, lib/jquery.dataTables.min, details/jobMatrixView, lib/jquery.ba-throttle-debounce.min, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/dataTables.fixedColumns.min"
-               css="details/jobMatrixView, common/dataTable, common/dataTables.fixedColumns">
+               css="details/jobMatrixView, common/table, common/dataTables.fixedColumns">
 	<div id="matrixPanel" data-job-id="${job.id}" data-job-space-id="${jobSpaceId}" data-stage="${stage}">
-		<h2 class="jobSpaceName">matrix for job space
-			"${matrix.getJobSpaceName()}" with id=${matrix.getJobSpaceId()}</h2>
-		<div class="matrixLegend">
+		<h2 class="jobSpaceName">Matrix for job space
+			&ldquo;${matrix.getJobSpaceName()}&rdquo; <span class="sr-only">with</span>
+			<small class="jobSpaceMeta">id=${matrix.getJobSpaceId()}</small>
+		</h2>
+
+		<%-- Legend: metric format + status color key --%>
+		<div class="matrixLegend" role="region" aria-label="Legend">
 			<p class="matrixTextLegend">
-				<span class="bold">Legend:</span><br>
-				<span class="wallclock">runtime (wallclock)</span>
+				<span class="bold">Legend:</span>
+				<span class="wallclock">wallclock</span>
 				<span class="cpuTimeWallclockDivider"> / </span>
 				<span class="memUsageWallclockDivider" hidden> / </span>
-				<span class="cpuTime">cpu usage</span>
+				<span class="cpuTime">cpu</span>
 				<span class="cpuTimeMemUsageDivider"> / </span>
-				<span class="memUsage">max virtual memory</span>
+				<span class="memUsage">memory</span>
 			</p>
-			<table class="legendColorTable">
-				<thead>
-				</thead>
-				<tbody>
-				<tr>
-					<td class="legendColor solved">Solved</td>
-					<td class="legendColor incomplete">Incomplete</td>
-					<td class="legendColor unknown">Unknown</td>
-					<td class="legendColor resource">Out Of Resource</td>
-					<td class="legendColor failed">Failed</td>
-					<td class="legendColor wrong">Wrong</td>
-				</tr>
-				</tbody>
-			</table>
+			<div class="legendColorTable" role="list" aria-label="Status color key">
+				<span class="legendColor solved" role="listitem"><span class="legendIcon statusIcon" aria-hidden="true"></span>Solved</span>
+				<span class="legendColor incomplete" role="listitem"><span class="legendIcon statusIcon" aria-hidden="true"></span>Incomplete</span>
+				<span class="legendColor unknown" role="listitem"><span class="legendIcon statusIcon" aria-hidden="true"></span>Unknown</span>
+				<span class="legendColor resource" role="listitem"><span class="legendIcon statusIcon" aria-hidden="true"></span>Out Of Resource</span>
+				<span class="legendColor failed" role="listitem"><span class="legendIcon statusIcon" aria-hidden="true"></span>Failed</span>
+				<span class="legendColor wrong" role="listitem"><span class="legendIcon statusIcon" aria-hidden="true"></span>Wrong</span>
+			</div>
 		</div>
 
+		<%-- Controls: metric toggles + stage selector --%>
 		<div class="matrixControls">
-			<form class="matrixLegendSelection">
-				<input class="wallclockCheckbox" type="checkbox" checked>
-				runtime (wallclock)
-				<input class="cpuTimeCheckbox" type="checkbox" checked> cpu
-				usage
-				<input class="memUsageCheckbox" type="checkbox" checked> max
-				virtual memory
-			</form>
+			<fieldset class="matrixLegendSelection">
+				<legend>Visible metrics</legend>
+				<label class="metric-toggle metric-toggle--active">
+					<input class="wallclockCheckbox" type="checkbox" checked
+					       aria-label="Show runtime (wallclock)">
+					<span class="metric-toggle__indicator" aria-hidden="true"></span>
+					Wallclock
+				</label>
+				<label class="metric-toggle metric-toggle--active">
+					<input class="cpuTimeCheckbox" type="checkbox" checked
+					       aria-label="Show CPU usage">
+					<span class="metric-toggle__indicator" aria-hidden="true"></span>
+					CPU
+				</label>
+				<label class="metric-toggle metric-toggle--active">
+					<input class="memUsageCheckbox" type="checkbox" checked
+					       aria-label="Show max virtual memory">
+					<span class="metric-toggle__indicator" aria-hidden="true"></span>
+					Memory
+				</label>
+			</fieldset>
 			<c:if test="${matrix.hasMultipleStages()}">
 				<form class="matrixStageSelection">
 					<label for="selectStageInput">Stage:</label>
-					<input id="selectStageInput" type="text" name="stage"
-					              value="${stage}">
-					<button id="selectStageButton" type="button">Show Stage
-					</button>
-					<span id="selectStageError" class="error-text hidden">Stage must be a positive integer.</span>
+					<input id="selectStageInput" type="number" name="stage"
+					       value="${stage}" min="1" step="1"
+					       aria-label="Stage number">
+					<button id="selectStageButton" type="button">Show Stage</button>
+					<span id="selectStageError" class="error-text hidden"
+					      role="alert">Stage must be a positive integer.</span>
 				</form>
 			</c:if>
 		</div>
 
-		<table id="jobMatrix">
+		<%-- Matrix table --%>
+		<table id="jobMatrix" role="grid"
+		       aria-label="Solver results matrix for job space ${matrix.getJobSpaceName()}">
 			<thead>
 			<tr class="matrixHeaderRow">
-				<th class="solverHeader benchmarksColumnHeader" width="120px">
+				<th class="solverHeader benchmarksColumnHeader" scope="col">
 					Benchmark
 				</th>
 				<c:forEach var="solverConfig" varStatus="headerIndex"
 				           items="${matrix.getSolverConfigsByColumn()}">
-					<th class="solverHeader" width="120px">
+					<th class="solverHeader" scope="col"
+					    title="${solverConfig.getLeft().getName()} (${solverConfig.getRight().getName()})">
 						<a href="${starexecRoot}/secure/details/solver.jsp?id=${solverConfig.getLeft().getId()}"
-						   target="_blank">
-								${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}</a>
-						<img class="extLink"
-						     src="${starexecRoot}/images/external.png">
+						   target="_blank"
+						   rel="noopener noreferrer">
+							${matrix.getTruncatedColumnHeader(headerIndex.getIndex())}
+							<span class="sr-only">(opens in new tab)</span>
+						</a>
 					</th>
 				</c:forEach>
 			</tr>
@@ -77,23 +94,25 @@
 			<c:forEach var="matrixRow" varStatus="rowIndex"
 			           items="${matrix.getInternalMatrixRepresentation()}">
 				<tr class="matrixBodyRow">
-					<td class="benchmarkHeader row${rowIndex.getIndex()}"
-					    width="120px">
+					<th class="benchmarkHeader row${rowIndex.getIndex()}" scope="row">
 						<a href="${starexecRoot}/secure/details/benchmark.jsp?id=${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getId()}"
-						   target="_blank">
-								${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}
-							<img class="extLink"
-							     src="${starexecRoot}/images/external.png">
+						   target="_blank"
+						   rel="noopener noreferrer"
+						   title="${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}">
+							${matrix.getBenchmarksByRow().get(rowIndex.getIndex()).getName()}
+							<span class="sr-only">(opens in new tab)</span>
 						</a>
-					</td>
+					</th>
 					<c:forEach var="matrixElement" varStatus="columnIndex"
 					           items="${matrixRow}">
 						<c:choose>
 							<c:when test="${matrixElement != null}">
 								<td id="${matrixElement.getUniqueIdentifier()}"
 								    class="jobMatrixCell ${matrixElement.getStatus()} row${rowIndex.getIndex()} column${columnIndex.getIndex()}"
-								    width="120px">
+								    data-status="${matrixElement.getStatus()}"
+								    title="Wallclock: ${matrixElement.getWallclock()}s | CPU: ${matrixElement.getCpuTime()}s | Memory: ${matrixElement.getMemUsage()}">
 									<a href="${starexecRoot}/secure/details/pair.jsp?id=${matrixElement.getJobPairId()}">
+										<span class="statusIcon" aria-hidden="true"></span>
 										<span class="wallclock">${matrixElement.getWallclock()}</span>
 										<span class="cpuTimeWallclockDivider"> / </span>
 										<span class="memUsageWallclockDivider"
@@ -105,7 +124,8 @@
 								</td>
 							</c:when>
 							<c:otherwise>
-								<td class="jobMatrixCell" width="120px"></td>
+								<td class="jobMatrixCell"
+								    aria-label="No data"></td>
 							</c:otherwise>
 						</c:choose>
 					</c:forEach>

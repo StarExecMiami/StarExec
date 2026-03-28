@@ -1,159 +1,668 @@
-.matrixLegendSelection {
-	margin: 2px 0 0 0;
-}
+// =============================================================================
+// JOB MATRIX VIEW — StarExec Design System
+// =============================================================================
+// Solver×Benchmark comparison matrix with status-colored cells.
+// Follows the existing design system tokens from _colors.scss, _spacing.scss,
+// _typography.scss, and _design-tokens.scss.
+// =============================================================================
 
-.matrixLegend {
-	float: left;
-	margin: 0 0 0 20px;
-}
+@use "../global/colors" as c;
+@use "../global/spacing" as s;
+@use "../global/typography" as t;
+@use "../global/mixins" as m;
 
-.matrixControls {
-	float: right;
-	margin: 0 20px 0 0;
-}
+// =============================================================================
+// STATUS COLORS — Dark-theme optimized, colorblind-safe
+// =============================================================================
+// Each status uses a left border accent + translucent background tint.
+// Text always stays white on the dark surface for guaranteed contrast.
+// Palette tested under deuteranopia/protanopia simulation.
 
-.matrixStageSelection {
-	margin: 10px 0 0 0;
-}
+$status-solved-border: #22c55e;  // green — distinct hue
+$status-solved-bg: rgb(34 197 94 / 15%);
+$status-incomplete-border: c.$accent-blue;  // blue — distinct hue
+$status-incomplete-bg: rgb(59 130 246 / 15%);
+$status-unknown-border: c.$accent-orange;  // orange — distinct hue
+$status-unknown-bg: rgb(250 98 27 / 12%);
+$status-resource-border: c.$accent-purple;  // purple — distinct hue
+$status-resource-bg: rgb(139 92 246 / 15%);
+$status-failed-border: #ef4444;  // red
+$status-failed-bg: rgb(239 68 68 / 15%);
+$status-wrong-border: #f59e0b;  // amber — differs from orange in luminance
+$status-wrong-bg: rgb(245 158 11 / 12%);
 
-.dataTables_scrollBody #jobMatrix thead {
-	display: none;
-}
+// =============================================================================
+// MATRIX LAYOUT
+// =============================================================================
 
-.bold {
-	font-weight: bold;
-}
-
-
-div.dataTables_wrapper { 
-	min-height: 500px;
-}
-
-div.DTFC_ScrollWrapper {
-	min-height: 500px;
-}
-
-div.dataTables_scroll {
-	min-height: 500px;
-}
-
-div.dataTables_scrollBody {
-	min-height: 500px;
-}
-
-.solverHeader {
-	font-size: 15px;
-	font-style: normal;
-	word-wrap: break-word;
+#matrixPanel {
+  padding: s.$spacing-sm s.$spacing-lg s.$spacing-md;
 }
 
 .jobSpaceName {
-	font-size: 26px;
-	margin-top: 50px;
-	margin-left: 20px;
-	margin-bottom: 10px;
-	word-wrap: break-word;
+  font-size: t.$font-size-2xl;
+  font-weight: t.$font-weight-semibold;
+  margin: s.$spacing-md 0 s.$spacing-sm;
+  color: c.$text-main-color;
+  word-wrap: break-word;
 }
 
-td.jobMatrixCell {
-	padding: 0 0 20px;
-	min-width: 240px;
-	text-align: center;
+.jobSpaceMeta {
+  font-size: t.$font-size-sm;
+  color: c.$text-accent-color;
+  font-weight: t.$font-weight-normal;
 }
 
-.matrixBodyRow td {
-	border-right: 1px solid black;
-	border-bottom: 1px solid black;
-	border-collapse: collapse;
-}
+// =============================================================================
+// LEGEND
+// =============================================================================
 
-
-table.dataTable tbody td {
-	padding: 0;
-}
-
-#wrapper {
-	width: 100%;
-}
-
-#pageHeader {
-	width: 1020px;
-	margin-left: auto;
-	margin-right: auto;
-}
-
-#pageFooter {
-	width: 1024px;
-	margin-left: auto;
-	margin-right: auto;
-}
-
-.legendColorTable {
-	margin: 5px 0 0 0;
+.matrixLegend {
+  margin-bottom: s.$spacing-sm;
 }
 
 .matrixTextLegend {
-	margin: 5px 0 0 0;
+  font-size: t.$font-size-sm;
+  color: c.$text-accent-color;
+  margin: 0 0 s.$spacing-2xs;
+  line-height: 1.6;
+
+  .bold {
+    font-weight: t.$font-weight-semibold;
+    color: c.$text-main-color;
+  }
+}
+
+// Legend color swatches — inline badges
+.legendColorTable {
+  border-collapse: separate;
+  border-spacing: s.$spacing-2xs;
+  margin: 0;
+
+  // Remove any inherited thead/table styles
+  thead { display: none; }
 }
 
 .legendColor {
-	padding: 4px;
+  display: inline-block;
+  padding: s.$spacing-2xs s.$spacing-sm;
+  border-radius: 4px;
+  font-size: t.$font-size-sm;
+  font-weight: t.$font-weight-semibold;
+  color: c.$text-main-color;
+  text-align: center;
+  white-space: nowrap;
+  border-left: 3px solid transparent;
+
+  &.solved {
+    background-color: rgb(34 197 94 / 22%);
+    border-left-color: $status-solved-border;
+  }
+
+  &.incomplete {
+    background-color: rgb(59 130 246 / 22%);
+    border-left-color: $status-incomplete-border;
+  }
+
+  &.unknown {
+    background-color: rgb(250 98 27 / 22%);
+    border-left-color: $status-unknown-border;
+  }
+
+  &.resource {
+    background-color: rgb(139 92 246 / 22%);
+    border-left-color: $status-resource-border;
+  }
+
+  &.failed {
+    background-color: rgb(239 68 68 / 22%);
+    border-left-color: $status-failed-border;
+  }
+
+  &.wrong {
+    background-color: rgb(245 158 11 / 22%);
+    border-left-color: $status-wrong-border;
+  }
 }
 
-.solved {
-	background-color: #006400;
+.legendIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: s.$spacing-2xs;
 }
 
-.incomplete {
-	background-color: #0066ff;
+// Professional monochrome SVG status icons (mask-based)
+.statusIcon {
+  display: inline-block;
+  width: 0.95rem;
+  height: 0.95rem;
+  background-color: currentcolor;
+  flex-shrink: 0;
+  vertical-align: text-bottom;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  opacity: 0.98;
 }
 
-.wrong {
-	background-color: #ae0000;
+.legendColor.solved .statusIcon,
+td.jobMatrixCell.solved .statusIcon {
+  color: $status-solved-border;
+  mask-image: url("../../images/icons/status-solved.svg");
+  -webkit-mask-image: url("../../images/icons/status-solved.svg");
 }
 
-.failed {
-	background-color: #ff7700;
+.legendColor.incomplete .statusIcon,
+td.jobMatrixCell.incomplete .statusIcon {
+  color: $status-incomplete-border;
+  mask-image: url("../../images/icons/status-incomplete.svg");
+  -webkit-mask-image: url("../../images/icons/status-incomplete.svg");
 }
 
-.resource {
-	background-color: #cc3399;
+.legendColor.unknown .statusIcon,
+td.jobMatrixCell.unknown .statusIcon {
+  color: $status-unknown-border;
+  mask-image: url("../../images/icons/status-unknown.svg");
+  -webkit-mask-image: url("../../images/icons/status-unknown.svg");
 }
 
-// Backward/forward compatibility: some server-side code paths now emit
-// "complete" for ATP terminal outcomes that previously used "resource".
-// Keep both class names mapped to the same color so matrix cells remain visible.
-.complete {
-	background-color: #cc3399;
+.legendColor.resource .statusIcon,
+td.jobMatrixCell.resource .statusIcon,
+td.jobMatrixCell.complete .statusIcon {
+  color: $status-resource-border;
+  mask-image: url("../../images/icons/status-resource.svg");
+  -webkit-mask-image: url("../../images/icons/status-resource.svg");
 }
 
-.unknown {
-	background-color: #90c;
+.legendColor.failed .statusIcon,
+td.jobMatrixCell.failed .statusIcon {
+  color: $status-failed-border;
+  mask-image: url("../../images/icons/status-failed.svg");
+  -webkit-mask-image: url("../../images/icons/status-failed.svg");
 }
 
-tr {
-	background-color: #222;
+.legendColor.wrong .statusIcon,
+td.jobMatrixCell.wrong .statusIcon {
+  color: $status-wrong-border;
+  mask-image: url("../../images/icons/status-wrong.svg");
+  -webkit-mask-image: url("../../images/icons/status-wrong.svg");
+}
+
+// =============================================================================
+// CONTROLS — Metric toggle checkboxes & stage selector
+// =============================================================================
+
+.matrixControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: s.$spacing-md;
+  margin-bottom: s.$spacing-xs;
+}
+
+.matrixControls .dataTables_filter {
+  float: none !important;
+  margin-left: auto;
+  flex: 1 1 220px;
+  max-width: 360px;
+  display: inline-flex;
+  align-items: center;
+  gap: s.$spacing-xs;
+  color: c.$text-main-color;
+
+  label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: s.$spacing-xs;
+    margin: 0;
+    width: 100%;
+    font-size: t.$font-size-base;
+    font-weight: t.$font-weight-medium;
+    color: c.$text-main-color;
+  }
+
+  input[type="search"] {
+    width: clamp(160px, 24vw, 300px);
+    max-width: 100%;
+  }
+}
+
+.matrixLegendSelection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: s.$spacing-xs;
+  margin: 0;
+  padding: 0;
+  border: none;
+
+  legend {
+    @include m.sr-only;
+  }
+}
+
+// Toggle pill labels
+.metric-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: s.$spacing-2xs;
+  padding: s.$spacing-2xs s.$spacing-sm;
+  font-size: t.$font-size-sm;
+  color: c.$text-accent-color;
+  background: c.$foreground-color;
+  border: 1px solid lighten(c.$foreground-color, 10%);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+
+  @include m.transition-safe(background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease);
+
+  min-height: 36px;
+
+  input[type="checkbox"] {
+    // Visually hide but keep accessible
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+
+    &:checked + .metric-toggle__indicator {
+      background-color: c.$accent-orange;
+      border-color: c.$accent-orange;
+
+      &::after {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    &:focus-visible + .metric-toggle__indicator {
+      outline: 2px solid c.$accent-orange;
+      outline-offset: 2px;
+    }
+  }
+
+  &:hover {
+    background: lighten(c.$foreground-color, 5%);
+    border-color: lighten(c.$foreground-color, 15%);
+    color: c.$text-main-color;
+  }
+
+  // Active state when checked
+  &--active {
+    color: c.$text-main-color;
+    border-color: rgba(c.$accent-orange, 0.4);
+    background: rgba(c.$accent-orange, 0.08);
+  }
+}
+
+.metric-toggle__indicator {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid c.$text-accent-color;
+  border-radius: 3px;
+  position: relative;
+  flex-shrink: 0;
+
+  @include m.transition-safe(background-color 0.15s ease, border-color 0.15s ease);
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    width: 5px;
+    height: 9px;
+    border: solid c.$background-color;
+    border-width: 0 2px 2px 0;
+    transform: scale(0.5);
+    opacity: 0;
+
+    @include m.transition-safe(opacity 0.15s ease, transform 0.15s ease);
+  }
+}
+
+// Stage selection form
+.matrixStageSelection {
+  display: flex;
+  align-items: center;
+  gap: s.$spacing-xs;
+  margin: 0;
+
+  label {
+    font-size: t.$font-size-sm;
+    color: c.$text-accent-color;
+    font-weight: t.$font-weight-medium;
+  }
+
+  #selectStageInput {
+    width: 60px;
+    text-align: center;
+  }
+
+  #selectStageButton {
+    padding: s.$spacing-2xs s.$spacing-sm;
+    font-size: t.$font-size-sm;
+    background: c.$foreground-color;
+    color: c.$text-main-color;
+    border: 1px solid lighten(c.$foreground-color, 10%);
+    border-radius: 4px;
+    cursor: pointer;
+
+    @include m.transition-safe(background-color 0.2s ease);
+
+    min-height: 36px;
+
+    &:hover {
+      background: lighten(c.$foreground-color, 8%);
+    }
+
+    &:focus-visible {
+      @include m.focus-ring;
+    }
+  }
+
+  #selectStageError {
+    color: c.$accent-red;
+    font-size: t.$font-size-sm;
+  }
+}
+
+// =============================================================================
+// DATATABLE CONTAINER
+// =============================================================================
+
+// Override DataTables scroll wrapper for this page
+.dataTables_scrollBody #jobMatrix thead {
+  display: none;
+}
+
+div.dataTables_wrapper {
+  min-height: 0;
+}
+
+div.DTFC_ScrollWrapper {
+  min-height: 0;
+}
+
+div.dataTables_scroll {
+  min-height: 0;
+}
+
+div.dataTables_scrollBody {
+  min-height: 120px;
+}
+
+// =============================================================================
+// MATRIX TABLE — Headers
+// =============================================================================
+
+#jobMatrix {
+  border-collapse: collapse;
+
+  thead {
+    .matrixHeaderRow {
+      background-color: c.$background-color;
+    }
+  }
+}
+
+.solverHeader {
+  font-size: t.$font-size-sm;
+  font-weight: t.$font-weight-semibold;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: c.$text-accent-color;
+  padding: s.$spacing-sm s.$spacing-md;
+  vertical-align: middle;
+  word-wrap: break-word;
+  border-bottom: 1px solid lighten(c.$foreground-color, 12%);
+
+  a {
+    color: c.$text-main-color;
+    text-decoration: none;
+
+    &:hover {
+      color: c.$accent-orange;
+      text-decoration: underline;
+    }
+
+    &:focus-visible {
+      @include m.focus-ring;
+    }
+  }
 }
 
 .benchmarksColumnHeader {
-	border-right: 1px solid black;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: c.$text-accent-color;
+  border-right: 1px solid lighten(c.$foreground-color, 8%);
 }
 
-.scrollable {
-	width: 100%;
-	height: 100%;
-	margin: 0;
-	padding: 0;
-	overflow: auto;
+// =============================================================================
+// MATRIX TABLE — Body cells
+// =============================================================================
+
+.matrixBodyRow {
+  background-color: c.$foreground-color;
+
+  @include m.transition-safe(background-color 0.15s ease);
+
+  &:nth-child(even) {
+    background-color: lighten(c.$foreground-color, 3%);
+  }
+
+  &:hover {
+    background-color: lighten(c.$foreground-color, 6%) !important;
+  }
+
+  td {
+    border-right: 1px solid lighten(c.$foreground-color, 6%);
+    border-bottom: 1px solid lighten(c.$foreground-color, 6%);
+    border-collapse: collapse;
+  }
 }
 
+td.jobMatrixCell {
+  padding: s.$spacing-xs s.$spacing-sm;
+  min-width: 200px;
+  text-align: center;
+  position: relative;
+
+  @include m.transition-safe(background-color 0.2s ease, border-color 0.2s ease);
+
+  > a {
+    color: c.$text-main-color;
+    text-decoration: none;
+    display: block;
+    padding: s.$spacing-2xs 0;
+    font-variant-numeric: tabular-nums;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &:focus-visible {
+      @include m.focus-ring;
+
+      border-radius: 2px;
+    }
+  }
+
+  > a .statusIcon {
+    margin-right: s.$spacing-2xs;
+  }
+
+  // --- Status styles: left border accent + translucent background ---
+  &.solved {
+    border-left: 3px solid $status-solved-border;
+    background-color: $status-solved-bg;
+  }
+
+  &.incomplete {
+    border-left: 3px solid $status-incomplete-border;
+    background-color: $status-incomplete-bg;
+  }
+
+  &.unknown {
+    border-left: 3px solid $status-unknown-border;
+    background-color: $status-unknown-bg;
+  }
+
+  &.resource,
+  &.complete {
+    border-left: 3px solid $status-resource-border;
+    background-color: $status-resource-bg;
+  }
+
+  &.failed {
+    border-left: 3px solid $status-failed-border;
+    background-color: $status-failed-bg;
+  }
+
+  &.wrong {
+    border-left: 3px solid $status-wrong-border;
+    background-color: $status-wrong-bg;
+  }
+
+  // Empty cell placeholder
+  &:empty::after {
+    content: "\2014"; // em-dash
+    color: c.$text-accent-color;
+    font-size: t.$font-size-sm;
+  }
+}
+
+// Numeric data separators — muted
+.cpuTimeWallclockDivider,
+.cpuTimeMemUsageDivider,
+.memUsageWallclockDivider {
+  color: c.$text-accent-color;
+  font-size: t.$font-size-sm;
+}
+
+// =============================================================================
+// BENCHMARK COLUMN (first column / row headers)
+// =============================================================================
 
 .benchmarkHeader {
-	border-right: 1px solid black;
-	text-align: center;
-	vertical-align: middle;
+  border-right: 1px solid lighten(c.$foreground-color, 8%);
+  text-align: left;
+  vertical-align: middle;
+  padding: s.$spacing-xs s.$spacing-sm;
+  font-weight: t.$font-weight-medium;
+  min-width: 160px;
+
+  a {
+    color: c.$accent-orange;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+      color: lighten(c.$accent-orange, 10%);
+    }
+
+    &:focus-visible {
+      @include m.focus-ring;
+    }
+  }
 }
 
+// External link indicator via CSS (replaces <img>)
+.extLink {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: s.$spacing-2xs;
+  vertical-align: middle;
+  opacity: 0.5;
+
+  @include m.transition-safe(opacity 0.15s ease);
+}
+
+a:hover .extLink {
+  opacity: 0.8;
+}
+
+// =============================================================================
+// FIXED COLUMNS WRAPPER (DataTables FixedColumns plugin)
+// =============================================================================
+
 .DTFC_LeftBodyWrapper {
-	background-color: #222;
+  background-color: c.$foreground-color;
+}
+
+// Override generic DataTables body padding for this table
+#jobMatrix.dataTable tbody td {
+  padding: s.$spacing-xs s.$spacing-sm;
+}
+
+// =============================================================================
+// WRAPPER & LAYOUT OVERRIDES
+// =============================================================================
+
+#wrapper {
+  width: 100%;
+}
+
+// =============================================================================
+// SCREEN READER UTILITY
+// =============================================================================
+
+.sr-only {
+  @include m.sr-only;
+}
+
+// =============================================================================
+// FOCUS RING — Global for this page
+// =============================================================================
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  @include m.focus-ring;
+}
+
+@media (width <= 1024px) {
+  .matrixControls {
+    justify-content: flex-start;
+  }
+
+  .matrixControls .dataTables_filter {
+    margin-left: 0;
+    max-width: none;
+  }
+
+  .matrixControls .dataTables_filter label {
+    justify-content: flex-start;
+  }
+}
+
+@media (width <= 768px) {
+  .matrixControls {
+    align-items: stretch;
+    gap: s.$spacing-xs;
+  }
+
+  .matrixControls .dataTables_filter,
+  .matrixControls .dataTables_filter label,
+  .matrixControls .dataTables_filter input[type="search"] {
+    width: 100%;
+  }
+}
+
+// =============================================================================
+// HIDDEN UTILITY
+// =============================================================================
+
+.hidden {
+  display: none !important;
 }

@@ -1,0 +1,30 @@
+<h1>Job Attributes Summary</h1>
+
+<p>The attributes summary page shows solver results aggregated by result
+attributes (e.g., sat, unsat, unknown) for all solver/configuration pairs
+in a given job space.
+</p>
+
+<h2>Attributes Table</h2>
+<p>Each row represents a solver/configuration pair. The columns show the
+distinct result attribute values found across all benchmarks. Each cell
+displays <strong>"count / time"</strong>, where count is the number of
+benchmarks that produced that attribute and time is the total wallclock
+(or CPU) time for those benchmarks.
+</p>
+
+<h2>Totals Table</h2>
+<p>The totals table aggregates counts and times across all solvers for each
+attribute value, giving an overview of the entire job space.
+</p>
+
+<h2>Switching Time Metric</h2>
+<p>Click the <strong>"use CPU time"</strong> button to toggle between wallclock
+time and CPU time in the time columns. Click again to switch back to wallclock
+time.
+</p>
+
+<h2>Space Navigation</h2>
+<p>Use the space tree on the left to navigate to sub-spaces within the job.
+Clicking a sub-space reloads the page with that space's attribute summary.
+</p>

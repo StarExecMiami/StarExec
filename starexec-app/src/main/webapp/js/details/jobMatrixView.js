@@ -1,18 +1,27 @@
-// All the classes given to a checkbox
+// =============================================================================
+// JOB MATRIX VIEW — JavaScript Controller
+// =============================================================================
+// Manages metric visibility toggles, stage navigation, and live polling
+// for in-progress job pair updates.
+// =============================================================================
+
+"use strict";
+
+// Ordered list of checkbox classes for metric toggles
 var orderedCheckboxClasses = [
 	'.cpuTimeCheckbox',
 	'.memUsageCheckbox',
 	'.wallclockCheckbox'
 ];
 
-// A mapping of each checkbox class to the class it controls the visibility of
+// Maps each checkbox class to the content class it controls visibility of
 var classControlledByCheckbox = {
 	'.cpuTimeCheckbox': '.cpuTime',
 	'.memUsageCheckbox': '.memUsage',
 	'.wallclockCheckbox': '.wallclock'
 };
 
-// A mapping from each checkbox to whether or not that checkbox is enabled.
+// Tracks enabled/disabled state of each checkbox
 var checkboxEnabled = {
 	'.cpuTimeCheckbox': true,
 	'.memUsageCheckbox': true,
@@ -23,32 +32,27 @@ var jobId;
 var jobSpaceId;
 var stageNumber;
 
-// Entry point to JavaScript application.
-$(document).ready(function() {
-	'use strict';
+// =============================================================================
+// ENTRY POINT
+// =============================================================================
 
+$(document).ready(function() {
 	var $matrixPanel = $('#matrixPanel');
 	jobId = $matrixPanel.data('job-id');
 	jobSpaceId = $matrixPanel.data('job-space-id');
 	stageNumber = $matrixPanel.data('stage');
 
 	registerCheckboxEventHandlers();
-	removeHeader();
 
 	var table = $('#jobMatrix').dataTable({
-		/*
-		'columnDefs': [
-			{ 'width': '120px', 'targets': '_all' }
-		],
-		*/
 		'bSort': false,
-		'scrollY': '300px',
+		'scrollY': '220px',
 		'scrollX': '100%',
 		'scrollCollapse': true,
 		'paging': false
 	});
 
-	/*table.fnAdjustColumnSizing();*/
+	moveSearchControlToControls();
 
 	new $.fn.dataTable.FixedColumns(table);
 
@@ -56,24 +60,53 @@ $(document).ready(function() {
 		table.fnDraw();
 	});
 
+	// Stage navigation
 	$('#selectStageButton').click(function() {
 		log('Select stage button clicked.');
 		var stageToRedirectTo = $('#selectStageInput').val();
 		log('Input value is ' + stageToRedirectTo);
 		if (isInt(stageToRedirectTo)) {
 			log('Input value is an integer, redirecting.');
-			window.location.replace(starexecRoot + 'secure/details/jobMatrixView.jsp?jobSpaceId=' + jobSpaceId + '&stage=' + stageToRedirectTo);
+			window.location.replace(
+				starexecRoot + 'secure/details/jobMatrixView.jsp?jobSpaceId=' +
+				jobSpaceId + '&stage=' + stageToRedirectTo
+			);
 		} else {
 			log('Input value is not an integer, showing error message.');
 			$('#selectStageError').removeClass('hidden');
 		}
 	});
 
+	// Allow Enter key in stage input
+	$('#selectStageInput').keypress(function(e) {
+		if (e.which === 13) {
+			e.preventDefault();
+			$('#selectStageButton').click();
+		}
+	});
+
+	// Start polling for live updates
 	getFinishedJobPairsFromServer(false, table);
 });
 
+/**
+ * Moves DataTables' generated search control into the matrix control bar,
+ * so metric toggles and search are grouped in one coherent UI row.
+ */
+function moveSearchControlToControls() {
+	var $filter = $('#jobMatrix_filter');
+	var $controls = $('.matrixControls');
+
+	if ($filter.length && $controls.length) {
+		$filter.detach().appendTo($controls);
+	}
+}
+
+// =============================================================================
+// LIVE POLLING — Fetches updated job pair data from the server
+// =============================================================================
+
 function getFinishedJobPairsFromServer(done, dataTable) {
-	'use strict';
 	if (!done) {
 		$.get(
 			starexecRoot + 'services/matrix/finished/' + jobSpaceId + '/' + stageNumber,
@@ -91,99 +124,96 @@ function getFinishedJobPairsFromServer(done, dataTable) {
 }
 
 function updateMatrix(jobPairData, dataTable) {
-	'use strict';
 	for (var key in jobPairData) {
 		if (jobPairData.hasOwnProperty(key)) {
 			var selector = '#' + key;
-			/*log('Number of elements selected with selector='+selector+': '+$(selector).length);*/
-			$(selector + ' ' + '.wallclock').text(jobPairData[key].wallclock);
-			$(selector + ' ' + '.memUsage').text(jobPairData[key].memUsage);
-			$(selector + ' ' + '.cpuTime').text(jobPairData[key].cpuTime);
+			var pair = jobPairData[key];
+
+			$(selector + ' .wallclock').text(pair.wallclock);
+			$(selector + ' .memUsage').text(pair.memUsage);
+			$(selector + ' .cpuTime').text(pair.cpuTime);
 			$(selector).removeClass('incomplete');
-			$(selector).addClass(jobPairData[key].status);
+			$(selector).addClass(pair.status);
+			$(selector).attr('data-status', pair.status);
+
+			// Update tooltip with new values
+			$(selector).attr('title',
+				'Wallclock: ' + pair.wallclock + 's | CPU: ' +
+				pair.cpuTime + 's | Memory: ' + pair.memUsage
+			);
 		}
 	}
-	// redraw the table
+	// Redraw the table
 	dataTable.fnDraw(false);
 }
 
-function isInt(value) {
-	'use strict';
-	var intRegex = /^[1-9]{1}[0-9]*$/;
+// =============================================================================
+// INPUT VALIDATION
+// =============================================================================
 
+function isInt(value) {
+	var intRegex = /^[1-9][0-9]*$/;
 	return intRegex.test(value);
 }
 
+// =============================================================================
+// METRIC TOGGLE CHECKBOXES
+// =============================================================================
+
 /**
- * Shows or hides each divider class depending on whether the appropriate checkboxes are enabled or not
- * @author Albert Giegerich
+ * Updates the visibility of slash dividers between metrics based on
+ * which checkboxes are currently enabled. This ensures dividers only
+ * appear between two visible adjacent metrics.
  */
 function updateDividers() {
-	'use strict';
-	if (checkboxEnabled['.cpuTimeCheckbox'] && checkboxEnabled['.memUsageCheckbox']) {
-		$('.cpuTimeMemUsageDivider').show();
-	} else {
-		$('.cpuTimeMemUsageDivider').hide();
-	}
+	var cpu = checkboxEnabled['.cpuTimeCheckbox'];
+	var mem = checkboxEnabled['.memUsageCheckbox'];
+	var wall = checkboxEnabled['.wallclockCheckbox'];
 
-	if (checkboxEnabled['.memUsageCheckbox'] && checkboxEnabled['.wallclockCheckbox']) {
-		$('.memUsageWallclockDivider').show();
-	} else {
-		$('.memUsageWallclockDivider').hide();
-	}
+	// Show divider between cpu and memory only if both visible
+	$('.cpuTimeMemUsageDivider').toggle(cpu && mem);
 
-	if (checkboxEnabled['.cpuTimeCheckbox'] && !checkboxEnabled['.memUsageCheckbox'] && checkboxEnabled['.wallclockCheckbox']) {
-		$('.cpuTimeWallclockDivider').show();
-	} else {
-		$('.cpuTimeWallclockDivider').hide();
-	}
+	// Show divider between memory and wallclock only if both visible
+	$('.memUsageWallclockDivider').toggle(mem && wall);
+
+	// Show divider between cpu and wallclock only if both visible
+	// AND memory is hidden (otherwise the other dividers handle it)
+	$('.cpuTimeWallclockDivider').toggle(cpu && !mem && wall);
 }
 
 /**
- * Shows/hides a checkbox as well as updating it's status in checkboxEnabled
- * @param checkboxClass The checkbox class to be toggled.
- * @author Albert Giegerich
+ * Toggles the visibility of the metric controlled by the given checkbox class
+ * and updates its tracking state.
  */
 function toggleCheckbox(checkboxClass) {
-	'use strict';
 	$(classControlledByCheckbox[checkboxClass]).toggle();
 	checkboxEnabled[checkboxClass] = !checkboxEnabled[checkboxClass];
 }
 
 /**
- * Registers an on-click event handler for each checkbox class.
- * @author Albert Giegerich
+ * Updates the visual state of the toggle pill label to reflect
+ * whether its checkbox is checked.
  */
-function registerCheckboxEventHandlers() {
-	orderedCheckboxClasses.forEach(function(checkboxClass) {
-		$(checkboxClass).click(function() {
-			// Whenever a checkbox class is clicked toggle it
-			// and update all dividers on the page to reflect
-			// the new state
-			toggleCheckbox(checkboxClass);
-			updateDividers();
-		});
-	});
-}
-
-function removeHeader() {
-	'use strict';
-	$('#pageHeader').remove();
+function updateTogglePillState($checkbox) {
+	var $label = $checkbox.closest('.metric-toggle');
+	if ($checkbox.is(':checked')) {
+		$label.addClass('metric-toggle--active');
+	} else {
+		$label.removeClass('metric-toggle--active');
+	}
 }
 
 /**
- * Makes the header stay in the same place despite horizontal scrolling.
- * @author Albert Giegerich
+ * Registers click event handlers for each metric toggle checkbox.
+ * When a checkbox is clicked, toggles the corresponding metric visibility
+ * and updates all dividers on the page.
  */
-function fixHeaderHorizontally() {
-	'use strict';
-	var leftOffset = parseInt($('#pageHeader').css('left'));
-	$(window).scroll(function() {
-		$('#pageHeader').css({
-			'left': $(this).scrollLeft() + leftOffset
+function registerCheckboxEventHandlers() {
+	orderedCheckboxClasses.forEach(function(checkboxClass) {
+		$(checkboxClass).on('change', function() {
+			toggleCheckbox(checkboxClass);
+			updateDividers();
+			updateTogglePillState($(this));
 		});
 	});
-}
-
-function zoomChanged(originalZoom) {
 }
