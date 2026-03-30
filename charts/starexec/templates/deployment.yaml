@@ -56,6 +56,12 @@ spec:
 {{- end }}
         - name: tmp
           emptyDir: {}
+{{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
+        - name: podman-socket
+          hostPath:
+            path: {{ .Values.podman.containerSocket.hostPath }}
+            type: Socket
+{{- end }}
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -63,7 +69,7 @@ spec:
           ports:
              - name: http
                containerPort: 8080
-{{- if eq .Values.deploymentMode "podman" }}
+{{- if eq .Values.backend.type "podman" }}
                hostPort: 7827
 {{- end }}
           env:
@@ -104,10 +110,22 @@ spec:
               value: "/app/backend"
             - name: STAREXEC_BACKEND_WORKING_DIR
               value: "/app/work"
+{{- if and (eq .Values.backend.type "podman") .Values.backend.networkMode }}
+            - name: STAREXEC_CONTAINER_NETWORK_MODE
+              value: "{{ .Values.backend.networkMode }}"
+{{- end }}
+{{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
             - name: STAREXEC_CONTAINER_SOCKET
               value: "unix:///run/podman/podman.sock"
             - name: STAREXEC_CONTAINER_JOB_IMAGE
               value: "starexec/job-runner:latest"
+{{- end }}
+{{- if .Values.backend.hostDataPath }}
+            - name: STAREXEC_CONTAINER_HOST_DATA_PATH
+              value: {{ .Values.backend.hostDataPath | quote }}
+            - name: STAREXEC_CONTAINER_DATA_PATH
+              value: "/app/data"
+{{- end }}
             - name: STAREXEC_DATA_DIR
               value: "/app/data"
             - name: STAREXEC_SANDBOX_DIR
@@ -154,6 +172,10 @@ spec:
               mountPath: /app/work
             - name: tmp
               mountPath: /tmp
+{{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
+            - name: podman-socket
+              mountPath: /run/podman/podman.sock
+{{- end }}
           resources:
             requests:
               memory: "1Gi"

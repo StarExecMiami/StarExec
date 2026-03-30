@@ -80,7 +80,7 @@ spec:
         - name: STAREXEC_REPORT_HOST
           value: "localhost"
         - name: STAREXEC_BACKEND_TYPE
-          value: "local"
+          value: "${STAREXEC_BACKEND_TYPE:-local}"
         - name: STAREXEC_BACKEND_ROOT
           value: "/app/backend"
         - name: STAREXEC_BACKEND_WORKING_DIR

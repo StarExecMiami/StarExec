@@ -5,9 +5,8 @@
 # ============================================================================
 # DEPLOYMENT MODE CONFIGURATION
 # ============================================================================
-# Choose your deployment target. This affects how resources are created.
-# Options: podman, microk8s, kubernetes
-deploymentMode: local
+# Deployment mode is now derived from backend.type (see backend section below).
+# hostPort binding is enabled automatically when backend.type is "podman".
 
 # ============================================================================
 # IMAGE CONFIGURATION
@@ -35,6 +34,7 @@ backend:
   type: "local" # Options: local, podman, SGE
   root: "/app/backend"
   workingDir: "/app/work"
+  hostDataPath: ""  # Set automatically by Makefile for DooD path translation
 
   # Local Backend specific configuration
   local:
@@ -153,13 +153,15 @@ kubernetes:
 podman:
   # Container socket path for DooD (Docker-out-of-Docker)
   containerSocket:
+    enabled: false
+    # Rootless Podman socket only. Do not point this at a rootful system socket.
     hostPath: "/run/user/1000/podman/podman.sock"
 
   # Job container configuration
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
 
   # Network configuration for job containers
-  networkMode: "podman-default-kube-network"
+  networkMode: "starexec-net"
   jobDbHost: "postgres"
 
   # Path translation for job containers

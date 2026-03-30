@@ -1,8 +1,6 @@
 # MicroK8s development environment values
 # Usage: helm template starexec ./charts/starexec -f ./charts/starexec/values-microk8s.yaml
 
-deploymentMode: microk8s
-
 image:
   repository: ghcr.io/starexecmiami/starexec
   tag: latest

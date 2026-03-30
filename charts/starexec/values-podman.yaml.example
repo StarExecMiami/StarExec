@@ -1,0 +1,75 @@
+# Podman environment values — EXAMPLE / TEMPLATE
+#
+# Copy this file to values-podman.yaml and fill in the placeholders:
+#
+#   cp charts/starexec/values-podman.yaml.example charts/starexec/values-podman.yaml
+#
+# values-podman.yaml is gitignored because it may contain real credentials.
+# Never commit that file; commit changes here instead.
+#
+# Usage: make deploy-podman ENV=podman
+
+image:
+  repository: localhost/starexec
+  tag: latest
+  pullPolicy: Never
+
+replicaCount: 1
+volumePrefix: starexec
+
+kubernetes:
+  enabled: false
+
+persistence:
+  enabled: true
+  storageClass: ""
+  useHostPathForPodman: false
+  usePodmanVolumes: true
+
+postgres:
+  image:
+    repository: docker.io/library/postgres
+    pullPolicy: IfNotPresent
+    tag: "15"
+
+  host: localhost
+  port: 5432
+  user: starexec
+  # Replace with a strong random password. For local dev the default seeded
+  # credentials (admin:admin, public:public) are already baked into the
+  # migrations, so any value you choose here only protects the DB socket.
+  # For any non-local deployment use STAREXEC_DB_PASSWORD_FILE instead.
+  password: <your-dev-password>
+  database: starexec
+  rootPassword: <your-dev-root-password>
+
+  persistence:
+    enabled: true
+
+backend:
+  type: "podman"
+  root: "/app/backend"
+  workingDir: "/app/work"
+  networkMode: "starexec-net"
+  jobDbHost: "postgres"
+  local:
+    concurrency: 1
+    forceSandbox: true
+    useRunsolver: true
+    gracefulShutdownSeconds: 30
+
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+env:
+  LOG_LEVEL: "DEBUG"
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+  STAREXEC_WEB_ADDRESS: "localhost:7827"
+  STAREXEC_URL_PREFIX: "http"
+
+podman:
+  containerSocket:
+    enabled: true
+    # Adjust to your user's runtime socket path (loginctl show-user $USER | grep RuntimePath)
+    hostPath: "/run/user/1000/podman/podman.sock"
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"

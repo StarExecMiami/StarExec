@@ -12,8 +12,6 @@ volumePrefix: starexec
 kubernetes:
   enabled: false
 
-deploymentMode: podman
-
 # Podman development mode: uses named volumes for proper lifecycle
 persistence:
   enabled: true
@@ -46,11 +44,11 @@ postgres:
     enabled: true # Enable persistence in dev for database continuity
 
 backend:
-  type: "local"
+  type: "podman"
   root: "/app/backend"
   workingDir: "/app/data/work"
   # Network for job containers to connect to the same network as the app pod
-  networkMode: "podman-default-kube-network"
+  networkMode: "starexec-net"
   # Database host that job containers should use (different from app which uses localhost in pod)
   # Job containers are separate from the pod so they need to use the postgres service name
   jobDbHost: "postgres"
@@ -88,3 +86,11 @@ env:
   STAREXEC_URL_PREFIX: "http"
   STAREXEC_WEB_BASE_DIR: "/opt/tomcat/webapps/starexec"
   STAREXEC_LOCAL_USE_RUNSOLVER: "true"
+
+podman:
+  containerSocket:
+    enabled: true
+    # Rootless Podman socket path. Adjust for your user if needed:
+    #   loginctl show-user $USER -p RuntimePath
+    hostPath: "/run/user/1000/podman/podman.sock"
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"

@@ -411,10 +411,11 @@ if [ "${SKIP_MIGRATIONS:-false}" = "true" ]; then
     echo ""
 else
     run_database_migrations || {
+        _migration_exit_code=$?
         echo ""
         echo "[MIGRATION][CRITICAL] 🚨 CRITICAL: Migration failure detected"
         echo "[MIGRATION][CRITICAL]    Container will exit to prevent starting with inconsistent database state"
-        exit $?
+        exit "${_migration_exit_code}"
     }
 fi
 
@@ -429,7 +430,8 @@ if [ -f "${LOGBACK_XML}" ]; then
 fi
 echo ""
 
-# Copy SGE scripts to data directory if they do not exist
+# Initialize SGE scripts in the persisted data directory on first start only.
+# Do not overwrite files that operators may have patched in the data volume.
 if [ ! -f /app/data/sge_scripts/functions.bash ]; then
     echo "Initializing SGE scripts in /app/data/sge_scripts..."
     mkdir -p /app/data/sge_scripts

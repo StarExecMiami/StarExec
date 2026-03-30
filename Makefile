@@ -491,6 +491,36 @@ volumes-help:
 	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) help
 
 # ============================================================================
+# REUSABLE GUARDS
+# ============================================================================
+
+# require_values_file — abort if ENV != dev and the expected values-$(ENV).yaml is missing.
+# Usage: @$(call require_values_file)
+define require_values_file
+	if [ "$(ENV)" != "dev" ] && [ ! -f "$(ENV_VALUES)" ]; then \
+		echo ""; \
+		echo "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
+		echo "${RED}  ✗  Missing required values file: $(ENV_VALUES)${RESET}"; \
+		echo "${RED}     ENV=$(ENV) requires an environment-specific values file.${RESET}"; \
+		echo "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
+		echo ""; \
+		if [ -f "$(ENV_VALUES).example" ]; then \
+			echo "An example file exists. Create your values file with:"; \
+			echo ""; \
+			echo "  cp $(ENV_VALUES).example $(ENV_VALUES)"; \
+			echo ""; \
+			echo "Then edit it to set your credentials and socket path."; \
+		else \
+			echo "Create $(ENV_VALUES) with the required configuration."; \
+			echo "Available values files:"; \
+			ls -1 $(CHART_DIR)/values*.yaml $(CHART_DIR)/values*.yaml.example 2>/dev/null | sed 's/^/  /'; \
+		fi; \
+		echo ""; \
+		exit 1; \
+	fi
+endef
+
+# ============================================================================
 # DATABASE MANAGEMENT (PostgreSQL)
 # ============================================================================
 
@@ -773,6 +803,7 @@ endef
 
 deploy-podman: verify-deps image volumes-create
 	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
+	@$(call require_values_file)
 	@echo "Using values file: $(VALS)"
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
 		echo ""; \
@@ -814,11 +845,14 @@ deploy-podman-helm:
 	@echo "Rendering deployment manifest..."
 	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
 	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
+	BACKEND_TYPE="local"; \
+	if [ "$(ENV)" = "podman" ]; then BACKEND_TYPE="podman"; fi; \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set environment=$(ENV) \
 		--set image.repository=$(RELEASE_NAME) \
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
+		--set backend.type=$$BACKEND_TYPE \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
 		echo "Check your values file: $(VALS)"; \
@@ -851,6 +885,7 @@ deploy-podman-direct:
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
+	 STAREXEC_BACKEND_TYPE=$$(if [ "$(ENV)" = "podman" ]; then echo "podman"; else echo "$${STAREXEC_BACKEND_TYPE:-local}"; fi) \
 	 APP_PORT=$(APP_PORT) \
 	 IMAGE_NAME=$(RELEASE_NAME) \
 	 IMAGE_TAG=$(IMAGE_TAG) \
@@ -955,6 +990,8 @@ undeploy-podman:
 
 deploy-k8s:
 	@echo "Deploying to Kubernetes with environment: $(ENV)"
+	@$(call require_values_file)
+	@echo "Using values file: $(VALS)"
 	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
 		-f $(VALS) \
 		--namespace starexec \
@@ -1275,7 +1312,14 @@ lint:
 template:
 	@if command -v helm >/dev/null 2>&1; then \
 		echo "Rendering templates with environment: $(ENV)"; \
-		helm template $(RELEASE_NAME) $(CHART_DIR) -f $(VALS) > render.yaml; \
+		if [ "$(ENV)" != "dev" ] && [ ! -f "$(ENV_VALUES)" ]; then \
+			echo "${YELLOW}⚠  WARNING: $(ENV_VALUES) not found, falling back to $(VALS)${RESET}"; \
+			echo "   The rendered manifest may not match the intended environment."; \
+		fi; \
+		BACKEND_TYPE="local"; \
+		if [ "$(ENV)" = "podman" ]; then BACKEND_TYPE="podman"; fi; \
+		helm template $(RELEASE_NAME) $(CHART_DIR) -f $(VALS) \
+			--set backend.type=$$BACKEND_TYPE > render.yaml; \
 		echo "Output written to: render.yaml"; \
 	else \
 		echo "Helm not installed, generating from template..."; \
