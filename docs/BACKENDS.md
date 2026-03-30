@@ -49,6 +49,60 @@ backend:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Default startup policy (`make start`)
+
+`make start` defaults to the Podman deployment path for better production parity and
+safer execution of untrusted solver binaries.
+
+- **Default**: Podman backend (container isolation)
+- **Fallback (explicit opt-in)**: Local backend for trusted-only debugging workflows
+
+Use Local backend only when you intentionally need direct host-process debugging and
+you trust the executed binaries.
+
+---
+
+## Backend operation profiles
+
+Use profiles to balance reproducibility and throughput:
+
+| Profile | Backend | Key knobs | Use when |
+|---|---|---|---|
+| `repro-strict` | Podman | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS=1` | Benchmark reproducibility and cache-noise reduction are the priority |
+| `dev-fast` | Podman | Increase `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` + `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` carefully | Fast local iteration is more important than strict reproducibility |
+| `debug-trusted-local` | Local | `STAREXEC_LOCAL_CONCURRENCY` + `STAREXEC_LOCAL_CORE_LIST` | Deep host-level debugging with trusted workloads |
+
+> Keep resource coupling in mind: total memory pressure scales with concurrent jobs.
+
+---
+
+## Podman-default go/no-go checklist
+
+Use this checklist before treating Podman default as healthy in a given environment.
+
+### Go (all must pass)
+
+- [ ] Environment-specific values file exists (`charts/starexec/values-<env>.yaml`)
+- [ ] Podman engine reachable (`podman info`)
+- [ ] Rootless mode enabled (or explicitly accepted risk for rootful non-prod)
+- [ ] Podman socket path exists when container socket mode is enabled
+- [ ] `make start` completes and `make wait-postgres` passes
+- [ ] Backend resolves to `podman` at runtime (`STAREXEC_BACKEND_TYPE=podman`)
+
+### No-go (any one is enough)
+
+- [ ] Missing env values file with fallback to unrelated defaults
+- [ ] Podman engine/socket unavailable or unstable
+- [ ] Rootful mode required for production without explicit override
+- [ ] Startup succeeds but backend resolves to `local` unexpectedly
+- [ ] Reproducibility/performance targets violated for selected profile
+
+### Rollback trigger for default choice
+
+Reconsider Podman as the startup default if onboarding reliability or runtime stability
+degrades persistently (for example: repeated startup failures across fresh setups,
+or backend mismatch incidents across releases).
+
 ---
 
 ## Backend Comparison

@@ -128,7 +128,9 @@ git checkout containerised
 # Development deployment (default)
 make start
 
-# Production deployment (requires secure password)
+# Production deployment (requires env-specific values + secure password)
+cp charts/starexec/values-podman.yaml charts/starexec/values-prod.yaml
+# Edit values-prod.yaml for production limits, credentials, and socket path
 export STAREXEC_DB_PASSWORD="$(openssl rand -base64 32)"
 make deploy-podman ENV=prod
 ```
@@ -139,13 +141,14 @@ make deploy-podman ENV=prod
 |-------------|---------|---------|
 | `dev` | `make deploy-podman ENV=dev` | Local development with defaults |
 | `ci` | `make deploy-podman ENV=ci` | CI/testing with ephemeral volumes |
-| `prod` | `make deploy-podman ENV=prod` | Production with secure settings |
+| `prod` | `make deploy-podman ENV=prod` | Production with secure settings (requires `charts/starexec/values-prod.yaml`) |
 
 ### Production Checklist
 
 Before deploying to production:
 
 - [ ] **Change default password**: `export STAREXEC_DB_PASSWORD="secure-value"`
+- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml charts/starexec/values-prod.yaml`
 - [ ] **Create volumes**: `make volumes-create ENV=prod`
 - [ ] **Configure backups**: Set up automated `make volumes-backup ENV=prod`
 - [ ] **Set resource limits**: Configure CPU/memory in `values-prod.yaml`
@@ -578,7 +581,7 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md) for more solutions.
 | `STAREXEC_DB_NAME` | `starexec` | Database name |
 | `STAREXEC_DB_USER` | `starexec` | Database username |
 | `STAREXEC_DB_PASSWORD` | *(empty)* | Database password (**required**) |
-| `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes |
+| `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes. Runtime fallback default is `local`, but `make start` deploys Podman by default. |
 | `ENV` | `dev` | Environment: dev, ci, prod |
 | `APP_PORT` | `7827` | Application port (Podman) |
 

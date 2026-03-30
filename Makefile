@@ -132,6 +132,7 @@ BOLD   := $(shell tput -Txterm bold)
 
 
 .PHONY: help build build-fresh build-prod build-offline cache-images image \
+	preflight-podman \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup network-reset deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s \
 	volumes-create volumes-fix-permissions volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
@@ -494,10 +495,10 @@ volumes-help:
 # REUSABLE GUARDS
 # ============================================================================
 
-# require_values_file — abort if ENV != dev and the expected values-$(ENV).yaml is missing.
+# require_values_file — abort if the expected values-$(ENV).yaml is missing.
 # Usage: @$(call require_values_file)
 define require_values_file
-	if [ "$(ENV)" != "dev" ] && [ ! -f "$(ENV_VALUES)" ]; then \
+	if [ ! -f "$(ENV_VALUES)" ]; then \
 		echo ""; \
 		echo "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"; \
 		echo "${RED}  ✗  Missing required values file: $(ENV_VALUES)${RESET}"; \
@@ -519,6 +520,68 @@ define require_values_file
 		exit 1; \
 	fi
 endef
+
+# require_podman_engine_ready — fail fast if Podman engine is unavailable.
+# In prod, block rootful mode unless FORCE=1 is explicitly set.
+# Usage: @$(call require_podman_engine_ready)
+define require_podman_engine_ready
+	if ! $(PODMAN_CMD) info >/dev/null 2>&1; then \
+		echo ""; \
+		echo "${RED}✗ Podman engine is not reachable.${RESET}"; \
+		echo "  Command: $(PODMAN_CMD) info"; \
+		echo "  Try: podman system service --time=0 (or ensure rootless session is active)"; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+		echo "${YELLOW}⚠ Podman appears to require sudo (rootful mode).${RESET}"; \
+		echo "  Rootless mode is recommended for safer default operation."; \
+		if [ "$(ENV)" = "prod" ] && [ "$(FORCE)" != "1" ]; then \
+			echo "${RED}✗ Refusing ENV=prod deployment in rootful mode without FORCE=1.${RESET}"; \
+			echo "  Use rootless Podman, or override explicitly with FORCE=1."; \
+			exit 1; \
+		fi; \
+	fi
+endef
+
+# verify_podman_socket_from_values — if values enable container socket, verify hostPath exists.
+# Uses yq when available; warns (does not fail) when yq is unavailable.
+# Usage: @$(call verify_podman_socket_from_values)
+define verify_podman_socket_from_values
+	if command -v yq >/dev/null 2>&1; then \
+		SOCKET_ENABLED=$$(yq '.podman.containerSocket.enabled // false' "$(VALS)"); \
+		case "$$SOCKET_ENABLED" in \
+			true|TRUE|True) \
+				SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(VALS)"); \
+				if [ -z "$$SOCKET_PATH" ]; then \
+					echo ""; \
+					echo "${RED}✗ Podman socket is enabled but hostPath is empty in values file.${RESET}"; \
+					echo "  File: $(VALS)"; \
+					echo "  Set .podman.containerSocket.hostPath to your rootless Podman socket path."; \
+					echo ""; \
+					exit 1; \
+				elif [ ! -S "$$SOCKET_PATH" ]; then \
+					echo ""; \
+					echo "${RED}✗ Podman socket path from values file is not available:${RESET} $$SOCKET_PATH"; \
+					echo "  File: $(VALS)"; \
+					echo "  Start your rootless podman socket service and retry:"; \
+					echo "    ${BLUE}systemctl --user start podman.socket${RESET}"; \
+					echo ""; \
+					exit 1; \
+				fi; \
+				;; \
+			*) : ;; \
+		esac; \
+	else \
+		echo "${YELLOW}○ yq not installed; skipping podman.socket hostPath preflight from values file${RESET}"; \
+	fi
+endef
+
+preflight-podman: verify-deps
+	@$(call require_values_file)
+	@$(call require_podman_engine_ready)
+	@$(call verify_podman_socket_from_values)
+	@echo "Using values file: $(VALS)"
 
 # ============================================================================
 # DATABASE MANAGEMENT (PostgreSQL)
@@ -801,10 +864,10 @@ define cleanup_deployment
 	fi
 endef
 
-deploy-podman: verify-deps image volumes-create
+deploy-podman: preflight-podman
 	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
-	@$(call require_values_file)
-	@echo "Using values file: $(VALS)"
+	@$(MAKE) image
+	@$(MAKE) volumes-create
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
 		echo ""; \
 		echo "${RED}╔════════════════════════════════════════════════════════╗${RESET}"; \
@@ -830,8 +893,14 @@ deploy-podman: verify-deps image volumes-create
 		echo "${YELLOW}Helm not found, using direct deployment...${RESET}"; \
 		$(MAKE) deploy-podman-direct; \
 	fi
+	@echo "${BOLD}Podman default readiness checklist:${RESET}"
+	@echo "  ✓ values file resolved and validated"
+	@echo "  ✓ Podman engine reachable"
+	@echo "  ✓ deployment manifest applied"
+	@echo "  ✓ PostgreSQL readiness gate passed"
 
 deploy-podman-helm:
+	@$(MAKE) preflight-podman
 	@# Verify values file exists before proceeding
 	@if [ ! -f "$(VALS)" ]; then \
 		echo "${RED}✗ Values file not found: $(VALS)${RESET}"; \
@@ -845,14 +914,12 @@ deploy-podman-helm:
 	@echo "Rendering deployment manifest..."
 	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
 	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
-	BACKEND_TYPE="local"; \
-	if [ "$(ENV)" = "podman" ]; then BACKEND_TYPE="podman"; fi; \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set environment=$(ENV) \
 		--set image.repository=$(RELEASE_NAME) \
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
-		--set backend.type=$$BACKEND_TYPE \
+		--set backend.type=podman \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
 		echo "Check your values file: $(VALS)"; \
@@ -877,6 +944,7 @@ deploy-podman-helm:
 	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
 
 deploy-podman-direct:
+	@$(MAKE) preflight-podman
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@$(MAKE) network-setup
@@ -885,7 +953,7 @@ deploy-podman-direct:
 	@echo "Generating deployment manifest from template..."
 	@STAREXEC_DATA_VOL=$${STAREXEC_DATA_VOL:-starexec-$(ENV)-data} \
 	 STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
-	 STAREXEC_BACKEND_TYPE=$$(if [ "$(ENV)" = "podman" ]; then echo "podman"; else echo "$${STAREXEC_BACKEND_TYPE:-local}"; fi) \
+	 STAREXEC_BACKEND_TYPE=$${STAREXEC_BACKEND_TYPE:-podman} \
 	 APP_PORT=$(APP_PORT) \
 	 IMAGE_NAME=$(RELEASE_NAME) \
 	 IMAGE_TAG=$(IMAGE_TAG) \
@@ -905,7 +973,8 @@ deploy-podman-direct:
 	@echo "  podman logs $(APP_CONTAINER)	- Application logs"
 	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
 
-deploy-podman-cached: image
+deploy-podman-cached: preflight-podman
+	@$(MAKE) image
 	@if [ ! -f render.yaml ]; then \
 		echo "${YELLOW}WARNING: render.yaml not found! Running 'make template' to generate...${RESET}"; \
 		$(MAKE) template; \
@@ -1312,14 +1381,9 @@ lint:
 template:
 	@if command -v helm >/dev/null 2>&1; then \
 		echo "Rendering templates with environment: $(ENV)"; \
-		if [ "$(ENV)" != "dev" ] && [ ! -f "$(ENV_VALUES)" ]; then \
-			echo "${YELLOW}⚠  WARNING: $(ENV_VALUES) not found, falling back to $(VALS)${RESET}"; \
-			echo "   The rendered manifest may not match the intended environment."; \
-		fi; \
-		BACKEND_TYPE="local"; \
-		if [ "$(ENV)" = "podman" ]; then BACKEND_TYPE="podman"; fi; \
+		$(call require_values_file); \
 		helm template $(RELEASE_NAME) $(CHART_DIR) -f $(VALS) \
-			--set backend.type=$$BACKEND_TYPE > render.yaml; \
+			> render.yaml; \
 		echo "Output written to: render.yaml"; \
 	else \
 		echo "Helm not installed, generating from template..."; \
@@ -1328,6 +1392,7 @@ template:
 		STAREXEC_BACKEND_VOL=$${STAREXEC_BACKEND_VOL:-starexec-$(ENV)-backend} \
 		STAREXEC_WORK_VOL=$${STAREXEC_WORK_VOL:-starexec-$(ENV)-work} \
 		STAREXEC_POSTGRES_VOL=$${STAREXEC_POSTGRES_VOL:-starexec-$(ENV)-postgres} \
+		STAREXEC_BACKEND_TYPE=$${STAREXEC_BACKEND_TYPE:-podman} \
 		APP_PORT=$(APP_PORT) \
 		IMAGE_NAME=$(RELEASE_NAME) \
 		IMAGE_TAG=$(IMAGE_TAG) \

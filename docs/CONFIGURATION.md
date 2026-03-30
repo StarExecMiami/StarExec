@@ -74,7 +74,7 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 
 | Variable | Default | Required | Example | Notes |
 |----------|---------|----------|---------|-------|
-| `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, sge, oar |
+| `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, sge, oar. Note: Makefile `make start` uses Podman deployment by default. |
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
 
 ### Performance Tuning
@@ -257,7 +257,9 @@ make deploy-podman ENV=ci
 - Monitoring enabled
 
 ```bash
-# Production deployment requires password
+# Production deployment requires env-specific values + secure password
+cp charts/starexec/values-podman.yaml charts/starexec/values-prod.yaml
+# Edit values-prod.yaml for production limits, credentials, and socket path
 export STAREXEC_DB_PASSWORD="$(generate-secure-password)"
 
 # Live log streaming (benchmark-priority profile)
