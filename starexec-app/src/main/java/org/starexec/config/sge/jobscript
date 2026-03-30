@@ -67,6 +67,7 @@ export CONTAINER_MODE="${CONTAINER_MODE:-false}"
 
 # Path to Olivier Roussel's runSolver
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
+
 # Include common functions and status codes
 . $SCRIPT_DIR/functions.bash
 

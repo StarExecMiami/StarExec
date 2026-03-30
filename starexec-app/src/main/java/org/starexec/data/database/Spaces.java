@@ -1034,6 +1034,12 @@ public class Spaces {
 		}
 
 		Space sourceSpace = Spaces.getDetails(srcId, usrId);
+		if (sourceSpace == null) {
+			throw new StarExecException(
+					"Could not load source space details for source space id '" + srcId +
+					"' and user id '" + usrId + "'"
+			);
+		}
 
 		// Create a new space
 		Space tempSpace = new Space();
@@ -1101,6 +1107,12 @@ public class Spaces {
 			if (copyPrimitives.shouldLinkJobs()) {
 				// Copying the references of jobs
 				List<Job> jobs = sourceSpace.getJobs();
+				if (jobs == null) {
+					throw new StarExecException(
+							"Failed to load jobs for source space id '" + srcId +
+							"' while copying to destination space id '" + desId + "'"
+					);
+				}
 				List<Integer> jobIds = new LinkedList<>();
 				int jobId = 0;
 				for (Job job : jobs) {

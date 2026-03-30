@@ -3470,6 +3470,44 @@ public class JobPairs {
         }
     }
 
+    /**
+     * Returns the current status code for a given job pair by reading directly
+     * from the {@code job_pairs} table. This is a lightweight point-read
+     * intended for use in guards where a full pair hydration would be wasteful
+     * (e.g., before writing a transitional status update to avoid overwriting
+     * an already-terminal state).
+     *
+     * <p>Returns {@link StatusCode#STATUS_UNKNOWN} (0) when the pair is not
+     * found or a database error occurs. Callers should treat a 0 return value
+     * as "status could not be determined" and act conservatively.
+     *
+     * @param pairId the id of the pair to query
+     * @return the current {@code status_code} column value, or 0 on error
+     */
+    public static int getPairStatusCode(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet results = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT status_code FROM job_pairs WHERE id = ?"
+            );
+            ps.setInt(1, pairId);
+            results = ps.executeQuery();
+            if (results.next()) {
+                return results.getInt("status_code");
+            }
+        } catch (Exception e) {
+            log.error("getPairStatusCode pairId=" + pairId, e);
+        } finally {
+            Common.safeClose(results);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return StatusCode.STATUS_UNKNOWN.getVal();
+    }
+
     private static boolean isTerminalStatusCode(int statusCode) {
         return !StatusCode.toStatusCode(statusCode).incomplete();
     }

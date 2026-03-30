@@ -7874,7 +7874,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetSpaceJobsById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpaceJobsById(_spaceId INT)
-RETURNS TABLE(id INT, name VARCHAR(255), user_id INT, created TIMESTAMP, description TEXT, deleted BOOLEAN, paused BOOLEAN, killed BOOLEAN, buildJob BOOLEAN, disk_size BIGINT, total_pairs INT, completed_pairs INT, errored_pairs INT, pending_pairs INT, status_code INT, max_stages INT, job_type INT, timeout INT, seed INT, suppress_output BOOLEAN, node_queued BOOLEAN) AS $$
+RETURNS TABLE(id INT, name VARCHAR(255), user_id INT, created TIMESTAMP, description TEXT, deleted BOOLEAN, paused BOOLEAN, killed BOOLEAN, buildJob BOOLEAN, disk_size BIGINT, total_pairs INT, completed_pairs INT, errored_pairs INT, pending_pairs INT, status_code INT, max_stages INT, job_type INT, timeout INT, seed BIGINT, suppress_output BOOLEAN, node_queued BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
     SELECT 

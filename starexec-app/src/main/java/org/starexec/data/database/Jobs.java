@@ -1625,14 +1625,16 @@ public class Jobs {
             }
             return jobs;
         } catch (Exception e) {
-            log.error("getBySpace", e);
+            log.error("getBySpace failed for spaceId=" + spaceId, e);
+            throw new RuntimeException(
+                "Failed to fetch jobs for spaceId=" + spaceId,
+                e
+            );
         } finally {
             Common.safeClose(con);
             Common.safeClose(procedure);
             Common.safeClose(results);
         }
-
-        return null;
     }
 
     /**

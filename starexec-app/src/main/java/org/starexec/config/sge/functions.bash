@@ -31,6 +31,7 @@ STATUS_SENT=false
 CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_ATTRS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/attributes.txt"
+CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
 
 # Write status update for container mode
 function containerWriteStatus {
@@ -162,7 +163,7 @@ function adjustForK8s {
         log "adjustForK8s stage Index: $STAGE_INDEX"
 
         # Decode the base64 encoded path
-        DECODED_PATH=$(echo "${SOLVER_PATHS[$STAGE_INDEX]}" | base64 --decode)
+        DECODED_PATH=$(echo "${SOLVER_PATHS[$STAGE_INDEX]}" | base64 -d)
 
         # Log directory contents for debugging
         log "Listing contents of: $DECODED_PATH"
@@ -207,17 +208,38 @@ function adjustForK8s {
 
 # setup the memory limit for this stage
 function limitMem {
-	#Gets the memory of the node in kilobytes
-	local NODE_MEM=$(vmstat -s | head -1 | sed 's/K total memory//')
+	# Determine node memory in KiB using /proc/meminfo first.
+	# BusyBox/Alpine formatting for vmstat is not stable enough to parse reliably.
+	local NODE_MEM_KB=""
+	local SLOT_COUNT="${NUM_SLOTS:-1}"
 
-	#then, convert kb to mb
-	# Using $((  )) not (( )) to avoid set -e aborting when result is 0 (e.g. low-memory node)
-	NODE_MEM=$(( NODE_MEM / 1024 ))
+	if [ -r /proc/meminfo ]; then
+		NODE_MEM_KB=$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo)
+	fi
+
+	if ! isInteger "${NODE_MEM_KB:-}"; then
+		NODE_MEM_KB=$(vmstat -s 2>/dev/null | awk '/total memory$/ { print $1; exit }')
+	fi
+
+	if ! isInteger "${NODE_MEM_KB:-}"; then
+		log "could not determine node memory; leaving requested max memory unchanged at $MAX_MEM"
+		return
+	fi
+
+	if ! isInteger "$SLOT_COUNT" || [ "$SLOT_COUNT" -le 0 ]; then
+		SLOT_COUNT=1
+	fi
+
+	local NODE_MEM=$(( NODE_MEM_KB / 1024 ))
 	log "node memory in megabytes = $NODE_MEM"
 
-	#then, set to half the memory
-	NODE_MEM=$(( NODE_MEM / NUM_SLOTS ))
+	NODE_MEM=$(( NODE_MEM / SLOT_COUNT ))
 	log "node memory after accounting for pairs allowed to run on node = $NODE_MEM"
+
+	if [ "$NODE_MEM" -le 0 ]; then
+		log "calculated node memory is non-positive; leaving requested max memory unchanged at $MAX_MEM"
+		return
+	fi
 
 	if ((MAX_MEM > NODE_MEM)); then
 		log "truncating max memory from requested $MAX_MEM to $NODE_MEM"
@@ -455,7 +477,12 @@ function initSandbox {
 }
 
 function log {
-	echo "$(date +'%D %r %Z'): $1"
+	local MESSAGE="$(date +'%D %r %Z'): $1"
+	echo "$MESSAGE"
+	if isContainerMode; then
+		mkdir -p "$(dirname "$CONTAINER_LOG_FILE")"
+		echo "$MESSAGE" >> "$CONTAINER_LOG_FILE"
+	fi
 }
 
 function safeRmLock {
@@ -924,14 +951,21 @@ function copyOutputNoStats {
 
 	if (($3 != 1)); then
 		log "mv $OUT_DIR/output_files/ $PAIR_OTHER_OUTPUT_PATH"
+		rm -rf "$PAIR_OTHER_OUTPUT_PATH"
 		mv "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
 	fi
 	SAVED_PAIR_OUTPUT_PATH="$SAVED_OUTPUT_DIR/$1"
 	SAVED_PAIR_OTHER_OUTPUT_PATH=$SAVED_OUTPUT_DIR"/"$1"_output"
 
 	cp "$STDOUT_FILE" "$SAVED_PAIR_OUTPUT_PATH"
-	log "mv $OUT_DIR/output_files/ $SAVED_PAIR_OTHER_OUTPUT_PATH"
-	mv "$OUT_DIR/output_files/" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+	rm -rf "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+	if [ -d "$OUT_DIR/output_files/" ]; then
+		log "mv $OUT_DIR/output_files/ $SAVED_PAIR_OTHER_OUTPUT_PATH"
+		mv "$OUT_DIR/output_files/" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+	elif [ -d "$PAIR_OTHER_OUTPUT_PATH" ]; then
+		log "cp -r $PAIR_OTHER_OUTPUT_PATH $SAVED_PAIR_OTHER_OUTPUT_PATH"
+		cp -r "$PAIR_OTHER_OUTPUT_PATH" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+	fi
 }
 
 # takes in a stage number as an argument so we know where to put the output
@@ -1000,9 +1034,9 @@ function fillDependArrays {
 
 	if ((HAS_DEPENDS == 1)); then
 		while read line; do
-			BENCH_DEPENDS_ARRAY[INDEX]=${line//$sep*};
-			LOCAL_DEPENDS_ARRAY[INDEX]=${line//*$sep};
-			((++INDEX))
+		BENCH_DEPENDS_ARRAY[INDEX]=${line//$sep*};
+		LOCAL_DEPENDS_ARRAY[INDEX]=${line//*$sep};
+		INDEX=$(( INDEX + 1 ))
 		done < "$JOB_IN_DIR/depend_$PAIR_ID.txt"
 	fi
 }
@@ -1062,7 +1096,7 @@ function copyBenchmarkDependencies {
 	while ((BENCH_INPUT_INDEX < NUM_BENCH_INPUTS)); do
 		CURRENT_BENCH_INPUT_PATH=${BENCH_INPUT_PATHS[BENCH_INPUT_INDEX]}
 		cp "$CURRENT_BENCH_INPUT_PATH" "$BENCH_INPUT_DIR/$((BENCH_INPUT_INDEX+1))"
-		((++BENCH_INPUT_INDEX))
+		BENCH_INPUT_INDEX=$(( BENCH_INPUT_INDEX + 1 ))
 	done
 
 	log "benchmark dependencies copy complete"
