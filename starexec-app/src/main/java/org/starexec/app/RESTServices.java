@@ -1119,10 +1119,12 @@ public class RESTServices {
 					return parsed;
 				}
 			} catch (NumberFormatException ignored) {
-				// fall through to tail-from-end behavior
+				// Invalid offsets should fail closed to tail-from-end behavior.
+				return logFile.exists() ? logFile.length() : 0L;
 			}
 		}
-		return logFile.exists() ? logFile.length() : 0L;
+		// First-time consumers with no Last-Event-ID should receive the log from byte 0.
+		return 0L;
 	}
 
 	private static long streamAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset, int maxChunkBytes) {

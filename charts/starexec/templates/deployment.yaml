@@ -118,7 +118,11 @@ spec:
             - name: STAREXEC_CONTAINER_SOCKET
               value: "unix:///run/podman/podman.sock"
             - name: STAREXEC_CONTAINER_JOB_IMAGE
-              value: "starexec/job-runner:latest"
+              value: "{{ .Values.podman.jobImage }}"
+{{- end }}
+{{- if eq .Values.backend.type "podman" }}
+            - name: STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS
+              value: "{{ .Values.podman.maxConcurrentJobs }}"
 {{- end }}
 {{- if .Values.backend.hostDataPath }}
             - name: STAREXEC_CONTAINER_HOST_DATA_PATH

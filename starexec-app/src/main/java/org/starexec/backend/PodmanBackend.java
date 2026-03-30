@@ -32,7 +32,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.starexec.config.EnvironmentConfig;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Queues;
+import org.starexec.data.to.Status;
 import org.starexec.logger.StarLogger;
 
 /**
@@ -104,6 +106,14 @@ public class PodmanBackend implements Backend {
     private long defaultMemoryMb;
     private int defaultCpuLimit;
     private int defaultWallclockLimit;
+    private int maxConcurrentJobs = 1;
+
+    // Hard concurrency gate for container submissions.
+    // This protects CPU cache locality by preventing unbounded sibling container fan-out.
+    private final Object submissionSlotLock = new Object();
+    private int activeSubmissionSlots = 0;
+    private final Set<Integer> execIdsHoldingSubmissionSlot =
+        ConcurrentHashMap.newKeySet();
 
     // DooD (Docker-outside-of-Docker) path translation
     // Maps container paths to host paths for volume mounts
@@ -138,7 +148,8 @@ public class PodmanBackend implements Backend {
                 return t;
             }
         },
-        new ThreadPoolExecutor.DiscardPolicy() // Rejection handler
+        // Never silently discard node/status updates; run in caller thread when saturated.
+        new ThreadPoolExecutor.CallerRunsPolicy()
     );
 
     // Monitor for processing completed container jobs
@@ -233,11 +244,9 @@ public class PodmanBackend implements Backend {
             // Ensure a virtual queue exists for container jobs
             ensureContainerQueueExists();
 
-            // Cache the node ID to avoid database queries during job submission
-            cachedNodeId = org.starexec.data.database.Cluster.getNodeIdByName(CONTAINER_WORKER_NODE);
-            if (cachedNodeId <= 0) {
-                log.warn("Could not find nodeId for " + CONTAINER_WORKER_NODE + " during initialization. Pair host mapping may be delayed.");
-            }
+            // Cache the node ID to avoid database queries during job submission.
+            // In some startup orders, this node may not yet exist; event handler will retry lazily.
+            cachedNodeId = resolveContainerWorkerNodeId();
 
             // Start the job completion monitor
             this.jobMonitor = new ContainerJobMonitor(this);
@@ -255,6 +264,66 @@ public class PodmanBackend implements Backend {
                 e
             );
         }
+    }
+
+    /**
+     * Resolves the virtual Podman worker node ID used for pair host attribution.
+     *
+     * <p>If the ID cannot be found yet (startup ordering), this returns -1 and
+     * callers should retry later.</p>
+     */
+    private int resolveContainerWorkerNodeId() {
+        if (cachedNodeId > 0) {
+            return cachedNodeId;
+        }
+
+        try {
+            int resolved = org.starexec.data.database.Cluster.getNodeIdByName(
+                CONTAINER_WORKER_NODE
+            );
+            if (resolved > 0) {
+                cachedNodeId = resolved;
+            } else {
+                log.warn(
+                    "Could not find nodeId for " +
+                    CONTAINER_WORKER_NODE +
+                    ". Pair host mapping will retry on next container start event."
+                );
+            }
+            return resolved;
+        } catch (Exception e) {
+            log.error(
+                "Error resolving nodeId for " + CONTAINER_WORKER_NODE,
+                e
+            );
+            return -1;
+        }
+    }
+
+    /**
+     * Resolves the container worker node ID with short retries to tolerate
+     * startup ordering where the virtual node has not been persisted yet.
+     */
+    private int resolveContainerWorkerNodeIdWithRetry(
+        int maxAttempts,
+        long delayMillis
+    ) {
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            int nodeId = resolveContainerWorkerNodeId();
+            if (nodeId > 0) {
+                return nodeId;
+            }
+
+            if (attempt < maxAttempts) {
+                try {
+                    Thread.sleep(delayMillis);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return -1;
+                }
+            }
+        }
+        return -1;
     }
 
     /**
@@ -292,12 +361,66 @@ public class PodmanBackend implements Backend {
                             log.debug("Container event received: action=" + action + " pairId=" + pairId);
 
                             if ("start".equals(action)) {
-                                if (cachedNodeId > 0 && pairId > 0) {
+                                if (pairId > 0) {
                                     dbUpdateExecutor.submit(() -> {
                                         try {
-                                            org.starexec.data.database.JobPairs.updatePairExecutionHost(pairId, cachedNodeId);
+                                            int nodeId = resolveContainerWorkerNodeIdWithRetry(5, 1000);
+                                            if (nodeId > 0) {
+                                                boolean hostUpdated = JobPairs.updatePairExecutionHost(
+                                                    pairId,
+                                                    nodeId
+                                                );
+                                                if (!hostUpdated) {
+                                                    log.warn(
+                                                        "Failed to update pair execution host for pair " +
+                                                        pairId +
+                                                        " on node " +
+                                                        nodeId
+                                                    );
+                                                }
+                                            } else {
+                                                log.warn(
+                                                    "Could not resolve worker node ID after retries for pair " +
+                                                    pairId
+                                                );
+                                            }
+
+                                            // Guard: only transition to STATUS_RUNNING if the pair
+                                            // has not yet finished running. A fast-completing
+                                            // container can cause the 'start' event to be delivered
+                                            // after ContainerJobMonitor has already written a
+                                            // terminal status code. UpdatePairStatus is
+                                            // unconditional — without this guard it would overwrite
+                                            // the terminal code, leaving the pair stuck in
+                                            // STATUS_RUNNING indefinitely and the job never
+                                            // completing.
+                                            int currentStatusCode = JobPairs.getPairStatusCode(pairId);
+                                            if (!Status.StatusCode.toStatusCode(currentStatusCode)
+                                                                   .finishedRunning()) {
+                                                // Mark pair as running so node-level cluster views
+                                                // can show in-flight execution.
+                                                boolean runningUpdated = JobPairs.setPairStatus(
+                                                    pairId,
+                                                    Status.StatusCode.STATUS_RUNNING.getVal()
+                                                );
+                                                if (!runningUpdated) {
+                                                    log.warn(
+                                                        "Failed to set running status for pair " + pairId
+                                                    );
+                                                }
+                                            } else {
+                                                log.debug(
+                                                    "Skipping STATUS_RUNNING for pair " + pairId +
+                                                    " — current status code " + currentStatusCode +
+                                                    " indicates execution has already finished"
+                                                );
+                                            }
                                         } catch (Exception ex) {
-                                            log.error("Failed to update pair execution host for pair " + pairId, ex);
+                                            log.error(
+                                                "Failed to process start event updates for pair " +
+                                                pairId,
+                                                ex
+                                            );
                                         }
                                     });
                                 }
@@ -394,6 +517,16 @@ public class PodmanBackend implements Backend {
         defaultCpuLimit = EnvironmentConfig.getContainerDefaultCpuLimit();
         defaultWallclockLimit =
             EnvironmentConfig.getContainerDefaultWallclockLimit();
+        maxConcurrentJobs = EnvironmentConfig.getContainerMaxConcurrentJobs();
+
+        if (maxConcurrentJobs < 1) {
+            log.warn(
+                "Invalid STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS value: " +
+                maxConcurrentJobs +
+                ". Falling back to 1."
+            );
+            maxConcurrentJobs = 1;
+        }
 
         // DooD path translation configuration
         hostDataPath = EnvironmentConfig.getContainerHostDataPath();
@@ -411,6 +544,8 @@ public class PodmanBackend implements Backend {
                 "DooD path translation disabled (host and container paths are same)"
             );
         }
+
+        log.info("Container max concurrent jobs: " + maxConcurrentJobs);
     }
 
     /**
@@ -451,6 +586,197 @@ public class PodmanBackend implements Backend {
                 );
                 return false;
             }
+        }
+    }
+
+    /**
+     * Acquires one container submission slot, blocking if the backend is at capacity.
+     */
+    private void acquireSubmissionSlot(int execId) throws InterruptedException {
+        synchronized (submissionSlotLock) {
+            while (activeSubmissionSlots >= maxConcurrentJobs) {
+                log.debug(
+                    "Podman submission waiting for available slot (execId=" +
+                    execId +
+                    ", active=" +
+                    activeSubmissionSlots +
+                    ", max=" +
+                    maxConcurrentJobs +
+                    ")"
+                );
+                submissionSlotLock.wait();
+            }
+
+            activeSubmissionSlots++;
+            execIdsHoldingSubmissionSlot.add(execId);
+            log.debug(
+                "Acquired Podman submission slot (execId=" +
+                execId +
+                ", active=" +
+                activeSubmissionSlots +
+                ", max=" +
+                maxConcurrentJobs +
+                ")"
+            );
+        }
+    }
+
+    /**
+     * Releases one container submission slot for the given execution id.
+     */
+    private void releaseSubmissionSlot(int execId, String reason) {
+        synchronized (submissionSlotLock) {
+            if (!execIdsHoldingSubmissionSlot.remove(execId)) {
+                return;
+            }
+
+            if (activeSubmissionSlots > 0) {
+                activeSubmissionSlots--;
+            } else {
+                log.warn(
+                    "Submission slot underflow prevented while releasing execId=" +
+                    execId +
+                    " (reason=" +
+                    reason +
+                    ")"
+                );
+            }
+
+            submissionSlotLock.notifyAll();
+
+            log.debug(
+                "Released Podman submission slot (execId=" +
+                execId +
+                ", reason=" +
+                reason +
+                ", active=" +
+                activeSubmissionSlots +
+                ", max=" +
+                maxConcurrentJobs +
+                ")"
+            );
+        }
+    }
+
+    /**
+     * Removes tracked execution mapping by container id and returns the associated exec id.
+     */
+    private Integer removeTrackedExecutionByContainerId(String containerId) {
+        if (containerId == null) {
+            return null;
+        }
+
+        for (Map.Entry<Integer, String> entry : execIdToContainerId.entrySet()) {
+            if (containerId.equals(entry.getValue())) {
+                Integer execId = entry.getKey();
+                if (execIdToContainerId.remove(execId, containerId)) {
+                    return execId;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Starts a container and verifies liveness when start call fails ambiguously.
+     *
+     * <p>
+     * Some container engines may fail the client-side start request even after
+     * the daemon has already started the container. In that case we must detect
+     * that the container is running and treat the submission as successful to
+     * avoid duplicate retries.
+     * </p>
+     */
+    private void startContainerWithVerification(String containerId)
+        throws Exception {
+        try {
+            dockerClient.startContainerCmd(containerId).exec();
+            log.info("Container started: " + containerId);
+            return;
+        } catch (Exception startException) {
+            log.warn(
+                "Container start command failed for " +
+                containerId +
+                ". Verifying runtime state before retry.",
+                startException
+            );
+
+            try {
+                var inspection = dockerClient
+                    .inspectContainerCmd(containerId)
+                    .exec();
+                var state = inspection.getState();
+                boolean isRunning =
+                    state != null && Boolean.TRUE.equals(state.getRunning());
+                if (isRunning) {
+                    log.warn(
+                        "Container " +
+                        containerId +
+                        " is already running despite start exception; " +
+                        "treating submission as successful."
+                    );
+                    return;
+                }
+            } catch (NotFoundException notFound) {
+                log.warn(
+                    "Container " +
+                    containerId +
+                    " not found during post-start verification."
+                );
+            } catch (Exception inspectException) {
+                log.warn(
+                    "Failed to inspect container " +
+                    containerId +
+                    " after start exception.",
+                    inspectException
+                );
+            }
+
+            // Best-effort cleanup before propagating failure for retry.
+            try {
+                dockerClient
+                    .removeContainerCmd(containerId)
+                    .withForce(true)
+                    .exec();
+                log.info(
+                    "Removed container after unsuccessful start verification: " +
+                    containerId
+                );
+            } catch (NotFoundException ignored) {
+                // Already gone.
+            } catch (Exception cleanupException) {
+                log.warn(
+                    "Failed to remove container after start failure: " +
+                    containerId,
+                    cleanupException
+                );
+            }
+
+            throw startException;
+        }
+    }
+
+    /**
+     * Notifies the completion monitor that a new container was submitted.
+     *
+     * <p>
+     * Notification failures are non-fatal and must not cause submission retries
+     * after a container has already started.
+     * </p>
+     */
+    private void notifyMonitorNewWorkSafely() {
+        if (jobMonitor == null) {
+            return;
+        }
+
+        try {
+            jobMonitor.notifyNewWorkSubmitted();
+        } catch (Exception e) {
+            log.warn(
+                "Container started successfully but failed to notify job monitor.",
+                e
+            );
         }
     }
 
@@ -536,6 +862,25 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String logPath
     ) {
+        int execIdForSlot = -1;
+        boolean slotAcquired = false;
+        boolean submissionAccepted = false;
+
+        synchronized (execIdLock) {
+            execIdForSlot = nextExecId++;
+        }
+
+        try {
+            acquireSubmissionSlot(execIdForSlot);
+            slotAcquired = true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error(
+                "Interrupted while waiting for an available Podman submission slot"
+            );
+            return -1;
+        }
+
         final long timestamp = System.currentTimeMillis();
         final String baseJobName = CONTAINER_PREFIX + timestamp;
 
@@ -543,82 +888,92 @@ public class PodmanBackend implements Backend {
         final int maxRetries = 3;
         final long baseRetryDelay = 500; // milliseconds
 
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            // Use unique name for each retry attempt to avoid conflicts
-            final String jobName = (attempt == 1)
-                ? baseJobName
-                : baseJobName + "-retry" + attempt;
+        try {
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                // Use unique name for each retry attempt to avoid conflicts
+                final String jobName = (attempt == 1)
+                    ? baseJobName
+                    : baseJobName + "-retry" + attempt;
 
-            try {
-                if (attempt > 1) {
-                    log.info(
-                        "Retry attempt " +
-                            attempt +
-                            " of " +
-                            maxRetries +
-                            " for job: " +
-                            jobName
-                    );
-                }
-
-                return doSubmitScript(
-                    pairId,
-                    jobName,
-                    scriptPath,
-                    workingDirectory,
-                    logPath,
-                    timestamp,
-                    attempt
-                );
-            } catch (Exception e) {
-                boolean isRetryable =
-                    e.getMessage() != null &&
-                    (e.getMessage().contains("Broken pipe") ||
-                        e.getMessage().contains("Connection reset"));
-
-                if (isRetryable && attempt < maxRetries) {
-                    long delay =
-                        baseRetryDelay * (long) Math.pow(2, attempt - 1);
-                    log.warn(
-                        "Transient error on attempt " +
-                            attempt +
-                            " (will retry in " +
-                            delay +
-                            "ms): " +
-                            e.getMessage()
-                    );
-                    try {
-                        Thread.sleep(delay);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        log.error("Interrupted during retry delay");
-                        return -1;
-                    }
-                } else {
-                    log.error(
-                        "Error submitting job: " +
-                            jobName +
-                            " (attempt " +
-                            attempt +
-                            " of " +
-                            maxRetries +
-                            ")"
-                    );
-                    log.error("Exception type: " + e.getClass().getName());
-                    log.error("Message: " + e.getMessage());
-                    if (e.getCause() != null) {
-                        log.error(
-                            "Cause: " +
-                                e.getCause().getClass().getName() +
-                                " - " +
-                                e.getCause().getMessage()
+                try {
+                    if (attempt > 1) {
+                        log.info(
+                            "Retry attempt " +
+                                attempt +
+                                " of " +
+                                maxRetries +
+                                " for job: " +
+                                jobName
                         );
                     }
-                    return -1;
+
+                    int execId = doSubmitScript(
+                        pairId,
+                        jobName,
+                        scriptPath,
+                        workingDirectory,
+                        logPath,
+                        timestamp,
+                        attempt,
+                        execIdForSlot
+                    );
+                    submissionAccepted = true;
+                    return execId;
+                } catch (Exception e) {
+                    boolean isRetryable =
+                        e.getMessage() != null &&
+                        (e.getMessage().contains("Broken pipe") ||
+                            e.getMessage().contains("Connection reset"));
+
+                    if (isRetryable && attempt < maxRetries) {
+                        long delay =
+                            baseRetryDelay * (long) Math.pow(2, attempt - 1);
+                        log.warn(
+                            "Transient error on attempt " +
+                                attempt +
+                                " (will retry in " +
+                                delay +
+                                "ms): " +
+                                e.getMessage()
+                        );
+                        try {
+                            Thread.sleep(delay);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            log.error("Interrupted during retry delay");
+                            return -1;
+                        }
+                    } else {
+                        log.error(
+                            "Error submitting job: " +
+                                jobName +
+                                " (attempt " +
+                                attempt +
+                                " of " +
+                                maxRetries +
+                                ")"
+                        );
+                        log.error("Exception type: " + e.getClass().getName());
+                        log.error("Message: " + e.getMessage());
+                        if (e.getCause() != null) {
+                            log.error(
+                                "Cause: " +
+                                    e.getCause().getClass().getName() +
+                                    " - " +
+                                    e.getCause().getMessage()
+                            );
+                        }
+                        return -1;
+                    }
                 }
             }
+
+            return -1; // Should not reach here
+        } finally {
+            if (slotAcquired && !submissionAccepted) {
+                releaseSubmissionSlot(execIdForSlot, "submission rejected");
+            }
         }
-        return -1; // Should not reach here
     }
 
     /**
@@ -631,7 +986,8 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String logPath,
         long timestamp,
-        int attempt
+        int attempt,
+        int execId
     ) throws Exception {
         log.info("Submitting job: " + jobName);
         log.debug("Working directory: " + workingDirectory);
@@ -736,27 +1092,20 @@ public class PodmanBackend implements Backend {
             }
         }
 
-        // Generate and store execution ID
-        int execId;
-        synchronized (execIdLock) {
-            execId = nextExecId++;
-        }
-        execIdToContainerId.put(execId, containerId);
-
         // Put pair ID in tracking map BEFORE starting the container to avoid race condition
         if (pairId > 0 && containerId != null) {
             containerIdToPairId.put(containerId, pairId);
         }
 
-        // Start container
-        dockerClient.startContainerCmd(containerId).exec();
-        log.info("Container started: " + containerId);
+        // Start container (with post-failure verification to avoid duplicate retries)
+        startContainerWithVerification(containerId);
 
-        // Notify the job monitor that new work has been submitted
-        // This resets the adaptive poll interval to base for responsive job detection
-        if (jobMonitor != null) {
-            jobMonitor.notifyNewWorkSubmitted();
-        }
+        // Track execution only after successful start
+        execIdToContainerId.put(execId, containerId);
+
+        // Notify the job monitor that new work has been submitted.
+        // Failure here is non-fatal and must not trigger submission retries.
+        notifyMonitorNewWorkSafely();
 
         log.info(
             "Job submitted successfully. ExecId: " +
@@ -1331,11 +1680,13 @@ public class PodmanBackend implements Backend {
             dockerClient.removeContainerCmd(containerId).withForce(true).exec();
 
             execIdToContainerId.remove(execId);
+            releaseSubmissionSlot(execId, "killed pair");
             log.info("Container killed successfully: " + containerId);
             return true;
         } catch (NotFoundException e) {
             log.warn("Container not found (already removed?): " + containerId);
             execIdToContainerId.remove(execId);
+            releaseSubmissionSlot(execId, "container already missing during kill");
             return true;
         } catch (Exception e) {
             log.error("Error killing container: " + containerId, e);
@@ -1379,6 +1730,13 @@ public class PodmanBackend implements Backend {
 
             for (Container container : containers) {
                 try {
+                    Integer execId = removeTrackedExecutionByContainerId(
+                        container.getId()
+                    );
+                    if (execId != null) {
+                        releaseSubmissionSlot(execId, "orphan cleanup");
+                    }
+
                     log.info(
                         "Cleaning up orphaned container: " + container.getId()
                     );
@@ -1465,10 +1823,12 @@ public class PodmanBackend implements Backend {
                 } else {
                     // Container finished, remove from tracking
                     execIdToContainerId.remove(entry.getKey());
+                    releaseSubmissionSlot(entry.getKey(), "container no longer running");
                 }
             } catch (NotFoundException e) {
                 // Container no longer exists
                 execIdToContainerId.remove(entry.getKey());
+                releaseSubmissionSlot(entry.getKey(), "container missing during active scan");
             }
         }
 
@@ -1622,6 +1982,11 @@ public class PodmanBackend implements Backend {
      * @param containerId The container ID to remove
      */
     public void removeCompletedContainer(String containerId) {
+        Integer execId = removeTrackedExecutionByContainerId(containerId);
+        if (execId != null) {
+            releaseSubmissionSlot(execId, "container completed");
+        }
+
         containerIdToPairId.invalidate(containerId);
         try {
             dockerClient

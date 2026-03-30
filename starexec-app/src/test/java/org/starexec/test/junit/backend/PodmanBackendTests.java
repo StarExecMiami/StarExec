@@ -11,6 +11,7 @@ import com.github.dockerjava.api.exception.NotModifiedException;
 import com.github.dockerjava.api.model.*;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -19,6 +20,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
 
 /**
@@ -133,6 +135,99 @@ public class PodmanBackendTests {
         return (Map<Integer, String>) mapField.get(backend);
     }
 
+    @SuppressWarnings("unchecked")
+    private Set<Integer> getSlotHolderSet() throws Exception {
+        Field holdersField = PodmanBackend.class.getDeclaredField("execIdsHoldingSubmissionSlot");
+        holdersField.setAccessible(true);
+        return (Set<Integer>) holdersField.get(backend);
+    }
+
+    private int getActiveSubmissionSlots() throws Exception {
+        Field slotsField = PodmanBackend.class.getDeclaredField("activeSubmissionSlots");
+        slotsField.setAccessible(true);
+        return (int) slotsField.get(backend);
+    }
+
+    private void setActiveSubmissionSlots(int value) throws Exception {
+        Field slotsField = PodmanBackend.class.getDeclaredField("activeSubmissionSlots");
+        slotsField.setAccessible(true);
+        slotsField.set(backend, value);
+    }
+
+    private void markSubmissionSlotHeld(int execId) throws Exception {
+        Set<Integer> holders = getSlotHolderSet();
+        holders.add(execId);
+        setActiveSubmissionSlots(holders.size());
+    }
+
+    private void invokeStartContainerWithVerification(String containerId)
+        throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "startContainerWithVerification",
+            String.class
+        );
+        method.setAccessible(true);
+        method.invoke(backend, containerId);
+    }
+
+    private void invokeNotifyMonitorNewWorkSafely() throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "notifyMonitorNewWorkSafely"
+        );
+        method.setAccessible(true);
+        method.invoke(backend);
+    }
+
+    private void setJobMonitor(ContainerJobMonitor monitor) throws Exception {
+        Field monitorField = PodmanBackend.class.getDeclaredField("jobMonitor");
+        monitorField.setAccessible(true);
+        monitorField.set(backend, monitor);
+    }
+
+    private void setBackendField(String fieldName, Object value) throws Exception {
+        Field field = PodmanBackend.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(backend, value);
+    }
+
+    private void configureBackendForSubmitScript() throws Exception {
+        setBackendField("usePrebuiltImage", true);
+        setBackendField(
+            "jobImage",
+            "ghcr.io/starexecmiami/starexec-job-runner:latest"
+        );
+        setBackendField("defaultMemoryMb", 2048L);
+        setBackendField("defaultCpuLimit", 600);
+        setBackendField("defaultWallclockLimit", 600);
+        setBackendField("containerDataPath", "/app/data");
+        setBackendField("hostDataPath", "");
+    }
+
+    private void configureCreateContainerSuccess(String containerId) {
+        CreateContainerResponse createResponse = mock(CreateContainerResponse.class);
+        when(createResponse.getId()).thenReturn(containerId);
+
+        when(mockDockerClient.createContainerCmd(anyString()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withName(anyString()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withHostName(anyString()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withHostConfig(any(HostConfig.class)))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withEnv(anyList()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withLabels(anyMap()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withEntrypoint(any(String[].class)))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withCmd(anyString()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withWorkingDir(anyString()))
+            .thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.exec()).thenReturn(createResponse);
+    }
+
     /**
      * Sets up common mock behaviors used across multiple tests.
      */
@@ -154,6 +249,9 @@ public class PodmanBackendTests {
         // Mock stop container command
         when(mockDockerClient.stopContainerCmd(anyString())).thenReturn(mockStopContainerCmd);
         when(mockStopContainerCmd.withTimeout(anyInt())).thenReturn(mockStopContainerCmd);
+
+        // Mock start container command
+        when(mockDockerClient.startContainerCmd(anyString())).thenReturn(mockStartContainerCmd);
 
         // Mock remove container command
         when(mockDockerClient.removeContainerCmd(anyString())).thenReturn(mockRemoveContainerCmd);
@@ -220,6 +318,7 @@ public class PodmanBackendTests {
         // Setup: Add a tracked container
         Map<Integer, String> execIdMap = getExecIdMap();
         execIdMap.put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        markSubmissionSlotHeld(TEST_EXEC_ID);
 
         // Execute
         boolean result = backend.killPair(TEST_EXEC_ID);
@@ -227,6 +326,8 @@ public class PodmanBackendTests {
         // Verify
         assertTrue("Kill should succeed", result);
         assertFalse("Container should be removed from tracking", execIdMap.containsKey(TEST_EXEC_ID));
+        assertFalse("Submission slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
+        assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
 
         // Verify Docker commands were called
         verify(mockDockerClient).stopContainerCmd(TEST_CONTAINER_ID);
@@ -397,6 +498,30 @@ public class PodmanBackendTests {
     }
 
     @Test
+    public void testGetActiveExecutionIds_ReleasesSlotForStoppedContainer() throws Exception {
+        // Setup: One stopped tracked container that still holds a submission slot
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(TEST_EXEC_ID, "stopped-container");
+        markSubmissionSlotHeld(TEST_EXEC_ID);
+
+        InspectContainerCmd stoppedInspect = mock(InspectContainerCmd.class);
+        InspectContainerResponse stoppedResponse = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState stoppedState = mock(InspectContainerResponse.ContainerState.class);
+        when(mockDockerClient.inspectContainerCmd("stopped-container")).thenReturn(stoppedInspect);
+        when(stoppedInspect.exec()).thenReturn(stoppedResponse);
+        when(stoppedResponse.getState()).thenReturn(stoppedState);
+        when(stoppedState.getRunning()).thenReturn(false);
+
+        // Execute
+        Set<Integer> activeIds = backend.getActiveExecutionIds();
+
+        // Verify
+        assertTrue("Stopped container should not be active", activeIds.isEmpty());
+        assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
+        assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
+    }
+
+    @Test
     public void testGetActiveExecutionIds_HandlesNotFoundContainer() throws Exception {
         // Setup: Add tracked container that no longer exists
         Map<Integer, String> execIdMap = getExecIdMap();
@@ -470,6 +595,20 @@ public class PodmanBackendTests {
     }
 
     @Test
+    public void testRemoveCompletedContainer_ReleasesSubmissionSlotForTrackedExec() throws Exception {
+        // Setup: tracked container with held submission slot
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(TEST_EXEC_ID, TEST_CONTAINER_ID);
+        markSubmissionSlotHeld(TEST_EXEC_ID);
+
+        backend.removeCompletedContainer(TEST_CONTAINER_ID);
+
+        assertFalse("Tracked exec should be removed after completion", execIdMap.containsKey(TEST_EXEC_ID));
+        assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
+        assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
+    }
+
+    @Test
     public void testRemoveCompletedContainer_HandlesException() {
         // Mock: Throw exception
         doThrow(new RuntimeException("Remove failed")).when(mockRemoveContainerCmd).exec();
@@ -478,6 +617,136 @@ public class PodmanBackendTests {
         backend.removeCompletedContainer(TEST_CONTAINER_ID);
 
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+    }
+
+    @Test
+    public void testStartContainerWithVerification_StartThrowsButContainerRunning_TreatedAsSuccess()
+        throws Exception {
+        // Arrange
+        RuntimeException startFailure = new RuntimeException("socket timeout");
+        doThrow(startFailure).when(mockStartContainerCmd).exec();
+
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(true);
+
+        // Act + Assert (no throw)
+        invokeStartContainerWithVerification(TEST_CONTAINER_ID);
+
+        verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+    }
+
+    @Test
+    public void testStartContainerWithVerification_StartThrowsAndContainerNotRunning_RemovesAndRethrows()
+        throws Exception {
+        // Arrange
+        RuntimeException startFailure = new RuntimeException("connection reset");
+        doThrow(startFailure).when(mockStartContainerCmd).exec();
+
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(false);
+
+        // Act + Assert
+        try {
+            invokeStartContainerWithVerification(TEST_CONTAINER_ID);
+            fail("Expected startContainerWithVerification to rethrow start failure");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            assertSame(
+                "Original start exception should be rethrown",
+                startFailure,
+                e.getCause()
+            );
+        }
+
+        verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+    }
+
+    @Test
+    public void testNotifyMonitorNewWorkSafely_MonitorThrows_DoesNotPropagate()
+        throws Exception {
+        // Arrange
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        doThrow(new RuntimeException("monitor down"))
+            .when(monitor)
+            .notifyNewWorkSubmitted();
+        setJobMonitor(monitor);
+
+        // Act + Assert (no throw)
+        invokeNotifyMonitorNewWorkSafely();
+
+        verify(monitor).notifyNewWorkSubmitted();
+    }
+
+    @Test
+    public void testSubmitScript_StartThrowsButContainerRunning_ReturnsExecIdWithoutRetry()
+        throws Exception {
+        // Arrange
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+
+        RuntimeException startFailure = new RuntimeException("socket timeout");
+        doThrow(startFailure).when(mockStartContainerCmd).exec();
+
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(true);
+
+        String workingDir = "/app/data/jobin/job_1";
+        String scriptPath = "/app/data/jobin/job_1/run.sh";
+        String logPath = tempDir.resolve("out").resolve("job.log").toString();
+
+        // Act
+        int execId = backend.submitScript(42, scriptPath, workingDir, logPath);
+
+        // Assert
+        assertTrue("Submission should succeed", execId > 0);
+        assertEquals(
+            "Execution should be tracked against created container",
+            TEST_CONTAINER_ID,
+            getExecIdMap().get(execId)
+        );
+        verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+        verify(mockStartContainerCmd, times(1)).exec();
+        verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+    }
+
+    @Test
+    public void testSubmitScript_MonitorThrows_StillReturnsExecIdWithoutRetry()
+        throws Exception {
+        // Arrange
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        doThrow(new RuntimeException("monitor down"))
+            .when(monitor)
+            .notifyNewWorkSubmitted();
+        setJobMonitor(monitor);
+
+        String workingDir = "/app/data/jobin/job_2";
+        String scriptPath = "/app/data/jobin/job_2/run.sh";
+        String logPath = tempDir.resolve("out").resolve("job2.log").toString();
+
+        // Act
+        int execId = backend.submitScript(99, scriptPath, workingDir, logPath);
+
+        // Assert
+        assertTrue("Submission should succeed despite monitor failure", execId > 0);
+        assertEquals(
+            "Execution should still be tracked",
+            TEST_CONTAINER_ID,
+            getExecIdMap().get(execId)
+        );
+        verify(monitor, times(1)).notifyNewWorkSubmitted();
+        verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+        verify(mockStartContainerCmd, times(1)).exec();
     }
 
     // ==================== Destroy Tests ====================

@@ -160,6 +160,10 @@ podman:
   # Job container configuration
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
 
+  # Hard cap on concurrently running Podman job containers.
+  # Keep this at 1 to avoid L1/L2 cache contention between solver jobs.
+  maxConcurrentJobs: 1
+
   # Network configuration for job containers
   networkMode: "starexec-net"
   jobDbHost: "postgres"

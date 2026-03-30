@@ -94,3 +94,5 @@ podman:
     #   loginctl show-user $USER -p RuntimePath
     hostPath: "/run/user/1000/podman/podman.sock"
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  # Keep one concurrent job to reduce L1/L2 cache contention.
+  maxConcurrentJobs: 1

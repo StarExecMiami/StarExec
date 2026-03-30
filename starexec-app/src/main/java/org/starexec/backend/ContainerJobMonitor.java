@@ -382,84 +382,93 @@ public class ContainerJobMonitor {
     }
 
     /**
-     * Parses stats.json (written by functions.bash in container mode).
-     * Simple JSON parsing without external dependencies.
+     * Parses stats.json (written by functions.bash in container mode) using Gson.
+     *
+     * <p>Each field is extracted individually so that a missing or malformed
+     * field leaves the corresponding {@link RunsolverStats} default value
+     * intact rather than aborting the entire parse. This mirrors the
+     * graceful-degradation pattern used for {@code status.json} parsing
+     * elsewhere in this class and satisfies the Gson mandate in AGENTS.md §5.2.</p>
      */
     private void parseStatsJson(String json, RunsolverStats stats) {
-        // Simple regex-based JSON parsing
-        Matcher m;
-        if (
-            (m = Pattern.compile("\"wallclockTime\"\\s*:\\s*([0-9.]+)").matcher(
-                    json
-                )).find()
-        ) {
-            stats.wallclockTime = Double.parseDouble(m.group(1));
-        }
-        if (
-            (m = Pattern.compile("\"cpuTime\"\\s*:\\s*([0-9.]+)").matcher(
-                    json
-                )).find()
-        ) {
-            stats.cpuTime = Double.parseDouble(m.group(1));
-        }
-        if (
-            (m = Pattern.compile("\"userTime\"\\s*:\\s*([0-9.]+)").matcher(
-                    json
-                )).find()
-        ) {
-            stats.userTime = Double.parseDouble(m.group(1));
-        }
-        if (
-            (m = Pattern.compile("\"systemTime\"\\s*:\\s*([0-9.]+)").matcher(
-                    json
-                )).find()
-        ) {
-            stats.systemTime = Double.parseDouble(m.group(1));
-        }
-        if (
-            (m = Pattern.compile(
-                    "\"maxVirtualMemory\"\\s*:\\s*([0-9.]+)"
-                ).matcher(json)).find()
-        ) {
-            stats.maxVirtualMemory = Double.parseDouble(m.group(1));
-        }
-        if (
-            (m = Pattern.compile(
-                    "\"maxResidentSetSize\"\\s*:\\s*([0-9]+)"
-                ).matcher(json)).find()
-        ) {
-            stats.maxResidentSetSize = Long.parseLong(m.group(1));
+        JsonObject obj;
+        try {
+            obj = JsonParser.parseString(json).getAsJsonObject();
+        } catch (Exception e) {
+            log.warn("stats.json is not valid JSON; skipping stats parse", e);
+            return;
         }
 
-        // Optional: stage number reported by containerized execution (int)
-        if (
-            (m = Pattern.compile("\"stageNumber\"\\s*:\\s*([0-9]+)").matcher(
-                    json
-                )).find()
-        ) {
-            stats.stageNumber = Integer.parseInt(m.group(1));
-        }
-
-        // Optional: disk size used (may be reported in bytes)
-        if (
-            (m = Pattern.compile("\"diskSize\"\\s*:\\s*([0-9]+)").matcher(
-                    json
-                )).find()
-        ) {
-            try {
-                stats.diskSize = Long.parseLong(m.group(1));
-            } catch (NumberFormatException e) {
-                // ignore and leave default
+        try {
+            if (obj.has("wallclockTime")) {
+                stats.wallclockTime = obj.get("wallclockTime").getAsDouble();
             }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'wallclockTime'", e);
         }
 
-        // Optional: hostname of the execution host/container
-        if (
-            (m = Pattern.compile("\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(
-                    json
-                )).find()
-        ) {
-            stats.hostname = m.group(1);
+        try {
+            if (obj.has("cpuTime")) {
+                stats.cpuTime = obj.get("cpuTime").getAsDouble();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'cpuTime'", e);
+        }
+
+        try {
+            if (obj.has("userTime")) {
+                stats.userTime = obj.get("userTime").getAsDouble();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'userTime'", e);
+        }
+
+        try {
+            if (obj.has("systemTime")) {
+                stats.systemTime = obj.get("systemTime").getAsDouble();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'systemTime'", e);
+        }
+
+        try {
+            if (obj.has("maxVirtualMemory")) {
+                stats.maxVirtualMemory = obj.get("maxVirtualMemory").getAsDouble();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'maxVirtualMemory'", e);
+        }
+
+        try {
+            if (obj.has("maxResidentSetSize")) {
+                stats.maxResidentSetSize = obj.get("maxResidentSetSize").getAsLong();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'maxResidentSetSize'", e);
+        }
+
+        try {
+            if (obj.has("stageNumber")) {
+                stats.stageNumber = obj.get("stageNumber").getAsInt();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'stageNumber'", e);
+        }
+
+        try {
+            if (obj.has("diskSize")) {
+                stats.diskSize = obj.get("diskSize").getAsLong();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'diskSize'", e);
+        }
+
+        try {
+            if (obj.has("hostname")) {
+                stats.hostname = obj.get("hostname").getAsString();
+            }
+        } catch (Exception e) {
+            log.warn("stats.json: could not parse 'hostname'", e);
         }
     }
 
@@ -597,7 +606,7 @@ public class ContainerJobMonitor {
             String nodeName = (stats.hostname != null &&
                     !stats.hostname.isEmpty())
                 ? stats.hostname
-                : "unknown";
+                : PodmanBackend.CONTAINER_WORKER_NODE;
             boolean ok = JobPairs.updateRunSolverStats(
                 pairId,
                 nodeName,

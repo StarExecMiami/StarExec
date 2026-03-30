@@ -598,6 +598,18 @@ public class EnvironmentConfig {
     }
 
     /**
+     * Maximum number of concurrently running Podman job containers.
+     *
+     * <p>
+     * This is a hard submission gate in PodmanBackend. It defaults to 1 to
+     * preserve cache locality and avoid L1/L2 contention between solver jobs.
+     * </p>
+     */
+    public static int getContainerMaxConcurrentJobs() {
+        return getEnvInt("STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS", 1);
+    }
+
+    /**
      * Default memory limit for job containers (in MB).
      */
     public static long getContainerDefaultMemoryMb() {
@@ -661,18 +673,18 @@ public class EnvironmentConfig {
      * <ul>
      *   <li>"host" - Use the host network (simplest, jobs can reach localhost services)</li>
      *   <li>"bridge" - Default bridge network (isolated)</li>
-     *   <li>"podman-default-kube-network" - Connect to the Podman kube network (for pod connectivity)</li>
+    *   <li>"starexec-net" - Connect to the StarExec Podman bridge network</li>
      *   <li>"container:&lt;name&gt;" - Share network with another container</li>
      * </ul>
      * <p>
-     * For Podman pods, use "podman-default-kube-network" to allow job containers to
+     * For the current Podman deployment, use "starexec-net" to allow job containers to
      * communicate with the StarExec application and PostgreSQL containers.
      * </p>
      */
     public static String getContainerNetworkMode() {
         return getEnv(
             "STAREXEC_CONTAINER_NETWORK_MODE",
-            "podman-default-kube-network"
+            "starexec-net"
         );
     }
 
