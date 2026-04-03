@@ -571,18 +571,11 @@ define verify_podman_socket_from_values
 				fi; \
 				if [ "$$SOCKET_UID_IN_FILE" != "$$CURRENT_UID" ]; then \
 					echo ""; \
-					echo "${RED}✗ UID mismatch detected${RESET}"; \
-					echo "  Values file expects UID: $$SOCKET_UID_IN_FILE"; \
-					echo "  Your current UID:       $$CURRENT_UID"; \
-					echo "  File: $(VALS)"; \
+					echo "${YELLOW}○ Detected UID mismatch: values file has /run/user/$$SOCKET_UID_IN_FILE/ but your UID is $$CURRENT_UID${RESET}"; \
+					echo "${YELLOW}  Auto-correcting: $(VALS)${RESET}"; \
+					sed -i 's|/run/user/[0-9]*/|/run/user/'$$CURRENT_UID'/|g' $(VALS); \
+					echo "${YELLOW}  Updated socket path to: /run/user/$$CURRENT_UID/podman/podman.sock${RESET}"; \
 					echo ""; \
-					echo "Edit the values file to use your UID:"; \
-					echo "  sed -i 's|/run/user/[0-9]*/|/run/user/'$$CURRENT_UID'/|g' $(VALS)"; \
-					echo ""; \
-					echo "Or set PODMAN_SOCKET_PATH to override:"; \
-					echo "  PODMAN_SOCKET_PATH=/run/user/$$CURRENT_UID/podman/podman.sock make deploy-podman ENV=$(ENV)"; \
-					echo ""; \
-					exit 1; \
 				fi; \
 				if [ ! -S "$$SOCKET_PATH" ]; then \
 					echo ""; \
