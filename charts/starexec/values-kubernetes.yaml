@@ -63,10 +63,14 @@ kubernetes:
   resources:
     requests:
       memory: "512Mi"
-      cpu: "500m"
+      cpu: "1"
     limits:
       memory: "2Gi"
-      cpu: "2"
+      cpu: "1"
+
+  # Academic reproducibility mode:
+  # enforce one job pair per CPU to reduce L1/L2 cache contention.
+  strictOnePairPerCpu: true
   
   # Job cleanup (TTL after completion)
   ttlSecondsAfterFinished: 3600  # 1 hour
@@ -137,20 +141,10 @@ persistence:
   usePodmanVolumes: false
   useHostPathForPodman: false
 
-# Environment variables
-env:
-  # Kubernetes backend configuration
-  STAREXEC_K8S_NAMESPACE: "starexec-jobs"
-  STAREXEC_K8S_JOB_IMAGE: "ghcr.io/starexecmiami/starexec-job-runner:latest"
-  STAREXEC_K8S_DATA_PVC: "starexec-data"
-  STAREXEC_K8S_SERVICE_ACCOUNT: "starexec-job"
-  STAREXEC_K8S_QUEUE_LABEL: "starexec/queue"
-  
-  # Logging
-  LOG_LEVEL: "INFO"
-  
-  # Flyway (database migrations)
-  FLYWAY_BASELINE_ON_MIGRATE: "true"
+# Additional environment variables (optional)
+# Keep Kubernetes backend variables out of this map; they are injected
+# from the canonical .Values.kubernetes settings by deployment.yaml.
+env: {}
 
 # Ingress configuration (optional)
 ingress:

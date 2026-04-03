@@ -14,6 +14,7 @@ spec:
       labels:
         {{- include "chart.selectorLabels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "chart.fullname" . }}
       restartPolicy: Always
       securityContext:
         fsGroup: 999
@@ -123,6 +124,32 @@ spec:
 {{- if eq .Values.backend.type "podman" }}
             - name: STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS
               value: "{{ .Values.podman.maxConcurrentJobs }}"
+{{- end }}
+{{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
+            - name: STAREXEC_K8S_NAMESPACE
+              value: "{{ .Values.kubernetes.jobNamespace | default .Release.Namespace }}"
+            - name: STAREXEC_K8S_JOB_IMAGE
+              value: "{{ .Values.kubernetes.jobImage }}"
+            - name: STAREXEC_K8S_DATA_PVC
+              value: {{ include "starexec.k8sDataPvcName" . | quote }}
+            - name: STAREXEC_K8S_SERVICE_ACCOUNT
+              value: {{ include "starexec.k8sJobServiceAccount" . | quote }}
+            - name: STAREXEC_K8S_QUEUE_LABEL
+              value: "{{ .Values.kubernetes.queueLabelKey }}"
+            - name: STAREXEC_K8S_JOB_TTL_SECONDS
+              value: "{{ .Values.kubernetes.ttlSecondsAfterFinished }}"
+            - name: STAREXEC_K8S_JOB_BACKOFF_LIMIT
+              value: "{{ .Values.kubernetes.backoffLimit }}"
+            - name: STAREXEC_K8S_MEMORY_LIMIT
+              value: "{{ .Values.kubernetes.resources.limits.memory }}"
+            - name: STAREXEC_K8S_CPU_LIMIT
+              value: "{{ .Values.kubernetes.resources.limits.cpu }}"
+            - name: STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU
+              value: "{{ .Values.kubernetes.strictOnePairPerCpu }}"
+            - name: STAREXEC_K8S_WORKER_SELECTOR_KEY
+              value: "starexec.org/worker"
+            - name: STAREXEC_K8S_WORKER_SELECTOR_VALUE
+              value: "true"
 {{- end }}
 {{- if .Values.backend.hostDataPath }}
             - name: STAREXEC_CONTAINER_HOST_DATA_PATH

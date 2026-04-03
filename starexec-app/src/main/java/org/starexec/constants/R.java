@@ -9,7 +9,7 @@ import java.util.Date;
 import java.util.HashMap;
 import org.starexec.backend.Backend;
 import org.starexec.backend.GridEngineBackend;
-import org.starexec.backend.KubernetesBackend;
+import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.LocalBackend;
 import org.starexec.backend.OARBackend;
 import org.starexec.backend.PodmanBackend;
@@ -111,6 +111,7 @@ public class R {
     public static final String SGE_TYPE = "sge";
     public static final String OAR_TYPE = "oar";
     public static final String LOCAL_TYPE = "local";
+    public static final String KUBERNETES_TYPE = "kubernetes";
     public static final String K8S_TYPE = "k8s";
     public static final String K8S_NATIVE_TYPE = "kubernetes-native";
     public static final String PODMAN_TYPE = "podman";
@@ -130,8 +131,10 @@ public class R {
             case LOCAL_TYPE:
                 b = new LocalBackend();
                 break;
+            case KUBERNETES_TYPE:
             case K8S_TYPE:
-                b = new KubernetesBackend();
+            case K8S_NATIVE_TYPE:
+                b = new KubernetesNativeBackend();
                 break;
             case PODMAN_TYPE:
                 b = new PodmanBackend();

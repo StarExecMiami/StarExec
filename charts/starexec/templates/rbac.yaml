@@ -4,7 +4,14 @@ metadata:
   name: {{ include "chart.fullname" . }}
   labels:
 {{ include "chart.labels" . | nindent 4 }}
-rules: []
+rules:
+{{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+{{- else }}
+  []
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -19,3 +26,47 @@ roleRef:
   kind: Role
   name: {{ include "chart.fullname" . }}
   apiGroup: rbac.authorization.k8s.io
+{{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-job" (include "chart.fullname" .) }}
+  labels:
+{{ include "chart.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "starexec.k8sJobServiceAccount" . }}
+roleRef:
+  kind: Role
+  name: {{ include "chart.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- if .Values.kubernetes.nodeManagement.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-node-manager" (include "chart.fullname" .) }}
+  labels:
+{{ include "chart.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-node-manager" (include "chart.fullname" .) }}
+  labels:
+{{ include "chart.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chart.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ printf "%s-node-manager" (include "chart.fullname" .) }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

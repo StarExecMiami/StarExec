@@ -78,10 +78,28 @@
 
 package org.starexec.backend;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import io.fabric8.kubernetes.api.model.Node;
+import io.fabric8.kubernetes.api.model.NodeList;
+import io.fabric8.kubernetes.api.model.NodeSpec;
+import io.fabric8.kubernetes.api.model.Quantity;
+import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
+import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
+import io.fabric8.kubernetes.api.model.batch.v1.JobList;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientBuilder;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import org.starexec.config.EnvironmentConfig;
+import org.starexec.constants.R;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
 /**
@@ -111,11 +129,17 @@ public class KubernetesNativeBackend implements Backend {
     /** Label prefix for StarExec-managed resources */
     private static final String LABEL_PREFIX = "starexec.org/";
 
-    /** Annotation key for execution ID */
+    /** Label key indicating a Kubernetes Job is managed by StarExec */
+    private static final String MANAGED_LABEL = LABEL_PREFIX + "managed";
+
+    /** Label key for execution ID */
     private static final String EXEC_ID_LABEL = LABEL_PREFIX + "exec-id";
 
-    /** Annotation key for job pair ID */
+    /** Label key for job pair ID */
     private static final String PAIR_ID_LABEL = LABEL_PREFIX + "pair-id";
+
+    /** Label key for worker nodes */
+    private static final String WORKER_LABEL = LABEL_PREFIX + "worker";
 
     /** Default queue name for nodes without queue label */
     private static final String DEFAULT_QUEUE_NAME = "default";
@@ -128,17 +152,25 @@ public class KubernetesNativeBackend implements Backend {
     private final Map<Integer, String> execIdToJobName =
         new ConcurrentHashMap<>();
 
+    /** Maps StarExec execution IDs to StarExec pair IDs */
+    private final Map<Integer, Integer> execIdToPairId =
+        new ConcurrentHashMap<>();
+
+    /** Maps StarExec execution IDs to output directories */
+    private final Map<Integer, Path> execIdToOutputDir =
+        new ConcurrentHashMap<>();
+
     /** Execution ID generator */
     private int nextExecId = 1;
 
     /** Lock for ID generation */
     private final Object idLock = new Object();
 
-    /** Kubernetes client instance - TODO: Initialize with fabric8 client */
-    // private KubernetesClient kubernetesClient;
+    /** Kubernetes client instance */
+    private KubernetesClient kubernetesClient;
 
-    /** Job monitor thread - TODO: Implement with Watch/Informer */
-    // private KubernetesJobMonitor jobMonitor;
+    /** Job monitor */
+    private KubernetesJobMonitor jobMonitor;
 
     /** Flag indicating if backend is initialized */
     private volatile boolean initialized = false;
@@ -152,13 +184,24 @@ public class KubernetesNativeBackend implements Backend {
     private String dataPvcName;
     private String serviceAccountName;
     private String queueLabelKey;
+    private String memoryLimit;
+    private String cpuLimit;
+    private int ttlSecondsAfterFinished;
+    private int backoffLimit;
+    private boolean strictOnePairPerCpu;
+
+    /** Optional node selector key for worker nodes */
+    private String workerNodeSelectorKey;
+
+    /** Optional node selector value for worker nodes */
+    private String workerNodeSelectorValue;
 
     // =========================================================================
     // Constructor
     // =========================================================================
 
     public KubernetesNativeBackend() {
-        log.info("KubernetesNativeBackend instantiated (scaffolding version)");
+        log.info("KubernetesNativeBackend instantiated");
     }
 
     // =========================================================================
@@ -185,29 +228,29 @@ public class KubernetesNativeBackend implements Backend {
         // Load configuration from environment
         loadConfiguration();
 
-        // TODO: Initialize Kubernetes client
-        // try {
-        //     kubernetesClient = new KubernetesClientBuilder().build();
-        //     log.info("Connected to Kubernetes cluster: " + kubernetesClient.getMasterUrl());
-        // } catch (Exception e) {
-        //     log.error("Failed to initialize Kubernetes client", e);
-        //     throw new RuntimeException("Kubernetes initialization failed", e);
-        // }
+        try {
+            kubernetesClient = new KubernetesClientBuilder().build();
+            log.info(
+                "Connected to Kubernetes API at " +
+                kubernetesClient.getConfiguration().getMasterUrl()
+            );
 
-        // TODO: Validate namespace exists
-        // ensureNamespaceExists();
+            ensureNamespaceAccessible();
 
-        // TODO: Start job monitor
-        // jobMonitor = new KubernetesJobMonitor(kubernetesClient, namespace);
-        // jobMonitor.start();
+            jobMonitor = new KubernetesJobMonitor(
+                kubernetesClient,
+                namespace,
+                new KubernetesJobCompletionCallback()
+            );
+            jobMonitor.start();
 
-        initialized = true;
-        log.info(
-            "KubernetesNativeBackend initialized (scaffolding - not fully functional)"
-        );
-        log.warn(
-            "⚠️  This backend is a SCAFFOLDING implementation. Full K8s integration pending."
-        );
+            initialized = true;
+            log.info("KubernetesNativeBackend initialized successfully");
+        } catch (Exception e) {
+            initialized = false;
+            log.error("Failed to initialize KubernetesNativeBackend", e);
+            throw new RuntimeException("KubernetesNativeBackend initialization failed", e);
+        }
     }
 
     /**
@@ -225,6 +268,27 @@ public class KubernetesNativeBackend implements Backend {
             "starexec-job"
         );
         queueLabelKey = getEnv("STAREXEC_K8S_QUEUE_LABEL", DEFAULT_QUEUE_LABEL);
+        memoryLimit = getEnv("STAREXEC_K8S_MEMORY_LIMIT", "2Gi");
+        cpuLimit = getEnv("STAREXEC_K8S_CPU_LIMIT", "1");
+        ttlSecondsAfterFinished = getEnvInt("STAREXEC_K8S_JOB_TTL_SECONDS", 3600);
+        backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
+        strictOnePairPerCpu = getEnvBoolean(
+            "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU",
+            true
+        );
+        workerNodeSelectorKey = getEnv("STAREXEC_K8S_WORKER_SELECTOR_KEY", WORKER_LABEL);
+        workerNodeSelectorValue = getEnv("STAREXEC_K8S_WORKER_SELECTOR_VALUE", "true");
+
+        // Academic reproducibility policy:
+        // keep one job pair per CPU core to reduce L1/L2 cache interference.
+        if (strictOnePairPerCpu && !"1".equals(cpuLimit)) {
+            log.warn(
+                "Overriding STAREXEC_K8S_CPU_LIMIT='" +
+                cpuLimit +
+                "' to '1' due to STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true"
+            );
+            cpuLimit = "1";
+        }
 
         log.info(
             "K8s Configuration: namespace=" +
@@ -232,7 +296,15 @@ public class KubernetesNativeBackend implements Backend {
                 ", image=" +
                 jobImage +
                 ", pvc=" +
-                dataPvcName
+                dataPvcName +
+                ", cpu=" +
+                cpuLimit +
+                ", memory=" +
+                memoryLimit +
+                ", ttlSeconds=" +
+                ttlSecondsAfterFinished +
+                ", strictOnePairPerCpu=" +
+                strictOnePairPerCpu
         );
     }
 
@@ -244,6 +316,35 @@ public class KubernetesNativeBackend implements Backend {
         return (value != null && !value.isEmpty()) ? value : defaultValue;
     }
 
+    private int getEnvInt(String key, int defaultValue) {
+        String value = System.getenv(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            log.warn("Invalid integer for env " + key + ": '" + value + "'. Using default " + defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private boolean getEnvBoolean(String key, boolean defaultValue) {
+        String value = System.getenv(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
+    }
+
+    private void ensureNamespaceAccessible() {
+        if (kubernetesClient.namespaces().withName(namespace).get() == null) {
+            throw new IllegalStateException(
+                "Kubernetes namespace does not exist or is inaccessible: " + namespace
+            );
+        }
+    }
+
     /**
      * Clean up resources when shutting down.
      */
@@ -251,17 +352,22 @@ public class KubernetesNativeBackend implements Backend {
     public void destroyIf() {
         log.info("Shutting down KubernetesNativeBackend...");
 
-        // TODO: Stop job monitor
-        // if (jobMonitor != null) {
-        //     jobMonitor.stop();
-        // }
+        if (jobMonitor != null) {
+            jobMonitor.stop();
+        }
 
-        // TODO: Close Kubernetes client
-        // if (kubernetesClient != null) {
-        //     kubernetesClient.close();
-        // }
+        if (kubernetesClient != null) {
+            try {
+                kubernetesClient.close();
+            } catch (Exception e) {
+                log.warn("Error while closing Kubernetes client", e);
+            }
+        }
 
         initialized = false;
+        execIdToJobName.clear();
+        execIdToPairId.clear();
+        execIdToOutputDir.clear();
         log.info("KubernetesNativeBackend shut down");
     }
 
@@ -273,7 +379,7 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public boolean isError(int execCode) {
-        return execCode < 0;
+        return execCode <= 0;
     }
 
     /**
@@ -316,58 +422,127 @@ public class KubernetesNativeBackend implements Backend {
                 scriptPath
         );
 
-        // TODO: Create Kubernetes Job resource
-        // Job job = new JobBuilder()
-        //     .withNewMetadata()
-        //         .withName(jobName)
-        //         .withNamespace(namespace)
-        //         .addToLabels(EXEC_ID_LABEL, String.valueOf(execId))
-        //     .endMetadata()
-        //     .withNewSpec()
-        //         .withBackoffLimit(0)  // No retries
-        //         .withTtlSecondsAfterFinished(3600)  // Cleanup after 1 hour
-        //         .withNewTemplate()
-        //             .withNewSpec()
-        //                 .withServiceAccountName(serviceAccountName)
-        //                 .withRestartPolicy("Never")
-        //                 .addNewContainer()
-        //                     .withName("job-runner")
-        //                     .withImage(jobImage)
-        //                     .withArgs(scriptPath, workingDirectoryPath, logPath)
-        //                     .addNewVolumeMount()
-        //                         .withName("data")
-        //                         .withMountPath("/app/data")
-        //                     .endVolumeMount()
-        //                     .withNewResources()
-        //                         .addToLimits("memory", new Quantity("2Gi"))
-        //                         .addToLimits("cpu", new Quantity("1"))
-        //                     .endResources()
-        //                 .endContainer()
-        //                 .addNewVolume()
-        //                     .withName("data")
-        //                     .withNewPersistentVolumeClaim()
-        //                         .withClaimName(dataPvcName)
-        //                     .endPersistentVolumeClaim()
-        //                 .endVolume()
-        //             .endSpec()
-        //         .endTemplate()
-        //     .endSpec()
-        //     .build();
-        //
-        // kubernetesClient.batch().v1().jobs()
-        //     .inNamespace(namespace)
-        //     .resource(job)
-        //     .create();
+        try {
+            Job job = buildKubernetesJob(
+                pairId,
+                execId,
+                jobName,
+                scriptPath,
+                workingDirectoryPath,
+                logPath
+            );
 
-        // Track the job
-        execIdToJobName.put(execId, jobName);
+            kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .resource(job)
+                .create();
 
-        log.info(
-            "K8s Job submitted: " +
-                jobName +
-                " (scaffolding - job not actually created)"
-        );
-        return execId;
+            execIdToJobName.put(execId, jobName);
+            execIdToPairId.put(execId, pairId);
+            execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
+            log.info("K8s Job submitted successfully: " + jobName);
+            return execId;
+        } catch (Exception e) {
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
+            log.error("Failed to submit Kubernetes Job: " + jobName, e);
+            return -1;
+        }
+    }
+
+    private Job buildKubernetesJob(
+        int pairId,
+        int execId,
+        String jobName,
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath
+    ) {
+        Map<String, String> labels = new HashMap<>();
+        labels.put(MANAGED_LABEL, "true");
+        labels.put(EXEC_ID_LABEL, String.valueOf(execId));
+        labels.put(PAIR_ID_LABEL, String.valueOf(pairId));
+
+        Path outputDir = resolveOutputDirectory(logPath);
+
+        ResourceRequirementsBuilder resourcesBuilder = new ResourceRequirementsBuilder()
+            .addToRequests("memory", new Quantity(memoryLimit))
+            .addToRequests("cpu", new Quantity(cpuLimit))
+            .addToLimits("memory", new Quantity(memoryLimit))
+            .addToLimits("cpu", new Quantity(cpuLimit));
+
+        Map<String, String> nodeSelector = new HashMap<>();
+        if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
+            nodeSelector.put(workerNodeSelectorKey, workerNodeSelectorValue);
+        }
+
+        return new JobBuilder()
+            .withNewMetadata()
+                .withName(jobName)
+                .withNamespace(namespace)
+                .addToLabels(labels)
+            .endMetadata()
+            .withNewSpec()
+                .withBackoffLimit(backoffLimit)
+                .withTtlSecondsAfterFinished(ttlSecondsAfterFinished)
+                .withNewTemplate()
+                    .withNewMetadata()
+                        .addToLabels(labels)
+                    .endMetadata()
+                    .withNewSpec()
+                        .withServiceAccountName(serviceAccountName)
+                        .withRestartPolicy("Never")
+                        .withNodeSelector(nodeSelector)
+                        .addNewContainer()
+                            .withName("job-runner")
+                            .withImage(jobImage)
+                            .withCommand("/bin/bash")
+                            .withArgs(scriptPath)
+                            .withWorkingDir(workingDirectoryPath)
+                            .addNewEnv()
+                                .withName("STAREXEC_PAIR_ID")
+                                .withValue(String.valueOf(pairId))
+                            .endEnv()
+                            .addNewEnv()
+                                .withName("CONTAINER_MODE")
+                                .withValue("true")
+                            .endEnv()
+                            .addNewEnv()
+                                .withName("STAREXEC_OUTPUT_DIR")
+                                .withValue(outputDir.toString())
+                            .endEnv()
+                            .addNewVolumeMount()
+                                .withName("starexec-data")
+                                .withMountPath("/app/data")
+                            .endVolumeMount()
+                            .withResources(resourcesBuilder.build())
+                        .endContainer()
+                        .addNewVolume()
+                            .withName("starexec-data")
+                            .withNewPersistentVolumeClaim()
+                                .withClaimName(dataPvcName)
+                            .endPersistentVolumeClaim()
+                        .endVolume()
+                    .endSpec()
+                .endTemplate()
+            .endSpec()
+            .build();
+    }
+
+    private Path resolveOutputDirectory(String logPath) {
+        if (logPath == null || logPath.trim().isEmpty()) {
+            return Paths.get(R.JOB_OUTPUT_DIRECTORY);
+        }
+
+        Path path = Paths.get(logPath);
+        Path parent = path.getParent();
+        if (parent != null) {
+            return parent;
+        }
+        return Paths.get(R.JOB_OUTPUT_DIRECTORY);
     }
 
     /**
@@ -404,29 +579,45 @@ public class KubernetesNativeBackend implements Backend {
     public boolean killPair(int execId) {
         String jobName = execIdToJobName.get(execId);
         if (jobName == null) {
-            log.warn("No job found for execId: " + execId);
+            log.info("No job found for execId: " + execId);
+            return false;
+        }
+
+        if (kubernetesClient == null) {
+            log.warn(
+                "Kubernetes client not initialized; removing local tracking for execId: " +
+                execId
+            );
+            execIdToJobName.remove(execId);
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
             return false;
         }
 
         log.info("Killing K8s Job: execId=" + execId + ", jobName=" + jobName);
 
-        // TODO: Delete the Kubernetes Job
-        // try {
-        //     kubernetesClient.batch().v1().jobs()
-        //         .inNamespace(namespace)
-        //         .withName(jobName)
-        //         .withPropagationPolicy(DeletionPropagation.FOREGROUND)
-        //         .delete();
-        //     execIdToJobName.remove(execId);
-        //     return true;
-        // } catch (Exception e) {
-        //     log.error("Failed to kill job: " + jobName, e);
-        //     return false;
-        // }
+        try {
+            List<?> deletedResources = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .delete();
 
-        execIdToJobName.remove(execId);
-        log.info("K8s Job killed (scaffolding): " + jobName);
-        return true;
+            boolean deleted = deletedResources != null && !deletedResources.isEmpty();
+
+            execIdToJobName.remove(execId);
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
+            if (!deleted) {
+                log.warn("Kubernetes API reported no deletion for job: " + jobName);
+            }
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to kill Kubernetes job: " + jobName, e);
+            return false;
+        }
     }
 
     /**
@@ -438,23 +629,33 @@ public class KubernetesNativeBackend implements Backend {
     public boolean killAll() {
         log.info("Killing all K8s Jobs in namespace: " + namespace);
 
-        // TODO: Delete all jobs with StarExec labels
-        // try {
-        //     kubernetesClient.batch().v1().jobs()
-        //         .inNamespace(namespace)
-        //         .withLabel(EXEC_ID_LABEL)
-        //         .withPropagationPolicy(DeletionPropagation.FOREGROUND)
-        //         .delete();
-        //     execIdToJobName.clear();
-        //     return true;
-        // } catch (Exception e) {
-        //     log.error("Failed to kill all jobs", e);
-        //     return false;
-        // }
+        if (kubernetesClient == null) {
+            log.info(
+                "Kubernetes client not initialized; clearing local job tracking only"
+            );
+            execIdToJobName.clear();
+            execIdToPairId.clear();
+            execIdToOutputDir.clear();
+            return false;
+        }
 
-        execIdToJobName.clear();
-        log.info("All K8s Jobs killed (scaffolding)");
-        return true;
+        try {
+            kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true")
+                .delete();
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to kill all Kubernetes jobs", e);
+            return false;
+        } finally {
+            execIdToJobName.clear();
+            execIdToPairId.clear();
+            execIdToOutputDir.clear();
+        }
     }
 
     /**
@@ -467,34 +668,51 @@ public class KubernetesNativeBackend implements Backend {
         StringBuilder sb = new StringBuilder();
         sb.append("=== Kubernetes Jobs Status ===\n");
         sb.append("Namespace: ").append(namespace).append("\n");
-        sb
-            .append("Tracked Jobs: ")
-            .append(execIdToJobName.size())
-            .append("\n\n");
 
-        // TODO: Query actual job status from Kubernetes
-        // JobList jobs = kubernetesClient.batch().v1().jobs()
-        //     .inNamespace(namespace)
-        //     .withLabel(EXEC_ID_LABEL)
-        //     .list();
-        //
-        // for (Job job : jobs.getItems()) {
-        //     sb.append(job.getMetadata().getName())
-        //       .append(": ")
-        //       .append(getJobStatus(job))
-        //       .append("\n");
-        // }
+        try {
+            JobList jobs = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true")
+                .list();
 
-        for (Map.Entry<Integer, String> entry : execIdToJobName.entrySet()) {
-            sb
-                .append("ExecID ")
-                .append(entry.getKey())
-                .append(": ")
-                .append(entry.getValue())
-                .append(" (status unknown - scaffolding)\n");
+            sb.append("Tracked Jobs: ").append(jobs.getItems().size()).append("\n\n");
+            for (Job job : jobs.getItems()) {
+                String jobName = job.getMetadata() != null ? job.getMetadata().getName() : "unknown";
+                String status = summarizeJobStatus(job);
+                sb.append(jobName).append(": ").append(status).append("\n");
+            }
+        } catch (Exception e) {
+            sb.append("Failed to query jobs: ").append(e.getMessage()).append("\n");
+            log.warn("Failed to query running Kubernetes jobs", e);
         }
 
         return sb.toString();
+    }
+
+    private String summarizeJobStatus(Job job) {
+        if (job.getStatus() == null) {
+            return "pending";
+        }
+
+        Integer succeeded = job.getStatus().getSucceeded();
+        if (succeeded != null && succeeded > 0) {
+            return "succeeded";
+        }
+
+        Integer failed = job.getStatus().getFailed();
+        if (failed != null && failed > 0) {
+            return "failed";
+        }
+
+        Integer active = job.getStatus().getActive();
+        if (active != null && active > 0) {
+            return "running";
+        }
+
+        return "pending";
     }
 
     /**
@@ -504,22 +722,46 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
-        // TODO: Query Kubernetes for actual running jobs
-        // Set<Integer> activeIds = new HashSet<>();
-        // JobList jobs = kubernetesClient.batch().v1().jobs()
-        //     .inNamespace(namespace)
-        //     .withLabel(EXEC_ID_LABEL)
-        //     .list();
-        //
-        // for (Job job : jobs.getItems()) {
-        //     String execIdStr = job.getMetadata().getLabels().get(EXEC_ID_LABEL);
-        //     if (execIdStr != null) {
-        //         activeIds.add(Integer.parseInt(execIdStr));
-        //     }
-        // }
-        // return activeIds;
+        Set<Integer> activeIds = new HashSet<>();
 
-        return new HashSet<>(execIdToJobName.keySet());
+        try {
+            JobList jobs = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true")
+                .list();
+
+            for (Job job : jobs.getItems()) {
+                if (job.getStatus() != null) {
+                    Integer succeeded = job.getStatus().getSucceeded();
+                    Integer failed = job.getStatus().getFailed();
+                    if ((succeeded != null && succeeded > 0) || (failed != null && failed > 0)) {
+                        continue;
+                    }
+                }
+
+                if (job.getMetadata() == null || job.getMetadata().getLabels() == null) {
+                    continue;
+                }
+
+                String execIdValue = job.getMetadata().getLabels().get(EXEC_ID_LABEL);
+                if (execIdValue == null || execIdValue.trim().isEmpty()) {
+                    continue;
+                }
+
+                try {
+                    activeIds.add(Integer.parseInt(execIdValue));
+                } catch (NumberFormatException e) {
+                    log.warn("Skipping job with malformed exec ID label: " + execIdValue);
+                }
+            }
+            return activeIds;
+        } catch (Exception e) {
+            log.error("Failed to query active execution IDs from Kubernetes", e);
+            throw new IOException("Failed to query active execution IDs", e);
+        }
     }
 
     // =========================================================================
@@ -537,18 +779,23 @@ public class KubernetesNativeBackend implements Backend {
     public String[] getWorkerNodes() {
         log.debug("Getting worker nodes from Kubernetes cluster");
 
-        // TODO: Query Kubernetes for nodes with StarExec labels
-        // NodeList nodes = kubernetesClient.nodes()
-        //     .withLabel("starexec.org/worker", "true")
-        //     .list();
-        //
-        // return nodes.getItems().stream()
-        //     .map(n -> n.getMetadata().getName())
-        //     .toArray(String[]::new);
+        try {
+            NodeList nodes = kubernetesClient
+                .nodes()
+                .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                .list();
 
-        // Scaffolding: return empty array
-        log.warn("getWorkerNodes: returning empty (scaffolding)");
-        return new String[0];
+            List<String> nodeNames = new ArrayList<>();
+            for (Node node : nodes.getItems()) {
+                if (node.getMetadata() != null && node.getMetadata().getName() != null) {
+                    nodeNames.add(node.getMetadata().getName());
+                }
+            }
+            return nodeNames.toArray(new String[0]);
+        } catch (Exception e) {
+            log.warn("Failed to read Kubernetes worker nodes", e);
+            return new String[0];
+        }
     }
 
     /**
@@ -560,24 +807,30 @@ public class KubernetesNativeBackend implements Backend {
     public String[] getQueues() {
         log.debug("Getting queues from Kubernetes node labels");
 
-        // TODO: Collect unique queue labels from nodes
-        // Set<String> queues = new HashSet<>();
-        // queues.add(DEFAULT_QUEUE_NAME);
-        //
-        // NodeList nodes = kubernetesClient.nodes()
-        //     .withLabel("starexec.org/worker", "true")
-        //     .list();
-        //
-        // for (Node node : nodes.getItems()) {
-        //     String queue = node.getMetadata().getLabels().get(queueLabelKey);
-        //     if (queue != null) {
-        //         queues.add(queue);
-        //     }
-        // }
-        // return queues.toArray(new String[0]);
+        Set<String> queues = new HashSet<>();
+        queues.add(DEFAULT_QUEUE_NAME);
 
-        log.warn("getQueues: returning default only (scaffolding)");
-        return new String[] { DEFAULT_QUEUE_NAME };
+        try {
+            NodeList nodes = kubernetesClient
+                .nodes()
+                .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                .list();
+
+            for (Node node : nodes.getItems()) {
+                if (node.getMetadata() == null || node.getMetadata().getLabels() == null) {
+                    continue;
+                }
+
+                String queue = node.getMetadata().getLabels().get(queueLabelKey);
+                if (queue != null && !queue.trim().isEmpty()) {
+                    queues.add(queue);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to read queue labels from Kubernetes nodes", e);
+        }
+
+        return queues.toArray(new String[0]);
     }
 
     /**
@@ -589,19 +842,31 @@ public class KubernetesNativeBackend implements Backend {
     public Map<String, String> getNodeQueueAssociations() {
         Map<String, String> associations = new HashMap<>();
 
-        // TODO: Build map from node labels
-        // NodeList nodes = kubernetesClient.nodes()
-        //     .withLabel("starexec.org/worker", "true")
-        //     .list();
-        //
-        // for (Node node : nodes.getItems()) {
-        //     String nodeName = node.getMetadata().getName();
-        //     String queue = node.getMetadata().getLabels()
-        //         .getOrDefault(queueLabelKey, DEFAULT_QUEUE_NAME);
-        //     associations.put(nodeName, queue);
-        // }
+        try {
+            NodeList nodes = kubernetesClient
+                .nodes()
+                .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                .list();
 
-        log.warn("getNodeQueueAssociations: returning empty (scaffolding)");
+            for (Node node : nodes.getItems()) {
+                if (node.getMetadata() == null || node.getMetadata().getName() == null) {
+                    continue;
+                }
+
+                String queueName = DEFAULT_QUEUE_NAME;
+                if (node.getMetadata().getLabels() != null) {
+                    String queue = node.getMetadata().getLabels().get(queueLabelKey);
+                    if (queue != null && !queue.trim().isEmpty()) {
+                        queueName = queue;
+                    }
+                }
+
+                associations.put(node.getMetadata().getName(), queueName);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to read node/queue associations from Kubernetes", e);
+        }
+
         return associations;
     }
 
@@ -614,23 +879,37 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public boolean clearNodeErrorStates() {
-        log.info("clearNodeErrorStates called (no-op in scaffolding)");
+        log.info("clearNodeErrorStates called for Kubernetes backend");
 
-        // TODO: Uncordon nodes or remove error taints
-        // NodeList nodes = kubernetesClient.nodes()
-        //     .withLabel("starexec.org/worker", "true")
-        //     .list();
-        //
-        // for (Node node : nodes.getItems()) {
-        //     if (node.getSpec().getUnschedulable() != null &&
-        //         node.getSpec().getUnschedulable()) {
-        //         kubernetesClient.nodes()
-        //             .withName(node.getMetadata().getName())
-        //             .uncordon();
-        //     }
-        // }
+        try {
+            NodeList nodes = kubernetesClient
+                .nodes()
+                .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                .list();
 
-        return true;
+            for (Node node : nodes.getItems()) {
+                if (node.getMetadata() == null || node.getMetadata().getName() == null) {
+                    continue;
+                }
+                NodeSpec spec = node.getSpec();
+                if (spec != null && Boolean.TRUE.equals(spec.getUnschedulable())) {
+                    kubernetesClient
+                        .nodes()
+                        .withName(node.getMetadata().getName())
+                        .edit(n -> {
+                            if (n.getSpec() != null) {
+                                n.getSpec().setUnschedulable(false);
+                            }
+                            return n;
+                        });
+                }
+            }
+
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to clear node error states in Kubernetes", e);
+            return false;
+        }
     }
 
     /**
@@ -645,22 +924,33 @@ public class KubernetesNativeBackend implements Backend {
             return;
         }
 
-        log.info("Deleting queue: " + queueName + " (scaffolding - no-op)");
+        log.info("Deleting queue label from nodes for queue: " + queueName);
 
-        // TODO: Remove queue label from all nodes with this queue
-        // NodeList nodes = kubernetesClient.nodes()
-        //     .withLabel(queueLabelKey, queueName)
-        //     .list();
-        //
-        // for (Node node : nodes.getItems()) {
-        //     kubernetesClient.nodes()
-        //         .withName(node.getMetadata().getName())
-        //         .edit(n -> new NodeBuilder(n)
-        //             .editMetadata()
-        //                 .removeFromLabels(queueLabelKey)
-        //             .endMetadata()
-        //             .build());
-        // }
+        try {
+            NodeList nodes = kubernetesClient
+                .nodes()
+                .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                .withLabel(queueLabelKey, queueName)
+                .list();
+
+            for (Node node : nodes.getItems()) {
+                if (node.getMetadata() == null || node.getMetadata().getName() == null) {
+                    continue;
+                }
+
+                kubernetesClient
+                    .nodes()
+                    .withName(node.getMetadata().getName())
+                    .edit(n -> {
+                        if (n.getMetadata() != null && n.getMetadata().getLabels() != null) {
+                            n.getMetadata().getLabels().remove(queueLabelKey);
+                        }
+                        return n;
+                    });
+            }
+        } catch (Exception e) {
+            log.error("Failed to delete queue from Kubernetes nodes: " + queueName, e);
+        }
     }
 
     /**
@@ -713,27 +1003,33 @@ public class KubernetesNativeBackend implements Backend {
                 nodeNames.length +
                 " nodes, " +
                 slots +
-                " slots (scaffolding)"
+                " slots"
         );
 
-        // TODO: Label nodes with queue name
-        // for (String nodeName : nodeNames) {
-        //     Map<String, String> labels = new HashMap<>();
-        //     labels.put(queueLabelKey, newQueueName);
-        //     if (slots != null) {
-        //         labels.put("starexec.org/slots", String.valueOf(slots));
-        //     }
-        //
-        //     kubernetesClient.nodes()
-        //         .withName(nodeName)
-        //         .edit(n -> new NodeBuilder(n)
-        //             .editMetadata()
-        //                 .addToLabels(labels)
-        //             .endMetadata()
-        //             .build());
-        // }
-
-        return true;
+        try {
+            for (String nodeName : nodeNames) {
+                kubernetesClient
+                    .nodes()
+                    .withName(nodeName)
+                    .edit(n -> {
+                        if (n.getMetadata() == null) {
+                            return n;
+                        }
+                        if (n.getMetadata().getLabels() == null) {
+                            n.getMetadata().setLabels(new HashMap<>());
+                        }
+                        n.getMetadata().getLabels().put(queueLabelKey, newQueueName);
+                        if (slots != null) {
+                            n.getMetadata().getLabels().put(LABEL_PREFIX + "slots", String.valueOf(slots));
+                        }
+                        return n;
+                    });
+            }
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to create queue in Kubernetes: " + newQueueName, e);
+            return false;
+        }
     }
 
     /**
@@ -758,31 +1054,33 @@ public class KubernetesNativeBackend implements Backend {
                 nodeNames.length +
                 " nodes to queue '" +
                 destQueueName +
-                "' (scaffolding)"
+                "'"
         );
 
-        // TODO: Update queue labels on nodes
-        // for (String nodeName : nodeNames) {
-        //     if (DEFAULT_QUEUE_NAME.equals(destQueueName)) {
-        //         // Remove queue label
-        //         kubernetesClient.nodes()
-        //             .withName(nodeName)
-        //             .edit(n -> new NodeBuilder(n)
-        //                 .editMetadata()
-        //                     .removeFromLabels(queueLabelKey)
-        //                 .endMetadata()
-        //                 .build());
-        //     } else {
-        //         // Set queue label
-        //         kubernetesClient.nodes()
-        //             .withName(nodeName)
-        //             .edit(n -> new NodeBuilder(n)
-        //                 .editMetadata()
-        //                     .addToLabels(queueLabelKey, destQueueName)
-        //                 .endMetadata()
-        //                 .build());
-        //     }
-        // }
+        for (String nodeName : nodeNames) {
+            try {
+                kubernetesClient
+                    .nodes()
+                    .withName(nodeName)
+                    .edit(n -> {
+                        if (n.getMetadata() == null) {
+                            return n;
+                        }
+                        if (n.getMetadata().getLabels() == null) {
+                            n.getMetadata().setLabels(new HashMap<>());
+                        }
+
+                        if (DEFAULT_QUEUE_NAME.equals(destQueueName)) {
+                            n.getMetadata().getLabels().remove(queueLabelKey);
+                        } else {
+                            n.getMetadata().getLabels().put(queueLabelKey, destQueueName);
+                        }
+                        return n;
+                    });
+            } catch (Exception e) {
+                log.error("Failed to move node to queue: node=" + nodeName + ", queue=" + destQueueName, e);
+            }
+        }
     }
 
     /**
@@ -799,5 +1097,142 @@ public class KubernetesNativeBackend implements Backend {
     @Override
     public void clearPairTracking(int pairId) {
         // KubernetesNativeBackend does not track pair state - no-op
+    }
+
+    private final class KubernetesJobCompletionCallback
+        implements KubernetesJobMonitor.JobCompletionCallback {
+
+        @Override
+        public void onJobComplete(int execId, String jobName) {
+            Integer pairId = resolvePairId(execId, jobName);
+            if (pairId == null) {
+                log.warn("Unable to resolve pair ID for completed job: " + jobName);
+                return;
+            }
+
+            try {
+                int terminalStatus = readTerminalStatus(execId, StatusCode.STATUS_COMPLETE.getVal());
+                int stageNumber = readStageNumber(execId, 1);
+
+                JobPairs.setPairStatusPrecise(
+                    pairId,
+                    stageNumber,
+                    terminalStatus,
+                    StatusCode.STATUS_NOT_REACHED.getVal()
+                );
+            } catch (Exception e) {
+                log.error("Failed updating completed status for pair " + pairId, e);
+            } finally {
+                execIdToJobName.remove(execId);
+                execIdToPairId.remove(execId);
+                execIdToOutputDir.remove(execId);
+            }
+        }
+
+        @Override
+        public void onJobFailed(int execId, String jobName, String reason) {
+            Integer pairId = resolvePairId(execId, jobName);
+            if (pairId == null) {
+                log.warn("Unable to resolve pair ID for failed job: " + jobName + ". Reason: " + reason);
+                return;
+            }
+
+            try {
+                JobPairs.setPairStatusPrecise(
+                    pairId,
+                    1,
+                    StatusCode.ERROR_RUNSCRIPT.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal()
+                );
+            } catch (Exception e) {
+                log.error("Failed updating failed status for pair " + pairId + ". Reason: " + reason, e);
+            } finally {
+                execIdToJobName.remove(execId);
+                execIdToPairId.remove(execId);
+                execIdToOutputDir.remove(execId);
+            }
+        }
+
+        private Integer resolvePairId(int execId, String jobName) {
+            Integer pairIdFromMap = execIdToPairId.get(execId);
+            if (pairIdFromMap != null && pairIdFromMap > 0) {
+                return pairIdFromMap;
+            }
+
+            try {
+                Job job = kubernetesClient
+                    .batch()
+                    .v1()
+                    .jobs()
+                    .inNamespace(namespace)
+                    .withName(jobName)
+                    .get();
+
+                if (job == null || job.getMetadata() == null || job.getMetadata().getLabels() == null) {
+                    return null;
+                }
+
+                String pairIdValue = job.getMetadata().getLabels().get(PAIR_ID_LABEL);
+                if (pairIdValue == null || pairIdValue.trim().isEmpty()) {
+                    return null;
+                }
+
+                Integer parsed = Integer.parseInt(pairIdValue);
+                execIdToPairId.put(execId, parsed);
+                return parsed;
+            } catch (Exception e) {
+                log.warn(
+                    "Failed to resolve pair ID for execId=" + execId + ", jobName=" + jobName,
+                    e
+                );
+                return null;
+            }
+        }
+
+        private int readTerminalStatus(int execId, int defaultStatus) {
+            Path statusPath = resolveStatusPath(execId);
+            if (statusPath == null || !Files.exists(statusPath)) {
+                return defaultStatus;
+            }
+
+            try {
+                String json = Files.readString(statusPath);
+                JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+                if (root.has("status") && !root.get("status").isJsonNull()) {
+                    return root.get("status").getAsInt();
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse status.json for execId " + execId, e);
+            }
+
+            return defaultStatus;
+        }
+
+        private int readStageNumber(int execId, int defaultStage) {
+            Path statusPath = resolveStatusPath(execId);
+            if (statusPath == null || !Files.exists(statusPath)) {
+                return defaultStage;
+            }
+
+            try {
+                String json = Files.readString(statusPath);
+                JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+                if (root.has("stageNumber") && !root.get("stageNumber").isJsonNull()) {
+                    return root.get("stageNumber").getAsInt();
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse stage number from status.json for execId " + execId, e);
+            }
+
+            return defaultStage;
+        }
+
+        private Path resolveStatusPath(int execId) {
+            Path outputDir = execIdToOutputDir.get(execId);
+            if (outputDir == null) {
+                return null;
+            }
+            return outputDir.resolve("status.json");
+        }
     }
 }

@@ -43,3 +43,19 @@ Usage: {{ include "starexec.volumeName" (list . "data") }}
 {{- $env := default "dev" $root.Values.environment -}}
 {{- printf "%s-%s-%s" (default "starexec" $root.Values.volumePrefix) $env $volumeType -}}
 {{- end -}}
+
+{{- define "starexec.isKubernetesBackend" -}}
+{{- if or (eq .Values.backend.type "kubernetes") (eq .Values.backend.type "k8s") (eq .Values.backend.type "kubernetes-native") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "starexec.k8sJobServiceAccount" -}}
+{{- default (printf "%s-job" (include "chart.fullname" .)) .Values.kubernetes.jobServiceAccount -}}
+{{- end -}}
+
+{{- define "starexec.k8sDataPvcName" -}}
+{{- default (include "starexec.volumeName" (list . "data")) .Values.kubernetes.dataPvc.name -}}
+{{- end -}}

@@ -80,9 +80,15 @@
 
 package org.starexec.backend;
 
-import org.starexec.logger.StarLogger;
-
+import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
+import io.fabric8.kubernetes.api.model.batch.v1.JobStatus;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.starexec.logger.StarLogger;
 
 /**
  * Monitors Kubernetes Jobs for completion and updates StarExec database.
@@ -99,37 +105,37 @@ public class KubernetesJobMonitor {
     // Configuration
     // =========================================================================
     
-    /** Label selector for StarExec jobs */
-    private static final String LABEL_SELECTOR = "starexec.org/exec-id";
-    
-    /** Resync period for informer (how often to re-list all resources) */
-    private static final long RESYNC_PERIOD_MS = 30_000; // 30 seconds
+    /** Label key used for all StarExec-managed Kubernetes Jobs */
+    private static final String MANAGED_LABEL_KEY = "starexec.org/managed";
+
+    /** Label key that stores StarExec execution ID */
+    private static final String EXEC_ID_LABEL_KEY = "starexec.org/exec-id";
+
+    /** Poll interval while informer integration is pending */
+    private static final long POLL_INTERVAL_MS = 5_000;
     
     // =========================================================================
     // Dependencies
     // =========================================================================
     
-    /** Kubernetes client - TODO: Initialize from parent */
-    // private final KubernetesClient kubernetesClient;
+    /** Kubernetes client */
+    private final KubernetesClient kubernetesClient;
     
     /** Namespace to watch */
     private final String namespace;
     
-    /** Callback for job completion - TODO: Define interface */
-    // private final JobCompletionCallback callback;
+    /** Callback for job completion */
+    private final JobCompletionCallback callback;
     
     // =========================================================================
     // Runtime State
     // =========================================================================
     
-    /** Shared informer factory - TODO: Initialize */
-    // private SharedInformerFactory informerFactory;
-    
-    /** Job informer - TODO: Initialize */
-    // private SharedIndexInformer<Job> jobInformer;
-    
     /** Running flag */
     private final AtomicBoolean running = new AtomicBoolean(false);
+
+    /** Tracks completion callbacks already emitted to avoid duplicate updates */
+    private final Set<Integer> completedExecIds = new HashSet<>();
     
     /** Monitor thread */
     private Thread monitorThread;
@@ -141,10 +147,18 @@ public class KubernetesJobMonitor {
     /**
      * Create a new Kubernetes job monitor.
      * 
+     * @param kubernetesClient Kubernetes client instance
      * @param namespace Kubernetes namespace to watch
+     * @param callback callback for completed jobs
      */
-    public KubernetesJobMonitor(String namespace) {
+    public KubernetesJobMonitor(
+        KubernetesClient kubernetesClient,
+        String namespace,
+        JobCompletionCallback callback
+    ) {
+        this.kubernetesClient = kubernetesClient;
         this.namespace = namespace;
+        this.callback = callback;
         log.info("KubernetesJobMonitor created for namespace: " + namespace);
     }
     
@@ -170,42 +184,13 @@ public class KubernetesJobMonitor {
         
         log.info("Starting KubernetesJobMonitor for namespace: " + namespace);
         
-        // TODO: Initialize informer factory
-        // informerFactory = kubernetesClient.informers();
-        
-        // TODO: Create job informer with label selector
-        // jobInformer = informerFactory.sharedIndexInformerFor(
-        //     Job.class,
-        //     RESYNC_PERIOD_MS
-        // );
-        
-        // TODO: Register event handler
-        // jobInformer.addEventHandler(new ResourceEventHandler<Job>() {
-        //     @Override
-        //     public void onAdd(Job job) {
-        //         log.debug("Job added: {}", job.getMetadata().getName());
-        //     }
-        //     
-        //     @Override
-        //     public void onUpdate(Job oldJob, Job newJob) {
-        //         handleJobUpdate(newJob);
-        //     }
-        //     
-        //     @Override
-        //     public void onDelete(Job job, boolean deletedFinalStateUnknown) {
-        //         log.debug("Job deleted: {}", job.getMetadata().getName());
-        //     }
-        // });
-        
-        // TODO: Start informer factory
-        // informerFactory.startAllRegisteredInformers();
-        
-        // Start a fallback polling thread (for scaffolding)
+        // Start polling monitor thread.
+        // NOTE: Informer wiring can be layered in later without changing callback contract.
         monitorThread = new Thread(this::pollLoop, "k8s-job-monitor");
         monitorThread.setDaemon(true);
         monitorThread.start();
-        
-        log.info("KubernetesJobMonitor started (scaffolding mode - polling fallback)");
+
+        log.info("KubernetesJobMonitor started (polling mode)");
     }
     
     /**
@@ -218,11 +203,6 @@ public class KubernetesJobMonitor {
         }
         
         log.info("Stopping KubernetesJobMonitor...");
-        
-        // TODO: Stop informer factory
-        // if (informerFactory != null) {
-        //     informerFactory.stopAllRegisteredInformers();
-        // }
         
         // Interrupt polling thread
         if (monitorThread != null) {
@@ -242,112 +222,19 @@ public class KubernetesJobMonitor {
     }
     
     // =========================================================================
-    // Event Handlers (Scaffolding)
+    // Polling implementation
     // =========================================================================
-    
+
     /**
-     * Handle a job update event.
-     * 
-     * <p>Checks if the job has completed and processes it accordingly.</p>
-     * 
-     * @param jobName Name of the updated job
-     */
-    private void handleJobUpdate(String jobName) {
-        log.debug("Handling job update: " + jobName);
-        
-        // TODO: Get job from informer cache
-        // Job job = jobInformer.getIndexer().getByKey(namespace + "/" + jobName);
-        // if (job == null) {
-        //     log.warn("Job not found in cache: {}", jobName);
-        //     return;
-        // }
-        
-        // TODO: Check completion status
-        // JobStatus status = job.getStatus();
-        // if (status == null) {
-        //     return;
-        // }
-        //
-        // if (status.getSucceeded() != null && status.getSucceeded() > 0) {
-        //     handleJobSuccess(job);
-        // } else if (status.getFailed() != null && status.getFailed() > 0) {
-        //     handleJobFailure(job);
-        // }
-        
-        log.debug("Job update processed (scaffolding): " + jobName);
-    }
-    
-    /**
-     * Handle successful job completion.
-     * 
-     * @param jobName Name of the completed job
-     */
-    private void handleJobSuccess(String jobName) {
-        log.info("Job completed successfully: " + jobName);
-        
-        // TODO: Extract execution ID from job labels
-        // String execIdStr = job.getMetadata().getLabels().get("starexec.org/exec-id");
-        // int execId = Integer.parseInt(execIdStr);
-        
-        // TODO: Read output files from PVC
-        // String outputPath = determineOutputPath(job);
-        // JobResult result = parseOutputFiles(outputPath);
-        
-        // TODO: Update database
-        // callback.onJobComplete(execId, result);
-        
-        // TODO: Cleanup job resource (or let TTL handle it)
-        // kubernetesClient.batch().v1().jobs()
-        //     .inNamespace(namespace)
-        //     .withName(jobName)
-        //     .delete();
-    }
-    
-    /**
-     * Handle job failure.
-     * 
-     * @param jobName Name of the failed job
-     */
-    private void handleJobFailure(String jobName) {
-        log.warn("Job failed: " + jobName);
-        
-        // TODO: Extract failure reason
-        // String reason = extractFailureReason(job);
-        
-        // TODO: Update database with failure status
-        // callback.onJobFailed(execId, reason);
-    }
-    
-    // =========================================================================
-    // Fallback Polling (Scaffolding Only)
-    // =========================================================================
-    
-    /**
-     * Fallback polling loop for scaffolding.
-     * 
-     * <p>In production, the Informer pattern replaces this polling approach.</p>
+     * Polling loop until informer integration is enabled.
      */
     private void pollLoop() {
-        log.info("Starting fallback polling loop (scaffolding)");
-        
+        log.info("Starting Kubernetes job monitor polling loop");
+
         while (running.get()) {
             try {
-                // TODO: Replace with informer-based approach
-                // For now, just sleep
-                Thread.sleep(5000);
-                
-                log.debug("Polling for completed jobs (scaffolding - no actual queries)");
-                
-                // TODO: Query jobs and check status
-                // JobList jobs = kubernetesClient.batch().v1().jobs()
-                //     .inNamespace(namespace)
-                //     .withLabel(LABEL_SELECTOR)
-                //     .list();
-                //
-                // for (Job job : jobs.getItems()) {
-                //     handleJobUpdate(job.getMetadata().getName());
-                // }
-                
+                pollJobsOnce();
+                Thread.sleep(POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
                 log.info("Polling loop interrupted");
                 Thread.currentThread().interrupt();
@@ -357,57 +244,163 @@ public class KubernetesJobMonitor {
             }
         }
         
-        log.info("Polling loop exited");
+        log.info("Kubernetes job monitor polling loop exited");
     }
-    
-    // =========================================================================
-    // Output File Parsing (Scaffolding)
-    // =========================================================================
-    
-    /**
-     * Parse output files from a completed job.
-     * 
-     * <p>Reads status.json, stats.json, and attributes.txt from the job output directory.</p>
-     * 
-     * @param outputPath Path to the job output directory
-     * @return Parsed job result (scaffolding: returns null)
-     */
-    private Object parseOutputFiles(String outputPath) {
-        log.debug("Parsing output files from: " + outputPath);
-        
-        // TODO: Read and parse files
-        // - status.json: {"pairId":1,"status":7,"stageNumber":0}
-        // - stats.json: {"wallclockTime":0.1,"cpuTime":0.1,...}
-        // - attributes.txt: key=value pairs
-        
-        return null; // Scaffolding
+
+    private void pollJobsOnce() {
+        List<Job> jobs = kubernetesClient
+            .batch()
+            .v1()
+            .jobs()
+            .inNamespace(namespace)
+            .withLabel(MANAGED_LABEL_KEY, "true")
+            .list()
+            .getItems();
+
+        for (Job job : jobs) {
+            Integer execId = extractExecId(job);
+            if (execId == null) {
+                continue;
+            }
+
+            if (completedExecIds.contains(execId)) {
+                continue;
+            }
+
+            CompletionState completion = getCompletionState(job);
+            if (completion == CompletionState.RUNNING) {
+                continue;
+            }
+
+            completedExecIds.add(execId);
+
+            String jobName =
+                (job.getMetadata() != null) ? job.getMetadata().getName() : "unknown";
+            if (completion == CompletionState.SUCCEEDED) {
+                callback.onJobComplete(execId, jobName);
+            } else {
+                callback.onJobFailed(execId, jobName, summarizeFailure(job));
+            }
+        }
     }
-    
+
+    private Integer extractExecId(Job job) {
+        if (job == null || job.getMetadata() == null || job.getMetadata().getLabels() == null) {
+            return null;
+        }
+
+        String execIdRaw = job.getMetadata().getLabels().get(EXEC_ID_LABEL_KEY);
+        if (execIdRaw == null || execIdRaw.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            return Integer.parseInt(execIdRaw);
+        } catch (NumberFormatException e) {
+            log.warn("Invalid execution id label on job: " + execIdRaw);
+            return null;
+        }
+    }
+
+    private CompletionState getCompletionState(Job job) {
+        JobStatus status = job.getStatus();
+        if (status == null) {
+            return CompletionState.RUNNING;
+        }
+
+        Integer succeeded = status.getSucceeded();
+        if (succeeded != null && succeeded > 0) {
+            return CompletionState.SUCCEEDED;
+        }
+
+        Integer failed = status.getFailed();
+        if (failed != null && failed > 0) {
+            return CompletionState.FAILED;
+        }
+
+        List<JobCondition> conditions = status.getConditions();
+        if (conditions == null) {
+            return CompletionState.RUNNING;
+        }
+
+        for (JobCondition condition : conditions) {
+            if (condition == null) {
+                continue;
+            }
+
+            String type = condition.getType();
+            String conditionStatus = condition.getStatus();
+            if (!"True".equalsIgnoreCase(conditionStatus)) {
+                continue;
+            }
+
+            if ("Complete".equalsIgnoreCase(type)) {
+                return CompletionState.SUCCEEDED;
+            }
+            if ("Failed".equalsIgnoreCase(type)) {
+                return CompletionState.FAILED;
+            }
+        }
+
+        return CompletionState.RUNNING;
+    }
+
+    private String summarizeFailure(Job job) {
+        JobStatus status = job.getStatus();
+        if (status == null || status.getConditions() == null) {
+            return "Job failed without status conditions";
+        }
+
+        for (JobCondition condition : status.getConditions()) {
+            if (condition == null) {
+                continue;
+            }
+            if (!"Failed".equalsIgnoreCase(condition.getType())) {
+                continue;
+            }
+
+            String reason = condition.getReason();
+            String message = condition.getMessage();
+            if (reason == null) {
+                reason = "unknown";
+            }
+            if (message == null) {
+                message = "no message";
+            }
+            return reason + ": " + message;
+        }
+
+        return "Job failed";
+    }
+
+    private enum CompletionState {
+        RUNNING,
+        SUCCEEDED,
+        FAILED,
+    }
+
     // =========================================================================
-    // Callback Interface (Scaffolding)
+    // Callback Interface
     // =========================================================================
-    
+
     /**
      * Callback interface for job completion events.
-     * 
-     * <p>Implement this to receive notifications when jobs complete.</p>
      */
     public interface JobCompletionCallback {
-        
+
         /**
          * Called when a job completes successfully.
-         * 
          * @param execId Execution ID
-         * @param result Job result data
+         * @param jobName Kubernetes job name
          */
-        void onJobComplete(int execId, Object result);
-        
+        void onJobComplete(int execId, String jobName);
+
         /**
          * Called when a job fails.
-         * 
          * @param execId Execution ID
+         * @param jobName Kubernetes job name
          * @param reason Failure reason
          */
-        void onJobFailed(int execId, String reason);
+        void onJobFailed(int execId, String jobName, String reason);
     }
 }
