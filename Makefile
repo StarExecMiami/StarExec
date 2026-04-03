@@ -630,6 +630,13 @@ preflight-podman: verify-deps
 	@$(call verify_podman_socket_from_values)
 	@echo "Using values file: $(VALS)"
 
+# Quick socket validation (standalone, no values file required)
+preflight-socket:
+	@echo "Running Podman socket validation..."
+	@bash ./scripts/preflight-podman.sh || exit 1
+	@echo ""
+	@echo "${GREEN}✓ Podman socket is accessible and ready for container operations${RESET}"
+
 # ============================================================================
 # DATABASE MANAGEMENT (PostgreSQL)
 # ============================================================================

@@ -4,6 +4,104 @@ set -euo pipefail
 echo "StarExec Container Starting..."
 echo "=========================================="
 
+# ============================================================================
+# PODMAN SOCKET PERMISSION VALIDATION
+# ============================================================================
+# This section validates Podman socket permissions when using DooD
+# (Docker-outside-of-Docker) backend. Permission issues are the most
+# common cause of backend initialization failures.
+#
+# What this does:
+#   1. Checks if the socket exists and is accessible
+#   2. If not accessible, detects the root cause (UID mismatch, group membership)
+#   3. Provides diagnostic guidance for manual remediation
+# ============================================================================
+
+# ANSI Colors
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RED='\033[31m'
+RESET='\033[0m'
+
+validate_podman_socket() {
+    local socket_path="${1:-/var/run/docker.sock}"
+    
+    # Only proceed if socket exists
+    if [ ! -e "$socket_path" ]; then
+        return 0  # Socket doesn't exist, let backend handle it
+    fi
+    
+    # Check if socket is readable by current user
+    if [ -r "$socket_path" ]; then
+        echo -e "  ${GREEN}[OK]${RESET} Podman socket is accessible: $socket_path"
+        return 0
+    fi
+    
+    # Socket exists but not readable - detect root cause
+    echo -e "  ${YELLOW}[WARN]${RESET} Podman socket exists but is not readable: $socket_path"
+    echo "         Analyzing socket permissions..."
+    
+    # For sockets in user runtime directories (e.g., /run/user/1000/...)
+    # check for UID mismatches between container user and socket owner
+    if [[ "$socket_path" == /run/user/* ]]; then
+        # Extract the UID from the socket path (e.g., /run/user/1000/podman/podman.sock)
+        socket_uid=$(echo "$socket_path" | awk -F/ '{print $4}')
+        current_uid=$(id -u)
+        
+        if [ "$socket_uid" != "$current_uid" ]; then
+            echo "         UID mismatch: container is $current_uid, socket is $socket_uid"
+            echo "         This can happen when running in different user contexts."
+            echo "         To fix:"
+            echo "           1. Find the Podman socket: find /run/user -name 'podman.sock' 2>/dev/null"
+            echo "           2. Check owner/permissions: ls -la <socket_path>"
+            echo "           3. Update docker-compose to use the correct socket path"
+            echo "              and inject the appropriate group via group_add"
+            return 1
+        fi
+    fi
+    
+    # Check if current user is in the socket's group
+    socket_group=$(stat -c '%G' "$socket_path" 2>/dev/null || echo "")
+    if [ -n "$socket_group" ]; then
+        # Check if user is already in the group
+        if [ "$(id -g)" = "$socket_group" ] || id -G | grep -q "\b$socket_group\b"; then
+            echo "         Current user is already in socket group: $socket_group"
+            return 0
+        fi
+        
+        # User is not in the socket group
+        echo -e "         ${RED}[FAIL]${RESET} Current user is not in socket group: $socket_group"
+        echo "         Fix: Add the container user to this group via docker-compose"
+        echo "              group_add: [\"$socket_group\"]"
+        echo "              or ensure the container runs with a user that has access"
+    fi
+    
+    return 0
+}
+
+# Determine socket path from environment or use default
+PODMAN_SOCKET="${STAREXEC_CONTAINER_SOCKET:-}"
+if [ -z "$PODMAN_SOCKET" ]; then
+    # Check common socket locations
+    if [ -e "/var/run/docker.sock" ]; then
+        PODMAN_SOCKET="/var/run/docker.sock"
+    elif [ -e "/run/podman/podman.sock" ]; then
+        PODMAN_SOCKET="/run/podman/podman.sock"
+    elif [ -e "/run/user/1000/podman/podman.sock" ]; then
+        PODMAN_SOCKET="/run/user/1000/podman/podman.sock"
+    fi
+fi
+
+# Validate socket permissions if configured
+if [ -n "$PODMAN_SOCKET" ] && [ "${STAREXEC_BACKEND_TYPE:-docker}" = "podman" ]; then
+    echo "Validating Podman socket access..."
+    validate_podman_socket "$PODMAN_SOCKET" || {
+        echo -e "${YELLOW}[WARN]${RESET} Socket permission check failed, but continuing startup."
+        echo "         Backend initialization may fail if socket is not accessible."
+    }
+    echo ""
+fi
+
 # Display environment for debugging (show defaults)
 echo "Environment Configuration:"
 echo "  STAREXEC_DB_HOST=${STAREXEC_DB_HOST:-localhost}"

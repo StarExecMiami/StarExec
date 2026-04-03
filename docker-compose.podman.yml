@@ -13,8 +13,10 @@
 
 services:
   starexec:
-    # Run as root to access container socket (required for DooD)
-    user: "0:0"
+    # The entrypoint.sh script will validate socket permissions.
+    # If you encounter permission issues, inject the socket group ID using:
+    #   group_add: ["<gid>"]
+    # This is safer than running as root (user: "0:0")
     
     environment:
       # Backend Configuration - Switch to Podman/Container backend
@@ -24,6 +26,9 @@ services:
       STAREXEC_CONTAINER_JOB_IMAGE: starexec/job-runner:latest
       
       # Container socket path (inside the StarExec container)
+      # For Docker: /var/run/docker.sock
+      # For Podman (rootful): /var/run/podman/podman.sock
+      # For Podman (rootless): /run/user/1000/podman/podman.sock
       STAREXEC_CONTAINER_SOCKET: unix:///var/run/docker.sock
       
       # Network for job containers - use the compose network
@@ -55,4 +60,11 @@ services:
       # Docker: /var/run/docker.sock
       # Podman (rootful): /var/run/podman/podman.sock
       # Podman (rootless): /run/user/1000/podman/podman.sock
+      #
+      # IMPORTANT: Socket permissions are validated by entrypoint.sh
+      # If you get permission denied errors:
+      #   1. Verify the socket exists: ls -la <socket_path_on_host>
+      #   2. Check UID matches: id -u (current) vs stat -c %U <socket>
+      #   3. For rootless, use group_add to inject the socket's group ID
       - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
+
