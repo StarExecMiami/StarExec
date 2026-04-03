@@ -90,8 +90,12 @@ env:
 podman:
   containerSocket:
     enabled: true
-    # Rootless Podman socket path. Adjust for your user if needed:
-    #   loginctl show-user $USER -p RuntimePath
+    # Rootless Podman socket path. IMPORTANT: The UID must match your user's ID.
+    # At deployment time, preflight checks will FAIL if:
+    #   1. UID in this path (1000) doesn't match your actual UID (run: id -u)
+    #   2. Socket is not running (run: systemctl --user status podman.socket)
+    # You must then manually fix this file or override via PODMAN_SOCKET_PATH env var.
+    # See docs/TROUBLESHOOTING_PODMAN.md for detailed remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
   # Keep one concurrent job to reduce L1/L2 cache contention.

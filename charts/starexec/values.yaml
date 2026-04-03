@@ -155,6 +155,9 @@ podman:
   containerSocket:
     enabled: false
     # Rootless Podman socket only. Do not point this at a rootful system socket.
+    # IMPORTANT: The UID must match your user's ID.
+    # At deployment time, preflight checks will FAIL if UID doesn't match your actual UID.
+    # See docs/TROUBLESHOOTING_PODMAN.md for remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
 
   # Job container configuration

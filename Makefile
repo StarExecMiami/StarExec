@@ -560,12 +560,65 @@ define verify_podman_socket_from_values
 					echo "  Set .podman.containerSocket.hostPath to your rootless Podman socket path."; \
 					echo ""; \
 					exit 1; \
-				elif [ ! -S "$$SOCKET_PATH" ]; then \
+				fi; \
+				SOCKET_UID_IN_FILE=$$(echo "$$SOCKET_PATH" | sed 's/.*\/run\/user\/\([0-9]*\)\/.*/\1/'); \
+				CURRENT_UID=$$(id -u); \
+				if [ -z "$$SOCKET_UID_IN_FILE" ] || [ "$$SOCKET_UID_IN_FILE" = "$$SOCKET_PATH" ]; then \
+					echo "${YELLOW}⚠️  Socket path does not contain /run/user/UID/ pattern: $$SOCKET_PATH${RESET}"; \
+					echo "    Expected format: /run/user/$(CURRENT_UID)/podman/podman.sock"; \
 					echo ""; \
-					echo "${RED}✗ Podman socket path from values file is not available:${RESET} $$SOCKET_PATH"; \
+					exit 1; \
+				fi; \
+				if [ "$$SOCKET_UID_IN_FILE" != "$$CURRENT_UID" ]; then \
+					echo ""; \
+					echo "${RED}✗ UID mismatch detected${RESET}"; \
+					echo "  Values file expects UID: $$SOCKET_UID_IN_FILE"; \
+					echo "  Your current UID:       $$CURRENT_UID"; \
 					echo "  File: $(VALS)"; \
-					echo "  Start your rootless podman socket service and retry:"; \
-					echo "    ${BLUE}systemctl --user start podman.socket${RESET}"; \
+					echo ""; \
+					echo "Edit the values file to use your UID:"; \
+					echo "  sed -i 's|/run/user/[0-9]*/|/run/user/'$$CURRENT_UID'/|g' $(VALS)"; \
+					echo ""; \
+					echo "Or set PODMAN_SOCKET_PATH to override:"; \
+					echo "  PODMAN_SOCKET_PATH=/run/user/$$CURRENT_UID/podman/podman.sock make deploy-podman ENV=$(ENV)"; \
+					echo ""; \
+					exit 1; \
+				fi; \
+				if [ ! -S "$$SOCKET_PATH" ]; then \
+					echo ""; \
+					echo "${RED}✗ Podman socket not found: $$SOCKET_PATH${RESET}"; \
+					echo "  File: $(VALS)"; \
+					echo ""; \
+					if command -v systemctl >/dev/null 2>&1; then \
+						SOCKET_STATUS=$$(systemctl --user is-enabled podman.socket 2>&1 || echo "error"); \
+						if echo "$$SOCKET_STATUS" | grep -q masked; then \
+							echo "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"; \
+							echo ""; \
+							echo "To enable it, copy systemd units to your user:"; \
+							echo "  ${BLUE}mkdir -p ~/.config/systemd/user/${RESET}"; \
+							echo "  ${BLUE}cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/${RESET}"; \
+							echo "  ${BLUE}systemctl --user daemon-reload${RESET}"; \
+							echo "  ${BLUE}systemctl --user enable --now podman.socket${RESET}"; \
+							echo ""; \
+						else \
+							echo "Start the Podman socket service:"; \
+							echo "  ${BLUE}systemctl --user start podman.socket${RESET}"; \
+							echo ""; \
+						fi; \
+					else \
+						echo "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"; \
+						echo ""; \
+						echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"; \
+						echo "  ${BLUE}podman machine start${RESET}"; \
+						echo ""; \
+						echo "Or on rootless Linux without systemd:"; \
+						echo "  ${BLUE}podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &${RESET}"; \
+						echo ""; \
+					fi; \
+					echo "Verify the socket exists:"; \
+					echo "  ${BLUE}ls -l /run/user/$$CURRENT_UID/podman/podman.sock${RESET}"; \
+					echo ""; \
+					echo "See docs/TROUBLESHOOTING_PODMAN.md for detailed help."; \
 					echo ""; \
 					exit 1; \
 				fi; \

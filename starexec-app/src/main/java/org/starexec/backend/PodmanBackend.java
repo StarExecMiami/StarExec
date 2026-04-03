@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Queues;
@@ -86,6 +87,11 @@ public class PodmanBackend implements Backend {
 
     private static final StarLogger log = StarLogger.getLogger(
         PodmanBackend.class
+    );
+
+    // Regex pattern for extracting UID from socket paths (compiled once at class load)
+    private static final Pattern UID_PATTERN = Pattern.compile(
+        "/run/user/(\\d+)/"
     );
 
     // Container engine client
@@ -256,13 +262,17 @@ public class PodmanBackend implements Backend {
             // Subscribe to container events
             startContainerEventListener();
         } catch (Exception e) {
-            log.error("Fatal error initializing PodmanBackend", e);
-            throw new IllegalStateException(
-                "Could not connect to the container engine. " +
-                    "Ensure the socket is available at: " +
-                    containerSocketPath,
-                e
-            );
+            // Wrap and throw up stack; logging/handling deferred to caller.
+            // Avoid double-logging by NOT logging here + throwing with same message.
+            String errorMessage = 
+                "Could not connect to the container engine at: " + containerSocketPath + "\n" +
+                "Please verify:\n" +
+                "  1. Socket service is running: systemctl --user status podman.socket\n" +
+                "  2. Your UID matches the socket path: id -u (current) vs " + 
+                extractUidFromPath(containerSocketPath) + " (in path)\n" +
+                "  3. For school networks with masked sockets, see: docs/TROUBLESHOOTING_PODMAN.md\n" +
+                "\nAlternatively, run 'make preflight-podman' for more diagnostics.";
+            throw new IllegalStateException(errorMessage, e);
         }
     }
 
@@ -2084,5 +2094,24 @@ public class PodmanBackend implements Backend {
     @Override
     public void clearPairTracking(int pairId) {
         // PodmanBackend does not track pair state - no-op
+    }
+
+    /**
+     * Extracts UID from a socket path like /run/user/1000/podman/podman.sock
+     * Returns "unknown" if extraction fails.
+     */
+    private String extractUidFromPath(String socketPath) {
+        if (socketPath == null || socketPath.isEmpty()) {
+            return "unknown";
+        }
+        try {
+            var matcher = UID_PATTERN.matcher(socketPath);
+            if (matcher.find()) {
+                return matcher.group(1);
+            }
+        } catch (Exception e) {
+            log.debug("Could not extract UID from socket path", e);
+        }
+        return "unknown";
     }
 }
