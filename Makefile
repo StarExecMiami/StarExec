@@ -576,6 +576,7 @@ define verify_podman_socket_from_values
 					sed -i 's|/run/user/[0-9]*/|/run/user/'$$CURRENT_UID'/|g' $(VALS); \
 					echo "${YELLOW}  Updated socket path to: /run/user/$$CURRENT_UID/podman/podman.sock${RESET}"; \
 					echo ""; \
+					SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(VALS)"); \
 				fi; \
 				if [ ! -S "$$SOCKET_PATH" ]; then \
 					echo ""; \
