@@ -119,6 +119,58 @@ public class RESTServices {
 	private static final int MAX_UPLOAD_SESSION_CREATE_BODY_BYTES = 64 * 1024;
 
 	@GET
+	@Path("/space/{sid}/processors")
+	@Produces("application/json")
+	public String getProcessorsBySpace(@PathParam("sid") int spaceId, @Context HttpServletRequest request) {
+
+		try {
+			int communityId = Spaces.getCommunityOfSpace(spaceId);
+			if (communityId <= 0) {
+				return gson.toJson(new ValidatorStatusCode(false, "Space not found"));
+			}
+			try {
+				List<Processor> post = Processors.getByCommunity(communityId,
+					org.starexec.data.to.enums.ProcessorType.POST);
+				List<Processor> pre = Processors.getByCommunity(communityId,
+					org.starexec.data.to.enums.ProcessorType.PRE);
+
+				List<Map<String, Object>> postProcessors = new ArrayList<>();
+				if (post != null) {
+					for (Processor processor : post) {
+						Map<String, Object> simple = new HashMap<>();
+						simple.put("id", processor.getId());
+						simple.put("name", processor.getName());
+						postProcessors.add(simple);
+					}
+				}
+
+				List<Map<String, Object>> preProcessors = new ArrayList<>();
+				if (pre != null) {
+					for (Processor processor : pre) {
+						Map<String, Object> simple = new HashMap<>();
+						simple.put("id", processor.getId());
+						simple.put("name", processor.getName());
+						preProcessors.add(simple);
+					}
+				}
+
+				Map<String, Object> response = new HashMap<>();
+				response.put("postProcessors", postProcessors);
+				response.put("preProcessors", preProcessors);
+
+				return gson.toJson(response);
+			} catch (Exception e) {
+				log.error("Error retrieving processors for community " + communityId, e);
+				return gson.toJson(ERROR_DATABASE);
+			}
+
+		} catch (Exception e) {
+			log.error("Error retrieving community for space " + spaceId, e);
+			return gson.toJson(ERROR_DATABASE);
+		}
+	}
+
+	@GET
 	@Path("/queue/{qid}/getDesc")
 	@Produces("text/plain")
 	public static String getDescription(@PathParam("qid") int qid) {
