@@ -121,7 +121,7 @@ public class RESTServices {
 	@GET
 	@Path("/space/{sid}/processors")
 	@Produces("application/json")
-	public String getProcessorsBySpace(@PathParam("sid") int spaceId, @Context HttpServletRequest request) {
+	public String getProcessorsBySpace(@PathParam("sid") int spaceId) {
 
 		try {
 			int communityId = Spaces.getCommunityOfSpace(spaceId);
