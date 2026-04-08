@@ -1948,9 +1948,43 @@ public class RESTServices {
 	}
 
 	/**
+	 * Returns a paginated DataTables response of all job pairs in a job that were
+	 * run by the given solver.
+	 *
+	 * @param jobId       The ID of the job
+	 * @param solverId    The ID of the solver whose pairs should be returned
+	 * @param wallclock   Whether to sort by wallclock time (false = cpu time)
+	 * @param stageNumber The pipeline stage to return data for (0 = primary stage)
+	 * @param request     The HTTP request carrying DataTables parameters
+	 * @return JSON DataTables object with the next page of job pairs
+	 */
+	@POST
+	@Path("/jobs/pairs/solver/{jobId}/{solverId}/{wallclock}/{stageNumber}")
+	@Produces("application/json")
+	public String getJobPairsBySolverPaginated(@PathParam("jobId") int jobId,
+			@PathParam("solverId") int solverId, @PathParam("wallclock") boolean wallclock,
+			@PathParam("stageNumber") int stageNumber, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		ValidatorStatusCode status = JobSecurity.canUserSeeJob(jobId, userId);
+		if (!status.isSuccess()) {
+			return gson.toJson(status);
+		}
+
+		JsonObject nextDataTablesPage = RESTHelpers.getNextDataTablesPageOfPairsInJobBySolver(jobId, solverId,
+				request, wallclock, stageNumber, PrimitivesToAnonymize.NONE);
+
+		if (nextDataTablesPage == null) {
+			return gson.toJson(ERROR_DATABASE);
+		} else if (nextDataTablesPage.has("maxpairs")) {
+			return gson.toJson(ERROR_TOO_MANY_JOB_PAIRS);
+		}
+		return gson.toJson(nextDataTablesPage);
+	}
+
+	/**
 	 * Handles an anonymous request to get a space overview graph for a job details
 	 * page
-	 * 
+	 *
 	 * @param jobSpaceId                The job space the chart is for
 	 * @param stageNumber               stage to get job pair data for
 	 * @param anonymousLinkUuid         The unique ID associated with this anonymous
