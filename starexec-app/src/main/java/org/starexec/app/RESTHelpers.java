@@ -499,6 +499,70 @@ public class RESTHelpers {
 	}
 
 	/**
+	 * Returns a DataTables JSON page of job pairs belonging to a given job and run
+	 * by a specific solver.
+	 *
+	 * @param jobId                 The job to query
+	 * @param solverId              The solver to filter by
+	 * @param request               The HTTP request (carries DataTables params)
+	 * @param wallclock             Whether to sort by wallclock time
+	 * @param stageNumber           Stage number (0 = primary stage)
+	 * @param primitivesToAnonymize Anonymization settings
+	 * @return JsonObject for DataTables, or null on database error
+	 */
+	public static JsonObject getNextDataTablesPageOfPairsInJobBySolver(int jobId, int solverId,
+			HttpServletRequest request, boolean wallclock, int stageNumber,
+			PrimitivesToAnonymize primitivesToAnonymize) {
+
+		final String methodName = "getNextDataTablesPageOfPairsInJobBySolver";
+		log.entry(methodName);
+		log.debug(methodName, "params: jobId=" + jobId + ", solverId=" + solverId + ", wallclock="
+			+ wallclock + ", stageNumber=" + stageNumber + ", primitivesToAnonymize="
+			+ primitivesToAnonymize);
+
+		DataTablesQuery query = RESTHelpers.getAttrMap(Primitive.JOB_PAIR, request);
+		if (query == null) {
+			log.debug(methodName, "Invalid DataTables parameters or missing required params; returning null");
+			return null;
+		}
+
+		query.setTotalRecords(Jobs.getJobPairCountInJobBySolver(jobId, solverId, stageNumber));
+		log.debug(methodName, "totalRecords=" + query.getTotalRecords());
+
+		if (query.getTotalRecords() > R.MAXIMUM_JOB_PAIRS) {
+			log.debug(methodName, "totalRecords > R.MAXIMUM_JOB_PAIRS (" + R.MAXIMUM_JOB_PAIRS + ") - aborting page retrieval");
+			JsonObject ob = new JsonObject();
+			ob.addProperty("maxpairs", true);
+			return ob;
+		}
+
+		String sortOverride = request.getParameter(SORT_COLUMN_OVERRIDE);
+		if (sortOverride != null) {
+			query.setSortColumn(Integer.parseInt(sortOverride));
+			query.setSortASC(Boolean.parseBoolean(request.getParameter(SORT_COLUMN_OVERRIDE_DIR)));
+			log.debug(methodName, "sort override applied: column=" + query.getSortColumn() + ", asc=" + query.isSortASC());
+		} else {
+			log.debug(methodName, "no sort override provided; using client-supplied sort settings");
+		}
+
+	List<JobPair> jobPairsToDisplay = Jobs.getJobPairsForNextPageInJobBySolver(query, jobId, solverId,
+		stageNumber, wallclock, primitivesToAnonymize);
+	log.debug(methodName, "retrieved jobPairsToDisplay size=" + (jobPairsToDisplay == null ? 0 : jobPairsToDisplay.size()));
+
+		if (!query.hasSearchQuery()) {
+			query.setTotalRecordsAfterQuery(query.getTotalRecords());
+		} else {
+			query.setTotalRecordsAfterQuery(
+					Jobs.getJobPairCountInJobBySolver(jobId, solverId, query.getSearchQuery(), stageNumber));
+		}
+		log.debug(methodName, "totalRecordsAfterQuery=" + query.getTotalRecordsAfterQuery());
+
+		JsonObject result = convertJobPairsToJsonObject(jobPairsToDisplay, query, wallclock, 0, primitivesToAnonymize);
+		log.debug(methodName, "returning DataTables page object");
+		return result;
+	}
+
+	/**
 	 * Gets the next page of Benchmarks that the given use can see. This includes
 	 * Benchmarks the user owns,
 	 * Benchmarks in public spaces, and Benchmarks in spaces the user is also in.

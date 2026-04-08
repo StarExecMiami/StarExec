@@ -49,6 +49,9 @@ public class PaginationQueries {
 	private static final String GET_UPLOADS_BY_USER_PATH = "/pagination/UploadForUserPagination.sql";
 	public static String GET_UPLOADS_BY_USER_QUERY = "";
 
+	private static final String GET_PAIRS_IN_JOB_BY_SOLVER_PATH = "/pagination/PairInJobBySolverPagination.sql";
+	public static String GET_PAIRS_IN_JOB_BY_SOLVER_QUERY = "";
+
 	private static final StarLogger log = StarLogger.getLogger(PaginationQueries.class);
 
 	/**
@@ -70,6 +73,7 @@ public class PaginationQueries {
 		GET_PAIRS_ENQUEUED_QUERY = loadQuery(GET_PAIRS_ENQUEUED_PATH);
 		GET_USERS_ADMIN_QUERY = loadQuery(GET_USERS_ADMIN_PATH);
 		GET_UPLOADS_BY_USER_QUERY = loadQuery(GET_UPLOADS_BY_USER_PATH);
+		GET_PAIRS_IN_JOB_BY_SOLVER_QUERY = loadQuery(GET_PAIRS_IN_JOB_BY_SOLVER_PATH);
 	}
 
 	private static String loadQuery(String relativePath) throws IOException {

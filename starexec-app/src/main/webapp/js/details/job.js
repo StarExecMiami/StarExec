@@ -3,6 +3,7 @@
 var summaryTable;
 var pairTable;
 var curSpaceId; //stores the ID of the job space that is currently selected from the space viewer
+var curSolverId; //stores the solver ID when filtering pairs by solver across an entire job
 var jobId; //the ID of the job being viewed
 var lastValidSelectOption;
 var panelArray = [];
@@ -1859,6 +1860,66 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 	});
 
 	openAjaxRequests.push(xhr);
+}
+
+// Handles querying for pages in a DataTable filtered by solver ID across an entire job.
+// Uses the native fetch API with URLSearchParams so the Content-Type is
+// application/x-www-form-urlencoded as required by getAttrMap on the server.
+//
+// @param sSource   the "sAjaxSource" of the calling table
+// @param aoData    array of {name, value} DataTables parameters
+// @param fnCallback the function that maps the returned page to the DataTable
+//
+function fnSolverPairsPaginationHandler(sSource, aoData, fnCallback) {
+	if (typeof curSolverId === 'undefined' || curSolverId === null) {
+		return;
+	}
+	if (sortOverride != null) {
+		aoData.push({'name': 'sort_by', 'value': getSelectedSort()});
+		aoData.push({'name': 'sort_dir', 'value': isASC()});
+	}
+
+	var postUrl = sSource + 'pairs/solver/' + jobId + '/' + curSolverId +
+		'/' + useWallclock + '/' + getSelectedStage();
+
+	// Convert aoData [{name, value}] to URLSearchParams-compatible [[name, value]] pairs.
+	// This guarantees Content-Type: application/x-www-form-urlencoded, which is required
+	// by RESTHelpers.getAttrMap. The required keys are:
+	//   sEcho, iColumns, sColumns, iDisplayStart, iDisplayLength,
+	//   iSortingCols, iSortCol_0, sSortDir_0, sSearch
+	// DataTables 1.x populates all of these in aoData automatically.
+	var params = new URLSearchParams(aoData.map(function(item) {
+		return [item.name, String(item.value)];
+	}));
+
+	fetch(postUrl, {
+		method: 'POST',
+		headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+		body: params.toString()
+	})
+	.then(function(response) { return response.json(); })
+	.then(function(nextDataTablePage) {
+		var s = parseReturnCode(nextDataTablePage);
+		if (s) {
+			pairTable.fnProcessingIndicator(false);
+			fnCallback(nextDataTablePage);
+			$("#errorField").hide();
+			if (pairTable.fnSettings().fnRecordsTotal() === 0) {
+				$("#pairTblField").hide();
+			} else {
+				$("#pairTblField").show();
+			}
+		} else {
+			var code = getStatusCode(nextDataTablePage);
+			if (code === 1) {
+				$("#pairTblField").hide();
+				$("#errorField").show();
+			}
+		}
+	})
+	.catch(function(err) {
+		handleAjaxError(err.message || String(err));
+	});
 }
 
 function popup(url) {

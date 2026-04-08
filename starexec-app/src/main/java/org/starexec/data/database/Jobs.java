@@ -2702,6 +2702,151 @@ public class Jobs {
     }
 
     /**
+     * Returns the total number of job pairs in a job that were run by a given solver,
+     * for the given stage.
+     *
+     * @param jobId       The ID of the job
+     * @param solverId    The ID of the solver to filter by
+     * @param stageNumber The stage number (0 = primary stage)
+     * @return the count of matching job pairs, or -1 on failure
+     */
+    public static int getJobPairCountInJobBySolver(int jobId, int solverId, int stageNumber) {
+        Connection con = null;
+        NamedParameterStatement procedure = null;
+        ResultSet results = null;
+        try {
+            con = Common.getConnection();
+            String sql =
+                "SELECT COUNT(*) AS jobPairCount " +
+                "FROM job_pairs " +
+                "JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id = job_pairs.id " +
+                "WHERE job_pairs.job_id = :jobId " +
+                "AND jobpair_stage_data.solver_id = :solverId " +
+                "AND ((:stageNumber = 0 AND jobpair_stage_data.stage_number = job_pairs.primary_jobpair_data) " +
+                "     OR jobpair_stage_data.stage_number = :stageNumber)";
+            procedure = new NamedParameterStatement(con, sql);
+            procedure.setInt("jobId", jobId);
+            procedure.setInt("solverId", solverId);
+            procedure.setInt("stageNumber", stageNumber);
+            results = procedure.executeQuery();
+            if (results.next()) {
+                return results.getInt("jobPairCount");
+            }
+        } catch (Exception e) {
+            log.error("getJobPairCountInJobBySolver", e);
+        } finally {
+            Common.safeClose(con);
+            Common.safeClose(procedure);
+            Common.safeClose(results);
+        }
+        return -1;
+    }
+
+    /**
+     * Returns the number of job pairs in a job run by a given solver that match a
+     * search query, for the given stage.
+     *
+     * @param jobId       The ID of the job
+     * @param solverId    The ID of the solver to filter by
+     * @param searchQuery The DataTables search string
+     * @param stageNumber The stage number (0 = primary stage)
+     * @return the count of matching job pairs, or 0 on failure
+     */
+    public static int getJobPairCountInJobBySolver(int jobId, int solverId, String searchQuery, int stageNumber) {
+        Connection con = null;
+        NamedParameterStatement procedure = null;
+        ResultSet results = null;
+        try {
+            con = Common.getConnection();
+            String sql =
+                "SELECT COUNT(*) AS jobPairCount " +
+                "FROM job_pairs " +
+                "JOIN jobpair_stage_data ON jobpair_stage_data.jobpair_id = job_pairs.id " +
+                "LEFT JOIN job_attributes ON (job_attributes.pair_id = job_pairs.id " +
+                "    AND job_attributes.stage_number = jobpair_stage_data.stage_number " +
+                "    AND job_attributes.attr_key = 'starexec-result') " +
+                "WHERE job_pairs.job_id = :jobId " +
+                "AND jobpair_stage_data.solver_id = :solverId " +
+                "AND ((:stageNumber = 0 AND jobpair_stage_data.stage_number = job_pairs.primary_jobpair_data) " +
+                "     OR jobpair_stage_data.stage_number = :stageNumber) " +
+                "AND (bench_name LIKE ('%' || COALESCE(:query, '')::text || '%') " +
+                "    OR jobpair_stage_data.config_name LIKE ('%' || COALESCE(:query, '')::text || '%') " +
+                "    OR jobpair_stage_data.solver_name LIKE ('%' || COALESCE(:query, '')::text || '%') " +
+                "    OR CAST(jobpair_stage_data.status_code AS TEXT) LIKE ('%' || COALESCE(:query, '')::text || '%') " +
+                "    OR CAST(jobpair_stage_data.wallclock AS TEXT) LIKE ('%' || COALESCE(:query, '')::text || '%') " +
+                "    OR CAST(cpu AS TEXT) LIKE ('%' || COALESCE(:query, '')::text || '%') " +
+                "    OR job_attributes.attr_value LIKE ('%' || COALESCE(:query, '')::text || '%'))";
+            procedure = new NamedParameterStatement(con, sql);
+            procedure.setInt("jobId", jobId);
+            procedure.setInt("solverId", solverId);
+            procedure.setInt("stageNumber", stageNumber);
+            procedure.setString("query", searchQuery);
+            results = procedure.executeQuery();
+            if (results.next()) {
+                return results.getInt("jobPairCount");
+            }
+        } catch (Exception e) {
+            log.error("getJobPairCountInJobBySolver", e);
+        } finally {
+            Common.safeClose(con);
+            Common.safeClose(procedure);
+            Common.safeClose(results);
+        }
+        return 0;
+    }
+
+    /**
+     * Retrieves the job pairs necessary to fill the next DataTables page, filtered
+     * by job ID and solver ID.
+     *
+     * @param query                 DataTables pagination/sort/filter parameters
+     * @param jobId                 The ID of the job
+     * @param solverId              The ID of the solver to filter by
+     * @param stageNumber           The stage number (0 = primary stage)
+     * @param wallclock             Whether to sort by wallclock time (vs cpu time)
+     * @param primitivesToAnonymize Anonymization settings
+     * @return List of job pairs for the requested page, or null on failure
+     */
+    public static List<JobPair> getJobPairsForNextPageInJobBySolver(
+        DataTablesQuery query,
+        int jobId,
+        int solverId,
+        int stageNumber,
+        boolean wallclock,
+        PrimitivesToAnonymize primitivesToAnonymize
+    ) {
+        Connection con = null;
+        NamedParameterStatement procedure = null;
+        ResultSet results = null;
+        String searchQuery = query.getSearchQuery();
+        if (searchQuery == null) {
+            searchQuery = "";
+        }
+        try {
+            PaginationQueryBuilder builder = new PaginationQueryBuilder(
+                PaginationQueries.GET_PAIRS_IN_JOB_BY_SOLVER_QUERY,
+                getJobPairOrderColumn(query.getSortColumn(), wallclock),
+                query
+            );
+            con = Common.getConnection();
+            procedure = new NamedParameterStatement(con, builder.getSQL());
+            procedure.setString("query", searchQuery);
+            procedure.setInt("stageNumber", stageNumber);
+            procedure.setInt("jobId", jobId);
+            procedure.setInt("solverId", solverId);
+            results = procedure.executeQuery();
+            return getJobPairsForDataTable(jobId, results, false, false, primitivesToAnonymize);
+        } catch (Exception e) {
+            log.error("getJobPairsForNextPageInJobBySolver", "jobId: " + jobId + " solverId: " + solverId, e);
+        } finally {
+            Common.safeClose(con);
+            Common.safeClose(procedure);
+            Common.safeClose(results);
+        }
+        return null;
+    }
+
+    /**
      * Gets benchmarks attributes with a specific key for all benchmarks used by a
      * given job
      *
