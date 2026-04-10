@@ -121,17 +121,20 @@ public class RESTServices {
 	@GET
 	@Path("/space/{sid}/processors")
 	@Produces("application/json")
+
 	public String getProcessorsBySpace(@PathParam("sid") int spaceId, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
 		ValidatorStatusCode status = JobSecurity.canUserCreateJobInSpace(userId, spaceId);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
+
 		try {
 			int communityId = Spaces.getCommunityOfSpace(spaceId);
 			if (communityId <= 0) {
 				return gson.toJson(new ValidatorStatusCode(false, "Space not found"));
 			}
+
 			List<Processor> post = Processors.getByCommunity(communityId,
 					org.starexec.data.to.enums.ProcessorType.POST);
 			List<Processor> pre = Processors.getByCommunity(communityId,

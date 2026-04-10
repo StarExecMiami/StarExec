@@ -8,6 +8,7 @@ var curSolverName = null; //stores the selected solver name for pair-table statu
 var jobId; //the ID of the job being viewed
 var lastValidSelectOption;
 var panelArray = [];
+
 var useWallclock = true;
 var syncResults = false;
 var DETAILS_JOB = {};
