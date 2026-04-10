@@ -1164,9 +1164,10 @@ public class RESTServices {
 		if (!Util.isNullOrEmpty(lastEventId)) {
 			try {
 				long parsed = Long.parseLong(lastEventId.trim());
-				if (parsed >= 0L) {
-					return parsed;
+				if (parsed < 0L) {
+					return logFile.exists() ? logFile.length() : 0L;
 				}
+				return parsed;
 			} catch (NumberFormatException ignored) {
 				// Invalid offsets should fail closed to tail-from-end behavior.
 				return logFile.exists() ? logFile.length() : 0L;
