@@ -545,9 +545,13 @@ public class RESTHelpers {
 			log.debug(methodName, "no sort override provided; using client-supplied sort settings");
 		}
 
-	List<JobPair> jobPairsToDisplay = Jobs.getJobPairsForNextPageInJobBySolver(query, jobId, solverId,
-		stageNumber, wallclock, primitivesToAnonymize);
-	log.debug(methodName, "retrieved jobPairsToDisplay size=" + (jobPairsToDisplay == null ? 0 : jobPairsToDisplay.size()));
+		List<JobPair> jobPairsToDisplay = Jobs.getJobPairsForNextPageInJobBySolver(query, jobId, solverId,
+				stageNumber, wallclock, primitivesToAnonymize);
+		if (jobPairsToDisplay == null) {
+			log.debug(methodName, "database error retrieving job pairs; returning null");
+			return null;
+		}
+		log.debug(methodName, "retrieved jobPairsToDisplay size=" + jobPairsToDisplay.size());
 
 		if (!query.hasSearchQuery()) {
 			query.setTotalRecordsAfterQuery(query.getTotalRecords());
