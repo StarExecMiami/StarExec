@@ -29,16 +29,18 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: user
+                  key: {{ .Values.postgres.existingSecretKeys.user }}
             - name: STAREXEC_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: password
+                  key: {{ .Values.postgres.existingSecretKeys.password }}
             - name: STAREXEC_DB_NAME
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: database
+                  key: {{ .Values.postgres.existingSecretKeys.database }}
+          resources:
+{{ toYaml .Values.resources.migrations | indent 12 }}
   backoffLimit: 1
 {{- end }}

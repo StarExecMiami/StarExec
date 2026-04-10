@@ -12,8 +12,9 @@
  *
  * 1. Creates Kubernetes Job resources for each job pair
  * 2. Uses the Kubernetes Java client (fabric8io/kubernetes-client) for API access
- * 3. Monitors job completion via Kubernetes watch/informers
- * 4. Supports horizontal scaling across multiple nodes natively
+ * 3. Monitors job completion via Kubernetes polling today, with informer-based
+ *    monitoring still planned
+ * 4. Enables Kubernetes-native execution experiments across multiple nodes
  * 5. Leverages Kubernetes features: resource limits, node selectors, tolerations
  *
  * Architecture:
@@ -34,8 +35,8 @@
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * │                                    ↓                                         │
  * │  ┌───────────────────────────────────────────────────────────────────────┐  │
- * │  │  KubernetesJobMonitor (Watch/Informer pattern)                        │  │
- * │  │    - Watches for Job completion events                                │  │
+ * │  │  KubernetesJobMonitor (polling mode today)                            │  │
+ * │  │    - Polls for Job completion                                         │  │
  * │  │    - Parses output files from PVC                                     │  │
  * │  │    - Updates database via JobPairs API                                │  │
  * │  │    - Cleans up completed Job resources                                │  │
@@ -49,7 +50,7 @@
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * └─────────────────────────────────────────────────────────────────────────────┘
  *
- * Dependencies (add to pom.xml):
+ * Dependency:
  *   <dependency>
  *     <groupId>io.fabric8</groupId>
  *     <artifactId>kubernetes-client</artifactId>
@@ -64,7 +65,6 @@
  *   STAREXEC_K8S_QUEUE_LABEL     - Label key for queue assignment (default: starexec/queue)
  *
  * Future TODOs:
- *   - [ ] Add fabric8 kubernetes-client dependency to pom.xml
  *   - [ ] Implement KubernetesJobMonitor with Watch pattern
  *   - [ ] Add Helm chart templates for RBAC (ServiceAccount, Role, RoleBinding)
  *   - [ ] Add PVC templates for shared data volume
@@ -105,10 +105,11 @@ import org.starexec.logger.StarLogger;
 /**
  * Kubernetes-native backend for StarExec job execution.
  *
- * <p>This backend creates Kubernetes Job resources for each StarExec job pair,
- * enabling true horizontal scaling across a Kubernetes cluster.</p>
+ * <p>This backend creates Kubernetes Job resources for each StarExec job pair.
+ * It is still an experimental path and should not be described as production-ready
+ * without cluster validation.</p>
  *
- * <p><b>Status: SCAFFOLDING</b> - Core structure in place, implementation pending.</p>
+ * <p><b>Status: EXPERIMENTAL</b> - Core submission flow exists; monitoring still polls.</p>
  */
 public class KubernetesNativeBackend implements Backend {
 

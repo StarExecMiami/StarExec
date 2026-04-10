@@ -270,7 +270,7 @@ public class PodmanBackend implements Backend {
                 "  1. Socket service is running: systemctl --user status podman.socket\n" +
                 "  2. Your UID matches the socket path: id -u (current) vs " + 
                 extractUidFromPath(containerSocketPath) + " (in path)\n" +
-                "  3. For school networks with masked sockets, see: docs/TROUBLESHOOTING_PODMAN.md\n" +
+                "  3. For school networks with masked sockets, see: docs/TROUBLESHOOTING.md#podman-issues\n" +
                 "\nAlternatively, run 'make preflight-podman' for more diagnostics.";
             throw new IllegalStateException(errorMessage, e);
         }

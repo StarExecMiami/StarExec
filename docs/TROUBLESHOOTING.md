@@ -110,6 +110,83 @@ podman system info | grep rootless
 # Should show: rootless: true
 ```
 
+### Podman Socket Path Is Not Available
+
+**Problem:** Startup fails because the configured socket path does not exist.
+
+Typical symptoms:
+
+```text
+Podman socket path is not available: /run/user/1000/podman/podman.sock
+```
+
+**Cause:** The socket service is not running, the configured UID does not match the current user, or the host uses a non-standard rootless Podman setup.
+
+**Solution:**
+
+```bash
+# Confirm your current UID
+id -u
+
+# Start the user socket on systemd-based Linux
+systemctl --user enable --now podman.socket
+systemctl --user status podman.socket
+
+# Verify the expected socket path
+ls -l /run/user/$(id -u)/podman/podman.sock
+```
+
+If your environment does not provide `systemd --user`, start the service manually:
+
+```bash
+podman system service --time=0 unix:///run/user/$(id -u)/podman/podman.sock &
+```
+
+If the values file hardcodes a different UID, override it before deployment or update the values file:
+
+```bash
+export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
+```
+
+### Podman Socket Permission Denied
+
+**Problem:** StarExec reaches the socket path but cannot open it.
+
+Typical symptoms:
+
+```text
+com.sun.jna.LastErrorException: [13] Permission denied
+```
+
+**Cause:** The container user does not match the socket owner or is missing the socket group.
+
+**Solution:**
+
+```bash
+# Run the preflight diagnostic
+./scripts/preflight-podman.sh
+
+# Inspect socket ownership
+stat -c '%u %g %A %n' /run/user/$(id -u)/podman/podman.sock
+id
+```
+
+If the socket group is the issue, inject that group into the container runtime configuration:
+
+```yaml
+services:
+  starexec:
+    group_add: ["<socket_gid>"]
+```
+
+For Podman-specific compose overrides:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
+```
+
+If your institution masks the user socket service, copy the Podman user unit files into `~/.config/systemd/user/`, reload the user daemon, and then enable `podman.socket`.
+
 ### Cgroup Controller Delegation Errors
 
 **Problem:** Containers fail to start with cgroup-related errors

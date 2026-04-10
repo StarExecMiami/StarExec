@@ -134,11 +134,11 @@ BOLD   := $(shell tput -Txterm bold)
 .PHONY: help build build-fresh build-prod build-offline cache-images image \
 	preflight-podman \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup network-reset deploy-podman-cached undeploy-podman \
-	deploy-k8s undeploy-k8s \
+	deploy-k8s undeploy-k8s k8s-detect k8s-setup k8s-setup-dry-run k8s-label-workers k8s-generate-values k8s-deploy-auto k8s-status \
 	volumes-create volumes-fix-permissions volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
 	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show runtime-check \
-	logs logs-app logs-postgres test-deps verify-deps wait-postgres test docs \
+	logs logs-app logs-postgres test-deps verify-deps wait-postgres test docs pull pull-job-runner \
 	start stop fix-cgroup-delegation
 
 start: deploy-podman
@@ -165,8 +165,17 @@ help:
 	@echo "  deploy-podman          Deploy to Podman (ensures image + render + apply)"
 	@echo "  deploy-podman-cached   Fast deploy using existing render.yaml (ensures image)"
 	@echo "  deploy-k8s             Deploy to Kubernetes (requires Helm)"
+	@echo "  k8s-deploy-auto        ⭐ Complete automated K8s setup and deployment"
 	@echo "  undeploy-podman        Remove Podman deployment"
 	@echo "  undeploy-k8s           Remove Kubernetes deployment"
+	@echo ""
+	@echo "Kubernetes Auto-Detection & Setup:"
+	@echo "  k8s-detect             Detect cluster configuration (nodes, storage, etc.)"
+	@echo "  k8s-setup              Configure K8s cluster (label nodes, create PVC)"
+	@echo "  k8s-setup-dry-run      Preview K8s setup without applying changes"
+	@echo "  k8s-label-workers      Label worker nodes for StarExec"
+	@echo "  k8s-generate-values    Generate optimized Helm values file"
+	@echo "  k8s-status             Show cluster and deployment status"
 	@echo ""
 	@echo "Volume Management (Podman):"
 	@echo "  volumes-create         Create named volumes for ENV"
@@ -612,7 +621,7 @@ define verify_podman_socket_from_values
 					echo "Verify the socket exists:"; \
 					echo "  ${BLUE}ls -l /run/user/$$CURRENT_UID/podman/podman.sock${RESET}"; \
 					echo ""; \
-					echo "See docs/TROUBLESHOOTING_PODMAN.md for detailed help."; \
+					echo "See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
 					echo ""; \
 					exit 1; \
 				fi; \
@@ -1108,25 +1117,99 @@ undeploy-podman:
 	@echo "Note: Use '${BLUE}make volumes-delete ENV=$(ENV)${RESET}' to remove data"
 
 # ============================================================================
-# KUBERNETES DEPLOYMENT
+# KUBERNETES DEPLOYMENT (with Auto-Detection)
 # ============================================================================
 
+# Auto-detect Kubernetes configuration
+k8s-detect:
+	@echo "${BOLD}Auto-detecting Kubernetes configuration...${RESET}"
+	@bash ./scripts/k8s-auto-detect.sh
+
+# Generate optimized Kubernetes values file
+k8s-generate-values:
+	@echo "${BOLD}Generating optimized Kubernetes values file...${RESET}"
+	@bash ./scripts/k8s-auto-detect.sh --generate-values
+	@echo ""
+	@echo "${GREEN}✓ Generated: charts/starexec/values-auto-detected.yaml${RESET}"
+	@echo "Deploy with: make deploy-k8s ENV=prod HELM_VALUES=charts/starexec/values-auto-detected.yaml"
+
+# Setup Kubernetes cluster (nodes, namespaces, storage)
+k8s-setup:
+	@echo "${BOLD}Setting up Kubernetes cluster for StarExec...${RESET}"
+	@bash ./scripts/k8s-node-setup.sh --all
+	@echo ""
+	@echo "${GREEN}✓ Kubernetes cluster setup complete!${RESET}"
+
+# Setup with dry-run (preview changes)
+k8s-setup-dry-run:
+	@echo "${BOLD}Previewing Kubernetes cluster setup (DRY-RUN)...${RESET}"
+	@bash ./scripts/k8s-node-setup.sh --all --dry-run
+
+# Label worker nodes only
+k8s-label-workers:
+	@bash ./scripts/k8s-node-setup.sh --label-workers
+
+# Complete automated Kubernetes deployment (auto-setup + deployment)
+k8s-deploy-auto: k8s-detect
+	@echo ""
+	@echo "${BLUE}Starting automated Kubernetes deployment...${RESET}"
+	@echo ""
+	@echo "Step 1: Setting up cluster infrastructure..."
+	@bash ./scripts/k8s-node-setup.sh --all
+	@echo ""
+	@echo "Step 2: Generating optimized configuration..."
+	@bash ./scripts/k8s-auto-detect.sh --generate-values
+	@echo ""
+	@echo "Step 3: Deploying StarExec..."
+	@$(MAKE) deploy-k8s ENV=prod HELM_VALUES=charts/starexec/values-auto-detected.yaml
+	@echo ""
+	@echo "${GREEN}✓✓✓ Automated Kubernetes deployment complete!${RESET}"
+	@echo ""
+	@kubectl get pods -n starexec
+	@echo ""
+	@echo "Access StarExec at: http://<cluster-ip>/starexec"
+
+# Deploy to Kubernetes with specified environment
 deploy-k8s:
 	@echo "Deploying to Kubernetes with environment: $(ENV)"
-	@$(call require_values_file)
-	@echo "Using values file: $(VALS)"
+	@# Use auto-generated values if they exist, otherwise use env-specific values
+	@if [ -f "charts/starexec/values-auto-detected.yaml" ] && [ "$(HELM_VALUES)" = "charts/starexec/values.yaml" ]; then \
+		VALUES_FILE="charts/starexec/values-auto-detected.yaml"; \
+		echo "${YELLOW}Using auto-detected values file: $$VALUES_FILE${RESET}"; \
+	else \
+		VALUES_FILE="$(HELM_VALUES)"; \
+	fi; \
+	if [ ! -f "$$VALUES_FILE" ]; then \
+		VALUES_FILE="charts/starexec/values-kubernetes.yaml"; \
+		echo "${YELLOW}Using Kubernetes values file: $$VALUES_FILE${RESET}"; \
+	fi; \
+	echo "Using values file: $$VALUES_FILE"; \
 	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
-		-f $(VALS) \
+		-f $$VALUES_FILE \
 		--namespace starexec \
-		--create-namespace \
-		--wait \
-		--timeout 5m
+		--create-namespace
 	@echo ""
 	@echo "${GREEN}✓ Kubernetes deployment complete!${RESET}"
 	@kubectl get pods -n starexec
 
 undeploy-k8s:
 	helm uninstall $(RELEASE_NAME) --namespace starexec || true
+
+# Check Kubernetes cluster health
+k8s-status:
+	@echo "${BOLD}${BLUE}Kubernetes Cluster Status${RESET}"
+	@echo ""
+	@echo "=== Nodes ==="
+	@kubectl get nodes -o wide
+	@echo ""
+	@echo "=== StarExec Pods ==="
+	@kubectl get pods -n starexec -o wide || echo "No pods deployed yet"
+	@echo ""
+	@echo "=== PersistentVolumeClaims ==="
+	@kubectl get pvc -n starexec-jobs -o wide || echo "No PVCs created yet"
+	@echo ""
+	@echo "=== Storage Classes ==="
+	@kubectl get storageclass
 
 # ============================================================================
 # MAINTENANCE AND CLEANUP

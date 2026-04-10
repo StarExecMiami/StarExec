@@ -197,6 +197,8 @@ Ensure your cluster has:
 2. **Ingress controller** (optional, for external access)
 3. **cert-manager** (optional, for TLS)
 
+For a single-node MicroK8s deployment that uses this machine as the only compute node, follow [MICROK8S_SINGLE_NODE.md](MICROK8S_SINGLE_NODE.md). That runbook uses the Kubernetes-native backend, `microk8s-hostpath`, Kubernetes secrets, and a chart-level PostgreSQL permission bootstrap.
+
 ### Installation
 
 #### From Helm Repository
@@ -232,6 +234,8 @@ helm install starexec ./charts/starexec \
   -n starexec \
   -f charts/starexec/values-dev.yaml
 ```
+
+For Helm-specific linting and credential-handling notes, see [charts/starexec/README.md](../charts/starexec/README.md).
 
 ### Custom Values
 

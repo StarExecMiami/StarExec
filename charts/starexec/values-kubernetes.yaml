@@ -9,7 +9,7 @@
 #
 # Prerequisites:
 #   1. A Kubernetes cluster with sufficient worker nodes
-#   2. A PersistentVolumeClaim for shared data (ReadWriteMany)
+#   2. A PersistentVolumeClaim for shared data
 #   3. Worker nodes labeled: starexec.org/worker=true
 #   4. (Optional) Queue labels: starexec/queue=<queue-name>
 
@@ -46,7 +46,7 @@ kubernetes:
     storageClass: ""  # Use cluster default, or specify: "nfs", "cephfs", etc.
     size: "100Gi"
     accessModes:
-      - ReadWriteMany
+      - ReadWriteOnce
   
   # Node selection for worker nodes
   nodeSelector:
@@ -100,10 +100,10 @@ postgres:
   # Use existing secret for credentials
   existingSecret: "starexec-postgres-credentials"
   existingSecretKeys:
-    user: "username"
+    user: "user"
     password: "password"
     database: "database"
-    rootPassword: "postgres-password"
+    rootPassword: "rootPassword"
   
   persistence:
     enabled: true
@@ -135,7 +135,10 @@ resources:
 persistence:
   enabled: true
   storageClass: ""  # Use default, or specify RWX-capable class
-  size: 100Gi
+  appDataSize: 100Gi
+  backendSize: 5Gi
+  sandboxSize: 10Gi
+  workSize: 20Gi
   
   # For Kubernetes, use PVC (not Podman volumes)
   usePodmanVolumes: false
@@ -161,6 +164,16 @@ ingress:
 # Monitoring (optional)
 monitoring:
   enabled: false
-  serviceMonitor:
+serviceMonitor:
     enabled: false
     interval: 30s
+
+web:
+  urlPrefix: "https"
+  address: "starexec.example.com"
+  proxyPort: 443
+
+security:
+  volumePermissions:
+    enabled: true
+    image: "busybox:1.36"
