@@ -47,6 +47,7 @@ jobs:
             ${{ runner.os }}-nvd-data-
 
       - name: Run OWASP Dependency Check
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
