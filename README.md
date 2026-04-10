@@ -36,12 +36,14 @@ helm install starexec starexec/starexec -n starexec --create-namespace
 ## Documentation
 
 Documentation is organized using the [Diátaxis](https://diataxis.fr) framework.
+The list below is the canonical public documentation set.
 
 ### Tutorial — Learning by doing
 - **[Quick Start Guide](docs/QUICKSTART.md)** - Get running in 10 minutes (Docker Compose, Podman, or Kubernetes)
 
 ### How-to — Accomplish specific goals
 - **[Deployment Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
+- **[Kubernetes Deployment Automation](docs/KUBERNETES_AUTO_DEPLOYMENT.md)** - Automated Kubernetes setup and deployment workflow
 - **[Volume Management](docs/VOLUMES.md)** - Backup, restore, and volume operations
 - **[Database Management](docs/DATABASE.md)** - Migrations, backups, and troubleshooting
 - **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
@@ -88,7 +90,7 @@ See [Developer Guide](docs/DEVELOPER.md#prerequisites) for complete requirements
 ## Support
 
 - **Issues:** [GitHub Issues](https://github.com/StarExecMiami/StarExec/issues)
-- **Releases:** [Changelog](https://github.com/StarExecMiami/StarExec/releases)
+- **Releases:** [CHANGELOG.md](CHANGELOG.md)
 - **User Manual:** [StarExec Help](https://starexec.ccs.miami.edu/starexec/public/help.jsp)
 
 ## License

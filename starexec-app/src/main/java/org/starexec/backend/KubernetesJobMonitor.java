@@ -6,31 +6,27 @@
  * ============================================================================
  * 
  * This component monitors Kubernetes Job resources for completion and updates
- * the StarExec database accordingly. It uses the Kubernetes Watch/Informer
- * pattern for efficient, event-driven monitoring.
+ * the StarExec database accordingly. The current implementation uses a polling
+ * loop; informer-based monitoring remains future work.
  * 
- * Design Pattern: Watch + Informer
- * ─────────────────────────────────
- * Unlike the PodmanBackend's polling approach, Kubernetes provides efficient
- * event-driven APIs:
- * 
- *   1. Watch API - Stream of events (ADDED, MODIFIED, DELETED)
- *   2. Informers - Higher-level abstraction with local cache + event handlers
+ * Current Design: Polling with a future informer migration path
+ * ─────────────────────────────────────────────────────────────
+ * The monitor currently lists StarExec-managed Jobs at a fixed interval and
+ * emits completion callbacks once a Job reports success or failure.
  * 
  * Architecture:
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │                        KubernetesJobMonitor                                  │
  * │  ┌───────────────────────────────────────────────────────────────────────┐  │
- * │  │  SharedInformerFactory                                                 │  │
- * │  │    - Maintains local cache of Job resources                            │  │
- * │  │    - Handles reconnection on network failures                          │  │
+ * │  │  Polling loop                                                          │  │
+ * │  │    - Lists StarExec-managed Job resources                              │  │
+ * │  │    - Sleeps between checks                                             │  │
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * │                                    ↓                                         │
  * │  ┌───────────────────────────────────────────────────────────────────────┐  │
- * │  │  ResourceEventHandler<Job>                                             │  │
- * │  │    - onAdd: New job created (ignore)                                   │  │
- * │  │    - onUpdate: Job status changed → check if complete                  │  │
- * │  │    - onDelete: Job removed (cleanup tracking)                          │  │
+ * │  │  Completion detection                                                  │  │
+ * │  │    - Checks status.succeeded / status.failed                           │  │
+ * │  │    - Avoids duplicate callbacks per execution ID                       │  │
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * │                                    ↓                                         │
  * │  ┌───────────────────────────────────────────────────────────────────────┐  │
@@ -63,7 +59,7 @@
  * 
  * Error Handling:
  * ───────────────
- *   - Network disconnection: Informer auto-reconnects
+ *   - Network disconnection: Next poll retries the list operation
  *   - Job stuck: TTL-based cleanup via ttlSecondsAfterFinished
  *   - Parse errors: Log and mark job as failed
  * 
@@ -93,9 +89,9 @@ import org.starexec.logger.StarLogger;
 /**
  * Monitors Kubernetes Jobs for completion and updates StarExec database.
  * 
- * <p>Uses the Kubernetes Informer pattern for efficient, event-driven monitoring.</p>
+ * <p>Uses polling today; informer-based monitoring is still planned.</p>
  * 
- * <p><b>Status: SCAFFOLDING</b> - Structure in place, implementation pending.</p>
+ * <p><b>Status: EXPERIMENTAL</b> - Polling implementation is active; informer migration is pending.</p>
  */
 public class KubernetesJobMonitor {
     

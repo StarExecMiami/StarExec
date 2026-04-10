@@ -265,6 +265,7 @@ curl -N -b cookies.txt \
 ## Pair Reproducibility Manifest
 
 StarExec provides a per-attempt reproducibility manifest for job pairs.
+For the full state model and precedence rules, see [REPRO_MANIFEST_CONTRACT.md](REPRO_MANIFEST_CONTRACT.md).
 
 **Endpoint**: `GET /starexec/services/jobs/pairs/{pairId}/reproducibility-manifest`  
 **Content-Type**: `application/json`

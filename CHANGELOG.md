@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kubernetes native backend groundwork**: Added a Kubernetes-native backend path that creates Kubernetes Job resources through the fabric8 client
+  - Implemented `KubernetesNativeBackend` class with fabric8 Kubernetes client
+  - Added `KubernetesJobMonitor` with polling-based completion monitoring
+  - Direct Kubernetes API integration (no more subprocess + kubectl)
+  - Native Job resource creation with resource limits and node selectors
+- **Fabric8 Kubernetes Client**: Added `io.fabric8:kubernetes-client` v6.10.0 dependency for native K8s API access
+- **Kubernetes Environment Variables**: Added comprehensive configuration via `STAREXEC_K8S_*` environment variables
+- **Helm Chart Updates**: Enhanced `values-kubernetes.yaml` with native backend configuration
+
+### Changed
+- **Backend Type Resolution**: `STAREXEC_BACKEND_TYPE=kubernetes` now uses `KubernetesNativeBackend` instead of legacy `KubernetesBackend`
+- **Kubernetes backend status**: Kubernetes routing now targets the native backend implementation; large-scale performance and production readiness still require end-to-end validation
+
 ## [2.3.0] - 2026-03-10
 
 ### Breaking Changes

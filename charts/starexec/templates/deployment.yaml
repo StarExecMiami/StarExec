@@ -6,6 +6,16 @@ metadata:
     {{- include "chart.labels" . | nindent 4 }}
 spec:
   replicas: 1
+{{- if eq .Values.postgres.host "localhost" }}
+  strategy:
+    type: Recreate
+{{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+{{- end }}
   selector:
     matchLabels:
       {{- include "chart.selectorLabels" . | nindent 6 }}
@@ -18,27 +28,50 @@ spec:
       restartPolicy: Always
       securityContext:
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:
         - name: fix-permissions
-          image: busybox
+          image: {{ .Values.security.volumePermissions.image | quote }}
           command:
             - sh
             - -c
             - |
-              echo "Ensuring directories exist (skipping chown)..."
+              echo "Ensuring directories exist and permissions are correct..."
               mkdir -p /app/data /app/sandbox /app/backend /app/work /var/lib/postgresql/data
-              echo "Note: chown skipped to avoid permission errors on mounted volumes"
+{{- if .Values.security.volumePermissions.enabled }}
+              chown -R 1000:999 /app/data /app/sandbox /app/backend /app/work
+              chown -R 999:999 /var/lib/postgresql/data
+              chmod 0770 /app/data /app/sandbox /app/backend /app/work
+              chmod 0700 /var/lib/postgresql/data
+{{- else }}
+              echo "Volume permission fixups disabled; only creating directories"
+{{- end }}
           securityContext:
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: sandbox
+              mountPath: /app/sandbox
+            - name: backend
+              mountPath: /app/backend
+            - name: work
+              mountPath: /app/work
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
       volumes:
         - name: data
           persistentVolumeClaim:
+{{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
+            claimName: {{ include "starexec.k8sDataPvcName" . }}
+{{- else }}
             claimName: {{ include "starexec.volumeName" (list . "data") }}
+{{- end }}
         - name: sandbox
           persistentVolumeClaim:
             claimName: {{ include "starexec.volumeName" (list . "sandbox") }}
@@ -82,27 +115,27 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: user
+                  key: {{ .Values.postgres.existingSecretKeys.user }}
             - name: STAREXEC_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: password
+                  key: {{ .Values.postgres.existingSecretKeys.password }}
             - name: STAREXEC_DB_NAME
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: database
+                  key: {{ .Values.postgres.existingSecretKeys.database }}
             - name: STAREXEC_CLUSTER_DB_USER
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: user
+                  key: {{ .Values.postgres.existingSecretKeys.user }}
             - name: STAREXEC_CLUSTER_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: password
+                  key: {{ .Values.postgres.existingSecretKeys.password }}
             - name: STAREXEC_REPORT_HOST
               value: "localhost"
             - name: STAREXEC_BACKEND_TYPE
@@ -174,11 +207,17 @@ spec:
             - name: LOG_LEVEL
               value: "DEBUG"
             - name: STAREXEC_URL_PREFIX
-              value: "http"
+              value: {{ .Values.web.urlPrefix | quote }}
             - name: STAREXEC_WEB_ADDRESS
-              value: "localhost:7827"
+              value: {{ .Values.web.address | quote }}
+            - name: STAREXEC_PROXY_PORT
+              value: {{ .Values.web.proxyPort | quote }}
             - name: SKIP_MIGRATIONS
+{{- if eq .Values.postgres.host "localhost" }}
+              value: "false"
+{{- else }}
               value: "{{ if .Values.migrations.enabled }}false{{ else }}true{{ end }}"
+{{- end }}
 {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
@@ -208,12 +247,7 @@ spec:
               mountPath: /run/podman/podman.sock
 {{- end }}
           resources:
-            requests:
-              memory: "1Gi"
-              cpu: "500m"
-            limits:
-              memory: "2Gi"
-              cpu: "2"
+{{ toYaml .Values.resources.app | indent 12 }}
           livenessProbe:
             httpGet:
               path: /starexec/
@@ -243,21 +277,17 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: database
+                  key: {{ .Values.postgres.existingSecretKeys.database }}
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: user
+                  key: {{ .Values.postgres.existingSecretKeys.user }}
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.existingSecret | default (printf "%s-postgres-credentials" (include "chart.fullname" .)) }}
-                  key: password
-            - name: LC_COLLATE
-              value: "en_US.UTF-8"
-            - name: LC_CTYPE
-              value: "en_US.UTF-8"
+                  key: {{ .Values.postgres.existingSecretKeys.password }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 999
@@ -270,12 +300,7 @@ spec:
             - name: tmp
               mountPath: /tmp
           resources:
-            requests:
-              memory: "256Mi"
-              cpu: "250m"
-            limits:
-              memory: "512Mi"
-              cpu: "500m"
+{{ toYaml .Values.resources.postgres | indent 12 }}
           livenessProbe:
             exec:
               command:

@@ -52,6 +52,9 @@ persistence:
 
   # Storage size configurations
   appDataSize: 5Gi
+  backendSize: 5Gi
+  sandboxSize: 5Gi
+  workSize: 5Gi
   postgresDataSize: 20Gi
 
   # Deployment-specific storage options
@@ -161,7 +164,7 @@ podman:
     # Rootless Podman socket only. Do not point this at a rootful system socket.
     # IMPORTANT: The UID must match your user's ID.
     # At deployment time, preflight checks will FAIL if UID doesn't match your actual UID.
-    # See docs/TROUBLESHOOTING_PODMAN.md for remediation steps.
+    # See docs/TROUBLESHOOTING.md#podman-issues for remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
 
   # Job container configuration
@@ -186,6 +189,14 @@ service:
   port: 8080
   targetPort: 8080
   nodePort: 30080 # Only used when type is NodePort
+
+# ============================================================================
+# EXTERNAL WEB URL
+# ============================================================================
+web:
+  urlPrefix: "http"
+  address: "localhost"
+  proxyPort: 80
 
 # ============================================================================
 # SCALABILITY TUNING
@@ -223,6 +234,14 @@ resources:
     limits:
       memory: "512Mi"
       cpu: "500m"
+
+# ============================================================================
+# SECURITY / VOLUME PERMISSIONS
+# ============================================================================
+security:
+  volumePermissions:
+    enabled: true
+    image: "busybox:1.36"
 
 # ============================================================================
 # DATABASE MIGRATIONS

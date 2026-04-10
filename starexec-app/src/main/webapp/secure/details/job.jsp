@@ -289,6 +289,8 @@
 					<button title="show only job pairs that have been solved by every solver/configuration combination in this space"
 					        id="syncResults" class="btn btn-secondary"><span class="ui-icon ui-icon-gear"></span> synchronize results
 					</button>
+					<span id="pairFilterStatus"></span>
+					<button id="clearPairFilter" class="btn btn-secondary" type="button"><span class="ui-icon ui-icon-close"></span> show selected space</button>
 				</c:if>
 				<label class="stageSelectorLabel"
 				       for="subspaceSummaryStageSelector">Stage: </label>

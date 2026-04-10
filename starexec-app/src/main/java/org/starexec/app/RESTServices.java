@@ -121,51 +121,51 @@ public class RESTServices {
 	@GET
 	@Path("/space/{sid}/processors")
 	@Produces("application/json")
-	public String getProcessorsBySpace(@PathParam("sid") int spaceId) {
+
+	public String getProcessorsBySpace(@PathParam("sid") int spaceId, @Context HttpServletRequest request) {
+		int userId = SessionUtil.getUserId(request);
+		ValidatorStatusCode status = JobSecurity.canUserCreateJobInSpace(userId, spaceId);
+		if (!status.isSuccess()) {
+			return gson.toJson(status);
+		}
 
 		try {
 			int communityId = Spaces.getCommunityOfSpace(spaceId);
 			if (communityId <= 0) {
 				return gson.toJson(new ValidatorStatusCode(false, "Space not found"));
 			}
-			try {
-				List<Processor> post = Processors.getByCommunity(communityId,
+
+			List<Processor> post = Processors.getByCommunity(communityId,
 					org.starexec.data.to.enums.ProcessorType.POST);
-				List<Processor> pre = Processors.getByCommunity(communityId,
+			List<Processor> pre = Processors.getByCommunity(communityId,
 					org.starexec.data.to.enums.ProcessorType.PRE);
 
-				List<Map<String, Object>> postProcessors = new ArrayList<>();
-				if (post != null) {
-					for (Processor processor : post) {
-						Map<String, Object> simple = new HashMap<>();
-						simple.put("id", processor.getId());
-						simple.put("name", processor.getName());
-						postProcessors.add(simple);
-					}
+			List<Map<String, Object>> postProcessors = new ArrayList<>();
+			if (post != null) {
+				for (Processor processor : post) {
+					Map<String, Object> simple = new HashMap<>();
+					simple.put("id", processor.getId());
+					simple.put("name", processor.getName());
+					postProcessors.add(simple);
 				}
-
-				List<Map<String, Object>> preProcessors = new ArrayList<>();
-				if (pre != null) {
-					for (Processor processor : pre) {
-						Map<String, Object> simple = new HashMap<>();
-						simple.put("id", processor.getId());
-						simple.put("name", processor.getName());
-						preProcessors.add(simple);
-					}
-				}
-
-				Map<String, Object> response = new HashMap<>();
-				response.put("postProcessors", postProcessors);
-				response.put("preProcessors", preProcessors);
-
-				return gson.toJson(response);
-			} catch (Exception e) {
-				log.error("Error retrieving processors for community " + communityId, e);
-				return gson.toJson(ERROR_DATABASE);
 			}
 
+			List<Map<String, Object>> preProcessors = new ArrayList<>();
+			if (pre != null) {
+				for (Processor processor : pre) {
+					Map<String, Object> simple = new HashMap<>();
+					simple.put("id", processor.getId());
+					simple.put("name", processor.getName());
+					preProcessors.add(simple);
+				}
+			}
+
+			Map<String, Object> response = new HashMap<>();
+			response.put("postProcessors", postProcessors);
+			response.put("preProcessors", preProcessors);
+			return gson.toJson(response);
 		} catch (Exception e) {
-			log.error("Error retrieving community for space " + spaceId, e);
+			log.error("Error retrieving processors for space " + spaceId, e);
 			return gson.toJson(ERROR_DATABASE);
 		}
 	}
@@ -1167,9 +1167,10 @@ public class RESTServices {
 		if (!Util.isNullOrEmpty(lastEventId)) {
 			try {
 				long parsed = Long.parseLong(lastEventId.trim());
-				if (parsed >= 0L) {
-					return parsed;
+				if (parsed < 0L) {
+					return logFile.exists() ? logFile.length() : 0L;
 				}
+				return parsed;
 			} catch (NumberFormatException ignored) {
 				// Invalid offsets should fail closed to tail-from-end behavior.
 				return logFile.exists() ? logFile.length() : 0L;

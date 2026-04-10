@@ -7874,7 +7874,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.GetSpaceJobsById CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSpaceJobsById(_spaceId INT)
-RETURNS TABLE(id INT, name VARCHAR(255), user_id INT, created TIMESTAMP, description TEXT, deleted BOOLEAN, paused BOOLEAN, killed BOOLEAN, buildJob BOOLEAN, disk_size BIGINT, total_pairs INT, completed_pairs INT, errored_pairs INT, pending_pairs INT, status_code INT, max_stages INT, job_type INT, timeout INT, seed BIGINT, suppress_output BOOLEAN, node_queued BOOLEAN) AS $$
+RETURNS TABLE(id INT, name VARCHAR(255), user_id INT, created TIMESTAMP, description TEXT, deleted BOOLEAN, paused BOOLEAN, killed BOOLEAN, buildJob BOOLEAN, disk_size BIGINT, total_pairs INT, completed_pairs INT, errored_pairs INT, pending_pairs INT, status_code INT, max_stages INT, job_type INT, timeout INT, seed BIGINT, suppress_output BOOLEAN, node_queued BOOLEAN, primary_space INT, completed TIMESTAMP, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, soft_time_limit INT, kill_delay INT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
 BEGIN
     RETURN QUERY
     SELECT 
@@ -7882,7 +7882,8 @@ BEGIN
         starexec.getcompletepairs(j.id)::INT as completed_pairs,
         starexec.geterrorpairs(j.id)::INT as errored_pairs,
         (j.total_pairs - starexec.getcompletepairs(j.id) - starexec.geterrorpairs(j.id))::INT as pending_pairs,
-        j.status_code, j.max_stages, j.job_type, j.timeout, j.seed, j.suppress_output, j.node_queued
+        j.status_code, j.max_stages, j.job_type, j.timeout, j.seed, j.suppress_output, j.node_queued,
+        j.primary_space, j.completed, j.cpuTimeout, j.clockTimeout, j.maximum_memory, j.suppress_timestamp, j.using_dependencies, j.soft_time_limit, j.kill_delay, j.benchmarking_framework, j.is_high_priority, j.output_benchmarks_directory_path
     FROM starexec.jobs j
     WHERE j.id IN (
         SELECT ja.job_id

@@ -77,6 +77,25 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, sge, oar. Note: Makefile `make start` uses Podman deployment by default. |
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
 
+### Kubernetes Backend Configuration
+
+These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYPE=kubernetes`.
+
+| Variable | Default | Required | Example | Notes |
+|----------|---------|----------|---------|-------|
+| `STAREXEC_K8S_NAMESPACE` | `starexec` | No | `starexec-jobs` | Kubernetes namespace for job execution |
+| `STAREXEC_K8S_JOB_IMAGE` | `starexec/job-runner:latest` | No | `ghcr.io/starexecmiami/starexec-job-runner:latest` | Container image for job execution |
+| `STAREXEC_K8S_DATA_PVC` | `starexec-data` | No | `starexec-data` | PVC name for shared data volume |
+| `STAREXEC_K8S_SERVICE_ACCOUNT` | `starexec-job` | No | `starexec-job` | ServiceAccount for job pods |
+| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key for queue assignment |
+| `STAREXEC_K8S_MEMORY_LIMIT` | `2Gi` | No | `4Gi` | Memory limit per job pod |
+| `STAREXEC_K8S_CPU_LIMIT` | `1` | No | `2` | CPU core limit per job pod |
+| `STAREXEC_K8S_JOB_TTL_SECONDS` | `3600` | No | `7200` | Job cleanup TTL after completion |
+| `STAREXEC_K8S_JOB_BACKOFF_LIMIT` | `0` | No | `3` | Kubernetes job retry limit |
+| `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU` | `true` | No | `false` | Enforce 1 job pair per CPU core |
+| `STAREXEC_K8S_WORKER_SELECTOR_KEY` | `starexec.org/worker` | No | `starexec.org/worker` | Node selector key for worker nodes |
+| `STAREXEC_K8S_WORKER_SELECTOR_VALUE` | `true` | No | `true` | Node selector value for worker nodes |
+
 ### Performance Tuning
 
 | Variable | Default | Description |
@@ -179,6 +198,23 @@ persistence:
 backend:
   type: kubernetes
   dataDir: /var/lib/starexec/data
+
+# Kubernetes-specific configuration
+kubernetes:
+  enabled: true
+  jobNamespace: "starexec-jobs"
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  dataPvc:
+    name: "starexec-data"
+    storageClass: "fast-nfs"
+    size: "100Gi"
+  resources:
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
 ```
 
 ## Configuration Validation

@@ -114,20 +114,20 @@ or backend mismatch incidents across releases).
 | Container isolation | ❌ | ✅ | ✅ | ❌ | ❌ |
 | Resource limits | ⚠️ | ✅ | ✅ | ✅ | ✅ |
 | Job persistence | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Horizontal scaling | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Horizontal scaling | ❌ | ❌ | Limited by current implementation maturity | ✅ | ✅ |
 | Untrusted code safe | ❌ | ✅ | ✅ | ⚠️ | ⚠️ |
 | Setup complexity | Low | Medium | High | High | High |
 | Maintenance | Low | Medium | High | High | High |
 
 ### Performance Comparison
 
-| Backend | Max Concurrent | Jobs/Hour (10-min jobs) | Best For |
-|---------|----------------|-------------------------|----------|
-| Local | 4-16 | 24-96 | < 1,000 jobs |
-| Podman | 64-100 | 384-600 | < 100,000 jobs |
-| Kubernetes | 500+ | 3,000+ | > 100,000 jobs |
-| SGE | Cluster-dependent | Varies | HPC workloads |
-| OAR | Cluster-dependent | Varies | HPC workloads |
+| Backend | Max Concurrent | Jobs/Hour (10-min jobs) | Status |
+|---------|----------------|-------------------------|--------|
+| Local | 4-16 | 24-96 | Stable |
+| Podman | 64-100 | 384-600 | Stable |
+| Kubernetes Native | Not yet validated | Not yet benchmarked | Experimental |
+| SGE | Cluster-dependent | Varies | Legacy |
+| OAR | Cluster-dependent | Varies | Legacy |
 
 ---
 
@@ -287,78 +287,133 @@ export STAREXEC_CONTAINER_MONITOR_POLL_MS=10000
 
 ### Overview
 
-The Kubernetes Backend leverages Kubernetes for container orchestration. It can scale across multiple nodes but currently has architectural limitations.
+The Kubernetes backend routes `kubernetes`, `k8s`, and `kubernetes-native` to `KubernetesNativeBackend`, which creates Kubernetes Job resources through the fabric8 client.
 
-**Best for:** Cloud deployments, multi-node clusters, auto-scaling
+**Best for:** Controlled Kubernetes experiments and backend development
 
-**Current limitation:** 50-job hardcoded limit in hybrid implementation
-
-### Configuration
-
-```yaml
-# Helm values
-backend:
-  type: kubernetes
-  dataDir: /var/lib/starexec/data
-  
-kubernetes:
-  namespace: starexec-jobs
-  serviceAccount: starexec-runner
-  imagePullSecrets:
-    - starexec-registry
-```
+**Status:** Experimental. Core submission logic exists, but monitoring still runs in polling mode and production-scale validation is still pending.
 
 ### Architecture
 
-The current implementation is a **hybrid design**:
+The current implementation uses this flow:
 
-1. StarExec submits jobs to internal queue
-2. Jobs are dispatched to Kubernetes pods
-3. ContainerJobMonitor polls for completion
-4. Results read from shared storage
+1. StarExec scheduler creates Kubernetes Job resources directly
+2. Each job pair runs in its own Pod with resource limits
+3. `KubernetesJobMonitor` polls the Kubernetes API for job completion
+4. Results read from shared PVC and updated in database
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ StarExec Pod (Head Node)                                    │
-│                                                             │
-│   KubernetesBackend                                         │
-│   ┌──────────────────────────────────────────────────────┐  │
-│   │ Submit jobs to internal queue                        │  │
-│   │ Create Kubernetes Job resources                      │  │
-│   │ Poll for completion                                  │  │
-│   └──────────────────────────────────────────────────────┘  │
-│                            │                                │
-└────────────────────────────┼────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Kubernetes Cluster                                          │
-│                                                             │
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐                 │
-│   │ Job Pod  │  │ Job Pod  │  │ Job Pod  │  ...            │
-│   │  Node 1  │  │  Node 2  │  │  Node 3  │                 │
-│   └──────────┘  └──────────┘  └──────────┘                 │
-│                                                             │
-│   Shared Storage (PVC)                                      │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │ /starexec/output/                                   │   │
-│   └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ StarExec Application (scheduler thread)                         │
+│                                                                 │
+│  JobManager.initMainTemplateIf() ──┐                            │
+│         │                           │                            │
+│         ▼                           ▼                            │
+│  Database (pair status)    KubernetesNativeBackend              │
+│                            (fabric8 client)                     │
+│                                     │                            │
+│                                     ▼                            │
+│                            Create Kubernetes Job                │
+│                            + PVC mount                          │
+│                            + Resource limits                    │
+│                            + Node selectors                     │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────────┐
+                    │  Kubernetes Cluster         │
+                    │                             │
+                    │  ┌─────────────────────┐    │
+                    │  │ Job 1: solver job   │    │
+                    │  │ → Pod execution     │    │
+                    │  │ → Output to PVC     │    │
+                    │  └─────────────────────┘    │
+                    │                             │
+                    │  [Shared PVC: /data]        │
+                    └─────────────────────────────┘
+                                  │
+                                  ▼
+                    Kubernetes API polling
+                    (current completion monitoring)
+                                  │
+                                  ▼
+           ┌──────────────────────────────────────────────────┐
+           │  KubernetesJobMonitor                            │
+           │  - Polls for Job completion                      │
+           │  - Reads output files from PVC                   │
+           │  - Updates database via JobPairs API             │
+           │  - Cleans up completed Job resources             │
+           └──────────────────────────────────────────────────┘
 ```
 
-### Limitations
+### Verified differences from the legacy backend
 
-- **50-job limit**: Hardcoded in current implementation
-- **Head node bottleneck**: Single StarExec pod manages all jobs
-- **Not fully cloud-native**: Still uses polling model
+| Aspect | Legacy backend | Current native backend |
+|--------|----------------|------------------------|
+| Execution | Local subprocesses plus `kubectl` | Direct Kubernetes API calls |
+| Monitoring | Legacy backend-specific flow | Polling `KubernetesJobMonitor` |
+| Routing | Dedicated `KubernetesBackend` | `kubernetes`, `k8s`, and `kubernetes-native` all map here |
+| Maturity | Legacy path | Experimental replacement under active development |
 
-### Future Roadmap
+### Configuration
 
-A true Kubernetes-native backend would:
-- Create Kubernetes Job resources directly
-- Use Kubernetes-native monitoring (not polling)
-- Scale StarExec horizontally
-- Support 100K+ concurrent jobs
+```bash
+# Required
+export STAREXEC_BACKEND_TYPE=kubernetes
+
+# Core settings
+export STAREXEC_K8S_NAMESPACE=starexec-jobs
+export STAREXEC_K8S_JOB_IMAGE=ghcr.io/starexecmiami/starexec-job-runner:latest
+export STAREXEC_K8S_DATA_PVC=starexec-data
+export STAREXEC_K8S_SERVICE_ACCOUNT=starexec-job
+
+# Resource limits (per job)
+export STAREXEC_K8S_MEMORY_LIMIT=2Gi
+export STAREXEC_K8S_CPU_LIMIT=1
+
+# Queue management
+export STAREXEC_K8S_QUEUE_LABEL=starexec/queue
+export STAREXEC_K8S_WORKER_SELECTOR_KEY=starexec.org/worker
+export STAREXEC_K8S_WORKER_SELECTOR_VALUE=true
+
+# Job cleanup
+export STAREXEC_K8S_JOB_TTL_SECONDS=3600
+export STAREXEC_K8S_JOB_BACKOFF_LIMIT=0
+```
+
+### Helm Deployment
+
+Use the provided Kubernetes values file:
+
+```bash
+# Deploy with Kubernetes native backend
+helm install starexec ./charts/starexec -f ./charts/starexec/values-kubernetes.yaml
+```
+
+### Prerequisites
+
+- Kubernetes cluster (v1.19+) with worker nodes
+- PersistentVolumeClaim supporting ReadWriteMany (NFS, CephFS, etc.)
+- Worker nodes labeled: `starexec.org/worker=true`
+- (Optional) Queue labels: `starexec/queue=<queue-name>`
+
+### Queue Management
+
+Jobs are automatically scheduled based on node labels:
+
+```bash
+# Label worker nodes
+kubectl label nodes worker-1 starexec.org/worker=true
+kubectl label nodes worker-1 starexec/queue=fast-solvers
+kubectl label nodes worker-2 starexec/queue=heavy-solvers
+```
+
+### Current limitations
+
+- End-to-end operator validation is still in progress.
+- Monitoring is polling-based today; watch/informer integration is still future work.
+- No repository benchmark currently proves large-scale concurrency claims.
+- Treat Kubernetes support as controlled-use rather than fully mature production guidance.
 
 ---
 
@@ -580,13 +635,13 @@ export STAREXEC_BACKEND_TYPE=oar        # OARBackend
 
 ### Local Backend
 
-⚠️ **NOT SAFE for untrusted code**
+WARNING: NOT SAFE for untrusted code
 
 Jobs run as the application user with full host access.
 
 ### Podman Backend
 
-✅ **Recommended for untrusted code**
+Recommended for untrusted code
 
 - Container isolation via namespaces
 - Resource limits enforced by cgroups
@@ -595,7 +650,7 @@ Jobs run as the application user with full host access.
 
 ### Kubernetes Backend
 
-✅ **Safe for untrusted code**
+Safe for untrusted code
 
 - Pod security policies
 - NetworkPolicies for isolation
@@ -604,7 +659,7 @@ Jobs run as the application user with full host access.
 
 ### HPC Backends (SGE/OAR)
 
-⚠️ **Depends on cluster configuration**
+WARNING: Depends on cluster configuration
 
 - Process isolation only
 - Relies on cluster security policies

@@ -1,22 +1,99 @@
-# MicroK8s development environment values
-# Usage: helm template starexec ./charts/starexec -f ./charts/starexec/values-microk8s.yaml
+# MicroK8s single-node Kubernetes-native profile
+# Usage:
+#   helm upgrade --install starexec ./charts/starexec \
+#     --create-namespace -n starexec \
+#     -f ./charts/starexec/values-microk8s.yaml
+#
+# This profile is intentionally single-node:
+# - it uses MicroK8s' default hostpath provisioner
+# - the StarExec app pod and job pods share one ReadWriteOnce PVC on the same node
+# - it is not the right profile for multi-node worker expansion
 
 image:
   repository: ghcr.io/starexecmiami/starexec
   tag: latest
   pullPolicy: IfNotPresent
 
-persistence:
-  hostPath:
-    data: "/tmp/starexec-data"
-    postgres: "/tmp/postgres-data"
-
 postgres:
-  password: starexec_dev_password
-  rootPassword: starexec_dev_password
+  host: "localhost"
+  existingSecret: "starexec-postgres-credentials"
+  existingSecretKeys:
+    user: "user"
+    password: "password"
+    database: "database"
+    rootPassword: "rootPassword"
+  persistence:
+    enabled: true
+    storageClass: "microk8s-hostpath"
+    size: 20Gi
 
 backend:
-  type: "local"
+  type: "kubernetes-native"
 
-env:
-  SKIP_MIGRATIONS: "true"
+kubernetes:
+  enabled: true
+  jobNamespace: "starexec-jobs"
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  jobServiceAccount: "starexec-job"
+  dataPvc:
+    name: "starexec-data"
+    storageClass: "microk8s-hostpath"
+    size: "100Gi"
+    accessModes:
+      - ReadWriteOnce
+  nodeSelector:
+    starexec.org/worker: "true"
+  queueLabelKey: "starexec/queue"
+  nodeManagement:
+    enabled: false
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "1"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+  strictOnePairPerCpu: true
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 0
+
+persistence:
+  enabled: true
+  storageClass: "microk8s-hostpath"
+  appDataSize: 100Gi
+  backendSize: 5Gi
+  sandboxSize: 10Gi
+  workSize: 20Gi
+
+resources:
+  app:
+    requests:
+      memory: "2Gi"
+      cpu: "1"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+  postgres:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+service:
+  type: NodePort
+  nodePort: 30080
+
+web:
+  urlPrefix: "http"
+  address: "192.168.20.32"
+  proxyPort: 30080
+
+migrations:
+  enabled: false
+
+security:
+  volumePermissions:
+    enabled: true
+    image: "busybox:1.36"
