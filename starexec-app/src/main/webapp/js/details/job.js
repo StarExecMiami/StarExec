@@ -3,6 +3,8 @@
 var summaryTable;
 var pairTable;
 var curSpaceId; //stores the ID of the job space that is currently selected from the space viewer
+var curSolverId = null; //stores the selected solver ID when filtering pairs across an entire job
+var curSolverName = null; //stores the selected solver name for pair-table status text
 var jobId; //the ID of the job being viewed
 var lastValidSelectOption;
 var panelArray = [];
@@ -110,6 +112,61 @@ function setSyncResultsText() {
 		$("#syncResults .ui-button-text").html("un-synchronize results");
 	} else {
 		$("#syncResults .ui-button-text").html("synchronize results");
+	}
+}
+
+function isFilteringPairsBySolver() {
+	return curSolverId !== null && !DETAILS_JOB.isAnonymousPage;
+}
+
+function updatePairFilterUI() {
+	var $status = $("#pairFilterStatus");
+	var $clearButton = $("#clearPairFilter");
+	var $syncButton = $("#syncResults");
+
+	if (!$status.length) {
+		return;
+	}
+
+	if (isFilteringPairsBySolver()) {
+		$status.text("showing all job pairs for solver " + curSolverName);
+		$clearButton.show();
+		if ($syncButton.length) {
+			$syncButton.hide();
+		}
+	} else {
+		$status.text("");
+		$clearButton.hide();
+		if ($syncButton.length) {
+			$syncButton.show();
+		}
+	}
+}
+
+function clearPairFilter(shouldRedraw) {
+	curSolverId = null;
+	curSolverName = null;
+	updatePairFilterUI();
+	if (shouldRedraw && pairTable) {
+		pairTable.fnDraw(false);
+	}
+}
+
+function applyPairFilterForSelectedSolver(rowData) {
+	if (!rowData || rowData.length < 3) {
+		clearPairFilter(true);
+		return;
+	}
+
+	curSolverId = rowData[0];
+	curSolverName = rowData[2];
+	if (syncResults) {
+		syncResults = false;
+		setSyncResultsText();
+	}
+	updatePairFilterUI();
+	if (pairTable) {
+		pairTable.fnDraw(false);
 	}
 }
 
@@ -395,6 +452,7 @@ function reloadTables(id) {
 	//we only need to update if we've actually selected a new space
 	if (curSpaceId != id) {
 		curSpaceId = id;
+		clearPairFilter(false);
 		clearPanels();
 		if (!isLocalJobPage) {
 			// summaryTable.fnClearTable();	//immediately get rid of the current data, which makes it look more responsive
@@ -451,6 +509,8 @@ function initUI() {
 	$("#errorField").hide();
 	$("#statsErrorField").hide();
 	$(".cpuTime").hide();
+	$("#clearPairFilter").hide();
+	$("#pairFilterStatus").text("");
 
 	$("#spaceOverview").show();
 	$("#solverComparison300").hide();
@@ -544,6 +604,15 @@ function initUI() {
 		syncResults = !syncResults;
 		setSyncResultsText();
 		pairTable.fnDraw(false);
+	});
+
+	$("#clearPairFilter")
+	.click(function() {
+		var $solveTbl = $("#solveTbl");
+		$solveTbl.find(".row_selected")
+		.removeClass("row_selected first_selected second_selected");
+		$("#compareSolvers").hide();
+		clearPairFilter(true);
 	});
 
 	$("#popoutPanels")
@@ -1399,6 +1468,15 @@ function initDataTables() {
 		} else {
 			$compareSolvers.hide();
 		}
+
+		if (!isLocalJobPage && !DETAILS_JOB.isAnonymousPage) {
+			var $primarySelection = $solveTbl.find(".first_selected").first();
+			if ($primarySelection.length > 0) {
+				applyPairFilterForSelectedSolver(summaryTable.fnGetData($primarySelection[0]));
+			} else {
+				clearPairFilter(true);
+			}
+		}
 	});
 
 	// Job pairs table
@@ -1826,6 +1904,8 @@ function fnPaginationHandler(sSource, aoData, fnCallback) {
 	if (DETAILS_JOB.isAnonymousPage) {
 		postUrl = sSource + 'pairs/pagination/anonymousLink/' + DETAILS_JOB.anonymousLinkUuid + '/' + curSpaceId +
 			'/' + useWallclock + '/' + syncResults + '/' + getSelectedStage() + '/' + DETAILS_JOB.primitivesToAnonymize;
+	} else if (isFilteringPairsBySolver()) {
+		postUrl = sSource + 'pairs/solver/' + jobId + '/' + curSolverId + '/' + useWallclock + '/' + getSelectedStage();
 	} else {
 		postUrl = sSource + 'pairs/pagination/' + curSpaceId + '/' + useWallclock + '/' + syncResults + '/' + getSelectedStage();
 	}
