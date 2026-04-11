@@ -141,3 +141,6 @@ spec:
         requests:
           cpu: 500m
           memory: 512Mi
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
