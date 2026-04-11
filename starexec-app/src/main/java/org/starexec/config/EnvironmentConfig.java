@@ -428,14 +428,14 @@ public class EnvironmentConfig {
     public static String getSpaceXmlSchemaRelativeLoc() {
         return getEnv(
             "STAREXEC_SPACE_XML_SCHEMA_LOC",
-            "/schemas/batchSpaceSchema.xsd"
+            "/public/batchSpaceSchema.xsd"
         );
     }
 
     public static String getJobXmlSchemaRelativeLoc() {
         return getEnv(
             "STAREXEC_JOB_XML_SCHEMA_LOC",
-            "/schemas/batchJobSchema.xsd"
+            "/public/batchJobSchema.xsd"
         );
     }
 
