@@ -6,8 +6,8 @@ set -e
 # Uses PODMAN_CMD environment variable if set (for runtime override support)
 
 PODMAN_CMD="${PODMAN_CMD:-podman}"
-PAUSE_IMAGE_TAG="3.9"
-TARGET_TAG="k8s.gcr.io/pause:3.5"
+PAUSE_IMAGE_TAG="${PAUSE_IMAGE_TAG:-3.9}"
+TARGET_TAG="${TARGET_TAG:-registry.k8s.io/pause:${PAUSE_IMAGE_TAG}}"
 
 echo "Ensuring Podman infra image exists..."
 
@@ -29,10 +29,10 @@ fi
 
 # Try 2: Google Container Registry mirror
 echo "  registry.k8s.io pull failed. Trying gcr.io..."
-if ${PODMAN_CMD} pull "gcr.io/google-containers/pause:3.2" 2>/dev/null; then
-    echo "✓ Pulled gcr.io/google-containers/pause:3.2"
+if ${PODMAN_CMD} pull "gcr.io/google-containers/pause:${PAUSE_IMAGE_TAG}" 2>/dev/null; then
+    echo "✓ Pulled gcr.io/google-containers/pause:${PAUSE_IMAGE_TAG}"
     echo "  Tagging as ${TARGET_TAG} for compatibility..."
-    ${PODMAN_CMD} tag "gcr.io/google-containers/pause:3.2" "${TARGET_TAG}"
+    ${PODMAN_CMD} tag "gcr.io/google-containers/pause:${PAUSE_IMAGE_TAG}" "${TARGET_TAG}"
     exit 0
 fi
 
@@ -49,6 +49,6 @@ echo "⚠️  Warning: Could not pull pause image from any source."
 echo "   'podman play kube' might fail if image is not in cache."
 echo ""
 echo "   Manual fix options:"
-echo "   1. podman pull registry.k8s.io/pause:3.9 && podman tag registry.k8s.io/pause:3.9 ${TARGET_TAG}"
+echo "   1. podman pull registry.k8s.io/pause:${PAUSE_IMAGE_TAG} && podman tag registry.k8s.io/pause:${PAUSE_IMAGE_TAG} ${TARGET_TAG}"
 echo "   2. Set PODMAN_INFRA_IMAGE environment variable"
 exit 0 # Don't fail the build, let podman play kube try its luck
