@@ -79,14 +79,37 @@ validate_podman_socket() {
     return 0
 }
 
+normalize_container_socket_for_validation() {
+    local socket_uri="${1:-}"
+
+    if [ -z "$socket_uri" ]; then
+        return 0
+    fi
+
+    case "$socket_uri" in
+        unix:///*)
+            printf '%s\n' "${socket_uri#unix://}"
+            ;;
+        unix://*)
+            printf 'INVALID_UNIX_URI:%s\n' "$socket_uri"
+            ;;
+        tcp://*)
+            printf 'TCP_SOCKET:%s\n' "$socket_uri"
+            ;;
+        *)
+            printf '%s\n' "$socket_uri"
+            ;;
+    esac
+}
+
 # Determine socket path from environment or use default
 PODMAN_SOCKET="${STAREXEC_CONTAINER_SOCKET:-}"
 if [ -z "$PODMAN_SOCKET" ]; then
     # Check common socket locations
-    if [ -e "/var/run/docker.sock" ]; then
-        PODMAN_SOCKET="/var/run/docker.sock"
-    elif [ -e "/run/podman/podman.sock" ]; then
+    if [ -e "/run/podman/podman.sock" ]; then
         PODMAN_SOCKET="/run/podman/podman.sock"
+    elif [ -e "/var/run/docker.sock" ]; then
+        PODMAN_SOCKET="/var/run/docker.sock"
     elif [ -e "/run/user/1000/podman/podman.sock" ]; then
         PODMAN_SOCKET="/run/user/1000/podman/podman.sock"
     fi
@@ -95,11 +118,22 @@ fi
 # Validate socket permissions if configured
 if [ -n "$PODMAN_SOCKET" ] && [ "${STAREXEC_BACKEND_TYPE:-docker}" = "podman" ]; then
     echo "Validating Podman socket access..."
-    validate_podman_socket "$PODMAN_SOCKET" || {
+    VALIDATION_SOCKET="$(normalize_container_socket_for_validation "$PODMAN_SOCKET")"
+    if [[ "$VALIDATION_SOCKET" == INVALID_UNIX_URI:* ]]; then
+        echo -e "${YELLOW}[WARN]${RESET} Invalid unix socket URI: ${PODMAN_SOCKET}"
+        echo "         Expected unix:///absolute/path/to/socket.sock or tcp://host:port"
+        echo "         Example for this chart: unix:///run/podman/podman.sock"
+        echo ""
+    elif [[ "$VALIDATION_SOCKET" == TCP_SOCKET:* ]]; then
+        echo "  TCP socket configured, skipping filesystem permission validation: ${PODMAN_SOCKET}"
+        echo ""
+    else
+        validate_podman_socket "$VALIDATION_SOCKET" || {
         echo -e "${YELLOW}[WARN]${RESET} Socket permission check failed, but continuing startup."
         echo "         Backend initialization may fail if socket is not accessible."
-    }
-    echo ""
+        }
+        echo ""
+    fi
 fi
 
 # Display environment for debugging (show defaults)
