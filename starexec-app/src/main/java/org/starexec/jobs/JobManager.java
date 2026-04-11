@@ -62,6 +62,14 @@ public abstract class JobManager {
 		if (monitor != null) {
 			return monitor.toString();
 		}
+
+		Queue queue = Queues.get(queueId);
+		if (queue != null && R.QUEUE_STATUS_ACTIVE.equals(queue.getStatus())) {
+			LoadBalanceMonitor initializedMonitor = getMonitor(queueId);
+			initializedMonitor.setUserLoadDataFormattedString();
+			return initializedMonitor.toString();
+		}
+
 		String knownQueues = queueToMonitor.keySet().toString();
 		log.warn(
 				"getLoadRepresentationForQueue",
