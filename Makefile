@@ -57,8 +57,6 @@ ENV_VALUES=$(CHART_DIR)/values-$(ENV).yaml
 VOLUME_SCRIPT=./scripts/podman-volumes.sh
 VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
-PAUSE_IMAGE_TAG="3.9"
-TARGET_TAG="registry.k8s.io/pause:${PAUSE_IMAGE_TAG}"
 
 FORCE?=0
 DRY_RUN?=0
@@ -993,8 +991,7 @@ deploy-podman-helm:
 	@echo "Deploying application pod..."
 	@# Ensure pause image exists (Podman uses it automatically for pod infra)
 	@./scripts/ensure-pause-image.sh
-	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id \
-	    --infra-image $(TARGET_TAG) render.yaml
+	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
 	@$(MAKE) wait-postgres
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
@@ -1025,8 +1022,7 @@ deploy-podman-direct:
 	 IMAGE_TAG=$(IMAGE_TAG) \
 	 ./scripts/generate-render-yaml.sh
 	@echo "Deploying application pod..."
-	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id \
-	    --infra-image $(TARGET_TAG) render.yaml
+	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
 	@$(MAKE) wait-postgres
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
@@ -1497,6 +1493,18 @@ verify-deps:
 		exit 1; \
 	fi
 	@echo "${GREEN}✓ All required dependencies satisfied${RESET}"
+	@printf "  catatonit (rootful infra image builder): "
+	@if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+		if command -v catatonit >/dev/null 2>&1; then \
+            echo "${GREEN}✓${RESET}"; \
+        else \
+            echo "${YELLOW}○ not installed${RESET}"; \
+            echo "  Rootful Podman needs catatonit to build infra/pause containers."; \
+            echo "  Install with: sudo apt install catatonit"; \
+        fi; \
+    else \
+        echo "${YELLOW}○ skipped (rootless mode uses pre-pulled pause image)${RESET}"; \
+    fi
 
 lint:
 	@if command -v helm >/dev/null 2>&1; then \
