@@ -1260,15 +1260,46 @@ public class RESTServices {
 	 * @param id      The ID of the benchmark
 	 * @param limit   The maximum number of characters to return
 	 * @param request HTTP Request
-	 * @return a JSON object containing benchmark details and contents
+	 * @return a string that is the plain text contents of a benchmark file
 	 * @author Tyler Jensen
 	 */
 	@GET
 	@Path("/benchmarks/{id}/contents")
-	@Produces(MediaType.APPLICATION_JSON)
+	@Produces("text/plain")
 	public String getBenchmarkContent(@PathParam("id") int id, @QueryParam("limit") int limit,
 			@Context HttpServletRequest request) {
 		final String methodName = "getBenchmarkContent";
+
+		log.entry(methodName);
+		int userId = SessionUtil.getUserId(request);
+
+		if (!BenchmarkSecurity.canUserSeeBenchmarkContents(id, userId).isSuccess()) {
+			throw RESTException.FORBIDDEN;
+		}
+		Benchmark b = Benchmarks.get(id);
+		try {
+			return Benchmarks.getContents(b, limit).get();
+		} catch (NoSuchElementException e) {
+			throw RESTException.NOT_FOUND;
+		} catch (IOException e) {
+			log.warn(methodName, "Caught IOException.");
+			throw RESTException.INTERNAL_SERVER_ERROR;
+		}
+	}
+
+	/**
+	 * @param id      The ID of the benchmark
+	 * @param limit   The maximum number of characters to return
+	 * @param request HTTP Request
+	 * @return a JSON object containing benchmark details and contents
+	 * @author Tyler Jensen
+	 */
+	@GET
+	@Path("/benchmarks/{id}/metadata")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String getBenchmarkMetadata(@PathParam("id") int id, @QueryParam("limit") int limit,
+			@Context HttpServletRequest request) {
+		final String methodName = "getBenchmarkMetadata";
 
 		log.entry(methodName);
 		int userId = SessionUtil.getUserId(request);
@@ -1282,7 +1313,6 @@ public class RESTServices {
 		}
 		try {
 			Map<String, Object> response = new LinkedHashMap<>();
-			response.put("benchmark", b);
 			response.put("id", b.getId());
 			response.put("name", b.getName());
 			response.put("description", b.getDescription());
