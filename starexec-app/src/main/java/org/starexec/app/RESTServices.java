@@ -1287,6 +1287,54 @@ public class RESTServices {
 		}
 	}
 
+	/**
+	 * @param id      The ID of the benchmark
+	 * @param limit   The maximum number of characters to return
+	 * @param request HTTP Request
+	 * @return a JSON object containing benchmark details and contents
+	 * @author Tyler Jensen
+	 */
+	@GET
+	@Path("/benchmarks/{id}/metadata")
+	@Produces(MediaType.APPLICATION_JSON)
+	public String getBenchmarkMetadata(@PathParam("id") int id, @QueryParam("limit") int limit,
+			@Context HttpServletRequest request) {
+		final String methodName = "getBenchmarkMetadata";
+
+		log.entry(methodName);
+		int userId = SessionUtil.getUserId(request);
+
+		if (!BenchmarkSecurity.canUserSeeBenchmarkContents(id, userId).isSuccess()) {
+			throw RESTException.FORBIDDEN;
+		}
+		Benchmark b = Benchmarks.get(id);
+		if (b == null) {
+			throw RESTException.NOT_FOUND;
+		}
+		try {
+			Map<String, Object> response = new LinkedHashMap<>();
+			response.put("id", b.getId());
+			response.put("name", b.getName());
+			response.put("description", b.getDescription());
+			response.put("uploadDate", b.getUploadDate());
+			response.put("downloadable", b.isDownloadable());
+			response.put("diskSize", b.getDiskSize());
+			response.put("type", b.getType());
+			response.put("attributes", Benchmarks.getSortedAttributes(id));
+			response.put("dependencies", Benchmarks.getBenchDependencies(id));
+			response.put("owner", Users.get(b.getUserId()));
+			Space community = Communities.getDetails(b.getType().getCommunityId());
+			response.put("community", community);
+			response.put("content", Benchmarks.getContents(b, limit).orElse(null));
+			return gson.toJson(response);
+		} catch (NoSuchElementException e) {
+			throw RESTException.NOT_FOUND;
+		} catch (IOException e) {
+			log.warn(methodName, "Caught IOException.");
+			throw RESTException.INTERNAL_SERVER_ERROR;
+		}
+	}
+
 	/*
 	 * get the value of the read_only system flag
 	 * 
