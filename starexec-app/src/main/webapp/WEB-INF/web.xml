@@ -51,11 +51,16 @@
     <!-- ========================= -->
     <!--        Listeners           -->
     <!-- ========================= -->
+    <!-- Core application startup must run before background workers so shared
+         resources (database pool, backend, etc.) are available when they begin. -->
     <listener>
-        <listener-class>org.starexec.servlets.UploadJobWorker</listener-class>
+        <listener-class>org.starexec.app.Starexec</listener-class>
     </listener>
     <listener>
         <listener-class>org.starexec.servlets.EmailExecutorContextListener</listener-class>
+    </listener>
+    <listener>
+        <listener-class>org.starexec.servlets.UploadJobWorker</listener-class>
     </listener>
 
     <!-- ========================= -->
@@ -437,7 +442,4 @@
         <welcome-file>secure/index.jsp</welcome-file>
     </welcome-file-list>
 
-    <listener>
-        <listener-class>org.starexec.app.Starexec</listener-class>
-    </listener>
 </web-app>

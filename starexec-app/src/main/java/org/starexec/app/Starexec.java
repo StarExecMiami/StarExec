@@ -3,7 +3,6 @@ package org.starexec.app;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
-import javax.servlet.annotation.WebListener;
 
 import org.starexec.backend.Backend;
 import org.starexec.backend.BackendInitializer;
@@ -25,7 +24,6 @@ import java.util.EnumSet;
  * This class is responsible for initializing the application when the servlet
  * container starts up and cleaning up resources when it shuts down.
  */
-@WebListener
 public class Starexec implements ServletContextListener {
 
     private static final StarLogger log = StarLogger.getLogger(Starexec.class);
