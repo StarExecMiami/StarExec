@@ -453,6 +453,9 @@ function reloadTables(id) {
 	//we only need to update if we've actually selected a new space
 	if (curSpaceId != id) {
 		curSpaceId = id;
+		// Seed the current tree selection so the first real explorer click
+		// is treated as a navigation event instead of the initial load state.
+		selectedJobSpaceId = id;
 		clearPairFilter(false);
 		clearPanels();
 		if (!isLocalJobPage) {
