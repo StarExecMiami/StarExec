@@ -12,6 +12,7 @@
 # ============================================================================
 SHELL := /bin/sh
 .SHELLFLAGS := -ec
+MAKEFLAGS += --no-print-directory
 
 # ============================================================================
 # CONFIGURATION VARIABLES
@@ -122,6 +123,16 @@ PODMAN_CMD := $(PODMAN_BASE_CMD) $(PODMAN_RUNTIME_FLAG)
 export PODMAN_CMD
 export PODMAN_REQUIRES_SUDO
 
+# Current user UID, used when deriving the rootless Podman socket path.
+CURRENT_UID := $(shell id -u)
+
+# Active Podman socket path for the current environment.
+# Rootful uses the system socket; rootless prefers XDG_RUNTIME_DIR and falls
+# back to the standard /run/user/UID path. Override with PODMAN_SOCKET_PATH if
+# your host uses a nonstandard socket location.
+PODMAN_SOCKET_PATH ?= $(if $(filter yes,$(PODMAN_REQUIRES_SUDO)),/run/podman/podman.sock,$(if $(XDG_RUNTIME_DIR),$(XDG_RUNTIME_DIR)/podman/podman.sock,/run/user/$(CURRENT_UID)/podman/podman.sock))
+export PODMAN_SOCKET_PATH
+
 # ANSI Colors for UI
 GREEN  := $(shell tput -Txterm setaf 2)
 YELLOW := $(shell tput -Txterm setaf 3)
@@ -132,7 +143,7 @@ BOLD   := $(shell tput -Txterm bold)
 
 
 .PHONY: help build build-fresh build-prod build-offline cache-images image \
-	preflight-podman \
+	preflight-podman test-podman-socket \
 	deploy-podman deploy-podman-helm deploy-podman-direct network-setup network-reset deploy-podman-cached undeploy-podman \
 	deploy-k8s undeploy-k8s k8s-detect k8s-setup k8s-setup-dry-run k8s-label-workers k8s-generate-values k8s-deploy-auto k8s-status \
 	volumes-create volumes-fix-permissions volumes-list volumes-backup volumes-restore volumes-export volumes-delete volumes-help \
@@ -164,6 +175,7 @@ help:
 	@echo "Deployment Targets:"
 	@echo "  deploy-podman          Deploy to Podman (ensures image + render + apply)"
 	@echo "  deploy-podman-cached   Fast deploy using existing render.yaml (ensures image)"
+	@echo "  test-podman-socket     Verify app container can reach the Podman socket"
 	@echo "  deploy-k8s             Deploy to Kubernetes (requires Helm)"
 	@echo "  k8s-deploy-auto        ⭐ Complete automated K8s setup and deployment"
 	@echo "  undeploy-podman        Remove Podman deployment"
@@ -216,6 +228,7 @@ help:
 	@echo "  runtime-check          Check OCI runtime configuration (crun/runc)"
 	@echo "  test-deps              Test job execution dependencies in container"
 	@echo "  test                   Run all unit and integration tests"
+	@echo "  test-podman-socket     Verify app container can reach the Podman socket"
 	@echo ""
 	@echo "Quick Start Aliases:"
 	@echo "  start                  Alias for deploy-podman"
@@ -553,83 +566,101 @@ define require_podman_engine_ready
 	fi
 endef
 
-# verify_podman_socket_from_values — if values enable container socket, verify hostPath exists.
-# Uses yq when available; warns (does not fail) when yq is unavailable.
+# verify_podman_socket_from_values — verify the resolved Podman socket path.
+# Uses PODMAN_SOCKET_PATH (derived from the active environment) and warns when
+# the values file contains a different hostPath.
 # Usage: @$(call verify_podman_socket_from_values)
 define verify_podman_socket_from_values
+	SOCKET_PATH="$(PODMAN_SOCKET_PATH)"; \
+	CURRENT_UID=$$(id -u); \
+	if [ -z "$$SOCKET_PATH" ]; then \
+		echo ""; \
+		echo "${RED}✗ Podman socket path is empty.${RESET}"; \
+		echo "  Set PODMAN_SOCKET_PATH or export XDG_RUNTIME_DIR before running make."; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	if [ ! -S "$$SOCKET_PATH" ]; then \
+		echo ""; \
+		echo "${RED}✗ Podman socket not found: $$SOCKET_PATH${RESET}"; \
+		if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+			echo "  Expected rootful default: /run/podman/podman.sock"; \
+			echo "  Start the system service or provide PODMAN_SOCKET_PATH explicitly."; \
+		else \
+			echo "  Resolved from PODMAN_SOCKET_PATH or the active runtime directory."; \
+			echo "  Expected rootless default: /run/user/$$CURRENT_UID/podman/podman.sock"; \
+		fi; \
+		echo ""; \
+		if command -v systemctl >/dev/null 2>&1; then \
+			if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+				SOCKET_STATUS=$$(systemctl is-active podman.socket 2>&1 || echo "error"); \
+				if echo "$$SOCKET_STATUS" | grep -q masked; then \
+					echo "${YELLOW}⚠️  Rootful Podman socket is masked by system${RESET}"; \
+					echo ""; \
+					echo "To enable it:"; \
+					echo "  ${BLUE}sudo systemctl daemon-reload${RESET}"; \
+					echo "  ${BLUE}sudo systemctl enable --now podman.socket${RESET}"; \
+					echo ""; \
+				else \
+					echo "Start the rootful Podman socket service:"; \
+					echo "  ${BLUE}sudo systemctl start podman.socket${RESET}"; \
+					echo ""; \
+				fi; \
+			else \
+				SOCKET_STATUS=$$(systemctl --user is-active podman.socket 2>&1 || echo "error"); \
+				if echo "$$SOCKET_STATUS" | grep -q masked; then \
+					echo "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"; \
+					echo ""; \
+					echo "To enable it, copy systemd units to your user:"; \
+					echo "  ${BLUE}mkdir -p ~/.config/systemd/user/${RESET}"; \
+					echo "  ${BLUE}cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/${RESET}"; \
+					echo "  ${BLUE}systemctl --user daemon-reload${RESET}"; \
+					echo "  ${BLUE}systemctl --user enable --now podman.socket${RESET}"; \
+					echo ""; \
+				else \
+					echo "Start the Podman socket service:"; \
+					echo "  ${BLUE}systemctl --user start podman.socket${RESET}"; \
+					echo ""; \
+				fi; \
+			fi; \
+		else \
+			echo "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"; \
+			echo ""; \
+			echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"; \
+			echo "  ${BLUE}podman machine start${RESET}"; \
+			echo ""; \
+			echo "Or on rootless Linux without systemd:"; \
+			echo "  ${BLUE}podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &${RESET}"; \
+			echo ""; \
+		fi; \
+		echo "Verify the socket exists:"; \
+		echo "  ${BLUE}ls -l $$SOCKET_PATH${RESET}"; \
+		echo ""; \
+		echo "See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	if command -v curl >/dev/null 2>&1; then \
+		if ! curl -s --unix-socket "$$SOCKET_PATH" http://localhost/_ping >/dev/null 2>&1; then \
+			echo ""; \
+			echo "${RED}✗ Podman socket exists but is not responding: $$SOCKET_PATH${RESET}"; \
+			echo "  The Podman service may not be running or socket activation is not configured."; \
+			echo "  Check: systemctl --user is-active podman.socket"; \
+			echo ""; \
+			exit 1; \
+		fi; \
+	fi; \
 	if command -v yq >/dev/null 2>&1; then \
 		SOCKET_ENABLED=$$(yq '.podman.containerSocket.enabled // false' "$(VALS)"); \
 		case "$$SOCKET_ENABLED" in \
 			true|TRUE|True) \
-				SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(VALS)"); \
-				if [ -z "$$SOCKET_PATH" ]; then \
-					echo ""; \
-					echo "${RED}✗ Podman socket is enabled but hostPath is empty in values file.${RESET}"; \
-					echo "  File: $(VALS)"; \
-					echo "  Set .podman.containerSocket.hostPath to your rootless Podman socket path."; \
-					echo ""; \
-					exit 1; \
-				fi; \
-				SOCKET_UID_IN_FILE=$$(echo "$$SOCKET_PATH" | sed 's/.*\/run\/user\/\([0-9]*\)\/.*/\1/'); \
-				CURRENT_UID=$$(id -u); \
-				if [ -z "$$SOCKET_UID_IN_FILE" ] || [ "$$SOCKET_UID_IN_FILE" = "$$SOCKET_PATH" ]; then \
-					echo "${YELLOW}⚠️  Socket path does not contain /run/user/UID/ pattern: $$SOCKET_PATH${RESET}"; \
-					echo "    Expected format: /run/user/$(CURRENT_UID)/podman/podman.sock"; \
-					echo ""; \
-					exit 1; \
-				fi; \
-				if [ "$$SOCKET_UID_IN_FILE" != "$$CURRENT_UID" ]; then \
-					echo ""; \
-					echo "${YELLOW}○ Detected UID mismatch: values file has /run/user/$$SOCKET_UID_IN_FILE/ but your UID is $$CURRENT_UID${RESET}"; \
-					echo "${YELLOW}  Auto-correcting: $(VALS)${RESET}"; \
-					sed -i 's|/run/user/[0-9]*/|/run/user/'$$CURRENT_UID'/|g' $(VALS); \
-					echo "${YELLOW}  Updated socket path to: /run/user/$$CURRENT_UID/podman/podman.sock${RESET}"; \
-					echo ""; \
-					SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(VALS)"); \
-				fi; \
-				if [ ! -S "$$SOCKET_PATH" ]; then \
-					echo ""; \
-					echo "${RED}✗ Podman socket not found: $$SOCKET_PATH${RESET}"; \
-					echo "  File: $(VALS)"; \
-					echo ""; \
-					if command -v systemctl >/dev/null 2>&1; then \
-						SOCKET_STATUS=$$(systemctl --user is-enabled podman.socket 2>&1 || echo "error"); \
-						if echo "$$SOCKET_STATUS" | grep -q masked; then \
-							echo "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"; \
-							echo ""; \
-							echo "To enable it, copy systemd units to your user:"; \
-							echo "  ${BLUE}mkdir -p ~/.config/systemd/user/${RESET}"; \
-							echo "  ${BLUE}cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/${RESET}"; \
-							echo "  ${BLUE}systemctl --user daemon-reload${RESET}"; \
-							echo "  ${BLUE}systemctl --user enable --now podman.socket${RESET}"; \
-							echo ""; \
-						else \
-							echo "Start the Podman socket service:"; \
-							echo "  ${BLUE}systemctl --user start podman.socket${RESET}"; \
-							echo ""; \
-						fi; \
-					else \
-						echo "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"; \
-						echo ""; \
-						echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"; \
-						echo "  ${BLUE}podman machine start${RESET}"; \
-						echo ""; \
-						echo "Or on rootless Linux without systemd:"; \
-						echo "  ${BLUE}podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &${RESET}"; \
-						echo ""; \
-					fi; \
-					echo "Verify the socket exists:"; \
-					echo "  ${BLUE}ls -l /run/user/$$CURRENT_UID/podman/podman.sock${RESET}"; \
-					echo ""; \
-					echo "See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
-					echo ""; \
-					exit 1; \
+				VALUES_SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(VALS)"); \
+				if [ -n "$$VALUES_SOCKET_PATH" ] && [ "$$VALUES_SOCKET_PATH" != "$$SOCKET_PATH" ]; then \
+					echo "${YELLOW}⚠️  values file hostPath ($$VALUES_SOCKET_PATH) differs from resolved socket ($$SOCKET_PATH).${RESET}"; \
+					echo "    make start will render with $$SOCKET_PATH without rewriting the values file."; \
 				fi; \
 				;; \
-			*) : ;; \
-		esac; \
-	else \
-		echo "${YELLOW}○ yq not installed; skipping podman.socket hostPath preflight from values file${RESET}"; \
+			esac; \
 	fi
 endef
 
@@ -638,6 +669,71 @@ preflight-podman: verify-deps
 	@$(call require_podman_engine_ready)
 	@$(call verify_podman_socket_from_values)
 	@echo "Using values file: $(VALS)"
+
+define resolve_app_container
+	APP_CTR=""; \
+	for c in "$(APP_CONTAINER)" "$(RELEASE_NAME)-pod-app" "starexec-pod-app" "starexec-app"; do \
+		if $(PODMAN_CMD) container exists $$c >/dev/null 2>&1; then \
+			APP_CTR=$$c; \
+			break; \
+		fi; \
+	done; \
+	if [ -z "$$APP_CTR" ]; then \
+		for c in $$($(PODMAN_CMD) ps -a --filter "label=app.kubernetes.io/instance=$(RELEASE_NAME)" --format "{{.Names}}"); do \
+			case "$$c" in \
+				*app*) APP_CTR=$$c; break ;; \
+			esac; \
+		done; \
+	fi; \
+	if [ -z "$$APP_CTR" ]; then \
+		echo "${RED}✗ Application container not found for release $(RELEASE_NAME).${RESET}"; \
+		echo "  Use '$(PODMAN_CMD) ps -a' to inspect containers."; \
+		exit 1; \
+	fi
+endef
+
+# Verify the running app container can actually talk to the mounted Podman socket.
+# This polls deterministically for the app container to be running, then executes
+# curl from inside the container against the socket path exposed via
+# STAREXEC_CONTAINER_SOCKET.
+test-podman-socket:
+	@echo "Waiting for app container to be ready..."
+	@$(call resolve_app_container); \
+	MAX_RETRIES=$${PODMAN_SOCKET_TEST_RETRIES:-60}; \
+	WAIT_SECONDS=$${PODMAN_SOCKET_TEST_INTERVAL_SECONDS:-2}; \
+	i=1; \
+	ready=0; \
+	while [ $$i -le $$MAX_RETRIES ]; do \
+		STATUS=$$($(PODMAN_CMD) ps --format '{{.Names}}\t{{.Status}}' | awk -F'\t' '$$1 == "'"$$APP_CTR"'" { print $$2; exit }'); \
+		LAST_STATUS="$$STATUS"; \
+		if echo "$$STATUS" | grep -q '^Up '; then \
+			ready=1; \
+			break; \
+		fi; \
+		echo "  App container not ready yet ($$i/$$MAX_RETRIES), status: $${STATUS:-not found}, retrying in $${WAIT_SECONDS}s..."; \
+		i=$$((i + 1)); \
+		sleep $$WAIT_SECONDS; \
+	done; \
+	if [ $$ready -ne 1 ]; then \
+		echo "${RED}[✗] Integration Test: App container failed to reach running state after $$MAX_RETRIES attempts (last status: $${LAST_STATUS:-unknown}).${RESET}"; \
+		$(PODMAN_CMD) ps --format 'table {{.Names}}\t{{.Status}}'; \
+		exit 1; \
+	fi; \
+	SOCKET_PATH=$$($(PODMAN_CMD) exec $$APP_CTR sh -c 'printf "%s" "$${STAREXEC_CONTAINER_SOCKET#unix://}"'); \
+	if [ -z "$$SOCKET_PATH" ]; then \
+		echo "${RED}[✗] Integration Test: STAREXEC_CONTAINER_SOCKET is not set inside the app container.${RESET}"; \
+		exit 1; \
+	fi; \
+	set +e; \
+		CURL_OUTPUT=$$($(PODMAN_CMD) exec $$APP_CTR sh -c 'curl -fsS --unix-socket "$${STAREXEC_CONTAINER_SOCKET#unix://}" http://localhost/_ping' 2>&1); \
+	CURL_STATUS=$$?; \
+		set -e; \
+	if [ $$CURL_STATUS -ne 0 ]; then \
+		echo "${RED}[✗] Integration Test: Application container could not reach the host Podman API via $$SOCKET_PATH.${RESET}"; \
+		printf '%s\n' "$$CURL_OUTPUT"; \
+		exit 1; \
+	fi; \
+	echo "${GREEN}[✓] Integration Test: Application container successfully reached host Podman API.${RESET}"
 
 # Quick socket validation (standalone, no values file required)
 preflight-socket:
@@ -983,6 +1079,8 @@ deploy-podman-helm:
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
 		--set backend.type=podman \
+		--set-string podman.containerSocket.enabled=true \
+		--set-string podman.containerSocket.hostPath="$(PODMAN_SOCKET_PATH)" \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
 		echo "Check your values file: $(VALS)"; \
@@ -993,6 +1091,7 @@ deploy-podman-helm:
 	@./scripts/ensure-pause-image.sh
 	@$(PODMAN_CMD) play kube --network starexec-net --userns=keep-id render.yaml
 	@$(MAKE) wait-postgres
+	@$(MAKE) test-podman-socket
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"

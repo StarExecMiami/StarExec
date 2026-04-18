@@ -90,11 +90,9 @@ env:
 podman:
   containerSocket:
     enabled: true
-    # Rootless Podman socket path. IMPORTANT: The UID must match your user's ID.
-    # At deployment time, preflight checks will FAIL if:
-    #   1. UID in this path (1000) doesn't match your actual UID (run: id -u)
-    #   2. Socket is not running (run: systemctl --user status podman.socket)
-    # You must then manually fix this file or override via PODMAN_SOCKET_PATH env var.
+    # Rootless Podman socket path. The Makefile automatically detects this for your user.
+    # Do NOT manually override unless your Podman socket is in an unusual location.
+    # The preflight flow validates socket liveness and connectivity before deployment.
     # See docs/TROUBLESHOOTING.md#podman-issues for detailed remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"

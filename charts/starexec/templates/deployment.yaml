@@ -23,6 +23,10 @@ spec:
     metadata:
       labels:
         {{- include "chart.selectorLabels" . | nindent 8 }}
+{{- if eq .Values.backend.type "podman" }}
+      annotations:
+        io.podman.annotations.userns: "keep-id"
+{{- end }}
     spec:
       serviceAccountName: {{ include "chart.fullname" . }}
       restartPolicy: Always
@@ -93,7 +97,7 @@ spec:
 {{- if and (eq .Values.backend.type "podman") .Values.podman.containerSocket.enabled }}
         - name: podman-socket
           hostPath:
-            path: {{ .Values.podman.containerSocket.hostPath }}
+            path: {{ required "podman.containerSocket.hostPath is required when containerSocket.enabled=true" .Values.podman.containerSocket.hostPath | quote }}
             type: Socket
 {{- end }}
       containers:
