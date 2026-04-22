@@ -282,6 +282,7 @@ pipeline {
         always {
             // Uncomment when build artefacts are produced:
             // archiveArtifacts artifacts: '**/target/*.xml', allowEmptyArchive: true, fingerprint: true
+            sh 'podman image prune --force || true'
             echo "Pipeline finished — status: ${currentBuild.currentResult}"
         }
 
