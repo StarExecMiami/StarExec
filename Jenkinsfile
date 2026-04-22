@@ -25,6 +25,16 @@ pipeline {
             defaultValue: '',
             description: 'Image tag suffix (leave blank to use the build number)'
         )
+        string(
+            name: 'NOTIFICATION_EMAIL',
+            defaultValue: '',
+            description: 'Email address for build notifications (optional, defaults to dev team email)'
+        )
+        string(
+            name: 'PODMAN_CGROUP_MANAGER',
+            defaultValue: 'cgroupfs',
+            description: 'Cgroup manager to use for Podman (cgroupfs or systemd)'
+        )
         booleanParam(
             name: 'SKIP_TESTS',
             defaultValue: false,
@@ -43,6 +53,8 @@ pipeline {
         IMAGE_TAG       = "${params.DEPLOY_ENV}-${TAG_SUFFIX}"
         DEPLOY_ENV      = "${params.DEPLOY_ENV}"
         IS_PROD         = "${params.DEPLOY_ENV == 'prod'}"
+        NOTIFICATION_EMAIL = "${params.NOTIFICATION_EMAIL?.trim() ?: 'dev-team@example.com'}"
+        PODMAN_CGROUP_MANAGER = "${params.PODMAN_CGROUP_MANAGER}"
 
         // The DB password credential is required in every environment.
         STAREXEC_DB_PASSWORD = credentials('starExec-db-password')
