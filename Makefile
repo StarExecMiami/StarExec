@@ -1510,7 +1510,7 @@ logs-postgres:
 	echo "Using PostgreSQL container: $$PG_CONTAINER"; \
 	$(PODMAN_CMD) logs -f "$$PG_CONTAINER"
 
-test: test-deps
+test:
 	@mvn test
 
 test-deps:

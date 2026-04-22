@@ -211,6 +211,12 @@ pipeline {
                     }
                 }
             }
+	   stage('Verify Deployment') {
+    		when { branch 'containerised' }
+    		steps {
+        		sh 'make test-deps'
+    		}
+	    }
             post {
                 success {
                     script {
