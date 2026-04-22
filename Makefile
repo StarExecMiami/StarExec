@@ -254,13 +254,13 @@ help:
 
 build:
 	@echo "Building image: $(RELEASE_NAME):$(IMAGE_TAG)"
-	$(PODMAN_CMD) build --pull=missing -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build --userns=auto --pull=missing -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-fresh:
 	@echo "Building fresh image (no cache): $(RELEASE_NAME):$(IMAGE_TAG)"
-	$(PODMAN_CMD) build --no-cache --pull=always -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build --no-cache --userns=auto --pull=always -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Fresh image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
@@ -268,7 +268,7 @@ build-prod:
 	@echo "Building production image"
 	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-2.3.0}; \
-	$(PODMAN_CMD) build --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
+	$(PODMAN_CMD) build --userns=auto --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "${GREEN}✓ Production image built successfully ${RESET}"
 	@echo "  Image: $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION
