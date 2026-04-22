@@ -56,6 +56,10 @@ DB_HOST_DEFAULT?=localhost
 ENV?=dev
 ENV_VALUES=$(CHART_DIR)/values-$(ENV).yaml
 VOLUME_SCRIPT=./scripts/podman-volumes.sh
+
+PODMAN_CGROUP_MANAGER ?= cgroupfs
+PODMAN_CGROUP_FLAG := $(if $(PODMAN_CGROUP_MANAGER),--cgroup-manager=$(PODMAN_CGROUP_MANAGER),)
+
 VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
@@ -150,7 +154,7 @@ BOLD   := $(shell tput -Txterm bold)
 	db-shell db-dump db-migrate db-status migrate-repair migrate-podman \
 	clean-podman clean-cache clean-all clean-hard reset nuke status lint template config-show runtime-check \
 	logs logs-app logs-postgres test-deps verify-deps wait-postgres test docs pull pull-job-runner \
-	start stop fix-cgroup-delegation
+	start stop preflight-cgroup fix-cgroup-delegation
 
 start: deploy-podman
 
@@ -215,6 +219,7 @@ help:
 	@echo "  clean-hard             ⚠️  HARD RESET: Remove ALL StarExec resources for ENV"
 	@echo "  reset                  ⚠️  Alias for stop + clean-hard (recommended)"
 	@echo "  nuke                   ⚠️  Alias for reset (complete environment wipe)"
+	@echo "  preflight-cgroup       Check and fix cgroup controller delegation for Podman rootless"
 	@echo "  fix-cgroup-delegation  Fix cgroup controller delegation for Podman rootless"
 	@echo "  status                 Show current deployment status"
 	@echo "  lint                   Lint Helm charts (if Helm available)"
@@ -254,13 +259,13 @@ help:
 
 build:
 	@echo "Building image: $(RELEASE_NAME):$(IMAGE_TAG)"
-	$(PODMAN_CMD) build --userns=auto --pull=missing -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build $(PODMAN_CGROUP_FLAG) --pull=missing -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
 build-fresh:
 	@echo "Building fresh image (no cache): $(RELEASE_NAME):$(IMAGE_TAG)"
-	$(PODMAN_CMD) build --no-cache --userns=auto --pull=always -t $(RELEASE_NAME):$(IMAGE_TAG) .
+	$(PODMAN_CMD) build --no-cache $(PODMAN_CGROUP_FLAG) --pull=always -t $(RELEASE_NAME):$(IMAGE_TAG) .
 	@echo "${GREEN}✓ Fresh image built successfully: $(RELEASE_NAME):$(IMAGE_TAG)${RESET}"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $(RELEASE_NAME):$(IMAGE_TAG)
 
@@ -268,7 +273,7 @@ build-prod:
 	@echo "Building production image"
 	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
 	IMAGE_VERSION=$${IMAGE_VERSION:-2.3.0}; \
-	$(PODMAN_CMD) build --userns=auto --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
+	$(PODMAN_CMD) build $(PODMAN_CGROUP_FLAG) --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "${GREEN}✓ Production image built successfully ${RESET}"
 	@echo "  Image: $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"
 	@$(PODMAN_CMD) images --format "  Size: {{.Size}}" $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION
@@ -1023,7 +1028,7 @@ define cleanup_deployment
 	fi
 endef
 
-deploy-podman: preflight-podman
+deploy-podman: preflight-podman preflight-cgroup
 	@echo "${BOLD}${BLUE}Deploying to Podman with environment: $(ENV)${RESET}"
 	@$(MAKE) image
 	@$(MAKE) volumes-create
@@ -1538,6 +1543,21 @@ test-deps:
 fix-cgroup-delegation:
 	@echo "Fixing cgroup controller delegation for Podman rootless mode..."
 	@./scripts/check-cgroup-delegation.sh --fix
+
+preflight-cgroup:
+	@echo "${BOLD}Checking cgroup controller delegation...${RESET}"
+	@if ./scripts/check-cgroup-delegation.sh >/dev/null 2>&1; then \
+		echo "${GREEN}✓ Cgroup delegation correct${RESET}"; \
+	else \
+		echo "${YELLOW}⚠️  Cgroup delegation check failed${RESET}"; \
+		if [ -t 0 ]; then \
+			echo "  Run 'make fix-cgroup-delegation' to apply manually (requires sudo)"; \
+		else \
+			echo "  Non-interactive environment detected, skipping auto-fix."; \
+			echo "  If deployment fails with cgroup errors, run manually:"; \
+			echo "    make fix-cgroup-delegation"; \
+		fi; \
+	fi
 
 verify-deps:
 	@echo "${BOLD}Validating required CLI tooling...${RESET}"
