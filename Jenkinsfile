@@ -211,14 +211,6 @@ pipeline {
                     }
                 }
             }
-	    }
-
-        stage('Verify Deployment') {
-    		when { branch 'containerised' }
-    		steps {
-        		sh 'make test-deps'
-    		}
-        }
             post {
                 success {
                     script {
@@ -232,6 +224,13 @@ pipeline {
                     sh 'echo "Deployment failed. Inspect logs with: make logs-app"'
                 }
             }
+	    }
+
+        stage('Verify Deployment') {
+    		when { branch 'containerised' }
+    		steps {
+        		sh 'make test-deps'
+    		}
         }
 
         // -----------------------------------------------------------------------
