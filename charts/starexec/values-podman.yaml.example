@@ -70,11 +70,13 @@ env:
 podman:
   containerSocket:
     enabled: true
-    # Rootless Podman socket path. IMPORTANT: The UID must match your user's ID.
-    # At deployment time, preflight checks will FAIL if:
-    #   1. UID in this path (1000) doesn't match your actual UID (run: id -u)
-    #   2. Socket is not running (run: systemctl --user status podman.socket)
-    # You must then manually fix this file or override via PODMAN_SOCKET_PATH env var.
+    # Rootless Podman socket path placeholder.
+    # `make start` resolves the active socket path for the current user and overrides this
+    # value at render time. You only need to edit this field when invoking Helm directly or
+    # when you want the values file itself to reflect a nonstandard socket location.
+    # For direct Helm with rootless Podman, also set security.app.runAsUser/runAsGroup
+    # to your current uid/gid so the app can open the mounted socket.
+    # Deployment still fails if the resolved socket is missing or not responding.
     # See docs/TROUBLESHOOTING.md#podman-issues for detailed remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"

@@ -162,8 +162,9 @@ podman:
   containerSocket:
     enabled: false
     # Rootless Podman socket only. Do not point this at a rootful system socket.
-    # IMPORTANT: The UID must match your user's ID.
-    # At deployment time, preflight checks will FAIL if UID doesn't match your actual UID.
+    # This placeholder is overridden by the Makefile during `make start` / Podman deploys.
+    # If your socket lives elsewhere, export PODMAN_SOCKET_PATH or set the final hostPath
+    # explicitly when invoking Helm directly.
     # See docs/TROUBLESHOOTING.md#podman-issues for remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"
 
@@ -239,6 +240,9 @@ resources:
 # SECURITY / VOLUME PERMISSIONS
 # ============================================================================
 security:
+  app:
+    runAsUser: 1000
+    runAsGroup: 999
   volumePermissions:
     enabled: true
     image: "busybox:1.36"

@@ -45,7 +45,7 @@ spec:
               echo "Ensuring directories exist and permissions are correct..."
               mkdir -p /app/data /app/sandbox /app/backend /app/work /var/lib/postgresql/data
 {{- if .Values.security.volumePermissions.enabled }}
-              chown -R 1000:999 /app/data /app/sandbox /app/backend /app/work
+              chown -R {{ .Values.security.app.runAsUser }}:{{ .Values.security.app.runAsGroup }} /app/data /app/sandbox /app/backend /app/work
               chown -R 999:999 /var/lib/postgresql/data
               chmod 0770 /app/data /app/sandbox /app/backend /app/work
               chmod 0700 /var/lib/postgresql/data
@@ -227,8 +227,8 @@ spec:
               value: {{ $value | quote }}
 {{- end }}
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 999
+            runAsUser: {{ .Values.security.app.runAsUser }}
+            runAsGroup: {{ .Values.security.app.runAsGroup }}
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false

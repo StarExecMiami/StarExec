@@ -142,10 +142,18 @@ If your environment does not provide `systemd --user`, start the service manuall
 podman system service --time=0 unix:///run/user/$(id -u)/podman/podman.sock &
 ```
 
-If the values file hardcodes a different UID, override it before deployment or update the values file:
+If the values file hardcodes a different UID, `make start` will override it with the resolved
+`PODMAN_SOCKET_PATH` and the current caller UID/GID. For direct Helm use, set the final socket
+path explicitly and pass your current UID/GID for the app container:
 
 ```bash
 export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
+helm template starexec ./charts/starexec -f ./charts/starexec/values-dev.yaml \
+  --set backend.type=podman \
+  --set security.app.runAsUser="$(id -u)" \
+  --set security.app.runAsGroup="$(id -g)" \
+  --set-string podman.containerSocket.enabled=true \
+  --set-string podman.containerSocket.hostPath="$PODMAN_SOCKET_PATH"
 ```
 
 ### Podman Socket Permission Denied

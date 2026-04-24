@@ -129,6 +129,7 @@ export PODMAN_REQUIRES_SUDO
 
 # Current user UID, used when deriving the rootless Podman socket path.
 CURRENT_UID := $(shell id -u)
+CURRENT_GID := $(shell id -g)
 
 # Active Podman socket path for the current environment.
 # Rootful uses the system socket; rootless prefers XDG_RUNTIME_DIR and falls
@@ -1084,6 +1085,8 @@ deploy-podman-helm:
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
 		--set backend.type=podman \
+		--set security.app.runAsUser=$(CURRENT_UID) \
+		--set security.app.runAsGroup=$(CURRENT_GID) \
 		--set-string podman.containerSocket.enabled=true \
 		--set-string podman.containerSocket.hostPath="$(PODMAN_SOCKET_PATH)" \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
