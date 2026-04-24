@@ -74,8 +74,8 @@ podman:
     # `make start` resolves the active socket path for the current user and overrides this
     # value at render time. You only need to edit this field when invoking Helm directly or
     # when you want the values file itself to reflect a nonstandard socket location.
-    # For direct Helm with rootless Podman, also set security.app.runAsUser/runAsGroup
-    # to your current uid/gid so the app can open the mounted socket.
+    # For direct Helm with rootless Podman, inject the socket gid via
+    # security.pod.supplementalGroups so the fixed in-image app user can open it.
     # Deployment still fails if the resolved socket is missing or not responding.
     # See docs/TROUBLESHOOTING.md#podman-issues for detailed remediation steps.
     hostPath: "/run/user/1000/podman/podman.sock"

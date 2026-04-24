@@ -33,6 +33,10 @@ spec:
       securityContext:
         fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
+{{- if .Values.security.pod.supplementalGroups }}
+        supplementalGroups:
+{{ toYaml .Values.security.pod.supplementalGroups | indent 10 }}
+{{- end }}
         seccompProfile:
           type: RuntimeDefault
       initContainers:

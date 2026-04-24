@@ -240,6 +240,8 @@ resources:
 # SECURITY / VOLUME PERMISSIONS
 # ============================================================================
 security:
+  pod:
+    supplementalGroups: []
   app:
     runAsUser: 1000
     runAsGroup: 999

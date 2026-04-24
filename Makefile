@@ -129,7 +129,6 @@ export PODMAN_REQUIRES_SUDO
 
 # Current user UID, used when deriving the rootless Podman socket path.
 CURRENT_UID := $(shell id -u)
-CURRENT_GID := $(shell id -g)
 
 # Active Podman socket path for the current environment.
 # Rootful uses the system socket; rootless prefers XDG_RUNTIME_DIR and falls
@@ -710,22 +709,40 @@ test-podman-socket:
 	i=1; \
 	ready=0; \
 	while [ $$i -le $$MAX_RETRIES ]; do \
-		STATUS=$$($(PODMAN_CMD) ps --format '{{.Names}}\t{{.Status}}' | awk -F'\t' '$$1 == "'"$$APP_CTR"'" { print $$2; exit }'); \
+		INSPECT_STATE=$$($(PODMAN_CMD) inspect $$APP_CTR --format '{{.State.Running}} {{.State.Status}} {{.State.ExitCode}}' 2>/dev/null || echo "false missing -1"); \
+		IS_RUNNING=$${INSPECT_STATE%% *}; \
+		REST_STATE=$${INSPECT_STATE#* }; \
+		STATUS=$${REST_STATE% *}; \
+		EXIT_CODE=$${INSPECT_STATE##* }; \
 		LAST_STATUS="$$STATUS"; \
-		if echo "$$STATUS" | grep -q '^Up '; then \
+		LAST_EXIT_CODE="$$EXIT_CODE"; \
+		if [ "$$IS_RUNNING" = "true" ]; then \
 			ready=1; \
 			break; \
 		fi; \
-		echo "  App container not ready yet ($$i/$$MAX_RETRIES), status: $${STATUS:-not found}, retrying in $${WAIT_SECONDS}s..."; \
+		echo "  App container not ready yet ($$i/$$MAX_RETRIES), status: $${STATUS:-not found}, exit: $${EXIT_CODE:-unknown}, retrying in $${WAIT_SECONDS}s..."; \
 		i=$$((i + 1)); \
 		sleep $$WAIT_SECONDS; \
 	done; \
 	if [ $$ready -ne 1 ]; then \
-		echo "${RED}[✗] Integration Test: App container failed to reach running state after $$MAX_RETRIES attempts (last status: $${LAST_STATUS:-unknown}).${RESET}"; \
-		$(PODMAN_CMD) ps --format 'table {{.Names}}\t{{.Status}}'; \
+		echo "${RED}[✗] Integration Test: App container failed to reach running state after $$MAX_RETRIES attempts (last status: $${LAST_STATUS:-unknown}, exit: $${LAST_EXIT_CODE:-unknown}).${RESET}"; \
+		$(PODMAN_CMD) ps -a --format 'table {{.Names}}\t{{.Status}}'; \
+		echo "  Recent logs from $$APP_CTR:"; \
+		$(PODMAN_CMD) logs --tail=80 $$APP_CTR 2>/dev/null || true; \
 		exit 1; \
 	fi; \
-	SOCKET_PATH=$$($(PODMAN_CMD) exec $$APP_CTR sh -c 'printf "%s" "$${STAREXEC_CONTAINER_SOCKET#unix://}"'); \
+	set +e; \
+		SOCKET_PATH=$$($(PODMAN_CMD) exec $$APP_CTR sh -c 'printf "%s" "$${STAREXEC_CONTAINER_SOCKET#unix://}"' 2>&1); \
+	EXEC_STATUS=$$?; \
+	set -e; \
+	if [ $$EXEC_STATUS -ne 0 ]; then \
+		echo "${RED}[✗] Integration Test: Could not exec into app container $$APP_CTR.${RESET}"; \
+		$(PODMAN_CMD) inspect $$APP_CTR --format '  state={{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}}' 2>/dev/null || true; \
+		echo "  Recent logs from $$APP_CTR:"; \
+		$(PODMAN_CMD) logs --tail=80 $$APP_CTR 2>/dev/null || true; \
+		printf '%s\n' "$$SOCKET_PATH"; \
+		exit 1; \
+	fi; \
 	if [ -z "$$SOCKET_PATH" ]; then \
 		echo "${RED}[✗] Integration Test: STAREXEC_CONTAINER_SOCKET is not set inside the app container.${RESET}"; \
 		exit 1; \
@@ -1078,6 +1095,7 @@ deploy-podman-helm:
 	@$(MAKE) network-setup
 	@echo "Rendering deployment manifest..."
 	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
+	SOCKET_GID=$$(stat -c '%g' "$(PODMAN_SOCKET_PATH)" 2>/dev/null || echo ""); \
 	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
 	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
 		--set environment=$(ENV) \
@@ -1085,10 +1103,9 @@ deploy-podman-helm:
 		--set image.tag=$(IMAGE_TAG) \
 		--set image.pullPolicy=Never \
 		--set backend.type=podman \
-		--set security.app.runAsUser=$(CURRENT_UID) \
-		--set security.app.runAsGroup=$(CURRENT_GID) \
 		--set-string podman.containerSocket.enabled=true \
 		--set-string podman.containerSocket.hostPath="$(PODMAN_SOCKET_PATH)" \
+		$${SOCKET_GID:+--set security.pod.supplementalGroups[0]=$$SOCKET_GID} \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
 		echo "Check your values file: $(VALS)"; \
