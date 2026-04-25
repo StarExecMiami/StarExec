@@ -1037,19 +1037,41 @@ function setupSetLowPriorityButton() {
 
 function setupPauseJobButton() {
 	$('#pauseJob').click(function() {
+		var pauseJobUrl = starexecRoot + "services/pause/job/" + getParameterByName("id");
+		var pauseJobRequestTimeoutMs = 30000;
+		var pauseJobReloadDelayMs = 1000;
+
 		createDialog("Pausing Job");
 		killAjaxRequests(); // Since we are reloading the page anyway...
 		window.stop();
-		$.post(
-			starexecRoot + "services/pause/job/" + getParameterByName("id"),
-			function(returnCode) {
-				var s = parseReturnCode(returnCode);
-				if (s) {
+		$.ajax({
+			type: "POST",
+			url: pauseJobUrl,
+			dataType: "json",
+			timeout: pauseJobRequestTimeoutMs
+		}).done(function(returnCode) {
+			var s = parseReturnCode(returnCode);
+			if (s) {
+				document.location.reload(true);
+			} else {
+				destroyDialog();
+			}
+		}).fail(function(xhr, textStatus, errorThrown) {
+			log('pause job request failed: ' + textStatus + (errorThrown ? ' (' + errorThrown + ')' : ''));
+			destroyDialog();
+
+			if (textStatus === 'timeout') {
+				showMessage('info',
+					'Pause request timed out. Refreshing the page to check the latest job state.',
+					5000);
+				setTimeout(function() {
 					document.location.reload(true);
-				}
-			},
-			"json"
-		);
+				}, pauseJobReloadDelayMs);
+				return;
+			}
+
+			showMessage('error', 'Pause request did not complete cleanly. Please refresh the page.', 5000);
+		});
 	});
 }
 
