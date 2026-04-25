@@ -1104,54 +1104,76 @@ public class KubernetesNativeBackend implements Backend {
         implements KubernetesJobMonitor.JobCompletionCallback {
 
         @Override
-        public void onJobComplete(int execId, String jobName) {
+        public boolean onJobComplete(int execId, String jobName) {
             Integer pairId = resolvePairId(execId, jobName);
             if (pairId == null) {
                 log.warn("Unable to resolve pair ID for completed job: " + jobName);
-                return;
+                return false;
             }
 
             try {
                 int terminalStatus = readTerminalStatus(execId, StatusCode.STATUS_COMPLETE.getVal());
                 int stageNumber = readStageNumber(execId, 1);
 
-                JobPairs.setPairStatusPrecise(
+                boolean updated = JobPairs.setPairStatusPrecise(
                     pairId,
                     stageNumber,
                     terminalStatus,
                     StatusCode.STATUS_NOT_REACHED.getVal()
                 );
+                if (!updated) {
+                    log.warn(
+                        "Failed updating completed status for pair " +
+                        pairId +
+                        "; Kubernetes completion will be retried"
+                    );
+                    return false;
+                }
             } catch (Exception e) {
                 log.error("Failed updating completed status for pair " + pairId, e);
-            } finally {
-                execIdToJobName.remove(execId);
-                execIdToPairId.remove(execId);
-                execIdToOutputDir.remove(execId);
+                return false;
             }
+
+            execIdToJobName.remove(execId);
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
+            return true;
         }
 
         @Override
-        public void onJobFailed(int execId, String jobName, String reason) {
+        public boolean onJobFailed(int execId, String jobName, String reason) {
             Integer pairId = resolvePairId(execId, jobName);
             if (pairId == null) {
                 log.warn("Unable to resolve pair ID for failed job: " + jobName + ". Reason: " + reason);
-                return;
+                return false;
             }
 
             try {
-                JobPairs.setPairStatusPrecise(
+                boolean updated = JobPairs.setPairStatusPrecise(
                     pairId,
                     1,
                     StatusCode.ERROR_RUNSCRIPT.getVal(),
                     StatusCode.STATUS_NOT_REACHED.getVal()
                 );
+                if (!updated) {
+                    log.warn(
+                        "Failed updating failed status for pair " +
+                        pairId +
+                        ". Reason: " +
+                        reason +
+                        "; Kubernetes completion will be retried"
+                    );
+                    return false;
+                }
             } catch (Exception e) {
                 log.error("Failed updating failed status for pair " + pairId + ". Reason: " + reason, e);
-            } finally {
-                execIdToJobName.remove(execId);
-                execIdToPairId.remove(execId);
-                execIdToOutputDir.remove(execId);
+                return false;
             }
+
+            execIdToJobName.remove(execId);
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
+            return true;
         }
 
         private Integer resolvePairId(int execId, String jobName) {

@@ -268,14 +268,21 @@ public class KubernetesJobMonitor {
                 continue;
             }
 
-            completedExecIds.add(execId);
-
             String jobName =
                 (job.getMetadata() != null) ? job.getMetadata().getName() : "unknown";
+            boolean processed;
             if (completion == CompletionState.SUCCEEDED) {
-                callback.onJobComplete(execId, jobName);
+                processed = callback.onJobComplete(execId, jobName);
             } else {
-                callback.onJobFailed(execId, jobName, summarizeFailure(job));
+                processed = callback.onJobFailed(
+                    execId,
+                    jobName,
+                    summarizeFailure(job)
+                );
+            }
+
+            if (processed) {
+                completedExecIds.add(execId);
             }
         }
     }
@@ -388,15 +395,17 @@ public class KubernetesJobMonitor {
          * Called when a job completes successfully.
          * @param execId Execution ID
          * @param jobName Kubernetes job name
+         * @return true when completion handling succeeded and should not be retried
          */
-        void onJobComplete(int execId, String jobName);
+        boolean onJobComplete(int execId, String jobName);
 
         /**
          * Called when a job fails.
          * @param execId Execution ID
          * @param jobName Kubernetes job name
          * @param reason Failure reason
+         * @return true when failure handling succeeded and should not be retried
          */
-        void onJobFailed(int execId, String jobName, String reason);
+        boolean onJobFailed(int execId, String jobName, String reason);
     }
 }

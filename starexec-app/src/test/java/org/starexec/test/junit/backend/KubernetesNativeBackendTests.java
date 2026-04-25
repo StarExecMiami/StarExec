@@ -2,12 +2,18 @@ package org.starexec.test.junit.backend;
 
 import static org.junit.Assert.*;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Map;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.KubernetesNativeBackend;
+import org.starexec.backend.KubernetesJobMonitor;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.to.Status.StatusCode;
 
 /**
  * Focused unit tests for KubernetesNativeBackend core invariants that do not
@@ -141,5 +147,204 @@ public class KubernetesNativeBackendTests {
         assertTrue(execToJob.isEmpty());
         assertTrue(execToPair.isEmpty());
         assertTrue(execToOut.isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void completionCallbackRetriesWhenDatabaseUpdateFails() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        execToJob.put(11, "job-11");
+        execToPair.put(11, 111);
+        execToOut.put(11, Path.of("/tmp/output/11"));
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            111,
+                            1,
+                            StatusCode.STATUS_COMPLETE.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(false, true);
+
+            assertFalse(callback.onJobComplete(11, "job-11"));
+            assertEquals("job-11", execToJob.get(11));
+            assertEquals(Integer.valueOf(111), execToPair.get(11));
+            assertEquals(Path.of("/tmp/output/11"), execToOut.get(11));
+
+            assertTrue(callback.onJobComplete(11, "job-11"));
+            assertTrue(execToJob.isEmpty());
+            assertTrue(execToPair.isEmpty());
+            assertTrue(execToOut.isEmpty());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void failedCallbackRetriesWhenDatabaseUpdateFails() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        execToJob.put(12, "job-12");
+        execToPair.put(12, 222);
+        execToOut.put(12, Path.of("/tmp/output/12"));
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            222,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(false, true);
+
+            assertFalse(callback.onJobFailed(12, "job-12", "BackoffLimitExceeded"));
+            assertEquals("job-12", execToJob.get(12));
+            assertEquals(Integer.valueOf(222), execToPair.get(12));
+            assertEquals(Path.of("/tmp/output/12"), execToOut.get(12));
+
+            assertTrue(callback.onJobFailed(12, "job-12", "BackoffLimitExceeded"));
+            assertTrue(execToJob.isEmpty());
+            assertTrue(execToPair.isEmpty());
+            assertTrue(execToOut.isEmpty());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void completionCallbackRetriesWhenDatabaseUpdateThrows() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        execToJob.put(13, "job-13");
+        execToPair.put(13, 313);
+        execToOut.put(13, Path.of("/tmp/output/13"));
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            313,
+                            1,
+                            StatusCode.STATUS_COMPLETE.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenThrow(new RuntimeException("db down"))
+                .thenReturn(true);
+
+            assertFalse(callback.onJobComplete(13, "job-13"));
+            assertEquals("job-13", execToJob.get(13));
+            assertEquals(Integer.valueOf(313), execToPair.get(13));
+            assertEquals(Path.of("/tmp/output/13"), execToOut.get(13));
+
+            assertTrue(callback.onJobComplete(13, "job-13"));
+            assertTrue(execToJob.isEmpty());
+            assertTrue(execToPair.isEmpty());
+            assertTrue(execToOut.isEmpty());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void failedCallbackRetriesWhenDatabaseUpdateThrows() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        execToJob.put(14, "job-14");
+        execToPair.put(14, 414);
+        execToOut.put(14, Path.of("/tmp/output/14"));
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            414,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenThrow(new RuntimeException("db down"))
+                .thenReturn(true);
+
+            assertFalse(callback.onJobFailed(14, "job-14", "BackoffLimitExceeded"));
+            assertEquals("job-14", execToJob.get(14));
+            assertEquals(Integer.valueOf(414), execToPair.get(14));
+            assertEquals(Path.of("/tmp/output/14"), execToOut.get(14));
+
+            assertTrue(callback.onJobFailed(14, "job-14", "BackoffLimitExceeded"));
+            assertTrue(execToJob.isEmpty());
+            assertTrue(execToPair.isEmpty());
+            assertTrue(execToOut.isEmpty());
+        }
+    }
+
+    private Object getField(Object target, String fieldName) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
+    private KubernetesJobMonitor.JobCompletionCallback instantiateCompletionCallback(
+        KubernetesNativeBackend backend
+    ) throws Exception {
+        Class<?> callbackClass = Class.forName(
+            "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback"
+        );
+        Constructor<?> constructor = callbackClass.getDeclaredConstructor(
+            KubernetesNativeBackend.class
+        );
+        constructor.setAccessible(true);
+        return (KubernetesJobMonitor.JobCompletionCallback) constructor.newInstance(
+            backend
+        );
     }
 }
