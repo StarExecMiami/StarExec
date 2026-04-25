@@ -22,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
+import org.starexec.backend.exception.BackendTransientException;
 
 /**
  * Unit tests for PodmanBackend container-based job execution.
@@ -580,11 +581,72 @@ public class PodmanBackendTests {
     // ==================== Completed Container Tests ====================
 
     @Test
-    public void testGetCompletedContainers_EmptyWhenNoContainers() {
+    public void testGetCompletedContainers_EmptyWhenNoContainers() throws Exception {
         var completed = backend.getCompletedContainers();
 
         assertNotNull("Completed list should not be null", completed);
         assertTrue("Completed list should be empty", completed.isEmpty());
+    }
+
+    @Test
+    public void testGetCompletedContainers_ListFailureThrowsTransientException() {
+        RuntimeException brokenPipe = new RuntimeException("Broken pipe");
+        when(mockListContainersCmd.exec()).thenThrow(brokenPipe);
+
+        try {
+            backend.getCompletedContainers();
+            fail("Expected transient exception when listing completed containers fails");
+        } catch (BackendTransientException e) {
+            assertSame("Original exception should be preserved as cause", brokenPipe, e.getCause());
+            assertEquals("Backend type should identify podman", "podman", e.getBackendType());
+        }
+    }
+
+    @Test
+    public void testGetCompletedContainers_ListFailureThrowsOriginalRuntimeWhenNonTransient()
+        throws Exception {
+        IllegalArgumentException nonTransientFailure = new IllegalArgumentException(
+            "Invalid filter"
+        );
+        when(mockListContainersCmd.exec()).thenThrow(nonTransientFailure);
+
+        try {
+            backend.getCompletedContainers();
+            fail("Expected non-transient list failure to propagate");
+        } catch (IllegalArgumentException e) {
+            assertSame(
+                "Non-transient list failures should not be reclassified as transient",
+                nonTransientFailure,
+                e
+            );
+        }
+    }
+
+    @Test
+    public void testGetCompletedContainers_InspectFailureThrowsTransientException()
+        throws Exception {
+        Container completedContainer = mock(Container.class);
+        Map<String, String> labels = new HashMap<>();
+        labels.put("starexec.pair.id", "17");
+
+        when(completedContainer.getId()).thenReturn(TEST_CONTAINER_ID);
+        when(completedContainer.getLabels()).thenReturn(labels);
+        when(mockListContainersCmd.exec()).thenReturn(
+            Collections.singletonList(completedContainer)
+        );
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+
+        RuntimeException brokenPipe = new RuntimeException("Broken pipe");
+        when(mockInspectContainerCmd.exec()).thenThrow(brokenPipe);
+
+        try {
+            backend.getCompletedContainers();
+            fail("Expected transient exception when inspecting completed container fails");
+        } catch (BackendTransientException e) {
+            assertSame("Original inspect exception should be preserved as cause", brokenPipe, e.getCause());
+            assertEquals("Backend type should identify podman", "podman", e.getBackendType());
+        }
     }
 
     @Test

@@ -7,6 +7,7 @@ import java.util.concurrent.*;
 import java.util.regex.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
@@ -259,6 +260,12 @@ public class ContainerJobMonitor {
                         pollInterval.getStats()
                 );
             }
+        } catch (BackendTransientException e) {
+            log.warn(
+                "Transient error checking completed Podman jobs; resetting to base poll interval for a fast retry",
+                e
+            );
+            pollInterval.resetToBase();
         } catch (Exception e) {
             log.error("Error in checkCompletedJobs", e);
             // Still record as idle to allow backoff even on errors

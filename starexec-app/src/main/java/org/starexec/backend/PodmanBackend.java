@@ -32,6 +32,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Queues;
@@ -1874,7 +1875,8 @@ public class PodmanBackend implements Backend {
      *
      * @return List of completed container info
      */
-    public List<CompletedContainerInfo> getCompletedContainers() {
+    public List<CompletedContainerInfo> getCompletedContainers()
+        throws BackendTransientException {
         List<CompletedContainerInfo> completed = new ArrayList<>();
 
         List<Container> containers;
@@ -1889,8 +1891,17 @@ public class PodmanBackend implements Backend {
                 .withStatusFilter(Collections.singletonList("exited"))
                 .exec();
         } catch (Exception e) {
-            log.warn("Error listing containers: " + e.getMessage());
-            return completed;
+            if (isTransientContainerEngineFailure(e)) {
+                throw new BackendTransientException(
+                    "Failed to list completed Podman containers",
+                    e,
+                    "podman"
+                );
+            }
+            throw toUncheckedContainerEngineFailure(
+                "Failed to list completed Podman containers",
+                e
+            );
         }
 
         for (Container container : containers) {
@@ -1979,11 +1990,54 @@ public class PodmanBackend implements Backend {
                     );
                 }
             } catch (Exception e) {
+                if (isTransientContainerEngineFailure(e)) {
+                    throw new BackendTransientException(
+                        "Failed to inspect completed Podman container " +
+                        container.getId(),
+                        e,
+                        "podman"
+                    );
+                }
                 log.warn("Error processing container: " + e.getMessage());
             }
         }
 
         return completed;
+    }
+
+    private RuntimeException toUncheckedContainerEngineFailure(
+        String message,
+        Exception exception
+    ) {
+        if (exception instanceof RuntimeException runtimeException) {
+            return runtimeException;
+        }
+        return new IllegalStateException(message, exception);
+    }
+
+    private boolean isTransientContainerEngineFailure(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof IOException) {
+                return true;
+            }
+
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(Locale.ROOT);
+                if (
+                    normalized.contains("broken pipe") ||
+                    normalized.contains("connection reset") ||
+                    normalized.contains("socket closed") ||
+                    normalized.contains("timeout") ||
+                    normalized.contains("connection refused")
+                ) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**
