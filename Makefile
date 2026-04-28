@@ -1052,9 +1052,9 @@ deploy-podman: preflight-podman preflight-cgroup
 	@$(MAKE) volumes-create
 	@if [ "$${STAREXEC_DB_PASSWORD:-$(DB_PASSWORD_DEFAULT)}" = "$(DB_PASSWORD_DEFAULT)" ]; then \
 		echo ""; \
-		echo "${RED}╔════════════════════════════════════════════════════════╗${RESET}"; \
-		echo "${RED}║  ⚠️  INSECURE: Using default development DB password    ║${RESET}"; \
-		echo "${RED}╚════════════════════════════════════════════════════════╝${RESET}"; \
+		echo "${RED}╔═══════════════════════════════════════════════════╗${RESET}"; \
+		echo "${RED}║  INSECURE: Using default development DB password  ║${RESET}"; \
+		echo "${RED}╚═══════════════════════════════════════════════════╝${RESET}"; \
 		echo ""; \
 		if [ "$(ENV)" = "prod" ]; then \
 			echo "${RED}ERROR: Cannot deploy to production with default password!${RESET}"; \
