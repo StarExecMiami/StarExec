@@ -1649,9 +1649,8 @@ public class PodmanBackend implements Backend {
         try {
             log.info("Killing container for execId: " + execId);
 
-            var inspection = dockerClient.inspectContainerCmd(containerId).exec();
-            var state = inspection.getState();
-            if (state != null && Boolean.FALSE.equals(state.getRunning())) {
+            Boolean alreadyExited = inspectContainerRunningState(containerId);
+            if (Boolean.FALSE.equals(alreadyExited)) {
                 log.info(
                     "Container for execId " +
                         execId +
@@ -1869,6 +1868,9 @@ public class PodmanBackend implements Backend {
         try {
             return collectCompletedContainers(dockerClient);
         } catch (BackendTransientException e) {
+            if (!canCreateFreshClient()) {
+                throw e;
+            }
             log.warn(
                 "Transient error using shared Podman client for completed-container scan; retrying once with a fresh client",
                 e
@@ -1891,6 +1893,35 @@ public class PodmanBackend implements Backend {
                     retryException
                 );
             }
+        }
+    }
+
+    private boolean canCreateFreshClient() {
+        return containerSocketPath != null && !containerSocketPath.isBlank();
+    }
+
+    private Boolean inspectContainerRunningState(String containerId) {
+        try {
+            var inspectCommand = dockerClient.inspectContainerCmd(containerId);
+            if (inspectCommand == null) {
+                return null;
+            }
+
+            var inspection = inspectCommand.exec();
+            if (inspection == null) {
+                return null;
+            }
+
+            var state = inspection.getState();
+            return state == null ? null : state.getRunning();
+        } catch (NotFoundException e) {
+            throw e;
+        } catch (Exception e) {
+            log.debug(
+                "Skipping pre-kill container state inspection for " + containerId,
+                e
+            );
+            return null;
         }
     }
 
