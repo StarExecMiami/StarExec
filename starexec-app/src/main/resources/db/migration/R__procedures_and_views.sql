@@ -3241,12 +3241,12 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
-    UPDATE job_pairs jp SET status_code = 1
-    FROM starexec.jobpair_stage_data jsd
-    WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = 20;
     UPDATE jobpair_stage_data jsd SET status_code = 1
     FROM starexec.job_pairs jp
-    WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = 20;
+    WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jsd.status_code = 20;
+    UPDATE job_pairs
+    SET status_code = 1
+    WHERE job_id = _jobId AND status_code = 20;
 END;
 $$ LANGUAGE plpgsql;
 

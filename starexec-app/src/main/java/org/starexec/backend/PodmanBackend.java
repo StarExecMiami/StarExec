@@ -197,36 +197,9 @@ public class PodmanBackend implements Backend {
                     (usePrebuiltImage ? jobImage : baseImage + " (JIT build)")
             );
 
-            // Configure Docker client with externalized socket path
-            DockerClientConfig config =
-                DefaultDockerClientConfig.createDefaultConfigBuilder()
-                    .withDockerHost(containerSocketPath)
-                    .build();
-
             // Create HTTP client with zerodep implementation (pure Java, no external dependencies)
             // This avoids intermittent "Broken pipe" errors seen with httpclient5
-            ZerodepDockerHttpClient httpClient =
-                new ZerodepDockerHttpClient.Builder()
-                    .dockerHost(config.getDockerHost())
-                    .maxConnections(
-                        EnvironmentConfig.getContainerMaxConnections()
-                    )
-                    .connectionTimeout(
-                        Duration.ofSeconds(
-                            EnvironmentConfig.getContainerConnectionTimeout()
-                        )
-                    )
-                    .responseTimeout(
-                        Duration.ofSeconds(
-                            EnvironmentConfig.getContainerResponseTimeout()
-                        )
-                    )
-                    .build();
-
-            this.dockerClient = DockerClientImpl.getInstance(
-                config,
-                httpClient
-            );
+            this.dockerClient = createDockerClient();
 
             // Test connection
             String engineVersion = dockerClient
@@ -1676,6 +1649,22 @@ public class PodmanBackend implements Backend {
         try {
             log.info("Killing container for execId: " + execId);
 
+            var inspection = dockerClient.inspectContainerCmd(containerId).exec();
+            var state = inspection.getState();
+            if (state != null && Boolean.FALSE.equals(state.getRunning())) {
+                log.info(
+                    "Container for execId " +
+                        execId +
+                        " has already exited; preserving it for ContainerJobMonitor result processing"
+                );
+                execIdToContainerId.remove(execId);
+                releaseSubmissionSlot(
+                    execId,
+                    "container already exited before kill"
+                );
+                return false;
+            }
+
             // Stop container (with timeout)
             try {
                 dockerClient
@@ -1877,12 +1866,43 @@ public class PodmanBackend implements Backend {
      */
     public List<CompletedContainerInfo> getCompletedContainers()
         throws BackendTransientException {
+        try {
+            return collectCompletedContainers(dockerClient);
+        } catch (BackendTransientException e) {
+            log.warn(
+                "Transient error using shared Podman client for completed-container scan; retrying once with a fresh client",
+                e
+            );
+
+            try (DockerClient retryClient = createDockerClient()) {
+                return collectCompletedContainers(retryClient);
+            } catch (BackendTransientException retryException) {
+                throw retryException;
+            } catch (Exception retryException) {
+                if (isTransientContainerEngineFailure(retryException)) {
+                    throw new BackendTransientException(
+                        "Failed to list completed Podman containers with a fresh retry client",
+                        retryException,
+                        "podman"
+                    );
+                }
+                throw toUncheckedContainerEngineFailure(
+                    "Failed to list completed Podman containers with a fresh retry client",
+                    retryException
+                );
+            }
+        }
+    }
+
+    private List<CompletedContainerInfo> collectCompletedContainers(
+        DockerClient client
+    ) throws BackendTransientException {
         List<CompletedContainerInfo> completed = new ArrayList<>();
 
         List<Container> containers;
         try {
             // Podman only supports "exited" status (not "dead" like Docker)
-            containers = dockerClient
+            containers = client
                 .listContainersCmd()
                 .withShowAll(true)
                 .withLabelFilter(
@@ -1927,7 +1947,7 @@ public class PodmanBackend implements Backend {
                 }
 
                 // Get output directory from container inspection
-                var inspection = dockerClient
+                var inspection = client
                     .inspectContainerCmd(container.getId())
                     .exec();
                 var mounts = inspection.getMounts();
@@ -2003,6 +2023,31 @@ public class PodmanBackend implements Backend {
         }
 
         return completed;
+    }
+
+    private DockerClient createDockerClient() {
+        DockerClientConfig config =
+            DefaultDockerClientConfig.createDefaultConfigBuilder()
+                .withDockerHost(containerSocketPath)
+                .build();
+
+        ZerodepDockerHttpClient httpClient =
+            new ZerodepDockerHttpClient.Builder()
+                .dockerHost(config.getDockerHost())
+                .maxConnections(EnvironmentConfig.getContainerMaxConnections())
+                .connectionTimeout(
+                    Duration.ofSeconds(
+                        EnvironmentConfig.getContainerConnectionTimeout()
+                    )
+                )
+                .responseTimeout(
+                    Duration.ofSeconds(
+                        EnvironmentConfig.getContainerResponseTimeout()
+                    )
+                )
+                .build();
+
+        return DockerClientImpl.getInstance(config, httpClient);
     }
 
     private RuntimeException toUncheckedContainerEngineFailure(

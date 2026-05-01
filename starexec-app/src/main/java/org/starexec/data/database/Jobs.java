@@ -5996,7 +5996,40 @@ public class Jobs {
         for (JobPair jp : pairs) {
             int execId = jp.getBackendExecId();
             int pairId = jp.getId();
-            R.BACKEND.killPair(execId);
+            int statusBeforeKill = JobPairs.getPairStatusCode(pairId);
+            if (!StatusCode.toStatusCode(statusBeforeKill).incomplete()) {
+                log.debug(
+                    "Skipping pause overwrite for pair " +
+                        pairId +
+                        " because it is already terminal with status " +
+                        statusBeforeKill
+                );
+                continue;
+            }
+
+            boolean killed = R.BACKEND.killPair(execId);
+
+            int statusAfterKill = JobPairs.getPairStatusCode(pairId);
+            if (!StatusCode.toStatusCode(statusAfterKill).incomplete()) {
+                log.debug(
+                    "Skipping pause overwrite for pair " +
+                        pairId +
+                        " because it reached terminal status " +
+                        statusAfterKill +
+                        " during pause"
+                );
+                continue;
+            }
+
+            if (!killed && statusBeforeKill == StatusCode.STATUS_RUNNING.getVal()) {
+                log.warn(
+                    "Pause did not overwrite running pair " +
+                        pairId +
+                        " because backend termination did not complete"
+                );
+                continue;
+            }
+
             JobPairs.setStatusForPairAndStages(
                 pairId,
                 StatusCode.STATUS_PAUSED.getVal()
@@ -6499,8 +6532,16 @@ public class Jobs {
                 // entry has null for a stage_id, then these are the correct primitives.
 
                 Status s = new Status();
-
-                s.setCode(ResultSetUtils.getInt(results, "status_code"));
+                Integer pairStatusCode = ResultSetUtils.getInt(
+                    results,
+                    "status_code"
+                );
+                if (pairStatusCode == null) {
+                    log.warn(
+                        "Encountered null pair status_code while processing job-space stats; defaulting to STATUS_UNKNOWN"
+                    );
+                }
+                s.setCode(pairStatusCode);
                 jp.setStatus(s);
                 jp.setId(
                     ResultSetUtils.getInt(
