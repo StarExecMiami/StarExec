@@ -3057,7 +3057,7 @@ $$ LANGUAGE plpgsql;
 -- Author: Wyatt Kaiser
 DROP FUNCTION IF EXISTS starexec.GetRunningJobPairsByJob CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetRunningJobPairsByJob(_id INT)
-RETURNS TABLE(id INT, sge_id VARCHAR(128)) AS $$
+RETURNS TABLE(id INT, sge_id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT jp.id, jp.sge_id
