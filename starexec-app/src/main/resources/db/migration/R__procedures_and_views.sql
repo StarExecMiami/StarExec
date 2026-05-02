@@ -1197,7 +1197,7 @@ BEGIN
 		GetErrorPairs(j.id) AS errorPairs
 	FROM starexec.jobs j
 	JOIN job_pairs jp ON j.id = jp.job_id
-	WHERE jp.status_code < 7 AND j.queue_id = _queueId;
+	WHERE (jp.status_code < 7 OR jp.status_code BETWEEN 19 AND 22) AND j.queue_id = _queueId;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -2275,10 +2275,10 @@ BEGIN
 	LEFT JOIN bench_attributes ON (job_pairs.bench_id=bench_attributes.bench_id AND bench_attributes.attr_key = 'starexec-expected-result')
 	WHERE ancestor=_jobSpaceId AND jobpair_stage_data.config_id=_configId AND jobpair_stage_data.stage_number = _stageNumber AND
 	((_type = 'all') OR
-	(_type='resource' AND job_pairs.status_code>=14 AND job_pairs.status_code<=17) OR
-	(_type = 'incomplete' AND job_pairs.status_code!=7 AND NOT (job_pairs.status_code>=14 AND job_pairs.status_code<=17)) OR
-	(_type='failed' AND ((job_pairs.status_code>=8 AND job_pairs.status_code<=13) OR job_pairs.status_code IN (18,21,23,24,25,26))) OR
-	(_type ='complete' AND (job_pairs.status_code=7 OR (job_pairs.status_code>=14 AND job_pairs.status_code<=17))) OR
+	(_type='resource' AND job_pairs.status_code BETWEEN 14 AND 17) OR
+	(_type = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
+	(_type='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
+	(_type ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
 	(_type= 'unknown' AND job_pairs.status_code=7 AND job_attributes.attr_value='starexec-unknown') OR
 	(_type = 'solved' AND job_pairs.status_code=7 AND (job_attributes.attr_value=bench_attributes.attr_value OR bench_attributes.attr_value is null)) OR
 	(_type = 'wrong' AND job_pairs.status_code=7 AND (bench_attributes.attr_value is not null) and (job_attributes.attr_value!=bench_attributes.attr_value)))
@@ -2549,7 +2549,7 @@ DECLARE
 	pending_count BIGINT;
 BEGIN
 	SELECT count(*) INTO pending_count FROM starexec.job_pairs
-	WHERE status_code BETWEEN 1 AND 6 AND job_id=_jobId;
+	WHERE status_code IN (1, 2, 4, 19, 20, 22) AND job_id=_jobId;
 	RETURN pending_count;
 END;
 $$ LANGUAGE plpgsql;
@@ -2571,18 +2571,27 @@ BEGIN
 	-- Get total pairs
 	SELECT total_pairs INTO total_pairs_val FROM starexec.jobs WHERE id=_jobId;
 
-	-- Get complete pairs
-	SELECT COUNT(*) INTO complete_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND status_code >= 7;
+	-- Get complete pairs (same semantics as GetCompletePairs)
+	SELECT COUNT(*) INTO complete_pairs_val
+	FROM starexec.job_pairs
+	WHERE job_id=_jobId
+	AND status_code IN (7, 14, 15, 16, 17, 25, 26);
 
 	-- Get pending pairs
-	SELECT COUNT(*) INTO pending_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND (status_code BETWEEN 1 AND 6 OR status_code=22);
+	SELECT COUNT(*) INTO pending_pairs_val
+	FROM starexec.job_pairs
+	WHERE job_id=_jobId
+	AND status_code IN (1, 2, 4, 19, 20, 22);
 
-	-- Get error pairs
-	SELECT COUNT(*) INTO error_pairs_val FROM starexec.job_pairs WHERE job_id=_jobId AND (status_code BETWEEN 8 AND 18 OR status_code=0 OR status_code BETWEEN 24 AND 26);
+	-- Get error pairs (mutually exclusive with complete pairs by excluding resource-limit completions 14-17)
+	SELECT COUNT(*) INTO error_pairs_val
+	FROM starexec.job_pairs
+	WHERE job_id=_jobId
+	AND status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26);
 
 	-- Calculate runtime (difference between earliest completed pair's start time and latest completed pair's end time)
 	SELECT EXTRACT(EPOCH FROM (MAX(end_time) - MIN(start_time))) * 1000000 INTO runtime_val
-	FROM starexec.job_pairs WHERE job_id=_jobId AND status_code >= 7;
+	FROM starexec.job_pairs WHERE job_id=_jobId AND status_code IN (7, 14, 15, 16, 17, 25, 26);
 
 	RETURN QUERY SELECT total_pairs_val, complete_pairs_val, pending_pairs_val, error_pairs_val, runtime_val;
 END;
@@ -3468,7 +3477,7 @@ BEGIN
         GetErrorPairs(j.id) AS errorPairs
     FROM starexec.jobs j
     WHERE j.queue_id = _queueId
-      AND j.id IN (SELECT DISTINCT jp.job_id FROM starexec.job_pairs jp WHERE jp.status_code BETWEEN 1 AND 6)
+      AND j.id IN (SELECT DISTINCT jp.job_id FROM starexec.job_pairs jp WHERE jp.status_code IN (1, 2, 4, 19, 20, 22))
       AND NOT j.paused
       AND NOT j.killed
     ORDER BY j.created DESC;
@@ -3496,7 +3505,7 @@ BEGIN
     SELECT COUNT(DISTINCT j.id)::BIGINT AS jobCount
     FROM starexec.jobs j
     JOIN job_pairs jp ON j.id = jp.job_id
-    WHERE jp.status_code < 7;
+    WHERE (jp.status_code < 7 OR jp.status_code BETWEEN 19 AND 22);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -9284,6 +9293,9 @@ $$ LANGUAGE plpgsql;
 -- ================================================================================
 
 -- Gets the number of completed job pairs for a given job id
+-- Counts only pairs that have genuinely completed execution, excluding
+-- active/pending/paused pairs as well as pairs whose only status is
+-- a pure infrastructure error.
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetCompletePairs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetCompletePairs(_jobId INT)
@@ -9293,13 +9305,16 @@ DECLARE
 BEGIN
     SELECT COUNT(*) INTO completePairs
     FROM starexec.job_pairs
-    WHERE job_id = _jobId AND status_code >= 7;
+    WHERE job_id = _jobId
+    AND status_code IN (7, 14, 15, 16, 17, 25, 26);
 
     RETURN completePairs;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Gets the number of errored job pairs for a given job id
+-- Counts only infrastructure/application errors, excluding resource-limit
+-- completions (timeout/memout/file-write) which are counted as completed.
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.GetErrorPairs CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetErrorPairs(_jobId INT)
@@ -9309,7 +9324,8 @@ DECLARE
 BEGIN
     SELECT COUNT(*) INTO errorPairs
     FROM starexec.job_pairs
-    WHERE job_id = _jobId AND (status_code BETWEEN 8 AND 18 OR status_code = 0 OR status_code BETWEEN 24 AND 26);
+    WHERE job_id = _jobId
+    AND status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26);
 
     RETURN errorPairs;
 END;
@@ -9327,7 +9343,7 @@ BEGIN
     SELECT CASE WHEN _jobId IN (
         SELECT job_id
         FROM starexec.job_pairs
-        WHERE status_code BETWEEN 1 AND 6
+        WHERE status_code IN (1, 2, 4, 19, 20, 22)
     ) THEN 'incomplete' ELSE 'complete' END
     INTO status;
 
@@ -9348,6 +9364,7 @@ BEGIN
         WHEN _jobId IN (SELECT id FROM starexec.jobs WHERE killed) THEN 'KILLED'
         WHEN _jobId IN (SELECT id FROM starexec.jobs WHERE paused) THEN 'PAUSED'
         WHEN _jobId IN (SELECT job_id FROM starexec.job_pairs WHERE status_code = 22) THEN 'PROCESSING'
+        WHEN _jobId IN (SELECT job_id FROM starexec.job_pairs WHERE status_code = 19) THEN 'PROCESSING_RESULTS'
         WHEN _jobId IN (SELECT job_id FROM starexec.job_pairs WHERE status_code BETWEEN 1 AND 6) THEN
             CASE
                 WHEN EXISTS (SELECT 1 FROM starexec.system_flags WHERE paused = TRUE)
@@ -9380,7 +9397,7 @@ BEGIN
     SELECT COUNT(*) INTO pendingPairs
     FROM starexec.job_pairs
     WHERE job_id = _jobId
-    AND (status_code BETWEEN 1 AND 6);
+    AND status_code IN (1, 2, 4, 19, 20, 22);
 
     RETURN pendingPairs;
 END;

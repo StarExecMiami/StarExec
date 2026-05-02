@@ -17,7 +17,7 @@ BEGIN
 	SELECT COUNT(*) INTO completepairs
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND status_code = 7;
+	  AND status_code IN (7, 14, 15, 16, 17, 25, 26);
 	RETURN completepairs;
 END;
 $$;
@@ -36,12 +36,12 @@ BEGIN
 	SELECT COUNT(*) INTO errorpairs
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND (status_code IN (8, 9, 10, 11, 12, 13, 18, 21, 23, 24, 25, 26));
+	  AND (status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26));
 	RETURN errorpairs;
 END;
 $$;
 
--- GetJobStatusDetail (keeps same behavior as GetErrorPairs)
+-- GetJobStatusDetail (counts pairs with infrastructure/application errors)
 DROP FUNCTION IF EXISTS starexec.getjobstatusdetail(integer);
 CREATE OR REPLACE FUNCTION starexec.getjobstatusdetail(_jobid integer)
 RETURNS integer
@@ -55,7 +55,7 @@ BEGIN
 	SELECT COUNT(*) INTO statusdetail
 	FROM job_pairs
 	WHERE job_id = _jobid
-	  AND (status_code IN (8, 9, 10, 11, 12, 13, 18, 21, 23, 24, 25, 26));
+	  AND (status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26));
 	RETURN statusdetail;
 END;
 $$;
