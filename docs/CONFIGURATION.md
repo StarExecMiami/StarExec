@@ -83,11 +83,11 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 
 | Variable | Default | Required | Example | Notes |
 |----------|---------|----------|---------|-------|
-| `STAREXEC_K8S_NAMESPACE` | `starexec` | No | `starexec-jobs` | Kubernetes namespace for job execution |
+| `STAREXEC_K8S_NAMESPACE` | `starexec` | No | `starexec` | Kubernetes namespace for job execution. Must match the namespace that contains the shared data PVC and job ServiceAccount. |
 | `STAREXEC_K8S_JOB_IMAGE` | `starexec/job-runner:latest` | No | `ghcr.io/starexecmiami/starexec-job-runner:latest` | Container image for job execution |
 | `STAREXEC_K8S_DATA_PVC` | `starexec-data` | No | `starexec-data` | PVC name for shared data volume |
 | `STAREXEC_K8S_SERVICE_ACCOUNT` | `starexec-job` | No | `starexec-job` | ServiceAccount for job pods |
-| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key for queue assignment |
+| `STAREXEC_K8S_QUEUE_LABEL` | `starexec/queue` | No | `starexec/queue` | Label key for queue discovery and node grouping. Current Kubernetes-native job placement does not yet add queue-specific selectors. |
 | `STAREXEC_K8S_MEMORY_LIMIT` | `2Gi` | No | `4Gi` | Memory limit per job pod |
 | `STAREXEC_K8S_CPU_LIMIT` | `1` | No | `2` | CPU core limit per job pod |
 | `STAREXEC_K8S_JOB_TTL_SECONDS` | `3600` | No | `7200` | Job cleanup TTL after completion |
@@ -202,7 +202,8 @@ backend:
 # Kubernetes-specific configuration
 kubernetes:
   enabled: true
-  jobNamespace: "starexec-jobs"
+  # Must match the Helm release namespace for the current backend design
+  jobNamespace: "starexec"
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
   dataPvc:
     name: "starexec-data"

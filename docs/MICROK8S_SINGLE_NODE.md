@@ -54,7 +54,6 @@ This keeps StarExec aligned with the Kubernetes-native backend's worker selectio
 
 ```bash
 microk8s kubectl create namespace starexec --dry-run=client -o yaml | microk8s kubectl apply -f -
-microk8s kubectl create namespace starexec-jobs --dry-run=client -o yaml | microk8s kubectl apply -f -
 ```
 
 ## 4. Create The Database Secret
@@ -88,7 +87,7 @@ That profile does all of the following:
 
 - enables the Kubernetes-native backend
 - uses `microk8s-hostpath` for StarExec and PostgreSQL PVCs
-- keeps job execution in `starexec-jobs`
+- keeps job execution in the Helm release namespace (`starexec`)
 - exposes the web app with `NodePort`
 - enables volume ownership repair before PostgreSQL starts
 
@@ -99,7 +98,7 @@ microk8s kubectl -n starexec get pods,pvc
 microk8s kubectl -n starexec describe pod -l app.kubernetes.io/instance=starexec
 microk8s kubectl -n starexec logs deploy/starexec -c postgres --tail=100
 microk8s kubectl -n starexec logs deploy/starexec -c app --tail=100
-microk8s kubectl -n starexec-jobs get jobs,pods
+microk8s kubectl -n starexec get jobs,pods
 ```
 
 Open the UI through the NodePort:
@@ -157,7 +156,7 @@ The chart now runs a root init container that creates the directories, applies `
 ```bash
 microk8s kubectl -n starexec rollout status deploy/starexec
 microk8s kubectl -n starexec get pvc
-microk8s kubectl -n starexec-jobs get all
+microk8s kubectl -n starexec get jobs,pods
 ```
 
 <!-- ## Live Status Checklist
@@ -168,7 +167,7 @@ Completed:
 
 - StarExec deployed successfully in namespace `starexec`
 - Kubernetes-native backend enabled and running
-- `starexec-jobs` namespace created for job execution
+- jobs execute in the Helm release namespace `starexec`
 - local worker node labeled with `starexec.org/worker=true`
 - local worker node labeled with `starexec/queue=default`
 - static single-node PVs created and bound for `data`, `backend`, `sandbox`, `work`, and `postgres`

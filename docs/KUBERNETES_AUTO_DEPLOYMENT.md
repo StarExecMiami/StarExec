@@ -16,7 +16,7 @@ make k8s-deploy-auto
 This will:
 1. ✅ Detect cluster configuration and available resources
 2. ✅ Label worker nodes automatically
-3. ✅ Create required namespaces and PersistentVolumeClaims
+3. ✅ Create the required namespace and PersistentVolumeClaims
 4. ✅ Generate optimized Helm values
 5. ✅ Deploy StarExec with appropriate resource limits
 
@@ -53,9 +53,13 @@ make k8s-setup
 **This will:**
 - Label all nodes as `starexec.org/worker=true`
 - Add default queue label: `starexec/queue=default`
-- Create `starexec` and `starexec-jobs` namespaces
+- Create the `starexec` namespace
 - Create PersistentVolumeClaim for shared data
-- Auto-detect and use default storage class
+- Auto-detect a compatible storage class when available
+
+**It does not create database credentials automatically.** Before the Helm deploy
+step, ensure the `starexec-postgres-credentials` secret exists in namespace
+`starexec`, or provide your own `postgres.existingSecret` override.
 
 **For fine-grained control:**
 
@@ -84,6 +88,15 @@ make k8s-generate-values
 - Storage class compatibility
 - Default resource requests/limits (uses ~1/2 of cluster resources)
 
+**Important:** If the generated shared data PVC access mode is `ReadWriteOnce`,
+the deployment is only safe for validated single-node or same-node execution.
+Use `ReadWriteMany` only with storage that you have explicitly validated for
+multi-node shared-PVC scheduling.
+
+When the generated profile uses the bundled PostgreSQL sidecar (`postgres.host: localhost`),
+the chart disables the standalone Helm migration hook and lets the main app pod
+run migrations during startup instead.
+
 Example generated values:
 ```yaml
 resources:
@@ -103,7 +116,7 @@ resources:
       cpu: "2"
 kubernetes:
   dataPvc:
-    storageClass: "standard"  # Auto-detected
+    storageClass: "microk8s-hostpath"  # Example only; cluster-specific
     size: "100Gi"
 ```
 
@@ -153,7 +166,7 @@ make k8s-status
 
 # Detailed pod status
 kubectl get pods -n starexec -o wide
-kubectl get pods -n starexec-jobs -o wide
+kubectl get jobs,pods -n starexec -o wide
 
 # Follow logs
 kubectl logs -n starexec -l app=starexec -f
@@ -297,17 +310,17 @@ bash ./scripts/k8s-node-setup.sh --create-pvc --storage-class <class-name>
 
 ```bash
 # Check PVC status
-kubectl get pvc -n starexec-jobs -o wide
+kubectl get pvc -n starexec -o wide
 
 # Describe for details
-kubectl describe pvc starexec-data -n starexec-jobs
+kubectl describe pvc starexec-data -n starexec
 
-# Create missing storage class if needed
+# Create or specify a compatible storage class if needed
 kubectl apply -f - << EOF
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: standard
+  name: local-shared-storage
 provisioner: kubernetes.io/no-provisioner
 volumeBindingMode: WaitForFirstConsumer
 EOF
@@ -440,12 +453,16 @@ KUBECONFIG=/path/to/kubeconfig make k8s-detect
 DRY_RUN=true make k8s-setup
 ```
 
+When the default `kubectl` context is broken but `microk8s kubectl` works,
+the Makefile now exports a temporary kubeconfig from `microk8s config` for
+Helm-based deploy and undeploy operations.
+
 ### Resource Sizing
 
 Generated values use these environment variables (if set):
 
 ```bash
-STAREXEC_K8S_NAMESPACE=starexec-jobs
+STAREXEC_K8S_NAMESPACE=starexec
 STAREXEC_K8S_JOB_IMAGE=ghcr.io/starexecmiami/starexec-job-runner:latest
 STAREXEC_K8S_DATA_PVC=starexec-data
 STAREXEC_K8S_MEMORY_LIMIT=2Gi

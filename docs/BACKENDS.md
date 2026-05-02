@@ -362,7 +362,9 @@ The current implementation uses this flow:
 export STAREXEC_BACKEND_TYPE=kubernetes
 
 # Core settings
-export STAREXEC_K8S_NAMESPACE=starexec-jobs
+# Must match the namespace that contains the shared data PVC and job
+# ServiceAccount.
+export STAREXEC_K8S_NAMESPACE=starexec
 export STAREXEC_K8S_JOB_IMAGE=ghcr.io/starexecmiami/starexec-job-runner:latest
 export STAREXEC_K8S_DATA_PVC=starexec-data
 export STAREXEC_K8S_SERVICE_ACCOUNT=starexec-job
@@ -387,19 +389,26 @@ Use the provided Kubernetes values file:
 
 ```bash
 # Deploy with Kubernetes native backend
-helm install starexec ./charts/starexec -f ./charts/starexec/values-kubernetes.yaml
+helm install starexec ./charts/starexec \
+  --namespace starexec \
+  --create-namespace \
+  -f ./charts/starexec/values-kubernetes.yaml
 ```
 
 ### Prerequisites
 
 - Kubernetes cluster (v1.19+) with worker nodes
-- PersistentVolumeClaim supporting ReadWriteMany (NFS, CephFS, etc.)
+- Shared PersistentVolumeClaim support matched to your topology:
+  - ReadWriteOnce is acceptable for validated single-node same-namespace deployments
+  - ReadWriteMany is required for validated multi-node shared-PVC scheduling
 - Worker nodes labeled: `starexec.org/worker=true`
 - (Optional) Queue labels: `starexec/queue=<queue-name>`
 
 ### Queue Management
 
-Jobs are automatically scheduled based on node labels:
+Worker labels are used for Kubernetes-native node selection, and queue labels
+are preserved for node grouping and queue administration APIs. The current
+backend does not yet add queue-specific selectors to submitted Job pods.
 
 ```bash
 # Label worker nodes
@@ -411,6 +420,7 @@ kubectl label nodes worker-2 starexec/queue=heavy-solvers
 ### Current limitations
 
 - End-to-end operator validation is still in progress.
+- Queue labels are not yet enforced in Job pod placement.
 - Monitoring is polling-based today; watch/informer integration is still future work.
 - No repository benchmark currently proves large-scale concurrency claims.
 - Treat Kubernetes support as controlled-use rather than fully mature production guidance.
