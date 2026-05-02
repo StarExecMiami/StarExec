@@ -278,10 +278,10 @@ jobs:
         run: |
           echo "## ✅ Pre-deployment Validation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** \`${{ needs.resolve-environment.outputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Namespace:** \`${{ needs.resolve-environment.outputs.namespace }\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Tag:** \`${{ steps.check-image.outputs.exists == 'true' && needs.resolve-environment.outputs.image_tag || 'latest (fallback)' }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Values File:** \`${{ needs.resolve-environment.outputs.values_file }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ format('`{0}`', needs.resolve-environment.outputs.environment) }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace:** ${{ format('`{0}`', needs.resolve-environment.outputs.namespace) }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ format('`{0}`', steps.check-image.outputs.exists == 'true' && needs.resolve-environment.outputs.image_tag || 'latest (fallback)') }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Values File:** ${{ format('`{0}`', needs.resolve-environment.outputs.values_file) }}" >> $GITHUB_STEP_SUMMARY
 
   # ==========================================================================
   # Deploy to Kubernetes
@@ -519,10 +519,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | \`${{ needs.resolve-environment.outputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Namespace | \`${{ needs.resolve-environment.outputs.namespace }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Image Tag | \`${{ steps.image-tag.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Job Runner | \`${{ env.JOB_RUNNER_IMAGE }}:${{ needs.resolve-environment.outputs.job_runner_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ format('`{0}`', needs.resolve-environment.outputs.environment) }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | ${{ format('`{0}`', needs.resolve-environment.outputs.namespace) }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Tag | ${{ format('`{0}`', steps.image-tag.outputs.tag) }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Job Runner | ${{ format('`{0}:{1}`', env.JOB_RUNNER_IMAGE, needs.resolve-environment.outputs.job_runner_tag) }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Deployment | \`starexec\` (Helm release) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Verification" >> $GITHUB_STEP_SUMMARY
