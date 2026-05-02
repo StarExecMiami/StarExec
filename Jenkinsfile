@@ -105,24 +105,6 @@ pipeline {
             }
         }
 
-    // ---------------------------------------------------------------------------
-    // Stages
-    // ---------------------------------------------------------------------------
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-                sh """
-                    echo "=== Build info ==================================="
-                    echo "  Job        : ${env.JOB_NAME} #${env.BUILD_NUMBER}"
-                    echo "  Image tag  : ${IMAGE_TAG}"
-                    echo "  Environment: ${DEPLOY_ENV}"
-                    echo "  Agent      : \$(hostname)"
-                    echo "================================================="
-                """
-            }
-        }
 
         // -----------------------------------------------------------------------
         stage('Build Image') {
@@ -433,5 +415,4 @@ Build log: ${env.BUILD_URL}consoleFull
             }
         }
     }
-}
 }
