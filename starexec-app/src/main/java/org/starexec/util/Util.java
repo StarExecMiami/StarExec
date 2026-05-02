@@ -14,6 +14,7 @@ import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -1437,16 +1438,70 @@ public class Util {
      * @author Eric Burns
      */
     public static boolean safeDeleteDirectory(String path) {
+        File file = new File(path);
         try {
-            File file = new File(path);
-            if (file.isDirectory()) {
-                FileUtils.deleteDirectory(file);
-            } else {
-                FileUtils.deleteQuietly(file);
-            }
+            deletePath(file);
             return true;
         } catch (Exception e) {
-            log.error("safeDeleteDirectory", e);
+            if (isDeletePermissionFailure(e)) {
+                log.warn(
+                    "safeDeleteDirectory: permission issue deleting " +
+                        file.getAbsolutePath() +
+                        "; attempting permission repair before retry",
+                    e
+                );
+                try {
+                    repairDeletePermissions(file);
+                    deletePath(file);
+                    return true;
+                } catch (Exception retryException) {
+                    log.error("safeDeleteDirectory", retryException);
+                }
+            } else {
+                log.error("safeDeleteDirectory", e);
+            }
+        }
+        return false;
+    }
+
+    private static void deletePath(File file) throws IOException {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (file.isDirectory()) {
+            FileUtils.deleteDirectory(file);
+        } else if (!FileUtils.deleteQuietly(file)) {
+            throw new IOException("Cannot delete file: " + file.getAbsolutePath());
+        }
+    }
+
+    private static void repairDeletePermissions(File file) throws IOException {
+        if (file == null) {
+            return;
+        }
+
+        File target = file.isDirectory() ? file : file.getParentFile();
+        if (target != null) {
+            chmodDirectory(target.getAbsolutePath(), false);
+            chmodDirectory(target.getAbsolutePath(), true);
+        }
+
+        if (file.exists() && !file.isDirectory()) {
+            chmodSinglePath(file, "u+rwx");
+            chmodSinglePath(file, "g+rwx");
+        }
+    }
+
+    private static boolean isDeletePermissionFailure(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof AccessDeniedException) {
+                return true;
+            }
+            if (current instanceof IOException ioException && isPermissionDenied(ioException)) {
+                return true;
+            }
+            current = current.getCause();
         }
         return false;
     }
