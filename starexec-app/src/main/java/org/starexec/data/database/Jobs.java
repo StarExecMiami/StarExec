@@ -5551,6 +5551,18 @@ public class Jobs {
             Jobs.countPairsByStatus(
                 jobId,
                 Status.StatusCode.STATUS_RUNNING.getVal()
+            ) +
+            Jobs.countPairsByStatus(
+                jobId,
+                Status.StatusCode.STATUS_PROCESSING_RESULTS.getVal()
+            ) +
+            Jobs.countPairsByStatus(
+                jobId,
+                Status.StatusCode.STATUS_PAUSED.getVal()
+            ) +
+            Jobs.countPairsByStatus(
+                jobId,
+                Status.StatusCode.STATUS_PROCESSING.getVal()
             )
         );
     }
@@ -6283,16 +6295,16 @@ public class Jobs {
     ) {
         StatusCode statusCode = stage.getStatus().getCode();
 
+        // Mutually exclusive classification prevents double-counting:
+        // pre/post-processor errors (25/26) are counted only as "failed",
+        // not also as "incomplete" and "complete".
         if (statusCode.failed()) {
             stats.incrementFailedJobPairs();
-        }
-        if (statusCode.resource()) {
+        } else if (statusCode.resource()) {
             stats.incrementResourceOutPairs();
-        }
-        if (statusCode.incomplete()) {
+        } else if (statusCode.incomplete()) {
             stats.incrementIncompleteJobPairs();
-        }
-        if (statusCode.statComplete()) {
+        } else if (statusCode.statComplete()) {
             stats.incrementCompleteJobPairs();
         }
 
