@@ -25,7 +25,6 @@ public class SessionUtil {
 	 */
 	public static User getUser(HttpServletRequest request) {
 		final String method = "getUser";
-		log.entry(method);
 		
 		// If they have a valid session, then check for the user object
 		User u = null;
@@ -35,12 +34,12 @@ public class SessionUtil {
 				u = (User) session.getAttribute(SessionUtil.USER);
 			}
 		} catch (Exception e) {
-			log.debug(method, "Exception getting user: " + e.getMessage(), e);
+			log.trace(method, "Exception getting user: " + e.getMessage(), e);
 		}
 		
 		// Only log when there's an issue (reduce log spam)
 		if (u == null && request.getSession(false) != null) {
-			log.debug(method, "User session exists but user not found in session");
+			log.trace(method, "User session exists but user not found in session");
 		}
 		
 		return u;
@@ -117,12 +116,12 @@ public class SessionUtil {
 			SessionUtil.cachePermission(session, spaceId);
 			cache = SessionUtil.getPermissionCache(session);
 		} else {
-			log.debug("Cache hit for spaceId="+spaceId);
+			log.trace("Cache hit for spaceId="+spaceId);
 		}
 
 		Permission p = cache.get(spaceId);
 		if (p != null) {
-			log.debug("Returning cached permission: "+p);
+			log.trace("Returning cached permission: "+p);
 			return p;
 		}
 
@@ -133,21 +132,21 @@ public class SessionUtil {
 			forceReloadPermission(session, spaceId);
 			p = cache.get(spaceId); // cache reference unchanged; entry may have been added
 			if (p != null) {
-				log.debug("Reload succeeded, returning permission: "+p);
+				log.trace("Reload succeeded, returning permission: "+p);
 				return p;
 			}
 		}
 
 		if (isPublic) {
 			if (userId == R.PUBLIC_USER_ID) {
-				log.debug("Public space and public user; returning empty permission");
+				log.trace("Public space and public user; returning empty permission");
 			} else {
-				log.debug("Public space but no specific permission row; returning empty permission");
+				log.trace("Public space but no specific permission row; returning empty permission");
 			}
 			return Permissions.getEmptyPermission();
 		}
 
-		log.debug("Permission unresolved (private space) returning null");
+		log.trace("Permission unresolved (private space) returning null");
 		return null;
 	}
 

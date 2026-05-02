@@ -17,12 +17,12 @@ public abstract class RobustRunnable implements Runnable {
 	public void run() {
 		Timer timer = new Timer();
 		try {
-			log.info(name + " (periodic)");
+			log.debug(name + " (periodic)");
 			dorun();
 		} catch (Throwable e) {
 			log.warn(name + " caught throwable: " + e, e);
 		} finally {
-			log.info(name + " completed one periodic execution in " + timer.getTime() + " milliseconds.");
+			log.debug(name + " completed one periodic execution in " + timer.getTime() + " milliseconds.");
 		}
 	}
 }

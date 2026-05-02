@@ -177,9 +177,8 @@ public class Permissions {
 	 */
 	public static ValidatorStatusCode canUserSeeJob(final int jobId, final int userId) {
 		final String methodName = "canUserSeeJob";
-		log.entry(methodName);
-		log.debug(methodName, "\tjobId: " + jobId);
-		log.debug(methodName, "\tuserId: " + userId);
+		log.trace(methodName, "jobId: " + jobId);
+		log.trace(methodName, "userId: " + userId);
 
 		Connection con = null;
 		ResultSet results = null;
@@ -237,7 +236,7 @@ public class Permissions {
 			Common.safeClose(results);
 			Common.safeClose(con);
 			Common.safeClose(ps);
-			log.exit(methodName);
+			log.trace(methodName, "Leaving method");
 		}
 	}
 
@@ -404,7 +403,7 @@ public class Permissions {
 	 * @author Tyler Jensen
 	 */
 	public static Permission get(int userId, int spaceId) {
-		log.debug("getting permissions for user id = " + userId + " and space id  = " + spaceId);
+		log.trace("getting permissions for user id=" + userId + " and space id=" + spaceId);
 		Connection con = null;
 		PreparedStatement ps = null;
 		ResultSet results = null;
@@ -416,7 +415,7 @@ public class Permissions {
 
 		// the admin has full permissions everywhere
 		if (GeneralSecurity.hasAdminWritePrivileges(userId)) {
-			log.debug("permissions for an admin were obtained userId = " + userId);
+			log.trace("permissions for an admin were obtained userId = " + userId);
 			return Permissions.getFullPermission();
 		}
 

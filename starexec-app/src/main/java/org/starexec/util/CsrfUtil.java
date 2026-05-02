@@ -37,7 +37,7 @@ public class CsrfUtil {
         if (token == null) {
             token = generateToken();
             session.setAttribute(CSRF_TOKEN_ATTR, token);
-            log.debug("Generated new CSRF token for session");
+            log.trace("Generated new CSRF token for session");
         }
         
         return token;
@@ -97,7 +97,7 @@ public class CsrfUtil {
         HttpSession session = request.getSession(true);
         String token = generateToken();
         session.setAttribute(CSRF_TOKEN_ATTR, token);
-        log.debug("Regenerated CSRF token for session");
+        log.trace("Regenerated CSRF token for session");
         return token;
     }
 

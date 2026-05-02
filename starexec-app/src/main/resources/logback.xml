@@ -32,6 +32,11 @@
   <!-- Force app internal logging to DEBUG for richer diagnostics -->
   <logger name="org.starexec" level="DEBUG" additivity="true"/>
 
+  <!-- Suppress excessive per-request DEBUG noise from session/auth plumbing -->
+  <logger name="org.starexec.app.SessionFilter" level="INFO"/>
+  <logger name="org.starexec.util.SessionUtil" level="INFO"/>
+  <logger name="org.starexec.data.database.Permissions" level="INFO"/>
+
   <root level="@LOGGING_LEVEL@">
     <appender-ref ref="STAREXEC"/>
     <appender-ref ref="CONSOLE"/>

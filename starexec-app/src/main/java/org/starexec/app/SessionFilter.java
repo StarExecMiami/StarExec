@@ -75,11 +75,11 @@ public class SessionFilter implements Filter {
 			final String method = "doFilter";
 			// Cast the servlet request to an httpRequest so we have access to the session
 			HttpServletRequest httpRequest = (HttpServletRequest) request;
-			log.debug(method, "Request URI: " + httpRequest.getRequestURI());
+			log.trace(method, "Request URI: " + httpRequest.getRequestURI());
 
 			boolean isCommandRequest = isFromCommand(httpRequest);
 			if (isCommandRequest) {
-				log.debug(method, "isFromCommand: true");
+				log.trace(method, "isFromCommand: true");
 			}
 
 			// Allow access to public resources and authentication endpoints FIRST
@@ -135,11 +135,11 @@ public class SessionFilter implements Filter {
 				String userEmail = user.getEmail();
 				// Check if they have the necessary user SessionUtil stored in their session
 				int userId = user.getId();
-				log.debug(method, "User Id of request was: " + userId);
-				log.debug(method, "User email of request was: " + userEmail);
+				log.trace(method, "User Id of request was: " + userId);
+				log.trace(method, "User email of request was: " + userEmail);
 
 				if (R.DEBUG_MODE_ACTIVE) {
-					log.debug(method, "Debug mode is active.");
+					log.trace(method, "Debug mode is active.");
 					if (!GeneralSecurity.hasAdminReadPrivileges(userId)) {
 						log.debug(method, "User does not have admin read privileges, redirecting to index...");
 						httpRequest.getSession().invalidate();
@@ -147,7 +147,7 @@ public class SessionFilter implements Filter {
 						return;
 					}
 				}
-				log.debug(method, "User role was found to be " + user.getRole());
+				log.trace(method, "User role was found to be " + user.getRole());
 				// suspended and unauthorized users cannot utilize the system: always place them
 				// back on the index page
 				// whenever they try to access anything secure.
@@ -160,7 +160,7 @@ public class SessionFilter implements Filter {
 			} else {
 				// User not logged in - let Tomcat's security system handle authentication
 				// Do NOT redirect manually, as this interferes with j_security_check
-				log.debug(method, "User not logged in, letting container handle authentication.");
+				log.trace(method, "User not logged in, letting container handle authentication.");
 				// Continue with the filter chain to allow Tomcat's authentication to work
 			}
 
