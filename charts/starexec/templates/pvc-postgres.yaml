@@ -1,3 +1,5 @@
+{{- if .Values.persistence.existingClaims.postgres }}
+{{- else }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -15,3 +17,4 @@ spec:
   resources:
     requests:
       storage: {{ .Values.postgres.persistence.size }}
+{{- end }}

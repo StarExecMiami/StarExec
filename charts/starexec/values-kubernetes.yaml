@@ -9,7 +9,7 @@
 #
 # Prerequisites:
 #   1. A Kubernetes cluster with sufficient worker nodes
-#   2. A PersistentVolumeClaim for shared data
+#   2. A PersistentVolumeClaim for shared data in the release namespace
 #   3. Worker nodes labeled: starexec.org/worker=true
 #   4. (Optional) Queue labels: starexec/queue=<queue-name>
 
@@ -31,8 +31,9 @@ backend:
 kubernetes:
   enabled: true
   
-  # Namespace for StarExec jobs (can be different from app namespace)
-  jobNamespace: "starexec-jobs"
+  # Jobs run in the Helm release namespace because the shared PVC and job
+  # ServiceAccount are namespaced resources.
+  jobNamespace: ""
   
   # Job runner image
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
@@ -40,13 +41,13 @@ kubernetes:
   # ServiceAccount for job pods
   jobServiceAccount: "starexec-job"
   
-  # PVC for shared data volume (must support ReadWriteMany)
+  # PVC for shared data volume (must support ReadWriteMany for multi-node use)
   dataPvc:
     name: "starexec-data"
     storageClass: ""  # Use cluster default, or specify: "nfs", "cephfs", etc.
     size: "100Gi"
     accessModes:
-      - ReadWriteOnce
+      - ReadWriteMany
   
   # Node selection for worker nodes
   nodeSelector:

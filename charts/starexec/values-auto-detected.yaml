@@ -12,15 +12,17 @@ backend:
 
 kubernetes:
   enabled: true
-  jobNamespace: "starexec-jobs"
+  # Jobs run in the Helm release namespace because the shared PVC and
+  # ServiceAccount are namespaced resources.
+  jobNamespace: ""
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
   jobServiceAccount: "starexec-job"
   dataPvc:
     name: "starexec-data"
-    storageClass: "microk8s-hostpath"
+    storageClass: ""
     size: "100Gi"
     accessModes:
-      - ReadWriteMany
+      - ReadWriteOnce
   nodeSelector:
     starexec.org/worker: "true"
   queueLabelKey: "starexec/queue"
@@ -38,10 +40,16 @@ postgres:
     tag: "15"
   host: "localhost"
   port: 5432
+  existingSecret: "starexec-postgres-credentials"
+  existingSecretKeys:
+    user: "user"
+    password: "password"
+    database: "database"
+    rootPassword: "rootPassword"
   persistence:
     enabled: true
-    storageClass: "microk8s-hostpath"
-    size: 50Gi
+    storageClass: ""
+    size: 20Gi
 
 resources:
   app:
@@ -61,13 +69,19 @@ resources:
 
 persistence:
   enabled: true
-  storageClass: "microk8s-hostpath"
-  size: 100Gi
+  storageClass: ""
+  appDataSize: 100Gi
+  backendSize: 5Gi
+  sandboxSize: 10Gi
+  workSize: 20Gi
 
 scalability:
-  numJobPairsAtATime: 50
-  nodeMultiplier: 100
+  numJobPairsAtATime: 10
+  nodeMultiplier: 20
 
-# Disable migrations (can cause timeout issues in K8s)
+service:
+  type: NodePort
+  nodePort: 30080
+
 migrations:
   enabled: false

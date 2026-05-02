@@ -6,7 +6,8 @@
 #
 # This profile is intentionally single-node:
 # - it uses MicroK8s' default hostpath provisioner
-# - the StarExec app pod and job pods share one ReadWriteOnce PVC on the same node
+# - the StarExec app pod and job pods share one ReadWriteOnce PVC in the
+#   release namespace on the same node
 # - it is not the right profile for multi-node worker expansion
 
 image:
@@ -32,7 +33,9 @@ backend:
 
 kubernetes:
   enabled: true
-  jobNamespace: "starexec-jobs"
+  # Jobs run in the Helm release namespace because the shared PVC and job
+  # ServiceAccount are namespaced resources.
+  jobNamespace: ""
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
   jobServiceAccount: "starexec-job"
   dataPvc:

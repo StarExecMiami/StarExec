@@ -1,3 +1,10 @@
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") .Values.kubernetes.jobNamespace (ne .Values.kubernetes.jobNamespace .Release.Namespace) -}}
+{{- fail (printf "kubernetes.jobNamespace (%s) must match the Helm release namespace (%s) because the Kubernetes-native backend mounts a namespaced shared PVC and uses a namespaced ServiceAccount" .Values.kubernetes.jobNamespace .Release.Namespace) -}}
+{{- end }}
+{{- $k8sDataPvcAccessMode := "ReadWriteMany" -}}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") .Values.kubernetes.dataPvc.accessModes -}}
+{{- $k8sDataPvcAccessMode = first .Values.kubernetes.dataPvc.accessModes -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +37,13 @@ spec:
     spec:
       serviceAccountName: {{ include "chart.fullname" . }}
       restartPolicy: Always
+{{- if .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+{{- else if and (eq (include "starexec.isKubernetesBackend" .) "true") (or (eq $k8sDataPvcAccessMode "ReadWriteOnce") (eq $k8sDataPvcAccessMode "ReadWriteOncePod")) }}
+      nodeSelector:
+{{ toYaml .Values.kubernetes.nodeSelector | indent 8 }}
+{{- end }}
       securityContext:
         fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
@@ -76,23 +90,23 @@ spec:
         - name: data
           persistentVolumeClaim:
 {{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
-            claimName: {{ include "starexec.k8sDataPvcName" . }}
+            claimName: {{ default (include "starexec.k8sDataPvcName" .) .Values.kubernetes.dataPvc.existingClaim }}
 {{- else }}
-            claimName: {{ include "starexec.volumeName" (list . "data") }}
+            claimName: {{ default (include "starexec.volumeName" (list . "data")) .Values.persistence.existingClaims.data }}
 {{- end }}
         - name: sandbox
           persistentVolumeClaim:
-            claimName: {{ include "starexec.volumeName" (list . "sandbox") }}
+            claimName: {{ default (include "starexec.volumeName" (list . "sandbox")) .Values.persistence.existingClaims.sandbox }}
         - name: backend
           persistentVolumeClaim:
-            claimName: {{ include "starexec.volumeName" (list . "backend") }}
+            claimName: {{ default (include "starexec.volumeName" (list . "backend")) .Values.persistence.existingClaims.backend }}
         - name: work
           persistentVolumeClaim:
-            claimName: {{ include "starexec.volumeName" (list . "work") }}
+            claimName: {{ default (include "starexec.volumeName" (list . "work")) .Values.persistence.existingClaims.work }}
         - name: postgres-data
 {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "starexec.volumeName" (list . "postgres") }}
+            claimName: {{ default (include "starexec.volumeName" (list . "postgres")) .Values.persistence.existingClaims.postgres }}
 {{- else }}
           emptyDir: {}
 {{- end }}
@@ -168,13 +182,19 @@ spec:
 {{- end }}
 {{- if eq (include "starexec.isKubernetesBackend" .) "true" }}
             - name: STAREXEC_K8S_NAMESPACE
-              value: "{{ .Values.kubernetes.jobNamespace | default .Release.Namespace }}"
+              value: "{{ .Release.Namespace }}"
             - name: STAREXEC_K8S_JOB_IMAGE
               value: "{{ .Values.kubernetes.jobImage }}"
             - name: STAREXEC_K8S_DATA_PVC
               value: {{ include "starexec.k8sDataPvcName" . | quote }}
+            - name: STAREXEC_K8S_DATA_PVC_ACCESS_MODE
+              value: "{{ $k8sDataPvcAccessMode }}"
             - name: STAREXEC_K8S_SERVICE_ACCOUNT
               value: {{ include "starexec.k8sJobServiceAccount" . | quote }}
+            - name: STAREXEC_K8S_APP_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
             - name: STAREXEC_K8S_QUEUE_LABEL
               value: "{{ .Values.kubernetes.queueLabelKey }}"
             - name: STAREXEC_K8S_JOB_TTL_SECONDS
@@ -187,6 +207,10 @@ spec:
               value: "{{ .Values.kubernetes.resources.limits.cpu }}"
             - name: STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU
               value: "{{ .Values.kubernetes.strictOnePairPerCpu }}"
+            - name: STAREXEC_NUM_JOB_PAIRS_AT_A_TIME
+              value: "{{ .Values.scalability.numJobPairsAtATime }}"
+            - name: STAREXEC_NODE_MULTIPLIER
+              value: "{{ .Values.scalability.nodeMultiplier }}"
             - name: STAREXEC_K8S_WORKER_SELECTOR_KEY
               value: "starexec.org/worker"
             - name: STAREXEC_K8S_WORKER_SELECTOR_VALUE

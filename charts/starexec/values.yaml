@@ -23,6 +23,11 @@ image:
 replicaCount: 1
 volumePrefix: starexec
 
+# Pin the StarExec application deployment independently from job pod
+# scheduling. Kubernetes-native benchmark job placement is controlled by
+# kubernetes.nodeSelector below.
+nodeSelector: {}
+
 # Application data directories
 dataDir: "/app/data"
 sandboxDir: "/app/sandbox"
@@ -49,6 +54,12 @@ backend:
 persistence:
   enabled: true
   storageClass: ""
+  existingClaims:
+    data: ""
+    backend: ""
+    sandbox: ""
+    work: ""
+    postgres: ""
 
   # Storage size configurations
   appDataSize: 5Gi
@@ -113,7 +124,9 @@ postgres:
 kubernetes:
   enabled: true
 
-  # Namespace for job execution (can be different from app namespace)
+  # Namespace for job execution. For the current Kubernetes-native backend,
+  # this must match the Helm release namespace because the shared PVC and job
+  # ServiceAccount are namespaced resources.
   jobNamespace: ""
 
   # Job runner configuration
@@ -123,6 +136,7 @@ kubernetes:
   # Data PVC for shared storage (required for kubernetes-native backend)
   dataPvc:
     name: ""
+    existingClaim: ""
     storageClass: ""
     size: "100Gi"
     accessModes:

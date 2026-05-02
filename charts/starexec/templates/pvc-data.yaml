@@ -1,3 +1,6 @@
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") .Values.kubernetes.dataPvc.existingClaim }}
+{{- else if and (ne (include "starexec.isKubernetesBackend" .) "true") .Values.persistence.existingClaims.data }}
+{{- else }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -31,4 +34,5 @@ spec:
       storage: {{ .Values.kubernetes.dataPvc.size }}
 {{- else }}
       storage: {{ .Values.persistence.appDataSize }}
+{{- end }}
 {{- end }}
