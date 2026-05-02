@@ -392,6 +392,36 @@ public class JobTests extends TestSequence {
 		}
 	}
 
+	@StarexecTest
+	private void PausedJobIncompleteListingUsesIncompleteCounts() throws Exception {
+		Job pausedJob = loader.loadJobIntoDatabase(space.getId(), user.getId(), solver.getId(), benchmarkIds);
+		try {
+			for (JobPair pair : pausedJob.getJobPairs()) {
+				Assert.assertTrue(
+						JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_PENDING_SUBMIT.getVal())
+				);
+			}
+
+			Assert.assertTrue(Jobs.pause(pausedJob.getId()));
+
+			Job listedJob = Jobs.getIncompleteJobs()
+					.stream()
+					.filter(j -> j.getId() == pausedJob.getId())
+					.findFirst()
+					.orElse(null);
+			Assert.assertNotNull(listedJob);
+			Assert.assertNotNull(listedJob.getLiteJobPairStats());
+			Assert.assertEquals(0, (int)listedJob.getLiteJobPairStats().get("completePairs"));
+			Assert.assertEquals(
+					pausedJob.getJobPairs().size(),
+					(int)listedJob.getLiteJobPairStats().get("pendingPairs")
+			);
+			Assert.assertEquals(0, (int)listedJob.getLiteJobPairStats().get("completionPercentage"));
+		} finally {
+			Jobs.deleteAndRemove(pausedJob.getId());
+		}
+	}
+
 	@Override
 	protected String getTestName() {
 		return "JobTests";

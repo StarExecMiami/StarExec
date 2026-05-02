@@ -2,8 +2,11 @@ package org.starexec.test.integration.database;
 
 import org.starexec.constants.R;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Statistics;
 import org.starexec.data.to.*;
+import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.TestUtil;
 import org.starexec.test.integration.StarexecTest;
 import org.starexec.test.integration.TestSequence;
@@ -52,6 +55,27 @@ public class StatisticsTests extends TestSequence {
 		Assert.assertEquals("0", stats.get("pendingPairs"));
 		Assert.assertEquals("0", stats.get("errorPairs"));
 
+	}
+
+	@StarexecTest
+	private void getJobPairOverviewPausedJobCountsAsIncompleteTest() throws Exception {
+		Job pausedJob = loader.loadJobIntoDatabase(space.getId(), owner.getId(), solver.getId(), benchmarkIds);
+		try {
+			for (JobPair pair : pausedJob.getJobPairs()) {
+				Assert.assertTrue(
+						JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_PENDING_SUBMIT.getVal())
+				);
+			}
+			Assert.assertTrue(Jobs.pause(pausedJob.getId()));
+
+			HashMap<String, String> stats = Statistics.getJobPairOverview(pausedJob.getId());
+			Assert.assertEquals(String.valueOf(pausedJob.getJobPairs().size()), stats.get("totalPairs"));
+			Assert.assertEquals("0", stats.get("completePairs"));
+			Assert.assertEquals(String.valueOf(pausedJob.getJobPairs().size()), stats.get("pendingPairs"));
+			Assert.assertEquals("0", stats.get("errorPairs"));
+		} finally {
+			Jobs.deleteAndRemove(pausedJob.getId());
+		}
 	}
 	
 	@Override
