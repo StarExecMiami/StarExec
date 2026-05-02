@@ -843,7 +843,6 @@ public class KubernetesNativeBackend implements Backend {
         log.debug("Getting queues from Kubernetes node labels");
 
         Set<String> queues = new HashSet<>();
-        queues.add(DEFAULT_QUEUE_NAME);
 
         try {
             NodeList nodes = kubernetesClient
@@ -863,6 +862,11 @@ public class KubernetesNativeBackend implements Backend {
             }
         } catch (Exception e) {
             log.warn("Failed to read queue labels from Kubernetes nodes", e);
+        }
+
+        // Only add default when no queues discovered from node labels
+        if (queues.isEmpty()) {
+            queues.add(DEFAULT_QUEUE_NAME);
         }
 
         return queues.toArray(new String[0]);
