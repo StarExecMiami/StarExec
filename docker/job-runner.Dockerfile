@@ -39,6 +39,37 @@
 #
 # =============================================================================
 
+# ==============================================================================
+# Stage 1: Build runsolver natively on Alpine (musl libc)
+# ==============================================================================
+FROM docker.io/library/alpine:3.21 AS runsolver-builder
+
+WORKDIR /tmp
+
+# Install build dependencies
+RUN apk add --no-cache \
+    curl \
+    build-base \
+    tar \
+    bzip2 \
+    numactl-dev
+
+# Download, patch, and compile runsolver
+# Patches match the main Dockerfile: remove NUMA support and fix type issues
+RUN curl -L https://www.cril.univ-artois.fr/~roussel/runsolver/runsolver-3.4.1.tar.bz2 -o runsolver.tar.bz2 && \
+    tar xjf runsolver.tar.bz2 && \
+    cd runsolver/src && \
+    sed -i 's/long long mem,memFree;/long mem,memFree;/g' runsolver.cc && \
+    sed -i 's/-DWITH_NUMA//g' Makefile && \
+    sed -i 's/-lnuma//g' Makefile && \
+    make && \
+    mkdir -p /tmp/runsolver-output && \
+    cp runsolver /tmp/runsolver-output/runsolver && \
+    chmod +x /tmp/runsolver-output/runsolver
+
+# ==============================================================================
+# Stage 2: Minimal runtime image
+# ==============================================================================
 FROM docker.io/library/alpine:3.21
 
 LABEL maintainer="StarExec Team"
@@ -81,8 +112,8 @@ RUN adduser -D -s /bin/bash -h /home/starexec_user starexec_user \
     /starexec/pre-processor /starexec/post-processor \
     && chown -R starexec_user:starexec_user /starexec
 
-# Copy runsolver binary for resource limiting
-COPY --chmod=755 starexec-app/src/main/java/org/starexec/config/sge/RunSolverSource/runsolver /usr/local/bin/runsolver
+# Copy runsolver binary compiled natively on Alpine (musl libc)
+COPY --from=runsolver-builder --chmod=755 /tmp/runsolver-output/runsolver /usr/local/bin/runsolver
 
 # Copy GetComputerInfo script (shell version - 154 lines vs 36MB Perl)
 # Backward compatibility: create symlink at legacy path

@@ -1289,7 +1289,13 @@ k8s-deploy-auto: k8s-detect
 	@echo ""
 	@echo "${GREEN}✓✓✓ Automated Kubernetes deployment complete!${RESET}"
 	@echo ""
-	@kubectl get pods -n starexec
+	@KUBECTL_CMD="kubectl"; \
+	if ! kubectl cluster-info >/dev/null 2>&1; then \
+		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+			KUBECTL_CMD="microk8s kubectl"; \
+		fi; \
+	fi; \
+	$$KUBECTL_CMD get pods -n starexec
 	@echo ""
 	@echo "Access StarExec at: http://<cluster-ip>/starexec"
 
@@ -1307,33 +1313,114 @@ deploy-k8s:
 		VALUES_FILE="charts/starexec/values-kubernetes.yaml"; \
 		echo "${YELLOW}Using Kubernetes values file: $$VALUES_FILE${RESET}"; \
 	fi; \
+	TMP_KUBECONFIG=""; \
+	KUBECTL_CMD="kubectl"; \
+	if kubectl cluster-info >/dev/null 2>&1; then \
+		:; \
+	elif command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+		TMP_KUBECONFIG="$$(mktemp)"; \
+		microk8s config > "$$TMP_KUBECONFIG"; \
+		KUBECTL_CMD="microk8s kubectl"; \
+	else \
+		echo "${RED}Cannot connect to Kubernetes with kubectl or microk8s kubectl${RESET}"; \
+		exit 1; \
+	fi; \
 	echo "Using values file: $$VALUES_FILE"; \
-	helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
-		-f $$VALUES_FILE \
-		--namespace starexec \
-		--create-namespace
+	if [ -n "$$TMP_KUBECONFIG" ]; then \
+		KUBECONFIG="$$TMP_KUBECONFIG" helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
+			-f $$VALUES_FILE \
+			--namespace starexec \
+			--create-namespace; \
+	else \
+		helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
+			-f $$VALUES_FILE \
+			--namespace starexec \
+			--create-namespace; \
+	fi; \
+	DEPLOY_EXIT=$$?; \
+	if [ $$DEPLOY_EXIT -ne 0 ]; then \
+		rm -f "$$TMP_KUBECONFIG"; \
+		exit $$DEPLOY_EXIT; \
+	fi; \
+	eval "$$KUBECTL_CMD get pods -n starexec"; \
+	rm -f "$$TMP_KUBECONFIG"
 	@echo ""
 	@echo "${GREEN}✓ Kubernetes deployment complete!${RESET}"
-	@kubectl get pods -n starexec
 
 undeploy-k8s:
-	helm uninstall $(RELEASE_NAME) --namespace starexec || true
+	@TMP_KUBECONFIG=""; \
+	if ! kubectl cluster-info >/dev/null 2>&1; then \
+		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+			TMP_KUBECONFIG="$$(mktemp)"; \
+			microk8s config > "$$TMP_KUBECONFIG"; \
+		fi; \
+	fi; \
+	if [ -n "$$TMP_KUBECONFIG" ]; then \
+		KUBECONFIG="$$TMP_KUBECONFIG" helm uninstall $(RELEASE_NAME) --namespace starexec || true; \
+	else \
+		helm uninstall $(RELEASE_NAME) --namespace starexec || true; \
+	fi; \
+	rm -f "$$TMP_KUBECONFIG"
 
 # Check Kubernetes cluster health
 k8s-status:
 	@echo "${BOLD}${BLUE}Kubernetes Cluster Status${RESET}"
 	@echo ""
 	@echo "=== Nodes ==="
-	@kubectl get nodes -o wide
+	@KUBECTL_CMD="kubectl"; \
+	if ! kubectl cluster-info >/dev/null 2>&1; then \
+		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+			KUBECTL_CMD="microk8s kubectl"; \
+		fi; \
+	fi; \
+	if [ "$$KUBECTL_CMD" = "microk8s kubectl" ] || kubectl cluster-info >/dev/null 2>&1; then \
+		$$KUBECTL_CMD get nodes -o wide; \
+	else \
+		echo "No working Kubernetes client found"; \
+		exit 1; \
+	fi
 	@echo ""
 	@echo "=== StarExec Pods ==="
-	@kubectl get pods -n starexec -o wide || echo "No pods deployed yet"
+	@KUBECTL_CMD="kubectl"; \
+	if ! kubectl cluster-info >/dev/null 2>&1; then \
+		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+			KUBECTL_CMD="microk8s kubectl"; \
+		fi; \
+	fi; \
+	if [ "$$KUBECTL_CMD" = "microk8s kubectl" ] || kubectl cluster-info >/dev/null 2>&1; then \
+		$$KUBECTL_CMD get pods -n starexec -o wide || echo "No pods deployed yet"; \
+	else \
+		echo "No working Kubernetes client found"; \
+		exit 1; \
+	fi
 	@echo ""
 	@echo "=== PersistentVolumeClaims ==="
-	@kubectl get pvc -n starexec-jobs -o wide || echo "No PVCs created yet"
+	@KUBECTL_CMD="kubectl"; \
+	if ! kubectl cluster-info >/dev/null 2>&1; then \
+		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+			KUBECTL_CMD="microk8s kubectl"; \
+		fi; \
+	fi; \
+	if [ "$$KUBECTL_CMD" = "microk8s kubectl" ] || kubectl cluster-info >/dev/null 2>&1; then \
+		$$KUBECTL_CMD get pvc -n starexec -o wide || echo "No PVCs created yet"; \
+	else \
+		echo "No working Kubernetes client found"; \
+		exit 1; \
+	fi
 	@echo ""
 	@echo "=== Storage Classes ==="
-	@kubectl get storageclass
+	@KUBECTL_CMD="kubectl"; \
+	if ! kubectl cluster-info >/dev/null 2>&1; then \
+		if command -v microk8s >/dev/null 2>&1 && microk8s kubectl cluster-info >/dev/null 2>&1; then \
+			KUBECTL_CMD="microk8s kubectl"; \
+		fi; \
+	fi; \
+	if [ "$$KUBECTL_CMD" = "microk8s kubectl" ] || kubectl cluster-info >/dev/null 2>&1; then \
+		$$KUBECTL_CMD get storageclass; \
+	else \
+		echo "No working Kubernetes client found"; \
+		exit 1; \
+	fi
 
 # ============================================================================
 # MAINTENANCE AND CLEANUP
