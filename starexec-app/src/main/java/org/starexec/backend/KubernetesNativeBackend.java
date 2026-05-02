@@ -31,7 +31,7 @@
  * │  │    - Creates K8s Job with starexec/job-runner image                   │  │
  * │  │    - Mounts PVC for data directory                                    │  │
  * │  │    - Sets resource limits (memory, CPU)                               │  │
- * │  │    - Uses node selectors for queue assignment                         │  │
+ * │  │    - Uses worker-node selectors for current job placement            │  │
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * │                                    ↓                                         │
  * │  ┌───────────────────────────────────────────────────────────────────────┐  │
@@ -45,8 +45,8 @@
  * │  ┌───────────────────────────────────────────────────────────────────────┐  │
  * │  │  Queue Abstraction via Labels                                         │  │
  * │  │    - Queue = Node label (starexec/queue=<name>)                       │  │
- * │  │    - Job targets queue via nodeSelector                               │  │
- * │  │    - Supports affinity/anti-affinity rules                            │  │
+ * │  │    - Queue labels support node grouping and queue administration       │  │
+ * │  │    - Job placement currently uses worker-node selectors only           │  │
  * │  └───────────────────────────────────────────────────────────────────────┘  │
  * └─────────────────────────────────────────────────────────────────────────────┘
  *
@@ -58,11 +58,19 @@
  *   </dependency>
  *
  * Configuration (environment variables):
- *   STAREXEC_K8S_NAMESPACE       - Kubernetes namespace (default: starexec)
+ *   STAREXEC_K8S_NAMESPACE       - Kubernetes namespace (default: starexec).
+ *                                   Must contain the shared data PVC and the
+ *                                   job ServiceAccount used by Kubernetes jobs.
  *   STAREXEC_K8S_JOB_IMAGE       - Job runner image (default: starexec/job-runner:latest)
  *   STAREXEC_K8S_DATA_PVC        - PVC name for data volume (default: starexec-data)
+ *   STAREXEC_K8S_DATA_PVC_ACCESS_MODE
+ *                                 - Access mode for the shared data PVC.
+ *                                   ReadWriteOnce-style modes pin jobs to the
+ *                                   StarExec app node.
  *   STAREXEC_K8S_SERVICE_ACCOUNT - ServiceAccount for jobs (default: starexec-job)
- *   STAREXEC_K8S_QUEUE_LABEL     - Label key for queue assignment (default: starexec/queue)
+ *   STAREXEC_K8S_APP_NODE_NAME    - Node currently hosting the StarExec app pod
+ *   STAREXEC_K8S_QUEUE_LABEL     - Label key for queue discovery and node grouping
+ *                                   (default: starexec/queue)
  *
  * Future TODOs:
  *   - [ ] Implement KubernetesJobMonitor with Watch pattern
@@ -183,7 +191,9 @@ public class KubernetesNativeBackend implements Backend {
     private String namespace;
     private String jobImage;
     private String dataPvcName;
+    private String dataPvcAccessMode;
     private String serviceAccountName;
+    private String appNodeName;
     private String queueLabelKey;
     private String memoryLimit;
     private String cpuLimit;
@@ -264,10 +274,12 @@ public class KubernetesNativeBackend implements Backend {
             EnvironmentConfig.getContainerJobImage()
         );
         dataPvcName = getEnv("STAREXEC_K8S_DATA_PVC", "starexec-data");
+        dataPvcAccessMode = getEnv("STAREXEC_K8S_DATA_PVC_ACCESS_MODE", "ReadWriteMany");
         serviceAccountName = getEnv(
             "STAREXEC_K8S_SERVICE_ACCOUNT",
             "starexec-job"
         );
+        appNodeName = getEnv("STAREXEC_K8S_APP_NODE_NAME", "");
         queueLabelKey = getEnv("STAREXEC_K8S_QUEUE_LABEL", DEFAULT_QUEUE_LABEL);
         memoryLimit = getEnv("STAREXEC_K8S_MEMORY_LIMIT", "2Gi");
         cpuLimit = getEnv("STAREXEC_K8S_CPU_LIMIT", "1");
@@ -298,10 +310,15 @@ public class KubernetesNativeBackend implements Backend {
                 jobImage +
                 ", pvc=" +
                 dataPvcName +
+                " (" +
+                dataPvcAccessMode +
+                ")" +
                 ", cpu=" +
                 cpuLimit +
                 ", memory=" +
                 memoryLimit +
+                ", appNode=" +
+                appNodeName +
                 ", ttlSeconds=" +
                 ttlSecondsAfterFinished +
                 ", strictOnePairPerCpu=" +
@@ -480,6 +497,19 @@ public class KubernetesNativeBackend implements Backend {
             nodeSelector.put(workerNodeSelectorKey, workerNodeSelectorValue);
         }
 
+        boolean pinToAppNode = requiresSameNodeDataPvc();
+        String pinnedNodeName = null;
+        if (pinToAppNode && appNodeName != null && !appNodeName.trim().isEmpty()) {
+            pinnedNodeName = appNodeName;
+        }
+        if (pinToAppNode && (appNodeName == null || appNodeName.trim().isEmpty())) {
+            log.warn(
+                "Shared data PVC uses " +
+                dataPvcAccessMode +
+                " but STAREXEC_K8S_APP_NODE_NAME is unavailable; job scheduling may fail"
+            );
+        }
+
         return new JobBuilder()
             .withNewMetadata()
                 .withName(jobName)
@@ -496,6 +526,7 @@ public class KubernetesNativeBackend implements Backend {
                     .withNewSpec()
                         .withServiceAccountName(serviceAccountName)
                         .withRestartPolicy("Never")
+                        .withNodeName(pinnedNodeName)
                         .withNodeSelector(nodeSelector)
                         .addNewContainer()
                             .withName("job-runner")
@@ -531,6 +562,11 @@ public class KubernetesNativeBackend implements Backend {
                 .endTemplate()
             .endSpec()
             .build();
+    }
+
+    private boolean requiresSameNodeDataPvc() {
+        return "ReadWriteOnce".equals(dataPvcAccessMode) ||
+            "ReadWriteOncePod".equals(dataPvcAccessMode);
     }
 
     private Path resolveOutputDirectory(String logPath) {
@@ -586,12 +622,10 @@ public class KubernetesNativeBackend implements Backend {
 
         if (kubernetesClient == null) {
             log.warn(
-                "Kubernetes client not initialized; removing local tracking for execId: " +
-                execId
+                "Kubernetes client not initialized; cannot kill execId: " +
+                execId +
+                ". Local tracking preserved for retry or destroyIf cleanup."
             );
-            execIdToJobName.remove(execId);
-            execIdToPairId.remove(execId);
-            execIdToOutputDir.remove(execId);
             return false;
         }
 
@@ -1097,7 +1131,9 @@ public class KubernetesNativeBackend implements Backend {
 
     @Override
     public void clearPairTracking(int pairId) {
-        // KubernetesNativeBackend does not track pair state - no-op
+        // Remove mapping so stale pair IDs are not returned by resolvePairId
+        // after a pair has been rerun or removed.
+        execIdToPairId.values().removeIf(v -> v.equals(pairId));
     }
 
     private final class KubernetesJobCompletionCallback
@@ -1112,6 +1148,33 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             try {
+                // Guard: skip DB update when the pair row has disappeared or the
+                // job is no longer submit-eligible. Without this check a K8s job
+                // that completes after pause/kill/delete writes a status into a
+                // stale or absent row, causing P0002 or overwriting a terminal.
+                JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
+                if (lookup.isMissing()) {
+                    log.debug(
+                        "Skipping completion update for stale pair " +
+                        pairId +
+                        " (K8s job " +
+                        jobName +
+                        ")"
+                    );
+                    execIdToJobName.remove(execId);
+                    execIdToPairId.remove(execId);
+                    execIdToOutputDir.remove(execId);
+                    return true;
+                }
+                if (lookup.isError()) {
+                    log.warn(
+                        "Could not determine whether pair " +
+                        pairId +
+                        " still exists after K8s job completion; retrying"
+                    );
+                    return false;
+                }
+
                 int terminalStatus = readTerminalStatus(execId, StatusCode.STATUS_COMPLETE.getVal());
                 int stageNumber = readStageNumber(execId, 1);
 
@@ -1129,6 +1192,10 @@ public class KubernetesNativeBackend implements Backend {
                     );
                     return false;
                 }
+
+                // Persist run-solver statistics (wallclock, cpu, memory, disk)
+                // so K8s-native jobs produce the same data as container jobs.
+                persistRunSolverStats(execId, pairId, stageNumber);
             } catch (Exception e) {
                 log.error("Failed updating completed status for pair " + pairId, e);
                 return false;
@@ -1149,9 +1216,36 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             try {
+                // Guard: skip DB update when the pair row has disappeared or the
+                // job is no longer submit-eligible.
+                JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
+                if (lookup.isMissing()) {
+                    log.debug(
+                        "Skipping failure update for stale pair " +
+                        pairId +
+                        " (K8s job " +
+                        jobName +
+                        ")"
+                    );
+                    execIdToJobName.remove(execId);
+                    execIdToPairId.remove(execId);
+                    execIdToOutputDir.remove(execId);
+                    return true;
+                }
+                if (lookup.isError()) {
+                    log.warn(
+                        "Could not determine whether pair " +
+                        pairId +
+                        " still exists after K8s job failure; retrying"
+                    );
+                    return false;
+                }
+
+                int stageNumber = readStageNumber(execId, 1);
+
                 boolean updated = JobPairs.setPairStatusPrecise(
                     pairId,
-                    1,
+                    stageNumber,
                     StatusCode.ERROR_RUNSCRIPT.getVal(),
                     StatusCode.STATUS_NOT_REACHED.getVal()
                 );
@@ -1256,6 +1350,82 @@ public class KubernetesNativeBackend implements Backend {
                 return null;
             }
             return outputDir.resolve("status.json");
+        }
+
+        /**
+         * Persists run-solver statistics (wallclock, cpu, memory, disk) from
+         * the shared data volume so that K8s-native jobs produce the same
+         * resource-usage data as container-mode jobs.
+         */
+        private void persistRunSolverStats(int execId, int pairId, int stageNumber) {
+            Path outputDir = execIdToOutputDir.get(execId);
+            if (outputDir == null) {
+                return;
+            }
+
+            Path statsPath = outputDir.resolve("stats.json");
+            if (!Files.exists(statsPath)) {
+                return;
+            }
+
+            ContainerJobMonitor.RunsolverStats stats = new ContainerJobMonitor.RunsolverStats();
+            try {
+                String json = Files.readString(statsPath);
+                parseStatsJsonInto(json, stats);
+            } catch (Exception e) {
+                log.warn("Could not read stats.json for pair " + pairId, e);
+                return;
+            }
+
+            try {
+                String nodeName = PodmanBackend.CONTAINER_WORKER_NODE;
+                boolean ok = JobPairs.updateRunSolverStats(
+                    pairId,
+                    nodeName,
+                    stats.wallclockTime,
+                    stats.cpuTime,
+                    stats.userTime,
+                    stats.systemTime,
+                    stats.maxVirtualMemory,
+                    stats.maxResidentSetSize,
+                    stageNumber,
+                    stats.diskSize
+                );
+                if (ok) {
+                    log.debug("Persisted run stats for pair " + pairId + ": " + stats);
+                } else {
+                    log.warn("Failed to persist run stats for pair " + pairId);
+                }
+            } catch (Exception e) {
+                log.warn("Exception persisting run stats for pair " + pairId, e);
+            }
+        }
+
+        /**
+         * Parses the subset of stats.json fields needed for run-solver
+         * statistics. Missing or malformed fields gracefully leave the
+         * default zero values in place.
+         */
+        private void parseStatsJsonInto(
+            String json,
+            ContainerJobMonitor.RunsolverStats stats
+        ) {
+            JsonObject obj;
+            try {
+                obj = JsonParser.parseString(json).getAsJsonObject();
+            } catch (Exception e) {
+                log.warn("stats.json is not valid JSON; skipping stats parse", e);
+                return;
+            }
+
+            try { if (obj.has("wallclockTime")) stats.wallclockTime = obj.get("wallclockTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse wallclockTime", e); }
+            try { if (obj.has("cpuTime")) stats.cpuTime = obj.get("cpuTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse cpuTime", e); }
+            try { if (obj.has("userTime")) stats.userTime = obj.get("userTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse userTime", e); }
+            try { if (obj.has("systemTime")) stats.systemTime = obj.get("systemTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse systemTime", e); }
+            try { if (obj.has("maxVirtualMemory")) stats.maxVirtualMemory = obj.get("maxVirtualMemory").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse maxVirtualMemory", e); }
+            try { if (obj.has("maxResidentSetSize")) stats.maxResidentSetSize = obj.get("maxResidentSetSize").getAsLong(); } catch (Exception e) { log.warn("stats.json: could not parse maxResidentSetSize", e); }
+            try { if (obj.has("diskSize")) stats.diskSize = obj.get("diskSize").getAsLong(); } catch (Exception e) { log.warn("stats.json: could not parse diskSize", e); }
+            try { if (obj.has("hostname")) stats.hostname = obj.get("hostname").getAsString(); } catch (Exception e) { log.warn("stats.json: could not parse hostname", e); }
         }
     }
 }

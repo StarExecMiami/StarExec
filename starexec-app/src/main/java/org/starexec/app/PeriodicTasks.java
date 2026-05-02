@@ -670,7 +670,7 @@ class PeriodicTasks {
                 "JOIN job_pairs jp ON j.id = jp.job_id " +
                 "WHERE j.completed IS NULL " +
                 "AND j.created < NOW() - INTERVAL '10 minutes' " +
-                "AND (jp.status_code < 7 OR jp.status_code > 18) " +
+                "AND (jp.status_code IN (1, 2, 4, 19, 20, 22)) " +
                 "GROUP BY j.id, j.name, j.created " +
                 "HAVING COUNT(jp.id) > 0";
 

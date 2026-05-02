@@ -348,20 +348,43 @@ public class PodmanBackend implements Backend {
                                 if (pairId > 0) {
                                     dbUpdateExecutor.submit(() -> {
                                         try {
+											JobPairs.PairStatusLookupResult initialLookup = JobPairs.getPairStatusLookup(
+													pairId
+											);
+											if (initialLookup.isMissing()) {
+												log.debug(
+													"Skipping start event updates for stale pair " + pairId
+												);
+												return;
+											}
+											if (initialLookup.isError()) {
+												log.warn(
+													"Could not determine whether pair " +
+													pairId +
+													" still exists while processing container start event"
+												);
+												return;
+											}
+
                                             int nodeId = resolveContainerWorkerNodeIdWithRetry(5, 1000);
                                             if (nodeId > 0) {
-                                                boolean hostUpdated = JobPairs.updatePairExecutionHost(
-                                                    pairId,
-                                                    nodeId
-                                                );
-                                                if (!hostUpdated) {
-                                                    log.warn(
-                                                        "Failed to update pair execution host for pair " +
-                                                        pairId +
-                                                        " on node " +
-                                                        nodeId
-                                                    );
-                                                }
+												JobPairs.ConditionalPairUpdateResult hostUpdateResult = JobPairs.tryUpdatePairExecutionHost(
+													pairId,
+													nodeId
+												);
+												if (hostUpdateResult == JobPairs.ConditionalPairUpdateResult.STALE) {
+													log.debug(
+														"Skipping execution host update for stale or completed pair " +
+														pairId
+													);
+												} else if (hostUpdateResult == JobPairs.ConditionalPairUpdateResult.ERROR) {
+													log.warn(
+														"Failed to update pair execution host for pair " +
+														pairId +
+														" on node " +
+														nodeId
+													);
+												}
                                             } else {
                                                 log.warn(
                                                     "Could not resolve worker node ID after retries for pair " +
@@ -378,20 +401,41 @@ public class PodmanBackend implements Backend {
                                             // the terminal code, leaving the pair stuck in
                                             // STATUS_RUNNING indefinitely and the job never
                                             // completing.
-                                            int currentStatusCode = JobPairs.getPairStatusCode(pairId);
-                                            if (!Status.StatusCode.toStatusCode(currentStatusCode)
-                                                                   .finishedRunning()) {
+											JobPairs.PairStatusLookupResult beforeRunningLookup = JobPairs.getPairStatusLookup(
+													pairId
+											);
+											if (beforeRunningLookup.isMissing()) {
+												log.debug(
+													"Skipping STATUS_RUNNING update for stale pair " + pairId
+												);
+												return;
+											}
+											if (beforeRunningLookup.isError()) {
+												log.warn(
+													"Could not determine current status for pair " +
+													pairId +
+													" while processing container start event"
+												);
+												return;
+											}
+											int currentStatusCode = beforeRunningLookup.getStatusCode();
+											if (!Status.StatusCode.toStatusCode(currentStatusCode)
+											                       .finishedRunning()) {
                                                 // Mark pair as running so node-level cluster views
                                                 // can show in-flight execution.
-                                                boolean runningUpdated = JobPairs.setPairStatus(
-                                                    pairId,
-                                                    Status.StatusCode.STATUS_RUNNING.getVal()
-                                                );
-                                                if (!runningUpdated) {
-                                                    log.warn(
-                                                        "Failed to set running status for pair " + pairId
-                                                    );
-                                                }
+												JobPairs.ConditionalPairUpdateResult runningUpdateResult = JobPairs.trySetPairRunning(
+													pairId
+												);
+												if (runningUpdateResult == JobPairs.ConditionalPairUpdateResult.STALE) {
+													log.debug(
+														"Skipping STATUS_RUNNING update for stale or completed pair " +
+														pairId
+													);
+												} else if (runningUpdateResult == JobPairs.ConditionalPairUpdateResult.ERROR) {
+													log.warn(
+														"Failed to set running status for pair " + pairId
+													);
+												}
                                             } else {
                                                 log.debug(
                                                     "Skipping STATUS_RUNNING for pair " + pairId +

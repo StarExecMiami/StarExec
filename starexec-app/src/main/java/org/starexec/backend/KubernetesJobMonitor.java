@@ -80,9 +80,9 @@ import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.api.model.batch.v1.JobStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.starexec.logger.StarLogger;
 
@@ -131,7 +131,7 @@ public class KubernetesJobMonitor {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     /** Tracks completion callbacks already emitted to avoid duplicate updates */
-    private final Set<Integer> completedExecIds = new HashSet<>();
+    private final Set<Integer> completedExecIds = ConcurrentHashMap.newKeySet();
     
     /** Monitor thread */
     private Thread monitorThread;
