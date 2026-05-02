@@ -45,6 +45,7 @@ IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
 IMAGE_TAG?=latest
 CHART_DIR=./charts/starexec
 RELEASE_NAME?=starexec
+K8S_NAMESPACE?=starexec
 HELM_VALUES?=values.yaml
 SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
@@ -1326,24 +1327,24 @@ deploy-k8s:
 		exit 1; \
 	fi; \
 	echo "Using values file: $$VALUES_FILE"; \
-	if [ -n "$$TMP_KUBECONFIG" ]; then \
-		KUBECONFIG="$$TMP_KUBECONFIG" helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
-			-f $$VALUES_FILE \
-			--namespace starexec \
-			--create-namespace; \
-	else \
-		helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
-			-f $$VALUES_FILE \
-			--namespace starexec \
-			--create-namespace; \
-	fi; \
-	DEPLOY_EXIT=$$?; \
-	if [ $$DEPLOY_EXIT -ne 0 ]; then \
-		rm -f "$$TMP_KUBECONFIG"; \
-		exit $$DEPLOY_EXIT; \
-	fi; \
-	eval "$$KUBECTL_CMD get pods -n starexec"; \
-	rm -f "$$TMP_KUBECONFIG"
+ 	if [ -n "$$TMP_KUBECONFIG" ]; then \
+ 		KUBECONFIG="$$TMP_KUBECONFIG" helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
+ 			-f $$VALUES_FILE \
+ 			--namespace $(K8S_NAMESPACE) \
+ 			--create-namespace; \
+ 	else \
+ 		helm upgrade --install $(RELEASE_NAME) $(CHART_DIR) \
+ 			-f $$VALUES_FILE \
+ 			--namespace $(K8S_NAMESPACE) \
+ 			--create-namespace; \
+ 	fi; \
+ 	DEPLOY_EXIT=$$?; \
+ 	if [ $$DEPLOY_EXIT -ne 0 ]; then \
+ 		rm -f "$$TMP_KUBECONFIG"; \
+ 		exit $$DEPLOY_EXIT; \
+ 	fi; \
+ 	eval "$$KUBECTL_CMD get pods -n $(K8S_NAMESPACE)"; \
+ 	rm -f "$$TMP_KUBECONFIG"
 	@echo ""
 	@echo "${GREEN}✓ Kubernetes deployment complete!${RESET}"
 
@@ -1355,10 +1356,10 @@ undeploy-k8s:
 			microk8s config > "$$TMP_KUBECONFIG"; \
 		fi; \
 	fi; \
-	if [ -n "$$TMP_KUBECONFIG" ]; then \
-		KUBECONFIG="$$TMP_KUBECONFIG" helm uninstall $(RELEASE_NAME) --namespace starexec || true; \
-	else \
-		helm uninstall $(RELEASE_NAME) --namespace starexec || true; \
+ 	if [ -n "$$TMP_KUBECONFIG" ]; then \
+ 		KUBECONFIG="$$TMP_KUBECONFIG" helm uninstall $(RELEASE_NAME) --namespace $(K8S_NAMESPACE) || true; \
+ 	else \
+ 		helm uninstall $(RELEASE_NAME) --namespace $(K8S_NAMESPACE) || true; \
 	fi; \
 	rm -f "$$TMP_KUBECONFIG"
 
