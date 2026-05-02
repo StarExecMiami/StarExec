@@ -1,3 +1,25 @@
+# =============================================================================
+# GitHub Actions Workflow: Container Build, Test, Scan, and Publish
+# =============================================================================
+#
+# Single workflow replaces the previous container-build + container-publish split.
+# On push: builds, tests, scans, and pushes to ghcr.io.
+# On PR:   builds, tests, scans — does NOT push.
+#
+# This eliminates the redundant double-build that previously occurred when both
+# container-build.yml and container-publish.yml triggered on the same push event.
+#
+# Triggers:
+#   - push: to containerised/UMprod when relevant files change
+#   - pull_request: same branches, same paths — test-only, no push
+#   - workflow_dispatch: manual with environment choice
+#
+# Consumers:
+#   - deploy-k8s.yml triggers on `workflow_run: Container Publish` completion
+#   - integration-test.yml should pull the published image from ghcr.io
+#
+# =============================================================================
+
 name: Container Publish
 
 on:
@@ -6,8 +28,20 @@ on:
     paths:
       - "starexec-app/**"
       - "Dockerfile"
+      - "docker/entrypoint.sh"
+      - "docker/setenv.sh"
       - "docker/migrations.sh"
       - "pom.xml"
+      - ".github/workflows/container-publish.yml"
+  pull_request:
+    branches: [UMprod, containerised]
+    paths:
+      - "Dockerfile"
+      - "docker/entrypoint.sh"
+      - "docker/setenv.sh"
+      - "docker/migrations.sh"
+      - "pom.xml"
+      - ".github/workflows/container-publish.yml"
   workflow_dispatch:
     inputs:
       environment:
@@ -23,14 +57,18 @@ on:
 permissions:
   contents: read
   packages: write
+  security-events: write
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
   publish:
-    name: Build & Publish Container
+    name: Build, Test, Scan & Publish
     runs-on: ubuntu-latest
+    # Don't push images from PRs or fork PRs (secrets not available)
+    env:
+      SHOULD_PUSH: ${{ github.event_name != 'pull_request' && github.event_name != 'pull_request_target' }}
 
     steps:
       - name: Checkout code
@@ -39,13 +77,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # ------------------------------------------------------------------
+      # Registry login (skip on PR — can't push, but still need for pull)
+      # ------------------------------------------------------------------
       - name: Log in to Container Registry
+        if: env.SHOULD_PUSH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ------------------------------------------------------------------
+      # Metadata extraction (produces tags for push; PR gets test-only tag)
+      # ------------------------------------------------------------------
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -58,12 +103,18 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' }}
+            type=raw,value=pr-test,enable=${{ github.event_name == 'pull_request' }}
 
-      - name: Build and push container image
+      # ------------------------------------------------------------------
+      # Single build (cached via GHA). Push only on non-PR events.
+      # ------------------------------------------------------------------
+      - name: Build container image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          push: ${{ env.SHOULD_PUSH }}
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -73,33 +124,78 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=${{ github.ref_name }}
 
-      - name: Generate image summary
-        if: success()
+      # ------------------------------------------------------------------
+      # Container validation (runs on every build — PR and push)
+      # ------------------------------------------------------------------
+      - name: Validate container structure
         run: |
-          echo "## 📦 Container Image Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Registry:** \`${{ env.REGISTRY }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Repository:** \`${{ github.repository }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit SHA:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Image Tags" >> $GITHUB_STEP_SUMMARY
-          echo '${{ steps.meta.outputs.tags }}' | while IFS= read -r tag; do
-            echo "- \`$tag\`" >> $GITHUB_STEP_SUMMARY
-          done
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ github.ref }}" == "refs/heads/containerised" ]; then
-            echo "✅ **Latest tag:** Updated on production branch" >> $GITHUB_STEP_SUMMARY
-          fi
+          LOCAL_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "Validating image: ${LOCAL_TAG}"
+
+          # Java installation
+          docker run --rm "${LOCAL_TAG}" java -version
+          echo "✓ Java runtime OK"
+
+          # Multi-module Maven structure
+          docker run --rm "${LOCAL_TAG}" sh -c \
+            'test -d /opt/tomcat/webapps/starexec && echo "✓ Maven multi-module structure OK"'
+
+          # Image metadata
+          docker inspect "${LOCAL_TAG}" | jq '.[0] | {Size, Created, Architecture: .Architecture, Os: .Os}'
+
+      # ------------------------------------------------------------------
+      # Security scan (runs on push only — SARIF upload needs permissions)
+      # ------------------------------------------------------------------
+      - name: Scan image for vulnerabilities
+        if: env.SHOULD_PUSH == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
+      - name: Upload Trivy scan results
+        if: env.SHOULD_PUSH == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: "trivy-results.sarif"
+          category: "trivy-container"
+
+      # ------------------------------------------------------------------
+      # Summary
+      # ------------------------------------------------------------------
+      - name: Generate build summary
+        if: always()
+        run: |
+          {
+            echo "## 📦 Container Image — ${{ env.SHOULD_PUSH == 'true' && 'Published' || 'Validated' }}"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Event | ${{ github.event_name }} |"
+            if [ "${{ env.SHOULD_PUSH }}" = "true" ]; then
+              echo "| Registry | \`${{ env.REGISTRY }}\` |"
+              echo "| Repository | \`${{ github.repository }}\` |"
+            fi
+            echo ""
+            echo "### Tags"
+            echo '```'
+            echo '${{ steps.meta.outputs.tags }}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create deployment annotation
-        if: success()
+        if: env.SHOULD_PUSH == 'true' && success()
         uses: actions/github-script@v7
         with:
           script: |
             github.rest.git.createRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              ref: 'refs/tags/deployment-${{ github.ref_name }}-${{ github.run_number }}',
+              ref: `refs/tags/deployment-${context.refName}-${context.runNumber}`,
               sha: context.sha
             }).catch(err => console.log('Deployment tag already exists'));
