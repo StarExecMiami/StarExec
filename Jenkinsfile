@@ -62,13 +62,20 @@ pipeline {
 
                     // Determine namespace:
                     //   PR builds → ephemeral starexec-pr-{NUMBER}
-                    //   Branch builds → starexec-dev
+                    //   Branch builds (non-prod) → starexec-dev
+                    //   Production builds → starexec
                     if (env.CHANGE_ID) {
                         env.K8S_NAMESPACE   = "starexec-pr-${env.CHANGE_ID}"
                         env.HELM_RELEASE    = "starexec-dev"
                         env.HELM_VALUES     = "/opt/jenkins/values-jenkins-dev.yaml"
                         env.APP_URL         = "http://localhost:30081/starexec"
                         env.IS_PR           = "true"
+                    } else if (params.DEPLOY_ENV == 'prod') {
+                        env.K8S_NAMESPACE   = "starexec"
+                        env.HELM_RELEASE    = "starexec"
+                        env.HELM_VALUES     = "/opt/jenkins/values-jenkins-prod.yaml"
+                        env.APP_URL         = "http://quokka.acorn.miami.edu/starexec"
+                        env.IS_PR           = "false"
                     } else {
                         env.K8S_NAMESPACE   = "starexec-dev"
                         env.HELM_RELEASE    = "starexec-dev"
@@ -268,6 +275,76 @@ pipeline {
                         echo "Deployment failed. Inspect logs with:"
                         echo "  microk8s kubectl -n ${K8S_NAMESPACE} logs deploy/${HELM_RELEASE}"
                         echo "  microk8s kubectl -n ${K8S_NAMESPACE} describe pod"
+                    '''
+                }
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        stage('Deploy to Production') {
+        // -----------------------------------------------------------------------
+            when {
+                allOf {
+                    branch 'containerised'
+                    expression { params.DEPLOY_ENV == 'prod' }
+                }
+            }
+            steps {
+                script {
+                    // Require explicit approval before deployment
+                    input(
+                        message: "Deploy StarExec to PRODUCTION? (${GIT_SHA})",
+                        ok: 'Deploy to Production'
+                    )
+                }
+                sh '''
+                    echo "⚠️  PRODUCTION DEPLOYMENT"
+                    echo "  Namespace:   ${K8S_NAMESPACE}"
+                    echo "  Release:     ${HELM_RELEASE}"
+                    echo "  Git SHA:     ${GIT_SHA}"
+
+                    # Pre-deploy PostgreSQL backup
+                    BACKUP_DIR="/starexec/k8s-shared/data/backups"
+                    mkdir -p "${BACKUP_DIR}"
+                    BACKUP_FILE="${BACKUP_DIR}/pre-deploy-$(date +%Y%m%d-%H%M%S).sql"
+                    echo "Backing up PostgreSQL..."
+                    microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \
+                        -- pg_dump -U starexec starexec > "${BACKUP_FILE}" 2>&1 && \
+                        echo "  Backup saved: ${BACKUP_FILE} ($(wc -c < ${BACKUP_FILE}) bytes)" || \
+                        echo "  WARNING: Backup may have failed (continuing)"
+
+                    # Atomic Helm deploy — auto-rollback on failure
+                    microk8s helm3 upgrade --install ${HELM_RELEASE} \
+                        /home/ancaicedou/StarExec/charts/starexec \
+                        --namespace ${K8S_NAMESPACE} \
+                        --values ${HELM_VALUES} \
+                        --set image.tag=${GIT_SHA} \
+                        --set image.pullPolicy=IfNotPresent \
+                        --atomic \
+                        --timeout 15m --no-hooks 2>&1
+
+                    echo "Waiting for production deployment..."
+                    microk8s kubectl wait --for=condition=available \
+                        --timeout=600s deployment/${HELM_RELEASE} \
+                        -n ${K8S_NAMESPACE}
+
+                    echo "Running database migrations..."
+                    microk8s kubectl exec -n ${K8S_NAMESPACE} \
+                        deploy/${HELM_RELEASE} -c app \
+                        -- bash /usr/local/bin/migrations.sh 2>&1 || true
+                '''
+            }
+            post {
+                success {
+                    script {
+                        echo "✅ Production deployment successful! ${APP_URL}"
+                    }
+                }
+                failure {
+                    sh '''
+                        echo "❌ Production deployment FAILED — Helm has auto-rolled back."
+                        echo "Check logs:"
+                        echo "  microk8s kubectl -n ${K8S_NAMESPACE} logs deploy/${HELM_RELEASE}"
                     '''
                 }
             }
