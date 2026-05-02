@@ -478,12 +478,31 @@ public abstract class JobManager {
 							// if the solver or benchmark is null, they were deleted. Indicate that the
 							// pair's
 							// submission failed and move on
-							JobPairs.UpdateStatus(pair.getId(), Status.StatusCode.ERROR_SUBMIT_FAIL.getVal());
+							setStatusForExistingPair(
+									pair.getId(),
+									Status.StatusCode.ERROR_SUBMIT_FAIL.getVal(),
+									"missing solver or benchmark"
+							);
 							continue;
 						}
-						monitor.changeLoad(s.job.getUserId(), s.job.getWallclockTimeout());
-						i++;
-						log.trace("About to submit pair " + pair.getId());
+
+						JobPairs.ConditionalPairUpdateResult claimResult = JobPairs.tryMarkPendingPairEnqueued(
+								pair.getId());
+						if (claimResult == JobPairs.ConditionalPairUpdateResult.STALE) {
+							log.debug("Skipping stale pair " + pair.getId() + " during submission");
+							continue;
+						}
+						if (claimResult == JobPairs.ConditionalPairUpdateResult.ERROR) {
+							log.error("submitJobs", "Failed to claim pending pair " + pair.getId() + " for submission");
+							setStatusForExistingPair(
+									pair.getId(),
+									StatusCode.ERROR_SUBMIT_FAIL.getVal(),
+									"pair claim failure"
+							);
+							continue;
+						}
+
+						log.trace("Claimed pair " + pair.getId() + " for submission");
 						// Check if the benchmark for this pair has any broken dependencies.
 						int benchId = pair.getBench().getId();
 						log.debug("Bench id for pair about to be submitted is: " + benchId);
@@ -494,8 +513,11 @@ public abstract class JobManager {
 								log.debug("Found " + brokenDependencies.size() + " missing dependencies.");
 								if (!brokenDependencies.isEmpty()) {
 									log.debug("Skipping pair with broken bench dependency...");
-									JobPairs.setStatusForPairAndStages(pair
-											.getId(), StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal());
+									setStatusForExistingPair(
+											pair.getId(),
+											StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
+											"broken dependency"
+									);
 									continue;
 								}
 							} else {
@@ -507,6 +529,10 @@ public abstract class JobManager {
 							// get a
 							// submit_failed status.
 						}
+
+						monitor.changeLoad(s.job.getUserId(), s.job.getWallclockTimeout());
+						i++;
+						log.trace("About to submit pair " + pair.getId());
 
 						try {
 							// Write the script that will run this individual pair
@@ -521,10 +547,6 @@ public abstract class JobManager {
 								log.debug("Deleting old log file for " + pair.getId());
 								file.delete();
 							}
-
-							log.trace("About to set the pair and stage status...");
-							// do this first, before we submit to grid engine, to avoid race conditions
-							JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.STATUS_ENQUEUED.getVal());
 							// Submit to the grid engine
 
 							log.trace("About to submit pair " + pair.getId());
@@ -534,17 +556,50 @@ public abstract class JobManager {
 							log.trace("Just submitted pair " + pair.getId());
 
 							if (R.BACKEND.isError(execId)) {
-								JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.ERROR_SGE_REJECT.getVal());
+								setStatusForExistingPair(
+										pair.getId(),
+										StatusCode.ERROR_SGE_REJECT.getVal(),
+										"backend rejection"
+								);
+								queueSize++;
 							} else {
-								JobPairs.updateBackendExecId(pair.getId(), execId);
+								JobPairs.ConditionalPairUpdateResult execUpdateResult = JobPairs.tryUpdateBackendExecId(
+										pair.getId(), execId);
+								if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+									queueSize++;
+								} else if (execUpdateResult == JobPairs.ConditionalPairUpdateResult.STALE) {
+									cleanupSubmittedBackendWork(
+											pair.getId(),
+											execId,
+											"the pair is no longer submit-eligible after backend submission"
+									);
+								} else {
+									cleanupSubmittedBackendWork(
+											pair.getId(),
+											execId,
+											"persisting the backend execution id failed"
+									);
+									setStatusForExistingPair(
+											pair.getId(),
+											StatusCode.ERROR_SUBMIT_FAIL.getVal(),
+											"backend execution id persistence failure"
+									);
+								}
 							}
-							queueSize++;
 						} catch (BenchmarkDependencyMissingException e) {
 							log.error("submitJobs", "ERROR_BENCHMARK for pair: " + pair.getId(), e);
-							JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.ERROR_BENCHMARK.getVal());
+							setStatusForExistingPair(
+									pair.getId(),
+									StatusCode.ERROR_BENCHMARK.getVal(),
+									"benchmark missing"
+							);
 						} catch (Exception e) {
 							log.error("submitJobs", "ERROR_SUBMIT_FAIL for pair: " + pair.getId(), e);
-							JobPairs.setStatusForPairAndStages(pair.getId(), StatusCode.ERROR_SUBMIT_FAIL.getVal());
+							setStatusForExistingPair(
+									pair.getId(),
+									StatusCode.ERROR_SUBMIT_FAIL.getVal(),
+									"submit failure"
+							);
 						}
 					}
 				} // end iterating once through the schedule
@@ -557,6 +612,44 @@ public abstract class JobManager {
 		}
 
 	} // end submitJobs()
+
+	private static void cleanupSubmittedBackendWork(int pairId, int execId, String reason) {
+		log.warn(
+				"Cleaning up backend work for pair " +
+				pairId +
+				" with execId " +
+				execId +
+				" because " +
+				reason);
+		try {
+			R.BACKEND.killPair(execId);
+		} catch (Exception killException) {
+			log.warn("Failed to kill backend work for pair " + pairId, killException);
+		}
+		try {
+			R.BACKEND.clearPairTracking(pairId);
+		} catch (Exception clearException) {
+			log.warn("Failed to clear backend tracking for pair " + pairId, clearException);
+		}
+	}
+
+	private static void setStatusForExistingPair(int pairId, int statusCode, String context) {
+		JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
+		if (lookup.isMissing()) {
+			log.debug("Skipping " + context + " status update for stale pair " + pairId);
+			return;
+		}
+		if (lookup.isError()) {
+			log.warn(
+					"Could not determine whether pair " +
+					pairId +
+					" still exists during " +
+					context +
+					"; leaving status unchanged");
+			return;
+		}
+		JobPairs.setStatusForPairAndStages(pairId, statusCode);
+	}
 
 	protected static String base64encode(String s) {
 		return new String(Base64.encodeBase64(s.getBytes()));
@@ -732,7 +825,7 @@ public abstract class JobManager {
 			stageCpuTimeouts.add(attrs.getCpuTimeout());
 			benchSuffixes.add(attrs.getBenchSuffix());
 			stageWallclockTimeouts.add(attrs.getWallclockTimeout());
-			stageMemLimits.add(attrs.getMaxMemory());
+			stageMemLimits.add(Util.bytesToMegabytes(attrs.getMaxMemory()));
 			solverIds.add(stage.getSolver().getId());
 			solverNames.add(stage.getSolver().getName());
 			configNames.add(stage.getConfiguration().getName());
