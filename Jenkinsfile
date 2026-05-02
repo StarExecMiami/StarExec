@@ -30,11 +30,6 @@ pipeline {
             defaultValue: '',
             description: 'Email address for build notifications (optional, defaults to dev team email)'
         )
-        string(
-            name: 'PODMAN_CGROUP_MANAGER',
-            defaultValue: 'cgroupfs',
-            description: 'Cgroup manager to use for Podman (cgroupfs or systemd)'
-        )
         booleanParam(
             name: 'SKIP_TESTS',
             defaultValue: false,
@@ -44,21 +39,61 @@ pipeline {
 
     // ---------------------------------------------------------------------------
     // Environment variables available to every stage.
-    // Secrets that are only required in production are loaded with withCredentials
-    // inside the relevant stages so that the pipeline does not fail on dev/ci
-    // builds where those credential IDs may not exist.
     // ---------------------------------------------------------------------------
     environment {
         TAG_SUFFIX      = "${params.IMAGE_TAG_SUFFIX?.trim() ?: env.BUILD_NUMBER}"
         IMAGE_TAG       = "${params.DEPLOY_ENV}-${TAG_SUFFIX}"
         DEPLOY_ENV      = "${params.DEPLOY_ENV}"
-        IS_PROD         = "${params.DEPLOY_ENV == 'prod'}"
         NOTIFICATION_EMAIL = "${params.NOTIFICATION_EMAIL?.trim() ?: 'dev-team@example.com'}"
-        PODMAN_CGROUP_MANAGER = "${params.PODMAN_CGROUP_MANAGER}"
-
-        // The DB password credential is required in every environment.
-        STAREXEC_DB_PASSWORD = credentials('starExec-db-password')
+        GIT_SHA         = ""
     }
+
+    // ---------------------------------------------------------------------------
+    // Stages
+    // ---------------------------------------------------------------------------
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.GIT_SHA = GIT_SHA
+
+                    // Determine namespace:
+                    //   PR builds → ephemeral starexec-pr-{NUMBER}
+                    //   Branch builds → starexec-dev
+                    if (env.CHANGE_ID) {
+                        env.K8S_NAMESPACE   = "starexec-pr-${env.CHANGE_ID}"
+                        env.HELM_RELEASE    = "starexec-dev"
+                        env.HELM_VALUES     = "/opt/jenkins/values-jenkins-dev.yaml"
+                        env.APP_URL         = "http://localhost:30081/starexec"
+                        env.IS_PR           = "true"
+                    } else {
+                        env.K8S_NAMESPACE   = "starexec-dev"
+                        env.HELM_RELEASE    = "starexec-dev"
+                        env.HELM_VALUES     = "/opt/jenkins/values-jenkins-dev.yaml"
+                        env.APP_URL         = "http://localhost:30081/starexec"
+                        env.IS_PR           = "false"
+                    }
+
+                    echo "Build context:"
+                    echo "  GIT_SHA:       ${GIT_SHA}"
+                    echo "  Namespace:     ${K8S_NAMESPACE}"
+                    echo "  Is PR:         ${IS_PR}"
+                    echo "  Image tag:     ${IMAGE_TAG}"
+                }
+                sh """
+                    echo "=== Build info ==================================="
+                    echo "  Job        : ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                    echo "  Git SHA    : ${GIT_SHA}"
+                    echo "  Namespace  : ${K8S_NAMESPACE}"
+                    echo "  Environment: ${DEPLOY_ENV}"
+                    echo "  Agent      : \$(hostname)"
+                    echo "================================================="
+                """
+            }
+        }
 
     // ---------------------------------------------------------------------------
     // Stages
@@ -83,8 +118,15 @@ pipeline {
         stage('Build Image') {
         // -----------------------------------------------------------------------
             steps {
-                sh 'make build'
-                sh 'podman images | grep starexec || { echo "ERROR: starexec image not found after build"; exit 1; }'
+                script {
+                    GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.GIT_SHA = GIT_SHA
+                    echo "Building image with tag: ${GIT_SHA}"
+                }
+                sh """
+                    make build IMAGE_TAG=${GIT_SHA}
+                    podman images | grep "${GIT_SHA}" || { echo "ERROR: image not found"; exit 1; }
+                """
             }
         }
 
@@ -170,106 +212,111 @@ pipeline {
         }
 
         // -----------------------------------------------------------------------
-        stage('Deploy') {
+        stage('Deploy to Kubernetes') {
         // -----------------------------------------------------------------------
             when {
-                // Only deploy from the main branch to prevent accidental promotions.
                 branch 'containerised'
             }
             steps {
-                // Production deployments additionally need the full set of secrets.
                 script {
-                    if (params.DEPLOY_ENV == 'prod') {
-                        withCredentials([
-                            string(credentialsId: 'starExec-db-user',                   variable: 'STAREXEC_DB_USER'),
-                            string(credentialsId: 'starExec-db-host',                   variable: 'STAREXEC_DB_HOST'),
-                            string(credentialsId: 'starExec-db-port',                   variable: 'STAREXEC_DB_PORT'),
-                            string(credentialsId: 'starExec-db-name',                   variable: 'STAREXEC_DB_NAME'),
-                            string(credentialsId: 'starExec-web-address',               variable: 'STAREXEC_WEB_ADDRESS'),
-                            string(credentialsId: 'starExec-proxy-address',             variable: 'STAREXEC_PROXY_ADDRESS'),
-                            string(credentialsId: 'starExec-proxy-port',                variable: 'STAREXEC_PROXY_PORT'),
-                            string(credentialsId: 'starExec-email-smtp',                variable: 'STAREXEC_EMAIL_SMTP'),
-                            string(credentialsId: 'starExec-email-port',                variable: 'STAREXEC_EMAIL_PORT'),
-                            string(credentialsId: 'starExec-email-user',                variable: 'STAREXEC_EMAIL_USER'),
-                            string(credentialsId: 'starExec-email-password',            variable: 'STAREXEC_EMAIL_PASSWORD'),
-                            string(credentialsId: 'starExec-container-host-data-path',  variable: 'STAREXEC_CONTAINER_HOST_DATA_PATH'),
-                        ]) {
-                            sh '''
-                                make deploy-podman \
-                                    ENV="${DEPLOY_ENV}" \
-                                    IMAGE_TAG="${IMAGE_TAG}" \
-                                    FORCE=1
-                            '''
-                        }
-                    } else {
-                        sh '''
-                            make deploy-podman \
-                                ENV="${DEPLOY_ENV}" \
-                                IMAGE_TAG="${IMAGE_TAG}" \
-                                FORCE=1
-                        '''
-                    }
+                    sh '''
+                        echo "Deploying StarExec to Kubernetes..."
+                        echo "  Namespace:   ${K8S_NAMESPACE}"
+                        echo "  Release:     ${HELM_RELEASE}"
+                        echo "  Environment: ${DEPLOY_ENV}"
+
+                        # Ensure namespace and DB secret exist
+                        microk8s kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | microk8s kubectl apply -f -
+
+                        microk8s kubectl create secret generic starexec-postgres-credentials \
+                            --namespace ${K8S_NAMESPACE} \
+                            --from-literal=user=starexec \
+                            --from-literal=password=starexec_dev_password \
+                            --from-literal=database=starexec \
+                            --from-literal=rootPassword=starexec_dev_root_password \
+                            --dry-run=client -o yaml | microk8s kubectl apply -f -
+
+                        # Helm deploy with pinned image tag
+                        microk8s helm3 upgrade --install ${HELM_RELEASE} \
+                            /home/ancaicedou/StarExec/charts/starexec \
+                            --namespace ${K8S_NAMESPACE} \
+                            --values ${HELM_VALUES} \
+                            --set image.tag=${GIT_SHA} \
+                            --set image.pullPolicy=IfNotPresent \
+                            --timeout 10m --no-hooks 2>&1
+
+                        echo "Waiting for deployment to become available..."
+                        microk8s kubectl wait --for=condition=available \
+                            --timeout=600s deployment/${HELM_RELEASE} \
+                            -n ${K8S_NAMESPACE} || true
+
+                        echo "Running database migrations..."
+                        microk8s kubectl exec -n ${K8S_NAMESPACE} \
+                            deploy/${HELM_RELEASE} -c app \
+                            -- bash /usr/local/bin/migrations.sh 2>&1 || true
+                    '''
                 }
             }
             post {
                 success {
                     script {
-                        def url = (params.DEPLOY_ENV == 'prod')
-                            ? "http://\${STAREXEC_WEB_ADDRESS}:\${STAREXEC_PROXY_PORT:-80}/starexec"
-                            : 'http://localhost:7827/starexec'
-                        echo "Deployment successful! Application available at: ${url}"
+                        echo "Deployment successful! Application available at: ${APP_URL}"
                     }
                 }
                 failure {
-                    sh 'echo "Deployment failed. Inspect logs with: make logs-app"'
+                    sh '''
+                        echo "Deployment failed. Inspect logs with:"
+                        echo "  microk8s kubectl -n ${K8S_NAMESPACE} logs deploy/${HELM_RELEASE}"
+                        echo "  microk8s kubectl -n ${K8S_NAMESPACE} describe pod"
+                    '''
                 }
             }
-	    }
+        }
 
         stage('Verify Deployment') {
-    		when { branch 'containerised' }
-    		steps {
-        		sh 'make test-deps'
-    		}
+            when { branch 'containerised' }
+            steps {
+                sh '''
+                    echo "=== Cluster nodes ==="
+                    microk8s kubectl get nodes
+                    echo ""
+                    echo "=== Pods ==="
+                    microk8s kubectl -n ${K8S_NAMESPACE} get pods -o wide
+                    echo ""
+                    echo "=== Service ==="
+                    microk8s kubectl -n ${K8S_NAMESPACE} get svc
+                '''
+            }
         }
 
         // -----------------------------------------------------------------------
         stage('Smoke Test') {
         // -----------------------------------------------------------------------
-            when {
-                allOf {
-                    branch 'containerised'
-                    expression { params.DEPLOY_ENV == 'prod' }
-                }
-            }
+            when { branch 'containerised' }
             steps {
-                withCredentials([
-                    string(credentialsId: 'starExec-web-address', variable: 'STAREXEC_WEB_ADDRESS'),
-                    string(credentialsId: 'starExec-proxy-port',  variable: 'STAREXEC_PROXY_PORT'),
-                ]) {
-                    sh '''
-                        echo "Waiting for application to become ready..."
-                        sleep 30
+                sh '''
+                    echo "Waiting for application to become ready..."
+                    sleep 15
 
-                        HEALTH_URL="http://${STAREXEC_WEB_ADDRESS}:${STAREXEC_PROXY_PORT:-80}/starexec/login"
-                        echo "Probing: ${HEALTH_URL}"
+                    HEALTH_URL="${APP_URL}/login"
+                    echo "Probing: ${HEALTH_URL}"
 
-                        STATUS_CODE=$(curl --silent --output /dev/null \
-                                          --write-out "%{http_code}" \
-                                          --max-time 10 \
-                                          "${HEALTH_URL}" || echo "000")
+                    STATUS_CODE=$(curl --silent --output /dev/null \
+                                      --write-out "%{http_code}" \
+                                      --max-time 30 \
+                                      "${HEALTH_URL}" || echo "000")
 
-                        echo "HTTP status: ${STATUS_CODE}"
+                    echo "HTTP status: ${STATUS_CODE}"
 
-                        if [ "${STATUS_CODE}" -ne 200 ]; then
-                            echo "ERROR: Smoke test failed (expected 200, got ${STATUS_CODE})"
-                            echo "Inspect application logs with: make logs-app"
-                            exit 1
-                        fi
+                    if [ "${STATUS_CODE}" -ne 200 ]; then
+                        echo "ERROR: Smoke test failed (expected 200, got ${STATUS_CODE})"
+                        echo "=== Pod logs ==="
+                        microk8s kubectl -n ${K8S_NAMESPACE} logs deploy/${HELM_RELEASE} --tail=50 || true
+                        exit 1
+                    fi
 
-                        echo "Smoke test passed."
-                    '''
-                }
+                    echo "Smoke test passed."
+                '''
             }
         }
 
@@ -280,18 +327,20 @@ pipeline {
     // ---------------------------------------------------------------------------
     post {
         always {
-            // Uncomment when build artefacts are produced:
-            // archiveArtifacts artifacts: '**/target/*.xml', allowEmptyArchive: true, fingerprint: true
-            sh 'podman image prune --force || true'
+            script {
+                if (env.IS_PR == 'true') {
+                    echo "PR ephemeral namespace: ${K8S_NAMESPACE}"
+                    echo "To clean up manually:"
+                    echo "  microk8s helm3 uninstall ${HELM_RELEASE} -n ${K8S_NAMESPACE}"
+                    echo "  microk8s kubectl delete ns ${K8S_NAMESPACE}"
+                }
+            }
             echo "Pipeline finished — status: ${currentBuild.currentResult}"
         }
 
         success {
             script {
                 def recipient = env.NOTIFICATION_EMAIL ?: 'dev-team@example.com'
-                def appUrl = (params.DEPLOY_ENV == 'prod')
-                    ? "http://\${STAREXEC_WEB_ADDRESS}:\${STAREXEC_PROXY_PORT:-80}/starexec"
-                    : 'http://localhost:7827/starexec'
 
                 mail(
                     to:      recipient,
@@ -306,7 +355,7 @@ Pipeline completed successfully.
   Duration    : ${currentBuild.durationString}
   Agent       : ${env.NODE_NAME}
 
-Application URL: ${appUrl}
+Application URL: ${APP_URL}
 
 Build log: ${env.BUILD_URL}
 """.stripIndent()
