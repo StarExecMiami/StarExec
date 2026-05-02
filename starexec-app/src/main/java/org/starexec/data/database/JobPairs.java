@@ -2613,6 +2613,300 @@ public class JobPairs {
         return false;
     }
 
+    public enum PairStatusLookupState {
+        FOUND,
+        MISSING,
+        ERROR,
+    }
+
+    public static final class PairStatusLookupResult {
+        private final PairStatusLookupState state;
+        private final int statusCode;
+
+        private PairStatusLookupResult(
+            PairStatusLookupState state,
+            int statusCode
+        ) {
+            this.state = state;
+            this.statusCode = statusCode;
+        }
+
+        public PairStatusLookupState getState() {
+            return state;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+
+        public boolean isFound() {
+            return state == PairStatusLookupState.FOUND;
+        }
+
+        public boolean isMissing() {
+            return state == PairStatusLookupState.MISSING;
+        }
+
+        public boolean isError() {
+            return state == PairStatusLookupState.ERROR;
+        }
+    }
+
+    public enum ConditionalPairUpdateResult {
+        UPDATED,
+        STALE,
+        ERROR,
+    }
+
+    /**
+     * Conditionally claims a pending pair for submission by transitioning both the
+     * pair and its stages to STATUS_ENQUEUED only if the row still exists and the
+     * parent job is still submit-eligible.
+     *
+     * <p>This is used by {@code JobManager.submitJobs()} to prevent stale schedule
+     * snapshots from launching backend work for pairs that were paused, killed,
+     * deleted, or otherwise changed after the schedule was built.</p>
+     *
+     * @param pairId The pair to claim for submission
+     * @return UPDATED if the pair was claimed, STALE if it no longer exists or is
+     *         no longer pending/eligible, ERROR if the database operation failed
+     */
+    public static ConditionalPairUpdateResult tryMarkPendingPairEnqueued(
+        int pairId
+    ) {
+        Connection con = null;
+        PreparedStatement pairPs = null;
+        PreparedStatement stagePs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            pairPs = con.prepareStatement(
+                "UPDATE starexec.job_pairs jp " +
+                "SET status_code = ?, queuesub_time = NOW() " +
+                "WHERE jp.id = ? AND jp.status_code = ? " +
+                "AND EXISTS (" +
+                "    SELECT 1 FROM starexec.jobs j " +
+                "    WHERE j.id = jp.job_id " +
+                "    AND j.paused = FALSE " +
+                "    AND j.killed = FALSE " +
+                "    AND j.deleted = FALSE" +
+                ")"
+            );
+            pairPs.setInt(1, StatusCode.STATUS_ENQUEUED.getVal());
+            pairPs.setInt(2, pairId);
+            pairPs.setInt(3, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+
+            if (pairPs.executeUpdate() == 0) {
+                Common.doRollback(con);
+                return ConditionalPairUpdateResult.STALE;
+            }
+
+            stagePs = con.prepareStatement(
+                "UPDATE starexec.jobpair_stage_data " +
+                "SET status_code = ? " +
+                "WHERE jobpair_id = ?"
+            );
+            stagePs.setInt(1, StatusCode.STATUS_ENQUEUED.getVal());
+            stagePs.setInt(2, pairId);
+            stagePs.executeUpdate();
+
+            Common.endTransaction(con);
+            return ConditionalPairUpdateResult.UPDATED;
+        } catch (Exception e) {
+            log.error("tryMarkPendingPairEnqueued pairId=" + pairId, e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(stagePs);
+            Common.safeClose(pairPs);
+            Common.safeClose(con);
+        }
+
+        return ConditionalPairUpdateResult.ERROR;
+    }
+
+    /**
+     * Updates a job pair's backend execution id without raising or logging a
+     * "pair not found" error when the row has already disappeared.
+     *
+     * <p>This is used immediately after backend submission so callers can tear down
+     * orphaned backend work if the pair row was deleted between launch and the DB
+     * write.</p>
+     *
+     * @param pairId The pair to update
+     * @param execId The backend execution id
+     * @return UPDATED if the row was updated, STALE if the pair is no longer in
+     *         a submit-eligible state, ERROR if the database operation failed
+     */
+    public static ConditionalPairUpdateResult tryUpdateBackendExecId(
+        int pairId,
+        int execId
+    ) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "UPDATE starexec.job_pairs jp " +
+                "SET sge_id = ? " +
+                "WHERE jp.id = ? " +
+                "AND jp.status_code <> ? " +
+                "AND jp.status_code <> ? " +
+                "AND EXISTS (" +
+                "    SELECT 1 FROM starexec.jobs j " +
+                "    WHERE j.id = jp.job_id " +
+                "    AND j.paused = FALSE " +
+                "    AND j.killed = FALSE " +
+                "    AND j.deleted = FALSE" +
+                ")"
+            );
+            ps.setInt(1, execId);
+            ps.setInt(2, pairId);
+            ps.setInt(3, StatusCode.STATUS_PAUSED.getVal());
+            ps.setInt(4, StatusCode.STATUS_KILLED.getVal());
+            return ps.executeUpdate() > 0
+                ? ConditionalPairUpdateResult.UPDATED
+                : ConditionalPairUpdateResult.STALE;
+        } catch (Exception e) {
+            log.error("tryUpdateBackendExecId pairId=" + pairId + ", execId=" + execId, e);
+        } finally {
+            Common.safeClose(con);
+            Common.safeClose(ps);
+        }
+
+        return ConditionalPairUpdateResult.ERROR;
+    }
+
+    /**
+     * Returns the current status code for a given job pair while distinguishing a
+     * missing row from a database error.
+     *
+     * @param pairId the id of the pair to query
+     * @return a structured lookup result containing the row state and, when found,
+     *         the current status code
+     */
+    public static PairStatusLookupResult getPairStatusLookup(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet results = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT status_code FROM job_pairs WHERE id = ?"
+            );
+            ps.setInt(1, pairId);
+            results = ps.executeQuery();
+            if (results.next()) {
+                return new PairStatusLookupResult(
+                    PairStatusLookupState.FOUND,
+                    results.getInt("status_code")
+                );
+            }
+            return new PairStatusLookupResult(
+                PairStatusLookupState.MISSING,
+                StatusCode.STATUS_UNKNOWN.getVal()
+            );
+        } catch (Exception e) {
+            log.error("getPairStatusLookup pairId=" + pairId, e);
+        } finally {
+            Common.safeClose(results);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return new PairStatusLookupResult(
+            PairStatusLookupState.ERROR,
+            StatusCode.STATUS_UNKNOWN.getVal()
+        );
+    }
+
+    /**
+     * Updates a job pair's node assignment only while the pair is still actively
+     * running or waiting to run.
+     *
+     * @param pairId The pair to update
+     * @param nodeId The execution node id
+     * @return UPDATED if the row was updated, STALE if the pair no longer exists or
+     *         is no longer active, ERROR if the database operation failed
+     */
+    public static ConditionalPairUpdateResult tryUpdatePairExecutionHost(
+        int pairId,
+        int nodeId
+    ) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "UPDATE starexec.job_pairs jp " +
+                "SET node_id = ? " +
+                "WHERE jp.id = ? " +
+                "AND jp.status_code < ? " +
+                "AND EXISTS (" +
+                "    SELECT 1 FROM starexec.jobs j " +
+                "    WHERE j.id = jp.job_id " +
+                "    AND j.paused = FALSE " +
+                "    AND j.killed = FALSE " +
+                "    AND j.deleted = FALSE" +
+                ")"
+            );
+            ps.setInt(1, nodeId);
+            ps.setInt(2, pairId);
+            ps.setInt(3, StatusCode.STATUS_COMPLETE.getVal());
+            return ps.executeUpdate() > 0
+                ? ConditionalPairUpdateResult.UPDATED
+                : ConditionalPairUpdateResult.STALE;
+        } catch (Exception e) {
+            log.error(
+                "tryUpdatePairExecutionHost pairId=" + pairId + ", nodeId=" + nodeId,
+                e
+            );
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return ConditionalPairUpdateResult.ERROR;
+    }
+
+    /**
+     * Marks a pair as STATUS_RUNNING only if it is still an active pair.
+     *
+     * @param pairId The pair to update
+     * @return UPDATED if the row was updated, STALE if the pair no longer exists or
+     *         is no longer active, ERROR if the database operation failed
+     */
+    public static ConditionalPairUpdateResult trySetPairRunning(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "UPDATE starexec.job_pairs jp " +
+                "SET status_code = ? " +
+                "WHERE jp.id = ? " +
+                "AND jp.status_code < ? " +
+                "AND EXISTS (" +
+                "    SELECT 1 FROM starexec.jobs j " +
+                "    WHERE j.id = jp.job_id " +
+                "    AND j.paused = FALSE " +
+                "    AND j.killed = FALSE " +
+                "    AND j.deleted = FALSE" +
+                ")"
+            );
+            ps.setInt(1, StatusCode.STATUS_RUNNING.getVal());
+            ps.setInt(2, pairId);
+            ps.setInt(3, StatusCode.STATUS_COMPLETE.getVal());
+            return ps.executeUpdate() > 0
+                ? ConditionalPairUpdateResult.UPDATED
+                : ConditionalPairUpdateResult.STALE;
+        } catch (Exception e) {
+            log.error("trySetPairRunning pairId=" + pairId, e);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return ConditionalPairUpdateResult.ERROR;
+    }
+
     /**
      * Updates job pair run solver statistics (CPU time, wallclock, memory, etc.)
      *
@@ -3485,27 +3779,7 @@ public class JobPairs {
      * @return the current {@code status_code} column value, or 0 on error
      */
     public static int getPairStatusCode(int pairId) {
-        Connection con = null;
-        PreparedStatement ps = null;
-        ResultSet results = null;
-        try {
-            con = Common.getConnection();
-            ps = con.prepareStatement(
-                "SELECT status_code FROM job_pairs WHERE id = ?"
-            );
-            ps.setInt(1, pairId);
-            results = ps.executeQuery();
-            if (results.next()) {
-                return results.getInt("status_code");
-            }
-        } catch (Exception e) {
-            log.error("getPairStatusCode pairId=" + pairId, e);
-        } finally {
-            Common.safeClose(results);
-            Common.safeClose(ps);
-            Common.safeClose(con);
-        }
-        return StatusCode.STATUS_UNKNOWN.getVal();
+        return getPairStatusLookup(pairId).getStatusCode();
     }
 
     private static boolean isTerminalStatusCode(int statusCode) {
