@@ -151,7 +151,7 @@ public class KubernetesNativeBackend implements Backend {
     private static final String WORKER_LABEL = LABEL_PREFIX + "worker";
 
     /** Default queue name for nodes without queue label */
-    private static final String DEFAULT_QUEUE_NAME = "kubernetes.q";
+    private static final String DEFAULT_QUEUE_NAME = "default";
 
     // =========================================================================
     // Runtime State
