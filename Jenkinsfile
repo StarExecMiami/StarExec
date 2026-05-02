@@ -470,3 +470,4 @@ Build log: ${env.BUILD_URL}consoleFull
         }
     }
 }
+}
