@@ -958,11 +958,6 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public void deleteQueue(String queueName) {
-        if (DEFAULT_QUEUE_NAME.equals(queueName)) {
-            log.warn("Cannot delete default queue");
-            return;
-        }
-
         log.info("Deleting queue label from nodes for queue: " + queueName);
 
         try {
