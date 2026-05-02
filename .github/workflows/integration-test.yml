@@ -95,43 +95,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Set up JDK 17 for WAR build
-        uses: actions/setup-java@v4
+      - name: Build Docker image (uses GHA cache from Container Publish workflow)
+        uses: docker/build-push-action@v5
         with:
-          java-version: "17"
-          distribution: "temurin"
-          cache: "maven"
-
-      - name: Build WAR artifact
-        run: |
-          cd starexec-app
-          mvn clean package -DskipTests -B -q
-          echo "✓ WAR artifact built successfully"
-
-      - name: Build Docker image locally
-        run: |
-          echo "Building Docker image from Dockerfile..."
-          docker build \
-            --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
-            --build-arg VCS_REF=${{ github.sha }} \
-            --build-arg VERSION=${{ github.sha }} \
-            -t ghcr.io/starexecmiami/starexec:latest \
-            -t ghcr.io/starexecmiami/starexec:ci-test-latest \
-            -t ghcr.io/starexecmiami/starexec:${{ github.sha }} \
-            .
-          echo "✓ Docker image built successfully"
-          docker images | grep starexec
+          context: .
+          push: false
+          load: true
+          tags: |
+            ghcr.io/starexecmiami/starexec:ci-test-latest
+            ghcr.io/starexecmiami/starexec:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.sha }}
 
       - name: Verify Docker image availability
         run: |
           echo "Verifying Docker image is available locally..."
-          docker image inspect ghcr.io/starexecmiami/starexec:latest > /dev/null 2>&1 && \
-            echo "✓ Image ghcr.io/starexecmiami/starexec:latest found" || \
-            { echo "✗ Image not found"; exit 1; }
           docker image inspect ghcr.io/starexecmiami/starexec:ci-test-latest > /dev/null 2>&1 && \
-            echo "✓ Image ghcr.io/starexecmiami/starexec:ci-test-latest found" || \
-            { echo "✗ Image not found"; exit 1; }
-          echo "All images verified successfully"
+            echo "✓ Image ci-test-latest found" || \
+            { echo "✗ Image not found"; docker images | grep starexec; exit 1; }
+          echo "Verification passed"
 
       - name: Start PostgreSQL service
         env:
