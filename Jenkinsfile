@@ -11,9 +11,6 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    // ---------------------------------------------------------------------------
-    // Triggers: poll GitHub every 5 min (no webhook needed — works behind firewall)
-    // ---------------------------------------------------------------------------
     triggers {
         pollSCM('H/5 * * * *')
     }
@@ -69,8 +66,7 @@ pipeline {
 
                     // Determine namespace:
                     //   PR builds → ephemeral starexec-pr-{NUMBER}
-                    //   Branch builds (non-prod) → starexec-dev
-                    //   Production builds → starexec
+                    //   Branch builds → starexec-dev
                     if (env.CHANGE_ID) {
                         env.K8S_NAMESPACE   = "starexec-pr-${env.CHANGE_ID}"
                         env.HELM_RELEASE    = "starexec-dev"
@@ -297,63 +293,31 @@ pipeline {
                 }
             }
             steps {
-                script {
-                    // Require explicit approval before deployment
-                    input(
-                        message: "Deploy StarExec to PRODUCTION? (${GIT_SHA})",
-                        ok: 'Deploy to Production'
-                    )
-                }
+                input message: "Deploy StarExec to PRODUCTION? (${GIT_SHA})", ok: 'Deploy'
                 sh '''
-                    echo "⚠️  PRODUCTION DEPLOYMENT"
-                    echo "  Namespace:   ${K8S_NAMESPACE}"
-                    echo "  Release:     ${HELM_RELEASE}"
-                    echo "  Git SHA:     ${GIT_SHA}"
-
-                    # Pre-deploy PostgreSQL backup
+                    echo "PRODUCTION DEPLOYMENT — ${GIT_SHA}"
                     BACKUP_DIR="/starexec/k8s-shared/data/backups"
                     mkdir -p "${BACKUP_DIR}"
                     BACKUP_FILE="${BACKUP_DIR}/pre-deploy-$(date +%Y%m%d-%H%M%S).sql"
-                    echo "Backing up PostgreSQL..."
                     microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \
                         -- pg_dump -U starexec starexec > "${BACKUP_FILE}" 2>&1 && \
-                        echo "  Backup saved: ${BACKUP_FILE} ($(wc -c < ${BACKUP_FILE}) bytes)" || \
-                        echo "  WARNING: Backup may have failed (continuing)"
-
-                    # Atomic Helm deploy — auto-rollback on failure
+                        echo "Backup: ${BACKUP_FILE}" || echo "Backup skipped"
                     microk8s helm3 upgrade --install ${HELM_RELEASE} \
                         /home/ancaicedou/StarExec/charts/starexec \
                         --namespace ${K8S_NAMESPACE} \
                         --values ${HELM_VALUES} \
                         --set image.tag=${GIT_SHA} \
                         --set image.pullPolicy=IfNotPresent \
-                        --atomic \
-                        --timeout 15m --no-hooks 2>&1
-
-                    echo "Waiting for production deployment..."
+                        --atomic --timeout 15m --no-hooks 2>&1
                     microk8s kubectl wait --for=condition=available \
-                        --timeout=600s deployment/${HELM_RELEASE} \
-                        -n ${K8S_NAMESPACE}
-
-                    echo "Running database migrations..."
-                    microk8s kubectl exec -n ${K8S_NAMESPACE} \
-                        deploy/${HELM_RELEASE} -c app \
-                        -- bash /usr/local/bin/migrations.sh 2>&1 || true
+                        --timeout=600s deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE}
+                    microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} \
+                        -c app -- bash /usr/local/bin/migrations.sh 2>&1 || true
                 '''
             }
             post {
-                success {
-                    script {
-                        echo "✅ Production deployment successful! ${APP_URL}"
-                    }
-                }
-                failure {
-                    sh '''
-                        echo "❌ Production deployment FAILED — Helm has auto-rolled back."
-                        echo "Check logs:"
-                        echo "  microk8s kubectl -n ${K8S_NAMESPACE} logs deploy/${HELM_RELEASE}"
-                    '''
-                }
+                success { echo "PRODUCTION DEPLOY SUCCESS: ${APP_URL}" }
+                failure { echo "PRODUCTION DEPLOY FAILED — Helm auto-rolled back" }
             }
         }
 
