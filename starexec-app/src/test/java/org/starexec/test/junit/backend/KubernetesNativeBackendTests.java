@@ -13,6 +13,7 @@ import org.mockito.Mockito;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.to.Status.StatusCode;
 
 /**
@@ -170,6 +171,9 @@ public class KubernetesNativeBackendTests {
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
             jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(111))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairsMock
                 .when(
                     () ->
                         JobPairs.setPairStatusPrecise(
@@ -214,6 +218,9 @@ public class KubernetesNativeBackendTests {
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
             jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(222))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairsMock
                 .when(
                     () ->
                         JobPairs.setPairStatusPrecise(
@@ -257,6 +264,9 @@ public class KubernetesNativeBackendTests {
             instantiateCompletionCallback(backend);
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(313))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
             jobPairsMock
                 .when(
                     () ->
@@ -303,6 +313,9 @@ public class KubernetesNativeBackendTests {
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
             jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(414))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairsMock
                 .when(
                     () ->
                         JobPairs.setPairStatusPrecise(
@@ -346,5 +359,20 @@ public class KubernetesNativeBackendTests {
         return (KubernetesJobMonitor.JobCompletionCallback) constructor.newInstance(
             backend
         );
+    }
+
+    /**
+     * Builds a FOUND lookup result for callback tests. Reflection is required
+     * because PairStatusLookupResult has no public constructor or factory.
+     */
+    private JobPairs.PairStatusLookupResult foundLookup(int statusCode)
+        throws Exception {
+        Constructor<JobPairs.PairStatusLookupResult> constructor =
+            JobPairs.PairStatusLookupResult.class.getDeclaredConstructor(
+                PairStatusLookupState.class,
+                int.class
+            );
+        constructor.setAccessible(true);
+        return constructor.newInstance(PairStatusLookupState.FOUND, statusCode);
     }
 }
