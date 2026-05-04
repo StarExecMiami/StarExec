@@ -67,6 +67,7 @@ list_volumes() {
 verify_postgres_volume_access() {
     local pg_vol="$1"
     ${PODMAN_CMD:-podman} run --rm \
+        --network=none \
         --userns=keep-id \
         --user 999:999 \
         -v "$pg_vol:/var/lib/postgresql/data" \
@@ -80,6 +81,7 @@ verify_postgres_volume_access() {
 repair_postgres_volume_keepid() {
     local pg_vol="$1"
     ${PODMAN_CMD:-podman} run --rm \
+        --network=none \
         --userns=keep-id \
         --user 0:0 \
         -v "$pg_vol:/var/lib/postgresql/data" \
@@ -151,8 +153,8 @@ create_volumes() {
                     log_info "✓ PostgreSQL volume repaired via podman unshare chown 999:999"
                 else
                     log_error "Could not fix ownership for $pg_mountpoint"
-                    log_error "Manual check: ${PODMAN_CMD:-podman} run --rm --userns=keep-id --user 999:999 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'id && ls -ld /var/lib/postgresql/data'"
-                    log_error "Manual repair: ${PODMAN_CMD:-podman} run --rm --userns=keep-id --user 0:0 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'chown -R 999:999 /var/lib/postgresql/data'"
+                    log_error "Manual check: ${PODMAN_CMD:-podman} run --rm --network=none --userns=keep-id --user 999:999 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'id && ls -ld /var/lib/postgresql/data'"
+                    log_error "Manual repair: ${PODMAN_CMD:-podman} run --rm --network=none --userns=keep-id --user 0:0 -v $pg_vol:/var/lib/postgresql/data alpine:latest sh -c 'chown -R 999:999 /var/lib/postgresql/data'"
                     return 1
                 fi
             fi
@@ -173,7 +175,7 @@ export_volume() {
 
     # Check if volume has any data before attempting export
     local file_count
-    file_count=$(${PODMAN_CMD:-podman} run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest sh -c 'find /data -mindepth 1 -maxdepth 1 2>/dev/null | wc -l' 2>/dev/null || echo 0)
+    file_count=$(${PODMAN_CMD:-podman} run --rm --network=none -v "$volume_name:/data:ro" docker.io/library/alpine:latest sh -c 'find /data -mindepth 1 -maxdepth 1 2>/dev/null | wc -l' 2>/dev/null || echo 0)
     if [ "$file_count" -eq 0 ]; then
         log_info "Volume $volume_name appears to be empty (no files found). Creating placeholder archive to record emptiness."
         # Create a small temporary marker file and package it so the backup records the emptiness explicitly.
@@ -198,6 +200,7 @@ export_volume() {
 
     # Use a temporary container to mount volume and create archive
     ${PODMAN_CMD:-podman} run --rm \
+        --network=none \
         -v "$volume_name:/data:ro" \
         -v "$(pwd)/$BACKUP_DIR:/backup" \
         docker.io/library/alpine:latest \
@@ -250,6 +253,7 @@ import_volume() {
 
     # Extract archive into volume
     ${PODMAN_CMD:-podman} run --rm \
+        --network=none \
         -v "$volume_name:/data" \
         -v "$(realpath "$archive"):/backup.tar.gz:ro" \
         docker.io/library/alpine:latest \
@@ -683,10 +687,10 @@ inspect_volume() {
     ${PODMAN_CMD:-podman} volume inspect "$volume_name"
 
     log_info "Disk usage:"
-    ${PODMAN_CMD:-podman} run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest du -sh /data || true
+    ${PODMAN_CMD:-podman} run --rm --network=none -v "$volume_name:/data:ro" docker.io/library/alpine:latest du -sh /data || true
 
     log_info "Top-level contents:"
-    ${PODMAN_CMD:-podman} run --rm -v "$volume_name:/data:ro" docker.io/library/alpine:latest ls -lah /data || true
+    ${PODMAN_CMD:-podman} run --rm --network=none -v "$volume_name:/data:ro" docker.io/library/alpine:latest ls -lah /data || true
 }
 
 # PostgreSQL logical dump
@@ -799,13 +803,13 @@ health_check() {
     log_info "=== Volume Mount Check ==="
     for vol in "${vols[@]}"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            if ${PODMAN_CMD:-podman} run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test 2>/dev/null; then
+            if ${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test 2>/dev/null; then
                 log_info "✅ Volume mountable: $vol"
                 
                 # Special check for data volume items
                 if [[ "$vol" == *"-data" ]]; then
-                    if ${PODMAN_CMD:-podman} run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Solvers && \
-                       ${PODMAN_CMD:-podman} run --rm -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Benchmarks; then
+                    if ${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Solvers && \
+                       ${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/test:ro" docker.io/library/alpine:latest test -d /test/Benchmarks; then
                          log_info "   ✅ Data volume structure verified (Solvers/Benchmarks found)"
                     else
                          log_warn "   ⚠️  Data volume missing Solvers or Benchmarks directories!"
@@ -830,7 +834,7 @@ health_check() {
 
     for vol in "${vols[@]}"; do
         if ${PODMAN_CMD:-podman} volume exists "$vol" 2>/dev/null; then
-            local size_bytes=$(${PODMAN_CMD:-podman} run --rm -v "$vol:/data:ro" docker.io/library/alpine:latest \
+            local size_bytes=$(${PODMAN_CMD:-podman} run --rm --network=none -v "$vol:/data:ro" docker.io/library/alpine:latest \
                 du -sb /data 2>/dev/null | awk '{print $1}')
             local size_gb=$((size_bytes / 1024 / 1024 / 1024))
 
