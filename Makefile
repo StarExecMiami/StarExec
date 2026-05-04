@@ -1120,7 +1120,6 @@ deploy-podman: preflight-podman preflight-cgroup
 	@echo "  ✓ PostgreSQL readiness gate passed"
 
 deploy-podman-helm:
-	@$(MAKE) preflight-podman
 	@# Verify values file exists before proceeding
 	@if [ ! -f "$(VALS)" ]; then \
 		echo "${RED}✗ Values file not found: $(VALS)${RESET}"; \
@@ -1169,7 +1168,6 @@ deploy-podman-helm:
 	@echo "  podman logs $(DB_CONTAINER)	- Database logs"
 
 deploy-podman-direct:
-	@$(MAKE) preflight-podman
 	@echo "Cleaning up existing deployment..."
 	$(call cleanup_deployment)
 	@$(MAKE) network-setup
