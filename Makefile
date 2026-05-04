@@ -572,6 +572,42 @@ define require_podman_engine_ready
 	fi
 endef
 
+# require_rootless_network_healthy — on rootless setups where pasta is the default
+# networking helper, verify it actually works. A segfaulting pasta binary silently
+# breaks all rootless networking (IPAM errors, container startup failures).
+# Falls back to slirp4netns guidance if available.
+# Usage: @$(call require_rootless_network_healthy)
+define require_rootless_network_healthy
+	if [ "$(PODMAN_REQUIRES_SUDO)" != "yes" ]; then \
+		NET_CMD=$$($(PODMAN_CMD) info --format '{{.Host.RootlessNetworkCmd}}' 2>/dev/null || echo "unknown"); \
+		if [ "$$NET_CMD" = "pasta" ]; then \
+			if ! timeout 3 pasta --version >/dev/null 2>&1; then \
+				echo ""; \
+				echo "${RED}╔══════════════════════════════════════════════════════════════╗${RESET}"; \
+				echo "${RED}║  ✗ Rootless networking helper 'pasta' is broken (segfault).  ║${RESET}"; \
+				echo "${RED}║    All rootless Podman networking will fail.                 ║${RESET}"; \
+				echo "${RED}╚══════════════════════════════════════════════════════════════╝${RESET}"; \
+				echo ""; \
+				if command -v slirp4netns >/dev/null 2>&1; then \
+					echo "${GREEN}slirp4netns is available as a drop-in replacement.${RESET}"; \
+					echo ""; \
+					echo "Apply the fix (single command):"; \
+					echo "  ${BLUE}mkdir -p ~/.config/containers && printf '[network]\\ndefault_rootless_network_cmd = \"slirp4netns\"\\n' > ~/.config/containers/containers.conf${RESET}"; \
+					echo ""; \
+				else \
+					echo "Install slirp4netns first:"; \
+					echo "  ${BLUE}sudo apt-get install -y slirp4netns${RESET}"; \
+					echo ""; \
+					echo "Then apply the fix:"; \
+					echo "  ${BLUE}mkdir -p ~/.config/containers && printf '[network]\\ndefault_rootless_network_cmd = \"slirp4netns\"\\n' > ~/.config/containers/containers.conf${RESET}"; \
+					echo ""; \
+				fi; \
+				exit 1; \
+			fi; \
+		fi; \
+	fi
+endef
+
 # verify_podman_socket_from_values — verify the resolved Podman socket path.
 # Uses PODMAN_SOCKET_PATH (derived from the active environment) and warns when
 # the values file contains a different hostPath.
@@ -673,6 +709,7 @@ endef
 preflight-podman: verify-deps
 	@$(call require_values_file)
 	@$(call require_podman_engine_ready)
+	@$(call require_rootless_network_healthy)
 	@$(call verify_podman_socket_from_values)
 	@echo "Using values file: $(VALS)"
 

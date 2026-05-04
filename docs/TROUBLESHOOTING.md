@@ -74,6 +74,31 @@ make start
 
 Avoid `podman network prune` on shared systems unless you intentionally want global cleanup.
 
+### Pasta Segfault / IPAM Errors on Rootless Podman
+
+**Problem:** Deployment fails with `IPAM error: failed to get ips` or `pasta failed with exit code -1` during `podman play kube`. Volume creation (`make volumes-create`) may also fail with a false `Could not fix ownership` error.
+
+**Cause:** The `pasta` rootless networking helper installed on the host is crashing (segfault). When Podman defaults to `pasta` for rootless networking and the binary is broken, every container start that requires networking fails.
+
+**Symptoms include:**
+- `pasta failed with exit code -1` or `signal: segmentation fault`
+- `IPAM error: failed to find ip for subnet` during pod startup
+- `Could not fix ownership for ...` during volume creation (false positive)
+
+**Solution:**
+
+```bash
+# Switch rootless networking from broken pasta to slirp4netns.
+# Single command fix (creates ~/.config/containers/containers.conf):
+mkdir -p ~/.config/containers && printf '[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' > ~/.config/containers/containers.conf
+
+# Verify the change took effect:
+podman info --format '{{.Host.RootlessNetworkCmd}}'
+# Should output: slirp4netns
+```
+
+The Makefile `preflight-podman` target includes a guard (`require_rootless_network_healthy`) that detects this condition and prints the fix before deployment starts.
+
 ### PostgreSQL Permission Errors on Rootless Volumes
 
 **Problem:** Postgres fails during init/start with permission denied in data directory.
