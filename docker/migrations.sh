@@ -62,6 +62,7 @@ CATALINA_HOME="/opt/tomcat"
 WEBAPP_DIR="${CATALINA_HOME}/webapps/starexec"
 MIGRATIONS_DIR="${WEBAPP_DIR}/WEB-INF/classes/db/migration"
 CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
+JAVA_BIN="${JAVA_HOME:-/opt/java/openjdk}/bin/java"
 
 # =====================================================================
 # STEP 1: Validate Configuration
@@ -119,6 +120,11 @@ migration_count=$(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name "*.sql" 2>/de
 echo "[MIGRATION][FILES] ✅ Found $migration_count migration SQL files"
 echo ""
 
+if [ ! -x "$JAVA_BIN" ]; then
+  echo "[MIGRATION][ERROR] ❌ Java runtime not found at: $JAVA_BIN"
+  exit 1
+fi
+
 # =====================================================================
 # STEP 4: Execute Flyway Migrations
 # =====================================================================
@@ -135,7 +141,7 @@ echo ""
 # This prevents credential exposure via process inspection
 #
 # Run as background process so we can handle signals
-java -cp "$CLASSPATH" \
+"$JAVA_BIN" -cp "$CLASSPATH" \
      org.starexec.migration.EmbeddedFlywayLauncher &
 java_pid=$!
 

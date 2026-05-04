@@ -21,7 +21,7 @@ spec:
         - name: migrate
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/bin/sh","-c","/opt/starexec/bin/run-migrations.sh"]
+          command: ["/bin/sh","-c","exec /usr/local/bin/migrations.sh"]
           env:
             - name: STAREXEC_DB_HOST
               value: "{{ .Values.postgres.host }}"
