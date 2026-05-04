@@ -82,6 +82,33 @@ if [ -f "$USER_SLICE_CGROUP/cgroup.subtree_control" ]; then
                 exit 1
             fi
 
+            # ⚠️ WARNING: Restarting user@UID.service terminates the current
+            # login session. Confirm before proceeding.
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  ⚠️  WARNING: Restarting user@${USER_ID}.service            ║"
+            echo "║                                                              ║"
+            echo "║  This WILL terminate your current login session.             ║"
+            echo "║  All running applications will be killed immediately.        ║"
+            echo "║                                                              ║"
+            echo "║  After the restart you MUST log in again.                    ║"
+            echo "║  Then run: podman system migrate                             ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo ""
+            if [ -t 0 ]; then
+                printf "Type 'yes' to proceed, anything else to cancel: "
+                read -r REPLY
+                if [ "$REPLY" != "yes" ]; then
+                    echo "Cancelled."
+                    exit 1
+                fi
+                echo ""
+            else
+                echo "Non-interactive environment — proceeding as --fix was"
+                echo "explicitly requested. Ensure no critical work is running."
+                echo ""
+            fi
+
             # Create the drop-in configuration
             echo "   Creating systemd drop-in configuration..."
             sudo mkdir -p "/etc/systemd/system/user@${USER_ID}.service.d"
