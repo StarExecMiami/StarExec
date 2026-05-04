@@ -50,27 +50,46 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     @Override
     public void contextInitialized(ServletContextEvent sce) {
         log.info("contextInitialized", "Starting upload job worker");
+
+        reconcileStartupState();
+        cleanupStartupArtifacts();
+        startWorkerInfrastructure();
         
-        // CRITICAL: Clean up orphaned extraction directories from previous crashes
-        // This handles OOM/SIGKILL scenarios where try-finally doesn't run
+        log.info("contextInitialized", "Upload job worker started");
+    }
+
+    void reconcileStartupState() {
+        UploadJobQueue.ReconciliationResult reconciliationResult = UploadJobQueue.reconcileStaleProcessingJobs();
+        if (reconciliationResult.hasChanges()) {
+            log.info(
+                "contextInitialized",
+                "Startup reconciliation complete: cancelled=" + reconciliationResult.getCancelledCount() +
+                    ", failed=" + reconciliationResult.getFailedCount()
+            );
+        }
+    }
+
+    void cleanupStartupArtifacts() {
+        // CRITICAL: Clean up orphaned extraction directories from previous crashes.
+        // This handles OOM/SIGKILL scenarios where try-finally doesn't run.
         cleanupOrphanedExtractions();
-        
-        // Create bounded thread pool for concurrent job processing
-        // This prevents head-of-line blocking where a large job delays smaller jobs
+    }
+
+    void startWorkerInfrastructure() {
+        // Create bounded thread pool for concurrent job processing.
+        // This prevents head-of-line blocking where a large job delays smaller jobs.
         workerExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_JOBS, r -> {
             Thread t = new Thread(r, "upload-job-worker");
             t.setDaemon(true);
             return t;
         });
-        
-        // Start the worker thread
+
+        // Start the worker thread.
         workerThread = new Thread(this, "upload-job-poller");
         workerThread.setDaemon(true);
         workerThread.start();
-        
-        log.info("contextInitialized", "Upload job worker started");
     }
-    
+
     /**
      * Cleans up orphaned extraction directories from previous crashes.
      *

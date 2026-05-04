@@ -15,6 +15,28 @@ import java.util.Optional;
  */
 public class UploadJobQueue {
     private static final StarLogger log = StarLogger.getLogger(UploadJobQueue.class);
+
+    public static final class ReconciliationResult {
+        private final int cancelledCount;
+        private final int failedCount;
+
+        public ReconciliationResult(int cancelledCount, int failedCount) {
+            this.cancelledCount = cancelledCount;
+            this.failedCount = failedCount;
+        }
+
+        public int getCancelledCount() {
+            return cancelledCount;
+        }
+
+        public int getFailedCount() {
+            return failedCount;
+        }
+
+        public boolean hasChanges() {
+            return cancelledCount > 0 || failedCount > 0;
+        }
+    }
     
     // SQL statements
     private static final String INSERT_JOB_SQL = 
@@ -79,6 +101,18 @@ public class UploadJobQueue {
 
     private static final String UPDATE_EXTRACT_PATH_SQL =
         "UPDATE upload_jobs SET extract_path = ? WHERE id = ?";
+
+    private static final String RECONCILE_CANCELLED_PROCESSING_JOBS_SQL =
+        "UPDATE upload_jobs SET status = 'CANCELLED', cancel_requested = FALSE, completed_at = CURRENT_TIMESTAMP, " +
+        "last_heartbeat = CURRENT_TIMESTAMP WHERE status = 'PROCESSING' AND cancel_requested = TRUE";
+
+    private static final String RECONCILE_FAILED_PROCESSING_JOBS_SQL =
+        "UPDATE upload_jobs SET status = 'FAILED', cancel_requested = FALSE, completed_at = CURRENT_TIMESTAMP, " +
+        "last_heartbeat = CURRENT_TIMESTAMP, error_message = CASE WHEN error_message IS NULL OR error_message = '' " +
+        "THEN ? ELSE error_message || E'\n' || ? END WHERE status = 'PROCESSING' AND cancel_requested = FALSE";
+
+    private static final String RESTART_INTERRUPTED_ERROR_MESSAGE =
+        "Upload processing was interrupted by application restart before completion. Please retry the upload job.";
     
     /**
      * Enqueues a new upload job for asynchronous processing using the UploadJobRequest object.
@@ -605,6 +639,42 @@ public class UploadJobQueue {
             Common.safeClose(ps);
             Common.safeClose(con);
         }
+    }
+
+    public static ReconciliationResult reconcileStaleProcessingJobs() {
+        try {
+            ReconciliationResult result = Common.runInTransaction(UploadJobQueue::reconcileStaleProcessingJobsInTransaction);
+
+            if (result.hasChanges()) {
+                log.warn(
+                    "reconcileStaleProcessingJobs",
+                    "Reconciled stale upload jobs after startup: cancelled=" + result.getCancelledCount() +
+                        ", failed=" + result.getFailedCount()
+                );
+            }
+
+            return result;
+        } catch (SQLException e) {
+            log.error("reconcileStaleProcessingJobs", "Failed to reconcile stale upload jobs", e);
+            return new ReconciliationResult(0, 0);
+        }
+    }
+
+    static ReconciliationResult reconcileStaleProcessingJobsInTransaction(Connection con) throws SQLException {
+        int cancelledCount;
+        int failedCount;
+
+        try (PreparedStatement cancelPs = con.prepareStatement(RECONCILE_CANCELLED_PROCESSING_JOBS_SQL)) {
+            cancelledCount = cancelPs.executeUpdate();
+        }
+
+        try (PreparedStatement failPs = con.prepareStatement(RECONCILE_FAILED_PROCESSING_JOBS_SQL)) {
+            failPs.setString(1, RESTART_INTERRUPTED_ERROR_MESSAGE);
+            failPs.setString(2, RESTART_INTERRUPTED_ERROR_MESSAGE);
+            failedCount = failPs.executeUpdate();
+        }
+
+        return new ReconciliationResult(cancelledCount, failedCount);
     }
     
     /**
