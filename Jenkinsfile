@@ -153,10 +153,7 @@ pipeline {
             // Validate that every required production secret is resolvable before
             // we attempt a deployment that would fail halfway through.
             when {
-                allOf {
-                    expression { env.GIT_BRANCH == 'containerised' || env.BRANCH_NAME == 'containerised' }
-                    expression { params.DEPLOY_ENV == 'prod' }
-                }
+                expression { params.DEPLOY_ENV == 'prod' }
             }
             steps {
                 withCredentials([
@@ -215,10 +212,7 @@ pipeline {
         stage('Deploy to Kubernetes') {
         // -----------------------------------------------------------------------
             when {
-                allOf {
-                    branch 'containerised'
-                    expression { params.DEPLOY_ENV != 'prod' }
-                }
+                expression { params.DEPLOY_ENV != 'prod' }
             }
             steps {
                 script {
@@ -280,10 +274,7 @@ pipeline {
         stage('Deploy to Production') {
         // -----------------------------------------------------------------------
             when {
-                allOf {
-                    branch 'containerised'
-                    expression { params.DEPLOY_ENV == 'prod' }
-                }
+                expression { params.DEPLOY_ENV == 'prod' }
             }
             steps {
                 input message: "Deploy StarExec to PRODUCTION? (${GIT_SHA})", ok: 'Deploy'
@@ -315,7 +306,6 @@ pipeline {
         }
 
         stage('Verify Deployment') {
-            when { branch 'containerised' }
             steps {
                 sh '''
                     echo "=== Cluster nodes ==="
@@ -333,7 +323,6 @@ pipeline {
         // -----------------------------------------------------------------------
         stage('Smoke Test') {
         // -----------------------------------------------------------------------
-            when { branch 'containerised' }
             steps {
                 sh '''
                     echo "Waiting for application to become ready..."
