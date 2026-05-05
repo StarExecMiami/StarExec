@@ -220,6 +220,22 @@ docker compose -f docker-compose.yml -f docker-compose.podman.yml up -d
 
 If your institution masks the user socket service, copy the Podman user unit files into `~/.config/systemd/user/`, reload the user daemon, and then enable `podman.socket`.
 
+### Rootless Podman Pod Exits After Suspend or Logout
+
+**Problem:** `make status` shows StarExec as `Exited` after the laptop sleeps, the user logs out, or the host restarts.
+
+**Cause:** StarExec runs under rootless Podman in the user's systemd session. If that session is stopped, Podman cleans up the pod. Lingering keeps user services alive outside an active login session, but it does not survive a full reboot.
+
+**Solution:**
+
+```bash
+# Keep user services alive outside the login session
+loginctl enable-linger $USER
+
+# After a reboot or if the pod already exited, start StarExec again
+make start
+```
+
 ### Cgroup Controller Delegation Errors
 
 **Problem:** Containers fail to start with cgroup-related errors

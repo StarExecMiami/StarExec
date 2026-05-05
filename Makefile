@@ -73,6 +73,18 @@ APP_CONTAINER=$(RELEASE_NAME)-app
 DB_CONTAINER=$(RELEASE_NAME)-postgres
 POD_NAME=$(RELEASE_NAME)-pod
 
+define resolve_pod_state
+POD_STATE=""; \
+PODS="$(1)"; \
+if [ "$(RELEASE_NAME)" = "starexec" ]; then PODS="$$PODS starexec"; fi; \
+for pod in $$PODS; do \
+	POD_STATE="$$( $(strip $(PODMAN_CMD)) pod inspect "$$pod" --format '{{.State}}' 2>/dev/null || true )"; \
+	if [ -n "$$POD_STATE" ]; then \
+		break; \
+	fi; \
+done
+endef
+
 # Port configuration
 APP_PORT?=7827
 
@@ -394,7 +406,8 @@ volumes-list:
 volumes-backup: verify-deps
 	@echo "Backing up volumes for environment: $(ENV)"
 	@# Safety check: warn if containers are running during backup
-	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
+	@$(call resolve_pod_state,$(POD_NAME)); \
+	if [ "$$POD_STATE" = "Running" ] || [ "$$POD_STATE" = "running" ] || [ "$$POD_STATE" = "Degraded" ] || [ "$$POD_STATE" = "degraded" ]; then \
 		echo ""; \
 		echo "${YELLOW}⚠️  WARNING: StarExec containers are currently RUNNING${RESET}"; \
 		echo "${YELLOW}   For a consistent backup, consider stopping first:${RESET}"; \
@@ -421,7 +434,8 @@ volumes-restore: verify-deps
 	@# =========================================================================
 	@echo "Restore requires timestamp. Available backups:"
 	@# Safety check: ensure containers are stopped before restore
-	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
+	@$(call resolve_pod_state,$(POD_NAME)); \
+	if [ "$$POD_STATE" = "Running" ] || [ "$$POD_STATE" = "running" ] || [ "$$POD_STATE" = "Degraded" ] || [ "$$POD_STATE" = "degraded" ]; then \
 		echo ""; \
 		echo "${RED}╔══════════════════════════════════════════════════════════════╗${RESET}"; \
 		echo "${RED}║  ⚠️  DANGER: StarExec is currently RUNNING!                   ║${RESET}"; \
@@ -485,7 +499,7 @@ volumes-restore: verify-deps
 		echo "${RED}✗ No timestamp provided, aborting${RESET}"; \
 		exit 1; \
 	fi; \
-	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) restore-all $(ENV) $$ts
+	PODMAN_CMD="$(PODMAN_CMD)" $(VOLUME_SCRIPT) restore-all "$(ENV)" "$$ts"
 
 volumes-export:
 	@printf "Volume name: "; \
@@ -1559,10 +1573,15 @@ status:
 	@echo "${BOLD}${BLUE}══════════════════════════════════════════${RESET}"
 	@echo ""
 	@printf "%-20s: " "Deployment State"
-	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
+	@$(call resolve_pod_state,$(POD_NAME)); \
+	if [ -z "$$POD_STATE" ]; then \
+		echo "${RED}STOPPED${RESET}"; \
+	elif [ "$$POD_STATE" = "Degraded" ] || [ "$$POD_STATE" = "degraded" ]; then \
+		echo "${YELLOW}DEGRADED${RESET}"; \
+	elif [ "$$POD_STATE" = "Running" ] || [ "$$POD_STATE" = "running" ]; then \
 		echo "${GREEN}RUNNING${RESET}"; \
 	else \
-		echo "${RED}STOPPED${RESET}"; \
+		echo "${YELLOW}$$POD_STATE${RESET}"; \
 	fi
 	@printf "%-20s: %s\n" "Environment" "$(ENV)"
 	@printf "%-20s: %s\n" "Image" "$(RELEASE_NAME):$(IMAGE_TAG)"
@@ -1598,17 +1617,24 @@ status:
 	fi
 	@echo ""
 	@echo "${BOLD}=== Containers ===${RESET}"
-	@$(PODMAN_CMD) ps -a --filter name=starexec --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
+	@$(PODMAN_CMD) ps -a --filter name=$(RELEASE_NAME) --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "${YELLOW}No StarExec containers found${RESET}"
 	@echo ""
 	@echo "${BOLD}=== Images ===${RESET}"
 	@$(PODMAN_CMD) images --filter reference=$(RELEASE_NAME) --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.Created}}" 2>/dev/null || echo "${YELLOW}No StarExec images found${RESET}"
 	@echo ""
-	@if $(PODMAN_CMD) pod exists $(POD_NAME) 2>/dev/null || $(PODMAN_CMD) pod exists starexec 2>/dev/null; then \
+	@$(call resolve_pod_state,$(POD_NAME)); \
+	if [ "$$POD_STATE" = "Running" ] || [ "$$POD_STATE" = "running" ]; then \
 		echo "${GREEN}✓ StarExec is RUNNING${RESET}"; \
 		echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"; \
+	elif [ "$$POD_STATE" = "Degraded" ] || [ "$$POD_STATE" = "degraded" ]; then \
+		echo "${YELLOW}⚠ StarExec is DEGRADED${RESET}"; \
+		echo "  Some containers are not healthy. Check the container table above."; \
+	elif [ -n "$$POD_STATE" ]; then \
+		echo "${YELLOW}⚠ StarExec pod state: $$POD_STATE${RESET}"; \
+		echo "  Restart with: ${BLUE}make start${RESET}"; \
 	else \
 		echo "${YELLOW}○ StarExec is NOT running${RESET}"; \
-		echo "  Deploy with: ${BLUE}make deploy-podman ENV=$(ENV)${RESET}"; \
+		echo "  Deploy with: ${BLUE}make start${RESET}"; \
 	fi
 
 # ============================================================================
