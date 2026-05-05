@@ -147,13 +147,14 @@ pipeline {
             // we attempt a deployment that would fail halfway through.
             when {
                 allOf {
-                    branch 'containerised'
+                    bexpression { env.GIT_BRANCH == 'containerised' || env.BRANCH_NAME == 'containerised' 
                     expression { params.DEPLOY_ENV == 'prod' }
                 }
             }
             steps {
                 withCredentials([
                     string(credentialsId: 'starExec-db-user',                   variable: 'STAREXEC_DB_USER'),
+		    string(credentialsId: 'starExec-db-password', 		variable: 'STAREXEC_DB_PASSWORD'),
                     string(credentialsId: 'starExec-db-host',                   variable: 'STAREXEC_DB_HOST'),
                     string(credentialsId: 'starExec-db-port',                   variable: 'STAREXEC_DB_PORT'),
                     string(credentialsId: 'starExec-db-name',                   variable: 'STAREXEC_DB_NAME'),
@@ -207,7 +208,10 @@ pipeline {
         stage('Deploy to Kubernetes') {
         // -----------------------------------------------------------------------
             when {
-                branch 'containerised'
+                allOf {
+                    branch 'containerised'
+                    expression { params.DEPLOY_ENV != 'prod' }
+                }
             }
             steps {
                 script {
