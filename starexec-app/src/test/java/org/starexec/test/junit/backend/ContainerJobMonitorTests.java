@@ -3,6 +3,7 @@ package org.starexec.test.junit.backend;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -60,6 +61,17 @@ public class ContainerJobMonitorTests {
             "Transient polling failures should clear backed-off state for a fast retry",
             pollInterval.isBackedOff()
         );
+    }
+
+    @Test
+    public void testCheckCompletedJobs_PerformsStaleExitedContainerSweep()
+        throws Exception {
+        when(backend.getCompletedContainers()).thenReturn(java.util.Collections.emptyList());
+        when(backend.cleanupStaleExitedContainers(anySet())).thenReturn(0);
+
+        invokeCheckCompletedJobs();
+
+        verify(backend).cleanupStaleExitedContainers(anySet());
     }
 
     private AdaptivePollInterval getPollInterval() throws Exception {

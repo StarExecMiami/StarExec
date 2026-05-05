@@ -104,6 +104,7 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 | `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `4096` | Memory per container (4GB) |
 | `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `1` | CPU cores per container |
+| `STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS` | `86400` | Minimum age before sweeping an exited managed Podman container that was not processed by the normal completion monitor (`0` disables the sweep) |
 
 ### Live Log Streaming (SSE)
 

@@ -333,6 +333,7 @@ public class PodmanBackendTests {
         // Verify Docker commands were called
         verify(mockDockerClient).stopContainerCmd(TEST_CONTAINER_ID);
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
     }
 
     @Test
@@ -654,6 +655,7 @@ public class PodmanBackendTests {
         backend.removeCompletedContainer(TEST_CONTAINER_ID);
 
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
     }
 
     @Test
@@ -726,6 +728,59 @@ public class PodmanBackendTests {
         }
 
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
+    }
+
+    @Test
+    public void testCleanupStaleExitedContainers_RemovesOnlyOldUnprotectedExitedContainers()
+        throws Exception {
+        long nowEpochSeconds = System.currentTimeMillis() / 1000L;
+        setBackendField("exitedContainerCleanupAgeSeconds", 60L);
+
+        Container staleContainer = mock(Container.class);
+        when(staleContainer.getId()).thenReturn("stale-container");
+        when(staleContainer.getCreated()).thenReturn(nowEpochSeconds - 120L);
+
+        Container freshContainer = mock(Container.class);
+        when(freshContainer.getId()).thenReturn("fresh-container");
+        when(freshContainer.getCreated()).thenReturn(nowEpochSeconds - 10L);
+
+        Container protectedContainer = mock(Container.class);
+        when(protectedContainer.getId()).thenReturn("protected-container");
+        when(protectedContainer.getCreated()).thenReturn(nowEpochSeconds - 120L);
+
+        when(mockListContainersCmd.exec()).thenReturn(
+            Arrays.asList(staleContainer, freshContainer, protectedContainer)
+        );
+
+        InspectContainerCmd staleInspect = mock(InspectContainerCmd.class);
+        InspectContainerResponse staleInspectResponse = mock(
+            InspectContainerResponse.class
+        );
+        InspectContainerResponse.ContainerState staleState = mock(
+            InspectContainerResponse.ContainerState.class
+        );
+
+        when(mockDockerClient.inspectContainerCmd("stale-container"))
+            .thenReturn(staleInspect);
+        when(staleInspect.exec()).thenReturn(staleInspectResponse);
+        when(staleInspectResponse.getState()).thenReturn(staleState);
+        when(staleState.getRunning()).thenReturn(false);
+
+        int removedCount = backend.cleanupStaleExitedContainers(
+            Collections.singleton("protected-container")
+        );
+
+        assertEquals(
+            "Only the stale unprotected exited container should be removed",
+            1,
+            removedCount
+        );
+        verify(mockDockerClient).removeContainerCmd("stale-container");
+        verify(mockDockerClient, never()).removeContainerCmd("fresh-container");
+        verify(mockDockerClient, never()).removeContainerCmd("protected-container");
+        verify(mockDockerClient).inspectContainerCmd("stale-container");
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
     }
 
     @Test

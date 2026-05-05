@@ -22,7 +22,7 @@ This guide covers:
 |-----------|---------|-------------|
 | `STAREXEC_LOCAL_CONCURRENCY` | 4 | Match CPU cores (up to 16) |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
-| `STAREXEC_CONTAINER_MONITOR_POLL_MS` | 5000 | Lower for latency, higher for scale |
+| `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Match solver requirements |
 | `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | 1 | 1 for single-threaded, more for parallel |
 
@@ -171,13 +171,13 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=3
 
 ```bash
 # Default: 5 seconds
-export STAREXEC_CONTAINER_MONITOR_POLL_MS=5000
+export STAREXEC_CONTAINER_POLL_INTERVAL_MS=5000
 
 # Low latency (fast result visibility)
-export STAREXEC_CONTAINER_MONITOR_POLL_MS=1000
+export STAREXEC_CONTAINER_POLL_INTERVAL_MS=1000
 
 # High scale (reduce CPU overhead)
-export STAREXEC_CONTAINER_MONITOR_POLL_MS=10000
+export STAREXEC_CONTAINER_POLL_INTERVAL_MS=10000
 ```
 
 **Tradeoffs:**

@@ -114,6 +114,8 @@ public class PodmanBackend implements Backend {
     private int defaultCpuLimit;
     private int defaultWallclockLimit;
     private int maxConcurrentJobs = 1;
+    private long exitedContainerCleanupAgeSeconds =
+        EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
 
     // Hard concurrency gate for container submissions.
     // This protects CPU cache locality by preventing unbounded sibling container fan-out.
@@ -546,6 +548,8 @@ public class PodmanBackend implements Backend {
         defaultWallclockLimit =
             EnvironmentConfig.getContainerDefaultWallclockLimit();
         maxConcurrentJobs = EnvironmentConfig.getContainerMaxConcurrentJobs();
+        exitedContainerCleanupAgeSeconds =
+            EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
 
         if (maxConcurrentJobs < 1) {
             log.warn(
@@ -574,6 +578,15 @@ public class PodmanBackend implements Backend {
         }
 
         log.info("Container max concurrent jobs: " + maxConcurrentJobs);
+        if (exitedContainerCleanupAgeSeconds > 0) {
+            log.info(
+                "Exited container cleanup age threshold: " +
+                exitedContainerCleanupAgeSeconds +
+                " seconds"
+            );
+        } else {
+            log.info("Exited container cleanup sweep disabled");
+        }
     }
 
     /**
@@ -763,10 +776,7 @@ public class PodmanBackend implements Backend {
 
             // Best-effort cleanup before propagating failure for retry.
             try {
-                dockerClient
-                    .removeContainerCmd(containerId)
-                    .withForce(true)
-                    .exec();
+                removeContainerArtifacts(containerId, true);
                 log.info(
                     "Removed container after unsuccessful start verification: " +
                     containerId
@@ -1720,15 +1730,17 @@ public class PodmanBackend implements Backend {
             }
 
             // Remove container
-            dockerClient.removeContainerCmd(containerId).withForce(true).exec();
+            removeContainerArtifacts(containerId, true);
 
             execIdToContainerId.remove(execId);
+            containerIdToPairId.invalidate(containerId);
             releaseSubmissionSlot(execId, "killed pair");
             log.info("Container killed successfully: " + containerId);
             return true;
         } catch (NotFoundException e) {
             log.warn("Container not found (already removed?): " + containerId);
             execIdToContainerId.remove(execId);
+            containerIdToPairId.invalidate(containerId);
             releaseSubmissionSlot(execId, "container already missing during kill");
             return true;
         } catch (Exception e) {
@@ -1783,10 +1795,8 @@ public class PodmanBackend implements Backend {
                     log.info(
                         "Cleaning up orphaned container: " + container.getId()
                     );
-                    dockerClient
-                        .removeContainerCmd(container.getId())
-                        .withForce(true)
-                        .exec();
+                    containerIdToPairId.invalidate(container.getId());
+                    removeContainerArtifacts(container.getId(), true);
                 } catch (Exception e) {
                     log.warn(
                         "Failed to remove orphaned container: " +
@@ -2160,6 +2170,116 @@ public class PodmanBackend implements Backend {
         return false;
     }
 
+    private void removeContainerArtifacts(String containerId, boolean force) {
+        dockerClient
+            .removeContainerCmd(containerId)
+            .withForce(force)
+            .withRemoveVolumes(true)
+            .exec();
+    }
+
+    private boolean isContainerOlderThanCleanupThreshold(
+        Container container,
+        long nowEpochSeconds
+    ) {
+        if (exitedContainerCleanupAgeSeconds <= 0) {
+            return false;
+        }
+
+        Long createdAtEpochSeconds = container.getCreated();
+        if (createdAtEpochSeconds == null || createdAtEpochSeconds <= 0) {
+            return false;
+        }
+
+        long ageSeconds = Math.max(0L, nowEpochSeconds - createdAtEpochSeconds);
+        return ageSeconds >= exitedContainerCleanupAgeSeconds;
+    }
+
+    /**
+     * Sweeps stale exited managed containers that were not part of the current
+     * completion-processing batch.
+     *
+     * <p>The monitor passes the current batch of processable exited containers as
+     * {@code protectedContainerIds} so this sweep cannot race normal result
+     * processing. A non-positive cleanup age disables the sweep entirely.</p>
+     *
+     * @param protectedContainerIds exited container IDs currently owned by the
+     *                              normal completion-processing path
+     * @return number of stale exited containers removed
+     */
+    public int cleanupStaleExitedContainers(Set<String> protectedContainerIds) {
+        if (exitedContainerCleanupAgeSeconds <= 0) {
+            return 0;
+        }
+
+        Set<String> excludedContainerIds = protectedContainerIds == null
+            ? Collections.emptySet()
+            : protectedContainerIds;
+
+        try {
+            List<Container> exitedContainers = dockerClient
+                .listContainersCmd()
+                .withShowAll(true)
+                .withLabelFilter(Collections.singletonMap(LABEL_MANAGED, "true"))
+                .withStatusFilter(Collections.singletonList("exited"))
+                .exec();
+
+            int removedCount = 0;
+            long nowEpochSeconds = TimeUnit.MILLISECONDS.toSeconds(
+                System.currentTimeMillis()
+            );
+
+            for (Container container : exitedContainers) {
+                String containerId = container.getId();
+                if (
+                    containerId == null ||
+                    excludedContainerIds.contains(containerId) ||
+                    !isContainerOlderThanCleanupThreshold(
+                        container,
+                        nowEpochSeconds
+                    )
+                ) {
+                    continue;
+                }
+
+                try {
+                    Boolean isRunning = inspectContainerRunningState(containerId);
+                    if (Boolean.TRUE.equals(isRunning) || isRunning == null) {
+                        continue;
+                    }
+
+                    Integer execId = removeTrackedExecutionByContainerId(
+                        containerId
+                    );
+                    if (execId != null) {
+                        releaseSubmissionSlot(execId, "stale exited container cleanup");
+                    }
+
+                    containerIdToPairId.invalidate(containerId);
+                    removeContainerArtifacts(containerId, false);
+                    removedCount++;
+                    log.info(
+                        "Removed stale exited managed container older than cleanup threshold: " +
+                        containerId
+                    );
+                } catch (NotFoundException ignored) {
+                    containerIdToPairId.invalidate(containerId);
+                } catch (Exception e) {
+                    log.warn(
+                        "Failed to remove stale exited container: " +
+                        containerId,
+                        e
+                    );
+                }
+            }
+
+            return removedCount;
+        } catch (Exception e) {
+            log.warn("Failed to sweep stale exited containers", e);
+            return 0;
+        }
+    }
+
     /**
      * Removes a completed container after processing.
      *
@@ -2173,11 +2293,7 @@ public class PodmanBackend implements Backend {
 
         containerIdToPairId.invalidate(containerId);
         try {
-            dockerClient
-                .removeContainerCmd(containerId)
-                .withForce(true)
-                .withRemoveVolumes(false)
-                .exec();
+            removeContainerArtifacts(containerId, false);
             log.debug("Removed completed container: " + containerId);
         } catch (Exception e) {
             log.warn(

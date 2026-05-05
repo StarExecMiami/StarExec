@@ -207,6 +207,10 @@ public class ContainerJobMonitor {
             // Get all completed containers that haven't been processed
             List<PodmanBackend.CompletedContainerInfo> completedJobs =
                 backend.getCompletedContainers();
+            Set<String> protectedContainerIds = new HashSet<>();
+            for (PodmanBackend.CompletedContainerInfo info : completedJobs) {
+                protectedContainerIds.add(info.containerId);
+            }
 
             int processedCount = 0;
 
@@ -244,13 +248,19 @@ public class ContainerJobMonitor {
                 }
             }
 
+            int staleCleanupCount = backend.cleanupStaleExitedContainers(
+                protectedContainerIds
+            );
+
             // Update adaptive polling based on work found
-            if (processedCount > 0) {
-                pollInterval.recordWorkFound(processedCount);
+            if (processedCount > 0 || staleCleanupCount > 0) {
+                pollInterval.recordWorkFound(processedCount + staleCleanupCount);
                 log.debug(
                     "ContainerJobMonitor: Processed " +
                         processedCount +
-                        " completed jobs. " +
+                        " completed jobs and swept " +
+                        staleCleanupCount +
+                        " stale exited containers. " +
                         pollInterval.getStats()
                 );
             } else {

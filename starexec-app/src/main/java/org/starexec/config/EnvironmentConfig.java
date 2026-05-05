@@ -633,6 +633,21 @@ public class EnvironmentConfig {
     }
 
     /**
+     * Minimum age in seconds before the Podman backend sweeps an exited managed
+     * container that was not processed by the normal completion-monitor path.
+     *
+     * <p>A value of 0 disables the stale exited-container sweep.</p>
+     */
+    public static long getContainerExitedCleanupAgeSeconds() {
+        return Math.max(
+            0L,
+            Long.parseLong(
+                getEnv("STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS", "86400")
+            )
+        );
+    }
+
+    /**
      * Host path corresponding to STAREXEC_DATA_DIR for DooD (Docker-outside-of-Docker) scenarios.
      *
      * <p>

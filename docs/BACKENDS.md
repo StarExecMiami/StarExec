@@ -213,7 +213,8 @@ export STAREXEC_BACKEND_TYPE=podman
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096      # 4GB per job
 export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1         # 1 CPU per job
 export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300 # 5 minutes
-export STAREXEC_CONTAINER_MONITOR_POLL_MS=5000        # Poll every 5s
+export STAREXEC_CONTAINER_POLL_INTERVAL_MS=5000       # Poll every 5s
+export STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS=86400 # Sweep stale exited managed containers after 24h
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5             # Batch size
 ```
 
@@ -272,13 +273,13 @@ Jobs write results to mounted volumes:
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=8
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
 export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
-export STAREXEC_CONTAINER_MONITOR_POLL_MS=2000
+export STAREXEC_CONTAINER_POLL_INTERVAL_MS=2000
 
 # Memory-constrained (16GB RAM)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=3
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048
 export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_MONITOR_POLL_MS=10000
+export STAREXEC_CONTAINER_POLL_INTERVAL_MS=10000
 ```
 
 ---
@@ -502,7 +503,7 @@ export OAR_SERVER=oar-server.example.com
 |-----------|---------|-------------|
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Batch size per submission cycle |
 | `STAREXEC_NODE_MULTIPLIER` | 16 | Queue depth = multiplier × nodes |
-| `STAREXEC_CONTAINER_MONITOR_POLL_MS` | 5000 | Poll interval for job completion |
+| `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Poll interval for job completion |
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Memory limit per container |
 | `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | 1 | CPU cores per container |
 | `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 300 | Wallclock timeout (seconds) |

@@ -7,8 +7,14 @@ pipeline {
     options {
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '5'))
+        buildDiscarder(logRotator(
+            daysToKeepStr: '30',
+            numToKeepStr: '20',
+            artifactDaysToKeepStr: '14',
+            artifactNumToKeepStr: '5'
+        ))
         disableConcurrentBuilds()
+        skipDefaultCheckout(true)
     }
 
     triggers {
@@ -59,6 +65,7 @@ pipeline {
 
         stage('Checkout') {
             steps {
+                deleteDir()
                 checkout scm
                 script {
                     GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
@@ -417,6 +424,10 @@ Build log: ${env.BUILD_URL}consoleFull
 """.stripIndent()
                 )
             }
+        }
+
+        cleanup {
+            deleteDir()
         }
     }
 }
