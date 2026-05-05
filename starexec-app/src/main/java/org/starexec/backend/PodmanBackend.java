@@ -37,6 +37,7 @@ import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Queues;
 import org.starexec.data.to.Status;
+import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
 /**
@@ -103,7 +104,17 @@ public class PodmanBackend implements Backend {
 
     // Label keys for container management
     private static final String LABEL_PAIR_ID = "starexec.pair.id";
+    private static final String LABEL_EXEC_ID = "starexec.exec.id";
     private static final String LABEL_MANAGED = "starexec.managed";
+    private static final String LABEL_VERSION = "starexec.label.version";
+    private static final String CURRENT_LABEL_VERSION = "2";
+    // Containers without this label are legacy (timestamp-based pairId, pre-v2.3.1).
+    // Their pairId labels cannot be trusted as authoritative.
+    private static final String LABEL_KIND = "starexec.kind";
+    private static final String KIND_JOB_PAIR = "job-pair";
+    // Maintenance containers (e.g. ClearCacheManager) use this kind to opt out
+    // of job-pair reconciliation and monitoring.
+    private static final String KIND_MAINTENANCE = "maintenance";
 
     // Configuration (loaded from EnvironmentConfig)
     private String containerSocketPath;
@@ -163,6 +174,9 @@ public class PodmanBackend implements Backend {
 
     // Monitor for processing completed container jobs
     private ContainerJobMonitor jobMonitor;
+
+    // Flag set during graceful shutdown to reject new submissions
+    private volatile boolean shuttingDown = false;
 
     // Cached node ID for database updates to avoid N+1 queries
     private int cachedNodeId = -1;
@@ -229,6 +243,11 @@ public class PodmanBackend implements Backend {
             // Cache the node ID to avoid database queries during job submission.
             // In some startup orders, this node may not yet exist; event handler will retry lazily.
             cachedNodeId = resolveContainerWorkerNodeId();
+
+            // Reconcile pairs left in ENQUEUED or RUNNING state from a previous crash.
+            // Must run before the monitor starts so exited containers are processed
+            // before the normal polling loop begins.
+            reconcileOrphanedPairs();
 
             // Start the job completion monitor
             this.jobMonitor = new ContainerJobMonitor(this);
@@ -820,10 +839,29 @@ public class PodmanBackend implements Backend {
 
     /**
      * Releases resources and cleans up.
+     *
+     * <p>Shutdown ordering is critical to avoid leaving pairs stranded in
+     * RUNNING status with no container to process:</p>
+     * <ol>
+     *   <li>Stop accepting new submissions</li>
+     *   <li>Drain the db-update executor</li>
+     *   <li>Run one final completed-container scan so the monitor can
+     *       process any containers that finished just before shutdown</li>
+     *   <li>Stop the job monitor</li>
+     *   <li>Close the Podman client</li>
+     *   <li><b>Do not</b> blanket-remove managed containers —
+     *       startup reconciliation will recover them</li>
+     * </ol>
      */
     @Override
     public void destroyIf() {
-        // Stop the db update executor
+        // 1. Quiesce submissions so no new containers are created during
+        //    shutdown.  Set the flag BEFORE acquiring the lock so any
+        //    submitScript() that checks the flag after we set it but before
+        //    we release the lock sees the shutdown.
+        shuttingDown = true;
+
+        // 2. Drain the db update executor
         if (dbUpdateExecutor != null) {
             dbUpdateExecutor.shutdown();
             try {
@@ -838,7 +876,23 @@ public class PodmanBackend implements Backend {
             }
         }
 
-        // Stop the job monitor first
+        // 3. Run one final completed-container scan so any container that
+        //    finished just before shutdown gets its DB update.
+        if (jobMonitor != null && dockerClient != null) {
+            try {
+                // Inline a single checkCompletedJobs-like scan.
+                // We cannot call the monitor's private method directly,
+                // so we delegate through getCompletedContainers and
+                // the normal processing path via the monitor's public API.
+                log.info("Running final completed-container scan before shutdown...");
+                jobMonitor.drainAndStop();
+            } catch (Exception e) {
+                log.warn("Error during final container scan before shutdown", e);
+            }
+        }
+
+        // 4. The monitor is already stopped by drainAndStop() above.
+        //    Guard against double-stop if drainAndStop() was skipped.
         if (jobMonitor != null) {
             try {
                 jobMonitor.stop();
@@ -848,14 +902,14 @@ public class PodmanBackend implements Backend {
             }
         }
 
+        // 5. Close the Podman client.
+        //    Managed containers are left in place so startup reconciliation
+        //    can find and process them on the next boot.
         if (dockerClient != null) {
             try {
-                // Clean up any orphaned StarExec containers
-                cleanupOrphanedContainers();
-
                 dockerClient.close();
                 dockerClient = null;
-                log.info("PodmanBackend destroyed successfully.");
+                log.info("PodmanBackend destroyed successfully (containers preserved for recovery).");
             } catch (Exception e) {
                 log.warn("Error during PodmanBackend cleanup", e);
             }
@@ -903,6 +957,14 @@ public class PodmanBackend implements Backend {
         int execIdForSlot = -1;
         boolean slotAcquired = false;
         boolean submissionAccepted = false;
+
+        // Reject new submissions during graceful shutdown so no containers
+        // are created after the final drain-and-stop sequence.
+        if (shuttingDown) {
+            log.warn("Rejecting submission for pair " + pairId +
+                     " — backend is shutting down");
+            return -1;
+        }
 
         synchronized (execIdLock) {
             execIdForSlot = nextExecId++;
@@ -1058,11 +1120,11 @@ public class PodmanBackend implements Backend {
         String outputDir = logDir != null ? logDir.toString() : "/tmp/output";
 
         List<String> envVars = createEnvironmentVariables(
-            timestamp,
+            pairId,
             workingDirectory,
             outputDir
         );
-        Map<String, String> labels = createContainerLabels(timestamp);
+        Map<String, String> labels = createContainerLabels(pairId, execId);
 
         // Log container creation parameters for debugging
         log.info("Creating container with:");
@@ -1643,7 +1705,7 @@ public class PodmanBackend implements Backend {
      * script from hardcoded paths, improving maintainability.
      * </p>
      *
-     * @param pairId           The job pair ID
+     * @param pairId           The actual job pair ID (not a timestamp)
      * @param workingDirectory The job's working directory on the host
      * @param outputDir        Directory where the job should write status.json and other output files
      */
@@ -1681,11 +1743,17 @@ public class PodmanBackend implements Backend {
 
     /**
      * Creates labels for container management.
+     *
+     * @param pairId The job pair ID (stored as {@code starexec.pair.id})
+     * @param execId The backend execution ID (stored as {@code starexec.exec.id})
      */
-    private Map<String, String> createContainerLabels(long pairId) {
+    private Map<String, String> createContainerLabels(int pairId, int execId) {
         Map<String, String> labels = new HashMap<>();
         labels.put(LABEL_MANAGED, "true");
         labels.put(LABEL_PAIR_ID, String.valueOf(pairId));
+        labels.put(LABEL_EXEC_ID, String.valueOf(execId));
+        labels.put(LABEL_VERSION, CURRENT_LABEL_VERSION);
+        labels.put(LABEL_KIND, pairId > 0 ? KIND_JOB_PAIR : KIND_MAINTENANCE);
         return labels;
     }
 
@@ -1771,7 +1839,395 @@ public class PodmanBackend implements Backend {
     }
 
     /**
-     * Cleans up any StarExec containers that might have been orphaned.
+     * Startup reconciliation: finds pairs left in ENQUEUED or RUNNING state
+     * from a previous crash and either recovers them or marks them as failed.
+     *
+     * <p>Called from {@link #initialize(String)} before the monitor starts.
+     * Uses container labels ({@code starexec.pair.id}, {@code starexec.label.version})
+     * as durable identity to match DB state with actual container state.
+     * Only v2+ labels are trusted; legacy (timestamp) labels are skipped.</p>
+     *
+     * <h3>Reconciliation matrix</h3>
+     * <table>
+     *   <tr><th>DB status</th><th>Container state</th><th>Action</th></tr>
+     *   <tr><td>ENQUEUED</td><td>running</td><td>rebuild tracking, leave active</td></tr>
+     *   <tr><td>ENQUEUED</td><td>exited + v2 label</td><td>process through normal completion</td></tr>
+     *   <tr><td>ENQUEUED</td><td>none / legacy label</td><td>reset pair + stages to PENDING_SUBMIT</td></tr>
+     *   <tr><td>RUNNING</td><td>running</td><td>rebuild tracking, leave active</td></tr>
+     *   <tr><td>RUNNING</td><td>exited + v2 label</td><td>process through normal completion</td></tr>
+     *   <tr><td>RUNNING</td><td>none / legacy label</td><td>mark terminal failure (unsafe to auto-rerun)</td></tr>
+     * </table>
+     */
+    private void reconcileOrphanedPairs() {
+        try {
+            log.info("Starting orphaned-pair reconciliation...");
+
+            // ---- Step 1: build container→pairId maps from V2 labels only ----
+            Map<Integer, String> pairIdToRunningContainer = new HashMap<>();
+            Map<Integer, String> pairIdToExitedContainer = new HashMap<>();
+            Map<Integer, Integer> pairIdToExecId = new HashMap<>();
+            int legacyContainers = 0;
+            int maintenanceContainers = 0;
+
+            List<Container> allContainers = dockerClient
+                .listContainersCmd()
+                .withShowAll(true)
+                .withLabelFilter(Collections.singletonMap(LABEL_MANAGED, "true"))
+                .exec();
+
+            for (Container container : allContainers) {
+                String kindLabel = container.getLabels().get(LABEL_KIND);
+                if (KIND_MAINTENANCE.equals(kindLabel)) {
+                    maintenanceContainers++;
+                    continue; // maintenance containers are not job-pair artifacts
+                }
+
+                String versionLabel = container.getLabels().get(LABEL_VERSION);
+                boolean isV2Label = CURRENT_LABEL_VERSION.equals(versionLabel);
+                if (!isV2Label) {
+                    legacyContainers++;
+                    continue; // legacy timestamp labels are not trusted
+                }
+
+                String pairIdStr = container.getLabels().get(LABEL_PAIR_ID);
+                String execIdStr = container.getLabels().get(LABEL_EXEC_ID);
+                if (pairIdStr == null) continue;
+
+                try {
+                    int pairId = Integer.parseInt(pairIdStr);
+                    if (pairId <= 0) continue; // guard: never act on invalid pairId
+
+                    String containerId = container.getId();
+
+                    // Inspect actual running state for "created" containers.
+                    // Podman may report "created" for a container whose init
+                    // process hasn't started yet; only trust "running" from
+                    // the live inspection.
+                    boolean trulyRunning = containerIsActuallyRunning(container);
+
+                    if (trulyRunning) {
+                        pairIdToRunningContainer.put(pairId, containerId);
+                    } else {
+                        pairIdToExitedContainer.put(pairId, containerId);
+                    }
+
+                    if (execIdStr != null) {
+                        pairIdToExecId.put(pairId, Integer.parseInt(execIdStr));
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Malformed label — cannot trust
+                }
+            }
+
+            log.info("Reconciliation: found " + pairIdToRunningContainer.size() +
+                     " running, " + pairIdToExitedContainer.size() +
+                     " exited V2 containers (" + legacyContainers +
+                     " legacy, " + maintenanceContainers + " maintenance skipped)");
+
+            // ---- Step 2: query DB for ENQUEUED and RUNNING pairs ----
+            List<Integer> enqueuedIds = JobPairs.getPairIdsByStatusCode(
+                StatusCode.STATUS_ENQUEUED.getVal());
+            List<Integer> runningIds = JobPairs.getPairIdsByStatusCode(
+                StatusCode.STATUS_RUNNING.getVal());
+
+            log.info("Reconciliation: DB has " + enqueuedIds.size() +
+                     " ENQUEUED pairs, " + runningIds.size() + " RUNNING pairs");
+
+            int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
+            int runningFailed = 0, runningProcessed = 0, runningRebuilt = 0;
+            int maxRecoveredExecId = 0;
+
+            // ---- Step 3a: reconcile ENQUEUED pairs ----
+            for (int pairId : enqueuedIds) {
+                if (pairIdToRunningContainer.containsKey(pairId)) {
+                    Integer execId = pairIdToExecId.get(pairId);
+                    rebuildTrackingFromLabel(
+                        pairId, pairIdToRunningContainer.get(pairId), execId);
+                    if (execId != null && execId > maxRecoveredExecId) {
+                        maxRecoveredExecId = execId;
+                    }
+                    enqueuedRebuilt++;
+                } else if (pairIdToExitedContainer.containsKey(pairId)) {
+                    processReconciledContainerThroughMonitor(
+                        pairId, pairIdToExitedContainer.get(pairId));
+                    enqueuedProcessed++;
+                } else {
+                    JobPairs.ConditionalPairUpdateResult result =
+                        JobPairs.tryResetEnqueuedToPending(pairId);
+                    if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                        enqueuedReset++;
+                    }
+                }
+            }
+
+            // ---- Step 3b: reconcile RUNNING pairs ----
+            for (int pairId : runningIds) {
+                if (pairIdToRunningContainer.containsKey(pairId)) {
+                    Integer execId = pairIdToExecId.get(pairId);
+                    rebuildTrackingFromLabel(
+                        pairId, pairIdToRunningContainer.get(pairId), execId);
+                    if (execId != null && execId > maxRecoveredExecId) {
+                        maxRecoveredExecId = execId;
+                    }
+                    runningRebuilt++;
+                } else if (pairIdToExitedContainer.containsKey(pairId)) {
+                    processReconciledContainerThroughMonitor(
+                        pairId, pairIdToExitedContainer.get(pairId));
+                    runningProcessed++;
+                } else {
+                    JobPairs.ConditionalPairUpdateResult result =
+                        JobPairs.tryMarkRunningAsFailed(pairId);
+                    if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                        runningFailed++;
+                    }
+                }
+            }
+
+            // ---- Step 5: advance nextExecId past recovered ids ----
+            if (maxRecoveredExecId > 0) {
+                synchronized (execIdLock) {
+                    if (maxRecoveredExecId >= nextExecId) {
+                        nextExecId = maxRecoveredExecId + 1;
+                        log.info("Reconciliation: advanced nextExecId to " + nextExecId);
+                    }
+                }
+            }
+
+            log.info("Reconciliation complete: ENQUEUED→reset=" + enqueuedReset +
+                     " processed=" + enqueuedProcessed + " rebuilt=" + enqueuedRebuilt +
+                     "; RUNNING→failed=" + runningFailed +
+                     " processed=" + runningProcessed + " rebuilt=" + runningRebuilt);
+
+            // ---- Step 4: remove stale terminal containers (V2 only) ----
+            cleanupStaleTerminalContainers(allContainers);
+
+        } catch (Exception e) {
+            log.error("Failed to reconcile orphaned pairs on startup", e);
+        }
+    }
+
+    /**
+     * Determines whether a container is actually running by inspecting its
+     * live state, not just the listing label.
+     *
+     * <p>The list endpoint may return {@code created} for a container whose
+     * init process has not started yet. Only a live inspection can confirm
+     * actual running state.</p>
+     */
+    private boolean containerIsActuallyRunning(Container listedContainer) {
+        try {
+            var inspection = dockerClient
+                .inspectContainerCmd(listedContainer.getId())
+                .exec();
+            var state = inspection.getState();
+            return state != null && Boolean.TRUE.equals(state.getRunning());
+        } catch (Exception e) {
+            log.debug("Cannot inspect container " + listedContainer.getId() +
+                      " for running state; assuming not running", e);
+            return false;
+        }
+    }
+
+    /**
+     * Rebuilds in-memory tracking maps from a container label so the backend
+     * can manage the container as if it had submitted it normally.
+     */
+    private void rebuildTrackingFromLabel(
+        int pairId, String containerId, Integer execId) {
+        if (pairId <= 0) return;
+        containerIdToPairId.put(containerId, pairId);
+        if (execId != null && execId > 0) {
+            execIdToContainerId.put(execId, containerId);
+            // Do NOT hold a submission slot for containers found during
+            // reconciliation — they were submitted in a previous session.
+        }
+        log.debug("Rebuilt tracking for pair " + pairId +
+                  " (container " + containerId + ", execId=" + execId + ")");
+    }
+
+    /**
+     * Processes one exited container found during reconciliation through the
+     * normal ContainerJobMonitor completion path, reading status.json, stats,
+     * and updating the DB with the actual result.
+     *
+     * <p>Unlike the previous blind ERROR_RUNSCRIPT approach, this reuses the
+     * same logic as the normal completion monitor so that a solver that
+     * completed successfully before a crash is recorded correctly.</p>
+     */
+    private void processReconciledContainerThroughMonitor(
+        int pairId, String containerId) {
+        if (pairId <= 0 || containerId == null) return;
+        try {
+            // Put entry in cache so inspect can find the pairId
+            containerIdToPairId.put(containerId, pairId);
+
+            // Build a CompletedContainerInfo from container inspection
+            List<CompletedContainerInfo> completed =
+                getCompletedContainersForIds(Collections.singletonList(containerId));
+            if (completed.isEmpty()) {
+                log.warn("Reconciliation: cannot inspect container " + containerId +
+                         " for pair " + pairId + "; marking as failed");
+                JobPairs.setPairStatusPrecise(pairId, 1,
+                    StatusCode.ERROR_RUNSCRIPT.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal());
+                removeCompletedContainer(containerId);
+                return;
+            }
+
+            // Process through monitor's completion logic
+            CompletedContainerInfo info = completed.get(0);
+            if (info.pairId <= 0) {
+                info = new CompletedContainerInfo(
+                    info.containerId, pairId, info.outputDir, info.exitCode);
+            }
+
+            // Delegate to ContainerJobMonitor for full processing
+            // (reads status.json, stats, attributes, updates DB)
+            if (jobMonitor != null) {
+                jobMonitor.processReconciledJob(info);
+                removeCompletedContainer(containerId);
+                log.info("Reconciliation: processed container for pair " + pairId +
+                         " through normal completion path");
+            } else {
+                // Monitor not yet created — use emergency path
+                log.warn("Reconciliation: monitor not available for pair " + pairId +
+                         "; using emergency error marking");
+                JobPairs.setPairStatusPrecise(pairId, 1,
+                    StatusCode.ERROR_RUNSCRIPT.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal());
+                removeCompletedContainer(containerId);
+            }
+        } catch (Exception e) {
+            log.warn("Reconciliation: failed to process container " +
+                     containerId + " for pair " + pairId, e);
+            // Emergency: mark as error so the pair doesn't stay stuck forever
+            try {
+                JobPairs.setPairStatusPrecise(pairId, 1,
+                    StatusCode.ERROR_RUNSCRIPT.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal());
+                removeCompletedContainer(containerId);
+            } catch (Exception ignored) { }
+        }
+    }
+
+    /**
+     * Returns completed-container info for a specific set of container IDs
+     * by reusing the same inspection logic as {@link #collectCompletedContainers}.
+     */
+    private List<CompletedContainerInfo> getCompletedContainersForIds(
+        List<String> containerIds) {
+        List<CompletedContainerInfo> result = new ArrayList<>();
+        if (containerIds == null || containerIds.isEmpty()) return result;
+
+        try {
+            List<Container> allExited = dockerClient
+                .listContainersCmd()
+                .withShowAll(true)
+                .withLabelFilter(Collections.singletonMap(LABEL_MANAGED, "true"))
+                .withStatusFilter(Collections.singletonList("exited"))
+                .exec();
+
+            for (Container container : allExited) {
+                if (containerIds.contains(container.getId())) {
+                    String pairIdLabel = container.getLabels().get(LABEL_PAIR_ID);
+                    if (pairIdLabel == null) continue;
+
+                    int pairId = -1;
+                    try { pairId = Integer.parseInt(pairIdLabel); }
+                    catch (NumberFormatException ignored) { }
+
+                    if (pairId <= 0) continue;
+
+                    var inspection = dockerClient.inspectContainerCmd(container.getId()).exec();
+                    var state = inspection.getState();
+                    int exitCode = 0;
+                    if (state != null && state.getExitCodeLong() != null) {
+                        exitCode = state.getExitCodeLong().intValue();
+                    }
+
+                    String outputDir = null;
+                    var config = inspection.getConfig();
+                    if (config != null && config.getEnv() != null) {
+                        for (String env : config.getEnv()) {
+                            if (env.startsWith("STAREXEC_OUTPUT_DIR=")) {
+                                outputDir = env.substring("STAREXEC_OUTPUT_DIR=".length());
+                                break;
+                            }
+                        }
+                    }
+
+                    if (outputDir == null) {
+                        var mounts = inspection.getMounts();
+                        if (mounts != null) {
+                            for (var mount : mounts) {
+                                var dest = mount.getDestination();
+                                if (dest != null && dest.getPath() != null &&
+                                    dest.getPath().contains("/app/data")) {
+                                    outputDir = mount.getSource();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (outputDir != null) {
+                        result.add(new CompletedContainerInfo(
+                            container.getId(), pairId, outputDir, exitCode));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to get completed containers for IDs", e);
+        }
+        return result;
+    }
+
+    /**
+     * Removes managed containers whose DB pair is already in a terminal state.
+     * Only processes V2-labeled containers; legacy containers are left alone.
+     */
+    private void cleanupStaleTerminalContainers(List<Container> allContainers) {
+        int removed = 0;
+        for (Container container : allContainers) {
+            try {
+                String versionLabel = container.getLabels().get(LABEL_VERSION);
+                if (!CURRENT_LABEL_VERSION.equals(versionLabel)) continue;
+
+                String pairIdStr = container.getLabels().get(LABEL_PAIR_ID);
+                if (pairIdStr == null) continue;
+                int pairId = Integer.parseInt(pairIdStr);
+                if (pairId <= 0) continue;
+
+                JobPairs.PairStatusLookupResult lookup =
+                    JobPairs.getPairStatusLookup(pairId);
+                if (lookup.isMissing()) {
+                    removeContainerArtifacts(container.getId(), true);
+                    removed++;
+                } else if (!lookup.isError()) {
+                    StatusCode sc = StatusCode.toStatusCode(lookup.getStatusCode());
+                    if (sc != null && sc.finishedRunning()) {
+                        removeContainerArtifacts(container.getId(), true);
+                        removed++;
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Skipping container during stale-terminal sweep: " +
+                          e.getMessage());
+            }
+        }
+        if (removed > 0) {
+            log.info("Reconciliation: removed " + removed +
+                     " stale terminal-pair containers");
+        }
+    }
+
+    /**
+     * Cleans up any StarExec containers with the managed label,
+     * regardless of whether they are tracked in-memory.
+     *
+     * <p>Use this for explicit force-cleanup (e.g., {@link #killAll()}).
+     * During normal graceful shutdown, containers are left in place so
+     * startup reconciliation can process them.</p>
      */
     private void cleanupOrphanedContainers() {
         try {
@@ -2011,24 +2467,30 @@ public class PodmanBackend implements Backend {
 
         for (Container container : containers) {
             try {
+                // Only trust pairId labels from V2+ containers.
+                // Legacy containers (timestamp-based labels, pre-v2.3.1)
+                // must fall back to status.json and should not have their
+                // label used for direct DB updates.
+                String versionLabel = container.getLabels().get(LABEL_VERSION);
+                boolean isV2Label = CURRENT_LABEL_VERSION.equals(versionLabel);
+
                 String pairIdLabel = container.getLabels().get(LABEL_PAIR_ID);
                 if (pairIdLabel == null) continue;
 
-                // The label may contain a timestamp instead of actual pair ID
-                // We'll use -1 as a placeholder and let ContainerJobMonitor read
-                // the real pair ID from status.json
                 int pairId = -1;
-                try {
-                    // Check if it's a reasonable pair ID (under 10 million)
-                    long labelValue = Long.parseLong(pairIdLabel);
-                    if (labelValue < 10_000_000) {
-                        pairId = (int) labelValue;
+                if (isV2Label) {
+                    // V2 label: authoritative, trust it directly
+                    try {
+                        pairId = Integer.parseInt(pairIdLabel);
+                        if (pairId <= 0) pairId = -1;
+                    } catch (NumberFormatException e) {
+                        log.warn("Malformed V2 pair ID label: " + pairIdLabel);
                     }
-                } catch (NumberFormatException e) {
-                    log.warn(
-                        "Invalid pair ID format in container label: " +
-                            pairIdLabel
-                    );
+                } else {
+                    // Legacy label: DO NOT parse as pairId.
+                    // Let the monitor read status.json instead.
+                    log.debug("Legacy container " + container.getId() +
+                              " — will use status.json for pairId resolution");
                 }
 
                 // Get output directory from container inspection

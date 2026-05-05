@@ -2908,6 +2908,123 @@ public class JobPairs {
     }
 
     /**
+     * Resets an ENQUEUED pair back to PENDING_SUBMIT, but only if the pair
+     * is still in ENQUEUED status (prevents race with concurrent updates).
+     *
+     * <p>Used by startup reconciliation: if a pair was claimed (ENQUEUED)
+     * but never submitted to a backend and no container evidence exists,
+     * it is safe to re-queue.</p>
+     *
+     * @param pairId The pair to reset
+     * @return UPDATED if reset, STALE if pair is no longer ENQUEUED, ERROR on failure
+     */
+    public static ConditionalPairUpdateResult tryResetEnqueuedToPending(int pairId) {
+        Connection con = null;
+        PreparedStatement pairPs = null;
+        PreparedStatement stagePs = null;
+        PreparedStatement lockPs = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            // Lock the row and verify it is still ENQUEUED
+            lockPs = con.prepareStatement(
+                "SELECT status_code FROM starexec.job_pairs WHERE id = ? FOR UPDATE");
+            lockPs.setInt(1, pairId);
+            rs = lockPs.executeQuery();
+            if (!rs.next() || rs.getInt(1) != StatusCode.STATUS_ENQUEUED.getVal()) {
+                Common.doRollback(con);
+                return ConditionalPairUpdateResult.STALE;
+            }
+            Common.safeClose(rs);
+            Common.safeClose(lockPs);
+
+            // Reset the pair
+            pairPs = con.prepareStatement(
+                "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?");
+            pairPs.setInt(1, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+            pairPs.setInt(2, pairId);
+            pairPs.executeUpdate();
+
+            // Reset all stages
+            stagePs = con.prepareStatement(
+                "UPDATE starexec.jobpair_stage_data SET status_code = ? WHERE jobpair_id = ?");
+            stagePs.setInt(1, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+            stagePs.setInt(2, pairId);
+            stagePs.executeUpdate();
+
+            Common.endTransaction(con);
+            return ConditionalPairUpdateResult.UPDATED;
+        } catch (Exception e) {
+            log.error("tryResetEnqueuedToPending pairId=" + pairId, e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(lockPs);
+            Common.safeClose(stagePs);
+            Common.safeClose(pairPs);
+            Common.safeClose(con);
+        }
+        return ConditionalPairUpdateResult.ERROR;
+    }
+
+    /**
+     * Marks a RUNNING pair as a terminal failure, but only if the pair
+     * is still in RUNNING status (prevents race with concurrent updates).
+     *
+     * <p>Used by startup reconciliation: if a pair was RUNNING but no
+     * container evidence exists after restart, the solver may have executed
+     * but its output is lost.  Marking as failed is safer than auto-rerun.</p>
+     *
+     * @param pairId The pair to mark as failed
+     * @return UPDATED if marked, STALE if pair is no longer RUNNING, ERROR on failure
+     */
+    public static ConditionalPairUpdateResult tryMarkRunningAsFailed(int pairId) {
+        Connection con = null;
+        PreparedStatement lockPs = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            // Lock the row and verify it is still RUNNING
+            lockPs = con.prepareStatement(
+                "SELECT status_code FROM starexec.job_pairs WHERE id = ? FOR UPDATE");
+            lockPs.setInt(1, pairId);
+            rs = lockPs.executeQuery();
+            if (!rs.next() || rs.getInt(1) != StatusCode.STATUS_RUNNING.getVal()) {
+                Common.doRollback(con);
+                return ConditionalPairUpdateResult.STALE;
+            }
+            Common.endTransaction(con);
+            // Transaction committed; now use the precise procedure which
+            // handles pair, stages, job_pair_completion, and parent job
+            // finalisation in its own transaction.
+        } catch (Exception e) {
+            log.error("tryMarkRunningAsFailed lock pairId=" + pairId, e);
+            Common.doRollback(con);
+            return ConditionalPairUpdateResult.ERROR;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(lockPs);
+            Common.safeClose(con);
+        }
+
+        // Outside the lock transaction: call the stored procedure which
+        // has its own internal transaction for the update + side effects.
+        try {
+            setPairStatusPrecise(pairId, 1,
+                StatusCode.ERROR_RUNSCRIPT.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal());
+            return ConditionalPairUpdateResult.UPDATED;
+        } catch (Exception e) {
+            log.error("tryMarkRunningAsFailed setPairStatusPrecise pairId=" + pairId, e);
+            return ConditionalPairUpdateResult.ERROR;
+        }
+    }
+
+    /**
      * Updates job pair run solver statistics (CPU time, wallclock, memory, etc.)
      *
      * @param pairId The ID of the job pair
@@ -3269,6 +3386,41 @@ public class JobPairs {
             pairs.addAll(runningPairs);
         }
         return pairs;
+    }
+
+    /**
+     * Returns the IDs of all job pairs with the given status code.
+     *
+     * <p>Used by {@code PodmanBackend.reconcileOrphanedPairs()} on startup
+     * to find pairs that were left in ENQUEUED or RUNNING state after a crash.</p>
+     *
+     * @param statusCode The status code to filter by
+     * @return List of pair IDs, never null
+     */
+    public static List<Integer> getPairIdsByStatusCode(int statusCode) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            List<Integer> ids = new ArrayList<>();
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT id FROM starexec.job_pairs WHERE status_code = ?"
+            );
+            ps.setInt(1, statusCode);
+            rs = ps.executeQuery();
+            while (rs.next()) {
+                ids.add(rs.getInt("id"));
+            }
+            return ids;
+        } catch (Exception e) {
+            log.error("getPairIdsByStatusCode", e);
+            return new ArrayList<>();
+        } finally {
+            Common.safeClose(con);
+            Common.safeClose(ps);
+            Common.safeClose(rs);
+        }
     }
 
     /**

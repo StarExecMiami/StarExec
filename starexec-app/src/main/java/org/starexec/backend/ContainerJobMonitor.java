@@ -200,6 +200,61 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Runs one final completion scan and then stops the monitor.
+     *
+     * <p>Call this during graceful shutdown to process any containers that
+     * completed just before teardown, preventing pairs from being left in
+     * RUNNING status with no container to recover from.</p>
+     *
+     * <p>Thread safety: sets running=false and cancels pending poll before
+     * performing the final scan to prevent races with the scheduled poll.</p>
+     */
+    public void drainAndStop() {
+        log.info("ContainerJobMonitor: draining final completions before stop...");
+        running = false;
+
+        // Cancel any pending poll so we don't race with it
+        if (scheduledPoll != null) {
+            scheduledPoll.cancel(false);
+        }
+
+        try {
+            checkCompletedJobs();
+        } catch (Exception e) {
+            log.warn("Error during final completion drain", e);
+        }
+        stop();
+    }
+
+    /**
+     * Processes a single completed container that was discovered during
+     * startup reconciliation.  Uses the same completion path as the normal
+     * monitor so that status.json, stats, and attributes are read and the
+     * DB is updated with the actual result.
+     *
+     * <p>Package-visible so {@code PodmanBackend} can call it during
+     * {@code reconcileOrphanedPairs()}.</p>
+     *
+     * @param info Completed container info from reconciliation
+     */
+    void processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
+        try {
+            processCompletedJob(info);
+        } catch (Exception e) {
+            log.error("Error processing reconciled job " + info.pairId, e);
+            // Emergency error marking so the pair doesn't stay stuck
+            try {
+                JobPairs.setPairStatusPrecise(
+                    info.pairId, 1,
+                    StatusCode.ERROR_RUNSCRIPT.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal());
+            } catch (Exception ex) {
+                log.error("Failed to set error status for pair " + info.pairId, ex);
+            }
+        }
+    }
+
+    /**
      * Checks for completed containers and processes their results.
      */
     private void checkCompletedJobs() {

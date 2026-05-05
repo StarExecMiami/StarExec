@@ -876,8 +876,13 @@ public class PodmanBackendTests {
     }
 
     @Test
-    public void testDestroyIf_CleansUpOrphanedContainers() {
-        // Setup: Mock orphaned containers
+    public void testDestroyIf_DrainsMonitorAndPreservesContainers()
+        throws Exception {
+        // Setup: inject a mock monitor whose drainAndStop() is tracked
+        ContainerJobMonitor mockMonitor = mock(ContainerJobMonitor.class);
+        setJobMonitor(mockMonitor);
+
+        // Setup: orphaned containers exist (but should NOT be removed)
         Container mockContainer = mock(Container.class);
         when(mockContainer.getId()).thenReturn("orphaned-container");
         when(mockListContainersCmd.exec()).thenReturn(Collections.singletonList(mockContainer));
@@ -885,7 +890,11 @@ public class PodmanBackendTests {
         // Execute
         backend.destroyIf();
 
-        // Verify cleanup was attempted
-        verify(mockDockerClient).removeContainerCmd("orphaned-container");
+        // Verify: monitor is drained before stop
+        verify(mockMonitor).drainAndStop();
+        // Verify: client is closed
+        verify(mockDockerClient).close();
+        // Verify: containers are NOT removed during normal shutdown
+        verify(mockDockerClient, never()).removeContainerCmd(anyString());
     }
 }
