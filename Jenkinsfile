@@ -147,7 +147,7 @@ pipeline {
             // we attempt a deployment that would fail halfway through.
             when {
                 allOf {
-                    bexpression { env.GIT_BRANCH == 'containerised' || env.BRANCH_NAME == 'containerised' 
+                    expression { env.GIT_BRANCH == 'containerised' || env.BRANCH_NAME == 'containerised' }
                     expression { params.DEPLOY_ENV == 'prod' }
                 }
             }
