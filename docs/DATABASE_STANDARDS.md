@@ -13,7 +13,7 @@ Use the following guidelines to determine the appropriate `ON DELETE` behavior:
 #### 1. ON DELETE CASCADE
 Use when child records have no meaning without the parent record.
 - **Examples**: 
-  - `analytics_users.user_id → users.id` - User analytics should be deleted when user is deleted
+  - `solver_pipelines.user_id → users.id` - Solver pipelines are owned by a user and should be removed when that user is deleted
   - `runscript_errors.job_pair_id → job_pairs.id` - Runscript errors should be deleted when job pair is deleted
   - `benchmarks.user_id → users.id` - Benchmarks should be deleted when user is deleted
 
@@ -26,10 +26,16 @@ Use when child records can exist without the parent reference, but the reference
 #### 3. ON DELETE RESTRICT / NO ACTION
 Use when parent record should not be deleted if child records exist (prevents orphaned references).
 - **Examples**:
-  - `processors.syntax_id → syntax.id` - Syntax is a lookup table; shouldn't delete if referenced
+  - `analytics_users.user_id → users.id` - Historical analytics should not silently disappear during user deletion
+  - `analytics_users.event_id → analytics_events.event_id` - Analytics rows should not outlive the event they summarize
   - `logins.user_id → users.id` - Login history should be preserved even if user is deleted
 
-#### 4. ON DELETE CASCADE with ON UPDATE CASCADE
+#### 4. ON DELETE SET DEFAULT
+Use when child rows must remain valid but should fall back to a stable lookup default.
+- **Examples**:
+  - `processors.syntax_id → syntax.id` - Processors fall back to syntax id `1` (Plain Text) instead of being deleted
+
+#### 5. ON DELETE CASCADE with ON UPDATE CASCADE
 Use when foreign key references a column that may be updated.
 - **Examples**:
   - `user_roles.email → users.email` - Email updates should cascade to user roles
@@ -67,12 +73,25 @@ When a user is deleted:
 - All dependent records with `ON DELETE CASCADE` are automatically removed
 - Records with `ON DELETE SET NULL` have user references cleared
 - Records with `ON DELETE RESTRICT/NO ACTION` prevent user deletion (requires manual cleanup)
+- Any filesystem cleanup that depends on IDs or paths which become unreachable after the DB cascade must be **pre-gathered before deletion**. StarExec now pre-collects job, solver, and benchmark IDs before `DeleteUser()` so output directories and pictures can still be removed after the database rows are gone.
+- In-memory authorization caches must also be invalidated as part of the deletion flow. StarExec removes the deleted user from `isAdminCache` after a successful DB delete.
 
 ### Space Deletion Pattern
 When a space is deleted:
 - Space hierarchy in `closure` table is cascaded
 - User associations are cascaded
 - Benchmark/solver/job associations are cascaded
+- Files owned by rows that will be cascade-deleted but are not otherwise recoverable from post-delete queries must be **pre-gathered before the transaction** and removed **after successful commit**. StarExec applies this pattern to processor files during `removeSubspaces()`.
+
+### Historical Snapshot Pattern
+Some columns are intentionally left unconstrained because they preserve the historical identity of completed benchmark runs even after primitives are deleted or recycled. Examples include:
+
+- `job_pairs.bench_id`
+- `jobpair_stage_data.solver_id`
+- `jobpair_stage_data.config_id`
+- `jobpair_stage_data.job_space_id`
+
+These columns should be documented in SQL comments and must not be converted to ordinary foreign keys unless the historical data-retention policy changes.
 
 ## Testing Requirements
 

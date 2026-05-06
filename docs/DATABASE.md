@@ -126,6 +126,30 @@ V10__Performance_indexes.sql    # Version 10
 | `V0021__bcrypt_only_passwords.sql` | BCrypt password migration |
 | `V0025__batch_rerun_and_indexes.sql` | PL/pgSQL function `RerunJobPairsBatch(int[])` for efficient batch job pair resets (replaces N+1 loop) |
 | `V0026__add_missing_indexes.sql` | 13 performance indexes on hot-path columns; runs non-transactionally (`-- flyway:executeInTransaction=false`) to allow `CREATE INDEX CONCURRENTLY` |
+| `V0110__fix_fk_delete_actions.sql` | Rebuilds legacy foreign keys with explicit `ON DELETE` behavior (`SET DEFAULT`, `RESTRICT`, `CASCADE`, `SET NULL`) and documents intentionally unconstrained historical snapshot columns |
+| `V0111__pipeline_anon_fk_constraints.sql` | Adds `solver_pipelines.user_id → users.id ON DELETE CASCADE` and documents why `anonymous_links.primitive_id` remains polymorphic and intentionally unconstrained |
+
+### Repeatable Procedures and Status Guards
+
+The repeatable migration `R__procedures_and_views.sql` contains several
+critical status-management routines. Recent hardening added a shared
+`starexec.IsTerminalPairStatus(INT)` function and uses it to prevent
+illegal state regressions.
+
+- `starexec.UpdatePairStatus(_jobPairId, _statusCode)` now rejects any
+  transition from a terminal pair status back to a non-terminal status.
+- `starexec.UpdatePairStatusPrecise(_pairId, _stageNumber, _terminalStatus,
+  _notReachedStatus)` applies the same downgrade guard while updating the
+  pair-level status and stage rows atomically.
+- `starexec.SetBrokenPairStatus(_pairId, _current_status, _new_status)` now
+  performs an atomic compare-and-set update (`WHERE status_code =
+  _current_status`) so stale reads do not overwrite a pair that changed since
+  the caller last observed it. Terminal updates still insert into
+  `job_pair_completion` and complete the parent job when no active pairs
+  remain.
+
+These guards exist to preserve the integrity of solver result accounting and
+prevent races from moving completed benchmark runs back into an earlier state.
 
 ### Checking Migration Status
 

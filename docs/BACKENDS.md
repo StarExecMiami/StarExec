@@ -347,6 +347,15 @@ The current implementation uses this flow:
            └──────────────────────────────────────────────────┘
 ```
 
+On startup, `KubernetesNativeBackend` now performs a reconciliation pass
+before the monitor starts. It scans ENQUEUED and RUNNING DB pairs,
+compares them to live managed Kubernetes Jobs, rebuilds in-memory tracking
+for live jobs, processes terminal jobs through the normal completion
+callback, resets stale ENQUEUED pairs back to pending, and marks stale
+RUNNING pairs as failed. During graceful shutdown it stops accepting new
+submissions, drains terminal jobs one final time, stops the monitor, and
+preserves still-running Kubernetes Jobs for the next startup recovery pass.
+
 ### Verified differences from the legacy backend
 
 | Aspect | Legacy backend | Current native backend |
@@ -354,7 +363,26 @@ The current implementation uses this flow:
 | Execution | Local subprocesses plus `kubectl` | Direct Kubernetes API calls |
 | Monitoring | Legacy backend-specific flow | Polling `KubernetesJobMonitor` |
 | Routing | Dedicated `KubernetesBackend` | `kubernetes`, `k8s`, and `kubernetes-native` all map here |
-| Maturity | Legacy path | Experimental replacement under active development |
+| Maturity | Deprecated legacy path with startup warning | Experimental replacement under active development |
+
+### Benchmark isolation policy
+
+StarExec is research and competition software, so benchmark metrics must be
+precise and reproducible. The operational default is therefore **one job pair
+per physical CPU core**. Do **not** treat SMT / Hyper-Threading siblings as
+independent benchmark slots unless you have measured evidence that doing so
+does not distort runtime, memory, or solver-behavior results.
+
+This policy is not only about L1 cache effects. Shared L1/L2/L3 caches,
+shared front-end and execution resources, and scheduler interference can all
+introduce noise that is unacceptable for scientific comparison. Prefer lower
+throughput over biased benchmark data.
+
+For local execution, follow the repository's CPU-pinning guidance: exclude
+logical CPU 0, use exactly one logical CPU per physical core, and derive
+concurrency from the selected core list. For Kubernetes, keep
+`STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` unless you have workload-specific
+validation that relaxing it preserves benchmark integrity.
 
 ### Configuration
 
@@ -382,6 +410,15 @@ export STAREXEC_K8S_WORKER_SELECTOR_VALUE=true
 # Job cleanup
 export STAREXEC_K8S_JOB_TTL_SECONDS=3600
 export STAREXEC_K8S_JOB_BACKOFF_LIMIT=0
+
+# Capacity and reconciliation
+export STAREXEC_K8S_MAX_CONCURRENT_JOBS=50
+export STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS=300000
+
+# Benchmark isolation
+# Keep enabled for academic / competition workloads unless you have measured
+# evidence that sharing CPU resources does not bias benchmark metrics.
+export STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true
 ```
 
 ### Helm Deployment

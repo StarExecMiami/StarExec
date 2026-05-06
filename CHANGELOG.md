@@ -15,11 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Native Job resource creation with resource limits and node selectors
 - **Fabric8 Kubernetes Client**: Added `io.fabric8:kubernetes-client` v6.10.0 dependency for native K8s API access
 - **Kubernetes Environment Variables**: Added comprehensive configuration via `STAREXEC_K8S_*` environment variables
+  - Added `STAREXEC_K8S_MAX_CONCURRENT_JOBS` (default `50`) to cap in-flight Kubernetes jobs
+  - Added `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` (default `300000`) to control periodic orphaned-Job cleanup
 - **Helm Chart Updates**: Enhanced `values-kubernetes.yaml` with native backend configuration
+- **Live pair-log streaming**: Added async Server-Sent Events (SSE) streaming for `/services/jobs/pairs/{id}/log/stream`
+- **Foreign-key cleanup migrations**: Added `V0110__fix_fk_delete_actions.sql` and `V0111__pipeline_anon_fk_constraints.sql` to enforce explicit delete actions and document intentional polymorphic references
 
 ### Changed
 - **Backend Type Resolution**: `STAREXEC_BACKEND_TYPE=kubernetes` now uses `KubernetesNativeBackend` instead of legacy `KubernetesBackend`
 - **Kubernetes backend status**: Kubernetes routing now targets the native backend implementation; large-scale performance and production readiness still require end-to-end validation
+- **Kubernetes startup recovery**: `KubernetesNativeBackend` now reconciles orphaned ENQUEUED/RUNNING pairs at startup, rebuilds tracking from live Kubernetes Jobs, and performs a final terminal-job drain during graceful shutdown
+- **Legacy Kubernetes backend**: `KubernetesBackend` now emits an explicit deprecation warning directing operators to `kubernetes-native` or `podman`
+- **Pair status transitions**: Stored procedures now reject terminal-to-non-terminal downgrades via `IsTerminalPairStatus()` guards in `UpdatePairStatus` and `UpdatePairStatusPrecise`
+- **Broken-pair handling**: `SetBrokenPairStatus()` now uses an atomic compare-and-set update and preserves job completion side effects
+- **User and space deletion cleanup**: User deletion now pre-gathers IDs before DB cascade cleanup and space deletion now removes processor files after successful commit
 
 ## [2.3.0] - 2026-03-10
 

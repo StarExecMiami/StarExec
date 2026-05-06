@@ -92,11 +92,24 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 | `STAREXEC_K8S_CPU_LIMIT` | `1` | No | `2` | CPU core limit per job pod |
 | `STAREXEC_K8S_JOB_TTL_SECONDS` | `3600` | No | `7200` | Job cleanup TTL after completion |
 | `STAREXEC_K8S_JOB_BACKOFF_LIMIT` | `0` | No | `3` | Kubernetes job retry limit |
-| `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU` | `true` | No | `false` | Enforce 1 job pair per CPU core |
+| `STAREXEC_K8S_MAX_CONCURRENT_JOBS` | `50` | No | `100` | Soft cap on concurrently tracked Kubernetes jobs. New submissions above the cap are rejected until an existing job completes, is killed, or is reconciled away. |
+| `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` | `300000` | No | `60000` | Periodic sweep interval for deleting managed Kubernetes Jobs whose DB pair rows disappeared while StarExec stayed online. Set to `0` to disable the sweep. |
+| `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU` | `true` | No | `false` | Enforce 1 job pair per physical CPU core for benchmark fidelity. Keep enabled for SAT/SMT competition or academic measurement workloads unless you have measured evidence that relaxing it preserves timing and memory reproducibility. |
 | `STAREXEC_K8S_WORKER_SELECTOR_KEY` | `starexec.org/worker` | No | `starexec.org/worker` | Node selector key for worker nodes |
 | `STAREXEC_K8S_WORKER_SELECTOR_VALUE` | `true` | No | `true` | Node selector value for worker nodes |
 
 ### Performance Tuning
+
+> **Scientific benchmarking default**
+>
+> StarExec is frequently used for academic SAT/SMT experiments where timing,
+> memory, and solver-behavior metrics must remain comparable across runs.
+> For that reason, the recommended default is **one job pair per physical CPU
+> core**, not per logical CPU. Avoid SMT / Hyper-Threading siblings when
+> assigning cores, because shared L1/L2/L3 caches and shared execution
+> resources can skew solver measurements. Throughput tuning must not override
+> benchmark reproducibility unless you have workload-specific evidence that the
+> results remain stable.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
