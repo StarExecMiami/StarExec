@@ -8,27 +8,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Kubernetes native backend groundwork**: Added a Kubernetes-native backend path that creates Kubernetes Job resources through the fabric8 client
-  - Implemented `KubernetesNativeBackend` class with fabric8 Kubernetes client
-  - Added `KubernetesJobMonitor` with polling-based completion monitoring
-  - Direct Kubernetes API integration (no more subprocess + kubectl)
+_No new changes._
+
+### Fixed
+_No new changes._
+
+## [2.4.0] - 2026-05-06
+
+### Added
+
+#### Kubernetes Native Backend
+- **Native backend implementation**: Added `KubernetesNativeBackend` class that creates Kubernetes Job resources directly through the fabric8 Kubernetes client (replaces legacy `kubectl` subprocess approach)
+  - Direct Kubernetes API integration via `io.fabric8:kubernetes-client` v6.10.0
+  - `KubernetesJobMonitor` with polling-based completion monitoring
   - Native Job resource creation with resource limits and node selectors
-- **Fabric8 Kubernetes Client**: Added `io.fabric8:kubernetes-client` v6.10.0 dependency for native K8s API access
-- **Kubernetes Environment Variables**: Added comprehensive configuration via `STAREXEC_K8S_*` environment variables
-  - Added `STAREXEC_K8S_MAX_CONCURRENT_JOBS` (default `50`) to cap in-flight Kubernetes jobs
-  - Added `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` (default `300000`) to control periodic orphaned-Job cleanup
-- **Helm Chart Updates**: Enhanced `values-kubernetes.yaml` with native backend configuration
-- **Live pair-log streaming**: Added async Server-Sent Events (SSE) streaming for `/services/jobs/pairs/{id}/log/stream`
-- **Foreign-key cleanup migrations**: Added `V0110__fix_fk_delete_actions.sql` and `V0111__pipeline_anon_fk_constraints.sql` to enforce explicit delete actions and document intentional polymorphic references
+- **Configuration**: `STAREXEC_K8S_*` environment variables for native backend tuning
+  - `STAREXEC_K8S_MAX_CONCURRENT_JOBS` (default `50`) caps in-flight Kubernetes jobs
+  - `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` (default `300000`) controls orphaned-Job cleanup interval
+- **Helm chart**: Enhanced `values-kubernetes.yaml` with native backend configuration, existing PVC claim support, worker selector, and K8s lifecycle tuning profiles
+- **Startup reconciliation**: `KubernetesNativeBackend` reconciles orphaned ENQUEUED/RUNNING pairs at startup by rebuilding tracking state from live Kubernetes Jobs, and performs terminal-job drain during graceful shutdown
+- **Orphan pair recovery**: Label-based identity tracking for post-crash pair reconciliation across both Podman and Kubernetes backends
+
+#### Live Pair-Log Streaming
+- **SSE streaming endpoint**: Added async Server-Sent Events (SSE) streaming at `/services/jobs/pairs/{id}/log/stream` for real-time pair log delivery
+- **Non-blocking architecture**: Replaced the previous blocking pair-log stream with an asynchronous SSE implementation, improving server concurrency under load
+
+#### Resumable Upload System
+- **Upload session lifecycle**: New domain model, queue controls, and REST API endpoints (`POST/PUT/DELETE /services/uploads/session/*`) for resumable upload sessions
+- **Progress UI**: Client-side upload progress tracking with pause/resume/cancel controls
+- **Background recovery**: Stale processing jobs are recovered on application startup
+- **Database migrations**: Added `V0107__resumable_upload_sessions.sql`, `V0108__upload_session_chunks.sql`, `V0109__upload_job_progress_monotonic_totals.sql`
+
+#### REST API Endpoints
+- **Benchmark metadata**: `GET /services/benchmarks/{id}/content` now returns enriched benchmark metadata; added new dedicated metadata endpoint
+- **Filtered pair queries**: `GET /services/jobs/pairs/filtered-by-solver` returns job pairs filtered by solver ID
+- **Pre/post-processor lookup**: `GET /services/processors` returns available preprocessors and postprocessors
+- **Stage metadata**: Pair queries now include stage execution metadata (pre/run/post timings, hostname)
+- **Extended job attributes**: `GetSpaceJobsById` now returns additional job attributes for richer UI display
+- **User load data**: New endpoint for active queue load representation
+
+#### Database & Migrations
+- **Foreign-key cleanup** (`V0110`, `V0111`): Enforced explicit `ON DELETE` actions on all foreign keys and documented intentional polymorphic references
+- **Reproducibility manifest** (`V0105`): New table for job pair reproduction manifests
+- **Batch rerun improvements** (`V0106`): Attempt-increment logic for idempotent batch reruns
+- **Terminal status guard**: Stored procedures now enforce `IsTerminalPairStatus()` checks, rejecting terminal-to-non-terminal status downgrades
+- **Atomic broken-pair handling**: `SetBrokenPairStatus()` uses compare-and-set semantics and preserves job completion side effects
+
+#### Podman & Container Operations
+- **Socket validation**: Automatic Podman socket URI normalization, validation, and UID correction at startup
+- **Configurable security**: `runAsUser`/`runAsGroup` support for Podman deployments; security context for PostgreSQL container
+- **Preflight checks**: Cgroup manager configuration check and broken pasta networking detection before container launch
+- **Networking**: Podman networking disabled by default for job containers (reduces attack surface)
+- **Offline builds**: Support for offline build mode with configurable pull policies
+
+#### Build & Deployment
+- **Native runsolver compilation**: Compiles runsolver natively on Alpine Linux during build; automatic MicroK8s detection in Makefile
+- **K8s auto-detection**: Rewrote `scripts/k8s-auto-detect.sh` and `node-setup.sh` for single-node hostPath deployments
+- **Image building**: Added `build-fresh` target for no-cache builds; user namespace option for Podman builds
+- **Deploy status**: `make status` now reports real Podman/K8s pod state; documented suspend recovery procedures
+- **Enhanced build metadata**: UI now displays richer build version and environment information
+
+#### CI/CD Pipeline
+- **Jenkins pipeline**: Full Jenkinsfile with SCM polling (H/5 \* \* \* \*), production deploy stage with manual approval gate, notification email parameters, and cgroup manager configuration
+- **Deployment verification**: Automatic post-deploy smoke test stage confirming application health
+- **Pipeline migration**: Migrated from Podman-based to Kubernetes-based deployment in CI
+
+#### Administration & Security
+- **Gitleaks secret scanning**: Added `.gitleaks.toml` configuration for automated secret detection in CI
+- **Admin email bypass**: Administrators can now bypass email verification for user accounts
+- **Solver-wide pair filtering**: UI support for filtering job pairs across all solvers in a job space
 
 ### Changed
-- **Backend Type Resolution**: `STAREXEC_BACKEND_TYPE=kubernetes` now uses `KubernetesNativeBackend` instead of legacy `KubernetesBackend`
-- **Kubernetes backend status**: Kubernetes routing now targets the native backend implementation; large-scale performance and production readiness still require end-to-end validation
-- **Kubernetes startup recovery**: `KubernetesNativeBackend` now reconciles orphaned ENQUEUED/RUNNING pairs at startup, rebuilds tracking from live Kubernetes Jobs, and performs a final terminal-job drain during graceful shutdown
-- **Legacy Kubernetes backend**: `KubernetesBackend` now emits an explicit deprecation warning directing operators to `kubernetes-native` or `podman`
-- **Pair status transitions**: Stored procedures now reject terminal-to-non-terminal downgrades via `IsTerminalPairStatus()` guards in `UpdatePairStatus` and `UpdatePairStatusPrecise`
-- **Broken-pair handling**: `SetBrokenPairStatus()` now uses an atomic compare-and-set update and preserves job completion side effects
-- **User and space deletion cleanup**: User deletion now pre-gathers IDs before DB cascade cleanup and space deletion now removes processor files after successful commit
+- **Kubernetes backend routing**: `STAREXEC_BACKEND_TYPE=kubernetes` now routes to `KubernetesNativeBackend` instead of legacy `KubernetesBackend`; the legacy backend emits an explicit deprecation warning
+- **Pair status transitions**: `UpdatePairStatus` and `UpdatePairStatusPrecise` now enforce terminal-to-non-terminal downgrade rejection via `IsTerminalPairStatus()` guard
+- **Broken-pair handling**: `SetBrokenPairStatus()` rewritten with atomic compare-and-set to prevent race conditions
+- **User deletion cleanup**: Process now pre-gathers all related IDs before executing DB cascade cleanup, preventing orphaned rows
+- **Space deletion cleanup**: Processor files are now removed after successful database commit (was previously removed before commit, risking ghost files on rollback)
+- **Backend pair submission**: Both Kubernetes and Podman backends now use conditional pair claims to prevent stale-snapshot backend launches
+- **CI workflows**: Renamed from "Deploy to Kubernetes" to "StarExec K8s Deploy"; merged container-build into container-publish to eliminate duplicate builds
+- **Default queue name**: Renamed from `'default'` to `'kubernetes.q'` for clarity (Kubernetes backend)
+- **Architecture decisions**: Pair log streaming migrated from blocking I/O to async SSE (breaking change for internal consumers only)
+
+### Fixed
+- **Database integrity**
+  - Terminal status guard prevents downgrade of completed/failed pairs to active states
+  - Broken-pair handler now uses atomic updates, preventing lost updates under concurrent access
+  - Conditional pair update methods prevent stale-snapshot writes in backend pair processing
+  - Status code reclassification ensures accurate complete/pending/failed counts in all queries
+  - `getPairsByStatus` now returns ALL matching pairs instead of only the first row
+  - `sge_id` column type corrected for RUNNING pair tracking
+  - Terminal status filter widened to include error codes 8-13, 18, 21, 23-26 in community statistics and pagination queries
+  - Upload job progress tracks monotonic totals for accurate progress reporting
+
+- **Podman & Container Operations**
+  - Podman networking disabled for job containers (was incorrectly enabled, exposing internal networks)
+  - Socket path auto-corrected when UID mismatch detected between container and host
+  - Preflight validation hardened: enforces Podman binary availability, socket reachability, and cgroup configuration before job submission
+  - Rootless Podman socket group-ID permission fixed
+  - Listener startup order enforced to prevent race between database pool init and job monitor
+  - Podman deployment recovery and Postgres startup checks stabilized
+  - Test-compatible retry paths preserved in Podman backend
+
+- **Job Management**
+  - Job pause/resume now correctly preserves pair state across the cycle
+  - Processing and paused pairs classified as active (were incorrectly counted as idle)
+  - Stuck pause dialog in job UI now recovers gracefully
+  - Explorer selection state initialized correctly on page load
+  - Completed job result handling stabilized against missing data
+  - Job details layout and help text improved
+  - Job views guarded against incomplete data rendering
+
+- **Security & Access Control**
+  - Processor lookup endpoint now authorizes by job creation access (was incorrectly gated)
+  - Unused parameter in API endpoint removed to pass security scanning
+  - Jenkins workspace cleanup prevents credential leakage between builds
+  - Stale Podman job containers cleaned up to prevent resource exhaustion
+  - Chart credentials now require explicit dev configuration (no more implicit defaults)
+  - Embedded vs. external Postgres behavior properly separated in Helm charts
+  - `starExecCommand` header value corrected to `StarExecCommand` for consistency
+
+- **CI/CD Pipeline**
+  - Jenkinsfile syntax: missing closing braces, duplicate stages block, `bexpression` typo all corrected
+  - Production deploy stage gated to prevent double deployment; branch-only gating removed from deploy stages
+  - Deploy-k8s workflow expression syntax error resolved
+  - YAML indentation in integration workflow restored to valid format
+  - OWASP Dependency Check workflow now skips error on PRs (non-blocking)
+  - Docker image tag in integration tests uses `ci-test-latest` instead of stale references
+  - `K8S_NAMESPACE` override prevents accidental production deploys from CI
+
+- **Performance & Resource Management**
+  - Thread safety improved in hot-path pair monitoring; polling load reduced via adaptive interval refinements
+  - Archive downloads now stream directly to response (was heap-buffering, causing OOM on large archives)
+  - DEBUG logging reduced to TRACE in hot-path session and auth code (significant reduction in log volume under load)
+
+- **Build & Deployment**
+  - Memory variable in `jobscript.sh` corrected to use proper variable expansion
+  - Delete permissions repaired to prevent partial cleanup on error
+  - Pause image tag updated to use `registry.k8s.io` mirror (was using deprecated `gcr.io`)
+  - Schema location default updated to `public` directory for Helm chart compatibility
+  - Migration launcher path corrected in deployment scripts
+  - User namespace option added to Podman build commands for rootless builds
+
+- **Secret Scanning & Credentials**
+  - Rotated credentials remediated; known false positives suppressed in `.gitleaksignore`
+  - Default dev credentials now require explicit configuration (no implicit fallback)
+
+### Security
+- Credential scanning (gitleaks) integrated into CI pipeline
+- Podman job containers run with networking disabled by default (reduces network attack surface)
+- API endpoint authorization hardened for processor lookups
+- Unused REST parameters removed after security audit
+- Default queue deletion allowed in Kubernetes backend (was incorrectly blocked)
+
+### Deprecated
+- **Legacy KubernetesBackend**: Emits deprecation warning; operators should migrate to `KubernetesNativeBackend` or `PodmanBackend`
+
+### Performance
+- CI Docker builds now use GitHub Actions cache layer to reduce redundant Maven steps
+- Thread safety improvements reduce polling load in hot paths
 
 ## [2.3.0] - 2026-03-10
 
@@ -215,7 +352,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Cluster MachineSpecs and overrides configuration for reproducible builds.
 - Initial implementation of the user Trash Bin/Recycle logic.
 
-[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/StarExecMiami/StarExec/compare/v2.3.0...v2.4.0
+[2.3.0]: https://github.com/StarExecMiami/StarExec/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/StarExecMiami/StarExec/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/StarExecMiami/StarExec/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/StarExecMiami/StarExec/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/StarExecMiami/StarExec/releases/tag/v1.0.0
