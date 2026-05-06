@@ -1,4 +1,4 @@
-{{- if .Values.migrations.enabled }}
+{{- if and .Values.migrations.enabled (ne (include "starexec.usesEmbeddedPostgres" .) "true") }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,6 +25,8 @@ spec:
           env:
             - name: STAREXEC_DB_HOST
               value: "{{ .Values.postgres.host }}"
+            - name: STAREXEC_DB_PORT
+              value: {{ .Values.postgres.port | quote }}
             - name: STAREXEC_DB_USER
               valueFrom:
                 secretKeyRef:

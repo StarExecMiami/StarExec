@@ -1,10 +1,26 @@
 {{- if and (eq (include "starexec.isKubernetesBackend" .) "true") .Values.kubernetes.jobNamespace (ne .Values.kubernetes.jobNamespace .Release.Namespace) -}}
 {{- fail (printf "kubernetes.jobNamespace (%s) must match the Helm release namespace (%s) because the Kubernetes-native backend mounts a namespaced shared PVC and uses a namespaced ServiceAccount" .Values.kubernetes.jobNamespace .Release.Namespace) -}}
 {{- end }}
+{{- if ne (int .Values.replicaCount) 1 -}}
+{{- fail (printf "replicaCount (%v) must remain 1 because StarExec currently supports only a single application replica" .Values.replicaCount) -}}
+{{- end }}
+{{- if and (eq .Values.postgres.host "localhost") (ne (int .Values.postgres.port) 5432) -}}
+{{- fail (printf "postgres.port (%v) must remain 5432 when postgres.host=localhost because the embedded PostgreSQL sidecar listens on 5432" .Values.postgres.port) -}}
+{{- end }}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (lt (int .Values.kubernetes.maxConcurrentJobs) 1) -}}
+{{- fail (printf "kubernetes.maxConcurrentJobs (%v) must be >= 1" .Values.kubernetes.maxConcurrentJobs) -}}
+{{- end }}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (lt (int .Values.kubernetes.orphanSweepIntervalMs) 0) -}}
+{{- fail (printf "kubernetes.orphanSweepIntervalMs (%v) must be >= 0" .Values.kubernetes.orphanSweepIntervalMs) -}}
+{{- end }}
+{{- if and (eq (include "starexec.isKubernetesBackend" .) "true") (or (eq .Values.kubernetes.workerSelectorKey "") (eq .Values.kubernetes.workerSelectorValue "")) -}}
+{{- fail "kubernetes.workerSelectorKey and kubernetes.workerSelectorValue must be non-empty for Kubernetes-native backend" -}}
+{{- end }}
 {{- $k8sDataPvcAccessMode := "ReadWriteMany" -}}
 {{- if and (eq (include "starexec.isKubernetesBackend" .) "true") .Values.kubernetes.dataPvc.accessModes -}}
 {{- $k8sDataPvcAccessMode = first .Values.kubernetes.dataPvc.accessModes -}}
 {{- end -}}
+{{- $embeddedPostgres := eq (include "starexec.usesEmbeddedPostgres" .) "true" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,7 +29,7 @@ metadata:
     {{- include "chart.labels" . | nindent 4 }}
 spec:
   replicas: 1
-{{- if eq .Values.postgres.host "localhost" }}
+{{- if $embeddedPostgres }}
   strategy:
     type: Recreate
 {{- else }}
@@ -61,12 +77,19 @@ spec:
             - -c
             - |
               echo "Ensuring directories exist and permissions are correct..."
-              mkdir -p /app/data /app/sandbox /app/backend /app/work /var/lib/postgresql/data
+              mkdir -p /app/data /app/sandbox /app/backend /app/work
+{{- if $embeddedPostgres }}
+              mkdir -p /var/lib/postgresql/data
+{{- end }}
 {{- if .Values.security.volumePermissions.enabled }}
               chown -R {{ .Values.security.app.runAsUser }}:{{ .Values.security.app.runAsGroup }} /app/data /app/sandbox /app/backend /app/work
+{{- if $embeddedPostgres }}
               chown -R 999:999 /var/lib/postgresql/data
+{{- end }}
               chmod 0770 /app/data /app/sandbox /app/backend /app/work
+{{- if $embeddedPostgres }}
               chmod 0700 /var/lib/postgresql/data
+{{- end }}
 {{- else }}
               echo "Volume permission fixups disabled; only creating directories"
 {{- end }}
@@ -84,8 +107,10 @@ spec:
               mountPath: /app/backend
             - name: work
               mountPath: /app/work
+{{- if $embeddedPostgres }}
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+{{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -103,12 +128,14 @@ spec:
         - name: work
           persistentVolumeClaim:
             claimName: {{ default (include "starexec.volumeName" (list . "work")) .Values.persistence.existingClaims.work }}
+{{- if $embeddedPostgres }}
         - name: postgres-data
 {{- if .Values.postgres.persistence.enabled }}
           persistentVolumeClaim:
             claimName: {{ default (include "starexec.volumeName" (list . "postgres")) .Values.persistence.existingClaims.postgres }}
 {{- else }}
           emptyDir: {}
+{{- end }}
 {{- end }}
         - name: tmp
           emptyDir: {}
@@ -132,7 +159,7 @@ spec:
             - name: STAREXEC_DB_HOST
               value: "{{ .Values.postgres.host }}"
             - name: STAREXEC_DB_PORT
-              value: "5432"
+              value: {{ .Values.postgres.port | quote }}
             - name: STAREXEC_DB_USER
               valueFrom:
                 secretKeyRef:
@@ -201,6 +228,10 @@ spec:
               value: "{{ .Values.kubernetes.ttlSecondsAfterFinished }}"
             - name: STAREXEC_K8S_JOB_BACKOFF_LIMIT
               value: "{{ .Values.kubernetes.backoffLimit }}"
+            - name: STAREXEC_K8S_MAX_CONCURRENT_JOBS
+              value: "{{ .Values.kubernetes.maxConcurrentJobs }}"
+            - name: STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS
+              value: "{{ .Values.kubernetes.orphanSweepIntervalMs }}"
             - name: STAREXEC_K8S_MEMORY_LIMIT
               value: "{{ .Values.kubernetes.resources.limits.memory }}"
             - name: STAREXEC_K8S_CPU_LIMIT
@@ -212,9 +243,9 @@ spec:
             - name: STAREXEC_NODE_MULTIPLIER
               value: "{{ .Values.scalability.nodeMultiplier }}"
             - name: STAREXEC_K8S_WORKER_SELECTOR_KEY
-              value: "starexec.org/worker"
+              value: {{ default "starexec.org/worker" .Values.kubernetes.workerSelectorKey | quote }}
             - name: STAREXEC_K8S_WORKER_SELECTOR_VALUE
-              value: "true"
+              value: {{ default "true" .Values.kubernetes.workerSelectorValue | quote }}
 {{- end }}
 {{- if .Values.backend.hostDataPath }}
             - name: STAREXEC_CONTAINER_HOST_DATA_PATH
@@ -245,10 +276,10 @@ spec:
             - name: STAREXEC_PROXY_PORT
               value: {{ .Values.web.proxyPort | quote }}
             - name: SKIP_MIGRATIONS
-{{- if eq .Values.postgres.host "localhost" }}
+{{- if $embeddedPostgres }}
               value: "false"
 {{- else }}
-              value: "{{ if .Values.migrations.enabled }}false{{ else }}true{{ end }}"
+              value: "{{ if .Values.migrations.enabled }}true{{ else }}false{{ end }}"
 {{- end }}
 {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
@@ -298,6 +329,7 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+{{- if $embeddedPostgres }}
         - name: postgres
           image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
@@ -343,3 +375,4 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+{{- end }}

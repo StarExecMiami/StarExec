@@ -1,3 +1,4 @@
+{{- $embeddedPostgres := eq (include "starexec.usesEmbeddedPostgres" .) "true" -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,6 +16,8 @@ spec:
       {{- if eq .Values.service.type "NodePort" }}
       nodePort: {{ .Values.service.nodePort }}
       {{- end }}
+{{- if $embeddedPostgres }}
     - name: postgres
       port: 5432
       targetPort: 5432
+{{- end }}

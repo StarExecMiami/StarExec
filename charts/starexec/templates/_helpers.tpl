@@ -52,6 +52,14 @@ false
 {{- end -}}
 {{- end -}}
 
+{{- define "starexec.usesEmbeddedPostgres" -}}
+{{- if eq .Values.postgres.host "localhost" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
 {{- define "starexec.k8sJobServiceAccount" -}}
 {{- default (printf "%s-job" (include "chart.fullname" .)) .Values.kubernetes.jobServiceAccount -}}
 {{- end -}}

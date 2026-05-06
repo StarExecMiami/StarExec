@@ -1,5 +1,4 @@
-{{- if .Values.persistence.existingClaims.postgres }}
-{{- else }}
+{{- if and (eq (include "starexec.usesEmbeddedPostgres" .) "true") .Values.postgres.persistence.enabled (not .Values.persistence.existingClaims.postgres) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
