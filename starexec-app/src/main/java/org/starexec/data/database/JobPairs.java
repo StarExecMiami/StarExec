@@ -3272,7 +3272,7 @@ public class JobPairs {
             );
             ps.setInt(1, statusCode);
             results = ps.executeQuery();
-            if (results.next()) {
+            while (results.next()) {
                 JobPair p = JobPairs.resultToPair(results);
                 p.getStatus().setCode(statusCode);
                 pairs.add(p);
