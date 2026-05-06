@@ -531,6 +531,8 @@ kubernetes:
       - DATA_ACCESS_MODE
   nodeSelector:
     starexec.org/worker: "true"
+  workerSelectorKey: "starexec.org/worker"
+  workerSelectorValue: "true"
   queueLabelKey: "starexec/queue"
   resources:
     requests:
@@ -539,6 +541,11 @@ kubernetes:
     limits:
       memory: "2Gi"
       cpu: "1"
+  strictOnePairPerCpu: true
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 0
+  maxConcurrentJobs: 50
+  orphanSweepIntervalMs: 300000
 
 postgres:
   image:
