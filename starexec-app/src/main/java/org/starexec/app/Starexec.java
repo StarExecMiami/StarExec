@@ -114,6 +114,14 @@ public class Starexec implements ServletContextListener {
                 log.info("Periodic tasks scheduler shut down successfully");
             }
 
+            try {
+                log.info("Shutting down pair log stream executor...");
+                RESTServices.shutdownPairLogStreamExecutor();
+                log.info("Pair log stream executor shut down successfully");
+            } catch (Exception e) {
+                log.error("Error shutting down pair log stream executor", e);
+            }
+
             // Cleanup backend resources via centralized backend getter
             try {
                 Backend backend = BackendInitializer.getBackend();

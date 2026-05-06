@@ -36,6 +36,9 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.StreamingOutput;
+import javax.ws.rs.sse.OutboundSseEvent;
+import javax.ws.rs.sse.Sse;
+import javax.ws.rs.sse.SseEventSink;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -54,10 +57,15 @@ import java.sql.SQLException;
 import java.util.*;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Class which handles all RESTful web service requests.
@@ -109,9 +117,61 @@ public class RESTServices {
 				}
 			});
 
+	/** Dedicated executor for live log stream polling and SSE writes. */
+	private static volatile ScheduledExecutorService pairLogStreamExecutor = createPairLogStreamExecutor();
+
+	/** Active log-stream sessions — drained at shutdown so no stream slot is leaked. */
+	private static final Set<PairLogStreamSession> activePairLogSessions =
+			ConcurrentHashMap.newKeySet();
+
 	/** Exposed for graceful shutdown via ServletContextListener. */
 	public static ExecutorService getEmailExecutor() {
 		return emailExecutor;
+	}
+
+	public static void shutdownPairLogStreamExecutor() {
+		// [REVIEW-FIX] Close every active session first so no slots are leaked
+		// if the executor is shutting down between ticks.
+		for (PairLogStreamSession session : activePairLogSessions) {
+			session.closeAndRelease();
+		}
+		ScheduledExecutorService executor = pairLogStreamExecutor;
+		if (executor.isShutdown()) {
+			return;
+		}
+		executor.shutdownNow();
+		try {
+			if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+				log.warn("shutdownPairLogStreamExecutor", "Pair log stream executor did not terminate gracefully");
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/** FOR TEST USE ONLY — replaces the live executor with a test-controlled one. */
+	static void setPairLogStreamExecutorForTesting(ScheduledExecutorService executor) {
+		pairLogStreamExecutor = Objects.requireNonNull(executor, "executor");
+	}
+
+	/** FOR TEST USE ONLY — restores the production executor after testing. */
+	static void resetPairLogStreamExecutorForTesting() {
+		pairLogStreamExecutor = createPairLogStreamExecutor();
+	}
+
+	private static ScheduledExecutorService createPairLogStreamExecutor() {
+		return Executors.newScheduledThreadPool(
+				Math.max(4, Math.min(16, Runtime.getRuntime().availableProcessors() * 2)),
+				new ThreadFactory() {
+					private final java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger();
+					@Override
+					public Thread newThread(Runnable r) {
+						Thread t = new Thread(r);
+						t.setName("pair-log-stream-worker-" + count.incrementAndGet());
+						t.setDaemon(true);
+						return t;
+					}
+				});
 	}
 
 	private static final AtomicInteger activePairLogStreams = new AtomicInteger(0);
@@ -1015,37 +1075,33 @@ public class RESTServices {
 
 	@GET
 	@Path("/jobs/pairs/{id}/log/stream")
-	@Produces("text/event-stream")
-	public Response streamJobPairLog(@PathParam("id") int id, @Context HttpServletRequest request) {
-		if (!EnvironmentConfig.isPairLogStreamEnabled()) {
-			return Response.status(Response.Status.SERVICE_UNAVAILABLE)
-					.type(MediaType.TEXT_PLAIN)
-					.entity("live log streaming is disabled")
-					.build();
+	@Produces(MediaType.SERVER_SENT_EVENTS)
+	public void streamJobPairLog(@PathParam("id") int id, @Context HttpServletRequest request,
+								 @Context SseEventSink eventSink, @Context Sse sse) {
+		Response preflightResponse = preparePairLogStream(id, request);
+		if (preflightResponse != null) {
+			throw new WebApplicationException(preflightResponse);
 		}
 
-		if (!isPairAccessibleForStream(id, request)) {
-			return Response.status(Response.Status.NOT_FOUND)
+		if (eventSink == null || sse == null) {
+			releasePairLogStreamSlot();
+			throw new WebApplicationException(Response.status(Response.Status.INTERNAL_SERVER_ERROR)
 					.type(MediaType.TEXT_PLAIN)
-					.entity("not available")
-					.build();
+					.entity("stream unavailable")
+					.build());
 		}
 
-		JobPair pair = JobPairs.getPair(id);
-		if (pair == null) {
-			return Response.status(Response.Status.NOT_FOUND)
-					.type(MediaType.TEXT_PLAIN)
-					.entity("not available")
-					.build();
-		}
+		final String lastEventId = request.getHeader("Last-Event-ID");
+		streamPairLogEventsAsync(id, eventSink, sse, lastEventId);
+	}
 
-		final int maxActive = Math.max(1, EnvironmentConfig.getPairLogStreamMaxActive());
-		if (!tryAcquirePairLogStreamSlot(maxActive)) {
-			return Response.status(Response.Status.TOO_MANY_REQUESTS)
-					.header("Retry-After", String.valueOf(EnvironmentConfig.getPairLogStreamRetryAfterSeconds()))
-					.type(MediaType.TEXT_PLAIN)
-					.entity("too many active live log streams")
-					.build();
+	/**
+	 * Legacy synchronous wrapper retained for direct unit/integration tests.
+	 */
+	public Response streamJobPairLog(int id, HttpServletRequest request) {
+		Response preflightResponse = preparePairLogStream(id, request);
+		if (preflightResponse != null) {
+			return preflightResponse;
 		}
 
 		final String lastEventId = request.getHeader("Last-Event-ID");
@@ -1066,6 +1122,39 @@ public class RESTServices {
 				.header("Cache-Control", "no-cache")
 				.header("Connection", "keep-alive")
 				.header("X-Accel-Buffering", "no")
+				.build();
+	}
+
+	private static Response preparePairLogStream(int id, HttpServletRequest request) {
+		if (!EnvironmentConfig.isPairLogStreamEnabled()) {
+			return buildPairLogStreamErrorResponse(Response.Status.SERVICE_UNAVAILABLE,
+					"live log streaming is disabled");
+		}
+
+		if (!isPairAccessibleForStream(id, request)) {
+			return buildPairLogStreamErrorResponse(Response.Status.NOT_FOUND, "not available");
+		}
+
+		if (JobPairs.getPair(id) == null) {
+			return buildPairLogStreamErrorResponse(Response.Status.NOT_FOUND, "not available");
+		}
+
+		final int maxActive = Math.max(1, EnvironmentConfig.getPairLogStreamMaxActive());
+		if (!tryAcquirePairLogStreamSlot(maxActive)) {
+			return Response.status(Response.Status.TOO_MANY_REQUESTS)
+					.header("Retry-After", String.valueOf(EnvironmentConfig.getPairLogStreamRetryAfterSeconds()))
+					.type(MediaType.TEXT_PLAIN)
+					.entity("too many active live log streams")
+					.build();
+		}
+
+		return null;
+	}
+
+	private static Response buildPairLogStreamErrorResponse(Response.Status status, String message) {
+		return Response.status(status)
+				.type(MediaType.TEXT_PLAIN)
+				.entity(message)
 				.build();
 	}
 
@@ -1159,6 +1248,214 @@ public class RESTServices {
 				log.warn(method, "Interrupted while streaming pair log for pair " + pairId, e);
 				writeSseEvent(output, "error", "{\"code\":\"INTERRUPTED\",\"message\":\"stream interrupted\"}");
 				return;
+			}
+		}
+	}
+
+	private static void streamPairLogEventsAsync(int pairId, SseEventSink eventSink, Sse sse, String lastEventId) {
+		PairLogStreamSession session = new PairLogStreamSession(pairId, eventSink, sse, lastEventId);
+		activePairLogSessions.add(session);
+		session.schedule(0L);
+	}
+
+	private static boolean sendSseEvent(int pairId, SseEventSink eventSink, Sse sse, String id, String eventName, String dataJson) {
+		try {
+			OutboundSseEvent.Builder builder = sse.newEventBuilder()
+					.name(eventName)
+					.mediaType(MediaType.TEXT_PLAIN_TYPE)
+					.data(String.class, dataJson);
+			if (!Util.isNullOrEmpty(id)) {
+				builder.id(id);
+			}
+			eventSink.send(builder.build()).toCompletableFuture().join();
+			return true;
+		} catch (RuntimeException e) {
+			log.warn("sendSseEvent", "Failed sending SSE event '" + eventName + "' for pair " + pairId, e);
+			return false;
+		}
+	}
+
+	private static boolean sendSseComment(int pairId, SseEventSink eventSink, Sse sse, String comment) {
+		try {
+			eventSink.send(sse.newEventBuilder().comment(comment).build()).toCompletableFuture().join();
+			return true;
+		} catch (RuntimeException e) {
+			log.warn("sendSseComment", "Failed sending SSE heartbeat for pair " + pairId, e);
+			return false;
+		}
+	}
+
+	private static long streamAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
+												 long currentOffset, int maxChunkBytes) {
+		long fileSize = logFile.length();
+		long offset = currentOffset;
+
+		if (fileSize < offset) {
+			offset = 0L;
+			if (!sendSseEvent(pairId, eventSink, sse, null, "reset", "{\"pairId\":" + pairId + ",\"offset\":0}")) {
+				return -1L;
+			}
+		}
+
+		if (fileSize <= offset) {
+			return offset;
+		}
+
+		long start = offset;
+		long bytesToRead = Math.min((long) maxChunkBytes, fileSize - offset);
+		byte[] bytes = new byte[(int) bytesToRead];
+
+		try (RandomAccessFile raf = new RandomAccessFile(logFile, "r")) {
+			raf.seek(offset);
+			int read = raf.read(bytes);
+			if (read <= 0) {
+				return offset;
+			}
+			offset += read;
+			String text = new String(bytes, 0, read, StandardCharsets.UTF_8).replace("\r\n", "\n");
+			String data = "{\"pairId\":" + pairId +
+					",\"offsetStart\":" + start +
+					",\"offsetEnd\":" + offset +
+					",\"text\":" + gson.toJson(text) + "}";
+			if (!sendSseEvent(pairId, eventSink, sse, String.valueOf(offset), "chunk", data)) {
+				return -1L;
+			}
+			return offset;
+		} catch (IOException e) {
+			log.warn("streamAvailableBytesSse", "Failed reading pair log stream for pair " + pairId, e);
+			sendSseEvent(pairId, eventSink, sse, null, "error", "{\"code\":\"LOG_READ_FAILED\",\"message\":\"log read failed\"}");
+			return -1L;
+		}
+	}
+
+	private static final class PairLogStreamSession {
+		private final int pairId;
+		private final SseEventSink eventSink;
+		private final Sse sse;
+		private final boolean logUnavailable;
+		private final File logFile;
+		private final long startedAt = System.currentTimeMillis();
+		private final long maxDurationMillis = Math.max(1L, EnvironmentConfig.getPairLogStreamMaxDurationSeconds()) * 1000L;
+		private final long pollIntervalMillis = Math.max(100L, EnvironmentConfig.getPairLogStreamPollIntervalMs());
+		private final long statusPollIntervalMillis = Math.max(1000L, EnvironmentConfig.getPairLogStreamStatusPollIntervalMs());
+		private final long heartbeatIntervalMillis = Math.max(1L, EnvironmentConfig.getPairLogStreamHeartbeatSeconds()) * 1000L;
+		private final int maxChunkBytes = Math.max(256, EnvironmentConfig.getPairLogStreamReadChunkBytes());
+		private final AtomicBoolean closed = new AtomicBoolean(false);
+		private volatile long offset;
+		private volatile long lastStatusCheckAt = 0L;
+		private volatile long lastHeartbeatAt = 0L;
+
+		private PairLogStreamSession(int pairId, SseEventSink eventSink, Sse sse, String lastEventId) {
+			this.pairId = pairId;
+			this.eventSink = eventSink;
+			this.sse = sse;
+			String logPath = JobPairs.getLogPath(pairId);
+			this.logUnavailable = Util.isNullOrEmpty(logPath);
+			this.logFile = logUnavailable ? null : new File(logPath);
+			this.offset = logUnavailable ? 0L : resolveInitialOffset(this.logFile, lastEventId);
+		}
+
+		private void schedule(long delayMillis) {
+			if (closed.get()) {
+				return;
+			}
+			try {
+				pairLogStreamExecutor.schedule(this::runTick,
+						Math.max(0L, delayMillis), TimeUnit.MILLISECONDS);
+			} catch (RejectedExecutionException e) {
+				log.warn("streamPairLogEventsAsync",
+						"Pair log stream executor rejected tick for pair " + pairId, e);
+				closeAndRelease();
+			}
+		}
+
+		private void runTick() {
+			if (closed.get() || eventSink.isClosed()) {
+				closeAndRelease();
+				return;
+			}
+
+			// [REVIEW-FIX] Match legacy behaviour: missing log path → immediate NOT_AVAILABLE.
+			if (logUnavailable) {
+				sendAndCloseError("NOT_AVAILABLE", "not available");
+				return;
+			}
+
+			try {
+				long now = System.currentTimeMillis();
+				if (now - startedAt >= maxDurationMillis) {
+					sendAndCloseError("STREAM_TIMEOUT", "stream timeout reached");
+					return;
+				}
+
+				if (now - lastStatusCheckAt >= statusPollIntervalMillis) {
+					JobPair pair = JobPairs.getPair(pairId);
+					if (pair == null) {
+						sendAndCloseError("NOT_AVAILABLE", "not available");
+						return;
+					}
+					if (!pair.getStatus().getCode().incomplete()) {
+						if (logFile != null && logFile.exists()) {
+							offset = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+							if (offset < 0L) {
+								closeAndRelease();
+								return;
+							}
+						}
+						if (!sendSseEvent(pairId, eventSink, sse, null, "complete", "{\"pairId\":" + pairId + "}")) {
+							closeAndRelease();
+							return;
+						}
+						closeAndRelease();
+						return;
+					}
+					lastStatusCheckAt = now;
+				}
+
+				if (logFile != null && logFile.exists()) {
+					offset = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+					if (offset < 0L) {
+						closeAndRelease();
+						return;
+					}
+				}
+
+				now = System.currentTimeMillis();
+				if (now - lastHeartbeatAt >= heartbeatIntervalMillis) {
+					if (!sendSseComment(pairId, eventSink, sse, "hb " + now)) {
+						closeAndRelease();
+						return;
+					}
+					lastHeartbeatAt = now;
+				}
+
+				schedule(pollIntervalMillis);
+			} catch (RuntimeException e) {
+				log.warn("streamPairLogEventsAsync", "Live log stream failed for pair " + pairId, e);
+				sendAndCloseError("STREAM_FAILURE", "stream unavailable");
+			}
+		}
+
+		private void sendAndCloseError(String code, String message) {
+			if (closed.get()) {
+				return;
+			}
+			sendSseEvent(pairId, eventSink, sse, null, "error",
+					"{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");
+			closeAndRelease();
+		}
+
+		private void closeAndRelease() {
+			if (!closed.compareAndSet(false, true)) {
+				return;
+			}
+			try {
+				eventSink.close();
+			} catch (RuntimeException ignored) {
+				// client may already be gone
+			} finally {
+				activePairLogSessions.remove(this);
+				releasePairLogStreamSlot();
 			}
 		}
 	}
