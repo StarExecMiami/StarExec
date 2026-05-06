@@ -1745,22 +1745,44 @@ $$ LANGUAGE plpgsql;
 -- Author: Tyler Jensen
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatus(INT, SMALLINT) CASCADE;
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatus(INT, INT) CASCADE;
+DROP FUNCTION IF EXISTS starexec.IsTerminalPairStatus(INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.IsTerminalPairStatus(_status INT)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN ((_status > 6 AND _status < 19) OR _status IN (21, 23, 24, 25, 26));
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatus(_jobPairId INT, _statusCode INT)
 AS $$
 DECLARE
 	_job_id INT;
+	_current_status INT;
 	_count INT;
 BEGIN
 	-- Initialize _job_id
-	SELECT job_id INTO _job_id FROM job_pairs WHERE id = _jobPairId;
+	SELECT job_id, status_code INTO _job_id, _current_status FROM job_pairs WHERE id = _jobPairId;
+	IF NOT FOUND THEN
+	    RAISE EXCEPTION USING
+	        ERRCODE = 'P0002',
+	        MESSAGE = format('Job pair %s not found', _jobPairId);
+	END IF;
+
+	-- Terminal pairs must not be moved back into an earlier non-terminal state.
+	IF starexec.IsTerminalPairStatus(_current_status) AND NOT starexec.IsTerminalPairStatus(_statusCode) THEN
+	    RAISE EXCEPTION USING
+	        ERRCODE = 'P0001',
+	        MESSAGE = format(
+	            'Illegal status transition for pair %s: terminal status %s cannot move to non-terminal status %s',
+	            _jobPairId,
+	            _current_status,
+	            _statusCode
+	        );
+	END IF;
 	
 	UPDATE job_pairs SET status_code=_statusCode WHERE id=_jobPairId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job pair %s not found', _jobPairId);
-    END IF;
-    
+
+	
 	-- List of terminal status codes (ones that mean the pair is finished and won't be updated further)
 	-- 7-18: Normal completion, resource limits, and common errors
 	-- 21: Killed
@@ -1768,7 +1790,7 @@ BEGIN
 	-- 24: Benchmark dependency missing
 	-- 25: Pre-processor error
 	-- 26: Post-processor error
-	IF ((_statusCode>6 AND _statusCode<19) OR _statusCode IN (21, 23, 24, 25, 26)) THEN
+	IF starexec.IsTerminalPairStatus(_statusCode) THEN
 		INSERT INTO job_pair_completion (pair_id) VALUES (_jobPairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
@@ -2236,26 +2258,54 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.SetBrokenPairStatus(INT, INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.SetBrokenPairStatus(_pairId INT, _current_status INT, _new_status INT)
 RETURNS VOID AS $$
+DECLARE
+	_job_id INT;
+    _count INT;
 BEGIN
-        UPDATE jobpair_stage_data
-        SET status_code = _new_status
-        FROM starexec.job_pairs
-        WHERE jobpair_stage_data.jobpair_id = job_pairs.id
-            AND jobpair_stage_data.jobpair_id = _pairId
-            AND job_pairs.status_code = _current_status;
+    UPDATE starexec.job_pairs
+    SET status_code = _new_status
+    WHERE id = _pairId AND status_code = _current_status
+    RETURNING job_id INTO _job_id;
+
+    -- The pair changed after the caller read it; leave it untouched.
     IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Stage data for job pair %s with status %s not found', _pairId, _current_status);
+        RETURN;
     END IF;
 
-	UPDATE job_pairs
-	SET status_code = _new_status
-	WHERE id = _pairId AND status_code = _current_status;
+    UPDATE starexec.jobpair_stage_data
+    SET status_code = _new_status
+    WHERE jobpair_id = _pairId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
-            MESSAGE = format('Job pair %s with status %s not found', _pairId, _current_status);
+            MESSAGE = format('Stage data for job pair %s not found', _pairId);
+    END IF;
+
+    -- Terminal status codes mean the pair is finished and should appear in
+    -- job_pair_completion. This mirrors UpdatePairStatus side effects.
+    IF starexec.IsTerminalPairStatus(_new_status) THEN
+        INSERT INTO starexec.job_pair_completion (pair_id) VALUES (_pairId)
+        ON CONFLICT (pair_id) DO NOTHING;
+
+        -- Serialize the final job-completion check with other concurrent pair
+        -- completions for the same job.
+        PERFORM 1 FROM starexec.jobs WHERE id = _job_id FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'P0002',
+                MESSAGE = format('Job %s for job pair %s not found', _job_id, _pairId);
+        END IF;
+
+        SELECT COUNT(*) INTO _count FROM (
+            SELECT id FROM starexec.job_pairs
+            WHERE job_id = _job_id AND status_code IN (1, 2, 4, 19, 20, 22)
+            LIMIT 1
+        ) AS subq;
+        IF _count = 0 THEN
+            UPDATE starexec.jobs
+            SET completed = COALESCE(completed, CURRENT_TIMESTAMP)
+            WHERE id = _job_id;
+        END IF;
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -9429,18 +9479,31 @@ CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatusPrecise(_pairId INT, _stage
 AS $$
 DECLARE
 	_job_id INT;
+	_current_status INT;
 	_count INT;
 BEGIN
 	-- Get the job_id for the completion check below
-	SELECT job_id INTO _job_id FROM job_pairs WHERE id = _pairId;
-
-	-- Set the pair-level status
-	UPDATE job_pairs SET status_code = _terminalStatus WHERE id = _pairId;
+	SELECT job_id, status_code INTO _job_id, _current_status FROM job_pairs WHERE id = _pairId;
 	IF NOT FOUND THEN
 		RAISE EXCEPTION USING
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
+
+	-- Terminal pairs must not be moved back into an earlier non-terminal state.
+	IF starexec.IsTerminalPairStatus(_current_status) AND NOT starexec.IsTerminalPairStatus(_terminalStatus) THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0001',
+			MESSAGE = format(
+				'Illegal status transition for pair %s: terminal status %s cannot move to non-terminal status %s',
+				_pairId,
+				_current_status,
+				_terminalStatus
+			);
+	END IF;
+
+	-- Set the pair-level status
+	UPDATE job_pairs SET status_code = _terminalStatus WHERE id = _pairId;
 
 	-- Set the terminal stage to terminalStatus
 	UPDATE jobpair_stage_data SET status_code = _terminalStatus
@@ -9453,7 +9516,7 @@ BEGIN
 	-- Fire job_pair_completion side-effects if terminalStatus is a terminal status code.
 	-- Terminal codes: 7-18 (normal completion, resource limits, common errors), 21 (killed),
 	-- 23 (not reached), 24 (benchmark dependency missing), 25 (pre-processor error), 26 (post-processor error)
-	IF ((_terminalStatus > 6 AND _terminalStatus < 19) OR _terminalStatus IN (21, 23, 24, 25, 26)) THEN
+	IF starexec.IsTerminalPairStatus(_terminalStatus) THEN
 		INSERT INTO job_pair_completion (pair_id) VALUES (_pairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
