@@ -4,6 +4,7 @@ import org.junit.Assert;
 import org.mockito.Mockito;
 import org.starexec.backend.GridEngineBackend;
 import org.starexec.constants.R;
+import org.starexec.data.database.Common;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Jobs;
@@ -18,6 +19,9 @@ import org.starexec.test.integration.TestSequence;
 import org.starexec.util.Util;
 
 import java.io.IOException;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
 
@@ -139,11 +143,86 @@ public class JobPairTests extends TestSequence {
 	}
 
 	@StarexecTest
+	private void setPairStatusRejectsTerminalDowngradeTest() {
+		JobPair jp = JobPairs.getPair(job.getJobPairs().get(0).getId());
+
+		Assert.assertTrue(JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_COMPLETE.getVal()));
+		Assert.assertFalse(
+			"Terminal pair status must not downgrade back to running.",
+			JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_RUNNING.getVal())
+		);
+		Assert.assertEquals(
+			StatusCode.STATUS_COMPLETE.getVal(),
+			JobPairs.getPair(jp.getId()).getStatus().getCode().getVal()
+		);
+
+		Assert.assertFalse(
+			"Precise status updates must also reject terminal downgrades.",
+			JobPairs.setPairStatusPrecise(
+				jp.getId(),
+				1,
+				StatusCode.STATUS_RUNNING.getVal(),
+				StatusCode.STATUS_NOT_REACHED.getVal()
+			)
+		);
+		Assert.assertEquals(
+			StatusCode.STATUS_COMPLETE.getVal(),
+			JobPairs.getPair(jp.getId()).getStatus().getCode().getVal()
+		);
+	}
+
+	@StarexecTest
 	private void setBrokenPairsToErrorStatusTest() throws IOException {
 		JobPair jp=JobPairs.getPair(job.getJobPairs().get(0).getId());
 		JobPairs.setPairStatus(jp.getId(), StatusCode.STATUS_ENQUEUED.getVal());
 		Jobs.setBrokenPairsToErrorStatus(R.BACKEND);
 		Assert.assertEquals(Status.StatusCode.ERROR_SUBMIT_FAIL.getVal(),JobPairs.getPair(jp.getId()).getStatus().getCode().getVal());
+	}
+
+	@StarexecTest
+	private void setBrokenPairStatusCreatesCompletionSideEffectsTest() throws SQLException {
+		int pairId = job.getJobPairs().get(0).getId();
+		JobPairs.removePairFromCompletedTable(pairId);
+		resetJobCompletionTime(job.getId());
+		JobPairs.setPairStatus(pairId, StatusCode.STATUS_ENQUEUED.getVal());
+
+		JobPairs.setBrokenPairStatus(JobPairs.getPair(pairId));
+
+		Assert.assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), JobPairs.getPair(pairId).getStatus().getCode().getVal());
+		Assert.assertTrue("Broken pair should be inserted into job_pair_completion.", pairHasCompletionRecord(pairId));
+		Assert.assertNotNull("Job should be marked complete when no active pairs remain.", Jobs.get(job.getId()).getCompleteTime());
+	}
+
+	@StarexecTest
+	private void setBrokenPairStatusStaleStatusIsNoOpTest() throws SQLException {
+		int pairId = job.getJobPairs().get(0).getId();
+		JobPair stalePair = JobPairs.getPair(pairId);
+		JobPairs.removePairFromCompletedTable(pairId);
+		resetJobCompletionTime(job.getId());
+		JobPairs.setPairStatus(pairId, StatusCode.STATUS_RUNNING.getVal());
+
+		JobPairs.setBrokenPairStatus(stalePair);
+
+		Assert.assertEquals(StatusCode.STATUS_RUNNING.getVal(), JobPairs.getPair(pairId).getStatus().getCode().getVal());
+		Assert.assertFalse("Stale broken-pair update should not insert completion side effects.", pairHasCompletionRecord(pairId));
+		Assert.assertNull("Stale broken-pair update should not complete the job.", Jobs.get(job.getId()).getCompleteTime());
+	}
+
+	@StarexecTest
+	private void getPairsByStatusReturnsAllMatchingPairsTest() {
+		JobPair firstPair = JobPairs.getPair(job.getJobPairs().get(0).getId());
+		JobPair secondPair = JobPairs.getPair(job2.getJobPairs().get(0).getId());
+		JobPairs.setPairStatus(firstPair.getId(), StatusCode.STATUS_ENQUEUED.getVal());
+		JobPairs.setPairStatus(secondPair.getId(), StatusCode.STATUS_ENQUEUED.getVal());
+
+		List<JobPair> enqueuedPairs = JobPairs.getPairsByStatus(StatusCode.STATUS_ENQUEUED.getVal());
+		Set<Integer> enqueuedPairIds = new HashSet<>();
+		for (JobPair pair : enqueuedPairs) {
+			enqueuedPairIds.add(pair.getId());
+		}
+
+		Assert.assertTrue("Expected first enqueued pair to be returned.", enqueuedPairIds.contains(firstPair.getId()));
+		Assert.assertTrue("Expected second enqueued pair to be returned.", enqueuedPairIds.contains(secondPair.getId()));
 	}
 
 	@StarexecTest
@@ -316,6 +395,30 @@ public class JobPairTests extends TestSequence {
 		job=loader.loadJobIntoDatabase(space.getId(), user.getId(), -1, postProc.getId(), solverIds, benchmarkIds,cpuTimeout,wallclockTimeout,gbMemory);
 		job2=loader.loadJobIntoDatabase(space.getId(), user2.getId(), -1, postProc.getId(), solverIds, benchmarkIds, cpuTimeout, wallclockTimeout, gbMemory);
 		Assert.assertNotNull(Jobs.get(job.getId()));
+	}
+
+	private void resetJobCompletionTime(int jobId) throws SQLException {
+		try (Connection con = DatabaseTestAccess.getConnectionForTest();
+			 PreparedStatement ps = con.prepareStatement("UPDATE starexec.jobs SET completed = NULL WHERE id = ?")) {
+			ps.setInt(1, jobId);
+			ps.executeUpdate();
+		}
+	}
+
+	private boolean pairHasCompletionRecord(int pairId) throws SQLException {
+		try (Connection con = DatabaseTestAccess.getConnectionForTest();
+			 PreparedStatement ps = con.prepareStatement("SELECT 1 FROM starexec.job_pair_completion WHERE pair_id = ?")) {
+			ps.setInt(1, pairId);
+			try (ResultSet rs = ps.executeQuery()) {
+				return rs.next();
+			}
+		}
+	}
+
+	private static class DatabaseTestAccess extends Common {
+		private static Connection getConnectionForTest() throws SQLException {
+			return getConnection();
+		}
 	}
 
 	@Override

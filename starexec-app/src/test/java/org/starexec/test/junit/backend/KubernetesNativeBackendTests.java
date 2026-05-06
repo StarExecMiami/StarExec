@@ -7,6 +7,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Map;
+import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -148,6 +150,65 @@ public class KubernetesNativeBackendTests {
         assertTrue(execToJob.isEmpty());
         assertTrue(execToPair.isEmpty());
         assertTrue(execToOut.isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void rebuildTrackingFromJobRestoresLabelsAndOutputAnnotation() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Job job = new JobBuilder()
+            .withNewMetadata()
+                .withName("starexec-job-77")
+                .addToLabels("starexec.org/managed", "true")
+                .addToLabels("starexec.org/exec-id", "77")
+                .addToLabels("starexec.org/pair-id", "707")
+                .addToAnnotations("starexec.org/output-dir", "/tmp/starexec/out/707")
+            .endMetadata()
+            .build();
+
+        Method rebuildTrackingFromJob = KubernetesNativeBackend.class
+            .getDeclaredMethod("rebuildTrackingFromJob", Job.class);
+        rebuildTrackingFromJob.setAccessible(true);
+        rebuildTrackingFromJob.invoke(backend, job);
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        assertEquals("starexec-job-77", execToJob.get(77));
+        assertEquals(Integer.valueOf(707), execToPair.get(77));
+        assertEquals(Path.of("/tmp/starexec/out/707"), execToOut.get(77));
+    }
+
+    @Test
+    public void terminalJobDetectionUsesSucceededAndFailedStatus() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Method isTerminalJob = KubernetesNativeBackend.class
+            .getDeclaredMethod("isTerminalJob", Job.class);
+        isTerminalJob.setAccessible(true);
+
+        Job runningJob = new JobBuilder()
+            .withNewStatus()
+                .withActive(1)
+            .endStatus()
+            .build();
+        Job succeededJob = new JobBuilder()
+            .withNewStatus()
+                .withSucceeded(1)
+            .endStatus()
+            .build();
+        Job failedJob = new JobBuilder()
+            .withNewStatus()
+                .withFailed(1)
+            .endStatus()
+            .build();
+
+        assertFalse((boolean) isTerminalJob.invoke(backend, runningJob));
+        assertTrue((boolean) isTerminalJob.invoke(backend, succeededJob));
+        assertTrue((boolean) isTerminalJob.invoke(backend, failedJob));
     }
 
     @Test
