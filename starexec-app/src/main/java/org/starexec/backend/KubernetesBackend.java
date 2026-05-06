@@ -24,6 +24,17 @@ public class KubernetesBackend implements Backend {
         KubernetesBackend.class
     );
 
+    static {
+        log.error(
+            "DEPRECATED: KubernetesBackend is a legacy implementation that "
+            + "runs scripts locally via ProcessBuilder, never updates the "
+            + "database, and cannot shut down cleanly. "
+            + "Use KubernetesNativeBackend instead. "
+            + "If you are seeing this message, set STAREXEC_BACKEND_TYPE "
+            + "to 'kubernetes-native' or 'podman'."
+        );
+    }
+
     // You can set this to any desired number
     // (Should be >= num compute nodes in cluster, so they can all be used concurrently)
     // However, because the k8s backend runs the runscript/jobscript locally on the head node (which then dispatches the actual heavy jobs via k8s),

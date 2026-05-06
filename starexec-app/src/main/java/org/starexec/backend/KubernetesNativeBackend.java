@@ -95,6 +95,7 @@ import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
+import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.api.model.batch.v1.JobList;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
@@ -104,6 +105,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
@@ -147,6 +152,21 @@ public class KubernetesNativeBackend implements Backend {
     /** Label key for job pair ID */
     private static final String PAIR_ID_LABEL = LABEL_PREFIX + "pair-id";
 
+    /** Label key for StarExec label schema version */
+    private static final String LABEL_VERSION = LABEL_PREFIX + "label-version";
+
+    /** Current label schema version */
+    private static final String CURRENT_LABEL_VERSION = "2";
+
+    /** Label key distinguishing job-pair resources from future maintenance jobs */
+    private static final String KIND_LABEL = LABEL_PREFIX + "kind";
+
+    /** Label value for regular job-pair execution resources */
+    private static final String KIND_JOB_PAIR = "job-pair";
+
+    /** Annotation key for the output directory on the shared PVC */
+    private static final String OUTPUT_DIR_ANNOTATION = LABEL_PREFIX + "output-dir";
+
     /** Label key for worker nodes */
     private static final String WORKER_LABEL = LABEL_PREFIX + "worker";
 
@@ -183,6 +203,27 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Flag indicating if backend is initialized */
     private volatile boolean initialized = false;
+
+    /** Flag set during graceful shutdown to reject new submissions */
+    private volatile boolean shuttingDown = false;
+
+    /** Hard concurrency cap to prevent unbounded K8s Job creation */
+    private int maxConcurrentJobs = 50;
+
+    /** Periodic orphan sweep interval in milliseconds */
+    private int orphanSweepIntervalMs = 300000;
+
+    /** Tracks active K8s Jobs against the concurrency cap */
+    private final AtomicInteger activeJobCount = new AtomicInteger(0);
+
+    /** Exec IDs currently holding a concurrency slot */
+    private final Set<Integer> jobsHoldingSlot = ConcurrentHashMap.newKeySet();
+
+    /** Exec IDs that have been killed to prevent stale completion callbacks */
+    private final Set<Integer> killedExecIds = ConcurrentHashMap.newKeySet();
+
+    /** Periodic cleanup task that deletes orphaned managed K8s Jobs */
+    private ScheduledExecutorService orphanSweepExecutor;
 
     // =========================================================================
     // Configuration (loaded from environment)
@@ -248,12 +289,16 @@ public class KubernetesNativeBackend implements Backend {
 
             ensureNamespaceAccessible();
 
+            reconcileOrphanedPairs();
+
             jobMonitor = new KubernetesJobMonitor(
                 kubernetesClient,
                 namespace,
                 new KubernetesJobCompletionCallback()
             );
             jobMonitor.start();
+
+            startOrphanSweepScheduler();
 
             initialized = true;
             log.info("KubernetesNativeBackend initialized successfully");
@@ -285,6 +330,24 @@ public class KubernetesNativeBackend implements Backend {
         cpuLimit = getEnv("STAREXEC_K8S_CPU_LIMIT", "1");
         ttlSecondsAfterFinished = getEnvInt("STAREXEC_K8S_JOB_TTL_SECONDS", 3600);
         backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
+        maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", 50);
+        if (maxConcurrentJobs < 1) {
+            log.warn(
+                "Invalid STAREXEC_K8S_MAX_CONCURRENT_JOBS value: " +
+                maxConcurrentJobs +
+                ". Falling back to 1."
+            );
+            maxConcurrentJobs = 1;
+        }
+        orphanSweepIntervalMs = getEnvInt("STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS", 300000);
+        if (orphanSweepIntervalMs < 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS value: " +
+                orphanSweepIntervalMs +
+                ". Falling back to 0 (disabled)."
+            );
+            orphanSweepIntervalMs = 0;
+        }
         strictOnePairPerCpu = getEnvBoolean(
             "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU",
             true
@@ -321,6 +384,10 @@ public class KubernetesNativeBackend implements Backend {
                 appNodeName +
                 ", ttlSeconds=" +
                 ttlSecondsAfterFinished +
+                ", maxConcurrentJobs=" +
+                maxConcurrentJobs +
+                ", orphanSweepIntervalMs=" +
+                orphanSweepIntervalMs +
                 ", strictOnePairPerCpu=" +
                 strictOnePairPerCpu
         );
@@ -365,28 +432,201 @@ public class KubernetesNativeBackend implements Backend {
 
     /**
      * Clean up resources when shutting down.
+     *
+     * <p>Shutdown ordering follows the same pattern as PodmanBackend:</p>
+     * <ol>
+     *   <li>Stop accepting new submissions</li>
+     *   <li>Run one final poll for terminal K8s Jobs</li>
+     *   <li>Stop the job monitor</li>
+     *   <li>Close the Kubernetes client</li>
+     *   <li>Clear in-memory tracking maps</li>
+     *   <li><b>Do not</b> delete managed K8s Jobs —
+     *       startup reconciliation will recover them</li>
+     * </ol>
      */
     @Override
     public void destroyIf() {
         log.info("Shutting down KubernetesNativeBackend...");
 
-        if (jobMonitor != null) {
-            jobMonitor.stop();
+        // 1. Stop accepting new submissions so no K8s Jobs are created during
+        //    shutdown. Any submitScript() that sees shuttingDown after this
+        //    point returns -1 immediately.
+        shuttingDown = true;
+
+        // 2. Run one final poll for terminal K8s Jobs so any Job that
+        //    completed just before shutdown gets its DB update.
+        if (jobMonitor != null && kubernetesClient != null) {
+            try {
+                log.info("Running final completed-K8s-Job scan before shutdown...");
+                drainTerminalJobs();
+            } catch (Exception e) {
+                log.warn("Error during final K8s job scan before shutdown", e);
+            }
         }
 
+        // 3. Stop the monitor.
+        if (jobMonitor != null) {
+            try {
+                jobMonitor.stop();
+                log.info("KubernetesJobMonitor stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping KubernetesJobMonitor", e);
+            }
+        }
+
+        if (orphanSweepExecutor != null) {
+            orphanSweepExecutor.shutdownNow();
+            orphanSweepExecutor = null;
+        }
+
+        // 4. Close the Kubernetes client.
+        //    K8s Jobs are left in place so startup reconciliation can find
+        //    and recover them on the next boot.
         if (kubernetesClient != null) {
             try {
                 kubernetesClient.close();
+                kubernetesClient = null;
+                log.info("KubernetesNativeBackend destroyed successfully (K8s Jobs preserved for recovery).");
             } catch (Exception e) {
                 log.warn("Error while closing Kubernetes client", e);
             }
         }
 
-        initialized = false;
+        // 5. Clear tracking maps and release concurrency slots.
+        releaseAllSlots();
         execIdToJobName.clear();
         execIdToPairId.clear();
         execIdToOutputDir.clear();
+        initialized = false;
         log.info("KubernetesNativeBackend shut down");
+    }
+
+    /**
+     * Starts the periodic orphan sweep that deletes managed K8s Jobs whose
+     * DB pair rows have been removed while the backend is running.
+     */
+    private void startOrphanSweepScheduler() {
+        if (orphanSweepIntervalMs <= 0) {
+            log.info("Kubernetes orphan sweep disabled");
+            return;
+        }
+
+        orphanSweepExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "k8s-orphan-sweep");
+            t.setDaemon(true);
+            return t;
+        });
+
+        orphanSweepExecutor.scheduleAtFixedRate(
+            this::sweepOrphanedKubernetesJobs,
+            orphanSweepIntervalMs,
+            orphanSweepIntervalMs,
+            TimeUnit.MILLISECONDS
+        );
+        log.info(
+            "Scheduled Kubernetes orphan sweep every " +
+            orphanSweepIntervalMs +
+            " ms"
+        );
+    }
+
+    /**
+     * Deletes managed K8s Jobs whose DB pair rows have disappeared.
+     * This keeps the cluster from accumulating orphaned Jobs when pairs are
+     * deleted while the application remains running.
+     */
+    private void sweepOrphanedKubernetesJobs() {
+        if (!initialized || kubernetesClient == null || shuttingDown) {
+            return;
+        }
+
+        try {
+            JobList jobList = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true")
+                .list();
+
+            int deleted = 0;
+            for (Job job : jobList.getItems()) {
+                Integer pairId = extractPairId(job);
+                Integer execId = extractExecId(job);
+                if (pairId == null || execId == null) {
+                    continue;
+                }
+
+                JobPairs.PairStatusLookupResult lookup =
+                    JobPairs.getPairStatusLookup(pairId);
+                if (!lookup.isMissing()) {
+                    continue;
+                }
+
+                deleteKubernetesJob(job);
+                execIdToJobName.remove(execId);
+                execIdToPairId.remove(execId);
+                execIdToOutputDir.remove(execId);
+                killedExecIds.add(execId);
+                releaseSubmissionSlot(execId);
+                deleted++;
+            }
+
+            if (deleted > 0) {
+                log.info("Kubernetes orphan sweep deleted " + deleted + " orphaned Job(s)");
+            }
+        } catch (Exception e) {
+            log.warn("Kubernetes orphan sweep failed", e);
+        }
+    }
+
+    /**
+     * Runs one final poll for terminal K8s Jobs before shutdown, so any
+     * Job that completed just before teardown gets its DB update processed.
+     */
+    private void drainTerminalJobs() {
+        try {
+            List<Job> jobs = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true")
+                .list()
+                .getItems();
+
+            int processed = 0;
+            KubernetesJobCompletionCallback callback =
+                new KubernetesJobCompletionCallback();
+
+            for (Job job : jobs) {
+                Integer execId = extractExecId(job);
+                String jobName = getJobName(job);
+                if (execId == null || jobName == null) {
+                    continue;
+                }
+
+                // Only process terminal jobs — active jobs are left for
+                // reconciliation on next startup.
+                if (isSucceededJob(job)) {
+                    if (callback.onJobComplete(execId, jobName)) {
+                        processed++;
+                    }
+                } else if (isFailedJob(job)) {
+                    if (callback.onJobFailed(execId, jobName,
+                            summarizeJobFailure(job))) {
+                        processed++;
+                    }
+                }
+            }
+
+            if (processed > 0) {
+                log.info("Final K8s job scan processed " + processed +
+                         " terminal job(s) before shutdown");
+            }
+        } catch (Exception e) {
+            log.error("Failed final K8s job scan before shutdown", e);
+        }
     }
 
     /**
@@ -428,6 +668,25 @@ public class KubernetesNativeBackend implements Backend {
             return -1;
         }
 
+        // Reject new submissions during graceful shutdown so no K8s Jobs
+        // are created after the final drain-and-stop sequence.
+        if (shuttingDown) {
+            log.warn("Rejecting submission for pair " + pairId +
+                     " — backend is shutting down");
+            return -1;
+        }
+
+        // Enforce concurrency cap to prevent unbounded K8s Job creation.
+        if (activeJobCount.get() >= maxConcurrentJobs) {
+            log.warn("Rejecting submission for pair " + pairId +
+                     " — at concurrency cap (" +
+                     activeJobCount.get() +
+                     "/" +
+                     maxConcurrentJobs +
+                     ")");
+            return -1;
+        }
+
         int execId = generateExecId();
         String jobName = generateJobName(execId);
 
@@ -461,9 +720,12 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobName.put(execId, jobName);
             execIdToPairId.put(execId, pairId);
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
+            activeJobCount.incrementAndGet();
+            jobsHoldingSlot.add(execId);
             log.info("K8s Job submitted successfully: " + jobName);
             return execId;
         } catch (Exception e) {
+            execIdToJobName.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
             log.error("Failed to submit Kubernetes Job: " + jobName, e);
@@ -596,6 +858,347 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
+     * Releases the concurrency slot held by {@code execId}, if any.
+     */
+    private void releaseSubmissionSlot(int execId) {
+        if (!jobsHoldingSlot.remove(execId)) {
+            return;
+        }
+        int remaining = activeJobCount.decrementAndGet();
+        log.debug(
+            "Released K8s concurrency slot (execId=" +
+            execId +
+            ", active=" +
+            remaining +
+            ", max=" +
+            maxConcurrentJobs +
+            ")"
+        );
+    }
+
+    /**
+     * Releases all concurrency slots (killAll / destroyIf shutdown path).
+     */
+    private void releaseAllSlots() {
+        int released = 0;
+        for (Integer execId : jobsHoldingSlot) {
+            releaseSubmissionSlot(execId);
+            released++;
+        }
+        if (released > 0) {
+            log.info("Released " + released +
+                     " K8s concurrency slots during bulk teardown");
+        }
+    }
+
+    /**
+     * Rebuilds in-memory execution tracking from Kubernetes Job labels and
+     * reconciles stale ENQUEUED/RUNNING database rows after a StarExec restart.
+     *
+     * <p>Recovery is intentionally conservative:</p>
+     * <ul>
+     *   <li>active K8s Job evidence rebuilds tracking and leaves the DB state intact;</li>
+     *   <li>terminal K8s Job evidence is processed through the normal completion callback;</li>
+     *   <li>ENQUEUED DB rows without Job evidence are reset to PENDING_SUBMIT;</li>
+     *   <li>RUNNING DB rows without Job evidence are marked as terminal failure.</li>
+     * </ul>
+     */
+    private void reconcileOrphanedPairs() {
+        try {
+            log.info("Starting Kubernetes orphaned-pair reconciliation...");
+
+            JobList jobList = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withLabel(MANAGED_LABEL, "true")
+                .list();
+
+            Map<Integer, Job> pairIdToActiveJob = new HashMap<>();
+            Map<Integer, Job> pairIdToTerminalJob = new HashMap<>();
+            int malformedJobs = 0;
+            int orphanedKubernetesJobs = 0;
+            int maxRecoveredExecId = 0;
+
+            for (Job job : jobList.getItems()) {
+                Integer pairId = extractPairId(job);
+                Integer execId = extractExecId(job);
+                if (pairId == null || pairId <= 0 || execId == null || execId <= 0) {
+                    malformedJobs++;
+                    continue;
+                }
+
+                JobPairs.PairStatusLookupResult lookup =
+                    JobPairs.getPairStatusLookup(pairId);
+                if (lookup.isMissing()) {
+                    deleteKubernetesJob(job);
+                    orphanedKubernetesJobs++;
+                    continue;
+                }
+                if (lookup.isError()) {
+                    log.warn("Skipping reconciliation for pair " + pairId +
+                             " because DB status lookup failed");
+                    continue;
+                }
+
+                if (isTerminalJob(job)) {
+                    pairIdToTerminalJob.put(pairId, job);
+                } else {
+                    pairIdToActiveJob.put(pairId, job);
+                }
+
+                if (execId > maxRecoveredExecId) {
+                    maxRecoveredExecId = execId;
+                }
+            }
+
+            List<Integer> enqueuedIds = JobPairs.getPairIdsByStatusCode(
+                StatusCode.STATUS_ENQUEUED.getVal());
+            List<Integer> runningIds = JobPairs.getPairIdsByStatusCode(
+                StatusCode.STATUS_RUNNING.getVal());
+
+            int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
+            int runningFailed = 0, runningProcessed = 0, runningRebuilt = 0;
+
+            for (int pairId : enqueuedIds) {
+                Job activeJob = pairIdToActiveJob.get(pairId);
+                Job terminalJob = pairIdToTerminalJob.get(pairId);
+                if (activeJob != null) {
+                    rebuildTrackingFromJob(activeJob);
+                    enqueuedRebuilt++;
+                } else if (terminalJob != null) {
+                    if (processReconciledJobThroughCallback(terminalJob)) {
+                        enqueuedProcessed++;
+                    }
+                } else if (JobPairs.tryResetEnqueuedToPending(pairId)
+                        == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                    enqueuedReset++;
+                }
+            }
+
+            for (int pairId : runningIds) {
+                Job activeJob = pairIdToActiveJob.get(pairId);
+                Job terminalJob = pairIdToTerminalJob.get(pairId);
+                if (activeJob != null) {
+                    rebuildTrackingFromJob(activeJob);
+                    runningRebuilt++;
+                } else if (terminalJob != null) {
+                    if (processReconciledJobThroughCallback(terminalJob)) {
+                        runningProcessed++;
+                    }
+                } else if (JobPairs.tryMarkRunningAsFailed(pairId)
+                        == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                    runningFailed++;
+                }
+            }
+
+            if (maxRecoveredExecId > 0) {
+                synchronized (idLock) {
+                    if (maxRecoveredExecId >= nextExecId) {
+                        nextExecId = maxRecoveredExecId + 1;
+                    }
+                }
+            }
+
+            log.info(
+                "Kubernetes reconciliation complete: ENQUEUED reset=" +
+                    enqueuedReset +
+                    " processed=" +
+                    enqueuedProcessed +
+                    " rebuilt=" +
+                    enqueuedRebuilt +
+                    "; RUNNING failed=" +
+                    runningFailed +
+                    " processed=" +
+                    runningProcessed +
+                    " rebuilt=" +
+                    runningRebuilt +
+                    "; malformedJobs=" +
+                    malformedJobs +
+                    "; orphanedKubernetesJobs=" +
+                    orphanedKubernetesJobs
+            );
+        } catch (Exception e) {
+            log.error("Failed to reconcile Kubernetes orphaned pairs on startup", e);
+        }
+    }
+
+    private boolean processReconciledJobThroughCallback(Job job) {
+        Integer execId = extractExecId(job);
+        String jobName = getJobName(job);
+        if (execId == null || jobName == null) {
+            return false;
+        }
+
+        rebuildTrackingFromJob(job);
+        KubernetesJobCompletionCallback callback =
+            new KubernetesJobCompletionCallback();
+        if (isSucceededJob(job)) {
+            return callback.onJobComplete(execId, jobName);
+        }
+        return callback.onJobFailed(execId, jobName, summarizeJobFailure(job));
+    }
+
+    private void rebuildTrackingFromJob(Job job) {
+        Integer execId = extractExecId(job);
+        Integer pairId = extractPairId(job);
+        String jobName = getJobName(job);
+        if (execId == null || pairId == null || jobName == null) {
+            return;
+        }
+
+        execIdToJobName.put(execId, jobName);
+        execIdToPairId.put(execId, pairId);
+        execIdToOutputDir.put(execId, resolveOutputDirectory(job, pairId));
+
+        // Acquire a concurrency slot so the capacity tracker stays in sync
+        // with the number of reconstructed in-memory tracking entries.
+        if (jobsHoldingSlot.add(execId)) {
+            int count = activeJobCount.incrementAndGet();
+            log.debug(
+                "Reclaimed K8s concurrency slot during reconciliation (execId=" +
+                execId +
+                ", active=" +
+                count +
+                ", max=" +
+                maxConcurrentJobs +
+                ")"
+            );
+        }
+    }
+
+    private Path resolveOutputDirectory(Job job, int pairId) {
+        if (job != null && job.getMetadata() != null
+                && job.getMetadata().getAnnotations() != null) {
+            String outputDir =
+                job.getMetadata().getAnnotations().get(OUTPUT_DIR_ANNOTATION);
+            if (outputDir != null && !outputDir.trim().isEmpty()) {
+                return Paths.get(outputDir);
+            }
+        }
+
+        try {
+            return resolveOutputDirectory(JobPairs.getStdout(pairId));
+        } catch (Exception e) {
+            log.warn(
+                "Could not reconstruct output directory for pair " + pairId +
+                "; using default", e);
+            return Paths.get(R.JOB_OUTPUT_DIRECTORY);
+        }
+    }
+
+    private Integer extractExecId(Job job) {
+        return extractIntegerLabel(job, EXEC_ID_LABEL);
+    }
+
+    private Integer extractPairId(Job job) {
+        return extractIntegerLabel(job, PAIR_ID_LABEL);
+    }
+
+    private Integer extractIntegerLabel(Job job, String labelKey) {
+        if (job == null || job.getMetadata() == null
+                || job.getMetadata().getLabels() == null) {
+            return null;
+        }
+        String value = job.getMetadata().getLabels().get(labelKey);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            log.warn("Malformed Kubernetes label " + labelKey + "='" + value + "'");
+            return null;
+        }
+    }
+
+    private String getJobName(Job job) {
+        if (job == null || job.getMetadata() == null) {
+            return null;
+        }
+        return job.getMetadata().getName();
+    }
+
+    private boolean isTerminalJob(Job job) {
+        return isSucceededJob(job) || isFailedJob(job);
+    }
+
+    private boolean isSucceededJob(Job job) {
+        if (job == null || job.getStatus() == null) {
+            return false;
+        }
+        Integer succeeded = job.getStatus().getSucceeded();
+        if (succeeded != null && succeeded > 0) {
+            return true;
+        }
+        return hasTrueCondition(job, "Complete");
+    }
+
+    private boolean isFailedJob(Job job) {
+        if (job == null || job.getStatus() == null) {
+            return false;
+        }
+        Integer failed = job.getStatus().getFailed();
+        if (failed != null && failed > 0) {
+            return true;
+        }
+        return hasTrueCondition(job, "Failed");
+    }
+
+    private boolean hasTrueCondition(Job job, String type) {
+        if (job.getStatus() == null || job.getStatus().getConditions() == null) {
+            return false;
+        }
+        for (JobCondition condition : job.getStatus().getConditions()) {
+            if (condition == null) {
+                continue;
+            }
+            if (type.equalsIgnoreCase(condition.getType())
+                    && "True".equalsIgnoreCase(condition.getStatus())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String summarizeJobFailure(Job job) {
+        if (job == null || job.getStatus() == null
+                || job.getStatus().getConditions() == null) {
+            return "Kubernetes Job failed";
+        }
+        for (JobCondition condition : job.getStatus().getConditions()) {
+            if (condition == null || !"Failed".equalsIgnoreCase(condition.getType())) {
+                continue;
+            }
+            String reason = condition.getReason() != null
+                ? condition.getReason() : "unknown";
+            String message = condition.getMessage() != null
+                ? condition.getMessage() : "no message";
+            return reason + ": " + message;
+        }
+        return "Kubernetes Job failed";
+    }
+
+    private void deleteKubernetesJob(Job job) {
+        String jobName = getJobName(job);
+        if (jobName == null) {
+            return;
+        }
+        try {
+            kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .delete();
+        } catch (Exception e) {
+            log.warn("Failed to delete orphaned Kubernetes Job: " + jobName, e);
+        }
+    }
+
+    /**
      * Generate a Kubernetes-compliant job name from execution ID.
      */
     private String generateJobName(int execId) {
@@ -645,6 +1248,8 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobName.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            killedExecIds.add(execId);
+            releaseSubmissionSlot(execId);
             if (!deleted) {
                 log.warn("Kubernetes API reported no deletion for job: " + jobName);
             }
@@ -668,6 +1273,7 @@ public class KubernetesNativeBackend implements Backend {
             log.info(
                 "Kubernetes client not initialized; clearing local job tracking only"
             );
+            releaseAllSlots();
             execIdToJobName.clear();
             execIdToPairId.clear();
             execIdToOutputDir.clear();
@@ -687,6 +1293,7 @@ public class KubernetesNativeBackend implements Backend {
             log.error("Failed to kill all Kubernetes jobs", e);
             return false;
         } finally {
+            releaseAllSlots();
             execIdToJobName.clear();
             execIdToPairId.clear();
             execIdToOutputDir.clear();
@@ -1140,6 +1747,20 @@ public class KubernetesNativeBackend implements Backend {
 
         @Override
         public boolean onJobComplete(int execId, String jobName) {
+            // Skip processing if this execId was killed — the kill path
+            // already removed tracking maps and released the concurrency slot.
+            if (killedExecIds.contains(execId)) {
+                log.debug(
+                    "Skipping completion callback for killed execId " +
+                    execId +
+                    " (K8s job " +
+                    jobName +
+                    ")"
+                );
+                killedExecIds.remove(execId);
+                return true;
+            }
+
             Integer pairId = resolvePairId(execId, jobName);
             if (pairId == null) {
                 log.warn("Unable to resolve pair ID for completed job: " + jobName);
@@ -1163,6 +1784,7 @@ public class KubernetesNativeBackend implements Backend {
                     execIdToJobName.remove(execId);
                     execIdToPairId.remove(execId);
                     execIdToOutputDir.remove(execId);
+                    releaseSubmissionSlot(execId);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -1203,11 +1825,26 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobName.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            releaseSubmissionSlot(execId);
             return true;
         }
 
         @Override
         public boolean onJobFailed(int execId, String jobName, String reason) {
+            // Skip processing if this execId was killed — the kill path
+            // already removed tracking maps and released the concurrency slot.
+            if (killedExecIds.contains(execId)) {
+                log.debug(
+                    "Skipping failure callback for killed execId " +
+                    execId +
+                    " (K8s job " +
+                    jobName +
+                    ")"
+                );
+                killedExecIds.remove(execId);
+                return true;
+            }
+
             Integer pairId = resolvePairId(execId, jobName);
             if (pairId == null) {
                 log.warn("Unable to resolve pair ID for failed job: " + jobName + ". Reason: " + reason);
@@ -1229,6 +1866,7 @@ public class KubernetesNativeBackend implements Backend {
                     execIdToJobName.remove(execId);
                     execIdToPairId.remove(execId);
                     execIdToOutputDir.remove(execId);
+                    releaseSubmissionSlot(execId);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -1266,6 +1904,7 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobName.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            releaseSubmissionSlot(execId);
             return true;
         }
 
