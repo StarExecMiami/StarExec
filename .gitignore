@@ -150,3 +150,16 @@ ops.txt
 **/*-report.json
 **/*-analysis.json
 **/test-*.html
+
+####################################
+# Agent tooling config — machine-local
+####################################
+.claude/
+.codex
+AGENTS.md
+
+####################################
+# Debug / operational artifacts
+####################################
+debug-*.yaml
+changes.diff
