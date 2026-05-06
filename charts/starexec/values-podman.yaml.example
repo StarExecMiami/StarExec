@@ -35,6 +35,7 @@ postgres:
   host: localhost
   port: 5432
   user: starexec
+  allowInsecureDevCredentials: true
   # Replace with a strong random password. For local dev the default seeded
   # credentials (admin:admin, public:public) are already baked into the
   # migrations, so any value you choose here only protects the DB socket.

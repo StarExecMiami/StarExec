@@ -27,6 +27,7 @@ postgres:
   host: localhost
   port: 5432
   user: starexec_ci
+  allowInsecureDevCredentials: true
   password: test_password_ci_only
   database: starexec_test
   rootPassword: root_ci_only
@@ -50,7 +51,7 @@ resources:
     limits:
       memory: "512Mi"
       cpu: "500m"
-  postgresql:
+  postgres:
     requests:
       memory: "256Mi"
       cpu: "250m"

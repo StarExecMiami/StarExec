@@ -36,6 +36,7 @@ postgres:
   host: localhost # Within pod, containers share localhost
   port: 5432
   user: starexec
+  allowInsecureDevCredentials: true
   password: starexec_dev_password # Dev-only; use env override for local testing
   database: starexec
   rootPassword: starexec_dev_password

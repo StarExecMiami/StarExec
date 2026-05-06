@@ -98,11 +98,13 @@ postgres:
   port: 5432
   user: starexec
   database: starexec
+  allowInsecureDevCredentials: false
 
   # Credentials - MUST be overridden via existingSecret in production
-  # For development/testing, can be set directly (not recommended for prod)
-  password: "starexec_dev_password" # Only set for dev/testing
-  rootPassword: "starexec_dev_password" # Only set for dev/testing
+  # For development/testing profiles, explicitly opt in with
+  # postgres.allowInsecureDevCredentials=true.
+  password: ""
+  rootPassword: ""
 
   # External secret configuration (recommended for production)
   existingSecret: "" # If set, use this secret instead of creating one
@@ -160,13 +162,23 @@ kubernetes:
       memory: "2Gi"
       cpu: "1"
 
+  # Worker scheduling labels. Keep these aligned with kubernetes.nodeSelector
+  # unless you have a measured reason to separate app placement from job
+  # placement.
+  workerSelectorKey: "starexec.org/worker"
+  workerSelectorValue: "true"
+
   # Academic reproducibility mode:
-  # enforce one job pair per CPU to reduce L1/L2 cache contention.
+  # requests one Kubernetes CPU per job pair to reduce oversubscription.
+  # Physical-core exclusivity still depends on cluster/node CPU-manager and
+  # SMT configuration outside this chart.
   strictOnePairPerCpu: true
 
   # Job lifecycle management
   ttlSecondsAfterFinished: 3600 # 1 hour
   backoffLimit: 0 # No retries - StarExec handles retry logic
+  maxConcurrentJobs: 50
+  orphanSweepIntervalMs: 300000
 
 # ============================================================================
 # PODMAN-SPECIFIC CONFIGURATION
