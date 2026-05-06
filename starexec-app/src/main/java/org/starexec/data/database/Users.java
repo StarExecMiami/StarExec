@@ -1272,6 +1272,32 @@ public class Users {
 			// First, get information needed for cleanup
 			Space personalSpace = Spaces.getPersonalSpace(userToDeleteId);
 
+			// Gather filesystem targets BEFORE the DB cascade so we can clean
+			// up job directories, solver pictures, and benchmark pictures that
+			// would become unreachable through DB queries after the cascade.
+			List<Job> userJobs = Jobs.getByUserId(userToDeleteId);
+			List<Solver> userSolvers = Solvers.getByUser(userToDeleteId);
+			List<Benchmark> userBenchmarks = Benchmarks.getByUser(userToDeleteId);
+
+			List<Integer> preGatheredJobIds = new ArrayList<>();
+			if (userJobs != null) {
+				for (Job j : userJobs) {
+					preGatheredJobIds.add(j.getId());
+				}
+			}
+			List<Integer> preGatheredSolverIds = new ArrayList<>();
+			if (userSolvers != null) {
+				for (Solver s : userSolvers) {
+					preGatheredSolverIds.add(s.getId());
+				}
+			}
+			List<Integer> preGatheredBenchmarkIds = new ArrayList<>();
+			if (userBenchmarks != null) {
+				for (Benchmark b : userBenchmarks) {
+					preGatheredBenchmarkIds.add(b.getId());
+				}
+			}
+
 			// Delete the user's personal space first to avoid orphan subspaces
 			if (personalSpace != null) {
 				log.info("Deleting personal space for user " + userToDeleteId + " with space id "
@@ -1295,11 +1321,14 @@ public class Users {
 
 			log.debug("Database deletion successful for user with id=" + userToDeleteId);
 
+			// Invalidate admin cache for the deleted user to prevent stale
+			// authorization decisions.
+			isAdminCache.remove(userToDeleteId);
+
 			// Only delete the users primitive directories if both personal space and
-			// database deletion succeeded
-			// This ensures we don't leave orphan directories if any part of the deletion
-			// fails
-			deleteUsersPrimitiveDirectories(userToDeleteId);
+			// database deletion succeeded.
+			// Uses pre-gathered IDs because DB queries return nothing post-cascade.
+			deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobIds, preGatheredSolverIds, preGatheredBenchmarkIds);
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
 			return true;
@@ -1323,10 +1352,17 @@ public class Users {
 	 * This includes: solvers, benchmarks, jobs, and ALL pictures (user, solver, and
 	 * benchmark).
 	 *
+	 * <p>Accepts pre-gathered IDs so that filesystem cleanup works after the DB
+	 * cascade has removed the user's rows.</p>
+	 *
 	 * @param userId Id of user whose data is to be completely deleted.
+	 * @param jobIds Ids of the user's jobs (pre-gathered before DB cascade).
+	 * @param solverIds Ids of the user's solvers (pre-gathered before DB cascade).
+	 * @param benchmarkIds Ids of the user's benchmarks (pre-gathered before DB cascade).
 	 * @author Albert Giegerich, Andres Caicedo (comprehensive cleanup)
 	 */
-	private static void deleteUsersPrimitiveDirectories(int userId) {
+	private static void deleteUsersPrimitiveDirectories(int userId,
+			List<Integer> jobIds, List<Integer> solverIds, List<Integer> benchmarkIds) {
 		final String method = "deleteUsersPrimitiveDirectories";
 		log.info(method + ": Deleting ALL data for user with id=" + userId);
 
@@ -1336,33 +1372,38 @@ public class Users {
 		// Delete user's benchmark directory
 		deleteUsersBenchmarkDirectory(userId);
 
-		// Delete all job output directories for user's jobs
-		deleteUsersJobDirectories(userId);
+		// Delete all job output directories for user's jobs (using pre-gathered IDs)
+		deleteUsersJobDirectories(userId, jobIds);
 
 		// Delete user's profile pictures
 		deleteUserPictures(userId);
 
-		// Delete pictures for all user's solvers
-		deleteUsersSolverPictures(userId);
+		// Delete pictures for all user's solvers (using pre-gathered IDs)
+		deleteUsersSolverPictures(userId, solverIds);
 
-		// Delete pictures for all user's benchmarks
-		deleteUsersBenchmarkPictures(userId);
+		// Delete pictures for all user's benchmarks (using pre-gathered IDs)
+		deleteUsersBenchmarkPictures(userId, benchmarkIds);
 
 		log.info(method + ": Completed deletion of all data for user with id=" + userId);
 	}
 
 	/**
-	 * Deletes the given user's job output directories.
+	 * Deletes the given user's job output directories using pre-gathered job IDs.
 	 *
 	 * @param userId Id of user whose job directories are to be deleted.
+	 * @param jobIds Pre-gathered job IDs (collected before the DB cascade so they
+	 *               are still reachable after user row deletion).
 	 * @author Albert Giegerich
 	 */
-	private static void deleteUsersJobDirectories(int userId) {
+	private static void deleteUsersJobDirectories(int userId, List<Integer> jobIds) {
 		final String method = "deleteUsersJobDirectories";
 		log.entry(method);
-		List<Job> jobs = Jobs.getByUserId(userId);
-		for (Job job : jobs) {
-			final String jobDirectory = Jobs.getDirectory(job.getId());
+		if (jobIds == null || jobIds.isEmpty()) {
+			log.debug(method + ": No pre-gathered job IDs for user " + userId);
+			return;
+		}
+		for (int jobId : jobIds) {
+			final String jobDirectory = Jobs.getDirectory(jobId);
 			log.debug(method + ": Deleting job directory: " + jobDirectory);
 			Util.safeDeleteDirectory(jobDirectory);
 		}
@@ -1453,32 +1494,32 @@ public class Users {
 
 	/**
 	 * Deletes profile pictures (original and thumbnail) for all solvers owned by
-	 * the user.
+	 * the user, using pre-gathered solver IDs.
 	 * Solver pictures are stored as:
 	 * - Original: /app/data/pictures/solvers/Pic{solverId}_org.jpg
 	 * - Thumbnail: /app/data/pictures/solvers/Pic{solverId}_thn.jpg
 	 *
 	 * @param userId Id of user whose solver pictures are to be deleted.
+	 * @param solverIds Pre-gathered solver IDs (collected before the DB cascade so
+	 *                  they are still reachable after user row deletion).
 	 * @author Andres Caicedo (Storage Leak Fix)
 	 */
-	private static void deleteUsersSolverPictures(int userId) {
+	private static void deleteUsersSolverPictures(int userId, List<Integer> solverIds) {
 		final String method = "deleteUsersSolverPictures";
 		long totalFreed = 0;
 
 		try {
-			// Get all solver IDs for this user
-			List<Solver> solvers = Solvers.getByUser(userId);
-			if (solvers == null || solvers.isEmpty()) {
-				log.debug(method + ": No solvers found for user " + userId);
+			if (solverIds == null || solverIds.isEmpty()) {
+				log.debug(method + ": No pre-gathered solver IDs for user " + userId);
 				return;
 			}
 
 			String picturePath = R.getPicturePath() + java.io.File.separator + "solvers";
 
-			for (Solver solver : solvers) {
+			for (int solverId : solverIds) {
 				// Delete original picture
 				java.io.File orgFile = new java.io.File(picturePath + java.io.File.separator +
-						"Pic" + solver.getId() + "_org.jpg");
+						"Pic" + solverId + "_org.jpg");
 				if (orgFile.exists()) {
 					long size = orgFile.length();
 					if (orgFile.delete()) {
@@ -1489,7 +1530,7 @@ public class Users {
 
 				// Delete thumbnail
 				java.io.File thnFile = new java.io.File(picturePath + java.io.File.separator +
-						"Pic" + solver.getId() + "_thn.jpg");
+						"Pic" + solverId + "_thn.jpg");
 				if (thnFile.exists()) {
 					long size = thnFile.length();
 					if (thnFile.delete()) {
@@ -1510,32 +1551,33 @@ public class Users {
 
 	/**
 	 * Deletes profile pictures (original and thumbnail) for all benchmarks owned by
-	 * the user.
+	 * the user, using pre-gathered benchmark IDs.
 	 * Benchmark pictures are stored as:
 	 * - Original: /app/data/pictures/benchmarks/Pic{benchmarkId}_org.jpg
 	 * - Thumbnail: /app/data/pictures/benchmarks/Pic{benchmarkId}_thn.jpg
 	 *
 	 * @param userId Id of user whose benchmark pictures are to be deleted.
+	 * @param benchmarkIds Pre-gathered benchmark IDs (collected before the DB
+	 *                     cascade so they are still reachable after user row
+	 *                     deletion).
 	 * @author Andres Caicedo (Storage Leak Fix)
 	 */
-	private static void deleteUsersBenchmarkPictures(int userId) {
+	private static void deleteUsersBenchmarkPictures(int userId, List<Integer> benchmarkIds) {
 		final String method = "deleteUsersBenchmarkPictures";
 		long totalFreed = 0;
 
 		try {
-			// Get all benchmark IDs for this user
-			List<Benchmark> benchmarks = Benchmarks.getByUser(userId);
-			if (benchmarks == null || benchmarks.isEmpty()) {
-				log.debug(method + ": No benchmarks found for user " + userId);
+			if (benchmarkIds == null || benchmarkIds.isEmpty()) {
+				log.debug(method + ": No pre-gathered benchmark IDs for user " + userId);
 				return;
 			}
 
 			String picturePath = R.getPicturePath() + java.io.File.separator + "benchmarks";
 
-			for (Benchmark benchmark : benchmarks) {
+			for (int benchId : benchmarkIds) {
 				// Delete original picture
 				java.io.File orgFile = new java.io.File(picturePath + java.io.File.separator +
-						"Pic" + benchmark.getId() + "_org.jpg");
+						"Pic" + benchId + "_org.jpg");
 				if (orgFile.exists()) {
 					long size = orgFile.length();
 					if (orgFile.delete()) {
@@ -1546,7 +1588,7 @@ public class Users {
 
 				// Delete thumbnail
 				java.io.File thnFile = new java.io.File(picturePath + java.io.File.separator +
-						"Pic" + benchmark.getId() + "_thn.jpg");
+						"Pic" + benchId + "_thn.jpg");
 				if (thnFile.exists()) {
 					long size = thnFile.length();
 					if (thnFile.delete()) {

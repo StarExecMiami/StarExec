@@ -6,6 +6,7 @@ import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.SolverSecurity;
 import org.starexec.data.to.*;
 import org.starexec.data.to.enums.CopyPrimitivesOption;
+import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
@@ -2457,6 +2458,20 @@ public class Spaces {
 	public static boolean removeSubspaces(List<Integer> subspaceIds) throws StarExecDatabaseException {
 		Connection con = null;
 		PreparedStatement ps = null;
+
+		// Gather processor file paths BEFORE the DB transaction so we can
+		// clean up files after the cascade deletes processor rows.
+		// Without this, space deletion via FK cascade removes processor DB
+		// rows but leaves their files orphaned on disk.
+		List<String> processorFilesToClean = new ArrayList<>();
+		try {
+			for (int subspaceId : subspaceIds) {
+				gatherProcessorFiles(subspaceId, processorFilesToClean);
+			}
+		} catch (Exception e) {
+			log.warn("Could not gather processor files before space deletion; skipping file cleanup. Space IDs: " + subspaceIds, e);
+		}
+
 		try {
 			con = Common.getConnection();
 
@@ -2480,6 +2495,11 @@ public class Spaces {
 
 			// Commit changes to database
 			Common.endTransaction(con);
+
+			// After successful commit, clean up processor files that were
+			// cascade-deleted from the database.
+			cleanProcessorFiles(processorFilesToClean);
+
 			return true;
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
@@ -2495,6 +2515,60 @@ public class Spaces {
 			Common.safeClose(ps);
 		}
 		return false;
+	}
+
+	/**
+	 * Recursively gathers processor file paths for the given space and all
+	 * of its subspaces, so they can be cleaned up after the DB cascade.
+	 */
+	private static void gatherProcessorFiles(int spaceId, List<String> sink) throws Exception {
+		for (ProcessorType type : new ProcessorType[] { ProcessorType.PRE, ProcessorType.POST, ProcessorType.BENCH, ProcessorType.UPDATE }) {
+			List<Processor> processors = Processors.getByCommunity(spaceId, type);
+			if (processors != null) {
+				for (Processor p : processors) {
+					String filePath = p.getFilePath();
+					if (filePath != null && !filePath.isEmpty()) {
+						sink.add(filePath);
+					}
+				}
+			}
+		}
+
+		// Recurse into subspaces so no processor file anywhere in the hierarchy is missed
+		for (Space subspace : Spaces.getSubSpaceHierarchy(spaceId)) {
+			gatherProcessorFiles(subspace.getId(), sink);
+		}
+	}
+
+	/**
+	 * Deletes processor files that were previously gathered before the DB
+	 * cascade removed their rows. Failures are logged but do not roll back
+	 * the already-committed space deletion.
+	 */
+	private static void cleanProcessorFiles(List<String> filePaths) {
+		if (filePaths == null || filePaths.isEmpty()) {
+			return;
+		}
+		long totalFreed = 0;
+		for (String filePath : filePaths) {
+			try {
+				File f = new File(filePath);
+				if (f.exists()) {
+					long size = f.length();
+					if (f.delete()) {
+						totalFreed += size;
+					} else {
+						log.warn("Could not delete processor file: " + filePath);
+					}
+				}
+			} catch (Exception e) {
+				log.warn("Error deleting processor file: " + filePath, e);
+			}
+		}
+		if (totalFreed > 0) {
+			log.info("Freed " + FileUtils.byteCountToDisplaySize(totalFreed) +
+			         " from processor files after space deletion");
+		}
 	}
 
 	/**
