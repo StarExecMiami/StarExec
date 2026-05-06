@@ -119,15 +119,15 @@ jobs:
             { echo "✗ Image not found"; docker images | grep starexec; exit 1; }
           echo "Verification passed"
 
-      - name: Start PostgreSQL service
-        env:
-          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
-          STAREXEC_DB_HOST: postgres
-          STAREXEC_DB_PORT: 5432
-          STAREXEC_DB_NAME: starexec
-          STAREXEC_DB_USER: starexec
-          STAREXEC_DB_SCHEMA: starexec
-          STAREXEC_VERSION: latest
+       - name: Start PostgreSQL service
+         env:
+           STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+           STAREXEC_DB_HOST: postgres
+           STAREXEC_DB_PORT: 5432
+           STAREXEC_DB_NAME: starexec
+           STAREXEC_DB_USER: starexec
+           STAREXEC_DB_SCHEMA: starexec
+           STAREXEC_VERSION: ci-test-latest
           VOLUME_PREFIX: starexec-ci
           DOCKER_BUILDKIT: 1
         run: |
@@ -143,21 +143,21 @@ jobs:
           done'
           echo "✓ PostgreSQL is accepting connections"
 
-      - name: Run database migrations
-        env:
-          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
-          STAREXEC_DB_HOST: postgres
-          STAREXEC_DB_PORT: 5432
-          STAREXEC_DB_NAME: starexec
-          STAREXEC_DB_USER: starexec
-          STAREXEC_DB_SCHEMA: starexec
-          STAREXEC_VERSION: latest
+       - name: Run database migrations
+         env:
+           STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+           STAREXEC_DB_HOST: postgres
+           STAREXEC_DB_PORT: 5432
+           STAREXEC_DB_NAME: starexec
+           STAREXEC_DB_USER: starexec
+           STAREXEC_DB_SCHEMA: starexec
+           STAREXEC_VERSION: ci-test-latest
           VOLUME_PREFIX: starexec-ci
           DOCKER_BUILDKIT: 1
         run: |
           echo "Running database migrations..."
           echo "Checking if image is available..."
-          docker image inspect ghcr.io/starexecmiami/starexec:latest || { echo "Image not found!"; exit 1; }
+          docker image inspect ghcr.io/starexecmiami/starexec:ci-test-latest || { echo "Image not found!"; exit 1; }
           # Use docker compose run to execute migrations service
           # The --rm flag removes the container after it exits
           # Exit code from migrations will propagate to this step
@@ -192,15 +192,15 @@ jobs:
             echo "⚠ WARNING: No credential redaction markers found - verify this is expected"
           fi
 
-      - name: Start StarExec application
-        env:
-          STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
-          STAREXEC_DB_HOST: postgres
-          STAREXEC_DB_PORT: 5432
-          STAREXEC_DB_NAME: starexec
-          STAREXEC_DB_USER: starexec
-          STAREXEC_DB_SCHEMA: starexec
-          STAREXEC_VERSION: latest
+       - name: Start StarExec application
+         env:
+           STAREXEC_DB_PASSWORD: ci_test_password_secure_12345
+           STAREXEC_DB_HOST: postgres
+           STAREXEC_DB_PORT: 5432
+           STAREXEC_DB_NAME: starexec
+           STAREXEC_DB_USER: starexec
+           STAREXEC_DB_SCHEMA: starexec
+           STAREXEC_VERSION: ci-test-latest
           VOLUME_PREFIX: starexec-ci
           DOCKER_BUILDKIT: 1
         run: |
