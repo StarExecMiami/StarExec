@@ -52,6 +52,8 @@ kubernetes:
   # Node selection for worker nodes
   nodeSelector:
     starexec.org/worker: "true"
+  workerSelectorKey: "starexec.org/worker"
+  workerSelectorValue: "true"
   
   # Queue label key
   queueLabelKey: "starexec/queue"
@@ -70,7 +72,9 @@ kubernetes:
       cpu: "1"
 
   # Academic reproducibility mode:
-  # enforce one job pair per CPU to reduce L1/L2 cache contention.
+  # requests one Kubernetes CPU per job pair to reduce oversubscription.
+  # Physical-core exclusivity still depends on cluster/node CPU-manager and
+  # SMT configuration outside this chart.
   strictOnePairPerCpu: true
   
   # Job cleanup (TTL after completion)
@@ -78,6 +82,8 @@ kubernetes:
   
   # Backoff limit (retries on failure)
   backoffLimit: 0  # No retries - StarExec handles retry logic
+  maxConcurrentJobs: 50
+  orphanSweepIntervalMs: 300000
 
 # Scalability Tuning for Kubernetes
 scalability:
