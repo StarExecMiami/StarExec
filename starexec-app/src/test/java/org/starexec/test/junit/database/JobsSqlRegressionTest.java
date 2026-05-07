@@ -2,6 +2,7 @@ package org.starexec.test.junit.database;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.Benchmark;
@@ -10,12 +11,14 @@ import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
+import org.starexec.util.DataTablesQuery;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -55,6 +58,76 @@ public class JobsSqlRegressionTest extends Common {
 
 			assertPairLoaded(pairs.get(0), fixture, true);
 		});
+	}
+
+	@Test
+	public void testMissingExpectedResultClassifiesAsUnknownInCountAndPagination() throws Exception {
+		withFixture(fixture -> {
+			insertJobAttribute(fixture, R.STAREXEC_RESULT, "sat");
+			assertExclusiveTypeClassification(fixture, "unknown", 1);
+		});
+	}
+
+	@Test
+	public void testExpectedUnknownClassifiesAsUnknownInCountAndPagination() throws Exception {
+		withFixture(fixture -> {
+			insertBenchmarkAttribute(fixture, R.EXPECTED_RESULT, R.STAREXEC_UNKNOWN);
+			insertJobAttribute(fixture, R.STAREXEC_RESULT, "sat");
+			assertExclusiveTypeClassification(fixture, "unknown", 1);
+		});
+	}
+
+	@Test
+	public void testActualUnknownWithConcreteExpectedClassifiesAsUnknownInCountAndPagination() throws Exception {
+		withFixture(fixture -> {
+			insertBenchmarkAttribute(fixture, R.EXPECTED_RESULT, "sat");
+			insertJobAttribute(fixture, R.STAREXEC_RESULT, R.STAREXEC_UNKNOWN);
+			assertExclusiveTypeClassification(fixture, "unknown", 1);
+		});
+	}
+
+	@Test
+	public void testMissingActualWithConcreteExpectedClassifiesAsWrongInCountAndPagination() throws Exception {
+		withFixture(fixture -> {
+			insertBenchmarkAttribute(fixture, R.EXPECTED_RESULT, "sat");
+			assertExclusiveTypeClassification(fixture, "wrong", 1);
+		});
+	}
+
+	@Test
+	public void testSolvedPrimaryStageClassifiesAsSolvedInCountAndPagination() throws Exception {
+		withFixture(fixture -> {
+			insertBenchmarkAttribute(fixture, R.EXPECTED_RESULT, "sat");
+			insertJobAttribute(fixture, R.STAREXEC_RESULT, "sat");
+			assertExclusiveTypeClassification(fixture, "solved", 0);
+		});
+	}
+
+	private void assertExclusiveTypeClassification(Fixture fixture, String expectedType, int stageNumber) {
+		for (String pairType : Arrays.asList("solved", "wrong", "unknown")) {
+			int expectedCount = pairType.equals(expectedType) ? 1 : 0;
+			assertEquals(
+					"Count classification should match for pairType=" + pairType,
+					expectedCount,
+					Jobs.getCountOfJobPairsByConfigInJobSpaceHierarchy(
+							fixture.jobSpaceId,
+							fixture.configId,
+							pairType,
+							"",
+							stageNumber));
+
+			List<JobPair> pairs = Jobs.getJobPairsForTableInJobSpaceHierarchy(
+					fixture.jobSpaceId,
+					new DataTablesQuery(0, 10, 0, true, ""),
+					fixture.configId,
+					stageNumber,
+					pairType);
+			assertNotNull("Pagination query should return a non-null list", pairs);
+			assertEquals(
+					"Pagination classification should match for pairType=" + pairType,
+					expectedCount,
+					pairs.size());
+		}
 	}
 
 	private interface SqlFixtureConsumer {
@@ -294,6 +367,30 @@ public class JobsSqlRegressionTest extends Common {
 				rs.next();
 				return rs.getInt(1);
 			}
+		}
+	}
+
+	private static void insertBenchmarkAttribute(Fixture fixture, String key, String value) throws SQLException {
+		try (Connection con = Common.getConnection();
+				 PreparedStatement ps = con.prepareStatement(
+						 "INSERT INTO bench_attributes (bench_id, attr_key, attr_value) VALUES (?, ?, ?)")) {
+			ps.setInt(1, fixture.benchmarkId);
+			ps.setString(2, key);
+			ps.setString(3, value);
+			ps.executeUpdate();
+		}
+	}
+
+	private static void insertJobAttribute(Fixture fixture, String key, String value) throws SQLException {
+		try (Connection con = Common.getConnection();
+				 PreparedStatement ps = con.prepareStatement(
+						 "INSERT INTO job_attributes (pair_id, attr_key, attr_value, job_id, stage_number) VALUES (?, ?, ?, ?, ?)")) {
+			ps.setInt(1, fixture.pairId);
+			ps.setString(2, key);
+			ps.setString(3, value);
+			ps.setInt(4, fixture.jobId);
+			ps.setInt(5, 1);
+			ps.executeUpdate();
 		}
 	}
 

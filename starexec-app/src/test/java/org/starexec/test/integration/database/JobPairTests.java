@@ -319,6 +319,27 @@ public class JobPairTests extends TestSequence {
 	}
 
 	@StarexecTest
+	private void isPairCorrectExpectedUnknownTest() {
+		JoblineStage stage = new JoblineStage();
+		Properties attrs = new Properties();
+		attrs.setProperty(R.EXPECTED_RESULT, R.STAREXEC_UNKNOWN);
+		attrs.setProperty(R.STAREXEC_RESULT, "sat");
+		stage.setAttributes(attrs);
+		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
+		Assert.assertEquals(2, JobPairs.isPairCorrect(stage));
+	}
+
+	@StarexecTest
+	private void isPairCorrectMissingActualWithConcreteExpectedTest() {
+		JoblineStage stage = new JoblineStage();
+		Properties attrs = new Properties();
+		attrs.setProperty(R.EXPECTED_RESULT, "sat");
+		stage.setAttributes(attrs);
+		stage.getStatus().setCode(StatusCode.STATUS_COMPLETE.getVal());
+		Assert.assertEquals(1, JobPairs.isPairCorrect(stage));
+	}
+
+	@StarexecTest
 	private void setPairStageStatusTest() {
 		JobPair jp = job.getJobPairs().get(0);
 		JoblineStage stage = jp.getStages().get(0);
