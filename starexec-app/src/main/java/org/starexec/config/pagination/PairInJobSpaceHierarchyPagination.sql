@@ -44,10 +44,19 @@
 			( :pairType = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
 			( :pairType='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
 			( :pairType ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
-				( :pairType= 'unknown' AND job_pairs.status_code=7 AND (job_attributes.attr_value='starexec-unknown'OR bench_attributes.attr_value IS NULL)) OR
-				( :pairType = 'solved' AND job_pairs.status_code=7 AND job_attributes.attr_value=bench_attributes.attr_value) OR
-				( :pairType = 'wrong' AND job_pairs.status_code=7 AND (bench_attributes.attr_value IS NOT NULL) 
-						AND ( job_attributes.attr_value IS NULL OR (job_attributes.attr_value!=bench_attributes.attr_value))))
+				( :pairType = 'unknown' AND jobpair_stage_data.status_code = 7 AND (
+						job_attributes.attr_value = 'starexec-unknown' OR
+						bench_attributes.attr_value IS NULL OR
+						bench_attributes.attr_value = 'starexec-unknown')) OR
+				( :pairType = 'solved' AND jobpair_stage_data.status_code = 7 AND
+						bench_attributes.attr_value IS NOT NULL AND
+						bench_attributes.attr_value != 'starexec-unknown' AND
+						job_attributes.attr_value = bench_attributes.attr_value) OR
+				( :pairType = 'wrong' AND jobpair_stage_data.status_code = 7 AND
+						bench_attributes.attr_value IS NOT NULL AND
+						bench_attributes.attr_value != 'starexec-unknown' AND
+						job_attributes.attr_value IS DISTINCT FROM bench_attributes.attr_value AND
+						job_attributes.attr_value IS DISTINCT FROM 'starexec-unknown'))
 				
 				
 				-- Exclude JobPairs whose benchmark name, configuration name, solver name, status and wallclock

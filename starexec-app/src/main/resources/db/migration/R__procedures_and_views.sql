@@ -2323,15 +2323,26 @@ BEGIN
 	LEFT JOIN job_attributes on (job_attributes.pair_id=job_pairs.id and job_attributes.stage_number=jobpair_stage_data.stage_number AND job_attributes.attr_key='starexec-result')
 	JOIN job_space_closure ON descendant=job_pairs.job_space_id
 	LEFT JOIN bench_attributes ON (job_pairs.bench_id=bench_attributes.bench_id AND bench_attributes.attr_key = 'starexec-expected-result')
-	WHERE ancestor=_jobSpaceId AND jobpair_stage_data.config_id=_configId AND jobpair_stage_data.stage_number = _stageNumber AND
+	WHERE ancestor=_jobSpaceId AND jobpair_stage_data.config_id=_configId AND
+	(( _stageNumber = 0 AND jobpair_stage_data.stage_number = job_pairs.primary_jobpair_data) OR jobpair_stage_data.stage_number = _stageNumber) AND
 	((_type = 'all') OR
 	(_type='resource' AND job_pairs.status_code BETWEEN 14 AND 17) OR
 	(_type = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
 	(_type='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
 	(_type ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
-	(_type= 'unknown' AND job_pairs.status_code=7 AND job_attributes.attr_value='starexec-unknown') OR
-	(_type = 'solved' AND job_pairs.status_code=7 AND (job_attributes.attr_value=bench_attributes.attr_value OR bench_attributes.attr_value is null)) OR
-	(_type = 'wrong' AND job_pairs.status_code=7 AND (bench_attributes.attr_value is not null) and (job_attributes.attr_value!=bench_attributes.attr_value)))
+	(_type = 'unknown' AND jobpair_stage_data.status_code = 7 AND (
+		job_attributes.attr_value = 'starexec-unknown' OR
+		bench_attributes.attr_value IS NULL OR
+		bench_attributes.attr_value = 'starexec-unknown')) OR
+	(_type = 'solved' AND jobpair_stage_data.status_code = 7 AND
+		bench_attributes.attr_value IS NOT NULL AND
+		bench_attributes.attr_value != 'starexec-unknown' AND
+		job_attributes.attr_value = bench_attributes.attr_value) OR
+	(_type = 'wrong' AND jobpair_stage_data.status_code = 7 AND
+		bench_attributes.attr_value IS NOT NULL AND
+		bench_attributes.attr_value != 'starexec-unknown' AND
+		job_attributes.attr_value IS DISTINCT FROM bench_attributes.attr_value AND
+		job_attributes.attr_value IS DISTINCT FROM 'starexec-unknown')))
 	AND
 	(bench_name LIKE CONCAT('%', _query, '%')
 	OR jobpair_stage_data.config_name LIKE CONCAT('%', _query, '%')
