@@ -34,13 +34,18 @@ _No new changes._
 - **Non-blocking architecture**: Replaced the previous blocking pair-log stream with an asynchronous SSE implementation, improving server concurrency under load
 
 #### Resumable Upload System
-- **Upload session lifecycle**: New domain model, queue controls, and REST API endpoints (`POST/PUT/DELETE /services/uploads/session/*`) for resumable upload sessions
+- **Upload session lifecycle**: New domain model and queue controls for resumable upload sessions
+  - `POST /services/uploads/sessions`
+  - `GET /services/uploads/sessions/{sessionId}`
+  - `PUT /services/uploads/sessions/{sessionId}/chunks/{chunkIndex}`
+  - `POST /services/uploads/sessions/{sessionId}/finalize`
+  - `POST /services/uploads/sessions/{sessionId}/abort`
 - **Progress UI**: Client-side upload progress tracking with pause/resume/cancel controls
 - **Background recovery**: Stale processing jobs are recovered on application startup
 - **Database migrations**: Added `V0107__resumable_upload_sessions.sql`, `V0108__upload_session_chunks.sql`, `V0109__upload_job_progress_monotonic_totals.sql`
 
 #### REST API Endpoints
-- **Benchmark metadata**: `GET /services/benchmarks/{id}/content` now returns enriched benchmark metadata; added new dedicated metadata endpoint
+- **Benchmark metadata**: `GET /services/benchmarks/{id}/contents` remains the plain-text contents endpoint; added dedicated `GET /services/benchmarks/{id}/metadata` endpoint for the JSON metadata payload, including contents
 - **Filtered pair queries**: `GET /services/jobs/pairs/filtered-by-solver` returns job pairs filtered by solver ID
 - **Pre/post-processor lookup**: `GET /services/processors` returns available preprocessors and postprocessors
 - **Stage metadata**: Pair queries now include stage execution metadata (pre/run/post timings, hostname)
@@ -86,7 +91,7 @@ _No new changes._
 - **Space deletion cleanup**: Processor files are now removed after successful database commit (was previously removed before commit, risking ghost files on rollback)
 - **Backend pair submission**: Both Kubernetes and Podman backends now use conditional pair claims to prevent stale-snapshot backend launches
 - **CI workflows**: Renamed from "Deploy to Kubernetes" to "StarExec K8s Deploy"; merged container-build into container-publish to eliminate duplicate builds
-- **Default queue name**: Renamed from `'default'` to `'kubernetes.q'` for clarity (Kubernetes backend)
+- **Default queue handling**: Kept `DEFAULT_QUEUE_NAME` as `default`; Kubernetes backend now adds it only when no node labels are found and allows deletion when appropriate
 - **Architecture decisions**: Pair log streaming migrated from blocking I/O to async SSE (breaking change for internal consumers only)
 
 ### Fixed
