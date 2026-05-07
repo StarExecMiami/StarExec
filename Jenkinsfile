@@ -235,7 +235,7 @@ pipeline {
 
                         # Helm deploy with pinned image tag
                         microk8s helm3 upgrade --install ${HELM_RELEASE} \
-                            /home/ancaicedou/StarExec/charts/starexec \
+                            charts/starexec \
                             --namespace ${K8S_NAMESPACE} \
                             --values ${HELM_VALUES} \
                             --set image.tag=${GIT_SHA} \
@@ -287,7 +287,7 @@ pipeline {
                         -- pg_dump -U starexec starexec > "${BACKUP_FILE}" 2>&1 && \
                         echo "Backup: ${BACKUP_FILE}" || echo "Backup skipped"
                     microk8s helm3 upgrade --install ${HELM_RELEASE} \
-                        /home/ancaicedou/StarExec/charts/starexec \
+                        charts/starexec \
                         --namespace ${K8S_NAMESPACE} \
                         --values ${HELM_VALUES} \
                         --set image.tag=${GIT_SHA} \
