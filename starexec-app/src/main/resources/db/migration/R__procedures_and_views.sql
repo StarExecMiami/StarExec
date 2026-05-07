@@ -267,7 +267,7 @@ RETURNS VOID AS $$
 BEGIN
 	INSERT INTO bench_dependency (primary_bench_id, secondary_bench_id, include_path)
 	VALUES (_primary_bench_id, _secondary_bench_id, _include_path)
-	ON CONFLICT (primary_bench_id, secondary_bench_id) 
+	ON CONFLICT (primary_bench_id, secondary_bench_id)
 	DO UPDATE SET include_path = EXCLUDED.include_path;
 END;
 $$ LANGUAGE plpgsql;
@@ -344,7 +344,7 @@ CREATE OR REPLACE FUNCTION starexec.ResolveBenchmarkDependenciesBatch(_root_spac
 RETURNS TABLE(p_id INT, s_id INT, inc_path TEXT) AS $$
 BEGIN
 	RETURN QUERY
-	WITH RECURSIVE 
+	WITH RECURSIVE
 	-- 1. Extract all declared dependencies for benchmarks in the given space hierarchy
 	raw_deps AS (
 		SELECT b.id as bench_id, ba.attr_value::TEXT as include_path,
@@ -363,25 +363,25 @@ BEGIN
 	-- 2. Walk the path segment-by-segment using the set_assoc table
 	path_walk AS (
 		-- Base case: Starting segments for each dependency
-		SELECT 
+		SELECT
 			rd.bench_id, rd.include_path, rd.segments, rd.total_segments,
 			1 as current_level,
 			_root_space_id as current_space_id,
 			CAST(NULL AS INT) as resolved_bench_id,
 			FALSE as is_resolved
 		FROM raw_deps rd
-		
+
 		UNION ALL
-		
+
 		-- Recursive step: descend into subspaces or find the target benchmark
-		SELECT 
+		SELECT
 			pw.bench_id, pw.include_path, pw.segments, pw.total_segments,
 			pw.current_level + 1,
-			CASE 
+			CASE
 				WHEN pw.current_level < pw.total_segments THEN s.id
 				ELSE pw.current_space_id
 			END,
-			CASE 
+			CASE
 				WHEN pw.current_level = pw.total_segments THEN b.id
 				ELSE NULL
 			END,
@@ -389,13 +389,13 @@ BEGIN
 		FROM path_walk pw
 		-- For intermediate directory segments, join with spaces via set_assoc
 		LEFT JOIN starexec.set_assoc sa ON sa.space_id = pw.current_space_id
-		LEFT JOIN starexec.spaces s ON s.id = sa.child_id 
+		LEFT JOIN starexec.spaces s ON s.id = sa.child_id
 									AND s.name = pw.segments[pw.current_level]
 									AND pw.current_level < pw.total_segments
 		-- For the final segment, join with benchmarks table via bench_assoc
-		LEFT JOIN starexec.bench_assoc ba_target ON ba_target.space_id = pw.current_space_id 
+		LEFT JOIN starexec.bench_assoc ba_target ON ba_target.space_id = pw.current_space_id
 									AND pw.current_level = pw.total_segments
-		LEFT JOIN starexec.benchmarks b ON b.id = ba_target.bench_id 
+		LEFT JOIN starexec.benchmarks b ON b.id = ba_target.bench_id
 									AND b.name = pw.segments[pw.current_level]
 		WHERE pw.current_level <= pw.total_segments
 		  AND NOT pw.is_resolved
@@ -423,15 +423,15 @@ BEGIN
 	INSERT INTO starexec.bench_dependency (primary_bench_id, secondary_bench_id, include_path)
 	SELECT r.p_id, r.s_id, r.inc_path
 	FROM starexec.ResolveBenchmarkDependenciesBatch(_root_space_id) r
-	ON CONFLICT (primary_bench_id, secondary_bench_id) 
+	ON CONFLICT (primary_bench_id, secondary_bench_id)
 	DO UPDATE SET include_path = EXCLUDED.include_path;
-	
+
 	GET DIAGNOSTICS v_inserted = ROW_COUNT;
-	
+
 	-- 2. Count total resolutions found
 	SELECT COUNT(*) INTO v_total
 	FROM starexec.ResolveBenchmarkDependenciesBatch(_root_space_id);
-	
+
 	RETURN QUERY SELECT v_inserted, v_total;
 END;
 $$ LANGUAGE plpgsql;
@@ -454,7 +454,7 @@ BEGIN
 	UPDATE benchmarks
 	SET deleted = true, disk_size = 0
 	WHERE id = _benchmarkId;
-	
+
 	IF NOT FOUND THEN
 		RAISE EXCEPTION USING
 			ERRCODE = 'P0002',
@@ -1779,10 +1779,10 @@ BEGIN
 	            _statusCode
 	        );
 	END IF;
-	
+
 	UPDATE job_pairs SET status_code=_statusCode WHERE id=_jobPairId;
 
-	
+
 	-- List of terminal status codes (ones that mean the pair is finished and won't be updated further)
 	-- 7-18: Normal completion, resource limits, and common errors
 	-- 21: Killed
@@ -2342,7 +2342,7 @@ BEGIN
 		bench_attributes.attr_value IS NOT NULL AND
 		bench_attributes.attr_value != 'starexec-unknown' AND
 		job_attributes.attr_value IS DISTINCT FROM bench_attributes.attr_value AND
-		job_attributes.attr_value IS DISTINCT FROM 'starexec-unknown')))
+		job_attributes.attr_value IS DISTINCT FROM 'starexec-unknown'))
 	AND
 	(bench_name LIKE CONCAT('%', _query, '%')
 	OR jobpair_stage_data.config_name LIKE CONCAT('%', _query, '%')
@@ -2351,7 +2351,7 @@ BEGIN
 	OR jobpair_stage_data.wallclock::text LIKE CONCAT('%', _query, '%')
 	OR jobpair_stage_data.cpu::text LIKE CONCAT('%', _query, '%')
 	OR job_attributes.attr_value LIKE CONCAT('%', _query, '%'));
-	
+
 	RETURN count_val;
 END;
 $$ LANGUAGE plpgsql;
@@ -2786,7 +2786,7 @@ BEGIN
 	SELECT COUNT(*) INTO count_val
 	FROM starexec.job_space_closure
 	WHERE ancestor=_id;
-	
+
 	RETURN count_val;
 END;
 $$ LANGUAGE plpgsql;
@@ -3062,10 +3062,10 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
-        jp.id, jp.job_id, jp.sge_id, jp.bench_id, jp.bench_name, jp.status_code, jp.node_id, 
+    SELECT
+        jp.id, jp.job_id, jp.sge_id, jp.bench_id, jp.bench_name, jp.status_code, jp.node_id,
         jp.queuesub_time, jp.start_time, jp.end_time, jp.job_space_id, jp.path, jp.sandbox_num, jp.primary_jobpair_data,
-        jsd.stage_number, jsd.jobpair_id, jsd.stage_id, jsd.cpu, jsd.wallclock, jsd.max_vmem, jsd.max_res_set, 
+        jsd.stage_number, jsd.jobpair_id, jsd.stage_id, jsd.cpu, jsd.wallclock, jsd.max_vmem, jsd.max_res_set,
         jsd.user_time, jsd.system_time, jsd.status_code, jsd.solver_name, jsd.config_name, jsd.solver_id, jsd.config_id, jsd.job_space_id, jsd.disk_size,
         (SELECT count(*)::BIGINT FROM starexec.bench_dependency WHERE primary_bench_id = b.id) AS dependency_count,
         b.user_id,
@@ -4065,7 +4065,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         job_stage_params.job_id,
         job_stage_params.stage_number,
         job_stage_params.cpuTimeout,
@@ -4661,12 +4661,12 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('User %s is not associated with space %s', _userId, _spaceId);
     END IF;
-    
+
     -- Get the permission ID for this user-space combination
     SELECT ua.permission INTO _permissionId
     FROM starexec.user_assoc ua
     WHERE ua.user_id = _userId AND ua.space_id = _spaceId;
-    
+
     -- Update the permission record
     UPDATE permissions p
     SET add_user = _addUser,
@@ -4748,7 +4748,7 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT solver_pipelines.id, user_id AS userId, name, uploaded, description, primary_stage_id AS primaryStageId 
+    SELECT solver_pipelines.id, user_id AS userId, name, uploaded, description, primary_stage_id AS primaryStageId
     FROM starexec.solver_pipelines WHERE id = _id;
 END;
 $$ LANGUAGE plpgsql;
@@ -7726,7 +7726,7 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Space %s not found', _subspaceId);
     END IF;
-    
+
     -- Only attempt to delete permission if it's not NULL
     -- (permissions can be NULL for some spaces)
     IF _permId IS NOT NULL THEN
@@ -7947,7 +7947,7 @@ CREATE OR REPLACE FUNCTION starexec.GetSpaceJobsById(_spaceId INT)
 RETURNS TABLE(id INT, name VARCHAR(255), user_id INT, created TIMESTAMP, description TEXT, deleted BOOLEAN, paused BOOLEAN, killed BOOLEAN, buildJob BOOLEAN, disk_size BIGINT, total_pairs INT, completed_pairs INT, errored_pairs INT, pending_pairs INT, status_code INT, max_stages INT, job_type INT, timeout INT, seed BIGINT, suppress_output BOOLEAN, node_queued BOOLEAN, primary_space INT, completed TIMESTAMP, cpuTimeout INT, clockTimeout INT, maximum_memory BIGINT, suppress_timestamp BOOLEAN, using_dependencies BOOLEAN, soft_time_limit INT, kill_delay INT, benchmarking_framework VARCHAR, is_high_priority BOOLEAN, output_benchmarks_directory_path TEXT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         j.id, j.name, j.user_id, j.created, j.description, j.deleted, j.paused, j.killed, j.buildJob, j.disk_size, j.total_pairs,
         starexec.getcompletepairs(j.id)::INT as completed_pairs,
         starexec.geterrorpairs(j.id)::INT as errored_pairs,
