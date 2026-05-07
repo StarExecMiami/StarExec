@@ -155,10 +155,10 @@
 							<th class="solverHead">solver</th>
 							<th class="configHead">config</th>
 							<th class="solvedHead"><span
-									title="Number of job pairs for which the result matched the expected result, or those attributes are undefined, over the number of job pairs that completed without any system errors. If either the actual or the expected result is starexec-unknown, it is not counted">solved</span>
+									title="Number of completed job pairs with a defined expected result whose actual result matched it. Pairs with no expected result, or with actual or expected result starexec-unknown, are not counted.">solved</span>
 							</th>
 							<th class="wrongHead"><span
-									title="Number of job pairs that completed successfully and without resource errors, but for which the result did not match the expected result. If the actual or expected result is starexec-unknown, it is not counted.">wrong</span>
+									title="Number of completed job pairs with a defined expected result whose actual result was missing or did not match it. Pairs with actual or expected result starexec-unknown are not counted.">wrong</span>
 							</th>
 							<th class="resourceHead"><span
 									title="Number of job pairs for which there was a timeout or memout">resource out</span>
@@ -167,7 +167,7 @@
 									title="Number of job pairs that failed due to some sort of internal error, such as job script or benchmark errors">failed</span>
 							</th>
 							<th class="unknownHead"><span
-									title="Number of job pairs that had the result starexec-unknown">unknown</span>
+									title="Number of completed job pairs whose actual result was starexec-unknown, whose expected result was starexec-unknown, or whose benchmark had no expected result">unknown</span>
 							</th>
 							<th class="incompleteHead"><span
 									title="Number of job pairs that are still waiting to run or are running right now">incomplete</span>
@@ -193,10 +193,10 @@
 							<th class="solverHead">solver</th>
 							<th class="configHead">config</th>
 							<th class="solvedHead"><span
-									title="Number of job pairs for which the result matched the expected result, or those attributes are undefined, over the number of job pairs that completed without any system errors. If either the actual or the expected result is starexec-unknown, it is not counted">solved</span>
+									title="Number of completed job pairs with a defined expected result whose actual result matched it. Pairs with no expected result, or with actual or expected result starexec-unknown, are not counted.">solved</span>
 							</th>
 							<th class="wrongHead"><span
-									title="Number of job pairs that completed successfully and without resource errors, but for which the result did not match the expected result. If the actual or expected result is starexec-unknown, it is not counted.">wrong</span>
+									title="Number of completed job pairs with a defined expected result whose actual result was missing or did not match it. Pairs with actual or expected result starexec-unknown are not counted.">wrong</span>
 							</th>
 							<th class="resourceHead"><span
 									title="Number of job pairs for which there was a timeout or memout">resource out</span>
@@ -205,7 +205,7 @@
 									title="Number of job pairs that failed due to some sort of internal error, such as job script or benchmark errors">failed</span>
 							</th>
 							<th class="unknownHead"><span
-									title="Number of job pairs that had the result starexec-unknown">unknown</span>
+									title="Number of completed job pairs whose actual result was starexec-unknown, whose expected result was starexec-unknown, or whose benchmark had no expected result">unknown</span>
 							</th>
 							<th class="incompleteHead"><span
 									title="Number of job pairs that are still waiting to run or are running right now">incomplete</span>
