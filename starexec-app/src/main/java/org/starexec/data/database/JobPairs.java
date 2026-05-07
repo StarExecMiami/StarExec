@@ -2881,7 +2881,7 @@ public class JobPairs {
             con = Common.getConnection();
             ps = con.prepareStatement(
                 "UPDATE starexec.job_pairs jp " +
-                "SET status_code = ? " +
+                "SET status_code = ?, start_time = COALESCE(start_time, NOW()) " +
                 "WHERE jp.id = ? " +
                 "AND jp.status_code < ? " +
                 "AND EXISTS (" +
@@ -3080,6 +3080,67 @@ public class JobPairs {
             Common.safeClose(ps);
         }
 
+        return false;
+    }
+
+    /**
+     * Sets the start time of a job pair to the current database time, only if
+     * it has not already been set.
+     *
+     * <p>The conditional update ({@code WHERE start_time IS NULL}) makes this
+     * safe to call multiple times — only the first call takes effect.  This
+     * mirrors the semantics of {@code SetPairStartTime} which is used in the
+     * SGE/local backend paths but is a no-op in container mode.</p>
+     *
+     * @param pairId The ID of the job pair to update
+     * @return true if the row was updated, false if already set or on error
+     */
+    public static boolean setStartTime(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "UPDATE starexec.job_pairs SET start_time = NOW() " +
+                "WHERE id = ? AND start_time IS NULL"
+            );
+            ps.setInt(1, pairId);
+            return ps.executeUpdate() > 0;
+        } catch (Exception e) {
+            log.error("setStartTime pairId=" + pairId, e);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    /**
+     * Sets the end time of a job pair to the current database time.
+     *
+     * <p>Unlike {@link #setStartTime}, this always overwrites any existing
+     * value so that retries (e.g. via reconciliation) record the latest
+     * completion time rather than a stale one from a previous attempt.</p>
+     *
+     * @param pairId The ID of the job pair to update
+     * @return true if the row was updated, false if the pair was not found or on error
+     */
+    public static boolean setEndTime(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "UPDATE starexec.job_pairs SET end_time = NOW() WHERE id = ?"
+            );
+            ps.setInt(1, pairId);
+            return ps.executeUpdate() > 0;
+        } catch (Exception e) {
+            log.error("setEndTime pairId=" + pairId, e);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
         return false;
     }
 

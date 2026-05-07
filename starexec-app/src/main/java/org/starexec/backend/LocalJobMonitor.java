@@ -7,6 +7,7 @@ import java.util.concurrent.*;
 import java.util.regex.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
@@ -455,6 +456,10 @@ public class LocalJobMonitor {
 
     /**
      * Parses post-processor attributes from attributes.txt.
+     *
+     * <p>Empty {@code starexec-result=} values are normalized to
+     * {@link R#STAREXEC_UNKNOWN} so timeout/unknown outcomes are classified
+     * consistently downstream.</p>
      */
     private Properties parseAttributes(Path outputDir) {
         Properties props = new Properties();
@@ -470,7 +475,10 @@ public class LocalJobMonitor {
                     if (eq > 0) {
                         String key = line.substring(0, eq).trim();
                         String value = line.substring(eq + 1).trim();
-                        if (!key.isEmpty() && !value.isEmpty()) {
+                        if (!key.isEmpty()) {
+                            if (R.STAREXEC_RESULT.equals(key) && value.isEmpty()) {
+                                value = R.STAREXEC_UNKNOWN;
+                            }
                             props.setProperty(key, value);
                         }
                     }

@@ -440,13 +440,14 @@ public class PodmanBackend implements Backend {
 												return;
 											}
 											int currentStatusCode = beforeRunningLookup.getStatusCode();
-											if (!Status.StatusCode.toStatusCode(currentStatusCode)
-											                       .finishedRunning()) {
+										if (!Status.StatusCode.toStatusCode(currentStatusCode)
+										                       .finishedRunning()) {
                                                 // Mark pair as running so node-level cluster views
-                                                // can show in-flight execution.
-												JobPairs.ConditionalPairUpdateResult runningUpdateResult = JobPairs.trySetPairRunning(
-													pairId
-												);
+                                                // can show in-flight execution, and stamp start_time
+                                                // on the first real start transition.
+											JobPairs.ConditionalPairUpdateResult runningUpdateResult = JobPairs.trySetPairRunning(
+												pairId
+											);
 												if (runningUpdateResult == JobPairs.ConditionalPairUpdateResult.STALE) {
 													log.debug(
 														"Skipping STATUS_RUNNING update for stale or completed pair " +

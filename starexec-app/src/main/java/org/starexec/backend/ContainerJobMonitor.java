@@ -8,6 +8,7 @@ import java.util.regex.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
@@ -624,6 +625,13 @@ public class ContainerJobMonitor {
 
     /**
      * Parses post-processor attributes from attributes.txt.
+     *
+     * <p>Each non-empty line is expected to have the form {@code key=value}.
+     * Empty values are preserved for most attributes, but
+     * {@code starexec-result=} is normalized to
+     * {@link R#STAREXEC_UNKNOWN} so downstream correctness logic treats timed-out
+     * and unknown outcomes consistently. Only lines with a missing or blank
+     * <em>key</em> are skipped.</p>
      */
     private Properties parseAttributes(Path outputDir) {
         Properties props = new Properties();
@@ -638,7 +646,10 @@ public class ContainerJobMonitor {
                     if (eq > 0) {
                         String key = line.substring(0, eq).trim();
                         String value = line.substring(eq + 1).trim();
-                        if (!key.isEmpty() && !value.isEmpty()) {
+                        if (!key.isEmpty()) {
+                            if (R.STAREXEC_RESULT.equals(key) && value.isEmpty()) {
+                                value = R.STAREXEC_UNKNOWN;
+                            }
                             props.setProperty(key, value);
                         }
                     }
@@ -658,6 +669,11 @@ public class ContainerJobMonitor {
      * {@code UpdatePairStatusPrecise}) to atomically set the terminal stage to
      * {@code status} and all later stages to STATUS_NOT_REACHED, eliminating
      * the dirty-read window in the former double-call pattern.</p>
+     *
+     * <p>Also sets {@code end_time} on the pair row. In container mode
+     * {@code functions.bash} skips the {@code SetPairEndTime} stored-procedure
+     * call (it is a no-op there), so without this step the completion timestamp
+     * remains NULL for container-executed pairs.</p>
      */
     private void updateDatabase(
         int pairId,
@@ -672,6 +688,17 @@ public class ContainerJobMonitor {
             status.getVal(),
             StatusCode.STATUS_NOT_REACHED.getVal()
         );
+
+        // Set end_time. This call is non-fatal: a failure here does not prevent
+        // the rest of the DB update from completing.
+        try {
+            if (!JobPairs.setEndTime(pairId)) {
+                log.warn("setEndTime found no row for pair " + pairId +
+                         " (pair may have been deleted)");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to set end_time for pair " + pairId, e);
+        }
 
         // Persist run stats (if available) using JobPairs.updateRunSolverStats
         try {
@@ -702,9 +729,11 @@ public class ContainerJobMonitor {
             log.warn("Exception persisting run stats for pair " + pairId, e);
         }
 
-        // Update attributes if any
+        // Persist attributes. parseAttributes() normalizes starexec-result=
+        // to starexec-unknown so timeout/unknown outcomes are classified
+        // consistently downstream.
         if (!attributes.isEmpty()) {
-            // Stage 1 for now - multi-stage pipelines would need enhancement
+            // Stage 1 for now — multi-stage pipelines would need enhancement
             JobPairs.addJobPairAttributes(pairId, 1, attributes);
         }
 
