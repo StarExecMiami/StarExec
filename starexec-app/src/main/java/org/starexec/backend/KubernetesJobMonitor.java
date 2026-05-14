@@ -132,6 +132,9 @@ public class KubernetesJobMonitor {
 
     /** Tracks completion callbacks already emitted to avoid duplicate updates */
     private final Set<Integer> completedExecIds = ConcurrentHashMap.newKeySet();
+
+    /** Tracks jobs already transitioned to STATUS_RUNNING */
+    private final Set<Integer> runningExecIds = ConcurrentHashMap.newKeySet();
     
     /** Monitor thread */
     private Thread monitorThread;
@@ -145,7 +148,7 @@ public class KubernetesJobMonitor {
      * 
      * @param kubernetesClient Kubernetes client instance
      * @param namespace Kubernetes namespace to watch
-     * @param callback callback for completed jobs
+     * @param callback callback for running, completed, and failed jobs
      */
     public KubernetesJobMonitor(
         KubernetesClient kubernetesClient,
@@ -265,6 +268,14 @@ public class KubernetesJobMonitor {
 
             CompletionState completion = getCompletionState(job);
             if (completion == CompletionState.RUNNING) {
+                if (isActiveJob(job) && !runningExecIds.contains(execId)) {
+                    String jobName =
+                        (job.getMetadata() != null) ? job.getMetadata().getName() : "unknown";
+                    boolean runningProcessed = callback.onJobRunning(execId, jobName);
+                    if (runningProcessed) {
+                        runningExecIds.add(execId);
+                    }
+                }
                 continue;
             }
 
@@ -284,6 +295,8 @@ public class KubernetesJobMonitor {
             if (processed) {
                 completedExecIds.add(execId);
             }
+
+            runningExecIds.remove(execId);
         }
     }
 
@@ -348,6 +361,16 @@ public class KubernetesJobMonitor {
         return CompletionState.RUNNING;
     }
 
+    private boolean isActiveJob(Job job) {
+        JobStatus status = job.getStatus();
+        if (status == null) {
+            return false;
+        }
+
+        Integer active = status.getActive();
+        return active != null && active > 0;
+    }
+
     private String summarizeFailure(Job job) {
         JobStatus status = job.getStatus();
         if (status == null || status.getConditions() == null) {
@@ -390,6 +413,15 @@ public class KubernetesJobMonitor {
      * Callback interface for job completion events.
      */
     public interface JobCompletionCallback {
+
+        /**
+         * Called when a job first becomes active in Kubernetes.
+         *
+         * @param execId Execution ID
+         * @param jobName Kubernetes job name
+         * @return true when the running transition was handled and should not be retried
+         */
+        boolean onJobRunning(int execId, String jobName);
 
         /**
          * Called when a job completes successfully.

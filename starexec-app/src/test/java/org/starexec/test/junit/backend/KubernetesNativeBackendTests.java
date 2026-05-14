@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import org.junit.Test;
@@ -164,12 +165,24 @@ public class KubernetesNativeBackendTests {
                 .addToLabels("starexec.org/pair-id", "707")
                 .addToAnnotations("starexec.org/output-dir", "/tmp/starexec/out/707")
             .endMetadata()
+            .withNewStatus()
+                .withActive(1)
+            .endStatus()
             .build();
 
         Method rebuildTrackingFromJob = KubernetesNativeBackend.class
             .getDeclaredMethod("rebuildTrackingFromJob", Job.class);
         rebuildTrackingFromJob.setAccessible(true);
-        rebuildTrackingFromJob.invoke(backend, job);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(707))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+
+            rebuildTrackingFromJob.invoke(backend, job);
+
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(707));
+        }
 
         Map<Integer, String> execToJob =
             (Map<Integer, String>) getField(backend, "execIdToJobName");
@@ -181,6 +194,96 @@ public class KubernetesNativeBackendTests {
         assertEquals("starexec-job-77", execToJob.get(77));
         assertEquals(Integer.valueOf(707), execToPair.get(77));
         assertEquals(Path.of("/tmp/starexec/out/707"), execToOut.get(77));
+    }
+
+    @Test
+    public void rebuildTrackingFromJobDoesNotMarkPendingJobsRunning() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Job job = new JobBuilder()
+            .withNewMetadata()
+                .withName("starexec-job-78")
+                .addToLabels("starexec.org/managed", "true")
+                .addToLabels("starexec.org/exec-id", "78")
+                .addToLabels("starexec.org/pair-id", "708")
+                .addToAnnotations("starexec.org/output-dir", "/tmp/starexec/out/708")
+            .endMetadata()
+            .build();
+
+        Method rebuildTrackingFromJob = KubernetesNativeBackend.class
+            .getDeclaredMethod("rebuildTrackingFromJob", Job.class);
+        rebuildTrackingFromJob.setAccessible(true);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            rebuildTrackingFromJob.invoke(backend, job);
+            jobPairsMock.verifyNoInteractions();
+        }
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        assertEquals("starexec-job-78", execToJob.get(78));
+        assertEquals(Integer.valueOf(708), execToPair.get(78));
+        assertEquals(Path.of("/tmp/starexec/out/708"), execToOut.get(78));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void runningCallbackRetriesWhenDatabaseUpdateFails() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+
+        execToJob.put(15, "job-15");
+        execToPair.put(15, 515);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(515))
+                .thenReturn(
+                    JobPairs.ConditionalPairUpdateResult.ERROR,
+                    JobPairs.ConditionalPairUpdateResult.UPDATED
+                );
+
+            assertFalse(callback.onJobRunning(15, "job-15"));
+            assertEquals("job-15", execToJob.get(15));
+            assertEquals(Integer.valueOf(515), execToPair.get(15));
+
+            assertTrue(callback.onJobRunning(15, "job-15"));
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(515), Mockito.times(2));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void runningCallbackLeavesKilledMarkerForTerminalCallbacks() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        int execId = 16;
+        Set<Integer> killedExecIds =
+            (Set<Integer>) getField(backend, "killedExecIds");
+        killedExecIds.add(execId);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            assertTrue(callback.onJobRunning(execId, "job-16"));
+            assertTrue(killedExecIds.contains(execId));
+            jobPairsMock.verifyNoInteractions();
+
+            assertTrue(callback.onJobComplete(execId, "job-16"));
+            assertFalse(killedExecIds.contains(execId));
+            jobPairsMock.verifyNoInteractions();
+        }
     }
 
     @Test

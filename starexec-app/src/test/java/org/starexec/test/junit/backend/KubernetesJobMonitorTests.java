@@ -2,8 +2,11 @@ package org.starexec.test.junit.backend;
 
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.anyInt;
+import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
@@ -85,6 +88,77 @@ public class KubernetesJobMonitorTests {
 
         verify(callback, times(2)).onJobComplete(EXEC_ID, JOB_NAME);
         assertTrue(getCompletedExecIds().contains(EXEC_ID));
+    }
+
+    @Test
+    public void pollJobsOnce_MarksActiveJobRunningOnlyOnce() throws Exception {
+        Job activeJob = new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels("starexec.org/managed", "true")
+            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewStatus()
+            .withActive(1)
+            .endStatus()
+            .build();
+
+        JobList activeJobs = new JobList();
+        activeJobs.setItems(List.of(activeJob));
+        when(filteredJobs.list()).thenReturn(activeJobs);
+        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
+        verify(callback, times(0)).onJobComplete(anyInt(), anyString());
+        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    public void pollJobsOnce_RetriesRunningJobUntilCallbackSucceeds() throws Exception {
+        Job activeJob = new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels("starexec.org/managed", "true")
+            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewStatus()
+            .withActive(1)
+            .endStatus()
+            .build();
+
+        JobList activeJobs = new JobList();
+        activeJobs.setItems(List.of(activeJob));
+        when(filteredJobs.list()).thenReturn(activeJobs);
+        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(false, true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(2)).onJobRunning(EXEC_ID, JOB_NAME);
+    }
+
+    @Test
+    public void pollJobsOnce_IgnoresPendingJobWithoutActivePods() throws Exception {
+        Job pendingJob = new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels("starexec.org/managed", "true")
+            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+            .endMetadata()
+            .build();
+
+        JobList pendingJobs = new JobList();
+        pendingJobs.setItems(List.of(pendingJob));
+        when(filteredJobs.list()).thenReturn(pendingJobs);
+
+        invokePollJobsOnce();
+
+        verifyNoInteractions(callback);
     }
 
     @Test

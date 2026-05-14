@@ -913,7 +913,7 @@ public class KubernetesNativeBackend implements Backend {
      *
      * <p>Recovery is intentionally conservative:</p>
      * <ul>
-     *   <li>active K8s Job evidence rebuilds tracking and leaves the DB state intact;</li>
+     *   <li>active K8s Job evidence rebuilds tracking and marks the pair RUNNING;</li>
      *   <li>terminal K8s Job evidence is processed through the normal completion callback;</li>
      *   <li>ENQUEUED DB rows without Job evidence are reset to PENDING_SUBMIT;</li>
      *   <li>RUNNING DB rows without Job evidence are marked as terminal failure.</li>
@@ -1081,6 +1081,59 @@ public class KubernetesNativeBackend implements Backend {
                 maxConcurrentJobs +
                 ")"
             );
+        }
+
+        if (!isTerminalJob(job) && isActiveJob(job)) {
+            markPairRunningSafely(pairId, "startup reconciliation");
+        }
+    }
+
+    private boolean isActiveJob(Job job) {
+        if (job == null || job.getStatus() == null) {
+            return false;
+        }
+
+        Integer active = job.getStatus().getActive();
+        return active != null && active > 0;
+    }
+
+    private JobPairs.ConditionalPairUpdateResult markPairRunningSafely(
+        int pairId,
+        String source
+    ) {
+        if (pairId <= 0) {
+            return JobPairs.ConditionalPairUpdateResult.STALE;
+        }
+
+        try {
+            JobPairs.ConditionalPairUpdateResult result = JobPairs.trySetPairRunning(pairId);
+            if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                log.debug(
+                    "Marked pair " + pairId + " as STATUS_RUNNING from " + source
+                );
+            } else if (result == JobPairs.ConditionalPairUpdateResult.STALE) {
+                log.debug(
+                    "Skipping STATUS_RUNNING update for stale or completed pair " +
+                    pairId +
+                    " from " +
+                    source
+                );
+            } else {
+                log.warn(
+                    "Failed to set running status for pair " + pairId +
+                    " from " +
+                    source
+                );
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn(
+                "Failed to set running status for pair " + pairId +
+                " from " +
+                source,
+                e
+            );
+            return JobPairs.ConditionalPairUpdateResult.ERROR;
         }
     }
 
@@ -1760,6 +1813,29 @@ public class KubernetesNativeBackend implements Backend {
 
     private final class KubernetesJobCompletionCallback
         implements KubernetesJobMonitor.JobCompletionCallback {
+
+        @Override
+        public boolean onJobRunning(int execId, String jobName) {
+            if (killedExecIds.contains(execId)) {
+                log.debug(
+                    "Skipping running callback for killed execId " +
+                    execId +
+                    " (K8s job " +
+                    jobName +
+                    ")"
+                );
+                return true;
+            }
+
+            Integer pairId = resolvePairId(execId, jobName);
+            if (pairId == null) {
+                log.warn("Unable to resolve pair ID for active job: " + jobName);
+                return false;
+            }
+
+            return markPairRunningSafely(pairId, "Kubernetes active-job polling") !=
+                JobPairs.ConditionalPairUpdateResult.ERROR;
+        }
 
         @Override
         public boolean onJobComplete(int execId, String jobName) {
