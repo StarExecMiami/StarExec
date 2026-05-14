@@ -18,11 +18,14 @@ import java.util.*;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.to.Status.StatusCode;
 
 /**
  * Unit tests for PodmanBackend container-based job execution.
@@ -174,6 +177,14 @@ public class PodmanBackendTests {
     private void invokeNotifyMonitorNewWorkSafely() throws Exception {
         Method method = PodmanBackend.class.getDeclaredMethod(
             "notifyMonitorNewWorkSafely"
+        );
+        method.setAccessible(true);
+        method.invoke(backend);
+    }
+
+    private void invokeReconcileOrphanedPairs() throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "reconcileOrphanedPairs"
         );
         method.setAccessible(true);
         method.invoke(backend);
@@ -819,19 +830,26 @@ public class PodmanBackendTests {
         String scriptPath = "/app/data/jobin/job_1/run.sh";
         String logPath = tempDir.resolve("out").resolve("job.log").toString();
 
-        // Act
-        int execId = backend.submitScript(42, scriptPath, workingDir, logPath);
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(42))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
 
-        // Assert
-        assertTrue("Submission should succeed", execId > 0);
-        assertEquals(
-            "Execution should be tracked against created container",
-            TEST_CONTAINER_ID,
-            getExecIdMap().get(execId)
-        );
-        verify(mockDockerClient, times(1)).createContainerCmd(anyString());
-        verify(mockStartContainerCmd, times(1)).exec();
-        verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+            // Act
+            int execId = backend.submitScript(42, scriptPath, workingDir, logPath);
+
+            // Assert
+            assertTrue("Submission should succeed", execId > 0);
+            assertEquals(
+                "Execution should be tracked against created container",
+                TEST_CONTAINER_ID,
+                getExecIdMap().get(execId)
+            );
+            verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+            verify(mockStartContainerCmd, times(1)).exec();
+            verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(42), times(1));
+        }
     }
 
     @Test
@@ -851,19 +869,132 @@ public class PodmanBackendTests {
         String scriptPath = "/app/data/jobin/job_2/run.sh";
         String logPath = tempDir.resolve("out").resolve("job2.log").toString();
 
-        // Act
-        int execId = backend.submitScript(99, scriptPath, workingDir, logPath);
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(99))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
 
-        // Assert
-        assertTrue("Submission should succeed despite monitor failure", execId > 0);
-        assertEquals(
-            "Execution should still be tracked",
-            TEST_CONTAINER_ID,
-            getExecIdMap().get(execId)
-        );
-        verify(monitor, times(1)).notifyNewWorkSubmitted();
-        verify(mockDockerClient, times(1)).createContainerCmd(anyString());
-        verify(mockStartContainerCmd, times(1)).exec();
+            // Act
+            int execId = backend.submitScript(99, scriptPath, workingDir, logPath);
+
+            // Assert
+            assertTrue("Submission should succeed despite monitor failure", execId > 0);
+            assertEquals(
+                "Execution should still be tracked",
+                TEST_CONTAINER_ID,
+                getExecIdMap().get(execId)
+            );
+            verify(monitor, times(1)).notifyNewWorkSubmitted();
+            verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+            verify(mockStartContainerCmd, times(1)).exec();
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(99), times(1));
+        }
+    }
+
+    @Test
+    public void testSubmitScript_RunningStatusUpdateFailure_DoesNotFailSubmission()
+        throws Exception {
+        // Arrange
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+
+        String workingDir = "/app/data/jobin/job_3";
+        String scriptPath = "/app/data/jobin/job_3/run.sh";
+        String logPath = tempDir.resolve("out").resolve("job3.log").toString();
+
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(77))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.ERROR);
+
+            // Act
+            int execId = backend.submitScript(77, scriptPath, workingDir, logPath);
+
+            // Assert
+            assertTrue("Submission should still succeed when running status update fails", execId > 0);
+            assertEquals(
+                "Execution should still be tracked",
+                TEST_CONTAINER_ID,
+                getExecIdMap().get(execId)
+            );
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(77), times(1));
+        }
+    }
+
+    @Test
+    public void testSubmitScript_RunningStatusUpdateStale_DoesNotFailSubmission()
+        throws Exception {
+        // Arrange
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+
+        String workingDir = "/app/data/jobin/job_4";
+        String scriptPath = "/app/data/jobin/job_4/run.sh";
+        String logPath = tempDir.resolve("out").resolve("job4.log").toString();
+
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(78))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.STALE);
+
+            // Act
+            int execId = backend.submitScript(78, scriptPath, workingDir, logPath);
+
+            // Assert
+            assertTrue("Submission should still succeed when running status is stale", execId > 0);
+            assertEquals(
+                "Execution should still be tracked",
+                TEST_CONTAINER_ID,
+                getExecIdMap().get(execId)
+            );
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(78), times(1));
+        }
+    }
+
+    @Test
+    public void testReconcileOrphanedPairs_MarksRunningContainersAsRunning()
+        throws Exception {
+        Container runningContainer = mock(Container.class);
+        Map<String, String> labels = new HashMap<>();
+        labels.put("starexec.managed", "true");
+        labels.put("starexec.label.version", "2");
+        labels.put("starexec.kind", "job-pair");
+        labels.put("starexec.pair.id", "17");
+        labels.put("starexec.exec.id", "1001");
+
+        when(runningContainer.getId()).thenReturn(TEST_CONTAINER_ID);
+        when(runningContainer.getLabels()).thenReturn(labels);
+        when(mockListContainersCmd.exec()).thenReturn(Collections.singletonList(runningContainer));
+
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(true);
+
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            JobPairs.PairStatusLookupResult lookup =
+                mock(JobPairs.PairStatusLookupResult.class);
+            when(lookup.isMissing()).thenReturn(false);
+            when(lookup.isError()).thenReturn(false);
+            when(lookup.getStatusCode()).thenReturn(StatusCode.STATUS_RUNNING.getVal());
+
+            jobPairsMock
+                .when(() -> JobPairs.getPairIdsByStatusCode(StatusCode.STATUS_ENQUEUED.getVal()))
+                .thenReturn(Collections.singletonList(17));
+            jobPairsMock
+                .when(() -> JobPairs.getPairIdsByStatusCode(StatusCode.STATUS_RUNNING.getVal()))
+                .thenReturn(Collections.emptyList());
+            jobPairsMock.when(() -> JobPairs.getPairStatusLookup(17)).thenReturn(lookup);
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(17))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+
+            invokeReconcileOrphanedPairs();
+
+            jobPairsMock.verify(() -> JobPairs.trySetPairRunning(17), times(1));
+            verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+        }
     }
 
     // ==================== Destroy Tests ====================

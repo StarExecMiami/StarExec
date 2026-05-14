@@ -839,6 +839,55 @@ public class PodmanBackend implements Backend {
     }
 
     /**
+     * Marks a pair as running once the backend has confirmed its container is
+     * active.
+     *
+     * <p>This updates the pair row only; stage-level status continues to be
+     * managed by the container-side job scripts and completion monitor.</p>
+     *
+     * <p>This is best-effort: a transient DB failure must not convert a
+     * successfully started container into a failed submission.</p>
+     *
+     * @param pairId The pair to mark running
+     * @param source Short label for the caller, used in logs
+     */
+    private void markPairRunningSafely(int pairId, String source) {
+        if (pairId <= 0) {
+            return;
+        }
+
+        try {
+            JobPairs.ConditionalPairUpdateResult result =
+                JobPairs.trySetPairRunning(pairId);
+            if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                log.debug(
+                    "Marked pair " + pairId + " as STATUS_RUNNING from " + source
+                );
+            } else if (result == JobPairs.ConditionalPairUpdateResult.STALE) {
+                log.debug(
+                    "Skipping STATUS_RUNNING update for stale or completed pair " +
+                        pairId +
+                        " from " +
+                        source
+                );
+            } else {
+                log.warn(
+                    "Failed to set running status for pair " + pairId +
+                        " from " +
+                        source
+                );
+            }
+        } catch (Exception e) {
+            log.warn(
+                "Failed to set running status for pair " + pairId +
+                    " from " +
+                    source,
+                e
+            );
+        }
+    }
+
+    /**
      * Releases resources and cleans up.
      *
      * <p>Shutdown ordering is critical to avoid leaving pairs stranded in
@@ -1203,6 +1252,10 @@ public class PodmanBackend implements Backend {
 
         // Track execution only after successful start
         execIdToContainerId.put(execId, containerId);
+
+        // Mark the pair running immediately so the DB reflects the active
+        // container even if the asynchronous start-event listener never fires.
+        markPairRunningSafely(pairId, "submission");
 
         // Notify the job monitor that new work has been submitted.
         // Failure here is non-fatal and must not trigger submission retries.
@@ -1851,10 +1904,10 @@ public class PodmanBackend implements Backend {
      * <h3>Reconciliation matrix</h3>
      * <table>
      *   <tr><th>DB status</th><th>Container state</th><th>Action</th></tr>
-     *   <tr><td>ENQUEUED</td><td>running</td><td>rebuild tracking, leave active</td></tr>
+     *   <tr><td>ENQUEUED</td><td>running</td><td>mark running, rebuild tracking, leave active</td></tr>
      *   <tr><td>ENQUEUED</td><td>exited + v2 label</td><td>process through normal completion</td></tr>
      *   <tr><td>ENQUEUED</td><td>none / legacy label</td><td>reset pair + stages to PENDING_SUBMIT</td></tr>
-     *   <tr><td>RUNNING</td><td>running</td><td>rebuild tracking, leave active</td></tr>
+     *   <tr><td>RUNNING</td><td>running</td><td>mark running, rebuild tracking, leave active</td></tr>
      *   <tr><td>RUNNING</td><td>exited + v2 label</td><td>process through normal completion</td></tr>
      *   <tr><td>RUNNING</td><td>none / legacy label</td><td>mark terminal failure (unsafe to auto-rerun)</td></tr>
      * </table>
@@ -1942,6 +1995,7 @@ public class PodmanBackend implements Backend {
             for (int pairId : enqueuedIds) {
                 if (pairIdToRunningContainer.containsKey(pairId)) {
                     Integer execId = pairIdToExecId.get(pairId);
+                    markPairRunningSafely(pairId, "reconciliation");
                     rebuildTrackingFromLabel(
                         pairId, pairIdToRunningContainer.get(pairId), execId);
                     if (execId != null && execId > maxRecoveredExecId) {
@@ -1965,6 +2019,7 @@ public class PodmanBackend implements Backend {
             for (int pairId : runningIds) {
                 if (pairIdToRunningContainer.containsKey(pairId)) {
                     Integer execId = pairIdToExecId.get(pairId);
+                    markPairRunningSafely(pairId, "reconciliation");
                     rebuildTrackingFromLabel(
                         pairId, pairIdToRunningContainer.get(pairId), execId);
                     if (execId != null && execId > maxRecoveredExecId) {
