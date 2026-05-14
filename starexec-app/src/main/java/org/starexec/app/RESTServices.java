@@ -1341,6 +1341,7 @@ public class RESTServices {
 		private final long heartbeatIntervalMillis = Math.max(1L, EnvironmentConfig.getPairLogStreamHeartbeatSeconds()) * 1000L;
 		private final int maxChunkBytes = Math.max(256, EnvironmentConfig.getPairLogStreamReadChunkBytes());
 		private final AtomicBoolean closed = new AtomicBoolean(false);
+		private final AtomicBoolean tickRunning = new AtomicBoolean(false);
 		private volatile long offset;
 		private volatile long lastStatusCheckAt = 0L;
 		private volatile long lastHeartbeatAt = 0L;
@@ -1375,9 +1376,24 @@ public class RESTServices {
 				return;
 			}
 
+			// Prevent concurrent tick execution within the same session.
+			// The scheduled-thread-pool executor (4-16 core threads) may
+			// dequeue a previously-scheduled delayed task before the
+			// currently-running tick returns. If both ticks then call
+			// sendSseEvent() on a broken-pipe client simultaneously, each
+			// blocks in join() → duplicate closed-pipe failures appear in
+			// the log until the TCP timeout resolves.
+			if (!tickRunning.compareAndSet(false, true)) {
+				// A tick is already in-flight; reschedule so we retry
+				// after the current tick releases the guard.
+				schedule(pollIntervalMillis);
+				return;
+			}
+
 			// [REVIEW-FIX] Match legacy behaviour: missing log path → immediate NOT_AVAILABLE.
 			if (logUnavailable) {
 				sendAndCloseError("NOT_AVAILABLE", "not available");
+				tickRunning.set(false);
 				return;
 			}
 
@@ -1433,6 +1449,8 @@ public class RESTServices {
 			} catch (RuntimeException e) {
 				log.warn("streamPairLogEventsAsync", "Live log stream failed for pair " + pairId, e);
 				sendAndCloseError("STREAM_FAILURE", "stream unavailable");
+			} finally {
+				tickRunning.set(false);
 			}
 		}
 
