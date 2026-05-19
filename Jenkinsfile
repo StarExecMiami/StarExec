@@ -170,7 +170,7 @@ pipeline {
                             STAREXEC_DB_PASSWORD \
                             STAREXEC_DB_USER
                         do
-                            eval "VAL=\$$VAR"
+                            VAL="$(printenv "$VAR" || true)"
                             if [ -z "$VAL" ]; then
                                 echo "  MISSING: $VAR"
                                 MISSING="$MISSING $VAR"
@@ -257,10 +257,11 @@ pipeline {
                 expression { params.DEPLOY_ENV == 'prod' }
             }
             steps {
-                input message: "Deploy StarExec to PRODUCTION? (${GIT_SHA})", ok: 'Deploy'
-                sh '''
-                    echo "PRODUCTION DEPLOYMENT — ${GIT_SHA}"
-                    BACKUP_DIR="/starexec/k8s-shared/data/backups"
+                input message: "Deploy StarExec to PRODUCTION? (${env.GIT_SHA})", ok: 'Deploy'
+                withEnv(["DEPLOY_GIT_SHA=${env.GIT_SHA}"]) {
+                    sh '''
+                    echo "PRODUCTION DEPLOYMENT — ${DEPLOY_GIT_SHA}"
+                    BACKUP_DIR="/opt/jenkins/backups/starexec"
                     mkdir -p "${BACKUP_DIR}"
                     BACKUP_FILE="${BACKUP_DIR}/pre-deploy-$(date +%Y%m%d-%H%M%S).sql"
                     microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \
@@ -270,14 +271,15 @@ pipeline {
                         charts/starexec \
                         --namespace ${K8S_NAMESPACE} \
                         --values ${HELM_VALUES} \
-                        --set image.tag=${GIT_SHA} \
+                        --set image.tag=${DEPLOY_GIT_SHA} \
                         --set image.pullPolicy=IfNotPresent \
                         --atomic --timeout 15m --no-hooks 2>&1
                     microk8s kubectl wait --for=condition=available \
                         --timeout=600s deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE}
                     microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} \
                         -c app -- bash /usr/local/bin/migrations.sh 2>&1 || true
-                '''
+                    '''
+                }
             }
             post {
                 success { echo "PRODUCTION DEPLOY SUCCESS: ${APP_URL}" }
