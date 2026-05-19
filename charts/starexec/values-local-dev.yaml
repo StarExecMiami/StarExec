@@ -1,0 +1,101 @@
+# Development environment values (Podman local development)
+# Usage: make deploy-podman ENV=dev
+#        or: VALS=chart/values-local-dev.yaml make deploy-podman
+
+image:
+  repository: localhost/local/starexec
+  tag: dev
+  pullPolicy: Never
+
+replicaCount: 1
+volumePrefix: starexec
+kubernetes:
+  enabled: false
+
+# Podman development mode: uses named volumes for proper lifecycle
+persistence:
+  enabled: true
+  storageClass: "" # Not applicable to Podman
+  size: 5Gi
+  useHostPathForPodman: false # Use named volumes instead
+  usePodmanVolumes: true # Enable Podman-specific named volume handling
+
+  # Named volume configuration (Podman creates/manages these)
+  podmanVolumes:
+    data:
+      name: "{{ .Values.volumePrefix }}-dev-data"
+    postgres:
+      name: "{{ .Values.volumePrefix }}-dev-postgres"
+
+postgres:
+  image:
+    repository: docker.io/library/postgres
+    pullPolicy: IfNotPresent
+    tag: "15"
+
+  host: localhost # Within pod, containers share localhost
+  port: 5432
+  user: starexec
+  allowInsecureDevCredentials: true
+  password: starexec_dev_password # Dev-only; use env override for local testing
+  database: starexec
+  rootPassword: starexec_dev_password
+
+  persistence:
+    enabled: true # Enable persistence in dev for database continuity
+
+backend:
+  type: "podman"
+  root: "/app/backend"
+  workingDir: "/app/data/work"
+  # Network for job containers to connect to the same network as the app pod
+  networkMode: "starexec-net"
+  # Database host that job containers should use (different from app which uses localhost in pod)
+  # Job containers are separate from the pod so they need to use the postgres service name
+  jobDbHost: "postgres"
+  # Local backend specific settings
+  local:
+    concurrency: 1
+    forceSandbox: true
+    useRunsolver: true
+    gracefulShutdownSeconds: 30
+
+dataDir: "/app/data"
+sandboxDir: "/app/sandbox"
+
+resources:
+  app:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  postgres:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+# Development-specific configurations
+env:
+  LOG_LEVEL: "DEBUG"
+  FLYWAY_BASELINE_ON_MIGRATE: "true"
+  STAREXEC_WEB_ADDRESS: "localhost:7827"
+  STAREXEC_URL_PREFIX: "http"
+  STAREXEC_WEB_BASE_DIR: "/opt/tomcat/webapps/starexec"
+  STAREXEC_LOCAL_USE_RUNSOLVER: "true"
+
+podman:
+  containerSocket:
+    enabled: true
+    # Rootless Podman socket path. The Makefile automatically detects this for your user.
+    # Do NOT manually override unless your Podman socket is in an unusual location.
+    # The preflight flow validates socket liveness and connectivity before deployment.
+    # See docs/TROUBLESHOOTING.md#podman-issues for detailed remediation steps.
+    hostPath: "/run/user/1000/podman/podman.sock"
+  jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+  # Keep one concurrent job to reduce L1/L2 cache contention.
+  maxConcurrentJobs: 1

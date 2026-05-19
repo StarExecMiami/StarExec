@@ -34,18 +34,18 @@ jobs:
       - name: Lint Helm chart
         run: |
           echo "Linting Helm chart..."
-          if [ -f "charts/starexec/values-dev.yaml" ]; then
-            echo "Using values-dev.yaml for lint validation..."
-            helm lint ./charts/starexec -f charts/starexec/values-dev.yaml --strict
+          if [ -f "charts/starexec/values-local-dev.yaml" ]; then
+            echo "Using values-local-dev.yaml for lint validation..."
+            helm lint ./charts/starexec -f charts/starexec/values-local-dev.yaml --strict
           else
-            echo "⚠️  values-dev.yaml not found, attempting default lint..."
+            echo "⚠️  values-local-dev.yaml not found, attempting default lint..."
             helm lint ./charts/starexec --strict
           fi
 
       - name: Validate chart templates
         run: |
           echo "Validating Helm templates for all environments..."
-          for env in dev ci; do
+          for env in local-dev dev ci prod; do
             if [ -f "charts/starexec/values-$env.yaml" ]; then
               echo ""
               echo "=== Validating $env environment ==="

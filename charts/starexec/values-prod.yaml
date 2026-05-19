@@ -1,7 +1,7 @@
-# Kubernetes development values for quokka.
+# Production environment values for the canonical quokka deployment.
 #
-# This profile is for the Jenkins/dev namespace on quokka's MicroK8s cluster.
-# Local Podman development lives in values-local-dev.yaml.
+# This file is the single source of truth for production. Jenkins and manual
+# Helm invocations targeting production should use this file.
 
 image:
   repository: ghcr.io/starexecmiami/starexec
@@ -29,22 +29,28 @@ postgres:
     database: database
     rootPassword: rootPassword
   persistence:
-    enabled: false
+    enabled: true
+    storageClass: starexec-nfs-rwo
+    size: 20Gi
 
 backend:
   type: kubernetes
 
 kubernetes:
-  jobNamespace: starexec-dev
+  jobNamespace: starexec
   jobImage: ghcr.io/starexecmiami/starexec-job-runner:latest
   jobImagePullPolicy: IfNotPresent
   jobServiceAccount: starexec-job
-  maxConcurrentJobs: 10
+  maxConcurrentJobs: 50
   nodeSelector:
     starexec.org/worker: "true"
   dataPvc:
+    existingClaim: starexec-data-rwx
+    name: starexec-data-rwx
+    storageClass: starexec-nfs-rwx
+    size: 100Gi
     accessModes:
-      - ReadWriteOnce
+      - ReadWriteMany
   resources:
     requests:
       cpu: "100m"
@@ -55,18 +61,24 @@ kubernetes:
 
 persistence:
   enabled: true
-  storageClass: microk8s-hostpath
-  appDataSize: 10Gi
+  storageClass: starexec-nfs-rwo
+  appDataSize: 100Gi
   backendSize: 5Gi
   sandboxSize: 5Gi
   workSize: 5Gi
   postgresDataSize: 20Gi
+  existingClaims:
+    data: starexec-data-rwx
+    backend: starexec-backend-rwo
+    sandbox: starexec-sandbox-rwo
+    work: starexec-work-rwo
+    postgres: starexec-postgres-rwo
 
 service:
   type: NodePort
   port: 8080
   targetPort: 8080
-  nodePort: 30081
+  nodePort: 30080
 
 ingress:
   enabled: false
@@ -77,12 +89,17 @@ monitoring:
 resources:
   requests:
     cpu: "500m"
-    memory: "1Gi"
+    memory: "2Gi"
   limits:
-    cpu: "2"
-    memory: "4Gi"
+    cpu: "4"
+    memory: "8Gi"
 
 web:
-  address: "localhost"
-  urlPrefix: "http"
-  proxyPort: 30081
+  address: "quokka.acorn.miami.edu"
+  urlPrefix: "https"
+  proxyPort: 443
+
+env:
+  STAREXEC_EMAIL_SMTP: "mailgw.as.acorn.miami.edu"
+  STAREXEC_EMAIL_PORT: "25"
+  STAREXEC_EMAIL_FROM: "starexec@quokka.acorn.miami.edu"

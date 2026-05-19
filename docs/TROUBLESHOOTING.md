@@ -174,7 +174,7 @@ socket path explicitly and pass the socket gid as a supplemental group:
 ```bash
 export PODMAN_SOCKET_PATH="/run/user/$(id -u)/podman/podman.sock"
 export PODMAN_SOCKET_GID="$(stat -c '%g' "$PODMAN_SOCKET_PATH")"
-helm template starexec ./charts/starexec -f ./charts/starexec/values-dev.yaml \
+helm template starexec ./charts/starexec -f ./charts/starexec/values-local-dev.yaml \
   --set backend.type=podman \
   --set security.pod.supplementalGroups[0]="$PODMAN_SOCKET_GID" \
   --set-string podman.containerSocket.enabled=true \

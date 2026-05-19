@@ -129,8 +129,8 @@ git checkout containerised
 make start
 
 # Production deployment (requires env-specific values + secure password)
-cp charts/starexec/values-podman.yaml charts/starexec/values-prod.yaml
-# Edit values-prod.yaml for production limits, credentials, and socket path
+cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml
+# Edit values-podman-prod.yaml for production limits, credentials, and socket path
 export STAREXEC_DB_PASSWORD="$(openssl rand -base64 32)"
 make deploy-podman ENV=prod
 ```
@@ -141,17 +141,17 @@ make deploy-podman ENV=prod
 |-------------|---------|---------|
 | `dev` | `make deploy-podman ENV=dev` | Local development with defaults |
 | `ci` | `make deploy-podman ENV=ci` | CI/testing with ephemeral volumes |
-| `prod` | `make deploy-podman ENV=prod` | Production with secure settings (requires `charts/starexec/values-prod.yaml`) |
+| `prod` | `make deploy-podman ENV=prod` | Production with secure settings (typically using a custom Podman override such as `charts/starexec/values-podman-prod.yaml`) |
 
 ### Production Checklist
 
 Before deploying to production:
 
 - [ ] **Change default password**: `export STAREXEC_DB_PASSWORD="secure-value"`
-- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml charts/starexec/values-prod.yaml`
+- [ ] **Create env-specific values file**: `cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml`
 - [ ] **Create volumes**: `make volumes-create ENV=prod`
 - [ ] **Configure backups**: Set up automated `make volumes-backup ENV=prod`
-- [ ] **Set resource limits**: Configure CPU/memory in `values-prod.yaml`
+- [ ] **Set resource limits**: Configure CPU/memory in `values-podman-prod.yaml`
 - [ ] **Enable TLS**: Configure reverse proxy (nginx, traefik)
 - [ ] **Review security**: Follow [Security Guide](SECURITY.md)
 

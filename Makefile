@@ -1797,9 +1797,9 @@ verify-deps:
 lint:
 	@if command -v helm >/dev/null 2>&1; then \
 		echo "Linting Helm chart..."; \
-		if [ -f "$(CHART_DIR)/values-dev.yaml" ]; then \
-			echo "  Using values-dev.yaml for basic validation..."; \
-			helm lint $(CHART_DIR) -f $(CHART_DIR)/values-dev.yaml; \
+		if [ -f "$(CHART_DIR)/values-local-dev.yaml" ]; then \
+			echo "  Using values-local-dev.yaml for basic validation..."; \
+			helm lint $(CHART_DIR) -f $(CHART_DIR)/values-local-dev.yaml; \
 		else \
 			echo "  Using default values.yaml (may show password warnings)..."; \
 			helm lint $(CHART_DIR) || echo "  ⚠️  Lint failed - this is expected if passwords not set in defaults"; \

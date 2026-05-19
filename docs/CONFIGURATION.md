@@ -148,7 +148,8 @@ Helm values are organized by environment:
 ```
 charts/starexec/
 ├── values.yaml           # Base defaults
-├── values-dev.yaml       # Development overrides
+├── values-local-dev.yaml # Local Podman development overrides
+├── values-dev.yaml       # Quokka Kubernetes development overrides
 ├── values-ci.yaml        # CI/testing overrides
 └── values-prod.yaml      # Production overrides
 ```
@@ -156,7 +157,7 @@ charts/starexec/
 ### Base Values Example
 
 ```yaml
-# values-dev.yaml
+# values-local-dev.yaml
 image:
   repository: starexec
   tag: latest
@@ -309,8 +310,8 @@ make deploy-podman ENV=ci
 
 ```bash
 # Production deployment requires env-specific values + secure password
-cp charts/starexec/values-podman.yaml charts/starexec/values-prod.yaml
-# Edit values-prod.yaml for production limits, credentials, and socket path
+cp charts/starexec/values-podman.yaml charts/starexec/values-podman-prod.yaml
+# Edit values-podman-prod.yaml for production limits, credentials, and socket path
 export STAREXEC_DB_PASSWORD="$(generate-secure-password)"
 
 # Live log streaming (benchmark-priority profile)

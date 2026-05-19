@@ -13,13 +13,13 @@ Error: execution error at (starexec/templates/secret.yaml:...): postgres.existin
 
 ## Recommended lint procedure
 
-1. For local development, point `helm lint` at `values-dev.yaml` since it opts into dev credentials explicitly:
+1. For local Podman development, point `helm lint` at `values-local-dev.yaml` since it opts into dev credentials explicitly:
 
    ```bash
-   helm lint chart -f chart/values-dev.yaml
+   helm lint chart -f chart/values-local-dev.yaml
    ```
 
-   This is what `make lint` does automatically when `values-dev.yaml` exists.
+   This is what `make lint` does automatically when `values-local-dev.yaml` exists.
 
 2. In CI or staging pipelines, lint against `values-ci.yaml` to use the ephemeral credentials it defines:
 

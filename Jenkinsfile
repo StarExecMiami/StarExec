@@ -77,19 +77,19 @@ pipeline {
                     if (env.CHANGE_ID) {
                         env.K8S_NAMESPACE   = "starexec-pr-${env.CHANGE_ID}"
                         env.HELM_RELEASE    = "starexec-dev"
-                        env.HELM_VALUES     = "/opt/jenkins/values-jenkins-dev.yaml"
+                        env.HELM_VALUES     = "charts/starexec/values-dev.yaml"
                         env.APP_URL         = "http://localhost:30081/starexec"
                         env.IS_PR           = "true"
                     } else if (params.DEPLOY_ENV == 'prod') {
                         env.K8S_NAMESPACE   = "starexec"
                         env.HELM_RELEASE    = "starexec"
-                        env.HELM_VALUES     = "/opt/jenkins/values-jenkins-prod.yaml"
-                        env.APP_URL         = "http://quokka.acorn.miami.edu/starexec"
+                        env.HELM_VALUES     = "charts/starexec/values-prod.yaml"
+                        env.APP_URL         = "https://quokka.acorn.miami.edu/starexec"
                         env.IS_PR           = "false"
                     } else {
                         env.K8S_NAMESPACE   = "starexec-dev"
                         env.HELM_RELEASE    = "starexec-dev"
-                        env.HELM_VALUES     = "/opt/jenkins/values-jenkins-dev.yaml"
+                        env.HELM_VALUES     = "charts/starexec/values-dev.yaml"
                         env.APP_URL         = "http://localhost:30081/starexec"
                         env.IS_PR           = "false"
                     }
@@ -152,24 +152,15 @@ pipeline {
         // -----------------------------------------------------------------------
             // Validate that every required production secret is resolvable before
             // we attempt a deployment that would fail halfway through.
+            // Non-secret deployment values (host, port, public URL) live in the
+            // Helm values file and are not treated as Jenkins credentials.
             when {
                 expression { params.DEPLOY_ENV == 'prod' }
             }
             steps {
                 withCredentials([
                     string(credentialsId: 'starExec-db-user',                   variable: 'STAREXEC_DB_USER'),
-		    string(credentialsId: 'starExec-db-password', 		variable: 'STAREXEC_DB_PASSWORD'),
-                    string(credentialsId: 'starExec-db-host',                   variable: 'STAREXEC_DB_HOST'),
-                    string(credentialsId: 'starExec-db-port',                   variable: 'STAREXEC_DB_PORT'),
-                    string(credentialsId: 'starExec-db-name',                   variable: 'STAREXEC_DB_NAME'),
-                    string(credentialsId: 'starExec-web-address',               variable: 'STAREXEC_WEB_ADDRESS'),
-                    string(credentialsId: 'starExec-proxy-address',             variable: 'STAREXEC_PROXY_ADDRESS'),
-                    string(credentialsId: 'starExec-proxy-port',                variable: 'STAREXEC_PROXY_PORT'),
-                    string(credentialsId: 'starExec-email-smtp',                variable: 'STAREXEC_EMAIL_SMTP'),
-                    string(credentialsId: 'starExec-email-port',                variable: 'STAREXEC_EMAIL_PORT'),
-                    string(credentialsId: 'starExec-email-user',                variable: 'STAREXEC_EMAIL_USER'),
-                    string(credentialsId: 'starExec-email-password',            variable: 'STAREXEC_EMAIL_PASSWORD'),
-                    string(credentialsId: 'starExec-container-host-data-path',  variable: 'STAREXEC_CONTAINER_HOST_DATA_PATH'),
+                    string(credentialsId: 'starExec-db-password',               variable: 'STAREXEC_DB_PASSWORD'),
                 ]) {
                     sh '''
                         echo "Validating production configuration..."
@@ -177,18 +168,7 @@ pipeline {
                         MISSING=""
                         for VAR in \
                             STAREXEC_DB_PASSWORD \
-                            STAREXEC_DB_USER \
-                            STAREXEC_DB_HOST \
-                            STAREXEC_DB_PORT \
-                            STAREXEC_DB_NAME \
-                            STAREXEC_WEB_ADDRESS \
-                            STAREXEC_PROXY_ADDRESS \
-                            STAREXEC_PROXY_PORT \
-                            STAREXEC_EMAIL_SMTP \
-                            STAREXEC_EMAIL_PORT \
-                            STAREXEC_EMAIL_USER \
-                            STAREXEC_EMAIL_PASSWORD \
-                            STAREXEC_CONTAINER_HOST_DATA_PATH
+                            STAREXEC_DB_USER
                         do
                             eval "VAL=\$$VAR"
                             if [ -z "$VAL" ]; then
@@ -328,7 +308,7 @@ pipeline {
                     echo "Waiting for application to become ready..."
                     sleep 15
 
-                    HEALTH_URL="${APP_URL}/login"
+                    HEALTH_URL="${APP_URL}/secure/index.jsp"
                     echo "Probing: ${HEALTH_URL}"
 
                     STATUS_CODE=$(curl --silent --output /dev/null \

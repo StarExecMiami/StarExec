@@ -539,7 +539,7 @@ public interface Backend {
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Priority 3: Helm Values (values-ENV.yaml)                  │
-│  values-dev.yaml, values-prod.yaml                         │
+│  values-local-dev.yaml, values-dev.yaml, values-prod.yaml  │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
