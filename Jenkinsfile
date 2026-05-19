@@ -195,12 +195,13 @@ pipeline {
                 expression { params.DEPLOY_ENV != 'prod' }
             }
             steps {
-                script {
+                withEnv(["DEPLOY_GIT_SHA=${env.GIT_SHA}"]) {
                     sh '''
                         echo "Deploying StarExec to Kubernetes..."
                         echo "  Namespace:   ${K8S_NAMESPACE}"
                         echo "  Release:     ${HELM_RELEASE}"
                         echo "  Environment: ${DEPLOY_ENV}"
+                        echo "  Git SHA:     ${DEPLOY_GIT_SHA}"
 
                         # Ensure namespace and DB secret exist
                         microk8s kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | microk8s kubectl apply -f -
@@ -218,7 +219,7 @@ pipeline {
                             charts/starexec \
                             --namespace ${K8S_NAMESPACE} \
                             --values ${HELM_VALUES} \
-                            --set image.tag=${GIT_SHA} \
+                            --set image.tag=${DEPLOY_GIT_SHA} \
                             --set image.pullPolicy=IfNotPresent \
                             --timeout 10m --no-hooks 2>&1
 
