@@ -55,7 +55,6 @@ pipeline {
         IMAGE_TAG       = "${params.DEPLOY_ENV}-${TAG_SUFFIX}"
         DEPLOY_ENV      = "${params.DEPLOY_ENV}"
         NOTIFICATION_EMAIL = "${params.NOTIFICATION_EMAIL?.trim() ?: 'dev-team@example.com'}"
-        GIT_SHA         = ""
     }
 
     // ---------------------------------------------------------------------------
@@ -68,8 +67,8 @@ pipeline {
                 deleteDir()
                 checkout scm
                 script {
-                    GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    env.GIT_SHA = GIT_SHA
+                    def gitSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.GIT_SHA = gitSha
 
                     // Determine namespace:
                     //   PR builds → ephemeral starexec-pr-{NUMBER}
@@ -95,7 +94,7 @@ pipeline {
                     }
 
                     echo "Build context:"
-                    echo "  GIT_SHA:       ${GIT_SHA}"
+                    echo "  GIT_SHA:       ${gitSha}"
                     echo "  Namespace:     ${K8S_NAMESPACE}"
                     echo "  Is PR:         ${IS_PR}"
                     echo "  Image tag:     ${IMAGE_TAG}"
@@ -103,7 +102,7 @@ pipeline {
                 sh """
                     echo "=== Build info ==================================="
                     echo "  Job        : ${env.JOB_NAME} #${env.BUILD_NUMBER}"
-                    echo "  Git SHA    : ${GIT_SHA}"
+                    echo "  Git SHA    : ${env.GIT_SHA}"
                     echo "  Namespace  : ${K8S_NAMESPACE}"
                     echo "  Environment: ${DEPLOY_ENV}"
                     echo "  Agent      : \$(hostname)"
@@ -117,14 +116,10 @@ pipeline {
         stage('Build Image') {
         // -----------------------------------------------------------------------
             steps {
-                script {
-                    GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    env.GIT_SHA = GIT_SHA
-                    echo "Building image with tag: ${GIT_SHA}"
-                }
+                echo "Building image with tag: ${env.GIT_SHA}"
                 sh """
-                    make build IMAGE_TAG=${GIT_SHA}
-                    podman images | grep "${GIT_SHA}" || { echo "ERROR: image not found"; exit 1; }
+                    make build IMAGE_TAG=${env.GIT_SHA}
+                    podman images | grep "${env.GIT_SHA}" || { echo "ERROR: image not found"; exit 1; }
                 """
             }
         }
@@ -195,45 +190,43 @@ pipeline {
                 expression { params.DEPLOY_ENV != 'prod' }
             }
             steps {
-                withEnv(["DEPLOY_GIT_SHA=${env.GIT_SHA}"]) {
-                    sh '''
-                        echo "Deploying StarExec to Kubernetes..."
-                        echo "  Namespace:   ${K8S_NAMESPACE}"
-                        echo "  Release:     ${HELM_RELEASE}"
-                        echo "  Environment: ${DEPLOY_ENV}"
-                        echo "  Git SHA:     ${DEPLOY_GIT_SHA}"
+                sh '''
+                    echo "Deploying StarExec to Kubernetes..."
+                    echo "  Namespace:   ${K8S_NAMESPACE}"
+                    echo "  Release:     ${HELM_RELEASE}"
+                    echo "  Environment: ${DEPLOY_ENV}"
+                    echo "  Git SHA:     ${GIT_SHA}"
 
-                        # Ensure namespace and DB secret exist
-                        microk8s kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | microk8s kubectl apply -f -
+                    # Ensure namespace and DB secret exist
+                    microk8s kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | microk8s kubectl apply -f -
 
-                        microk8s kubectl create secret generic starexec-postgres-credentials \
-                            --namespace ${K8S_NAMESPACE} \
-                            --from-literal=user=starexec \
-                            --from-literal=password=starexec_dev_password \
-                            --from-literal=database=starexec \
-                            --from-literal=rootPassword=starexec_dev_root_password \
-                            --dry-run=client -o yaml | microk8s kubectl apply -f -
+                    microk8s kubectl create secret generic starexec-postgres-credentials \
+                        --namespace ${K8S_NAMESPACE} \
+                        --from-literal=user=starexec \
+                        --from-literal=password=starexec_dev_password \
+                        --from-literal=database=starexec \
+                        --from-literal=rootPassword=starexec_dev_root_password \
+                        --dry-run=client -o yaml | microk8s kubectl apply -f -
 
-                        # Helm deploy with pinned image tag
-                        microk8s helm3 upgrade --install ${HELM_RELEASE} \
-                            charts/starexec \
-                            --namespace ${K8S_NAMESPACE} \
-                            --values ${HELM_VALUES} \
-                            --set image.tag=${DEPLOY_GIT_SHA} \
-                            --set image.pullPolicy=IfNotPresent \
-                            --timeout 10m --no-hooks 2>&1
+                    # Helm deploy with pinned image tag
+                    microk8s helm3 upgrade --install ${HELM_RELEASE} \
+                        charts/starexec \
+                        --namespace ${K8S_NAMESPACE} \
+                        --values ${HELM_VALUES} \
+                        --set image.tag=${GIT_SHA} \
+                        --set image.pullPolicy=IfNotPresent \
+                        --timeout 10m --no-hooks 2>&1
 
-                        echo "Waiting for deployment to become available..."
-                        microk8s kubectl wait --for=condition=available \
-                            --timeout=600s deployment/${HELM_RELEASE} \
-                            -n ${K8S_NAMESPACE} || true
+                    echo "Waiting for deployment to become available..."
+                    microk8s kubectl wait --for=condition=available \
+                        --timeout=600s deployment/${HELM_RELEASE} \
+                        -n ${K8S_NAMESPACE} || true
 
-                        echo "Running database migrations..."
-                        microk8s kubectl exec -n ${K8S_NAMESPACE} \
-                            deploy/${HELM_RELEASE} -c app \
-                            -- bash /usr/local/bin/migrations.sh 2>&1 || true
-                    '''
-                }
+                    echo "Running database migrations..."
+                    microk8s kubectl exec -n ${K8S_NAMESPACE} \
+                        deploy/${HELM_RELEASE} -c app \
+                        -- bash /usr/local/bin/migrations.sh 2>&1 || true
+                '''
             }
             post {
                 success {
@@ -259,9 +252,8 @@ pipeline {
             }
             steps {
                 input message: "Deploy StarExec to PRODUCTION? (${env.GIT_SHA})", ok: 'Deploy'
-                withEnv(["DEPLOY_GIT_SHA=${env.GIT_SHA}"]) {
-                    sh '''
-                    echo "PRODUCTION DEPLOYMENT — ${DEPLOY_GIT_SHA}"
+                sh '''
+                    echo "PRODUCTION DEPLOYMENT — ${GIT_SHA}"
                     BACKUP_DIR="/opt/jenkins/backups/starexec"
                     mkdir -p "${BACKUP_DIR}"
                     BACKUP_FILE="${BACKUP_DIR}/pre-deploy-$(date +%Y%m%d-%H%M%S).sql"
@@ -272,15 +264,14 @@ pipeline {
                         charts/starexec \
                         --namespace ${K8S_NAMESPACE} \
                         --values ${HELM_VALUES} \
-                        --set image.tag=${DEPLOY_GIT_SHA} \
+                        --set image.tag=${GIT_SHA} \
                         --set image.pullPolicy=IfNotPresent \
                         --atomic --timeout 15m --no-hooks 2>&1
                     microk8s kubectl wait --for=condition=available \
                         --timeout=600s deployment/${HELM_RELEASE} -n ${K8S_NAMESPACE}
                     microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} \
                         -c app -- bash /usr/local/bin/migrations.sh 2>&1 || true
-                    '''
-                }
+                '''
             }
             post {
                 success { echo "PRODUCTION DEPLOY SUCCESS: ${APP_URL}" }
@@ -317,7 +308,7 @@ pipeline {
                     STATUS_CODE=$(curl --silent --output /dev/null \
                                       --write-out "%{http_code}" \
                                       --max-time 30 \
-                                      "${HEALTH_URL}" || echo "000")
+                                      "${HEALTH_URL}" 2>/dev/null) || STATUS_CODE="000"
 
                     echo "HTTP status: ${STATUS_CODE}"
 
