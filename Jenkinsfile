@@ -54,6 +54,7 @@ pipeline {
         TAG_SUFFIX      = "${params.IMAGE_TAG_SUFFIX?.trim() ?: env.BUILD_NUMBER}"
         IMAGE_TAG       = "${params.DEPLOY_ENV}-${TAG_SUFFIX}"
         DEPLOY_ENV      = "${params.DEPLOY_ENV}"
+        DEPLOY_IMAGE_TAG = "latest"
         NOTIFICATION_EMAIL = "${params.NOTIFICATION_EMAIL?.trim() ?: 'dev-team@example.com'}"
     }
 
@@ -97,12 +98,14 @@ pipeline {
                     echo "  GIT_SHA:       ${gitSha}"
                     echo "  Namespace:     ${K8S_NAMESPACE}"
                     echo "  Is PR:         ${IS_PR}"
-                    echo "  Image tag:     ${IMAGE_TAG}"
+                    echo "  Local image:   ${gitSha}"
+                    echo "  Deploy image:  ${DEPLOY_IMAGE_TAG}"
                 }
                 sh """
                     echo "=== Build info ==================================="
                     echo "  Job        : ${env.JOB_NAME} #${env.BUILD_NUMBER}"
                     echo "  Git SHA    : ${env.GIT_SHA}"
+                    echo "  Deploy Tag : ${env.DEPLOY_IMAGE_TAG}"
                     echo "  Namespace  : ${K8S_NAMESPACE}"
                     echo "  Environment: ${DEPLOY_ENV}"
                     echo "  Agent      : \$(hostname)"
@@ -196,6 +199,7 @@ pipeline {
                     echo "  Release:     ${HELM_RELEASE}"
                     echo "  Environment: ${DEPLOY_ENV}"
                     echo "  Git SHA:     ${GIT_SHA}"
+                    echo "  Deploy tag:  ${DEPLOY_IMAGE_TAG}"
 
                     # Ensure namespace and DB secret exist
                     microk8s kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | microk8s kubectl apply -f -
@@ -208,12 +212,12 @@ pipeline {
                         --from-literal=rootPassword=starexec_dev_root_password \
                         --dry-run=client -o yaml | microk8s kubectl apply -f -
 
-                    # Helm deploy with pinned image tag
+                    # Helm deploy with published GHCR tag
                     microk8s helm3 upgrade --install ${HELM_RELEASE} \
                         charts/starexec \
                         --namespace ${K8S_NAMESPACE} \
                         --values ${HELM_VALUES} \
-                        --set image.tag=${GIT_SHA} \
+                        --set image.tag=${DEPLOY_IMAGE_TAG} \
                         --set image.pullPolicy=IfNotPresent \
                         --timeout 10m --no-hooks 2>&1
 
@@ -254,6 +258,7 @@ pipeline {
                 input message: "Deploy StarExec to PRODUCTION? (${env.GIT_SHA})", ok: 'Deploy'
                 sh '''
                     echo "PRODUCTION DEPLOYMENT — ${GIT_SHA}"
+                    echo "Deploy tag: ${DEPLOY_IMAGE_TAG}"
                     BACKUP_DIR="/opt/jenkins/backups/starexec"
                     mkdir -p "${BACKUP_DIR}"
                     BACKUP_FILE="${BACKUP_DIR}/pre-deploy-$(date +%Y%m%d-%H%M%S).sql"
@@ -264,7 +269,7 @@ pipeline {
                         charts/starexec \
                         --namespace ${K8S_NAMESPACE} \
                         --values ${HELM_VALUES} \
-                        --set image.tag=${GIT_SHA} \
+                        --set image.tag=${DEPLOY_IMAGE_TAG} \
                         --set image.pullPolicy=IfNotPresent \
                         --atomic --timeout 15m --no-hooks 2>&1
                     microk8s kubectl wait --for=condition=available \
@@ -360,6 +365,8 @@ Pipeline completed successfully.
   Agent       : ${env.NODE_NAME}
 
 Application URL: ${APP_URL}
+
+Deployed image tag: ${DEPLOY_IMAGE_TAG}
 
 Build log: ${env.BUILD_URL}
 """.stripIndent()
