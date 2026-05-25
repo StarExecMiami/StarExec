@@ -247,10 +247,11 @@ public class Registration extends HttpServlet {
 					log.warn("Failed to create personal subspace for user " + user.getEmail(), e);
 					// Don't fail the registration if personal space creation fails
 				}
-						try {
+			try {
 				Mail.sendPassword(user, request.getParameter(Registration.USER_PASSWORD));
 			} catch (Exception e) {
 				log.warn("Failed to send password email to user " + user.getEmail(), e);
+				// Fix: keep success=true because account creation succeeded and only follow-up email delivery failed — see GitHub issue #85 audit
 				return new ValidatorStatusCode(true, "email_failed");
 			}
 				return new ValidatorStatusCode(true);
@@ -273,6 +274,7 @@ public class Registration extends HttpServlet {
 					Mail.sendActivationCode(user, code);
 				} catch (Exception e) {
 					log.warn("Failed to send activation email to user " + user.getEmail(), e);
+					// Fix: keep success=true because registration succeeded and only follow-up email delivery failed — see GitHub issue #85 audit
 					return new ValidatorStatusCode(true, "email_failed");
 				}
 				return new ValidatorStatusCode(true);

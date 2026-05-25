@@ -117,6 +117,7 @@ public class Verify extends HttpServlet {
 		}
 
 		String status = "";
+		boolean success = true;
 		switch (verdict) {
 		case Web.APPROVE_COMMUNITY_REQUEST:
 			try {
@@ -125,6 +126,8 @@ public class Verify extends HttpServlet {
 			} catch (StarExecException e) {
 				log.error("Failed to approve community request", e);
 				status = "Failed to approve the user.";
+				// Fix: was success=true for failed approval branch — see GitHub issue #85 audit
+				success = false;
 			}
 			break;
 		case Web.DECLINE_COMMUNITY_REQUEST:
@@ -136,7 +139,7 @@ public class Verify extends HttpServlet {
 		if (sentFromCommunityPage) {
 			response.setContentType("application/json");
 			response.getWriter()
-			        .write(gson.toJson(new ValidatorStatusCode(true, status)));
+			        .write(gson.toJson(new ValidatorStatusCode(success, status)));
 		} else {
 			response.sendRedirect(Util.docRoot("public/messages/leader_response.jsp"));
 		}

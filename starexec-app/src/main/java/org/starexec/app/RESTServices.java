@@ -3795,7 +3795,8 @@ public class RESTServices {
 		try {
 			boolean success = Settings.deleteProfile(id);
 			// Passed validation AND Database update successful
-			return success ? gson.toJson(new ValidatorStatusCode(true, "Community edit successful"))
+			// Fix: was "Community edit successful" — see GitHub issue #85 audit
+			return success ? gson.toJson(new ValidatorStatusCode(true, "Default settings profile deleted successfully"))
 					: gson.toJson(ERROR_DATABASE);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -3966,7 +3967,8 @@ public class RESTServices {
 			}
 
 			// Passed validation AND Database update successful
-			return success ? gson.toJson(new ValidatorStatusCode(true, "Community edit successful"))
+			// Fix: was "Community edit successful" — see GitHub issue #85 audit
+			return success ? gson.toJson(new ValidatorStatusCode(true, "Default settings updated successfully"))
 					: gson.toJson(ERROR_DATABASE);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -4217,7 +4219,8 @@ public class RESTServices {
 		if (!Solvers.restoreRecycledSolvers(userId)) {
 			return gson.toJson(ERROR_DATABASE);
 		}
-		return gson.toJson(new ValidatorStatusCode(true, "Solvers restored successfully"));
+		// Fix: was "Solvers restored successfully" — see GitHub issue #85 audit
+		return gson.toJson(new ValidatorStatusCode(true, "Solvers deleted successfully"));
 	}
 
 	/**
@@ -4604,7 +4607,8 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 		return Users.associate(selectedUsers, spaceId, copyToSubspaces, requestUserId)
-				? gson.toJson(new ValidatorStatusCode(true, "User(s) moved successfully"))
+				// Fix: was "User(s) moved successfully" — see GitHub issue #85 audit
+				? gson.toJson(new ValidatorStatusCode(true, "User(s) added successfully"))
 				: gson.toJson(ERROR_DATABASE);
 	}
 
@@ -4687,7 +4691,9 @@ public class RESTServices {
 			// if we did a copy, the solvers are already associated with the root space, so
 			// we don't need to link to that one
 			return Solvers.associate(selectedSolvers, spaceId, copyToSubspaces, requestUserId, !copy)
-					? gson.toJson(new ValidatorStatusCode(true, "Solver(s) moved successfully"))
+					// Fix: was "Solver(s) moved successfully" — see GitHub issue #85 audit
+					? gson.toJson(new ValidatorStatusCode(true,
+							copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully"))
 					: gson.toJson(ERROR_DATABASE);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
@@ -4829,7 +4835,8 @@ public class RESTServices {
 		boolean success = Jobs.associate(selectedJobs, spaceId);
 
 		// Return a value based on results from database operation
-		return success ? gson.toJson(new ValidatorStatusCode(true, "Job(s) moved successfully"))
+		// Fix: was "Job(s) moved successfully" — see GitHub issue #85 audit
+		return success ? gson.toJson(new ValidatorStatusCode(true, "Job(s) added successfully"))
 				: gson.toJson(ERROR_DATABASE);
 	}
 
@@ -5533,7 +5540,8 @@ public class RESTServices {
 			}
 		};
 		Util.threadPoolExecute(removeSubspacesProcess);
-		return gson.toJson(new ValidatorStatusCode(true, "Subspaces are being deleted."));
+		// Fix: was "Subspaces are being deleted." — see GitHub issue #85 audit
+		return gson.toJson(new ValidatorStatusCode(true, "Subspaces are being removed."));
 	}
 
 	/**
@@ -7359,7 +7367,8 @@ public class RESTServices {
 		log.debug("made it into readOnly API CALL readOnly: " + readOnly);
 		int userId = SessionUtil.getUserId(request);
 		if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {
-			return gson.toJson(new ValidatorStatusCode(true, "Only Admins can set read only"));
+			// Fix: was success=true with admin permission failure — see GitHub issue #85 audit
+			return gson.toJson(new ValidatorStatusCode(false, "Only admins can set read only mode."));
 		}
 		try {
 			RESTHelpers.setReadOnly(readOnly);
@@ -7381,7 +7390,8 @@ public class RESTServices {
 	public String freezePrimitives(@FormParam("frozen") boolean frozen, @Context HttpServletRequest request) {
 		int userId = SessionUtil.getUserId(request);
 		if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {
-			return gson.toJson(new ValidatorStatusCode(true, "Only Admins can freeze or unfreeze primitives"));
+			// Fix: was success=true with admin permission failure — see GitHub issue #85 audit
+			return gson.toJson(new ValidatorStatusCode(false, "Only admins can freeze or unfreeze primitives."));
 		}
 		try {
 			RESTHelpers.setFreezePrimitives(frozen);
