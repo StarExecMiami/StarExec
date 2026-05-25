@@ -4,7 +4,9 @@ import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.app.RESTServices;
+import org.starexec.data.to.UploadSession;
 import org.starexec.data.security.UploadSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
 
 import javax.servlet.ReadListener;
 import javax.servlet.ServletInputStream;
@@ -16,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class RESTServicesUploadSessionTests {
@@ -92,5 +95,57 @@ public class RESTServicesUploadSessionTests {
 		Files.deleteIfExists(source);
 		Files.deleteIfExists(target);
 		Files.deleteIfExists(tempDir);
+	}
+
+	@Test
+	public void cleanupUploadSessionChunksDeletesChunkDirectory() throws Exception {
+		RESTServices services = new RESTServices();
+		Path tempDir = Files.createTempDirectory("rest-services-upload-cleanup");
+		Path chunksDir = tempDir.resolve("archive.part.chunks");
+		Files.createDirectories(chunksDir);
+		Files.write(chunksDir.resolve("chunk_0.bin"), "data".getBytes(StandardCharsets.UTF_8));
+
+		UploadSession session = new UploadSession();
+		session.setId(11L);
+
+		Method method = RESTServices.class.getDeclaredMethod(
+				"cleanupUploadSessionChunks",
+				UploadSession.class,
+				java.nio.file.Path.class);
+		method.setAccessible(true);
+		method.invoke(services, session, chunksDir);
+
+		assertFalse(Files.exists(chunksDir));
+		Files.deleteIfExists(tempDir);
+	}
+
+	@Test
+	public void assembleUploadSessionChunksRemovesAssemblingFileWhenSizeMismatchOccurs() throws Exception {
+		RESTServices services = new RESTServices();
+		Path tempDir = Files.createTempDirectory("rest-services-upload-assemble");
+		Path chunksDir = tempDir.resolve("archive.part.chunks");
+		Files.createDirectories(chunksDir);
+		Files.write(chunksDir.resolve("chunk_0.bin"), "data".getBytes(StandardCharsets.UTF_8));
+
+		UploadSession session = new UploadSession();
+		session.setId(12L);
+		session.setStagingPath(tempDir.resolve("archive.part").toString());
+		session.setTotalChunks(1);
+		session.setTotalBytes(10L);
+
+		Path finalArchive = tempDir.resolve("archive.tgz");
+
+		Method method = RESTServices.class.getDeclaredMethod(
+				"assembleUploadSessionChunks",
+				UploadSession.class,
+				java.nio.file.Path.class,
+				java.nio.file.Path.class);
+		method.setAccessible(true);
+		ValidatorStatusCode status = (ValidatorStatusCode)method.invoke(services, session, chunksDir, finalArchive);
+
+		assertFalse(status.isSuccess());
+		assertFalse(Files.exists(Path.of(session.getStagingPath() + ".assembling")));
+		assertFalse(Files.exists(finalArchive));
+		org.apache.commons.io.FileUtils.deleteQuietly(tempDir.toFile());
 	}
 }

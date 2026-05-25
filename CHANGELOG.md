@@ -8,10 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-_No new changes._
+- **Upload extraction controls**: Added `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` and `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` for resumable benchmark upload extraction tuning and safety enforcement.
 
 ### Fixed
-_No new changes._
+- **Resumable benchmark uploads**
+  - `.tar`, `.tar.gz`, and `.tgz` uploads are now extracted in-process instead of relying on an external `tar` command with the global shell timeout.
+  - Async upload extraction now uses temporary `.extracting` directories before promoting the final extracted tree, reducing cleanup and crash-recovery hazards.
+  - Upload-session chunk directories are cleaned up after successful finalization, and partial `.assembling` files are removed on failed assembly.
+  - Extraction cleanup now targets only unfinished temporary extraction directories, avoiding accidental removal of finalized benchmark files referenced by the database.
+  - Async upload extraction now enforces configured extracted-size limits together with the uploader's remaining disk quota.
 
 ## [2.4.0] - 2026-05-06
 

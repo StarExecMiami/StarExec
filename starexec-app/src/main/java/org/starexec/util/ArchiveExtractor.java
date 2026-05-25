@@ -1,15 +1,24 @@
 package org.starexec.util;
 
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
+import org.starexec.config.EnvironmentConfig;
 import org.starexec.logger.StarLogger;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
-import java.nio.file.FileVisitResult;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -24,9 +33,57 @@ public class ArchiveExtractor {
     
     // Safety limits
     private static final long MAX_UNCOMPRESSED_SIZE_BYTES = 100L * 1024 * 1024 * 1024; // 100GB max
-    private static final int MAX_ENTRY_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10GB per file
+    private static final long MAX_ENTRY_SIZE_BYTES = 10L * 1024 * 1024 * 1024; // 10GB per file
     private static final int BUFFER_SIZE = 8192;
     private static final int MAX_ENTRY_NAME_LENGTH = 255;
+
+    public static final class ExtractionSettings {
+        private final long maxUncompressedSizeBytes;
+        private final int timeoutSeconds;
+        private final long deadlineEpochMillis;
+        private final Runnable progressCallback;
+        private final BooleanSupplier cancellationRequested;
+
+        private ExtractionSettings(long maxUncompressedSizeBytes, int timeoutSeconds, Runnable progressCallback,
+                                   BooleanSupplier cancellationRequested) {
+            this.maxUncompressedSizeBytes = maxUncompressedSizeBytes;
+            this.timeoutSeconds = timeoutSeconds;
+            this.deadlineEpochMillis = timeoutSeconds > 0
+                ? System.currentTimeMillis() + (timeoutSeconds * 1000L)
+                : Long.MAX_VALUE;
+            this.progressCallback = progressCallback;
+            this.cancellationRequested = cancellationRequested;
+        }
+
+        public static ExtractionSettings defaults() {
+            return new ExtractionSettings(MAX_UNCOMPRESSED_SIZE_BYTES, 0, null, null);
+        }
+
+        public static ExtractionSettings fromEnvironment() {
+            return new ExtractionSettings(
+                EnvironmentConfig.getUploadExtractionMaxUncompressedBytes(),
+                EnvironmentConfig.getUploadExtractionTimeoutSeconds(),
+                null,
+                null
+            );
+        }
+
+        public ExtractionSettings withMaxUncompressedSizeBytes(long maxBytes) {
+            return new ExtractionSettings(maxBytes, timeoutSeconds, progressCallback, cancellationRequested);
+        }
+
+        public ExtractionSettings withTimeoutSeconds(int newTimeoutSeconds) {
+            return new ExtractionSettings(maxUncompressedSizeBytes, newTimeoutSeconds, progressCallback, cancellationRequested);
+        }
+
+        public ExtractionSettings withProgressCallback(Runnable newProgressCallback) {
+            return new ExtractionSettings(maxUncompressedSizeBytes, timeoutSeconds, newProgressCallback, cancellationRequested);
+        }
+
+        public ExtractionSettings withCancellationRequested(BooleanSupplier newCancellationRequested) {
+            return new ExtractionSettings(maxUncompressedSizeBytes, timeoutSeconds, progressCallback, newCancellationRequested);
+        }
+    }
     
     /**
      * Extracts an archive safely with circuit breaker protection.
@@ -37,7 +94,7 @@ public class ArchiveExtractor {
      * @throws IOException if extraction fails or safety limits are exceeded
      */
     public static Path extractSafely(String archivePath, Path extractDir) throws IOException {
-        return extractSafely(archivePath, extractDir, null);
+        return extractSafely(archivePath, extractDir, null, ExtractionSettings.defaults());
     }
     
     /**
@@ -51,6 +108,11 @@ public class ArchiveExtractor {
      * @throws IOException if extraction fails or safety limits are exceeded
      */
     public static Path extractSafely(String archivePath, Path extractDir, AtomicInteger extractedCount) throws IOException {
+        return extractSafely(archivePath, extractDir, extractedCount, ExtractionSettings.defaults());
+    }
+
+    public static Path extractSafely(String archivePath, Path extractDir, AtomicInteger extractedCount,
+                                     ExtractionSettings settings) throws IOException {
         String method = "extractSafely";
         
         // Validate archive exists
@@ -64,10 +126,10 @@ public class ArchiveExtractor {
         
         try {
             if (lowerName.endsWith(".zip")) {
-                return extractZip(archiveFile.toPath(), extractDir, extractedCount);
-            } else if (lowerName.endsWith(".tar") || lowerName.endsWith(".tar.gz") || 
-                       lowerName.endsWith(".tgz") || lowerName.endsWith(".gz")) {
-                return extractTar(archiveFile.toPath(), extractDir, extractedCount);
+                return extractZip(archiveFile.toPath(), extractDir, extractedCount, settings);
+            } else if (lowerName.endsWith(".tar") || lowerName.endsWith(".tar.gz") ||
+                       lowerName.endsWith(".tgz")) {
+                return extractTar(archiveFile.toPath(), extractDir, extractedCount, settings);
             } else {
                 throw new IOException("Unsupported archive format: " + archiveFile.getName());
             }
@@ -82,9 +144,10 @@ public class ArchiveExtractor {
     /**
      * Extracts a ZIP file with zip bomb protection.
      */
-    private static Path extractZip(Path archivePath, Path extractDir, AtomicInteger extractedCount) throws IOException {
+    private static Path extractZip(Path archivePath, Path extractDir, AtomicInteger extractedCount,
+                                   ExtractionSettings settings) throws IOException {
         String method = "extractZip";
-        
+
         long totalUncompressedSize = 0;
         int entryCount = 0;
         
@@ -94,6 +157,7 @@ public class ArchiveExtractor {
             
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
+                checkExtractionState(settings, archivePath, totalUncompressedSize);
                 // Validate entry name
                 String entryName = entry.getName();
                 if (entryName.length() > MAX_ENTRY_NAME_LENGTH) {
@@ -105,38 +169,8 @@ public class ArchiveExtractor {
                     continue;
                 }
                 
-                // Get entry size (may be -1 for STORED method)
-                long entrySize = entry.getSize();
-                
-                // Handle zip bombs (entries with no declared size)
-                if (entrySize < 0) {
-                    // For STORED method without size, we must count as we read
-                    // Limit to reasonable single file size
-                    entrySize = MAX_ENTRY_SIZE_BYTES;
-                }
-                
-                // Check individual file size limit
-                if (entrySize > MAX_ENTRY_SIZE_BYTES) {
-                    throw new SecurityException("Entry too large: " + entryName + 
-                            " (" + entrySize + " bytes)");
-                }
-                
-                // Accumulate total size
-                totalUncompressedSize += entrySize;
-                
-                // Check total size limit (circuit breaker)
-                if (totalUncompressedSize > MAX_UNCOMPRESSED_SIZE_BYTES) {
-                    throw new SecurityException("Total uncompressed size exceeds " + 
-                            MAX_UNCOMPRESSED_SIZE_BYTES + " bytes");
-                }
-                
                 // Extract entry
-                Path targetPath = extractDir.resolve(entryName);
-                
-                // Security: Prevent zip slip vulnerability (path traversal)
-                if (!targetPath.normalize().startsWith(extractDir.normalize())) {
-                    throw new SecurityException("Entry attempts path traversal: " + entryName);
-                }
+                Path targetPath = validateTargetPath(extractDir, entryName);
                 
                 // Create parent directories
                 Files.createDirectories(targetPath.getParent());
@@ -144,10 +178,16 @@ public class ArchiveExtractor {
                 // Write file
                 try (OutputStream os = Files.newOutputStream(targetPath);
                      BufferedOutputStream bos = new BufferedOutputStream(os)) {
-                    IOUtils.copy(zis, bos);
+                    long entryBytes = copyEntryData(zis, bos, entryName, archivePath, settings, totalUncompressedSize);
+                    if (entryBytes > MAX_ENTRY_SIZE_BYTES) {
+                        throw new SecurityException("Entry too large: " + entryName + " (" + entryBytes + " bytes)");
+                    }
+                    totalUncompressedSize += entryBytes;
+                    validateTotalSize(totalUncompressedSize, settings);
                 }
                 
                 entryCount++;
+                invokeProgressCallback(settings);
                 zis.closeEntry();
             }
         }
@@ -167,17 +207,55 @@ public class ArchiveExtractor {
      * Extracts a TAR/TGZ file.
      * Note: For simplicity, this is a placeholder. Production should use Apache Commons Compress.
      */
-    private static Path extractTar(Path archivePath, Path extractDir, AtomicInteger extractedCount) throws IOException {
+    private static Path extractTar(Path archivePath, Path extractDir, AtomicInteger extractedCount,
+                                   ExtractionSettings settings) throws IOException {
         String method = "extractTar";
-        
-        // For tar extraction, we need to count files after extraction
-        // First delegate to existing ArchiveUtil
-        if (!ArchiveUtil.extractArchive(archivePath.toString(), extractDir.toString())) {
-            throw new IOException("Failed to extract archive: " + archivePath);
+
+        long totalUncompressedSize = 0L;
+        int count = 0;
+
+        try (InputStream fileInput = Files.newInputStream(archivePath);
+             BufferedInputStream bufferedInput = new BufferedInputStream(fileInput);
+             InputStream archiveInput = archivePath.getFileName().toString().toLowerCase().endsWith(".tar")
+                 ? bufferedInput
+                 : new GzipCompressorInputStream(bufferedInput);
+             TarArchiveInputStream tarInput = new TarArchiveInputStream(archiveInput)) {
+
+            TarArchiveEntry entry;
+            while ((entry = tarInput.getNextTarEntry()) != null) {
+                checkExtractionState(settings, archivePath, totalUncompressedSize);
+                String entryName = entry.getName();
+                if (entryName == null || entryName.isEmpty()) {
+                    continue;
+                }
+                if (entryName.length() > MAX_ENTRY_NAME_LENGTH) {
+                    throw new SecurityException("Entry name too long: " + entryName);
+                }
+                if (entry.isSymbolicLink() || entry.isLink()) {
+                    throw new SecurityException("Archive contains unsupported link entry: " + entryName);
+                }
+
+                Path targetPath = validateTargetPath(extractDir, entryName);
+                if (entry.isDirectory()) {
+                    Files.createDirectories(targetPath);
+                    continue;
+                }
+
+                Files.createDirectories(targetPath.getParent());
+                try (OutputStream outputStream = Files.newOutputStream(targetPath);
+                     BufferedOutputStream bufferedOutput = new BufferedOutputStream(outputStream)) {
+                    long entryBytes = copyEntryData(tarInput, bufferedOutput, entryName, archivePath, settings, totalUncompressedSize);
+                    if (entryBytes > MAX_ENTRY_SIZE_BYTES) {
+                        throw new SecurityException("Entry too large: " + entryName + " (" + entryBytes + " bytes)");
+                    }
+                    totalUncompressedSize += entryBytes;
+                    validateTotalSize(totalUncompressedSize, settings);
+                }
+
+                count++;
+                invokeProgressCallback(settings);
+            }
         }
-        
-        // Count the extracted files by walking the directory
-        int count = countExtractedFiles(extractDir);
         
         // Set the extracted count if requested
         if (extractedCount != null) {
@@ -235,7 +313,7 @@ public class ArchiveExtractor {
      */
     public static Path extractWithCleanup(String archivePath, Path extractDir) throws IOException {
         // Call the overloaded version with null for count (backward compatible)
-        return extractWithCleanup(archivePath, extractDir, null);
+        return extractWithCleanup(archivePath, extractDir, null, ExtractionSettings.defaults());
     }
     
     /**
@@ -249,6 +327,11 @@ public class ArchiveExtractor {
      * @throws IOException if extraction fails
      */
     public static Path extractWithCleanup(String archivePath, Path extractDir, AtomicInteger extractedCount) throws IOException {
+        return extractWithCleanup(archivePath, extractDir, extractedCount, ExtractionSettings.defaults());
+    }
+
+    public static Path extractWithCleanup(String archivePath, Path extractDir, AtomicInteger extractedCount,
+                                          ExtractionSettings settings) throws IOException {
         String method = "extractWithCleanup";
         
         boolean success = false;
@@ -258,7 +341,7 @@ public class ArchiveExtractor {
             Files.createDirectories(extractDir);
             
             // Extract
-            Path result = extractSafely(archivePath, extractDir, extractedCount);
+            Path result = extractSafely(archivePath, extractDir, extractedCount, settings);
             success = true;
             return result;
             
@@ -300,6 +383,62 @@ public class ArchiveExtractor {
         } catch (IOException e) {
             log.error(method, "Failed to cleanup extraction directory: " + extractPath, e);
             return false;
+        }
+    }
+
+    private static Path validateTargetPath(Path extractDir, String entryName) throws IOException {
+        Path targetPath = extractDir.resolve(entryName).normalize();
+        if (!targetPath.startsWith(extractDir.normalize())) {
+            throw new SecurityException("Entry attempts path traversal: " + entryName);
+        }
+        return targetPath;
+    }
+
+    private static long copyEntryData(InputStream inputStream, OutputStream outputStream, String entryName,
+                                      Path archivePath, ExtractionSettings settings, long bytesExtractedSoFar)
+        throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        long entryBytes = 0L;
+        int read;
+        while ((read = inputStream.read(buffer)) != -1) {
+            long projectedEntryBytes = entryBytes + read;
+            long projectedTotalBytes = bytesExtractedSoFar + projectedEntryBytes;
+            checkExtractionState(settings, archivePath, projectedTotalBytes);
+            if (projectedEntryBytes > MAX_ENTRY_SIZE_BYTES) {
+                throw new SecurityException("Entry too large: " + entryName + " (" + projectedEntryBytes + " bytes)");
+            }
+            outputStream.write(buffer, 0, read);
+            entryBytes = projectedEntryBytes;
+        }
+        return entryBytes;
+    }
+
+    private static void validateTotalSize(long totalUncompressedSize, ExtractionSettings settings) {
+        long configuredLimit = settings.maxUncompressedSizeBytes > 0
+            ? settings.maxUncompressedSizeBytes
+            : MAX_UNCOMPRESSED_SIZE_BYTES;
+        if (totalUncompressedSize > configuredLimit) {
+            throw new SecurityException("Total uncompressed size exceeds " + configuredLimit + " bytes");
+        }
+    }
+
+    private static void checkExtractionState(ExtractionSettings settings, Path archivePath, long bytesExtracted)
+        throws IOException {
+        validateTotalSize(bytesExtracted, settings);
+        if (settings.timeoutSeconds > 0 && System.currentTimeMillis() > settings.deadlineEpochMillis) {
+            throw new IOException(
+                "Archive extraction timed out after " + settings.timeoutSeconds +
+                    " seconds for " + archivePath
+            );
+        }
+        if (settings.cancellationRequested != null && settings.cancellationRequested.getAsBoolean()) {
+            throw new IOException("Archive extraction cancelled for " + archivePath);
+        }
+    }
+
+    private static void invokeProgressCallback(ExtractionSettings settings) {
+        if (settings.progressCallback != null) {
+            settings.progressCallback.run();
         }
     }
     

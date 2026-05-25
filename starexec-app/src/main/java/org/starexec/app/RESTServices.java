@@ -767,6 +767,7 @@ public class RESTServices {
 		}
 
 		UploadSessions.completeSession(sessionId, jobId);
+		cleanupUploadSessionChunks(session, chunksDir);
 		Map<String, Object> response = new HashMap<>();
 		response.put("success", true);
 		response.put("sessionId", sessionId);
@@ -812,6 +813,7 @@ public class RESTServices {
 
 	private ValidatorStatusCode assembleUploadSessionChunks(UploadSession session, java.nio.file.Path chunksDir, java.nio.file.Path outputFile) {
 		java.nio.file.Path tempOutput = Paths.get(session.getStagingPath() + ".assembling");
+		boolean assembled = false;
 		try (FileChannel out = FileChannel.open(
 			tempOutput,
 			StandardOpenOption.CREATE,
@@ -850,12 +852,31 @@ public class RESTServices {
 				return new ValidatorStatusCode(false, "Uploaded archive size does not match the expected size");
 			}
 			moveWithAtomicFallback(tempOutput, outputFile);
+			assembled = true;
 		} catch (IOException e) {
 			log.error("assembleUploadSessionChunks", "Failed finalizing assembled archive for session " + session.getId(), e);
 			return new ValidatorStatusCode(false, "Failed to finalize the uploaded archive");
+		} finally {
+			if (!assembled) {
+				try {
+					Files.deleteIfExists(tempOutput);
+				} catch (IOException cleanupError) {
+					log.debug("assembleUploadSessionChunks", "Failed to cleanup partial assembled archive for session " + session.getId(), cleanupError);
+				}
+			}
 		}
 
 		return new ValidatorStatusCode(true);
+	}
+
+	private void cleanupUploadSessionChunks(UploadSession session, java.nio.file.Path chunksDir) {
+		try {
+			if (Files.exists(chunksDir)) {
+				org.apache.commons.io.FileUtils.deleteDirectory(chunksDir.toFile());
+			}
+		} catch (IOException e) {
+			log.warn("cleanupUploadSessionChunks", "Failed to cleanup chunk files for session " + session.getId(), e);
+		}
 	}
 
 	@POST

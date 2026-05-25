@@ -40,6 +40,21 @@ public class EnvironmentConfig {
         return defaultValue;
     }
 
+    /**
+     * Get an environment variable as long with a default value.
+     */
+    private static long getEnvLong(String key, long defaultValue) {
+        String value = System.getenv(key);
+        if (value != null && !value.trim().isEmpty()) {
+            try {
+                return Long.parseLong(value);
+            } catch (NumberFormatException e) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
+    }
+
     // Database Configuration
     public static String getDbName() {
         return getEnv("STAREXEC_DB_NAME", "starexec");
@@ -258,6 +273,23 @@ public class EnvironmentConfig {
      */
     public static int getUploadSessionChunkSizeBytes() {
         return getEnvInt("STAREXEC_UPLOAD_SESSION_CHUNK_SIZE_BYTES", 2 * 1024 * 1024);
+    }
+
+    /**
+     * Maximum number of seconds an async benchmark archive extraction may run.
+     */
+    public static int getUploadExtractionTimeoutSeconds() {
+        return getEnvInt("STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS", 1800);
+    }
+
+    /**
+     * Global safety cap for async benchmark archive extraction output size.
+     */
+    public static long getUploadExtractionMaxUncompressedBytes() {
+        return getEnvLong(
+            "STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES",
+            100L * 1024 * 1024 * 1024
+        );
     }
 
     /**

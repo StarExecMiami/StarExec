@@ -1,5 +1,8 @@
 package org.starexec.test.unit.util;
 
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
@@ -7,138 +10,139 @@ import org.junit.Test;
 import org.starexec.util.ArchiveExtractor;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
-/**
- * Tests for ArchiveExtractor safety features.
- */
 public class ArchiveExtractorTest {
-    
+
     private Path tempDir;
-    
+
     @Before
     public void setUp() throws IOException {
         tempDir = Files.createTempDirectory("archive-test-");
     }
-    
+
     @After
     public void tearDown() {
-        // Cleanup
-        try {
-            if (tempDir != null && tempDir.toFile().exists()) {
-                FileUtils.deleteDirectory(tempDir.toFile());
-            }
-        } catch (IOException e) {
-            // Ignore cleanup errors
-        }
+        FileUtils.deleteQuietly(tempDir.toFile());
     }
-    
-    /**
-     * Test 1: Mid-flight crash simulation.
-     * Simulates a database failure during processing and verifies
-     * that the job can be retried without data duplication.
-     * 
-     * This test verifies the idempotency tracking mechanism.
-     */
+
     @Test
-    public void testMidFlightCrashIdempotency() throws Exception {
-        // Simulate job progress tracking
-        int lastProcessedIndex = 0;
-        String lastProcessedPath = null;
-        
-        // Simulate processing 100 items
-        lastProcessedIndex = 100;
-        lastProcessedPath = "/path/to/benchmark_100.txt";
-        
-        // On retry, we should resume from this point
-        assertTrue("Should detect this is a retry", lastProcessedIndex > 0);
-        assertEquals("Should track last processed path", "/path/to/benchmark_100.txt", lastProcessedPath);
-        
-        // In the actual implementation, we would skip items up to this index
-        System.out.println("Idempotency: Would skip items 0-" + lastProcessedIndex + 
-                          " and resume from " + lastProcessedPath);
-    }
-    
-    /**
-     * Test 2: Disk cleanup on failure.
-     * Verifies that if extraction fails or is interrupted,
-     * the temporary directory is cleaned up.
-     */
-    @Test
-    public void testCleanupOnFailure() throws IOException {
+    public void cleanupRemovesExtractionDirectory() throws IOException {
         Path extractDir = tempDir.resolve("extract");
         Files.createDirectories(extractDir);
-        
-        // Create some test files
-        Files.createFile(extractDir.resolve("test1.txt"));
-        Files.createFile(extractDir.resolve("test2.txt"));
-        
-        // Verify files exist
-        assertTrue("Test file 1 should exist", Files.exists(extractDir.resolve("test1.txt")));
-        assertTrue("Test file 2 should exist", Files.exists(extractDir.resolve("test2.txt")));
-        
-        // Simulate cleanup
-        boolean cleaned = ArchiveExtractor.cleanup(extractDir.toString());
-        
-        assertTrue("Cleanup should succeed", cleaned);
-        assertFalse("Directory should be deleted", Files.exists(extractDir));
+        Files.createFile(extractDir.resolve("test.txt"));
+
+        assertTrue(ArchiveExtractor.cleanup(extractDir.toString()));
+        assertFalse(Files.exists(extractDir));
     }
-    
-    /**
-     * Test 3: Zip bomb protection limits.
-     * Verifies that the extraction respects size limits.
-     * 
-     * Note: This test creates a small "bomb" to verify the mechanism works.
-     * In production, you'd test with actual large files.
-     */
+
     @Test
-    public void testSizeLimits() {
-        // Test the constants
-        long maxUncompressed = 100L * 1024 * 1024 * 1024; // 100GB
-        long maxEntrySize = 10L * 1024 * 1024 * 1024; // 10GB
-        
-        assertTrue("Max uncompressed should be > 0", maxUncompressed > 0);
-        assertTrue("Max entry should be > 0", maxEntrySize > 0);
-        assertTrue("Max entry should be < max uncompressed", maxEntrySize < maxUncompressed);
-        
-        // Verify that a file exceeding the limit would be rejected
-        long hugeFileSize = maxEntrySize + 1;
-        assertTrue("Files exceeding max entry size should be rejected", 
-                  hugeFileSize > maxEntrySize);
-        
-        System.out.println("Safety limits: maxUncompressed=" + maxUncompressed + 
-                          ", maxEntry=" + maxEntrySize);
+    public void extractTarGzUsesInProcessExtraction() throws Exception {
+        Path archive = createTarGzArchive("bench/file1.p", "content-1", "bench/file2.p", "content-2");
+        Path extractDir = tempDir.resolve("out");
+        AtomicInteger extractedCount = new AtomicInteger();
+
+        ArchiveExtractor.extractWithCleanup(
+            archive.toString(),
+            extractDir,
+            extractedCount,
+            ArchiveExtractor.ExtractionSettings.defaults().withTimeoutSeconds(30)
+        );
+
+        assertTrue(Files.exists(extractDir.resolve("bench/file1.p")));
+        assertTrue(Files.exists(extractDir.resolve("bench/file2.p")));
+        assertEquals(2, extractedCount.get());
     }
-    
-    /**
-     * Test 4: Path traversal protection.
-     * Verifies that malicious archives can't extract files outside target directory.
-     */
+
     @Test
-    public void testPathTraversalProtection() throws IOException {
-        // Test path validation logic
-        Path extractDir = tempDir.resolve("safe");
-        Files.createDirectories(extractDir);
-        
-        // These should be allowed (normal case)
-        String normalPath = "benchmarks/file.txt";
-        Path normalTarget = extractDir.resolve(normalPath);
-        assertTrue("Normal path should resolve inside",
-                   normalTarget.normalize().startsWith(extractDir.normalize()));
-        
-        // These should be blocked (path traversal)
-        String maliciousPath = "../../../etc/passwd";
-        Path maliciousTarget = extractDir.resolve(maliciousPath);
-        
-        // The path resolves outside the extract directory
-        boolean isSafe = maliciousTarget.normalize().startsWith(extractDir.normalize());
-        assertFalse("Malicious path should be blocked", isSafe);
-        
-        System.out.println("Path traversal test: malicious path " + maliciousPath + 
-                          " resolves to " + maliciousTarget + 
-                          ", isSafe=" + isSafe);
+    public void extractTarGzRejectsPathTraversal() throws Exception {
+        Path archive = tempDir.resolve("evil.tgz");
+        try (OutputStream fileOutput = Files.newOutputStream(archive);
+             GzipCompressorOutputStream gzipOutput = new GzipCompressorOutputStream(fileOutput);
+             TarArchiveOutputStream tarOutput = new TarArchiveOutputStream(gzipOutput)) {
+            writeTarEntry(tarOutput, "../evil.txt", "boom");
+            tarOutput.finish();
+        }
+
+        try {
+            ArchiveExtractor.extractWithCleanup(archive.toString(), tempDir.resolve("evil-out"));
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("path traversal"));
+            return;
+        }
+
+        throw new AssertionError("Expected extraction to reject path traversal");
+    }
+
+    @Test
+    public void extractTarGzHonorsCancellationSetting() throws Exception {
+        Path archive = createTarGzArchive("bench/file1.p", "slow-content", "bench/file2.p", "slow-content-2");
+        ArchiveExtractor.ExtractionSettings settings = ArchiveExtractor.ExtractionSettings.defaults()
+            .withTimeoutSeconds(1)
+            .withCancellationRequested(() -> true);
+
+        try {
+            ArchiveExtractor.extractWithCleanup(archive.toString(), tempDir.resolve("cancelled"), null, settings);
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("cancelled"));
+            return;
+        }
+
+        throw new AssertionError("Expected extraction cancellation");
+    }
+
+    @Test
+    public void extractTarGzStopsWhenProjectedSizeExceedsLimit() throws Exception {
+        Path archive = createTarGzArchive(
+            "bench/file1.p",
+            "0123456789",
+            "bench/file2.p",
+            "abcdefghij"
+        );
+
+        try {
+            ArchiveExtractor.extractWithCleanup(
+                archive.toString(),
+                tempDir.resolve("quota-limited"),
+                null,
+                ArchiveExtractor.ExtractionSettings.defaults().withMaxUncompressedSizeBytes(5)
+            );
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Total uncompressed size exceeds"));
+            assertFalse(Files.exists(tempDir.resolve("quota-limited")));
+            return;
+        }
+
+        throw new AssertionError("Expected extraction to stop when the configured size limit is exceeded");
+    }
+
+    private Path createTarGzArchive(String firstEntryName, String firstContent, String secondEntryName, String secondContent)
+        throws IOException {
+        Path archive = tempDir.resolve("archive.tgz");
+        try (OutputStream fileOutput = Files.newOutputStream(archive);
+             GzipCompressorOutputStream gzipOutput = new GzipCompressorOutputStream(fileOutput);
+             TarArchiveOutputStream tarOutput = new TarArchiveOutputStream(gzipOutput)) {
+            writeTarEntry(tarOutput, firstEntryName, firstContent);
+            writeTarEntry(tarOutput, secondEntryName, secondContent);
+            tarOutput.finish();
+        }
+        return archive;
+    }
+
+    private void writeTarEntry(TarArchiveOutputStream tarOutput, String entryName, String content) throws IOException {
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        TarArchiveEntry entry = new TarArchiveEntry(entryName);
+        entry.setSize(bytes.length);
+        tarOutput.putArchiveEntry(entry);
+        tarOutput.write(bytes);
+        tarOutput.closeArchiveEntry();
     }
 }

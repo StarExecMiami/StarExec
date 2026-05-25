@@ -1,14 +1,18 @@
 package org.starexec.servlets;
 
 import org.starexec.constants.R;
+import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.UploadJobQueue;
+import org.starexec.data.database.Users;
 import org.starexec.data.processing.BoundedUploadProcessor;
 import org.starexec.data.to.Permission;
 import org.starexec.data.to.TraversalProgressListener;
 import org.starexec.data.to.UploadJob;
+import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.ArchiveExtractor;
+import org.starexec.util.ArchiveUtil;
 
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
@@ -34,6 +38,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     private static final int SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final int MAX_CONCURRENT_JOBS = 3; // Allow up to 3 concurrent job processing
     private static final long ORPHAN_RETENTION_HOURS = 24;
+    static final String TEMP_EXTRACTION_SUFFIX = ".extracting";
     
     private final AtomicBoolean running = new AtomicBoolean(true);
     private ExecutorService workerExecutor;
@@ -136,7 +141,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                             if (extractionDirs == null) continue;
 
                             for (File extractionDir : extractionDirs) {
-                                if (!extractionDir.isDirectory() || !extractionDir.getName().startsWith("upload_")) {
+                                if (!isTemporaryExtractionDirectory(extractionDir)) {
                                     continue;
                                 }
 
@@ -176,6 +181,13 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    boolean isTemporaryExtractionDirectory(File extractionDir) {
+        return extractionDir != null
+            && extractionDir.isDirectory()
+            && extractionDir.getName().startsWith("upload_")
+            && extractionDir.getName().endsWith(TEMP_EXTRACTION_SUFFIX);
     }
     
     @Override
@@ -275,6 +287,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         File extractDir = null;
         boolean processingSucceeded = false;
         boolean preserveArtifactsForRetry = false;
+        boolean safeToDeleteExtractDir = true;
         
         // Track extraction count
         final AtomicInteger extractedCount = new AtomicInteger(0);
@@ -300,10 +313,12 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             // "dump" method can use the new async processor
             if ("convert".equals(job.getUploadMethod())) {
                 log.info(method, "Using legacy path for 'convert' method to create subspaces");
+                safeToDeleteExtractDir = false;
                 handleConvertMethod(job, extractDir);
             } else {
                 // dump method - use the new async processor
                 log.info(method, "Processing benchmarks for job " + job.getId());
+                safeToDeleteExtractDir = false;
                 BoundedUploadProcessor processor = new BoundedUploadProcessor(job, extractDir);
                 processor.process();
             }
@@ -355,7 +370,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         } finally {
             // Only delete the extraction directory when processing FAILED — the files
             // were never registered in the DB so there is nothing to preserve.
-            if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null) {
+            if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null && safeToDeleteExtractDir) {
                 try {
                     ArchiveExtractor.cleanup(extractDir.getAbsolutePath());
                     log.info(method, "Cleaned up extraction directory after failure for job " + job.getId());
@@ -524,12 +539,13 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         };
     }
 
-    private File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
+    File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
         String method = "prepareExtraction";
 
         if (job.getExtractPath() != null && !job.getExtractPath().isEmpty()) {
             File existingExtractDir = new File(job.getExtractPath());
-            if (existingExtractDir.exists() && existingExtractDir.isDirectory()) {
+            if (existingExtractDir.exists() && existingExtractDir.isDirectory() &&
+                    existingExtractDir.getAbsolutePath().startsWith(R.getBenchmarkPath())) {
                 return existingExtractDir;
             }
         }
@@ -538,14 +554,85 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             throw new IOException("Archive file not found: " + job.getArchivePath());
         }
 
+        UploadExtractionQuota quota = calculateExtractionQuota(job, archiveFile);
         String extractDirName = "upload_" + job.getId() + "_" + System.currentTimeMillis();
-        File extractDir = new File(archiveFile.getParent(), extractDirName);
+        File tempExtractDir = new File(archiveFile.getParent(), extractDirName + TEMP_EXTRACTION_SUFFIX);
+        File finalExtractDir = new File(archiveFile.getParent(), extractDirName);
+
+        ArchiveExtractor.ExtractionSettings extractionSettings = ArchiveExtractor.ExtractionSettings.fromEnvironment()
+            .withTimeoutSeconds(EnvironmentConfig.getUploadExtractionTimeoutSeconds())
+            .withMaxUncompressedSizeBytes(quota.maxExtractableBytes)
+            .withProgressCallback(() -> UploadJobQueue.touchJob(job.getId()));
 
         log.info(method, "Extracting archive for job " + job.getId());
-        ArchiveExtractor.extractWithCleanup(job.getArchivePath(), extractDir.toPath(), extractedCount);
-        UploadJobQueue.updateExtractPath(job.getId(), extractDir.getAbsolutePath());
-        job.setExtractPath(extractDir.getAbsolutePath());
-        return extractDir;
+        ArchiveExtractor.extractWithCleanup(job.getArchivePath(), tempExtractDir.toPath(), extractedCount, extractionSettings);
+
+        moveExtractDirectory(tempExtractDir, finalExtractDir);
+        if (!UploadJobQueue.updateExtractPath(job.getId(), finalExtractDir.getAbsolutePath())) {
+            ArchiveExtractor.cleanup(finalExtractDir.getAbsolutePath());
+            throw new IOException("Failed to persist extraction path for upload job " + job.getId());
+        }
+        job.setExtractPath(finalExtractDir.getAbsolutePath());
+        return finalExtractDir;
+    }
+
+    private void moveExtractDirectory(File sourceDir, File targetDir) throws IOException {
+        try {
+            java.nio.file.Files.move(
+                sourceDir.toPath(),
+                targetDir.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE
+            );
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            java.nio.file.Files.move(sourceDir.toPath(), targetDir.toPath());
+        }
+    }
+
+    private UploadExtractionQuota calculateExtractionQuota(UploadJob job, File archiveFile) throws IOException {
+        User currentUser = Users.get(job.getUserId());
+        if (currentUser == null) {
+            throw new IOException("Failed to load upload user for quota validation");
+        }
+
+        long remainingQuotaBytes = Math.max(0L, currentUser.getDiskQuota() - currentUser.getDiskUsage());
+        if (remainingQuotaBytes <= 0L) {
+            throw new IOException("The benchmark upload exceeds the remaining disk quota for this user");
+        }
+
+        long archiveSizeBytes = archiveFile.length();
+        if (archiveSizeBytes > remainingQuotaBytes) {
+            throw new IOException("The uploaded archive exceeds the remaining disk quota for this user");
+        }
+
+        long estimatedUncompressedBytes = shouldEstimateArchiveSize(archiveFile)
+            ? ArchiveUtil.getArchiveSize(archiveFile.getAbsolutePath())
+            : -1L;
+        if (estimatedUncompressedBytes > 0L && estimatedUncompressedBytes > remainingQuotaBytes) {
+            throw new IOException(
+                "The uploaded archive expands to approximately " + estimatedUncompressedBytes +
+                    " bytes, which exceeds the remaining disk quota of " + remainingQuotaBytes + " bytes"
+            );
+        }
+
+        long configuredMaxBytes = EnvironmentConfig.getUploadExtractionMaxUncompressedBytes();
+        long maxExtractableBytes = configuredMaxBytes > 0L
+            ? Math.min(configuredMaxBytes, remainingQuotaBytes)
+            : remainingQuotaBytes;
+
+        return new UploadExtractionQuota(maxExtractableBytes);
+    }
+
+    private boolean shouldEstimateArchiveSize(File archiveFile) {
+        String fileName = archiveFile.getName().toLowerCase();
+        return !(fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz"));
+    }
+
+    private static final class UploadExtractionQuota {
+        private final long maxExtractableBytes;
+
+        private UploadExtractionQuota(long maxExtractableBytes) {
+            this.maxExtractableBytes = maxExtractableBytes;
+        }
     }
 
     private void ensureNotCancelled(long jobId) throws UploadCancellationException {

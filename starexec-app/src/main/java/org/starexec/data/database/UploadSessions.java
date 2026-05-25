@@ -339,11 +339,16 @@ public class UploadSessions {
         }
 
         File stagingFile = new File(session.getStagingPath());
-        File parent = stagingFile.getParentFile();
+        File chunkDirectory = new File(session.getStagingPath() + ".chunks");
+        File assemblingFile = new File(session.getStagingPath() + ".assembling");
         try {
-            if (parent != null && parent.exists()) {
-                FileUtils.deleteDirectory(parent);
-            } else if (stagingFile.exists()) {
+            if (chunkDirectory.exists()) {
+                FileUtils.deleteDirectory(chunkDirectory);
+            }
+            if (assemblingFile.exists()) {
+                FileUtils.deleteQuietly(assemblingFile);
+            }
+            if (stagingFile.exists()) {
                 FileUtils.deleteQuietly(stagingFile);
             }
         } catch (IOException e) {

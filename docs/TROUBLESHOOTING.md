@@ -961,6 +961,46 @@ make start
 3. **Kubernetes backend incomplete** - Hybrid design has bottleneck
 4. **SGE/OAR tests disabled** - Use PowerMockito, not maintained
 
+## Upload Extraction Issues
+
+### Large benchmark upload fails during extraction
+
+**Symptoms:**
+
+- upload session finishes successfully, but the background upload job fails
+- error messages include `Failed to extract archive`
+- failures are more common with `.tgz` archives containing many small files
+
+**What changed:**
+
+- async `.tar`, `.tar.gz`, and `.tgz` extraction now runs in-process
+- extraction uses temporary `upload_*.extracting` directories before promotion
+- extraction is limited by both disk quota and explicit safety caps
+
+**Things to check:**
+
+1. User has enough remaining disk quota for the extracted archive contents
+2. `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` is high enough for your storage backend
+3. `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` is not lower than the expected extracted dataset size
+4. Shared storage latency, especially NFS, is not causing extraction to exceed the timeout window
+
+**Relevant settings:**
+
+```bash
+STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS=1800
+STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES=107374182400
+```
+
+**Recommended tuning approach:**
+
+- increase `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` first for slow storage
+- increase `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` only when the expected extracted size legitimately exceeds the default cap
+- do not raise limits blindly; confirm expected archive size and user quota first
+
+### Temporary upload extraction directories accumulate
+
+Temporary extraction directories now end with `.extracting` and are safe to clean only when they are stale and unfinished. Finalized `upload_*` extraction directories may contain benchmark files that are already referenced by the database and should **not** be removed manually unless you have confirmed they are unreferenced.
+
 ## Getting More Help
 
 ### Enable Debug Logging

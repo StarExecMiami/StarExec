@@ -76,6 +76,20 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 |----------|---------|----------|---------|-------|
 | `STAREXEC_BACKEND_TYPE` | `local` | No | `podman` | Backend: local, podman, kubernetes, sge, oar. Note: Makefile `make start` uses Podman deployment by default. |
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
+| `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` | `1800` | No | `3600` | Timeout for async benchmark archive extraction only. Applies to resumable upload job extraction, not all shell commands globally. |
+| `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` | `107374182400` | No | `214748364800` | Hard cap for total extracted bytes during async benchmark archive extraction. Effective limit is the smaller of this value and the uploader's remaining disk quota. |
+
+#### Async benchmark upload extraction
+
+Resumable benchmark uploads now use a safer extraction lifecycle:
+
+- `.tar`, `.tar.gz`, and `.tgz` archives are extracted **in-process** instead of calling external `tar`
+- extraction runs in a temporary `upload_*.extracting` directory first
+- the final extraction directory is published only after extraction succeeds
+- chunk directories (`*.chunks`) are cleaned after successful session finalization
+- extracted bytes are bounded by both the configured safety cap and the uploader's remaining disk quota
+
+This is especially relevant for large uploads on slower shared storage such as NFS.
 
 ### Kubernetes Backend Configuration
 
@@ -359,7 +373,11 @@ env:
   STAREXEC_PAIR_LOG_STREAM_HEARTBEAT_SECONDS: "25"
   STAREXEC_PAIR_LOG_STREAM_MAX_DURATION_SECONDS: "900"
   STAREXEC_PAIR_LOG_STREAM_RETRY_AFTER_SECONDS: "10"
+  STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS: "3600"
+  STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES: "214748364800"
 ```
+
+Use the `env` map for application-level upload extraction tuning. Keep Kubernetes-native backend settings under `.Values.kubernetes.*`, but regular StarExec application environment variables such as upload extraction limits belong under `.Values.env`.
 
 Deploy with custom values:
 
