@@ -371,7 +371,7 @@ public class ProcessorManager extends HttpServlet {
 			log.warn(e.getMessage(), e);
 		}
 
-		// Return false control flow is broken and ends up here
-		return new ValidatorStatusCode(true, "Internal error processing request");
+		// Fix: was success=true for an internal error path — see GitHub issue #85 audit
+		return new ValidatorStatusCode(false, "Internal error processing request.");
 	}
 }
