@@ -64,6 +64,34 @@ PODMAN_CGROUP_FLAG := $(if $(PODMAN_CGROUP_MANAGER),--cgroup-manager=$(PODMAN_CG
 VOLUME_PREFIX=starexec
 VALS := $(if $(wildcard $(ENV_VALUES)),$(ENV_VALUES),$(CHART_DIR)/values.yaml)
 
+# ============================================================================
+# Podman deployments require values files that do not rely on pre-existing
+# Kubernetes secrets.  The K8s profiles (values-dev.yaml, values-prod.yaml)
+# use `existingSecret` which must be created before deployment.  The Podman
+# profiles (values-local-dev.yaml, values-podman.yaml) use
+# `allowInsecureDevCredentials: true` so the Helm chart creates the secret.
+#
+#   ENV=dev  → values-local-dev.yaml (Podman local dev)
+#   ENV=ci   → values-ci.yaml          (CI — already Podman-compatible)
+#   ENV=prod → values-prod.yaml        (K8s only; use values-podman.yaml for Podman)
+#
+# Explicit command-line overrides (VALS=...) are always respected.
+# ============================================================================
+PODMAN_DEV_VALUES_FILE := $(CHART_DIR)/values-local-dev.yaml
+ifneq ($(origin VALS),command line)
+  ifeq ($(ENV),dev)
+    ifneq ($(wildcard $(PODMAN_DEV_VALUES_FILE)),)
+      PODMAN_VALS := $(PODMAN_DEV_VALUES_FILE)
+    else
+      PODMAN_VALS := $(VALS)
+    endif
+  else
+    PODMAN_VALS := $(VALS)
+  endif
+else
+  PODMAN_VALS := $(VALS)
+endif
+
 FORCE?=0
 DRY_RUN?=0
 LOCAL?=0
@@ -707,10 +735,10 @@ define verify_podman_socket_from_values
 		fi; \
 	fi; \
 	if command -v yq >/dev/null 2>&1; then \
-		SOCKET_ENABLED=$$(yq '.podman.containerSocket.enabled // false' "$(VALS)"); \
+		SOCKET_ENABLED=$$(yq '.podman.containerSocket.enabled // false' "$(PODMAN_VALS)"); \
 		case "$$SOCKET_ENABLED" in \
 			true|TRUE|True) \
-				VALUES_SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(VALS)"); \
+				VALUES_SOCKET_PATH=$$(yq -r '.podman.containerSocket.hostPath // ""' "$(PODMAN_VALS)"); \
 				if [ -n "$$VALUES_SOCKET_PATH" ] && [ "$$VALUES_SOCKET_PATH" != "$$SOCKET_PATH" ]; then \
 					echo "${YELLOW}⚠️  values file hostPath ($$VALUES_SOCKET_PATH) differs from resolved socket ($$SOCKET_PATH).${RESET}"; \
 					echo "    make start will render with $$SOCKET_PATH without rewriting the values file."; \
@@ -725,7 +753,7 @@ preflight-podman: verify-deps
 	@$(call require_podman_engine_ready)
 	@$(call require_rootless_network_healthy)
 	@$(call verify_podman_socket_from_values)
-	@echo "Using values file: $(VALS)"
+	@echo "Using values file: $(PODMAN_VALS)"
 
 define resolve_app_container
 	APP_CTR=""; \
@@ -1135,8 +1163,8 @@ deploy-podman: preflight-podman preflight-cgroup
 
 deploy-podman-helm:
 	@# Verify values file exists before proceeding
-	@if [ ! -f "$(VALS)" ]; then \
-		echo "${RED}✗ Values file not found: $(VALS)${RESET}"; \
+	@if [ ! -f "$(PODMAN_VALS)" ]; then \
+		echo "${RED}✗ Values file not found: $(PODMAN_VALS)${RESET}"; \
 		echo "Available values files:"; \
 		ls -1 $(CHART_DIR)/values*.yaml 2>/dev/null || echo "  (none found)"; \
 		exit 1; \
@@ -1148,7 +1176,7 @@ deploy-podman-helm:
 	@DATA_VOL_NAME="$(VOLUME_PREFIX)-$(ENV)-data"; \
 	SOCKET_GID=$$(stat -c '%g' "$(PODMAN_SOCKET_PATH)" 2>/dev/null || echo ""); \
 	HOST_DATA_PATH=$$($(PODMAN_CMD) volume inspect "$$DATA_VOL_NAME" --format '{{.Mountpoint}}' 2>/dev/null || echo ""); \
-	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(VALS)" \
+	if ! helm template $(RELEASE_NAME) $(CHART_DIR) -f "$(PODMAN_VALS)" \
 		--set environment=$(ENV) \
 		--set image.repository=$(RELEASE_NAME) \
 		--set image.tag=$(IMAGE_TAG) \
@@ -1159,7 +1187,7 @@ deploy-podman-helm:
 		$${SOCKET_GID:+--set security.pod.supplementalGroups[0]=$$SOCKET_GID} \
 		$${HOST_DATA_PATH:+--set backend.hostDataPath=$$HOST_DATA_PATH} > render.yaml; then \
 		echo "${RED}✗ Helm template generation failed${RESET}"; \
-		echo "Check your values file: $(VALS)"; \
+		echo "Check your values file: $(PODMAN_VALS)"; \
 		exit 1; \
 	fi
 	@echo "Deploying application pod..."
@@ -1171,7 +1199,7 @@ deploy-podman-helm:
 	@echo ""
 	@echo "${GREEN}✓ Deployment complete!${RESET}"
 	@echo "  Environment: ${BOLD}$(ENV)${RESET}"
-	@echo "  Values: $(VALS)"
+	@echo "  Values: $(PODMAN_VALS)"
 	@echo "  Migrations: Executed automatically during startup"
 	@echo "  Access: ${BLUE}http://localhost:$(APP_PORT)/starexec${RESET}"
 	@echo ""
@@ -1819,7 +1847,7 @@ template:
 	@if command -v helm >/dev/null 2>&1; then \
 		echo "Rendering templates with environment: $(ENV)"; \
 		$(call require_values_file); \
-		helm template $(RELEASE_NAME) $(CHART_DIR) -f $(VALS) \
+		helm template $(RELEASE_NAME) $(CHART_DIR) -f $(PODMAN_VALS) \
 			> render.yaml; \
 		echo "Output written to: render.yaml"; \
 	else \
