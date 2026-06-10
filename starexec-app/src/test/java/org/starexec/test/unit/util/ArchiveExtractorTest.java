@@ -15,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -60,6 +62,33 @@ public class ArchiveExtractorTest {
         assertTrue(Files.exists(extractDir.resolve("bench/file1.p")));
         assertTrue(Files.exists(extractDir.resolve("bench/file2.p")));
         assertEquals(2, extractedCount.get());
+    }
+
+    @Test
+    public void extractZipAcceptsTinyBenchmarkEntry() throws Exception {
+        Path archive = tempDir.resolve("tiny.zip");
+        byte[] content = "1234567890123".getBytes(StandardCharsets.UTF_8);
+        try (OutputStream fileOutput = Files.newOutputStream(archive);
+             ZipOutputStream zipOutput = new ZipOutputStream(fileOutput)) {
+            ZipEntry entry = new ZipEntry("Fake/FakeProblem.p");
+            zipOutput.putNextEntry(entry);
+            zipOutput.write(content);
+            zipOutput.closeEntry();
+        }
+
+        AtomicInteger extractedCount = new AtomicInteger();
+        Path extractDir = tempDir.resolve("tiny-out");
+
+        ArchiveExtractor.extractWithCleanup(
+            archive.toString(),
+            extractDir,
+            extractedCount,
+            ArchiveExtractor.ExtractionSettings.defaults().withTimeoutSeconds(30)
+        );
+
+        assertTrue(Files.exists(extractDir.resolve("Fake/FakeProblem.p")));
+        assertEquals(1, extractedCount.get());
+        assertEquals(13, Files.size(extractDir.resolve("Fake/FakeProblem.p")));
     }
 
     @Test

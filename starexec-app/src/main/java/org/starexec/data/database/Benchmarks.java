@@ -615,11 +615,17 @@ public class Benchmarks {
 			log.info("Adding (with deps) " + benchmarks.size() + " to Space " + spaceId);
 			// Get the processor of the first benchmark (they should all have the same
 			// processor)
-			Processor p = Processors.get(benchmarks.get(0).getType().getId());
+			int processorId = benchmarks.get(0).getType().getId();
 
 			log.info("About to attach attributes to " + benchmarks.size());
 
-			Benchmarks.attachBenchAttrs(benchmarks, p, statusId);
+			if (processorId == R.NO_TYPE_PROC_ID) {
+				markBenchmarksValidWithoutProcessor(benchmarks);
+				Uploads.incrementValidatedBenchmarks(statusId, benchmarks.size());
+			} else {
+				Processor p = Processors.get(processorId);
+				Benchmarks.attachBenchAttrs(benchmarks, p, statusId);
+			}
 			if (usesDeps) {
 				boolean success = Benchmarks.validateDependencies(benchmarks, depRootSpaceId, linked, statusId);
 				if (!success) {
@@ -732,12 +738,11 @@ public class Benchmarks {
 		// if we are using the no_type processor, we do not need to actually execute
 		// anything-- just validate every
 		// benchmark.
-		if (p.getId() == Processors.getNoTypeProcessor().getId()) {
-			for (Benchmark b : benchmarks) {
-				Map<String, String> prop = new HashMap<>();
-				prop.put(R.VALID_BENCHMARK_ATTRIBUTE, "true");
-				b.setAttributes(prop);
-			}
+		if (p == null) {
+			throw new StarExecException("Benchmark processor not found");
+		}
+		if (p.getId() == R.NO_TYPE_PROC_ID) {
+			markBenchmarksValidWithoutProcessor(benchmarks);
 			Uploads.incrementValidatedBenchmarks(statusId, benchmarks.size());
 			return true;
 		}
@@ -820,6 +825,14 @@ public class Benchmarks {
 			Uploads.incrementValidatedBenchmarks(statusId, validatedCounter);
 		}
 		return true;
+	}
+
+	private static void markBenchmarksValidWithoutProcessor(List<Benchmark> benchmarks) {
+		for (Benchmark b : benchmarks) {
+			Map<String, String> prop = new HashMap<>();
+			prop.put(R.VALID_BENCHMARK_ATTRIBUTE, "true");
+			b.setAttributes(prop);
+		}
 	}
 
 	/**

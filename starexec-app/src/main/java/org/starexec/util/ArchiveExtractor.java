@@ -33,6 +33,7 @@ public class ArchiveExtractor {
     
     // Safety limits
     private static final long MAX_UNCOMPRESSED_SIZE_BYTES = 100L * 1024 * 1024 * 1024; // 100GB max
+    // Keep this as a long expression. An int expression overflows and makes tiny entries look "too large".
     private static final long MAX_ENTRY_SIZE_BYTES = 10L * 1024 * 1024 * 1024; // 10GB per file
     private static final int BUFFER_SIZE = 8192;
     private static final int MAX_ENTRY_NAME_LENGTH = 255;
