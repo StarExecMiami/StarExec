@@ -133,18 +133,46 @@ a.ui-button:active,
 }
 
 .ui-dialog .ui-dialog-titlebar {
+  align-items: center;
   background: $background-color !important;
   border-bottom: 1px solid $text-accent-color;
   color: $text-main-color !important;
+  display: flex;
+  justify-content: flex-start;
+  min-height: 2.5rem;
+  padding-right: 3rem;
 }
 
 .ui-dialog .ui-dialog-title {
   color: $text-main-color !important;
+  flex: 1 1 auto;
+  float: none;
+  height: auto !important;
+  line-height: normal;
+  margin: 0;
+  width: auto;
 }
 
 .ui-dialog .ui-dialog-titlebar-close {
   background: $foreground-color !important;
   border: 1px solid $background-color !important;
+  box-sizing: border-box !important;
+  height: 2rem !important;
+  margin: 0 !important;
+  min-height: 2rem !important;
+  min-width: 2rem !important;
+  padding: 0 !important;
+  right: 0.5rem !important;
+  top: 50% !important;
+  transform: translateY(-50%);
+  width: 2rem !important;
+
+  .ui-icon {
+    left: 50% !important;
+    margin: -8px 0 0 -8px !important;
+    position: absolute !important;
+    top: 50% !important;
+  }
   
   &:hover {
     background: $accent-red !important;

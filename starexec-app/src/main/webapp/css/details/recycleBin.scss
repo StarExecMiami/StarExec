@@ -1,5 +1,38 @@
 
 
+.recycle-bin-confirm-dialog {
+	max-width: calc(100vw - 32px) !important;
+}
+
+.recycle-bin-confirm-dialog .ui-dialog-content {
+	align-items: flex-start;
+	display: flex;
+	gap: 12px;
+	height: auto !important;
+	max-height: calc(100vh - 14rem) !important;
+	overflow-wrap: break-word;
+	overflow-y: auto;
+	white-space: normal;
+}
+
+.recycle-bin-confirm-dialog .ui-dialog-content .ui-icon {
+	flex: 0 0 auto;
+	margin-top: 4px;
+}
+
+.recycle-bin-confirm-dialog .ui-dialog-buttonpane .ui-dialog-buttonset {
+	display: flex;
+	flex-wrap: wrap;
+	float: none;
+	gap: 8px;
+	justify-content: flex-end;
+}
+
+.recycle-bin-confirm-dialog .ui-dialog-buttonpane button {
+	margin: 0 !important;
+	white-space: nowrap;
+}
+
 @media only screen and (max-width: 767px) {
 	body th, body td {
 		text-align: center;
@@ -9,5 +42,14 @@
 	/* Base button styles come from global components/_button.scss */
 	#actionField button {
 		margin: 0 5px 5px 0;
+	}
+
+	.recycle-bin-confirm-dialog .ui-dialog-buttonpane .ui-dialog-buttonset {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.recycle-bin-confirm-dialog .ui-dialog-buttonpane button {
+		width: 100%;
 	}
 }

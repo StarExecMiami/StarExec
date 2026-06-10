@@ -1,5 +1,25 @@
 var solverTable;
 var benchTable;
+var recycleBinDialogDefaults = {
+	classes: {
+		"ui-dialog": "ui-corner-all recycle-bin-confirm-dialog"
+	},
+	height: "auto",
+	minHeight: 0,
+	maxHeight: 520,
+	modal: true,
+	width: 500
+};
+
+function focusCancelButton() {
+	$(this).parent().find(".ui-dialog-buttonpane button").filter(function() {
+		return $(this).text().toLowerCase() === "cancel";
+	}).trigger("focus");
+}
+
+function openRecycleBinDialog(config, message, icon) {
+	star.openDialog($.extend({}, recycleBinDialogDefaults, config), message, icon);
+}
 
 jQuery(function($) {
 	"use strict";
@@ -157,10 +177,9 @@ function deleteAll(prim) {
 	var message = 'Are you sure you want to delete all the ' + prim + '(s) from the trash bin? After deletion, they can not be recovered';
 
 	// Display the confirmation dialog
-	star.openDialog({
+	openRecycleBinDialog({
 		title: "Confirm Delete",
-		modal: true,
-		height: 220,
+		open: focusCancelButton,
 		buttons: {
 			'delete permanently': function() {
 				$(this).dialog("close");
@@ -185,10 +204,8 @@ function restoreAll(prim) {
 	var message = 'Are you sure you want to restore all the ' + prim + '(s) from the trash bin?';
 
 	// Display the confirmation dialog
-	star.openDialog({
+	openRecycleBinDialog({
 		title: "Confirm Restore",
-		modal: true,
-		height: 220,
 		buttons: {
 			'restore': function() {
 				$(this).dialog("close");
@@ -217,10 +234,9 @@ function deleteSelected(prim) {
 		table = benchTable;
 	}
 	// Display the confirmation dialog
-	star.openDialog({
+	openRecycleBinDialog({
 		title: "Confirm Delete",
-		modal: true,
-		height: 220,
+		open: focusCancelButton,
 		buttons: {
 			'delete permanently': function() {
 				$(this).dialog("close");
@@ -250,10 +266,8 @@ function restoreSelected(prim) {
 		table = benchTable;
 	}
 	// Display the confirmation dialog
-	star.openDialog({
+	openRecycleBinDialog({
 		title: "Confirm Restore",
-		modal: true,
-		height: 220,
 		buttons: {
 			'restore': function() {
 				$(this).dialog("close");
