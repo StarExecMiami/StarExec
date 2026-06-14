@@ -665,64 +665,83 @@ define verify_podman_socket_from_values
 		exit 1; \
 	fi; \
 	if [ ! -S "$$SOCKET_PATH" ]; then \
-		echo ""; \
-		echo "${RED}✗ Podman socket not found: $$SOCKET_PATH${RESET}"; \
-		if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
-			echo "  Expected rootful default: /run/podman/podman.sock"; \
-			echo "  Start the system service or provide PODMAN_SOCKET_PATH explicitly."; \
-		else \
-			echo "  Resolved from PODMAN_SOCKET_PATH or the active runtime directory."; \
-			echo "  Expected rootless default: /run/user/$$CURRENT_UID/podman/podman.sock"; \
-		fi; \
-		echo ""; \
 		if command -v systemctl >/dev/null 2>&1; then \
-			if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
-				SOCKET_STATUS=$$(systemctl is-active podman.socket 2>&1 || echo "error"); \
-				if echo "$$SOCKET_STATUS" | grep -q masked; then \
-					echo "${YELLOW}⚠️  Rootful Podman socket is masked by system${RESET}"; \
-					echo ""; \
-					echo "To enable it:"; \
-					echo "  ${BLUE}sudo systemctl daemon-reload${RESET}"; \
-					echo "  ${BLUE}sudo systemctl enable --now podman.socket${RESET}"; \
-					echo ""; \
-				else \
-					echo "Start the rootful Podman socket service:"; \
-					echo "  ${BLUE}sudo systemctl start podman.socket${RESET}"; \
-					echo ""; \
-				fi; \
-			else \
+			if [ "$(PODMAN_REQUIRES_SUDO)" != "yes" ]; then \
 				SOCKET_STATUS=$$(systemctl --user is-active podman.socket 2>&1 || echo "error"); \
-				if echo "$$SOCKET_STATUS" | grep -q masked; then \
-					echo "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"; \
-					echo ""; \
-					echo "To enable it, copy systemd units to your user:"; \
-					echo "  ${BLUE}mkdir -p ~/.config/systemd/user/${RESET}"; \
-					echo "  ${BLUE}cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/${RESET}"; \
-					echo "  ${BLUE}systemctl --user daemon-reload${RESET}"; \
-					echo "  ${BLUE}systemctl --user enable --now podman.socket${RESET}"; \
-					echo ""; \
-				else \
-					echo "Start the Podman socket service:"; \
-					echo "  ${BLUE}systemctl --user start podman.socket${RESET}"; \
-					echo ""; \
+				if ! echo "$$SOCKET_STATUS" | grep -q masked; then \
+					echo "${YELLOW}⚠  Podman socket not running. Attempting auto-start via systemctl --user...${RESET}"; \
+					systemctl --user start podman.socket 2>/dev/null || true; \
+					_retries=0; \
+					while [ $$_retries -lt 5 ] && [ ! -S "$$SOCKET_PATH" ]; do \
+						sleep 1; \
+						_retries=$$(( $$_retries + 1 )); \
+					done; \
+					if [ -S "$$SOCKET_PATH" ]; then \
+						echo "${GREEN}✓ Podman socket started automatically.${RESET}"; \
+					fi; \
 				fi; \
 			fi; \
-		else \
-			echo "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"; \
-			echo ""; \
-			echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"; \
-			echo "  ${BLUE}podman machine start${RESET}"; \
-			echo ""; \
-			echo "Or on rootless Linux without systemd:"; \
-			echo "  ${BLUE}podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &${RESET}"; \
-			echo ""; \
 		fi; \
-		echo "Verify the socket exists:"; \
-		echo "  ${BLUE}ls -l $$SOCKET_PATH${RESET}"; \
-		echo ""; \
-		echo "See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
-		echo ""; \
-		exit 1; \
+		if [ ! -S "$$SOCKET_PATH" ]; then \
+			echo ""; \
+			echo "${RED}✗ Podman socket not found: $$SOCKET_PATH${RESET}"; \
+			if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+				echo "  Expected rootful default: /run/podman/podman.sock"; \
+				echo "  Start the system service or provide PODMAN_SOCKET_PATH explicitly."; \
+			else \
+				echo "  Resolved from PODMAN_SOCKET_PATH or the active runtime directory."; \
+				echo "  Expected rootless default: /run/user/$$CURRENT_UID/podman/podman.sock"; \
+			fi; \
+			echo ""; \
+			if command -v systemctl >/dev/null 2>&1; then \
+				if [ "$(PODMAN_REQUIRES_SUDO)" = "yes" ]; then \
+					SOCKET_STATUS=$$(systemctl is-active podman.socket 2>&1 || echo "error"); \
+					if echo "$$SOCKET_STATUS" | grep -q masked; then \
+						echo "${YELLOW}⚠️  Rootful Podman socket is masked by system${RESET}"; \
+						echo ""; \
+						echo "To enable it:"; \
+						echo "  ${BLUE}sudo systemctl daemon-reload${RESET}"; \
+						echo "  ${BLUE}sudo systemctl enable --now podman.socket${RESET}"; \
+						echo ""; \
+					else \
+						echo "Start the rootful Podman socket service:"; \
+						echo "  ${BLUE}sudo systemctl start podman.socket${RESET}"; \
+						echo ""; \
+					fi; \
+				else \
+					SOCKET_STATUS=$$(systemctl --user is-active podman.socket 2>&1 || echo "error"); \
+					if echo "$$SOCKET_STATUS" | grep -q masked; then \
+						echo "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"; \
+						echo ""; \
+						echo "To enable it, copy systemd units to your user:"; \
+						echo "  ${BLUE}mkdir -p ~/.config/systemd/user/${RESET}"; \
+						echo "  ${BLUE}cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/${RESET}"; \
+						echo "  ${BLUE}systemctl --user daemon-reload${RESET}"; \
+						echo "  ${BLUE}systemctl --user enable --now podman.socket${RESET}"; \
+						echo ""; \
+					else \
+						echo "Start the Podman socket service:"; \
+						echo "  ${BLUE}systemctl --user start podman.socket${RESET}"; \
+						echo ""; \
+					fi; \
+				fi; \
+			else \
+				echo "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"; \
+				echo ""; \
+				echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"; \
+				echo "  ${BLUE}podman machine start${RESET}"; \
+				echo ""; \
+				echo "Or on rootless Linux without systemd:"; \
+				echo "  ${BLUE}podman system service --time=0 unix:///run/user/$$CURRENT_UID/podman/podman.sock &${RESET}"; \
+				echo ""; \
+			fi; \
+			echo "Verify the socket exists:"; \
+			echo "  ${BLUE}ls -l $$SOCKET_PATH${RESET}"; \
+			echo ""; \
+			echo "See docs/TROUBLESHOOTING.md#podman-issues for detailed help."; \
+			echo ""; \
+			exit 1; \
+		fi; \
 	fi; \
 	if command -v curl >/dev/null 2>&1; then \
 		if ! curl -s --unix-socket "$$SOCKET_PATH" http://localhost/_ping >/dev/null 2>&1; then \

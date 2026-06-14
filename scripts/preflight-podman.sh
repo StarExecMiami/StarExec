@@ -21,6 +21,85 @@ CURRENT_UID=$(id -u)
 CURRENT_USER=$(id -un)
 CURRENT_GID=$(id -g)
 CURRENT_GROUPS=$(id -G)
+PODMAN_AUTOSTART_REASON=""
+
+attempt_rootless_podman_socket_autostart() {
+    local socket_path="$1"
+    PODMAN_AUTOSTART_REASON=""
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        PODMAN_AUTOSTART_REASON="no-systemctl"
+        return 1
+    fi
+
+    if ! [[ "$socket_path" =~ ^/run/user/[0-9]+/ ]]; then
+        PODMAN_AUTOSTART_REASON="not-rootless"
+        return 1
+    fi
+
+    local socket_status
+    set +e
+    socket_status=$(systemctl --user is-active podman.socket 2>&1)
+    set -e
+
+    if echo "$socket_status" | grep -q masked; then
+        PODMAN_AUTOSTART_REASON="masked"
+        return 1
+    fi
+
+    echo -e "${YELLOW}⚠  Podman socket not running. Attempting auto-start via systemctl --user...${RESET}"
+    set +e
+    systemctl --user start podman.socket 2>/dev/null
+    set -e
+
+    local retries=0
+    while [ "$retries" -lt 5 ] && [ ! -S "$socket_path" ]; do
+        sleep 1
+        retries=$((retries + 1))
+    done
+
+    if [ -S "$socket_path" ]; then
+        echo -e "${GREEN}✓ Podman socket started automatically.${RESET}"
+        return 0
+    fi
+
+    PODMAN_AUTOSTART_REASON="autostart-failed"
+    return 1
+}
+
+print_podman_autostart_context() {
+    local socket_path="$1"
+
+    case "$PODMAN_AUTOSTART_REASON" in
+        masked)
+            echo ""
+            echo -e "${YELLOW}⚠️  Podman socket is masked by system (common on school-managed networks)${RESET}"
+            echo ""
+            echo "To enable it, copy systemd units to your user:"
+            echo "  mkdir -p ~/.config/systemd/user/"
+            echo "  cp /usr/lib/systemd/user/podman.* ~/.config/systemd/user/"
+            echo "  systemctl --user daemon-reload"
+            echo "  systemctl --user enable --now podman.socket"
+            ;;
+        no-systemctl)
+            echo ""
+            echo -e "${YELLOW}⚠️  systemd not found on this system (e.g., macOS, Windows WSL without systemd)${RESET}"
+            echo ""
+            echo "Ensure Podman daemon is running. On macOS/Windows, this typically means:"
+            echo "  podman machine start"
+            echo ""
+            echo "Or on rootless Linux without systemd:"
+            echo "  podman system service --time=0 unix:///run/user/$CURRENT_UID/podman/podman.sock &"
+            ;;
+        not-rootless)
+            if [[ "$socket_path" == /run/podman/* ]]; then
+                echo ""
+                echo "Start the rootful Podman socket service:"
+                echo "  sudo systemctl start podman.socket"
+            fi
+            ;;
+    esac
+}
 
 # Find socket if not provided
 if [ -z "$SOCKET_PATH" ]; then
@@ -31,16 +110,22 @@ if [ -z "$SOCKET_PATH" ]; then
     elif [ -e "/run/podman/podman.sock" ]; then
         SOCKET_PATH="/run/podman/podman.sock"
     else
-        echo -e "${RED}ERROR: No container socket found at standard locations${RESET}"
-        echo ""
-        echo "Standard socket paths:"
-        echo "  - /var/run/docker.sock"
-        echo "  - /run/user/\$UID/podman/podman.sock"
-        echo "  - /run/podman/podman.sock"
-        echo ""
-        echo "To find your socket, run:"
-        echo "  find /run -name '*podman.sock' -o -name '*docker.sock' 2>/dev/null"
-        exit 1
+        ROOTLESS_SOCKET_PATH="/run/user/$CURRENT_UID/podman/podman.sock"
+        if attempt_rootless_podman_socket_autostart "$ROOTLESS_SOCKET_PATH"; then
+            SOCKET_PATH="$ROOTLESS_SOCKET_PATH"
+        else
+            echo -e "${RED}ERROR: No container socket found at standard locations${RESET}"
+            echo ""
+            echo "Standard socket paths:"
+            echo "  - /var/run/docker.sock"
+            echo "  - /run/user/\$UID/podman/podman.sock"
+            echo "  - /run/podman/podman.sock"
+            echo ""
+            echo "To find your socket, run:"
+            echo "  find /run -name '*podman.sock' -o -name '*docker.sock' 2>/dev/null"
+            print_podman_autostart_context "$ROOTLESS_SOCKET_PATH"
+            exit 1
+        fi
     fi
 fi
 
@@ -54,18 +139,21 @@ echo ""
 
 # Check if socket exists
 if [ ! -e "$SOCKET_PATH" ]; then
-    echo -e "${RED}ERROR: Socket does not exist: $SOCKET_PATH${RESET}"
-    echo ""
-    echo "Diagnostics:"
-    echo "   1. Is Podman/Docker running?"
-    if command -v systemctl &>/dev/null; then
-        echo "      podman.socket status: $(systemctl --user is-active podman.socket 2>/dev/null || echo 'NOT_FOUND')"
-        echo "      docker.socket status: $(systemctl is-active docker 2>/dev/null || echo 'NOT_FOUND')"
+    if ! attempt_rootless_podman_socket_autostart "$SOCKET_PATH"; then
+        echo -e "${RED}ERROR: Socket does not exist: $SOCKET_PATH${RESET}"
+        echo ""
+        echo "Diagnostics:"
+        echo "   1. Is Podman/Docker running?"
+        if command -v systemctl &>/dev/null; then
+            echo "      podman.socket status: $(systemctl --user is-active podman.socket 2>/dev/null || echo 'NOT_FOUND')"
+            echo "      docker.socket status: $(systemctl is-active docker 2>/dev/null || echo 'NOT_FOUND')"
+        fi
+        echo "   2. Try starting Podman:"
+        echo "      systemctl --user start podman.socket  # for rootless"
+        echo "      sudo systemctl start docker          # for Docker (requires sudo)"
+        print_podman_autostart_context "$SOCKET_PATH"
+        exit 1
     fi
-    echo "   2. Try starting Podman:"
-    echo "      systemctl --user start podman.socket  # for rootless"
-    echo "      sudo systemctl start docker          # for Docker (requires sudo)"
-    exit 1
 fi
 
 echo -e "${GREEN}[OK]${RESET} Socket exists: $SOCKET_PATH"
