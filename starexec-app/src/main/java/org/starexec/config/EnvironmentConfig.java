@@ -642,6 +642,42 @@ public class EnvironmentConfig {
     }
 
     /**
+     * Number of CPU partitions, or "auto"/"1" to disable partitioning.
+     * Env var: STAREXEC_CPU_PARTITION_COUNT
+     * Default: "auto"
+     */
+    public static String getCpuPartitionCount() {
+        return getEnv("STAREXEC_CPU_PARTITION_COUNT", "auto");
+    }
+
+    /**
+     * Explicit cpuset strings for partitions, space- or semicolon-separated.
+     * Env var: STAREXEC_CPU_PARTITIONS
+     * Example: "0-7 8-15" or "0-7,16-23;8-15,24-31"
+     * Default: null (use auto-discovery)
+     */
+    public static String getCpuPartitionsOverride() {
+        return System.getenv("STAREXEC_CPU_PARTITIONS");
+    }
+
+    /**
+     * Maximum concurrent jobs per partition.
+     * Env var: STAREXEC_PARTITION_MAX_JOBS
+     * Default: value of STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS
+     */
+    public static int getPartitionMaxJobs() {
+        String val = System.getenv("STAREXEC_PARTITION_MAX_JOBS");
+        if (val != null) {
+            try {
+                return Math.max(1, Integer.parseInt(val.trim()));
+            } catch (NumberFormatException e) {
+                // Fall through to existing container concurrency default.
+            }
+        }
+        return getContainerMaxConcurrentJobs();
+    }
+
+    /**
      * Default memory limit for job containers (in MB).
      */
     public static long getContainerDefaultMemoryMb() {

@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.config.EnvironmentConfig;
+import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Queues;
 import org.starexec.data.to.Status;
@@ -107,6 +108,8 @@ public class PodmanBackend implements Backend {
     private static final String LABEL_EXEC_ID = "starexec.exec.id";
     private static final String LABEL_MANAGED = "starexec.managed";
     private static final String LABEL_VERSION = "starexec.label.version";
+    private static final String LABEL_PARTITION_INDEX = "starexec.partition.index";
+    private static final String LABEL_PARTITION_CPUS = "starexec.partition.cpus";
     private static final String CURRENT_LABEL_VERSION = "2";
     // Containers without this label are legacy (timestamp-based pairId, pre-v2.3.1).
     // Their pairId labels cannot be trusted as authoritative.
@@ -128,12 +131,39 @@ public class PodmanBackend implements Backend {
     private long exitedContainerCleanupAgeSeconds =
         EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
 
-    // Hard concurrency gate for container submissions.
-    // This protects CPU cache locality by preventing unbounded sibling container fan-out.
-    private final Object submissionSlotLock = new Object();
-    private int activeSubmissionSlots = 0;
-    private final Set<Integer> execIdsHoldingSubmissionSlot =
-        ConcurrentHashMap.newKeySet();
+    /**
+     * Container queue name used by legacy single-partition execution.
+     *
+     * @deprecated Kept for compatibility with KubernetesNativeBackend and legacy
+     *             no-pinning mode. Use the active CPU partition list instead.
+     */
+    @Deprecated
+    public static final String CONTAINER_QUEUE_NAME = "container.q";
+
+    /**
+     * Virtual worker node name used by legacy single-partition execution.
+     *
+     * @deprecated Kept for compatibility with KubernetesNativeBackend and legacy
+     *             no-pinning mode. Use the active CPU partition list instead.
+     */
+    @Deprecated
+    public static final String CONTAINER_WORKER_NODE = "container-worker-1";
+
+    // Active CPU partition configuration. Empty before initialize(); access through
+    // getEffectivePartitions() to preserve legacy behavior for tests/startup ordering.
+    private List<CpuPartition> partitions = Collections.emptyList();
+
+    // Per-partition concurrency: slots[i] is the active job count for partitions.get(i).
+    private int[] partitionActiveSlots = new int[0];
+    private int[] partitionMaxSlots = new int[0];
+    private Object[] partitionSlotLocks = new Object[0];
+
+    // Maps execId → partition index for slot release on completion.
+    private final Map<Integer, Integer> execIdToPartitionIndex =
+        new ConcurrentHashMap<>();
+
+    // Maps partition index → cached DB node ID.
+    private int[] partitionNodeIds = new int[0];
 
     // DooD (Docker-outside-of-Docker) path translation
     // Maps container paths to host paths for volume mounts
@@ -178,7 +208,8 @@ public class PodmanBackend implements Backend {
     // Flag set during graceful shutdown to reject new submissions
     private volatile boolean shuttingDown = false;
 
-    // Cached node ID for database updates to avoid N+1 queries
+    // Cached legacy node ID for database updates to avoid N+1 queries.
+    // Partition-aware code uses partitionNodeIds instead.
     private int cachedNodeId = -1;
 
     /**
@@ -237,12 +268,25 @@ public class PodmanBackend implements Backend {
                 }
             }
 
-            // Ensure a virtual queue exists for container jobs
-            ensureContainerQueueExists();
+            // Discover CPU partitions and set up per-partition state. When
+            // discovery yields a single no-pinning partition, this preserves the
+            // historical container.q/container-worker-1 behavior exactly.
+            partitions = CpuPartitionManager.discover();
+            initializePartitionState();
+            log.info(CpuPartitionManager.describeTopology(partitions));
 
-            // Cache the node ID to avoid database queries during job submission.
-            // In some startup orders, this node may not yet exist; event handler will retry lazily.
-            cachedNodeId = resolveContainerWorkerNodeId();
+            // Ensure a virtual queue and worker node exist for every partition.
+            for (CpuPartition partition : getEffectivePartitions()) {
+                ensurePartitionQueueExists(partition);
+            }
+
+            // Cache partition node IDs to avoid database queries during job
+            // submission. In some startup orders, nodes may not yet exist; event
+            // handler will retry lazily.
+            for (CpuPartition partition : getEffectivePartitions()) {
+                getOrResolveCachedNodeId(partition.index);
+            }
+            cachedNodeId = getOrResolveCachedNodeId(0);
 
             // Reconcile pairs left in ENQUEUED or RUNNING state from a previous crash.
             // Must run before the monitor starts so exited containers are processed
@@ -271,6 +315,45 @@ public class PodmanBackend implements Backend {
         }
     }
 
+    private List<CpuPartition> getEffectivePartitions() {
+        if (partitions == null || partitions.isEmpty()) {
+            return Collections.singletonList(CpuPartitionManager.singleNoPinningPartition());
+        }
+        return partitions;
+    }
+
+    private void initializePartitionState() {
+        List<CpuPartition> activePartitions = getEffectivePartitions();
+        int partitionCount = activePartitions.size();
+        partitionActiveSlots = new int[partitionCount];
+        partitionMaxSlots = new int[partitionCount];
+        partitionNodeIds = new int[partitionCount];
+        partitionSlotLocks = new Object[partitionCount];
+        Arrays.fill(partitionNodeIds, -1);
+
+        int maxJobsPerPartition = EnvironmentConfig.getPartitionMaxJobs();
+        for (int i = 0; i < partitionCount; i++) {
+            partitionMaxSlots[i] = maxJobsPerPartition;
+            partitionSlotLocks[i] = new Object();
+        }
+        log.info(
+            "Container max concurrent jobs per CPU partition: " +
+            maxJobsPerPartition
+        );
+    }
+
+    private void ensurePartitionStateReady() {
+        int partitionCount = getEffectivePartitions().size();
+        if (
+            partitionSlotLocks.length != partitionCount ||
+            partitionActiveSlots.length != partitionCount ||
+            partitionMaxSlots.length != partitionCount ||
+            partitionNodeIds.length != partitionCount
+        ) {
+            initializePartitionState();
+        }
+    }
+
     /**
      * Resolves the virtual Podman worker node ID used for pair host attribution.
      *
@@ -282,27 +365,47 @@ public class PodmanBackend implements Backend {
             return cachedNodeId;
         }
 
+        int resolved = getOrResolveCachedNodeId(0);
+        if (resolved > 0) {
+            cachedNodeId = resolved;
+        }
+        return resolved;
+    }
+
+    private int resolveNodeIdByName(String nodeName) {
         try {
-            int resolved = org.starexec.data.database.Cluster.getNodeIdByName(
-                CONTAINER_WORKER_NODE
-            );
-            if (resolved > 0) {
-                cachedNodeId = resolved;
-            } else {
+            int resolved = Cluster.getNodeIdByName(nodeName);
+            if (resolved <= 0) {
                 log.warn(
                     "Could not find nodeId for " +
-                    CONTAINER_WORKER_NODE +
+                    nodeName +
                     ". Pair host mapping will retry on next container start event."
                 );
             }
             return resolved;
         } catch (Exception e) {
-            log.error(
-                "Error resolving nodeId for " + CONTAINER_WORKER_NODE,
-                e
-            );
+            log.error("Error resolving nodeId for " + nodeName, e);
             return -1;
         }
+    }
+
+    private int getOrResolveCachedNodeId(int idx) {
+        ensurePartitionStateReady();
+        List<CpuPartition> activePartitions = getEffectivePartitions();
+        int safeIndex = normalizePartitionIndex(idx);
+        if (
+            safeIndex < partitionNodeIds.length &&
+            partitionNodeIds[safeIndex] > 0
+        ) {
+            return partitionNodeIds[safeIndex];
+        }
+
+        CpuPartition partition = activePartitions.get(safeIndex);
+        int id = resolveNodeIdByName(partition.workerNodeName);
+        if (safeIndex < partitionNodeIds.length && id > 0) {
+            partitionNodeIds[safeIndex] = id;
+        }
+        return id;
     }
 
     /**
@@ -313,8 +416,16 @@ public class PodmanBackend implements Backend {
         int maxAttempts,
         long delayMillis
     ) {
+        return resolveContainerWorkerNodeIdWithRetry(0, maxAttempts, delayMillis);
+    }
+
+    private int resolveContainerWorkerNodeIdWithRetry(
+        int partitionIndex,
+        int maxAttempts,
+        long delayMillis
+    ) {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            int nodeId = resolveContainerWorkerNodeId();
+            int nodeId = getOrResolveCachedNodeId(partitionIndex);
             if (nodeId > 0) {
                 return nodeId;
             }
@@ -330,20 +441,6 @@ public class PodmanBackend implements Backend {
         }
         return -1;
     }
-
-    /**
-     * Container queue name used for all container-based job execution.
-     * This is a virtual queue that exists only in the database to satisfy
-     * the job submission form requirements.
-     */
-    public static final String CONTAINER_QUEUE_NAME = "container.q";
-
-    /**
-     * Virtual worker node name for container-based job execution.
-     * This node doesn't represent a physical machine but satisfies the
-     * JobManager's requirement for at least one node associated with a queue.
-     */
-    public static final String CONTAINER_WORKER_NODE = "container-worker-1";
 
     private void startContainerEventListener() {
         try {
@@ -362,6 +459,10 @@ public class PodmanBackend implements Backend {
                             // Only care about containers we track
                             Integer pairId = containerIdToPairId.getIfPresent(containerId);
                             if (pairId == null) return;
+                            final int partitionIndex = getPartitionIndexFromEvent(
+                                event,
+                                containerId
+                            );
 
                             log.debug("Container event received: action=" + action + " pairId=" + pairId);
 
@@ -387,7 +488,11 @@ public class PodmanBackend implements Backend {
 												return;
 											}
 
-                                            int nodeId = resolveContainerWorkerNodeIdWithRetry(5, 1000);
+                                            int nodeId = resolveContainerWorkerNodeIdWithRetry(
+                                                partitionIndex,
+                                                5,
+                                                1000
+                                            );
                                             if (nodeId > 0) {
 												JobPairs.ConditionalPairUpdateResult hostUpdateResult = JobPairs.tryUpdatePairExecutionHost(
 													pairId,
@@ -503,54 +608,138 @@ public class PodmanBackend implements Backend {
         }
     }
 
+    private int getPartitionIndexFromEvent(Event event, String containerId) {
+        Map<String, String> labels = null;
+        if (event != null && event.getActor() != null) {
+            labels = event.getActor().getAttributes();
+        }
+
+        int fromEvent = parsePartitionIndex(labels);
+        if (fromEvent >= 0) {
+            return normalizePartitionIndex(fromEvent);
+        }
+
+        try {
+            var inspection = dockerClient.inspectContainerCmd(containerId).exec();
+            var config = inspection.getConfig();
+            if (config != null && config.getLabels() != null) {
+                int fromInspect = parsePartitionIndex(config.getLabels());
+                if (fromInspect >= 0) {
+                    return normalizePartitionIndex(fromInspect);
+                }
+            }
+        } catch (Exception e) {
+            log.debug(
+                "Could not inspect container labels for partition attribution: " +
+                containerId,
+                e
+            );
+        }
+
+        return 0;
+    }
+
+    private int parsePartitionIndex(Map<String, String> labels) {
+        if (labels == null) {
+            return -1;
+        }
+        String partitionLabel = labels.get(LABEL_PARTITION_INDEX);
+        if (partitionLabel == null || partitionLabel.trim().isEmpty()) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(partitionLabel.trim());
+        } catch (NumberFormatException e) {
+            log.warn(
+                "Invalid container partition label '" + partitionLabel +
+                "'; falling back to partition 0",
+                e
+            );
+            return -1;
+        }
+    }
+
     /**
-     * Ensures a virtual queue exists for container job submission.
+     * Ensures the legacy virtual queue exists for container job submission.
+     *
+     * @deprecated Use {@link #ensurePartitionQueueExists(CpuPartition)} so queue
+     *             and node creation follows the active CPU partition list.
+     */
+    @Deprecated
+    private void ensureContainerQueueExists() {
+        ensurePartitionQueueExists(CpuPartitionManager.singleNoPinningPartition());
+    }
+
+    /**
+     * Ensures a virtual queue and worker node exist for a CPU partition.
      * <p>
      * The StarExec job submission UI requires a queue selection, but container
      * backends don't use traditional SGE queues. This method creates a virtual
-     * "container.q" queue with generous timeout limits that serves as the
-     * target for all container-based jobs.
+     * partition queue with generous timeout limits and a worker node associated
+     * to that queue.
      * </p>
      */
-    private void ensureContainerQueueExists() {
+    private void ensurePartitionQueueExists(CpuPartition partition) {
         try {
-            // Check if container queue already exists
-            if (Queues.getIdByName(CONTAINER_QUEUE_NAME) > 0) {
+            CpuPartition effectivePartition = partition == null
+                ? CpuPartitionManager.singleNoPinningPartition()
+                : partition;
+
+            int queueId = Queues.getIdByName(effectivePartition.queueName);
+            if (queueId > 0) {
                 log.info(
-                    "Container queue '" +
-                        CONTAINER_QUEUE_NAME +
+                    "Container partition queue '" +
+                        effectivePartition.queueName +
                         "' already exists"
                 );
-                return;
+            } else {
+                // Create virtual queue with generous limits.
+                // CPU and wallclock limits are enforced by the container, not the queue.
+                int cpuTimeout = 86400; // 24 hours max
+                int wallTimeout = 86400; // 24 hours max
+
+                queueId = Queues.add(
+                    effectivePartition.queueName,
+                    cpuTimeout,
+                    wallTimeout
+                );
+                if (queueId > 0) {
+                    log.info(
+                        "Created container partition queue '" +
+                            effectivePartition.queueName +
+                            "' with ID: " +
+                            queueId
+                    );
+                } else {
+                    log.warn(
+                        "Failed to create container partition queue '" +
+                        effectivePartition.queueName +
+                        "' - job submission may fail"
+                    );
+                }
             }
 
-            // Create virtual queue with generous limits
-            // CPU and wallclock limits are enforced by the container, not the queue
-            int cpuTimeout = 86400; // 24 hours max
-            int wallTimeout = 86400; // 24 hours max
-
-            int queueId = Queues.add(
-                CONTAINER_QUEUE_NAME,
-                cpuTimeout,
-                wallTimeout
-            );
+            // These calls are intentionally idempotent: re-run on every startup to handle
+            // cases where a previous startup created the queue but crashed before completing
+            // node association, or where a DBA manually reset the node status.
             if (queueId > 0) {
-                // Make queue globally accessible
                 Queues.makeGlobal(queueId);
-                Queues.setStatus(CONTAINER_QUEUE_NAME, "ACTIVE");
-                log.info(
-                    "Created container queue '" +
-                        CONTAINER_QUEUE_NAME +
-                        "' with ID: " +
-                        queueId
+                Queues.setStatus(effectivePartition.queueName, "ACTIVE");
+                Cluster.addNodeIfNotExists(effectivePartition.workerNodeName);
+                Cluster.setNodeStatus(effectivePartition.workerNodeName, "ACTIVE");
+                Queues.associate(
+                    effectivePartition.queueName,
+                    effectivePartition.workerNodeName
                 );
             } else {
                 log.warn(
-                    "Failed to create container queue - job submission may fail"
+                    "Could not verify container partition queue '" +
+                    effectivePartition.queueName +
+                    "' - skipping node association"
                 );
             }
         } catch (Exception e) {
-            log.warn("Error creating container queue: " + e.getMessage());
+            log.warn("Error creating container partition queue: " + e.getMessage());
             // Don't fail initialization - the queue might be created by another process
         }
     }
@@ -650,33 +839,98 @@ public class PodmanBackend implements Backend {
         }
     }
 
+    private int normalizePartitionIndex(int partitionIndex) {
+        ensurePartitionStateReady();
+        int partitionCount = getEffectivePartitions().size();
+        if (partitionCount <= 1) {
+            return 0;
+        }
+        if (partitionIndex < 0 || partitionIndex >= partitionCount) {
+            log.warn(
+                "Invalid CPU partition index " + partitionIndex +
+                "; falling back to partition 0"
+            );
+            return 0;
+        }
+        return partitionIndex;
+    }
+
     /**
-     * Acquires one container submission slot, blocking if the backend is at capacity.
+     * Acquires one container submission slot for the selected CPU partition.
      */
-    private void acquireSubmissionSlot(int execId) throws InterruptedException {
-        synchronized (submissionSlotLock) {
-            while (activeSubmissionSlots >= maxConcurrentJobs) {
+    private void acquirePartitionSlot(int partitionIndex, int execId)
+        throws InterruptedException {
+        ensurePartitionStateReady();
+        int safeIndex = normalizePartitionIndex(partitionIndex);
+        Object lock = partitionSlotLocks[safeIndex];
+        synchronized (lock) {
+            while (partitionActiveSlots[safeIndex] >= partitionMaxSlots[safeIndex]) {
                 log.debug(
-                    "Podman submission waiting for available slot (execId=" +
+                    "Podman submission waiting for available partition slot " +
+                    "(execId=" +
                     execId +
+                    ", partition=" +
+                    safeIndex +
                     ", active=" +
-                    activeSubmissionSlots +
+                    partitionActiveSlots[safeIndex] +
                     ", max=" +
-                    maxConcurrentJobs +
+                    partitionMaxSlots[safeIndex] +
                     ")"
                 );
-                submissionSlotLock.wait();
+                lock.wait();
             }
 
-            activeSubmissionSlots++;
-            execIdsHoldingSubmissionSlot.add(execId);
+            partitionActiveSlots[safeIndex]++;
+            execIdToPartitionIndex.put(execId, safeIndex);
             log.debug(
-                "Acquired Podman submission slot (execId=" +
+                "Acquired Podman partition slot (execId=" +
                 execId +
+                ", partition=" +
+                safeIndex +
                 ", active=" +
-                activeSubmissionSlots +
+                partitionActiveSlots[safeIndex] +
                 ", max=" +
-                maxConcurrentJobs +
+                partitionMaxSlots[safeIndex] +
+                ")"
+            );
+        }
+    }
+
+    private void releasePartitionSlot(
+        int partitionIndex,
+        int execId,
+        String reason
+    ) {
+        ensurePartitionStateReady();
+        int safeIndex = normalizePartitionIndex(partitionIndex);
+        Object lock = partitionSlotLocks[safeIndex];
+        synchronized (lock) {
+            if (partitionActiveSlots[safeIndex] > 0) {
+                partitionActiveSlots[safeIndex]--;
+            } else {
+                log.warn(
+                    "Partition slot underflow prevented while releasing execId=" +
+                    execId +
+                    " (partition=" +
+                    safeIndex +
+                    ", reason=" +
+                    reason +
+                    ")"
+                );
+            }
+
+            lock.notifyAll();
+            log.debug(
+                "Released Podman partition slot (execId=" +
+                execId +
+                ", partition=" +
+                safeIndex +
+                ", reason=" +
+                reason +
+                ", active=" +
+                partitionActiveSlots[safeIndex] +
+                ", max=" +
+                partitionMaxSlots[safeIndex] +
                 ")"
             );
         }
@@ -686,37 +940,36 @@ public class PodmanBackend implements Backend {
      * Releases one container submission slot for the given execution id.
      */
     private void releaseSubmissionSlot(int execId, String reason) {
-        synchronized (submissionSlotLock) {
-            if (!execIdsHoldingSubmissionSlot.remove(execId)) {
-                return;
-            }
-
-            if (activeSubmissionSlots > 0) {
-                activeSubmissionSlots--;
-            } else {
-                log.warn(
-                    "Submission slot underflow prevented while releasing execId=" +
-                    execId +
-                    " (reason=" +
-                    reason +
-                    ")"
-                );
-            }
-
-            submissionSlotLock.notifyAll();
-
-            log.debug(
-                "Released Podman submission slot (execId=" +
-                execId +
-                ", reason=" +
-                reason +
-                ", active=" +
-                activeSubmissionSlots +
-                ", max=" +
-                maxConcurrentJobs +
-                ")"
-            );
+        Integer partitionIndex = execIdToPartitionIndex.remove(execId);
+        if (partitionIndex != null) {
+            releasePartitionSlot(partitionIndex, execId, reason);
         }
+    }
+
+    /**
+     * Selects the partition for a new job using least-loaded balancing.
+     * On tie, uses {@code pairId % partitions.size()} for determinism.
+     *
+     * <p>For single-partition setups this always returns partition 0.</p>
+     */
+    private CpuPartition selectPartition(int pairId) {
+        ensurePartitionStateReady();
+        List<CpuPartition> activePartitions = getEffectivePartitions();
+        if (activePartitions.size() == 1) {
+            return activePartitions.get(0);
+        }
+
+        int tieBreaker = Math.floorMod(pairId, activePartitions.size());
+        int best = 0;
+        int bestLoad = Integer.MAX_VALUE;
+        for (int i = 0; i < activePartitions.size(); i++) {
+            int load = partitionActiveSlots[i];
+            if (load < bestLoad || (load == bestLoad && i == tieBreaker)) {
+                best = i;
+                bestLoad = load;
+            }
+        }
+        return activePartitions.get(best);
     }
 
     /**
@@ -1020,13 +1273,16 @@ public class PodmanBackend implements Backend {
             execIdForSlot = nextExecId++;
         }
 
+        CpuPartition selectedPartition = selectPartition(pairId);
+        int partitionIndex = selectedPartition.index;
+
         try {
-            acquireSubmissionSlot(execIdForSlot);
+            acquirePartitionSlot(partitionIndex, execIdForSlot);
             slotAcquired = true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.error(
-                "Interrupted while waiting for an available Podman submission slot"
+                "Interrupted while waiting for an available Podman partition slot"
             );
             return -1;
         }
@@ -1065,7 +1321,8 @@ public class PodmanBackend implements Backend {
                         logPath,
                         timestamp,
                         attempt,
-                        execIdForSlot
+                        execIdForSlot,
+                        selectedPartition
                     );
                     submissionAccepted = true;
                     return execId;
@@ -1137,12 +1394,14 @@ public class PodmanBackend implements Backend {
         String logPath,
         long timestamp,
         int attempt,
-        int execId
+        int execId,
+        CpuPartition selectedPartition
     ) throws Exception {
         log.info("Submitting job: " + jobName);
         log.debug("Working directory: " + workingDirectory);
         log.debug("Script path: " + scriptPath);
         log.debug("Log path: " + logPath);
+        log.debug("CPU partition: " + selectedPartition);
 
         // Ensure log directory exists (use the directory part of logPath, as it may be a file path)
         Path logDir = Paths.get(logPath).getParent();
@@ -1164,7 +1423,11 @@ public class PodmanBackend implements Backend {
         }
 
         // Configure container with volume mounts
-        HostConfig hostConfig = createHostConfig(workingDirectory, logPath);
+        HostConfig hostConfig = createHostConfig(
+            workingDirectory,
+            logPath,
+            selectedPartition
+        );
 
         // Get output directory for container communication (status.json, etc.)
         String outputDir = logDir != null ? logDir.toString() : "/tmp/output";
@@ -1174,7 +1437,11 @@ public class PodmanBackend implements Backend {
             workingDirectory,
             outputDir
         );
-        Map<String, String> labels = createContainerLabels(pairId, execId);
+        Map<String, String> labels = createContainerLabels(
+            pairId,
+            execId,
+            selectedPartition
+        );
 
         // Log container creation parameters for debugging
         log.info("Creating container with:");
@@ -1203,7 +1470,7 @@ public class PodmanBackend implements Backend {
             CreateContainerResponse container = dockerClient
                 .createContainerCmd(imageName)
                 .withName(jobName)
-                .withHostName(CONTAINER_WORKER_NODE)
+                .withHostName(selectedPartition.workerNodeName)
                 .withHostConfig(hostConfig)
                 .withEnv(envVars)
                 .withLabels(labels)
@@ -1233,6 +1500,7 @@ public class PodmanBackend implements Backend {
                     hostConfig,
                     envVars,
                     labels,
+                    selectedPartition.workerNodeName,
                     scriptPath,
                     workingDirectory
                 );
@@ -1412,6 +1680,7 @@ public class PodmanBackend implements Backend {
         HostConfig hostConfig,
         List<String> env,
         Map<String, String> labels,
+        String hostName,
         String scriptPath,
         String workDir
     ) throws Exception {
@@ -1421,7 +1690,7 @@ public class PodmanBackend implements Backend {
         json.append("\"Image\":\"").append(escapeJson(image)).append("\",");
         json
             .append("\"Hostname\":\"")
-            .append(escapeJson(CONTAINER_WORKER_NODE))
+            .append(escapeJson(hostName))
             .append("\",");
         json.append("\"Entrypoint\":[\"/bin/bash\"],");
         json
@@ -1509,6 +1778,26 @@ public class PodmanBackend implements Backend {
                 .append("\"CpuQuota\":")
                 .append(hostConfig.getCpuQuota())
                 .append(",");
+        }
+
+        // Cpuset CPU/memory pinning must be preserved in the curl fallback path.
+        if (
+            hostConfig.getCpusetCpus() != null &&
+            !hostConfig.getCpusetCpus().isEmpty()
+        ) {
+            json
+                .append("\"CpusetCpus\":\"")
+                .append(escapeJson(hostConfig.getCpusetCpus()))
+                .append("\",");
+        }
+        if (
+            hostConfig.getCpusetMems() != null &&
+            !hostConfig.getCpusetMems().isEmpty()
+        ) {
+            json
+                .append("\"CpusetMems\":\"")
+                .append(escapeJson(hostConfig.getCpusetMems()))
+                .append("\",");
         }
 
         // Remove trailing comma and close HostConfig
@@ -1672,7 +1961,8 @@ public class PodmanBackend implements Backend {
      */
     private HostConfig createHostConfig(
         String workingDirectory,
-        String logPath
+        String logPath,
+        CpuPartition partition
     ) {
         List<Bind> binds = new ArrayList<>();
 
@@ -1706,7 +1996,7 @@ public class PodmanBackend implements Backend {
         String networkMode = EnvironmentConfig.getContainerNetworkMode();
         log.debug("Job container network mode: " + networkMode);
 
-        return new HostConfig()
+        HostConfig hostConfig = new HostConfig()
             .withBinds(binds.toArray(new Bind[0]))
             .withNetworkMode(networkMode)
             .withMemory(defaultMemoryMb * 1024 * 1024) // Convert MB to bytes
@@ -1714,6 +2004,15 @@ public class PodmanBackend implements Backend {
             .withCpuPeriod(100000L)
             .withCpuQuota(100000L) // 1 CPU core
             .withAutoRemove(false); // Keep container for inspection after completion
+
+        if (partition != null && partition.cpusetCpus != null) {
+            hostConfig.withCpusetCpus(partition.cpusetCpus);
+        }
+        if (partition != null && partition.cpusetMems != null) {
+            hostConfig.withCpusetMems(partition.cpusetMems);
+        }
+
+        return hostConfig;
     }
 
     /**
@@ -1800,14 +2099,32 @@ public class PodmanBackend implements Backend {
      *
      * @param pairId The job pair ID (stored as {@code starexec.pair.id})
      * @param execId The backend execution ID (stored as {@code starexec.exec.id})
+     * @param partition The CPU partition selected for this container
      */
-    private Map<String, String> createContainerLabels(int pairId, int execId) {
+    private Map<String, String> createContainerLabels(
+        int pairId,
+        int execId,
+        CpuPartition partition
+    ) {
         Map<String, String> labels = new HashMap<>();
         labels.put(LABEL_MANAGED, "true");
         labels.put(LABEL_PAIR_ID, String.valueOf(pairId));
         labels.put(LABEL_EXEC_ID, String.valueOf(execId));
         labels.put(LABEL_VERSION, CURRENT_LABEL_VERSION);
         labels.put(LABEL_KIND, pairId > 0 ? KIND_JOB_PAIR : KIND_MAINTENANCE);
+        CpuPartition effectivePartition = partition == null
+            ? CpuPartitionManager.singleNoPinningPartition()
+            : partition;
+        labels.put(
+            LABEL_PARTITION_INDEX,
+            String.valueOf(effectivePartition.index)
+        );
+        labels.put(
+            LABEL_PARTITION_CPUS,
+            effectivePartition.cpusetCpus != null
+                ? effectivePartition.cpusetCpus
+                : "all"
+        );
         return labels;
     }
 
@@ -1920,6 +2237,7 @@ public class PodmanBackend implements Backend {
             Map<Integer, String> pairIdToRunningContainer = new HashMap<>();
             Map<Integer, String> pairIdToExitedContainer = new HashMap<>();
             Map<Integer, Integer> pairIdToExecId = new HashMap<>();
+            Map<Integer, Integer> pairIdToPartitionIndex = new HashMap<>();
             int legacyContainers = 0;
             int maintenanceContainers = 0;
 
@@ -1968,6 +2286,11 @@ public class PodmanBackend implements Backend {
                     if (execIdStr != null) {
                         pairIdToExecId.put(pairId, Integer.parseInt(execIdStr));
                     }
+                    int partitionIndex = parsePartitionIndex(container.getLabels());
+                    pairIdToPartitionIndex.put(
+                        pairId,
+                        partitionIndex >= 0 ? normalizePartitionIndex(partitionIndex) : 0
+                    );
                 } catch (NumberFormatException ignored) {
                     // Malformed label — cannot trust
                 }
@@ -1997,7 +2320,10 @@ public class PodmanBackend implements Backend {
                     Integer execId = pairIdToExecId.get(pairId);
                     markPairRunningSafely(pairId, "reconciliation");
                     rebuildTrackingFromLabel(
-                        pairId, pairIdToRunningContainer.get(pairId), execId);
+                        pairId,
+                        pairIdToRunningContainer.get(pairId),
+                        execId,
+                        pairIdToPartitionIndex.get(pairId));
                     if (execId != null && execId > maxRecoveredExecId) {
                         maxRecoveredExecId = execId;
                     }
@@ -2021,7 +2347,10 @@ public class PodmanBackend implements Backend {
                     Integer execId = pairIdToExecId.get(pairId);
                     markPairRunningSafely(pairId, "reconciliation");
                     rebuildTrackingFromLabel(
-                        pairId, pairIdToRunningContainer.get(pairId), execId);
+                        pairId,
+                        pairIdToRunningContainer.get(pairId),
+                        execId,
+                        pairIdToPartitionIndex.get(pairId));
                     if (execId != null && execId > maxRecoveredExecId) {
                         maxRecoveredExecId = execId;
                     }
@@ -2089,16 +2418,64 @@ public class PodmanBackend implements Backend {
      * can manage the container as if it had submitted it normally.
      */
     private void rebuildTrackingFromLabel(
-        int pairId, String containerId, Integer execId) {
+        int pairId,
+        String containerId,
+        Integer execId,
+        Integer partitionIndex
+    ) {
         if (pairId <= 0) return;
         containerIdToPairId.put(containerId, pairId);
         if (execId != null && execId > 0) {
             execIdToContainerId.put(execId, containerId);
-            // Do NOT hold a submission slot for containers found during
-            // reconciliation — they were submitted in a previous session.
+            int safePartitionIndex = normalizePartitionIndex(
+                partitionIndex == null ? 0 : partitionIndex
+            );
+            reserveRecoveredPartitionSlot(safePartitionIndex, execId);
         }
         log.debug("Rebuilt tracking for pair " + pairId +
-                  " (container " + containerId + ", execId=" + execId + ")");
+                  " (container " + containerId + ", execId=" + execId +
+                  ", partition=" + (partitionIndex == null ? 0 : partitionIndex) + ")");
+    }
+
+    /**
+     * Reserves a per-partition slot for a container recovered during crash reconciliation.
+     *
+     * <p>This is an intentional reversal of the pre-partition behavior, which
+     * deliberately did <em>not</em> hold submission slots for recovered containers.
+     * That was safe under the old single-global-slot model because recovered containers
+     * were not registered in {@code execIdsHoldingSubmissionSlot}, so their completion
+     * events would silently skip {@code releaseSubmissionSlot}, leaving the counter
+     * unchanged.</p>
+     *
+     * <p>Under the partition model this logic breaks down: if recovered containers are
+     * not counted in {@code partitionActiveSlots}, new submissions will push the active
+     * count above {@code partitionMaxSlots} without the partition being aware. Worse,
+     * when the recovered container does complete, the event listener calls
+     * {@code releaseSubmissionSlot}, which removes the execId from
+     * {@code execIdToPartitionIndex}. Without a prior {@code putIfAbsent} here, that
+     * remove returns {@code null} and no {@code releasePartitionSlot} is called — so the
+     * slot count never decrements, permanently under-counting active jobs.</p>
+     *
+     * <p>Holding the slot here is therefore required for correctness: the count reflects
+     * real concurrent load, and the slot is properly released when the container exits
+     * through the normal Docker event path.</p>
+     *
+     * <p>Side effect: recovered containers do count against {@code partitionMaxSlots}.
+     * If a crash left N containers running and N == partitionMaxSlots, new submissions
+     * will block until those containers exit. This is the correct behavior — the CPUs
+     * are genuinely occupied.</p>
+     */
+    private void reserveRecoveredPartitionSlot(int partitionIndex, int execId) {
+        int safeIndex = normalizePartitionIndex(partitionIndex);
+        if (execIdToPartitionIndex.putIfAbsent(execId, safeIndex) != null) {
+            return;
+        }
+
+        Object lock = partitionSlotLocks[safeIndex];
+        synchronized (lock) {
+            partitionActiveSlots[safeIndex]++;
+            lock.notifyAll();
+        }
     }
 
     /**
@@ -2134,7 +2511,11 @@ public class PodmanBackend implements Backend {
             CompletedContainerInfo info = completed.get(0);
             if (info.pairId <= 0) {
                 info = new CompletedContainerInfo(
-                    info.containerId, pairId, info.outputDir, info.exitCode);
+                    info.containerId,
+                    pairId,
+                    info.outputDir,
+                    info.exitCode,
+                    info.partitionIndex);
             }
 
             // Delegate to ContainerJobMonitor for full processing
@@ -2228,7 +2609,11 @@ public class PodmanBackend implements Backend {
 
                     if (outputDir != null) {
                         result.add(new CompletedContainerInfo(
-                            container.getId(), pairId, outputDir, exitCode));
+                            container.getId(),
+                            pairId,
+                            outputDir,
+                            exitCode,
+                            Math.max(0, parsePartitionIndex(container.getLabels()))));
                     }
                 }
             }
@@ -2409,6 +2794,7 @@ public class PodmanBackend implements Backend {
         public final int pairId;
         public final String outputDir;
         public final int exitCode;
+        public final int partitionIndex;
 
         public CompletedContainerInfo(
             String containerId,
@@ -2416,10 +2802,21 @@ public class PodmanBackend implements Backend {
             String outputDir,
             int exitCode
         ) {
+            this(containerId, pairId, outputDir, exitCode, 0);
+        }
+
+        public CompletedContainerInfo(
+            String containerId,
+            int pairId,
+            String outputDir,
+            int exitCode,
+            int partitionIndex
+        ) {
             this.containerId = containerId;
             this.pairId = pairId;
             this.outputDir = outputDir;
             this.exitCode = exitCode;
+            this.partitionIndex = partitionIndex;
         }
     }
 
@@ -2600,7 +2997,8 @@ public class PodmanBackend implements Backend {
                             container.getId(),
                             pairId,
                             outputDir,
-                            exitCode
+                            exitCode,
+                            Math.max(0, parsePartitionIndex(container.getLabels()))
                         )
                     );
                     log.debug(
@@ -2825,31 +3223,37 @@ public class PodmanBackend implements Backend {
 
     // --- Methods not applicable to container backend ---
 
+    String getWorkerNodeNameForPartition(int partitionIndex) {
+        List<CpuPartition> activePartitions = getEffectivePartitions();
+        return activePartitions
+            .get(normalizePartitionIndex(partitionIndex))
+            .workerNodeName;
+    }
+
     @Override
     public String[] getWorkerNodes() {
-        // Return a virtual worker node to satisfy JobManager's requirement
-        // for at least one node associated with the container queue
-        log.debug("getWorkerNodes: Returning virtual container worker node");
-        return new String[] { CONTAINER_WORKER_NODE };
+        return getEffectivePartitions()
+            .stream()
+            .map(partition -> partition.workerNodeName)
+            .toArray(String[]::new);
     }
 
     @Override
     public String[] getQueues() {
-        // Return the virtual container queue so Cluster.loadQueueDetails() keeps it active
-        log.debug(
-            "getQueues: Returning container queue: " + CONTAINER_QUEUE_NAME
-        );
-        return new String[] { CONTAINER_QUEUE_NAME };
+        return getEffectivePartitions()
+            .stream()
+            .map(partition -> partition.queueName)
+            .toArray(String[]::new);
     }
 
     @Override
     public Map<String, String> getNodeQueueAssociations() {
-        // Return the association between the virtual worker node and container queue
-        // This enables Cluster.setQueueAssociationsInDb() to populate the queue_assoc table
-        Map<String, String> associations = new HashMap<>();
-        associations.put(CONTAINER_WORKER_NODE, CONTAINER_QUEUE_NAME);
-        log.debug(
-            "getNodeQueueAssociations: Returning virtual node-queue association"
+        Map<String, String> associations = new LinkedHashMap<>();
+        getEffectivePartitions().forEach(
+            partition -> associations.put(
+                partition.workerNodeName,
+                partition.queueName
+            )
         );
         return associations;
     }

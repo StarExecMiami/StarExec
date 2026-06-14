@@ -397,7 +397,14 @@ public class ContainerJobMonitor {
         Properties attributes = parseAttributes(outputPath);
 
         // 4. Update database
-        updateDatabase(pairId, stageNumber, stats, status, attributes);
+        updateDatabase(
+            pairId,
+            stageNumber,
+            stats,
+            status,
+            attributes,
+            info.partitionIndex
+        );
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
@@ -680,7 +687,8 @@ public class ContainerJobMonitor {
         int stageNumber,
         RunsolverStats stats,
         StatusCode status,
-        Properties attributes
+        Properties attributes,
+        int partitionIndex
     ) throws Exception {
         JobPairs.setPairStatusPrecise(
             pairId,
@@ -705,7 +713,7 @@ public class ContainerJobMonitor {
             String nodeName = (stats.hostname != null &&
                     !stats.hostname.isEmpty())
                 ? stats.hostname
-                : PodmanBackend.CONTAINER_WORKER_NODE;
+                : backend.getWorkerNodeNameForPartition(partitionIndex);
             boolean ok = JobPairs.updateRunSolverStats(
                 pairId,
                 nodeName,

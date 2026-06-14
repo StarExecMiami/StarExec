@@ -22,6 +22,7 @@ import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.starexec.backend.ContainerJobMonitor;
+import org.starexec.backend.CpuPartition;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
@@ -141,27 +142,47 @@ public class PodmanBackendTests {
 
     @SuppressWarnings("unchecked")
     private Set<Integer> getSlotHolderSet() throws Exception {
-        Field holdersField = PodmanBackend.class.getDeclaredField("execIdsHoldingSubmissionSlot");
-        holdersField.setAccessible(true);
-        return (Set<Integer>) holdersField.get(backend);
+        return getSlotPartitionMap().keySet();
     }
 
     private int getActiveSubmissionSlots() throws Exception {
-        Field slotsField = PodmanBackend.class.getDeclaredField("activeSubmissionSlots");
-        slotsField.setAccessible(true);
-        return (int) slotsField.get(backend);
+        ensurePartitionStateReady();
+        int activeSlots = 0;
+        for (int slotCount : getPartitionActiveSlots()) {
+            activeSlots += slotCount;
+        }
+        return activeSlots;
     }
 
     private void setActiveSubmissionSlots(int value) throws Exception {
-        Field slotsField = PodmanBackend.class.getDeclaredField("activeSubmissionSlots");
-        slotsField.setAccessible(true);
-        slotsField.set(backend, value);
+        ensurePartitionStateReady();
+        int[] slots = getPartitionActiveSlots();
+        slots[0] = value;
     }
 
     private void markSubmissionSlotHeld(int execId) throws Exception {
-        Set<Integer> holders = getSlotHolderSet();
-        holders.add(execId);
+        Map<Integer, Integer> holders = getSlotPartitionMap();
+        holders.put(execId, 0);
         setActiveSubmissionSlots(holders.size());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<Integer, Integer> getSlotPartitionMap() throws Exception {
+        Field holdersField = PodmanBackend.class.getDeclaredField("execIdToPartitionIndex");
+        holdersField.setAccessible(true);
+        return (Map<Integer, Integer>) holdersField.get(backend);
+    }
+
+    private int[] getPartitionActiveSlots() throws Exception {
+        Field slotsField = PodmanBackend.class.getDeclaredField("partitionActiveSlots");
+        slotsField.setAccessible(true);
+        return (int[]) slotsField.get(backend);
+    }
+
+    private void ensurePartitionStateReady() throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod("ensurePartitionStateReady");
+        method.setAccessible(true);
+        method.invoke(backend);
     }
 
     private void invokeStartContainerWithVerification(String containerId)
@@ -301,6 +322,69 @@ public class PodmanBackendTests {
             "Worker node should be associated with container queue",
             "container.q",
             associations.get("container-worker-1")
+        );
+    }
+
+    @Test
+    public void testGetQueues_ReturnsPartitionQueuesWhenConfigured() throws Exception {
+        setBackendField(
+            "partitions",
+            Arrays.asList(
+                new CpuPartition(0, "0-7", "0"),
+                new CpuPartition(1, "8-15", "0")
+            )
+        );
+
+        String[] queues = backend.getQueues();
+
+        assertArrayEquals(
+            "Partition queues should follow active CPU partition order",
+            new String[]{"partition0.q", "partition1.q"},
+            queues
+        );
+    }
+
+    @Test
+    public void testGetWorkerNodes_ReturnsPartitionNodesWhenConfigured() throws Exception {
+        setBackendField(
+            "partitions",
+            Arrays.asList(
+                new CpuPartition(0, "0-7", "0"),
+                new CpuPartition(1, "8-15", "0")
+            )
+        );
+
+        String[] nodes = backend.getWorkerNodes();
+
+        assertArrayEquals(
+            "Partition nodes should follow active CPU partition order",
+            new String[]{"container-worker-partition-0", "container-worker-partition-1"},
+            nodes
+        );
+    }
+
+    @Test
+    public void testGetNodeQueueAssociations_ReturnsPartitionMappingsWhenConfigured()
+        throws Exception {
+        setBackendField(
+            "partitions",
+            Arrays.asList(
+                new CpuPartition(0, "0-7", "0"),
+                new CpuPartition(1, "8-15", "0")
+            )
+        );
+
+        Map<String, String> associations = backend.getNodeQueueAssociations();
+
+        assertNotNull("Associations should not be null", associations);
+        assertEquals("Should have one mapping per partition", 2, associations.size());
+        assertEquals(
+            "partition0.q",
+            associations.get("container-worker-partition-0")
+        );
+        assertEquals(
+            "partition1.q",
+            associations.get("container-worker-partition-1")
         );
     }
 

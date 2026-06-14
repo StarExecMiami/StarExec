@@ -174,6 +174,9 @@ public class KubernetesNativeBackend implements Backend {
     /** Default queue name for nodes without queue label */
     private static final String DEFAULT_QUEUE_NAME = "default";
 
+    /** Fallback node name when Kubernetes stats do not report a hostname */
+    private static final String DEFAULT_WORKER_NODE_NAME = "kubernetes-worker";
+
     // =========================================================================
     // Runtime State
     // =========================================================================
@@ -2129,7 +2132,7 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             try {
-                String nodeName = PodmanBackend.CONTAINER_WORKER_NODE;
+                String nodeName = resolveStatsNodeName(stats);
                 boolean ok = JobPairs.updateRunSolverStats(
                     pairId,
                     nodeName,
@@ -2196,6 +2199,24 @@ public class KubernetesNativeBackend implements Backend {
                     log.warn("Failed to persist attributes for pair " + pairId, e);
                 }
             }
+        }
+
+        private String resolveStatsNodeName(ContainerJobMonitor.RunsolverStats stats) {
+            if (stats.hostname != null && !stats.hostname.trim().isEmpty()) {
+                return stats.hostname;
+            }
+            if (appNodeName != null && !appNodeName.trim().isEmpty()) {
+                return appNodeName;
+            }
+            try {
+                String[] workerNodes = KubernetesNativeBackend.this.getWorkerNodes();
+                if (workerNodes != null && workerNodes.length > 0) {
+                    return workerNodes[0];
+                }
+            } catch (Exception e) {
+                log.debug("Could not resolve Kubernetes worker node for stats fallback", e);
+            }
+            return DEFAULT_WORKER_NODE_NAME;
         }
 
         /**
