@@ -53,6 +53,7 @@ pipeline {
     environment {
         GHCR_REPO          = 'ghcr.io/starexecmiami/starexec'
         JOB_RUNNER_REPO    = 'ghcr.io/starexecmiami/starexec-job-runner'
+        DEPLOY_IMAGE_TAG   = 'latest'
         NOTIFICATION_EMAIL = "${params.NOTIFICATION_EMAIL?.trim() ?: 'dev-team@example.com'}"
     }
 
@@ -98,7 +99,7 @@ pipeline {
                         env.HELM_ARGS        = ''
                     }
 
-                    // Image tag: always the short git SHA for full traceability.
+                    // Build locally with the git SHA; deploy the published registry tag.
                     env.IMAGE_TAG = env.GIT_SHA
 
                     echo """
@@ -107,7 +108,8 @@ pipeline {
                     ╠══════════════════════════════════════════════════════════╣
                     ║  Job         : ${env.JOB_NAME} #${env.BUILD_NUMBER}
                     ║  Git SHA     : ${env.GIT_SHA}
-                    ║  Image tag   : ${env.IMAGE_TAG}
+                    ║  Build tag   : ${env.IMAGE_TAG}
+                    ║  Deploy tag  : ${env.DEPLOY_IMAGE_TAG}
                     ║  Environment : ${params.DEPLOY_ENV}
                     ║  Namespace   : ${env.K8S_NAMESPACE}
                     ║  Helm release: ${env.HELM_RELEASE}
@@ -152,29 +154,6 @@ pipeline {
                 }
             }
         }
-
-
-        // =======================================================================
-        stage('Import Image into MicroK8s') {
-        // =======================================================================
-            when {
-                expression { !params.SKIP_DEPLOY }
-            }
-            steps {
-                sh '''
-                    IMAGE_TAR=$(mktemp /tmp/starexec-image.XXXXXX.tar)
-                    trap 'rm -f "$IMAGE_TAR"' EXIT
-
-                    echo "Exporting image for local cluster use: ${GHCR_REPO}:${IMAGE_TAG}"
-                    podman save --format docker-archive --output "$IMAGE_TAR" ${GHCR_REPO}:${IMAGE_TAG}
-                    microk8s ctr image import "$IMAGE_TAR"
-
-                    echo "✓ Image imported into MicroK8s: ${GHCR_REPO}:${IMAGE_TAG}"
-                '''
-            }
-        }
-
-
         // =======================================================================
         stage('Pre-deploy Validation') {
         // =======================================================================
@@ -233,7 +212,7 @@ pipeline {
                         echo "  Deploying StarExec"
                         echo "  Namespace   : ${K8S_NAMESPACE}"
                         echo "  Release     : ${HELM_RELEASE}"
-                        echo "  Image       : ${GHCR_REPO}:${IMAGE_TAG}"
+                        echo "  Image       : ${GHCR_REPO}:${DEPLOY_IMAGE_TAG}"
                         echo "  Values      : ${HELM_VALUES}"
                         echo "════════════════════════════════════════════════════"
 
@@ -279,7 +258,7 @@ pipeline {
                             --namespace ${K8S_NAMESPACE} \\
                             --create-namespace \\
                             --values ${HELM_VALUES} \\
-                            --set image.tag=${IMAGE_TAG} \\
+                            --set image.tag=${DEPLOY_IMAGE_TAG} \\
                             --set image.pullPolicy=IfNotPresent \\
                             ${HELM_ARGS} \\
                             --atomic \\
@@ -316,7 +295,7 @@ pipeline {
                     ╔══════════════════════════════════════════════════════════╗
                     ║  DEPLOYMENT SUCCESSFUL                                  ║
                     ║  Application: ${APP_URL}                                 ║
-                    ║  Image tag:   ${IMAGE_TAG}                               ║
+                    ║  Image tag:   ${DEPLOY_IMAGE_TAG}                        ║
                     ╚══════════════════════════════════════════════════════════╝
                     """
                 }
@@ -446,7 +425,8 @@ Pipeline completed successfully.
   Build       : #${env.BUILD_NUMBER}
   Environment : ${params.DEPLOY_ENV}
   Git SHA     : ${env.GIT_SHA}
-  Image       : ${env.GHCR_REPO}:${env.IMAGE_TAG}
+  Build Image : ${env.GHCR_REPO}:${env.IMAGE_TAG}
+  Deploy Image: ${env.GHCR_REPO}:${env.DEPLOY_IMAGE_TAG}
   Duration    : ${currentBuild.durationString}
   Agent       : ${env.NODE_NAME}
 
