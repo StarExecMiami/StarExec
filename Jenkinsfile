@@ -155,27 +155,22 @@ pipeline {
 
 
         // =======================================================================
-        stage('Push Image') {
+        stage('Import Image into MicroK8s') {
         // =======================================================================
             when {
                 expression { !params.SKIP_DEPLOY }
             }
             steps {
-                withCredentials([
-                    string(credentialsId: 'ghcr-username',     variable: 'GHCR_USER'),
-                    string(credentialsId: 'ghcr-password',     variable: 'GHCR_PASS'),
-                ]) {
-                    sh """
-                        echo "${GHCR_PASS}" | podman login ghcr.io -u "${GHCR_USER}" --password-stdin
-                        podman push ${GHCR_REPO}:${env.IMAGE_TAG}
+                sh '''
+                    IMAGE_TAR=$(mktemp /tmp/starexec-image.XXXXXX.tar)
+                    trap 'rm -f "$IMAGE_TAR"' EXIT
 
-                        # Also push :latest for convenience (optional — CI tools may prefer :latest)
-                        podman tag ${GHCR_REPO}:${env.IMAGE_TAG} ${GHCR_REPO}:latest
-                        podman push ${GHCR_REPO}:latest
+                    echo "Exporting image for local cluster use: ${GHCR_REPO}:${IMAGE_TAG}"
+                    podman save --format docker-archive --output "$IMAGE_TAR" ${GHCR_REPO}:${IMAGE_TAG}
+                    microk8s ctr image import "$IMAGE_TAR"
 
-                        echo "✓ Image published: ${GHCR_REPO}:${env.IMAGE_TAG}"
-                    """
-                }
+                    echo "✓ Image imported into MicroK8s: ${GHCR_REPO}:${IMAGE_TAG}"
+                '''
             }
         }
 
