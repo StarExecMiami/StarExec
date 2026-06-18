@@ -237,16 +237,19 @@ pipeline {
                         # 3. Pre-deploy backup (production only, best-effort)
                         # -----------------------------------------------------------------
                         if [ "${DEPLOY_ENV}" = "prod" ]; then
-                            BACKUP_DIR="/starexec/k8s-shared/data/backups"
-                            mkdir -p "\${BACKUP_DIR}"
-                            BACKUP_FILE="\${BACKUP_DIR}/pre-deploy-\$(date +%Y%m%d-%H%M%S).sql"
-                            if microk8s kubectl get deploy/${HELM_RELEASE} -n ${K8S_NAMESPACE} >/dev/null 2>&1; then
-                                microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
-                                    -- pg_dump -U starexec starexec > "\${BACKUP_FILE}" 2>&1 && \\
-                                    echo "✓ Backup: \${BACKUP_FILE} (\$(wc -c < "\${BACKUP_FILE}") bytes)" || \\
-                                    echo "⚠ Backup skipped (postgres not reachable)"
+                            BACKUP_DIR="${env.JENKINS_HOME ?: env.WORKSPACE}/backups/starexec"
+                            if mkdir -p "\${BACKUP_DIR}"; then
+                                BACKUP_FILE="\${BACKUP_DIR}/pre-deploy-\$(date +%Y%m%d-%H%M%S).sql"
+                                if microk8s kubectl get deploy/${HELM_RELEASE} -n ${K8S_NAMESPACE} >/dev/null 2>&1; then
+                                    microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
+                                        -- pg_dump -U starexec starexec > "\${BACKUP_FILE}" 2>&1 && \\
+                                        echo "✓ Backup: \${BACKUP_FILE} (\$(wc -c < "\${BACKUP_FILE}") bytes)" || \\
+                                        echo "⚠ Backup skipped (postgres not reachable)"
+                                else
+                                    echo "ℹ No existing deployment — backup skipped"
+                                fi
                             else
-                                echo "ℹ No existing deployment — backup skipped"
+                                echo "⚠ Backup skipped (backup directory not writable: \${BACKUP_DIR})"
                             fi
                         fi
 
