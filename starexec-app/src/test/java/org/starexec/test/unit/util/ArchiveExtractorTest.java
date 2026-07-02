@@ -65,6 +65,25 @@ public class ArchiveExtractorTest {
     }
 
     @Test
+    public void extractTarGzUpdatesExtractedCountBeforeProgressCallback() throws Exception {
+        Path archive = createTarGzArchive("bench/file1.p", "content-1", "bench/file2.p", "content-2");
+        Path extractDir = tempDir.resolve("progress-out");
+        AtomicInteger extractedCount = new AtomicInteger();
+        AtomicInteger largestProgressCount = new AtomicInteger();
+
+        ArchiveExtractor.ExtractionSettings settings = ArchiveExtractor.ExtractionSettings.defaults()
+            .withTimeoutSeconds(30)
+            .withProgressCallback(() -> largestProgressCount.set(
+                Math.max(largestProgressCount.get(), extractedCount.get())
+            ));
+
+        ArchiveExtractor.extractWithCleanup(archive.toString(), extractDir, extractedCount, settings);
+
+        assertEquals(2, extractedCount.get());
+        assertEquals(2, largestProgressCount.get());
+    }
+
+    @Test
     public void extractZipAcceptsTinyBenchmarkEntry() throws Exception {
         Path archive = tempDir.resolve("tiny.zip");
         byte[] content = "1234567890123".getBytes(StandardCharsets.UTF_8);

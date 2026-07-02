@@ -132,6 +132,34 @@ public class UploadJobWorkerStartupTests {
         }
     }
 
+    @Test
+    public void prepareExtractionIncludesRootCauseWhenArchiveExtractionFails() throws Exception {
+        Path tempRoot = Files.createTempDirectory("upload-job-worker-bad-archive-");
+        try {
+            Path archive = createTarGzArchive(tempRoot.resolve("AllProblems.tgz"), "../evil.p", "content");
+            UploadJob job = buildUploadJob(archive);
+            User user = buildUserWithQuota();
+            UploadJobWorker worker = new UploadJobWorker();
+
+            try (MockedStatic<Users> usersMock = Mockito.mockStatic(Users.class)) {
+                usersMock.when(() -> Users.get(job.getUserId())).thenReturn(user);
+
+                try {
+                    worker.prepareExtraction(job, archive.toFile(), new AtomicInteger());
+                } catch (IOException e) {
+                    assertTrue(e.getMessage().contains("Failed to extract archive"));
+                    assertTrue(e.getMessage().contains("path traversal"));
+                    assertEquals(0, countDirectories(tempRoot));
+                    return;
+                }
+            }
+
+            throw new AssertionError("Expected prepareExtraction to fail for an unsafe archive entry");
+        } finally {
+            FileUtils.deleteQuietly(tempRoot.toFile());
+        }
+    }
+
     private UploadJob buildUploadJob(Path archive) {
         UploadJob job = new UploadJob();
         job.setId(42L);

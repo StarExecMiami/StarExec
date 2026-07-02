@@ -188,6 +188,9 @@ public class ArchiveExtractor {
                 }
                 
                 entryCount++;
+                if (extractedCount != null) {
+                    extractedCount.set(entryCount);
+                }
                 invokeProgressCallback(settings);
                 zis.closeEntry();
             }
@@ -196,7 +199,8 @@ public class ArchiveExtractor {
         log.info(method, "Extracted " + entryCount + " entries (" + 
                 totalUncompressedSize + " bytes) from " + archivePath);
         
-        // Set the extracted count if requested
+        // Set the extracted count if requested. This is also updated as entries
+        // are extracted so callers can expose progress for large archives.
         if (extractedCount != null) {
             extractedCount.set(entryCount);
         }
@@ -254,11 +258,15 @@ public class ArchiveExtractor {
                 }
 
                 count++;
+                if (extractedCount != null) {
+                    extractedCount.set(count);
+                }
                 invokeProgressCallback(settings);
             }
         }
         
-        // Set the extracted count if requested
+        // Set the extracted count if requested. This is also updated as entries
+        // are extracted so callers can expose progress for large archives.
         if (extractedCount != null) {
             extractedCount.set(count);
         }

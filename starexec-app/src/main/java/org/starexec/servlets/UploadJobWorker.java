@@ -37,6 +37,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     private static final int POLL_INTERVAL_MS = 5000; // 5 seconds
     private static final int SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final int MAX_CONCURRENT_JOBS = 3; // Allow up to 3 concurrent job processing
+    private static final int EXTRACTION_PROGRESS_UPDATE_FILE_INTERVAL = 100;
     private static final long ORPHAN_RETENTION_HOURS = 24;
     static final String TEMP_EXTRACTION_SUFFIX = ".extracting";
     
@@ -562,10 +563,14 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         ArchiveExtractor.ExtractionSettings extractionSettings = ArchiveExtractor.ExtractionSettings.fromEnvironment()
             .withTimeoutSeconds(EnvironmentConfig.getUploadExtractionTimeoutSeconds())
             .withMaxUncompressedSizeBytes(quota.maxExtractableBytes)
-            .withProgressCallback(() -> UploadJobQueue.touchJob(job.getId()));
+            .withProgressCallback(createExtractionProgressCallback(job.getId(), extractedCount));
 
         log.info(method, "Extracting archive for job " + job.getId());
-        ArchiveExtractor.extractWithCleanup(job.getArchivePath(), tempExtractDir.toPath(), extractedCount, extractionSettings);
+        try {
+            ArchiveExtractor.extractWithCleanup(job.getArchivePath(), tempExtractDir.toPath(), extractedCount, extractionSettings);
+        } catch (IOException e) {
+            throw new IOException(buildExtractionFailureMessage(job.getArchivePath(), e), e);
+        }
 
         moveExtractDirectory(tempExtractDir, finalExtractDir);
         if (!UploadJobQueue.updateExtractPath(job.getId(), finalExtractDir.getAbsolutePath())) {
@@ -586,6 +591,35 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         } catch (java.nio.file.AtomicMoveNotSupportedException e) {
             java.nio.file.Files.move(sourceDir.toPath(), targetDir.toPath());
         }
+    }
+
+    private Runnable createExtractionProgressCallback(long jobId, AtomicInteger extractedCount) {
+        return new Runnable() {
+            private int lastPersistedCount = 0;
+
+            @Override
+            public void run() {
+                int currentCount = extractedCount.get();
+                if (currentCount <= 0) {
+                    UploadJobQueue.touchJob(jobId);
+                    return;
+                }
+                if (currentCount - lastPersistedCount >= EXTRACTION_PROGRESS_UPDATE_FILE_INTERVAL) {
+                    UploadJobQueue.updateProgress(jobId, currentCount, null, null, null, null);
+                    lastPersistedCount = currentCount;
+                } else {
+                    UploadJobQueue.touchJob(jobId);
+                }
+            }
+        };
+    }
+
+    private String buildExtractionFailureMessage(String archivePath, IOException error) {
+        String causeMessage = error.getMessage();
+        if (causeMessage == null || causeMessage.isEmpty()) {
+            causeMessage = error.getClass().getSimpleName();
+        }
+        return "Failed to extract archive: " + archivePath + " - " + causeMessage;
     }
 
     private UploadExtractionQuota calculateExtractionQuota(UploadJob job, File archiveFile) throws IOException {
