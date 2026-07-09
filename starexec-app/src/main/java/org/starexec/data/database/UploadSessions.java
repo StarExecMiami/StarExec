@@ -1,14 +1,19 @@
 package org.starexec.data.database;
 
-import org.apache.commons.io.FileUtils;
 import org.starexec.config.EnvironmentConfig;
+import org.starexec.data.to.UploadJob;
 import org.starexec.data.to.UploadSession;
 import org.starexec.data.to.UploadSessionCreateRequest;
 import org.starexec.logger.StarLogger;
 import org.starexec.servlets.UploadBenchmark;
+import org.starexec.util.UploadArtifactFileSystem;
+import org.starexec.util.UploadArtifactPathGuard;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.sql.*;
 import java.util.Optional;
 import java.util.UUID;
@@ -72,6 +77,13 @@ public class UploadSessions {
     private static final String UPDATE_STAGING_PATH_SQL =
         "UPDATE upload_sessions SET staging_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?";
 
+    private static final String LOCK_SESSION_FOR_FINALIZE_SQL =
+        "SELECT status, job_id FROM upload_sessions WHERE id = ? FOR UPDATE";
+
+    private static final String UPDATE_FINALIZING_STAGING_PATH_SQL =
+        "UPDATE upload_sessions SET staging_path = ?, updated_at = CURRENT_TIMESTAMP " +
+        "WHERE id = ? AND status = 'FINALIZING' AND job_id IS NULL";
+
     private static final String MARK_FINALIZING_SQL =
         "UPDATE upload_sessions SET status = 'FINALIZING', updated_at = CURRENT_TIMESTAMP " +
         "WHERE id = ? AND status IN ('UPLOADING', 'READY')";
@@ -81,10 +93,15 @@ public class UploadSessions {
         "SET status = 'COMPLETE', job_id = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, error_message = NULL " +
         "WHERE id = ?";
 
+    private static final String COMPLETE_FINALIZING_SESSION_SQL =
+        "UPDATE upload_sessions " +
+        "SET status = 'COMPLETE', job_id = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP, error_message = NULL " +
+        "WHERE id = ? AND status = 'FINALIZING' AND job_id IS NULL";
+
     private static final String FAIL_SESSION_SQL =
         "UPDATE upload_sessions " +
         "SET status = 'FAILED', error_message = ?, updated_at = CURRENT_TIMESTAMP " +
-        "WHERE id = ?";
+        "WHERE id = ? AND status NOT IN ('COMPLETE', 'ABORTED')";
 
     private static final String ABORT_SESSION_SQL =
         "UPDATE upload_sessions " +
@@ -259,6 +276,85 @@ public class UploadSessions {
         }
     }
 
+    public static Optional<Long> finalizeSessionWithUploadJob(
+        long sessionId,
+        String finalArchivePath,
+        UploadJob.UploadJobRequest request
+    ) {
+        try {
+            return Optional.of(Common.<Long, SQLException>runInTransaction(
+                con -> finalizeSessionWithUploadJobInTransaction(con, sessionId, finalArchivePath, request)
+            ));
+        } catch (SQLException e) {
+            log.error("finalizeSessionWithUploadJob", "Failed to finalize upload session " + sessionId, e);
+            return Optional.empty();
+        }
+    }
+
+    static long finalizeSessionWithUploadJobInTransaction(
+        Connection con,
+        long sessionId,
+        String finalArchivePath,
+        UploadJob.UploadJobRequest request
+    ) throws SQLException {
+        FinalizeSessionState state = lockSessionForFinalize(con, sessionId);
+        if (state == null) {
+            throw new SQLException("Upload session " + sessionId + " not found");
+        }
+        if ("COMPLETE".equals(state.status) && state.jobId != null) {
+            return state.jobId;
+        }
+        if (!"FINALIZING".equals(state.status) || state.jobId != null) {
+            throw new SQLException("Upload session " + sessionId + " is not finalizable from state " + state.status);
+        }
+
+        if (!updateFinalizingStagingPathInTransaction(con, sessionId, finalArchivePath)) {
+            throw new SQLException("Failed to update finalized archive path for upload session " + sessionId);
+        }
+
+        long jobId = UploadJobQueue.enqueueJobInTransaction(con, request);
+        if (jobId <= 0) {
+            throw new SQLException("Failed to enqueue upload job for upload session " + sessionId);
+        }
+
+        if (!completeFinalizingSessionInTransaction(con, sessionId, jobId)) {
+            throw new SQLException("Failed to complete upload session " + sessionId + " for upload job " + jobId);
+        }
+
+        return jobId;
+    }
+
+    static FinalizeSessionState lockSessionForFinalize(Connection con, long sessionId) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(LOCK_SESSION_FOR_FINALIZE_SQL)) {
+            ps.setLong(1, sessionId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                long jobId = rs.getLong("job_id");
+                boolean jobIdWasNull = rs.wasNull();
+                return new FinalizeSessionState(rs.getString("status"), jobIdWasNull ? null : jobId);
+            }
+        }
+    }
+
+    static boolean updateStagingPathInTransaction(Connection con, long sessionId, String stagingPath) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(UPDATE_STAGING_PATH_SQL)) {
+            ps.setString(1, stagingPath);
+            ps.setLong(2, sessionId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    static boolean updateFinalizingStagingPathInTransaction(Connection con, long sessionId, String stagingPath)
+        throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(UPDATE_FINALIZING_STAGING_PATH_SQL)) {
+            ps.setString(1, stagingPath);
+            ps.setLong(2, sessionId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
     public static boolean markFinalizing(long sessionId) {
         Connection con = null;
         PreparedStatement ps = null;
@@ -293,6 +389,32 @@ public class UploadSessions {
         } finally {
             Common.safeClose(ps);
             Common.safeClose(con);
+        }
+    }
+
+    static boolean completeSessionInTransaction(Connection con, long sessionId, long jobId) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(COMPLETE_SESSION_SQL)) {
+            ps.setLong(1, jobId);
+            ps.setLong(2, sessionId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    static boolean completeFinalizingSessionInTransaction(Connection con, long sessionId, long jobId) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(COMPLETE_FINALIZING_SESSION_SQL)) {
+            ps.setLong(1, jobId);
+            ps.setLong(2, sessionId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    static final class FinalizeSessionState {
+        private final String status;
+        private final Long jobId;
+
+        private FinalizeSessionState(String status, Long jobId) {
+            this.status = status;
+            this.jobId = jobId;
         }
     }
 
@@ -334,22 +456,31 @@ public class UploadSessions {
     }
 
     public static void cleanupSessionFiles(UploadSession session) {
-        if (session == null || session.getStagingPath() == null || session.getStagingPath().isEmpty()) {
+        try {
+            cleanupSessionFiles(session, new UploadArtifactPathGuard());
+        } catch (IOException e) {
+            long sessionId = session == null ? -1L : session.getId();
+            log.warn("cleanupSessionFiles", "Failed to initialize upload path guard for session " + sessionId, e);
+        }
+    }
+
+    public static void cleanupSessionFiles(UploadSession session, UploadArtifactPathGuard pathGuard) {
+        if (session == null || session.getStagingPath() == null || session.getStagingPath().trim().isEmpty()) {
             return;
         }
 
-        File stagingFile = new File(session.getStagingPath());
-        File chunkDirectory = new File(session.getStagingPath() + ".chunks");
-        File assemblingFile = new File(session.getStagingPath() + ".assembling");
         try {
-            if (chunkDirectory.exists()) {
-                FileUtils.deleteDirectory(chunkDirectory);
+            Path stagingFile = pathGuard.validateUploadSessionStagingPath(session);
+            Path chunkDirectory = pathGuard.validateUploadSessionChunksDirectory(session, session.getStagingPath() + ".chunks");
+            Path assemblingFile = pathGuard.validateUploadSessionAssemblingFile(session);
+            if (Files.exists(chunkDirectory, LinkOption.NOFOLLOW_LINKS)) {
+                UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(chunkDirectory);
             }
-            if (assemblingFile.exists()) {
-                FileUtils.deleteQuietly(assemblingFile);
+            if (Files.exists(assemblingFile, LinkOption.NOFOLLOW_LINKS)) {
+                UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(assemblingFile);
             }
-            if (stagingFile.exists()) {
-                FileUtils.deleteQuietly(stagingFile);
+            if (Files.exists(stagingFile, LinkOption.NOFOLLOW_LINKS)) {
+                UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(stagingFile);
             }
         } catch (IOException e) {
             log.warn("cleanupSessionFiles", "Failed to cleanup session artifacts for session " + session.getId(), e);

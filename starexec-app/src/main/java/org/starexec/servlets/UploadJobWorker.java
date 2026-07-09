@@ -13,16 +13,23 @@ import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.ArchiveExtractor;
 import org.starexec.util.ArchiveUtil;
+import org.starexec.util.UploadArtifactFileSystem;
+import org.starexec.util.UploadArtifactPathGuard;
 
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.DirectoryStream;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,8 +49,18 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     static final String TEMP_EXTRACTION_SUFFIX = ".extracting";
     
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final UploadArtifactPathGuard uploadPathGuard;
     private ExecutorService workerExecutor;
+    private ScheduledExecutorService cleanupExecutor;
     private Thread workerThread;
+
+    public UploadJobWorker() {
+        this(null);
+    }
+
+    UploadJobWorker(UploadArtifactPathGuard uploadPathGuard) {
+        this.uploadPathGuard = uploadPathGuard;
+    }
 
     private static class UploadCancellationException extends IOException {
         private static final long serialVersionUID = 1L;
@@ -94,6 +111,26 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         workerThread = new Thread(this, "upload-job-poller");
         workerThread.setDaemon(true);
         workerThread.start();
+
+        if (EnvironmentConfig.isUploadCleanupEnabled()) {
+            cleanupExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "upload-artifact-cleanup");
+                t.setDaemon(true);
+                return t;
+            });
+            try {
+                UploadArtifactCleanupWorker cleanupWorker = new UploadArtifactCleanupWorker(
+                    EnvironmentConfig.getUploadCleanupBatchSize()
+                );
+                int interval = EnvironmentConfig.getUploadCleanupIntervalSeconds();
+                cleanupExecutor.scheduleWithFixedDelay(cleanupWorker, 0, interval, TimeUnit.SECONDS);
+                log.info("startWorkerInfrastructure", "Scheduled upload artifact cleanup every " + interval + " seconds");
+            } catch (IOException e) {
+                log.error("startWorkerInfrastructure", "Failed to initialize upload artifact cleanup", e);
+                cleanupExecutor.shutdownNow();
+                cleanupExecutor = null;
+            }
+        }
     }
 
     /**
@@ -105,57 +142,63 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      * - Only deletes extraction directories with worker-owned prefix (upload_)
      * - Never traverses arbitrary benchmark hierarchy directories
      */
-    private void cleanupOrphanedExtractions() {
+    void cleanupOrphanedExtractions() {
         String method = "cleanupOrphanedExtractions";
         
         try {
-            String benchmarkPath = R.getBenchmarkPath();
-            File benchmarkDir = new File(benchmarkPath);
-            
-            if (!benchmarkDir.exists()) {
+            Path benchmarkRoot = uploadPathGuard != null ? uploadPathGuard.getBenchmarkRoot() : Path.of(R.getBenchmarkPath());
+            if (!Files.exists(benchmarkRoot, LinkOption.NOFOLLOW_LINKS)) {
+                return;
+            }
+
+            UploadArtifactPathGuard pathGuard = getUploadPathGuard();
+            benchmarkRoot = pathGuard.getBenchmarkRoot();
+            if (!isSafeDirectory(benchmarkRoot)) {
                 return;
             }
             
             int cleanedCount = 0;
-            File[] userDirs = benchmarkDir.listFiles();
-            if (userDirs != null) {
-                for (File userDir : userDirs) {
-                    if (!userDir.isDirectory()) continue;
+            try (DirectoryStream<Path> userDirs = Files.newDirectoryStream(benchmarkRoot)) {
+                for (Path userDir : userDirs) {
+                    if (!isSafeDirectory(userDir)) continue;
 
-                    File[] dateDirs = userDir.listFiles();
-                    if (dateDirs == null) continue;
-
-                    for (File dateDir : dateDirs) {
-                        if (!dateDir.isDirectory() || !looksLikeDateDirectory(dateDir.getName())) {
-                            continue;
-                        }
-
-                        File[] sessionDirs = dateDir.listFiles();
-                        if (sessionDirs == null) continue;
-
-                        for (File sessionDir : sessionDirs) {
-                            if (!sessionDir.isDirectory() || !sessionDir.getName().startsWith("upload-session-")) {
+                    try (DirectoryStream<Path> dateDirs = Files.newDirectoryStream(userDir)) {
+                        for (Path dateDir : dateDirs) {
+                            if (!isSafeDirectory(dateDir) || !looksLikeDateDirectory(dateDir.getFileName().toString())) {
                                 continue;
                             }
 
-                            File[] extractionDirs = sessionDir.listFiles();
-                            if (extractionDirs == null) continue;
+                            try (DirectoryStream<Path> sessionDirs = Files.newDirectoryStream(dateDir)) {
+                                for (Path sessionDir : sessionDirs) {
+                                    if (!isSafeDirectory(sessionDir) || !sessionDir.getFileName().toString().startsWith("upload-session-")) {
+                                        continue;
+                                    }
 
-                            for (File extractionDir : extractionDirs) {
-                                if (!isTemporaryExtractionDirectory(extractionDir)) {
-                                    continue;
-                                }
+                                    try (DirectoryStream<Path> extractionDirs = Files.newDirectoryStream(sessionDir)) {
+                                        for (Path extractionDir : extractionDirs) {
+                                            if (!isTemporaryExtractionDirectory(extractionDir)) {
+                                                continue;
+                                            }
 
-                                long ageHours = (System.currentTimeMillis() - extractionDir.lastModified()) / (1000 * 60 * 60);
-                                if (ageHours <= ORPHAN_RETENTION_HOURS) {
-                                    continue;
-                                }
+                                            long ageHours = (System.currentTimeMillis() -
+                                                Files.getLastModifiedTime(extractionDir, LinkOption.NOFOLLOW_LINKS).toMillis()) /
+                                                (1000 * 60 * 60);
+                                            if (ageHours <= ORPHAN_RETENTION_HOURS) {
+                                                continue;
+                                            }
 
-                                try {
-                                    org.apache.commons.io.FileUtils.deleteDirectory(extractionDir);
-                                    cleanedCount++;
-                                } catch (Exception e) {
-                                    log.warn(method, "Failed to clean: " + extractionDir.getAbsolutePath(), e);
+                                            try {
+                                                Path safeExtractionDir = pathGuard.validateTemporaryExtractionDirectory(extractionDir.toString());
+                                                if (!Files.isDirectory(safeExtractionDir, LinkOption.NOFOLLOW_LINKS)) {
+                                                    continue;
+                                                }
+                                                UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(safeExtractionDir);
+                                                cleanedCount++;
+                                            } catch (Exception e) {
+                                                log.warn(method, "Failed to clean: " + extractionDir, e);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -172,6 +215,10 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         }
     }
 
+    private boolean isSafeDirectory(Path path) {
+        return path != null && !Files.isSymbolicLink(path) && Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS);
+    }
+
     private boolean looksLikeDateDirectory(String name) {
         if (name == null || !name.matches("\\d{8}")) {
             return false;
@@ -186,9 +233,16 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
 
     boolean isTemporaryExtractionDirectory(File extractionDir) {
         return extractionDir != null
-            && extractionDir.isDirectory()
             && extractionDir.getName().startsWith("upload_")
             && extractionDir.getName().endsWith(TEMP_EXTRACTION_SUFFIX);
+    }
+
+    private boolean isTemporaryExtractionDirectory(Path extractionDir) {
+        return extractionDir != null
+            && !Files.isSymbolicLink(extractionDir)
+            && Files.isDirectory(extractionDir, LinkOption.NOFOLLOW_LINKS)
+            && extractionDir.getFileName().toString().startsWith("upload_")
+            && extractionDir.getFileName().toString().endsWith(TEMP_EXTRACTION_SUFFIX);
     }
     
     @Override
@@ -224,6 +278,20 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             } catch (InterruptedException e) {
                 log.warn("contextDestroyed", "Interrupted while shutting down worker executor", e);
                 workerExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        if (cleanupExecutor != null) {
+            cleanupExecutor.shutdown();
+            try {
+                if (!cleanupExecutor.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    log.warn("contextDestroyed", "Cleanup executor did not terminate gracefully");
+                    cleanupExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                log.warn("contextDestroyed", "Interrupted while shutting down cleanup executor", e);
+                cleanupExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
         }
@@ -298,7 +366,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             ensureNotCancelled(job.getId());
 
             String archivePath = job.getArchivePath();
-            File archiveFile = new File(job.getArchivePath());
+            File archiveFile = getUploadPathGuard().validateSourceArchivePath(job.getArchivePath(), job.getUserId()).toFile();
             extractDir = prepareExtraction(job, archiveFile, extractedCount);
             ensureNotCancelled(job.getId());
 
@@ -339,8 +407,12 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             // Step 4: Delete only the source archive file now that extraction is done.
             // The extracted directory must NOT be deleted — DB paths point to it.
             try {
-                if (archiveFile.exists() && archiveFile.delete()) {
+                if (Files.exists(archiveFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                    UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(archiveFile.toPath());
+                    UploadJobQueue.markSourceArchiveDeleted(job.getId(), false);
                     log.info(method, "Deleted source archive: " + archivePath);
+                } else {
+                    UploadJobQueue.markSourceArchiveDeleted(job.getId(), true);
                 }
             } catch (Exception deleteEx) {
                 log.warn(method, "Could not delete source archive (non-fatal): " + archivePath, deleteEx);
@@ -373,7 +445,12 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             // were never registered in the DB so there is nothing to preserve.
             if (!processingSucceeded && !preserveArtifactsForRetry && extractDir != null && safeToDeleteExtractDir) {
                 try {
-                    ArchiveExtractor.cleanup(extractDir.getAbsolutePath());
+                    Path safeExtractDir = getUploadPathGuard().validateExtractionDirectoryPath(
+                        extractDir.getAbsolutePath(),
+                        job.getId(),
+                        job.getUserId()
+                    );
+                    UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(safeExtractDir);
                     log.info(method, "Cleaned up extraction directory after failure for job " + job.getId());
                 } catch (Exception cleanupEx) {
                     log.warn(method, "Failed to cleanup extraction directory: " + extractDir.getAbsolutePath(), cleanupEx);
@@ -395,6 +472,10 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             cursor = cursor.getCause();
         }
         return false;
+    }
+
+    private UploadArtifactPathGuard getUploadPathGuard() throws IOException {
+        return uploadPathGuard != null ? uploadPathGuard : new UploadArtifactPathGuard();
     }
     
     /**
@@ -542,15 +623,26 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
 
     File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
         String method = "prepareExtraction";
+        UploadArtifactPathGuard pathGuard = getUploadPathGuard();
+        Path safeArchivePath = pathGuard.validateSourceArchivePath(job.getArchivePath(), job.getUserId());
 
         if (job.getExtractPath() != null && !job.getExtractPath().isEmpty()) {
-            File existingExtractDir = new File(job.getExtractPath());
-            if (existingExtractDir.exists() && existingExtractDir.isDirectory() &&
-                    existingExtractDir.getAbsolutePath().startsWith(R.getBenchmarkPath())) {
-                return existingExtractDir;
+            try {
+                Path existingExtractPath = pathGuard.validateExtractionDirectoryPath(
+                    job.getExtractPath(),
+                    job.getId(),
+                    job.getUserId()
+                );
+                if (safeArchivePath.getParent().equals(existingExtractPath.getParent()) &&
+                    Files.isDirectory(existingExtractPath, LinkOption.NOFOLLOW_LINKS)) {
+                    return existingExtractPath.toFile();
+                }
+            } catch (IOException e) {
+                log.warn(method, "Ignoring unsafe persisted extraction path for job " + job.getId(), e);
             }
         }
 
+        archiveFile = safeArchivePath.toFile();
         if (!archiveFile.exists()) {
             throw new IOException("Archive file not found: " + job.getArchivePath());
         }
@@ -559,6 +651,16 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         String extractDirName = "upload_" + job.getId() + "_" + System.currentTimeMillis();
         File tempExtractDir = new File(archiveFile.getParent(), extractDirName + TEMP_EXTRACTION_SUFFIX);
         File finalExtractDir = new File(archiveFile.getParent(), extractDirName);
+        Path safeTempExtractDir = pathGuard.validateExtractionDirectoryPath(
+            tempExtractDir.getAbsolutePath(),
+            job.getId(),
+            job.getUserId()
+        );
+        Path safeFinalExtractDir = pathGuard.validateExtractionDirectoryPath(
+            finalExtractDir.getAbsolutePath(),
+            job.getId(),
+            job.getUserId()
+        );
 
         ArchiveExtractor.ExtractionSettings extractionSettings = ArchiveExtractor.ExtractionSettings.fromEnvironment()
             .withTimeoutSeconds(EnvironmentConfig.getUploadExtractionTimeoutSeconds())
@@ -567,18 +669,18 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
 
         log.info(method, "Extracting archive for job " + job.getId());
         try {
-            ArchiveExtractor.extractWithCleanup(job.getArchivePath(), tempExtractDir.toPath(), extractedCount, extractionSettings);
+            ArchiveExtractor.extractWithCleanup(safeArchivePath.toString(), safeTempExtractDir, extractedCount, extractionSettings);
         } catch (IOException e) {
             throw new IOException(buildExtractionFailureMessage(job.getArchivePath(), e), e);
         }
 
-        moveExtractDirectory(tempExtractDir, finalExtractDir);
-        if (!UploadJobQueue.updateExtractPath(job.getId(), finalExtractDir.getAbsolutePath())) {
-            ArchiveExtractor.cleanup(finalExtractDir.getAbsolutePath());
+        moveExtractDirectory(safeTempExtractDir.toFile(), safeFinalExtractDir.toFile());
+        if (!UploadJobQueue.updateExtractPath(job.getId(), safeFinalExtractDir.toAbsolutePath().toString())) {
+            UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(safeFinalExtractDir);
             throw new IOException("Failed to persist extraction path for upload job " + job.getId());
         }
-        job.setExtractPath(finalExtractDir.getAbsolutePath());
-        return finalExtractDir;
+        job.setExtractPath(safeFinalExtractDir.toAbsolutePath().toString());
+        return safeFinalExtractDir.toFile();
     }
 
     private void moveExtractDirectory(File sourceDir, File targetDir) throws IOException {

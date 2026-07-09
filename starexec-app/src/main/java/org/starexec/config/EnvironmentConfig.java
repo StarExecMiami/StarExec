@@ -292,6 +292,22 @@ public class EnvironmentConfig {
         );
     }
 
+    public static boolean isUploadCleanupEnabled() {
+        return Boolean.parseBoolean(getEnv("STAREXEC_UPLOAD_CLEANUP_ENABLED", "true"));
+    }
+
+    public static int getUploadCleanupIntervalSeconds() {
+        return getEnvInt("STAREXEC_UPLOAD_CLEANUP_INTERVAL_SECONDS", 900);
+    }
+
+    public static int getUploadCleanupBatchSize() {
+        return getEnvInt("STAREXEC_UPLOAD_CLEANUP_BATCH_SIZE", 100);
+    }
+
+    public static int getUploadArtifactRetentionHours() {
+        return getEnvInt("STAREXEC_UPLOAD_ARTIFACT_RETENTION_HOURS", 168);
+    }
+
     /**
      * Enables or disables live SSE streaming for job pair logs.
      */

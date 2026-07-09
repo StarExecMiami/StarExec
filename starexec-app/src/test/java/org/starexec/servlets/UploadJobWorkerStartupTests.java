@@ -11,6 +11,7 @@ import org.starexec.data.database.UploadJobQueue;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.UploadJob;
 import org.starexec.data.to.User;
+import org.starexec.util.UploadArtifactPathGuard;
 
 import javax.servlet.ServletContextEvent;
 import java.io.File;
@@ -19,6 +20,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -76,10 +78,10 @@ public class UploadJobWorkerStartupTests {
     public void prepareExtractionPromotesTempDirectoryAndPersistsExtractPath() throws Exception {
         Path tempRoot = Files.createTempDirectory("upload-job-worker-");
         try {
-            Path archive = createTarGzArchive(tempRoot.resolve("AllProblems.tgz"), "bench/file1.p", "content");
+            Path archive = createTarGzArchive(uploadSessionArchive(tempRoot, "ok"), "bench/file1.p", "content");
             UploadJob job = buildUploadJob(archive);
             User user = buildUserWithQuota();
-            UploadJobWorker worker = new UploadJobWorker();
+            UploadJobWorker worker = new UploadJobWorker(new UploadArtifactPathGuard(tempRoot));
             AtomicInteger extractedCount = new AtomicInteger();
 
             try (MockedStatic<Users> usersMock = Mockito.mockStatic(Users.class);
@@ -106,10 +108,10 @@ public class UploadJobWorkerStartupTests {
     public void prepareExtractionCleansFinalDirectoryWhenPersistingExtractPathFails() throws Exception {
         Path tempRoot = Files.createTempDirectory("upload-job-worker-fail-");
         try {
-            Path archive = createTarGzArchive(tempRoot.resolve("AllProblems.tgz"), "bench/file1.p", "content");
+            Path archive = createTarGzArchive(uploadSessionArchive(tempRoot, "fail"), "bench/file1.p", "content");
             UploadJob job = buildUploadJob(archive);
             User user = buildUserWithQuota();
-            UploadJobWorker worker = new UploadJobWorker();
+            UploadJobWorker worker = new UploadJobWorker(new UploadArtifactPathGuard(tempRoot));
 
             try (MockedStatic<Users> usersMock = Mockito.mockStatic(Users.class);
                  MockedStatic<UploadJobQueue> queueMock = Mockito.mockStatic(UploadJobQueue.class)) {
@@ -121,7 +123,7 @@ public class UploadJobWorkerStartupTests {
                     worker.prepareExtraction(job, archive.toFile(), new AtomicInteger());
                 } catch (IOException e) {
                     assertTrue(e.getMessage().contains("Failed to persist extraction path"));
-                    assertEquals(0, countDirectories(tempRoot));
+                    assertEquals(0, countDirectories(archive.getParent()));
                     return;
                 }
             }
@@ -136,10 +138,10 @@ public class UploadJobWorkerStartupTests {
     public void prepareExtractionIncludesRootCauseWhenArchiveExtractionFails() throws Exception {
         Path tempRoot = Files.createTempDirectory("upload-job-worker-bad-archive-");
         try {
-            Path archive = createTarGzArchive(tempRoot.resolve("AllProblems.tgz"), "../evil.p", "content");
+            Path archive = createTarGzArchive(uploadSessionArchive(tempRoot, "bad"), "../evil.p", "content");
             UploadJob job = buildUploadJob(archive);
             User user = buildUserWithQuota();
-            UploadJobWorker worker = new UploadJobWorker();
+            UploadJobWorker worker = new UploadJobWorker(new UploadArtifactPathGuard(tempRoot));
 
             try (MockedStatic<Users> usersMock = Mockito.mockStatic(Users.class)) {
                 usersMock.when(() -> Users.get(job.getUserId())).thenReturn(user);
@@ -149,7 +151,7 @@ public class UploadJobWorkerStartupTests {
                 } catch (IOException e) {
                     assertTrue(e.getMessage().contains("Failed to extract archive"));
                     assertTrue(e.getMessage().contains("path traversal"));
-                    assertEquals(0, countDirectories(tempRoot));
+                    assertEquals(0, countDirectories(archive.getParent()));
                     return;
                 }
             }
@@ -157,6 +159,58 @@ public class UploadJobWorkerStartupTests {
             throw new AssertionError("Expected prepareExtraction to fail for an unsafe archive entry");
         } finally {
             FileUtils.deleteQuietly(tempRoot.toFile());
+        }
+    }
+
+    @Test
+    public void cleanupOrphanedExtractionsDeletesOnlyAgedMatchingDirectories() throws Exception {
+        Path tempRoot = Files.createTempDirectory("upload-job-worker-orphans-");
+        try {
+            Path oldExtraction = tempRoot.resolve("7/20260704/upload-session-old/upload_42_1.extracting");
+            Path recentExtraction = tempRoot.resolve("7/20260704/upload-session-recent/upload_43_1.extracting");
+            Path nonMatching = tempRoot.resolve("7/20260704/upload-session-keep/not-upload.extracting");
+            Files.createDirectories(oldExtraction);
+            Files.createDirectories(recentExtraction);
+            Files.createDirectories(nonMatching);
+            Files.writeString(oldExtraction.resolve("old.p"), "old");
+            Files.writeString(recentExtraction.resolve("recent.p"), "recent");
+            Files.writeString(nonMatching.resolve("keep.p"), "keep");
+            Files.setLastModifiedTime(oldExtraction, FileTime.fromMillis(System.currentTimeMillis() - (26L * 60 * 60 * 1000)));
+
+            UploadJobWorker worker = new UploadJobWorker(new UploadArtifactPathGuard(tempRoot));
+            worker.cleanupOrphanedExtractions();
+
+            assertFalse(Files.exists(oldExtraction));
+            assertTrue(Files.exists(recentExtraction));
+            assertTrue(Files.exists(nonMatching));
+        } finally {
+            FileUtils.deleteQuietly(tempRoot.toFile());
+        }
+    }
+
+    @Test
+    public void cleanupOrphanedExtractionsSkipsSymlinkedDirectoriesDuringDiscovery() throws Exception {
+        Path tempRoot = Files.createTempDirectory("upload-job-worker-symlink-root-");
+        Path outside = Files.createTempDirectory("upload-job-worker-symlink-outside-");
+        Path dateLink = tempRoot.resolve("7/20260704");
+        try {
+            Path externalExtraction = outside.resolve("upload-session-linked/upload_99_1.extracting");
+            Files.createDirectories(externalExtraction);
+            Files.writeString(externalExtraction.resolve("outside.p"), "outside");
+            Files.setLastModifiedTime(externalExtraction, FileTime.fromMillis(System.currentTimeMillis() - (26L * 60 * 60 * 1000)));
+
+            Path userDir = tempRoot.resolve("7");
+            Files.createDirectories(userDir);
+            Files.createSymbolicLink(dateLink, outside);
+
+            UploadJobWorker worker = new UploadJobWorker(new UploadArtifactPathGuard(tempRoot));
+            worker.cleanupOrphanedExtractions();
+
+            assertTrue(Files.exists(externalExtraction));
+        } finally {
+            Files.deleteIfExists(dateLink);
+            FileUtils.deleteQuietly(tempRoot.toFile());
+            FileUtils.deleteQuietly(outside.toFile());
         }
     }
 
@@ -179,6 +233,7 @@ public class UploadJobWorkerStartupTests {
     }
 
     private Path createTarGzArchive(Path archive, String entryName, String content) throws IOException {
+        Files.createDirectories(archive.getParent());
         try (OutputStream fileOutput = Files.newOutputStream(archive);
              GzipCompressorOutputStream gzipOutput = new GzipCompressorOutputStream(fileOutput);
              TarArchiveOutputStream tarOutput = new TarArchiveOutputStream(gzipOutput)) {
@@ -191,6 +246,10 @@ public class UploadJobWorkerStartupTests {
             tarOutput.finish();
         }
         return archive;
+    }
+
+    private Path uploadSessionArchive(Path root, String suffix) {
+        return root.resolve("7/20260704/upload-session-" + suffix + "/AllProblems.tgz");
     }
 
     private long countDirectories(Path root) throws IOException {

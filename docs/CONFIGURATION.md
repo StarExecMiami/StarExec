@@ -78,6 +78,10 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_DATA_DIR` | `/tmp/starexec/data` | No | `/var/lib/starexec/data` | Data directory path |
 | `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` | `1800` | No | `3600` | Timeout for async benchmark archive extraction only. Applies to resumable upload job extraction, not all shell commands globally. |
 | `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` | `107374182400` | No | `214748364800` | Hard cap for total extracted bytes during async benchmark archive extraction. Effective limit is the smaller of this value and the uploader's remaining disk quota. |
+| `STAREXEC_UPLOAD_CLEANUP_ENABLED` | `true` | No | `true` | Enables DB-driven cleanup of expired upload-owned artifacts. |
+| `STAREXEC_UPLOAD_CLEANUP_INTERVAL_SECONDS` | `900` | No | `300` | Interval between upload artifact cleanup sweeps. |
+| `STAREXEC_UPLOAD_CLEANUP_BATCH_SIZE` | `100` | No | `50` | Maximum upload artifacts claimed per cleanup sweep. |
+| `STAREXEC_UPLOAD_ARTIFACT_RETENTION_HOURS` | `168` | No | `72` | Retry/artifact retention window for upload source archives before cleanup and retry expiry. |
 
 #### Async benchmark upload extraction
 
@@ -88,6 +92,8 @@ Resumable benchmark uploads now use a safer extraction lifecycle:
 - the final extraction directory is published only after extraction succeeds
 - chunk directories (`*.chunks`) are cleaned after successful session finalization
 - extracted bytes are bounded by both the configured safety cap and the uploader's remaining disk quota
+- expired retry archives are cleaned by a DB-driven upload artifact cleanup worker;
+  once cleaned or expired, users must re-upload instead of retrying the old job
 
 This is especially relevant for large uploads on slower shared storage such as NFS.
 

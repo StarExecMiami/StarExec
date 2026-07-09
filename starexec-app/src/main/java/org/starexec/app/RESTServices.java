@@ -530,7 +530,12 @@ public class RESTServices {
 		
 		response.put("isStuck", job.isStuck());
 		response.put("cancelRequested", job.isCancelRequested());
-		response.put("canRetry", job.canRetry());
+		boolean retryArtifactAvailable = UploadJobQueue.isSourceArchiveAvailableForRetry(job.getId());
+		response.put("canRetry", job.canRetry() && retryArtifactAvailable);
+		response.put("requiresReupload", job.canRetry() && !retryArtifactAvailable);
+		if (job.canRetry() && !retryArtifactAvailable) {
+			response.put("retryMessage", "Retry artifacts have expired; please re-upload the archive");
+		}
 		response.put("canCancel", ("PENDING".equals(job.getStatus()) || "PROCESSING".equals(job.getStatus()))
 			&& !job.isCancelRequested());
 		response.put("retryCount", job.getRetryCount());
@@ -624,10 +629,30 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, "Chunk size exceeds the expected range"));
 		}
 
-		java.nio.file.Path stagingPath = Paths.get(session.getStagingPath());
-		java.nio.file.Path chunksDir = Paths.get(session.getStagingPath() + ".chunks");
-		java.nio.file.Path finalChunkPath = chunksDir.resolve("chunk_" + chunkIndex + ".bin");
-		java.nio.file.Path tempChunkPath = chunksDir.resolve("chunk_" + chunkIndex + "." + UUID.randomUUID() + ".tmp");
+		java.nio.file.Path stagingPath;
+		java.nio.file.Path chunksDir;
+		java.nio.file.Path finalChunkPath;
+		java.nio.file.Path tempChunkPath;
+		try {
+			UploadArtifactPathGuard pathGuard = new UploadArtifactPathGuard();
+			stagingPath = pathGuard.validateUploadSessionStagingPath(session);
+			chunksDir = pathGuard.validateUploadSessionChunksDirectory(session, session.getStagingPath() + ".chunks");
+			finalChunkPath = pathGuard.validateUploadSessionChunkFile(
+				session,
+				chunkIndex,
+				chunksDir.resolve("chunk_" + chunkIndex + ".bin").toString(),
+				false
+			);
+			tempChunkPath = pathGuard.validateUploadSessionChunkFile(
+				session,
+				chunkIndex,
+				chunksDir.resolve("chunk_" + chunkIndex + "." + UUID.randomUUID() + ".tmp").toString(),
+				true
+			);
+		} catch (IOException e) {
+			log.error("uploadSessionChunk", "Unsafe upload session path for session " + sessionId, e);
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session path is invalid"));
+		}
 
 		try {
 			java.nio.file.Path parent = stagingPath.getParent();
@@ -640,7 +665,7 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, "Failed to prepare upload staging directory"));
 		}
 
-		if (UploadSessions.isChunkRecorded(sessionId, chunkIndex) && Files.exists(finalChunkPath)) {
+		if (UploadSessions.isChunkRecorded(sessionId, chunkIndex) && Files.exists(finalChunkPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
 			UploadSession updated = UploadSessions.getSession(sessionId).orElse(session);
 			return gson.toJson(buildUploadSessionPayload(updated));
 		}
@@ -651,8 +676,7 @@ public class RESTServices {
 		try {
 			try (InputStream in = request.getInputStream();
 					 OutputStream out = Files.newOutputStream(tempChunkPath,
-						 StandardOpenOption.CREATE,
-					 StandardOpenOption.TRUNCATE_EXISTING,
+					 StandardOpenOption.CREATE_NEW,
 					 StandardOpenOption.WRITE)) {
 				int read;
 				while ((read = in.read(buffer)) != -1) {
@@ -724,15 +748,39 @@ public class RESTServices {
 		if (session.getBytesReceived() != session.getTotalBytes() || session.getNextChunkIndex() != session.getTotalChunks()) {
 			return gson.toJson(new ValidatorStatusCode(false, "Upload is incomplete and cannot be finalized"));
 		}
-		if (!UploadSessions.markFinalizing(sessionId) && !"FINALIZING".equals(session.getStatus())) {
+		if (!UploadSessions.markFinalizing(sessionId)) {
+			UploadSession refreshed = UploadSessions.getSession(sessionId).orElse(null);
+			if (refreshed == null) {
+				return gson.toJson(new ValidatorStatusCode(false, "Upload session not found"));
+			}
+			if ("COMPLETE".equals(refreshed.getStatus()) && refreshed.getJobId() != null) {
+				Map<String, Object> response = new HashMap<>();
+				response.put("success", true);
+				response.put("jobId", refreshed.getJobId());
+				response.put("sessionId", refreshed.getId());
+				return gson.toJson(response);
+			}
+			if ("FINALIZING".equals(refreshed.getStatus())) {
+				return gson.toJson(new ValidatorStatusCode(false, "Upload finalization already in progress"));
+			}
 			return gson.toJson(new ValidatorStatusCode(false, "Upload session is not ready to finalize"));
 		}
 
-		java.nio.file.Path chunksDir = Paths.get(session.getStagingPath() + ".chunks");
-		java.nio.file.Path targetArchive = Paths.get(session.getStagingPath());
-		java.nio.file.Path finalArchivePath = (targetArchive.getParent() == null)
-			? Paths.get(UploadSessions.sanitizeFileName(session.getFileName()))
-			: targetArchive.getParent().resolve(UploadSessions.sanitizeFileName(session.getFileName()));
+		java.nio.file.Path chunksDir;
+		java.nio.file.Path finalArchivePath;
+		try {
+			UploadArtifactPathGuard pathGuard = new UploadArtifactPathGuard();
+			chunksDir = pathGuard.validateUploadSessionChunksDirectory(session, session.getStagingPath() + ".chunks");
+			java.nio.file.Path targetArchive = pathGuard.validateUploadSessionStagingPath(session);
+			finalArchivePath = pathGuard.validateUploadSessionFinalArchive(
+				session,
+				targetArchive.getParent().resolve(UploadSessions.sanitizeFileName(session.getFileName())).toString()
+			);
+		} catch (IOException e) {
+			log.error("finalizeUploadSession", "Unsafe upload session path for session " + sessionId, e);
+			UploadSessions.failSession(sessionId, "Upload session path is invalid");
+			return gson.toJson(new ValidatorStatusCode(false, "Upload session path is invalid"));
+		}
 
 		ValidatorStatusCode assembleStatus = assembleUploadSessionChunks(session, chunksDir, finalArchivePath);
 		if (!assembleStatus.isSuccess()) {
@@ -740,14 +788,9 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, assembleStatus.getMessage()));
 		}
 
-		if (!UploadSessions.updateStagingPath(sessionId, finalArchivePath.toAbsolutePath().toString())) {
-			UploadSessions.failSession(sessionId, "Failed to update finalized archive path");
-			return gson.toJson(new ValidatorStatusCode(false, "Failed to persist the finalized archive path"));
-		}
-
 		File finalArchive = finalArchivePath.toFile();
 
-		long jobId = UploadJobQueue.enqueueJob(new UploadJob.UploadJobRequest.Builder()
+		UploadJob.UploadJobRequest uploadJobRequest = new UploadJob.UploadJobRequest.Builder()
 			.archivePath(finalArchive.getAbsolutePath())
 			.userId(session.getUserId())
 			.spaceId(session.getSpaceId())
@@ -759,19 +802,24 @@ public class RESTServices {
 			.depRootSpaceId(session.getDepRootSpaceId())
 			.linked(session.isLinked())
 			.uploadSessionId(session.getId())
-			.build());
+			.build();
 
-		if (jobId <= 0) {
-			UploadSessions.failSession(sessionId, "Failed to enqueue upload job");
+		Optional<Long> jobId = UploadSessions.finalizeSessionWithUploadJob(
+			sessionId,
+			finalArchivePath.toAbsolutePath().toString(),
+			uploadJobRequest
+		);
+		if (jobId.isEmpty()) {
+			UploadSessions.failSession(sessionId, "Failed to schedule upload processing");
+			cleanupFinalizedUploadArtifacts(session, chunksDir, finalArchivePath);
 			return gson.toJson(new ValidatorStatusCode(false, "Failed to schedule upload processing"));
 		}
 
-		UploadSessions.completeSession(sessionId, jobId);
 		cleanupUploadSessionChunks(session, chunksDir);
 		Map<String, Object> response = new HashMap<>();
 		response.put("success", true);
 		response.put("sessionId", sessionId);
-		response.put("jobId", jobId);
+		response.put("jobId", jobId.get());
 		return gson.toJson(response);
 	}
 
@@ -801,7 +849,7 @@ public class RESTServices {
 	}
 
 	private static void moveWithAtomicFallbackNoReplace(java.nio.file.Path source, java.nio.file.Path target) throws IOException {
-		if (Files.exists(target)) {
+		if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
 			throw new FileAlreadyExistsException(target.toString());
 		}
 		try {
@@ -812,7 +860,16 @@ public class RESTServices {
 	}
 
 	private ValidatorStatusCode assembleUploadSessionChunks(UploadSession session, java.nio.file.Path chunksDir, java.nio.file.Path outputFile) {
-		java.nio.file.Path tempOutput = Paths.get(session.getStagingPath() + ".assembling");
+		java.nio.file.Path tempOutput;
+		try {
+			UploadArtifactPathGuard pathGuard = new UploadArtifactPathGuard();
+			pathGuard.validateUploadSessionChunksDirectory(session, chunksDir.toString());
+			tempOutput = pathGuard.validateUploadSessionAssemblingFile(session);
+			pathGuard.validateUploadSessionFinalArchive(session, outputFile.toString());
+		} catch (IOException e) {
+			log.error("assembleUploadSessionChunks", "Unsafe upload assembly path for session " + session.getId(), e);
+			return new ValidatorStatusCode(false, "Upload session path is invalid");
+		}
 		boolean assembled = false;
 		try (FileChannel out = FileChannel.open(
 			tempOutput,
@@ -823,8 +880,11 @@ public class RESTServices {
 			long targetOffset = 0L;
 			for (int i = 0; i < session.getTotalChunks(); i++) {
 				java.nio.file.Path chunkPath = chunksDir.resolve("chunk_" + i + ".bin");
-				if (!Files.exists(chunkPath)) {
+				if (!Files.exists(chunkPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
 					return new ValidatorStatusCode(false, "Missing chunk " + i);
+				}
+				if (Files.isSymbolicLink(chunkPath)) {
+					return new ValidatorStatusCode(false, "Unsafe chunk " + i);
 				}
 				try (FileChannel in = FileChannel.open(chunkPath, StandardOpenOption.READ)) {
 					long size = in.size();
@@ -871,11 +931,25 @@ public class RESTServices {
 
 	private void cleanupUploadSessionChunks(UploadSession session, java.nio.file.Path chunksDir) {
 		try {
-			if (Files.exists(chunksDir)) {
-				org.apache.commons.io.FileUtils.deleteDirectory(chunksDir.toFile());
+			chunksDir = new UploadArtifactPathGuard().validateUploadSessionChunksDirectory(session, chunksDir.toString());
+			if (Files.exists(chunksDir, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				UploadArtifactFileSystem.deleteDirectoryWithoutFollowingLinks(chunksDir);
 			}
 		} catch (IOException e) {
 			log.warn("cleanupUploadSessionChunks", "Failed to cleanup chunk files for session " + session.getId(), e);
+		}
+	}
+
+	private void cleanupFinalizedUploadArtifacts(UploadSession session, java.nio.file.Path chunksDir, java.nio.file.Path finalArchivePath) {
+		cleanupUploadSessionChunks(session, chunksDir);
+		try {
+			java.nio.file.Path safeFinalArchive = new UploadArtifactPathGuard()
+				.validateUploadSessionFinalArchive(session, finalArchivePath.toString());
+			if (Files.exists(safeFinalArchive, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+				UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(safeFinalArchive);
+			}
+		} catch (IOException e) {
+			log.warn("cleanupFinalizedUploadArtifacts", "Failed to cleanup finalized archive for session " + session.getId(), e);
 		}
 	}
 
@@ -940,6 +1014,9 @@ public class RESTServices {
 		}
 		if (!job.canRetry()) {
 			return gson.toJson(new ValidatorStatusCode(false, "This upload job cannot be retried"));
+		}
+		if (!UploadJobQueue.isSourceArchiveAvailableForRetry(jobId)) {
+			return gson.toJson(new ValidatorStatusCode(false, "Retry artifacts have expired; please re-upload the archive"));
 		}
 		return UploadJobQueue.retryJob(jobId)
 			? gson.toJson(new ValidatorStatusCode(true, "Retry scheduled"))

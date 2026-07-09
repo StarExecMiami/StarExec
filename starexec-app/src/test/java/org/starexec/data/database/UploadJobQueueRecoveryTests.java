@@ -17,9 +17,10 @@ public class UploadJobQueueRecoveryTests {
         Connection connection = mock(Connection.class);
         PreparedStatement cancelStatement = mock(PreparedStatement.class);
         PreparedStatement failStatement = mock(PreparedStatement.class);
+        PreparedStatement retentionStatement = mock(PreparedStatement.class);
 
         when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString()))
-            .thenReturn(cancelStatement, failStatement);
+            .thenReturn(cancelStatement, failStatement, retentionStatement);
         when(cancelStatement.executeUpdate()).thenReturn(1);
         when(failStatement.executeUpdate()).thenReturn(2);
 
@@ -33,5 +34,7 @@ public class UploadJobQueueRecoveryTests {
         verify(failStatement).setString(2,
             "Upload processing was interrupted by application restart before completion. Please retry the upload job.");
         verify(failStatement).executeUpdate();
+        verify(retentionStatement).setInt(1, 168);
+        verify(retentionStatement).executeUpdate();
     }
 }

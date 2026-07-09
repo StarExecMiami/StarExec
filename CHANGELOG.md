@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Upload extraction controls**: Added `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` and `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` for resumable benchmark upload extraction tuning and safety enforcement.
+- **Upload artifact cleanup**: Added DB-driven cleanup metadata and a background cleanup worker for expired upload source archives, with retry expiry and path-safety validation.
 
 ### Fixed
 - **Resumable benchmark uploads**
