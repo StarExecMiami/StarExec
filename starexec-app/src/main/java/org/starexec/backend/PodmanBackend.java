@@ -275,7 +275,7 @@ public class PodmanBackend implements Backend {
             initializePartitionState();
             log.info(CpuPartitionManager.describeTopology(partitions));
 
-            // Ensure a virtual queue and worker node exist for every partition.
+            // Ensure the shared container queue and one worker node exist for every partition.
             for (CpuPartition partition : getEffectivePartitions()) {
                 ensurePartitionQueueExists(partition);
             }
@@ -662,8 +662,8 @@ public class PodmanBackend implements Backend {
     /**
      * Ensures the legacy virtual queue exists for container job submission.
      *
-     * @deprecated Use {@link #ensurePartitionQueueExists(CpuPartition)} so queue
-     *             and node creation follows the active CPU partition list.
+     * @deprecated Use {@link #ensurePartitionQueueExists(CpuPartition)} so shared
+     *             queue and node creation follows the active CPU partition list.
      */
     @Deprecated
     private void ensureContainerQueueExists() {
@@ -671,12 +671,12 @@ public class PodmanBackend implements Backend {
     }
 
     /**
-     * Ensures a virtual queue and worker node exist for a CPU partition.
+     * Ensures the shared virtual queue and worker node exist for a CPU partition.
      * <p>
      * The StarExec job submission UI requires a queue selection, but container
      * backends don't use traditional SGE queues. This method creates a virtual
-     * partition queue with generous timeout limits and a worker node associated
-     * to that queue.
+     * container queue with generous timeout limits and associates each partition
+     * worker node to that same queue.
      * </p>
      */
     private void ensurePartitionQueueExists(CpuPartition partition) {
@@ -688,7 +688,7 @@ public class PodmanBackend implements Backend {
             int queueId = Queues.getIdByName(effectivePartition.queueName);
             if (queueId > 0) {
                 log.info(
-                    "Container partition queue '" +
+                    "Container queue '" +
                         effectivePartition.queueName +
                         "' already exists"
                 );
@@ -705,14 +705,14 @@ public class PodmanBackend implements Backend {
                 );
                 if (queueId > 0) {
                     log.info(
-                        "Created container partition queue '" +
+                        "Created container queue '" +
                             effectivePartition.queueName +
                             "' with ID: " +
                             queueId
                     );
                 } else {
                     log.warn(
-                        "Failed to create container partition queue '" +
+                        "Failed to create container queue '" +
                         effectivePartition.queueName +
                         "' - job submission may fail"
                     );
@@ -733,13 +733,13 @@ public class PodmanBackend implements Backend {
                 );
             } else {
                 log.warn(
-                    "Could not verify container partition queue '" +
+                    "Could not verify container queue '" +
                     effectivePartition.queueName +
                     "' - skipping node association"
                 );
             }
         } catch (Exception e) {
-            log.warn("Error creating container partition queue: " + e.getMessage());
+            log.warn("Error creating container queue or partition node: " + e.getMessage());
             // Don't fail initialization - the queue might be created by another process
         }
     }
@@ -3240,10 +3240,11 @@ public class PodmanBackend implements Backend {
 
     @Override
     public String[] getQueues() {
-        return getEffectivePartitions()
-            .stream()
-            .map(partition -> partition.queueName)
-            .toArray(String[]::new);
+        Set<String> queueNames = new LinkedHashSet<>();
+        getEffectivePartitions().forEach(
+            partition -> queueNames.add(partition.queueName)
+        );
+        return queueNames.toArray(new String[0]);
     }
 
     @Override

@@ -212,9 +212,19 @@ public final class CpuPartitionManager {
             0,
             null,
             null,
-            PodmanBackend.CONTAINER_WORKER_NODE,
-            PodmanBackend.CONTAINER_QUEUE_NAME
+            legacyContainerWorkerNodeName(),
+            sharedContainerQueueName()
         );
+    }
+
+    @SuppressWarnings("deprecation")
+    static String legacyContainerWorkerNodeName() {
+        return PodmanBackend.CONTAINER_WORKER_NODE;
+    }
+
+    @SuppressWarnings("deprecation")
+    static String sharedContainerQueueName() {
+        return PodmanBackend.CONTAINER_QUEUE_NAME;
     }
 
     /**

@@ -13,6 +13,11 @@ environment variables set), all containers float across all available CPUs and
 the single `container.q` queue and `container-worker-1` node are used — exactly
 as before this feature was introduced.
 
+When partitioning is enabled, StarExec still exposes a single submission queue:
+`container.q`. Each CPU partition is represented as a separate virtual worker
+node attached to that same queue. This keeps queue selection simple while still
+letting `PodmanBackend` pin containers to partition-specific CPU sets.
+
 ## Configuration reference
 
 | Variable | Default | Description |
@@ -27,8 +32,8 @@ For `STAREXEC_CPU_PARTITIONS="0-7 8-15"`:
 
 ```
 CpuPartitionManager: 2 partitions from CPU partition configuration
-  partition-0: cpus=0-7 mems=0 node=container-worker-partition-0 queue=partition0.q
-  partition-1: cpus=8-15 mems=0 node=container-worker-partition-1 queue=partition1.q
+  partition-0: cpus=0-7 mems=0 node=container-worker-partition-0 queue=container.q
+  partition-1: cpus=8-15 mems=0 node=container-worker-partition-1 queue=container.q
 Container max concurrent jobs per CPU partition: 1
 ```
 
@@ -49,8 +54,8 @@ Container max concurrent jobs per CPU partition: 1
 - **Single socket, single NUMA node, `STAREXEC_CPU_PARTITIONS="0-7 8-15"`** →
   Two partitions. Containers for partition 0 are pinned to CPUs 0–7; partition 1
   to CPUs 8–15. Both partitions bind to NUMA memory node 0 (only node available).
-  Two virtual queues (`partition0.q`, `partition1.q`) and two virtual nodes are
-  created in the database at startup.
+  One virtual queue (`container.q`) and two virtual nodes are created in the
+  database at startup; both nodes are associated with `container.q`.
 
 - **Dual socket, dual NUMA node, `STAREXEC_CPU_PARTITION_COUNT=auto`** → Two
   partitions, one per NUMA node, using cpulist from
@@ -65,11 +70,11 @@ Jobs are assigned to partitions by `selectPartition(pairId)`:
 2. On a tie, `pairId % partitionCount` breaks the tie deterministically.
 3. For single-partition setups, partition 0 is always selected.
 
-Note: the `Backend.submitScript()` interface has no queue or node parameter. Partition
-assignment is therefore internal to `PodmanBackend` and cannot be directed from the
-StarExec UI queue selector. A job submitted to `partition1.q` in the UI may still run
-on partition 0 if partition 0 has fewer active slots. This will be addressed when the
-`Backend` interface is extended with a target-node parameter.
+Note: the `Backend.submitScript()` interface has no queue or node parameter.
+Partition assignment is therefore internal to `PodmanBackend` and cannot be
+directed from the StarExec UI queue selector. The UI continues to expose the
+single `container.q` queue; `PodmanBackend` chooses the concrete partition worker
+by current load.
 
 ## Known limitations
 
@@ -97,16 +102,17 @@ To revert to single-partition legacy behavior without redeploying:
 3. `PodmanBackend` will call `CpuPartitionManager.discover()`, find no env vars and a
    single NUMA node, and return the legacy no-pinning partition with `container.q` and
    `container-worker-1`.
-4. The `partition0.q` and `partition1.q` queues remain in the database but receive no
-   new jobs. Operators may archive them via the StarExec admin UI if desired.
+4. Extra partition worker nodes remain in the database but receive no new job
+   host updates once legacy mode is active. Operators may deactivate them via the
+   StarExec admin UI if desired.
 
 ## Changed files
 
 | File | Change |
 |---|---|
-| `org/starexec/backend/CpuPartition.java` | New. Immutable value type representing one CPU partition (index, cpusetCpus, cpusetMems, node name, queue name). |
+| `org/starexec/backend/CpuPartition.java` | New. Immutable value type representing one CPU partition (index, cpusetCpus, cpusetMems, node name, shared queue name). |
 | `org/starexec/backend/CpuPartitionManager.java` | New. Discovers partitions from NUMA sysfs, env var override, or equal CPU subdivision. Contains `expandCpuset`, `compressCpuset`, `subdivide` helpers. |
-| `org/starexec/backend/PodmanBackend.java` | Replaced single global slot gate with per-partition arrays. Added `selectPartition`, `acquirePartitionSlot`, `releasePartitionSlot`, `getWorkerNodeNameForPartition`. Updated `createHostConfig`, `createContainerLabels`, `createContainerWithCurl`, and all three `Backend` getters. |
+| `org/starexec/backend/PodmanBackend.java` | Replaced single global slot gate with per-partition arrays. Added `selectPartition`, `acquirePartitionSlot`, `releasePartitionSlot`, `getWorkerNodeNameForPartition`. Updated `createHostConfig`, `createContainerLabels`, `createContainerWithCurl`, and all three `Backend` getters. `getWorkerNodes()` returns one worker per partition; `getQueues()` returns the single shared `container.q`; `getNodeQueueAssociations()` maps each partition worker to `container.q`. |
 | `org/starexec/backend/ContainerJobMonitor.java` | `updateDatabase` now takes `partitionIndex`; uses `backend.getWorkerNodeNameForPartition()` instead of the deprecated `CONTAINER_WORKER_NODE` constant. |
 | `org/starexec/backend/KubernetesNativeBackend.java` | Removed cross-backend reference to `PodmanBackend.CONTAINER_WORKER_NODE`. Added local `DEFAULT_WORKER_NODE_NAME` constant and `resolveStatsNodeName()` helper. |
 | `org/starexec/config/EnvironmentConfig.java` | Added `getCpuPartitionCount()`, `getCpuPartitionsOverride()`, `getPartitionMaxJobs()`. |

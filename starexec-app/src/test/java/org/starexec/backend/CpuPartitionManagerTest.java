@@ -31,9 +31,11 @@ public class CpuPartitionManagerTest {
             assertEquals("0-7", partitions.get(0).cpusetCpus);
             assertEquals("0", partitions.get(0).cpusetMems);
             assertEquals("container-worker-partition-0", partitions.get(0).workerNodeName);
-            assertEquals("partition0.q", partitions.get(0).queueName);
+            assertEquals(PodmanBackend.CONTAINER_QUEUE_NAME, partitions.get(0).queueName);
             assertEquals("8-15", partitions.get(1).cpusetCpus);
             assertEquals("0", partitions.get(1).cpusetMems);
+            assertEquals("container-worker-partition-1", partitions.get(1).workerNodeName);
+            assertEquals(PodmanBackend.CONTAINER_QUEUE_NAME, partitions.get(1).queueName);
         } finally {
             deleteRecursively(tempDir);
         }
@@ -106,8 +108,12 @@ public class CpuPartitionManagerTest {
             assertEquals(2, partitions.size());
             assertEquals("0-7,16-23", partitions.get(0).cpusetCpus);
             assertEquals("0", partitions.get(0).cpusetMems);
+            assertEquals("container-worker-partition-0", partitions.get(0).workerNodeName);
+            assertEquals(PodmanBackend.CONTAINER_QUEUE_NAME, partitions.get(0).queueName);
             assertEquals("8-15,24-31", partitions.get(1).cpusetCpus);
             assertEquals("1", partitions.get(1).cpusetMems);
+            assertEquals("container-worker-partition-1", partitions.get(1).workerNodeName);
+            assertEquals(PodmanBackend.CONTAINER_QUEUE_NAME, partitions.get(1).queueName);
         } finally {
             deleteRecursively(tempDir);
         }

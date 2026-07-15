@@ -326,7 +326,8 @@ public class PodmanBackendTests {
     }
 
     @Test
-    public void testGetQueues_ReturnsPartitionQueuesWhenConfigured() throws Exception {
+    public void testGetQueues_ReturnsSharedContainerQueueWhenPartitionsConfigured()
+        throws Exception {
         setBackendField(
             "partitions",
             Arrays.asList(
@@ -338,8 +339,8 @@ public class PodmanBackendTests {
         String[] queues = backend.getQueues();
 
         assertArrayEquals(
-            "Partition queues should follow active CPU partition order",
-            new String[]{"partition0.q", "partition1.q"},
+            "Partition workers should share the same container queue",
+            new String[]{"container.q"},
             queues
         );
     }
@@ -379,11 +380,11 @@ public class PodmanBackendTests {
         assertNotNull("Associations should not be null", associations);
         assertEquals("Should have one mapping per partition", 2, associations.size());
         assertEquals(
-            "partition0.q",
+            "container.q",
             associations.get("container-worker-partition-0")
         );
         assertEquals(
-            "partition1.q",
+            "container.q",
             associations.get("container-worker-partition-1")
         );
     }

@@ -4,8 +4,10 @@ package org.starexec.backend;
  * Represents a single CPU partition for container job scheduling.
  *
  * <p>A partition is a contiguous or non-contiguous set of logical CPUs assigned
- * exclusively to one virtual StarExec worker node and queue. Containers
- * scheduled on this partition are pinned to its CPU set, preventing
+ * exclusively to one virtual StarExec worker node. All partition worker nodes
+ * remain associated with the same container queue so StarExec presents one
+ * submission target while the backend chooses the CPU partition internally.
+ * Containers scheduled on this partition are pinned to its CPU set, preventing
  * cross-partition interference and improving cache locality.</p>
  *
  * <p>On NUMA hardware, each partition typically corresponds to one NUMA node,
@@ -34,11 +36,12 @@ public final class CpuPartition {
     /** StarExec virtual worker node name, e.g. "container-worker-partition-0". */
     public final String workerNodeName;
 
-    /** StarExec virtual queue name, e.g. "partition0.q". */
+    /** StarExec virtual queue name shared by all container partitions. */
     public final String queueName;
 
     /**
-     * Creates a named partition using the standard partition node/queue names.
+     * Creates a named partition using the standard partition worker node and
+     * the shared container queue.
      *
      * @param index zero-based partition index
      * @param cpusetCpus cpuset-cpus value, or null for no pinning
@@ -50,7 +53,7 @@ public final class CpuPartition {
             cpusetCpus,
             cpusetMems,
             "container-worker-partition-" + index,
-            "partition" + index + ".q"
+            CpuPartitionManager.sharedContainerQueueName()
         );
     }
 
