@@ -4,9 +4,14 @@ Automated tools for deploying StarExec to Kubernetes clusters with dynamic confi
 
 This guide covers the automation scripts and Make targets. It does not, by itself, prove end-to-end Kubernetes backend maturity or large-scale performance.
 
+> **Canonical Quokka deployment:** Do not run the direct commands in this guide
+> against Quokka's MicroK8s cluster. Jenkins is the sole application deployment
+> authority there and deploys only GitHub-published images. Use these commands
+> for development or separately operated Kubernetes clusters.
+
 ## Quick Start (Automated)
 
-Deploy to any Kubernetes cluster with a single command:
+Deploy to a non-Quokka Kubernetes cluster with a single command:
 
 ```bash
 # Complete automated setup and deployment

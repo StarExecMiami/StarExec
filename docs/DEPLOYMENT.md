@@ -312,6 +312,28 @@ kubectl port-forward -n starexec svc/starexec 8080:8080
 # Access at http://localhost:8080/starexec
 ```
 
+### Quokka Jenkins Deployment
+
+Jenkins is the sole deployment authority for the canonical quokka MicroK8s
+cluster. GitHub Actions validates and publishes application images; it does not
+access the cluster.
+
+| Setting | Production value |
+|---------|------------------|
+| Jenkins job | `StarExec Containerised` |
+| Source branch | `containerised` |
+| Kubernetes namespace | `starexec` |
+| Helm release | `starexec` |
+| Values file | `charts/starexec/values-prod.yaml` |
+| Application URL | `https://quokka.acorn.miami.edu/starexec` |
+
+Jenkins waits for a successful GitHub Container Publish run for the checked-out
+commit, pulls its `sha-<full-git-sha>` image, resolves the OCI digest, imports
+that exact image into MicroK8s, and deploys the digest with
+`imagePullPolicy: IfNotPresent`. Do not deploy a mutable `latest` tag through
+Jenkins.
+
+
 ### Upgrading
 
 ```bash

@@ -119,6 +119,8 @@ jobs:
           tags: |
             # Set latest tag for default branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' || github.ref == 'refs/heads/UMprod' }}
+            # Immutable full-SHA tag for reproducible deployments
+            type=sha,prefix=sha-,format=long,enable=${{ github.event_name == 'push' }}
             # Branch + short SHA (push events)
             type=sha,prefix={{branch}}-,format=short,enable=${{ github.event_name == 'push' }}
             # Semantic version from release tag (releases must use vX.Y.Z format)

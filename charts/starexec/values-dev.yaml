@@ -5,8 +5,10 @@
 
 image:
   repository: ghcr.io/starexecmiami/starexec
+  # Manual deployments that keep `latest` should leave pullPolicy at Always.
+  # CI/CD overrides tag and pullPolicy with a unique per-build tag + IfNotPresent.
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 replicaCount: 1
 

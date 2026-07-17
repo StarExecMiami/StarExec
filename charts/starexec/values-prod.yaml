@@ -1,12 +1,14 @@
 # Production environment values for the canonical quokka deployment.
 #
-# This file is the single source of truth for production. Jenkins and manual
-# Helm invocations targeting production should use this file.
+# This file is the base production profile. Jenkins and manual Helm invocations
+# targeting production should use this file; Jenkins overlays deploy-time image references.
 
 image:
   repository: ghcr.io/starexecmiami/starexec
+  # Manual deployments that keep `latest` should leave pullPolicy at Always.
+  # CI/CD overrides tag and pullPolicy with a unique per-build tag + IfNotPresent.
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 replicaCount: 1
 

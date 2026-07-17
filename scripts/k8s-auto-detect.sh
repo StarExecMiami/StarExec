@@ -510,8 +510,10 @@ generate_values_file() {
 
 image:
   repository: ghcr.io/starexecmiami/starexec
+  # Auto-detected deployments use the mutable latest tag; always check GHCR.
+  # CI/CD overrides tag and pullPolicy with a unique per-build tag + IfNotPresent.
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 backend:
   type: "kubernetes-native"

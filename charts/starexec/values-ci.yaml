@@ -4,7 +4,8 @@
 
 image:
   repository: localhost/local/starexec
-  tag: "ci-${CI_COMMIT_SHA:-latest}"
+  # CI can override this valid default with --set-string image.tag=<build-tag>.
+  tag: "ci-test-latest"
   pullPolicy: Always  # Always pull latest in CI
 
 replicaCount: 1

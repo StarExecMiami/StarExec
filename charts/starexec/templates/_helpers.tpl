@@ -60,6 +60,14 @@ false
 {{- end -}}
 {{- end -}}
 
+{{- define "starexec.appImage" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "starexec.k8sJobServiceAccount" -}}
 {{- default (printf "%s-job" (include "chart.fullname" .)) .Values.kubernetes.jobServiceAccount -}}
 {{- end -}}

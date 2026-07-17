@@ -52,8 +52,6 @@ pipeline {
     // ---------------------------------------------------------------------------
     environment {
         GHCR_REPO          = 'ghcr.io/starexecmiami/starexec'
-        JOB_RUNNER_REPO    = 'ghcr.io/starexecmiami/starexec-job-runner'
-        DEPLOY_IMAGE_TAG   = 'latest'
         NOTIFICATION_EMAIL = "${params.NOTIFICATION_EMAIL?.trim() ?: 'dev-team@example.com'}"
     }
 
@@ -69,7 +67,7 @@ pipeline {
                 deleteDir()
                 checkout scm
                 script {
-                    def gitSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    def gitSha = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
                     env.GIT_SHA = gitSha
 
                     // Determine deployment target based on trigger type and parameter.
@@ -79,7 +77,7 @@ pipeline {
                         env.K8S_NAMESPACE    = "starexec-pr-${env.CHANGE_ID}"
                         env.HELM_RELEASE     = "starexec-pr-${env.CHANGE_ID}"
                         env.HELM_VALUES      = 'charts/starexec/values-dev.yaml'
-                        env.APP_URL          = "http://localhost:30080/starexec"
+                        env.APP_URL          = "http://localhost:30081/starexec"
                         env.HELM_ARGS        = "--set kubernetes.jobNamespace=${env.K8S_NAMESPACE}"
                     } else if (params.DEPLOY_ENV == 'prod') {
                         // Main-branch production
@@ -99,8 +97,10 @@ pipeline {
                         env.HELM_ARGS        = ''
                     }
 
-                    // Build locally with the git SHA; deploy the published registry tag.
-                    env.IMAGE_TAG = env.GIT_SHA
+                    // GitHub Actions publishes the app image. Jenkins deploys only
+                    // the artifact validated by a successful workflow for this SHA.
+                    env.PUBLISHED_IMAGE_TAG = "sha-${env.GIT_SHA}"
+                    env.PUBLISHED_IMAGE = "${GHCR_REPO}:${env.PUBLISHED_IMAGE_TAG}"
 
                     echo """
                     ╔══════════════════════════════════════════════════════════╗
@@ -108,8 +108,7 @@ pipeline {
                     ╠══════════════════════════════════════════════════════════╣
                     ║  Job         : ${env.JOB_NAME} #${env.BUILD_NUMBER}
                     ║  Git SHA     : ${env.GIT_SHA}
-                    ║  Build tag   : ${env.IMAGE_TAG}
-                    ║  Deploy tag  : ${env.DEPLOY_IMAGE_TAG}
+                    ║  Published tag: ${env.PUBLISHED_IMAGE_TAG}
                     ║  Environment : ${params.DEPLOY_ENV}
                     ║  Namespace   : ${env.K8S_NAMESPACE}
                     ║  Helm release: ${env.HELM_RELEASE}
@@ -123,17 +122,59 @@ pipeline {
 
 
         // =======================================================================
-        stage('Build Image') {
+        stage('Resolve Published Image') {
         // =======================================================================
+            when {
+                expression { env.IS_PR != 'true' }
+            }
             steps {
                 script {
-                    sh """
-                        echo "Building image: ${GHCR_REPO}:${env.IMAGE_TAG}"
-                        make build IMAGE_TAG=${env.IMAGE_TAG}
-                        podman tag starexec:${env.IMAGE_TAG} ${GHCR_REPO}:${env.IMAGE_TAG}
-                        podman images --filter=reference="${GHCR_REPO}:${env.IMAGE_TAG}" \
-                            || { echo 'ERROR: image not found after tag'; exit 1; }
-                    """
+                    env.DEPLOY_IMAGE_DIGEST = sh(
+                        script: """
+                            set -eu
+
+                            command -v curl >/dev/null
+                            command -v jq >/dev/null
+                            command -v podman >/dev/null
+
+                            WORKFLOW_RUNS_URL="https://api.github.com/repos/StarExecMiami/StarExec/actions/workflows/container-publish.yml/runs?head_sha=${env.GIT_SHA}&status=completed&per_page=100"
+                            RUN_ID=""
+                            for attempt in \$(seq 1 30); do
+                                if ! WORKFLOW_RUNS="\$(curl --fail --silent --show-error --retry 3 --retry-delay 2 --retry-all-errors \\
+                                    -H 'Accept: application/vnd.github+json' "\${WORKFLOW_RUNS_URL}")"; then
+                                    echo "GitHub workflow lookup failed (attempt \${attempt}/30); retrying..." >&2
+                                    sleep 30
+                                    continue
+                                fi
+                                RUN_ID="\$(printf '%s' "\${WORKFLOW_RUNS}" | jq -r --arg sha '${env.GIT_SHA}' \\
+                                    '[.workflow_runs[] | select(.head_sha == \$sha and .conclusion == "success")] | sort_by(.updated_at) | last | .id // empty')"
+                                if [ -n "\${RUN_ID}" ]; then
+                                    break
+                                fi
+
+                                echo "Waiting for successful Container Publish workflow (attempt \${attempt}/30)" >&2
+                                sleep 30
+                            done
+
+                            if [ -z "\${RUN_ID}" ]; then
+                                echo "ERROR: no successful Container Publish workflow completed within 15 minutes for ${env.GIT_SHA}" >&2
+                                exit 1
+                            fi
+
+                            echo "Verified Container Publish run \${RUN_ID} for ${env.GIT_SHA}" >&2
+                            podman pull "${env.PUBLISHED_IMAGE}" >&2
+
+                            REPOSITORY_DIGEST="\$(podman image inspect --format '{{index .RepoDigests 0}}' "${env.PUBLISHED_IMAGE}")"
+                            DEPLOY_IMAGE_DIGEST="\${REPOSITORY_DIGEST#*@}"
+                            case "\${DEPLOY_IMAGE_DIGEST}" in
+                                sha256:*) printf '%s' "\${DEPLOY_IMAGE_DIGEST}" ;;
+                                *) echo "ERROR: could not resolve an OCI digest for ${env.PUBLISHED_IMAGE}" >&2; exit 1 ;;
+                            esac
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Resolved published image ${env.PUBLISHED_IMAGE}@${env.DEPLOY_IMAGE_DIGEST}"
                 }
             }
         }
@@ -158,7 +199,11 @@ pipeline {
         stage('Pre-deploy Validation') {
         // =======================================================================
             when {
-                expression { params.DEPLOY_ENV == 'prod' && !params.SKIP_DEPLOY }
+                expression {
+                    params.DEPLOY_ENV == 'prod' &&
+                        !params.SKIP_DEPLOY &&
+                        env.IS_PR != 'true'
+                }
             }
             steps {
                 withCredentials([
@@ -193,7 +238,7 @@ pipeline {
         stage('Deploy to Kubernetes') {
         // =======================================================================
             when {
-                expression { !params.SKIP_DEPLOY }
+                expression { !params.SKIP_DEPLOY && env.IS_PR != 'true' }
             }
             steps {
                 script {
@@ -208,13 +253,22 @@ pipeline {
                     string(credentialsId: 'starExec-db-password', variable: 'DB_PASSWORD'),
                 ]) {
                     sh """
+                        set +x
+                        set -eu
+
                         echo "════════════════════════════════════════════════════"
                         echo "  Deploying StarExec"
                         echo "  Namespace   : ${K8S_NAMESPACE}"
                         echo "  Release     : ${HELM_RELEASE}"
-                        echo "  Image       : ${GHCR_REPO}:${DEPLOY_IMAGE_TAG}"
+                        echo "  Image       : ${PUBLISHED_IMAGE}@${DEPLOY_IMAGE_DIGEST}"
                         echo "  Values      : ${HELM_VALUES}"
                         echo "════════════════════════════════════════════════════"
+
+                        SECRET_ENV_FILE="${WORKSPACE}/.starexec-db-${BUILD_NUMBER}.env"
+                        umask 077
+                        printf 'user=%s\npassword=%s\ndatabase=starexec\nrootPassword=%s\n' \\
+                            "\${DB_USER}" "\${DB_PASSWORD}" "\${DB_PASSWORD}" > "\${SECRET_ENV_FILE}"
+                        trap 'rm -f "\${SECRET_ENV_FILE}"' EXIT
 
                         # -----------------------------------------------------------------
                         # 1. Ensure namespace exists
@@ -227,10 +281,7 @@ pipeline {
                         # -----------------------------------------------------------------
                         microk8s kubectl create secret generic starexec-postgres-credentials \\
                             --namespace ${K8S_NAMESPACE} \\
-                            --from-literal=user="\${DB_USER}" \\
-                            --from-literal=password="\${DB_PASSWORD}" \\
-                            --from-literal=database=starexec \\
-                            --from-literal=rootPassword="\${DB_PASSWORD}" \\
+                            --from-env-file="\${SECRET_ENV_FILE}" \\
                             --dry-run=client -o yaml | microk8s kubectl apply -f -
 
                         # -----------------------------------------------------------------
@@ -254,14 +305,16 @@ pipeline {
                         fi
 
                         # -----------------------------------------------------------------
-                        # 4. Helm deploy (atomic — rolls back on failure)
+                        # 4. Helm deploy (atomic — rolls back on failure). Kubernetes
+                        #    resolves the public GitHub-published image digest directly.
                         # -----------------------------------------------------------------
                         microk8s helm3 upgrade --install ${HELM_RELEASE} \\
                             charts/starexec \\
                             --namespace ${K8S_NAMESPACE} \\
                             --create-namespace \\
                             --values ${HELM_VALUES} \\
-                            --set image.tag=${DEPLOY_IMAGE_TAG} \\
+                            --set-string image.tag=${PUBLISHED_IMAGE_TAG} \\
+                            --set-string image.digest=${DEPLOY_IMAGE_DIGEST} \\
                             --set image.pullPolicy=IfNotPresent \\
                             ${HELM_ARGS} \\
                             --atomic \\
@@ -286,8 +339,10 @@ pipeline {
                             -- bash /usr/local/bin/migrations.sh 2>&1; then
                             echo "✓ Migrations complete"
                         else
-                            echo "⚠ Migrations may have partially applied — check logs"
+                            echo "ERROR: Database migrations failed; deployment requires intervention."
+                            exit 1
                         fi
+
                     """
                 }
             }
@@ -298,7 +353,7 @@ pipeline {
                     ╔══════════════════════════════════════════════════════════╗
                     ║  DEPLOYMENT SUCCESSFUL                                  ║
                     ║  Application: ${APP_URL}                                 ║
-                    ║  Image tag:   ${DEPLOY_IMAGE_TAG}                        ║
+                    ║  Image:       ${PUBLISHED_IMAGE}@${DEPLOY_IMAGE_DIGEST}  ║
                     ╚══════════════════════════════════════════════════════════╝
                     """
                 }
@@ -326,7 +381,7 @@ pipeline {
         stage('Verify Deployment') {
         // =======================================================================
             when {
-                expression { !params.SKIP_DEPLOY }
+                expression { !params.SKIP_DEPLOY && env.IS_PR != 'true' }
             }
             steps {
                 sh """
@@ -353,7 +408,7 @@ pipeline {
         stage('Smoke Test') {
         // =======================================================================
             when {
-                expression { !params.SKIP_DEPLOY }
+                expression { !params.SKIP_DEPLOY && env.IS_PR != 'true' }
             }
             steps {
                 sh """
@@ -428,8 +483,8 @@ Pipeline completed successfully.
   Build       : #${env.BUILD_NUMBER}
   Environment : ${params.DEPLOY_ENV}
   Git SHA     : ${env.GIT_SHA}
-  Build Image : ${env.GHCR_REPO}:${env.IMAGE_TAG}
-  Deploy Image: ${env.GHCR_REPO}:${env.DEPLOY_IMAGE_TAG}
+  Published Image: ${env.PUBLISHED_IMAGE}
+  Deploy Digest : ${env.DEPLOY_IMAGE_DIGEST}
   Duration    : ${currentBuild.durationString}
   Agent       : ${env.NODE_NAME}
 

@@ -8,10 +8,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
-
-env:
-  REGISTRY: ghcr.io
 
 jobs:
   create-release:
@@ -96,15 +92,6 @@ jobs:
 
             ### 📋 Changes
             ${{ steps.changelog.outputs.changelog }}
-
-            ### 🐳 Container Image
-            **Registry:** `${{ env.REGISTRY }}`
-            **Image:** `${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}`
-
-            Pull the image:
-            ```bash
-            docker pull ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}
-            ```
 
             ### 📦 Build Information
             **Build System:** Maven Multi-Module

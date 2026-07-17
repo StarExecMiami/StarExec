@@ -15,8 +15,8 @@
 #   - workflow_dispatch: manual with environment choice
 #
 # Consumers:
-#   - deploy-k8s.yml triggers on `workflow_run: Container Publish` completion
-#   - integration-test.yml should pull the published image from ghcr.io
+#   - Jenkins deploys the exact published image to quokka MicroK8s.
+#   - integration-test.yml should pull the published image from ghcr.io.
 #
 # =============================================================================
 
@@ -25,22 +25,17 @@ name: Container Publish
 on:
   push:
     branches: [UMprod, containerised]
-    paths:
-      - "starexec-app/**"
-      - "Dockerfile"
-      - "docker/entrypoint.sh"
-      - "docker/setenv.sh"
-      - "docker/migrations.sh"
-      - "pom.xml"
-      - ".github/workflows/container-publish.yml"
   pull_request:
     branches: [UMprod, containerised]
     paths:
+      - "starexec-app/**"
+      - "tomcat-credential-handler/**"
       - "Dockerfile"
-      - "docker/entrypoint.sh"
-      - "docker/setenv.sh"
-      - "docker/migrations.sh"
+      - "docker/**"
+      - "scripts/GetComputerInfo"
       - "pom.xml"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/container-publish.yml"
   workflow_dispatch:
     inputs:
@@ -61,6 +56,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME: starexecmiami/starexec
 
 jobs:
   publish:
@@ -78,16 +74,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # ------------------------------------------------------------------
-      # Registry login (skip on PR — can't push, but still need for pull)
-      # ------------------------------------------------------------------
-      - name: Log in to Container Registry
-        if: env.SHOULD_PUSH == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       # ------------------------------------------------------------------
       # Metadata extraction (produces tags for push; PR gets test-only tag)
       # ------------------------------------------------------------------
@@ -95,8 +81,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=sha,prefix=sha-,format=long
             type=sha,prefix={{branch}}-,format=short
             type=sha,prefix={{branch}}-
             type=ref,event=branch
@@ -106,14 +93,14 @@ jobs:
             type=raw,value=pr-test,enable=${{ github.event_name == 'pull_request' }}
 
       # ------------------------------------------------------------------
-      # Single build (cached via GHA). Push only on non-PR events.
+      # Build and load locally. Publishing is allowed only after validation.
       # ------------------------------------------------------------------
       - name: Build container image
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ env.SHOULD_PUSH }}
+          push: false
           load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -144,24 +131,44 @@ jobs:
           docker inspect "${LOCAL_TAG}" | jq '.[0] | {Size, Created, Architecture: .Architecture, Os: .Os}'
 
       # ------------------------------------------------------------------
-      # Security scan (runs on push only — SARIF upload needs permissions)
+      # Security scan gates publication on all push and pull-request builds.
       # ------------------------------------------------------------------
       - name: Scan image for vulnerabilities
-        if: env.SHOULD_PUSH == 'true'
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: "${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
           format: "sarif"
           output: "trivy-results.sarif"
           severity: "CRITICAL,HIGH"
+          exit-code: "1"
 
       - name: Upload Trivy scan results
-        if: env.SHOULD_PUSH == 'true'
+        if: always()
         uses: github/codeql-action/upload-sarif@v3
         continue-on-error: true
         with:
           sarif_file: "trivy-results.sarif"
           category: "trivy-container"
+
+      # ------------------------------------------------------------------
+      # Publish only after image structure validation and Trivy succeed.
+      # ------------------------------------------------------------------
+      - name: Log in to Container Registry
+        if: env.SHOULD_PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish validated image
+        if: env.SHOULD_PUSH == 'true'
+        run: |
+          while IFS= read -r tag; do
+            docker push "$tag"
+          done <<'EOF'
+          ${{ steps.meta.outputs.tags }}
+          EOF
 
       # ------------------------------------------------------------------
       # Summary
@@ -170,18 +177,18 @@ jobs:
         if: always()
         run: |
           {
-            echo "## 📦 Container Image — ${{ env.SHOULD_PUSH == 'true' && 'Published' || 'Validated' }}"
+              echo "## 📦 Container Image — ${{ env.SHOULD_PUSH == 'true' && 'Published' || 'Validated' }}"
             echo ""
             echo "| Property | Value |"
             echo "|----------|-------|"
             echo "| Branch | \`${{ github.ref_name }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
-            echo "| Event | ${{ github.event_name }} |"
-            if [ "${{ env.SHOULD_PUSH }}" = "true" ]; then
-              echo "| Registry | \`${{ env.REGISTRY }}\` |"
-              echo "| Repository | \`${{ github.repository }}\` |"
-            fi
-            echo ""
+              echo "| Event | ${{ github.event_name }} |"
+              if [ "${{ env.SHOULD_PUSH }}" = "true" ]; then
+                echo "| Registry | \`${{ env.REGISTRY }}\` |"
+                echo "| Repository | \`${{ env.IMAGE_NAME }}\` |"
+              fi
+              echo ""
             echo "### Tags"
             echo '```'
             echo '${{ steps.meta.outputs.tags }}'

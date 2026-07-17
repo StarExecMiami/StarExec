@@ -15,8 +15,10 @@
 
 image:
   repository: ghcr.io/starexecmiami/starexec
+  # Manual deployments that keep `latest` should leave pullPolicy at Always.
+  # Automation may override tag and pullPolicy with a unique tag + IfNotPresent.
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 replicaCount: 1
 volumePrefix: starexec

@@ -14,6 +14,8 @@
 image:
   repository: ghcr.io/starexecmiami/starexec
   tag: latest
+  # When set, digest takes precedence over tag and pins the exact OCI artifact.
+  digest: ""
   # pullPolicy: IfNotPresent # Be careful: IfNotPresent with 'latest' prevents updates
   pullPolicy: Always # Recommended for 'latest' tags to ensure backend logic changes are picked up
 

@@ -1,5 +1,10 @@
 # MicroK8s Single-Node Deployment
 
+> **Canonical Quokka deployment:** Do not use this runbook against Quokka's
+> MicroK8s cluster. Jenkins is the sole deployment authority there and deploys
+> exact GitHub-published image digests. Use this guide only for separately
+> operated or development clusters.
+
 This runbook deploys StarExec on MicroK8s using the Kubernetes-native backend, with the same machine acting as:
 
 - Kubernetes control plane

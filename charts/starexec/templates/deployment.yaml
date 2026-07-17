@@ -147,7 +147,7 @@ spec:
 {{- end }}
       containers:
         - name: app
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "starexec.appImage" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
              - name: http
