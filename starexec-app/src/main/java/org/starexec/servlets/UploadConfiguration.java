@@ -1,6 +1,6 @@
 package org.starexec.servlets;
 
-import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
 import org.starexec.constants.R;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.security.SolverSecurity;
@@ -63,7 +63,7 @@ public class UploadConfiguration extends HttpServlet {
 			}
 
 			// Ensure request is a file upload request (i.e. a multipart request)
-			if (ServletFileUpload.isMultipartContent(request)) {
+			if (JavaxServletFileUpload.isMultipartContent(request)) {
 
 				// Get the configuration form attributes from add/configuration.jsp
 				HashMap<String, Object> configAttrMap = Util.parseMultipartRequest(request);

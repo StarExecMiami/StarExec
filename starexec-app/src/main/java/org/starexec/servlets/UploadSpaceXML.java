@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
-import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Uploads;
@@ -47,7 +47,7 @@ public class UploadSpaceXML extends HttpServlet {
 		int userId = SessionUtil.getUserId(request);
 		try {
 			// If we're dealing with an upload request...
-			if (ServletFileUpload.isMultipartContent(request)) {
+			if (JavaxServletFileUpload.isMultipartContent(request)) {
 				HashMap<String, Object> form = Util.parseMultipartRequest(request);
 
 				ValidatorStatusCode status = this.isValidRequest(form);

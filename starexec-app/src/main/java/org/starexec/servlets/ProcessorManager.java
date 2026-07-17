@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
-import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
 import org.starexec.constants.R;
 import org.starexec.util.PartWrapper;
 import org.starexec.data.database.Processors;
@@ -65,7 +65,7 @@ public class ProcessorManager extends HttpServlet {
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
 		try {
-			if (ServletFileUpload.isMultipartContent(request)) {
+			if (JavaxServletFileUpload.isMultipartContent(request)) {
 				HashMap<String, Object> form = Util.parseMultipartRequest(request);
 				String action = (String) form.get(ACTION);
 

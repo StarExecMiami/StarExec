@@ -49,7 +49,14 @@ jobs:
             if [ -f "charts/starexec/values-$env.yaml" ]; then
               echo ""
               echo "=== Validating $env environment ==="
+              case "$env" in
+                dev) namespace="starexec-dev" ;;
+                prod) namespace="starexec" ;;
+                ci) namespace="starexec-ci" ;;
+                local-dev) namespace="starexec-local" ;;
+              esac
               helm template starexec ./charts/starexec \
+                --namespace "$namespace" \
                 -f charts/starexec/values-$env.yaml \
                 > /tmp/template-$env.yaml
               if [ $? -eq 0 ]; then
@@ -63,6 +70,17 @@ jobs:
               echo "⚠ values-$env.yaml not found, skipping"
             fi
           done
+
+          if [ -f "charts/starexec/values-kubernetes.yaml" ]; then
+            echo ""
+            echo "=== Validating kubernetes environment ==="
+            helm template starexec ./charts/starexec \
+              --namespace starexec \
+              -f charts/starexec/values-kubernetes.yaml \
+              > /tmp/template-kubernetes.yaml
+            LINES=$(wc -l < /tmp/template-kubernetes.yaml)
+            echo "✓ kubernetes validation passed ($LINES lines generated)"
+          fi
 
       - name: Check chart version
         id: chart-info

@@ -2,7 +2,7 @@ package org.starexec.servlets;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
-import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
 import org.starexec.constants.R;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Reports;
@@ -90,9 +90,9 @@ public class UploadSolver extends HttpServlet {
 			Boolean commonsResult = null;
 			if (!skipCommons) {
 				try {
-					commonsResult = ServletFileUpload.isMultipartContent(request);
+					commonsResult = JavaxServletFileUpload.isMultipartContent(request);
 				} catch (Throwable ex) {
-					log.warn("Exception inside ServletFileUpload.isMultipartContent", ex);
+					log.warn("Exception inside JavaxServletFileUpload.isMultipartContent", ex);
 				}
 			}
 			boolean isMultipart = headerHeuristic || Boolean.TRUE.equals(commonsResult);

@@ -23,7 +23,9 @@
         <!-- Dependency Versions -->
         <flyway.version>11.13.1</flyway.version>
         <postgresql.connector.version>42.7.4</postgresql.connector.version>
-        <jackson.version>2.19.1</jackson.version>
+        <jackson.version>2.21.5</jackson.version>
+        <jackson.annotations.version>2.21</jackson.annotations.version>
+        <bouncycastle.version>1.80.2</bouncycastle.version>
         <slf4j.version>1.7.36</slf4j.version>
         <log4j.version>2.21.1</log4j.version>
         <gson.version>2.10.1</gson.version>
@@ -79,7 +81,7 @@
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-annotations</artifactId>
-                <version>${jackson.version}</version>
+                <version>${jackson.annotations.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
@@ -100,6 +102,18 @@
                 <groupId>com.fasterxml.jackson.datatype</groupId>
                 <artifactId>jackson-datatype-jsr310</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <!-- Override docker-java's vulnerable transitive Bouncy Castle line. -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcpkix-jdk18on</artifactId>
+                <version>${bouncycastle.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcprov-jdk18on</artifactId>
+                <version>${bouncycastle.version}</version>
             </dependency>
 
             <!-- Testing - JUnit 5 (Jupiter) -->

@@ -45,7 +45,6 @@ IMAGE_NAME?=$(IMAGE_REGISTRY)/starexec
 IMAGE_TAG?=latest
 CHART_DIR=./charts/starexec
 RELEASE_NAME?=starexec
-K8S_NAMESPACE?=starexec
 HELM_VALUES?=values.yaml
 SECRET_NAME=secret-postgres
 STAREXEC_DB_PASSWORD?=starexec_dev_password
@@ -55,6 +54,21 @@ DB_USER_DEFAULT?=starexec
 DB_NAME_DEFAULT?=starexec
 DB_HOST_DEFAULT?=localhost
 ENV?=dev
+
+# Match the Helm release namespace to each Kubernetes values profile unless
+# callers explicitly provide K8S_NAMESPACE.
+ifeq ($(origin K8S_NAMESPACE), undefined)
+  ifeq ($(ENV),dev)
+    K8S_NAMESPACE := starexec-dev
+  else ifeq ($(ENV),ci)
+    K8S_NAMESPACE := starexec-ci
+  else ifeq ($(ENV),local-dev)
+    K8S_NAMESPACE := starexec-local
+  else
+    K8S_NAMESPACE := starexec
+  endif
+endif
+
 ENV_VALUES=$(CHART_DIR)/values-$(ENV).yaml
 VOLUME_SCRIPT=./scripts/podman-volumes.sh
 
@@ -1854,8 +1868,15 @@ lint:
 		echo "Validating all value files..."; \
 		for f in $(CHART_DIR)/values*.yaml; do \
 			if [ "$$f" != "$(CHART_DIR)/values.yaml" ]; then \
+				case "$$f" in \
+					*/values-dev.yaml) namespace=starexec-dev ;; \
+					*/values-prod.yaml) namespace=starexec ;; \
+					*/values-ci.yaml) namespace=starexec-ci ;; \
+					*/values-local-dev.yaml) namespace=starexec-local ;; \
+					*) namespace=default ;; \
+				esac; \
 				echo "  Checking $$f..."; \
-				helm template $(CHART_DIR) -f $$f > /dev/null && echo "    ✓ Valid" || echo "    ✗ Invalid"; \
+				helm template $(CHART_DIR) --namespace "$$namespace" -f $$f > /dev/null && echo "    ✓ Valid" || echo "    ✗ Invalid"; \
 			fi; \
 		done; \
 	else \

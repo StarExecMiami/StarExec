@@ -1,7 +1,7 @@
 package org.starexec.servlets;
 
 import org.apache.commons.io.FilenameUtils;
-import org.apache.tomcat.util.http.fileupload.servlet.ServletFileUpload;
+import org.apache.commons.fileupload2.javax.JavaxServletFileUpload;
 import org.starexec.constants.R;
 import org.starexec.data.database.Permissions;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -53,7 +53,7 @@ public class UploadJobXML extends HttpServlet {
 		int userId = SessionUtil.getUserId(request);
 		try {
 			// If we're dealing with an upload request...
-			if (ServletFileUpload.isMultipartContent(request)) {
+			if (JavaxServletFileUpload.isMultipartContent(request)) {
 				log.info(method, "Got request to upload job xml from user with id=" + userId);
 
 				log.info(method, "Parsing job xml upload request.");

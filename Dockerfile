@@ -27,7 +27,8 @@ FROM docker.io/library/alpine:3.19 AS runsolver-builder
 WORKDIR /tmp
 
 # Install build dependencies
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
     curl \
     build-base \
     tar \
@@ -128,7 +129,8 @@ LABEL maintainer="StarExec Team" \
 # - libstdc++: C++ standard library (required by runsolver)
 # - libgcc: GCC runtime library (required by runsolver)
 # - gcompat: glibc compatibility layer for musl (required by solver binaries compiled against glibc)
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
     bash \
     curl \
     ca-certificates \
@@ -171,7 +173,7 @@ RUN addgroup -g 1000 starexec && \
 
 # Set environment variables
 ENV CATALINA_HOME=/opt/tomcat \
-    TOMCAT_VERSION=9.0.82 \
+    TOMCAT_VERSION=9.0.120 \
     JAVA_OPTS="-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseStringDeduplication" \
     STAREXEC_DATA_DIR=/var/starexec/data \
     STAREXEC_LOG_DIR=/var/log/starexec \
