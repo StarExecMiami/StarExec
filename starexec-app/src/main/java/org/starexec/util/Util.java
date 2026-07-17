@@ -61,7 +61,7 @@ public class Util {
     );
     private static final Pattern SUBSHELL_PATTERN = Pattern.compile("\\$\\(");
     private static final ExecutorService threadPool = createBoundedExecutor();
-    private static final long COMMAND_TIMEOUT_SECONDS = 600;
+    private static final long COMMAND_TIMEOUT_SECONDS = 3600;
     private static final long OUTPUT_COLLECTION_TIMEOUT_SECONDS = 60;
     public static final int CONNECT_TIMEOUT_MS = 60000;
     public static final int READ_TIMEOUT_MS = 600000;
