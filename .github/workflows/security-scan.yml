@@ -13,86 +13,107 @@ on:
     branches: [UMprod, dev, containerised, fb1]
     paths:
       - 'pom.xml'
+      - 'starexec-app/**'
+      - '.github/workflows/security-scan.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   dependency-scan:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
+    env:
+      DC_DATA_DIR: ${{ github.workspace }}/.cache/dependency-check-data
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
       
-      - name: Set NVD cache date key
-        run: echo "YEAR_MONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
+      - name: Set Dependency-Check cache key
+        run: echo "CACHE_EPOCH=$(date +'%Y-W%V')" >> "$GITHUB_ENV"
 
-      - name: Cache NVD vulnerability database
-        uses: actions/cache@v4
+      - name: Restore Dependency-Check database
+        id: dependency-check-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: target/dependency-check-data
-          key: ${{ runner.os }}-nvd-data-${{ env.YEAR_MONTH }}
+          path: ${{ env.DC_DATA_DIR }}
+          key: ${{ runner.os }}-dependency-check-v1-${{ env.CACHE_EPOCH }}
+          # A prior weekly cache is only an update input. The strict update
+          # step below must succeed before the vulnerability scan can run.
           restore-keys: |
-            ${{ runner.os }}-nvd-data-
+            ${{ runner.os }}-dependency-check-v1-${{ env.CACHE_EPOCH }}-
+            ${{ runner.os }}-dependency-check-v1-
 
-      - name: Run OWASP Dependency Check
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
+      - name: Update Dependency-Check database
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          echo "Running OWASP Dependency Check..."
-          # Only pass the API key flag if the secret is actually configured.
-          # An empty key causes NvdCveClient to throw a format-validation error
-          # before nvdApiFailOnError=false can gate it. Omitting the flag entirely
-          # runs the scan unauthenticated (5 req/30s instead of 50 req/30s).
-          NVD_KEY_FLAG=""
+          mkdir -p "$DC_DATA_DIR"
+          NVD_KEY_OPTION=()
           if [ -n "${NVD_API_KEY}" ]; then
-            NVD_KEY_FLAG="-Dnvd.api.key=${NVD_API_KEY}"
+            NVD_KEY_OPTION=(-DnvdApiKeyEnvironmentVariable=NVD_API_KEY)
+          else
+            # Respect the NVD unauthenticated rate limit during a cold cache
+            # bootstrap. Subsequent runs restore the persisted database.
+            NVD_KEY_OPTION=(-DnvdApiDelay=10000 -DnvdMaxRetryCount=10)
           fi
-          mvn dependency-check:check \
+          mvn -B dependency-check:update-only \
+            -DdataDirectory="$DC_DATA_DIR" \
+            -DnvdValidForHours=24 \
+            -DfailOnError=true \
+            "${NVD_KEY_OPTION[@]}"
+
+      - name: Verify Dependency-Check database
+        run: |
+          if [ ! -s "$DC_DATA_DIR/odc.mv.db" ]; then
+            echo "Dependency-Check update completed without a usable vulnerability database" >&2
+            exit 1
+          fi
+
+      - name: Run OWASP Dependency Check
+        run: |
+          mvn -B dependency-check:check \
+            -DdataDirectory="$DC_DATA_DIR" \
+            -DautoUpdate=false \
+            -DfailOnError=true \
+            -DfailBuildOnCVSS=7 \
             -DskipProvidedScope=true \
             -DskipRuntimeScope=false \
-            -DskipTestScope=true \
-            ${NVD_KEY_FLAG} \
-            -Dnvd.api.failOnError=false
+            -DskipTestScope=true
+
+      - name: Save Dependency-Check database
+        if: ${{ success() && github.event_name != 'pull_request' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DC_DATA_DIR }}
+          key: ${{ steps.dependency-check-cache.outputs.cache-primary-key }}
       
       - name: Upload dependency check report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dependency-check-report-${{ github.sha }}
           path: |
-            target/dependency-check-report.*
+            **/target/dependency-check-report.*
           retention-days: 30
       
-      - name: Publish dependency check results
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            
-            const reportPath = 'target/dependency-check-report.html';
-            if (fs.existsSync(reportPath)) {
-              console.log('✓ Dependency check report generated');
-              console.log('  Location: ' + reportPath);
-            }
-  
   sast-scan:
     name: SAST Analysis (CodeQL)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     
     strategy:
       fail-fast: false
@@ -101,16 +122,18 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
       
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -122,75 +145,74 @@ jobs:
           mvn clean package -DskipTests -q
       
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4
         with:
           category: '/language:${{ matrix.language }}'
       
-      - name: Upload CodeQL results
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            console.log('✓ CodeQL analysis completed');
-            console.log('  Results are available in the Security tab');
-
-  license-check:
-    name: License Compliance Check
+  license-inventory:
+    name: License Inventory (Informational)
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
       
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
       
-      - name: Check license compliance
+      - name: Generate license inventory
         run: |
-          echo "Checking Maven dependency licenses..."
-          mvn license:add-third-party || true
-          mvn license:check \
-            -Dlicense.failIfMissing=false \
-            -Dlicense.failIfUnknown=false || true
+          echo "Generating an informational Maven dependency license inventory..."
+          mvn -B license:add-third-party
       
-      - name: Generate license report
-        run: |
-          mvn license:aggregate-add-third-party -q || true
-      
-      - name: Upload license report
+      - name: Upload license inventory
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: license-report-${{ github.sha }}
+          name: license-inventory-${{ github.sha }}
           path: |
-            target/LICENSES*
-            target/license-list*
+            starexec-app/target/generated-sources/license/THIRD-PARTY.txt
           retention-days: 30
 
   security-summary:
     name: Security Summary
     runs-on: ubuntu-latest
-    needs: [dependency-scan, sast-scan, license-check]
+    needs: [dependency-scan, sast-scan, license-inventory]
     if: always()
     
     steps:
       - name: Generate security report summary
+        env:
+          DEPENDENCY_SCAN_RESULT: ${{ needs.dependency-scan.result }}
+          SAST_SCAN_RESULT: ${{ needs.sast-scan.result }}
+          LICENSE_INVENTORY_RESULT: ${{ needs.license-inventory.result }}
         run: |
-          echo "## 🔒 Security Scanning Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Scan Coverage" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Dependency Vulnerability Scan (OWASP)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Static Analysis (CodeQL)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ License Compliance Check" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Report Access" >> $GITHUB_STEP_SUMMARY
-          echo "- View detailed results in the **Security** tab" >> $GITHUB_STEP_SUMMARY
-          echo "- Download artifacts from workflow run" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Schedule" >> $GITHUB_STEP_SUMMARY
-          echo "- **Regular:** Weekly on Mondays at 6:00 AM UTC" >> $GITHUB_STEP_SUMMARY
-          echo "- **On Demand:** Triggered on PRs and pushes to main branches" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## 🔒 Security Scanning Results"
+            echo ""
+            echo "### Job Results"
+            echo "| Scan | Result |"
+            echo "|------|--------|"
+            echo "| Dependency Vulnerability Scan (OWASP) | ${DEPENDENCY_SCAN_RESULT} |"
+            echo "| Static Analysis (CodeQL) | ${SAST_SCAN_RESULT} |"
+            echo "| License Inventory (informational) | ${LICENSE_INVENTORY_RESULT} |"
+            echo ""
+            echo "### Report Access"
+            echo "- View detailed results in the **Security** tab"
+            echo "- Download artifacts from workflow run"
+            echo ""
+            echo "### Schedule"
+            echo "- **Regular:** Weekly on Mondays at 6:00 AM UTC"
+            echo "- **On Demand:** Triggered by pull requests and supported-branch POM changes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$DEPENDENCY_SCAN_RESULT" != "success" ] || [ "$SAST_SCAN_RESULT" != "success" ]; then
+            echo "A required security scan failed" >&2
+            exit 1
+          fi

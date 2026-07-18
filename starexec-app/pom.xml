@@ -48,7 +48,7 @@
         <dependency>
             <groupId>commons-beanutils</groupId>
             <artifactId>commons-beanutils</artifactId>
-            <version>1.9.4</version>
+            <version>${beanutils.version}</version>
         </dependency>
         <dependency>
             <groupId>commons-codec</groupId>
@@ -112,7 +112,7 @@
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
-            <version>2.8.9</version>
+            <version>${gson.version}</version>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>
@@ -165,14 +165,12 @@
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>1.2.10</version>
         </dependency>
 
         <!-- SLF4J API -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>1.7.32</version>
         </dependency>
 
         <!-- Mail -->
@@ -186,13 +184,13 @@
         <dependency>
             <groupId>org.owasp.esapi</groupId>
             <artifactId>esapi</artifactId>
-            <version>2.2.3.1</version>
+            <version>${esapi.version}</version>
         </dependency>
         <!-- Exclude slf4j-simple pulled transitively via antisamy to avoid multiple SLF4J bindings -->
         <dependency>
             <groupId>org.owasp.antisamy</groupId>
             <artifactId>antisamy</artifactId>
-            <version>1.6.3</version>
+            <version>1.7.8</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>
@@ -455,7 +453,7 @@
                     <dependency>
                         <groupId>org.postgresql</groupId>
                         <artifactId>postgresql</artifactId>
-                        <version>42.7.3</version>
+                        <version>${postgresql.connector.version}</version>
                     </dependency>
                 </dependencies>
             </plugin>

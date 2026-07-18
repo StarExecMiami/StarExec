@@ -22,11 +22,15 @@
 
         <!-- Dependency Versions -->
         <flyway.version>11.13.1</flyway.version>
-        <postgresql.connector.version>42.7.4</postgresql.connector.version>
+        <postgresql.connector.version>42.7.12</postgresql.connector.version>
         <jackson.version>2.21.5</jackson.version>
         <jackson.annotations.version>2.21</jackson.annotations.version>
         <bouncycastle.version>1.80.2</bouncycastle.version>
-        <slf4j.version>1.7.36</slf4j.version>
+        <beanutils.version>1.11.0</beanutils.version>
+        <esapi.version>2.7.0.0</esapi.version>
+        <logback.version>1.5.38</logback.version>
+        <okhttp.version>4.12.0</okhttp.version>
+        <slf4j.version>2.0.18</slf4j.version>
         <log4j.version>2.21.1</log4j.version>
         <gson.version>2.10.1</gson.version>
         <junit-jupiter.version>5.10.1</junit-jupiter.version>
@@ -55,6 +59,29 @@
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-classic</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-core</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+
+            <!-- Fabric8 6.x defaults to vulnerable OkHttp 3.12.x. OkHttp 4.x
+                 preserves binary compatibility and is supported by Fabric8. -->
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>logging-interceptor</artifactId>
+                <version>${okhttp.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.logging.log4j</groupId>
@@ -209,16 +236,12 @@
                 <plugin>
                     <groupId>org.owasp</groupId>
                     <artifactId>dependency-check-maven</artifactId>
-                    <version>12.2.0</version>
+                    <version>12.2.2</version>
                     <configuration>
                         <dataDirectory>${project.build.directory}/dependency-check-data</dataDirectory>
-                        <!-- Report-only mode: 11 exceeds max CVSS score (10.0) so build never fails.
-                             Establish a clean baseline before tightening this gate. -->
-                        <failBuildOnCVSS>11</failBuildOnCVSS>
-                        <!-- Enable NVD and GitHub advisors -->
+                        <failBuildOnCVSS>7</failBuildOnCVSS>
+                        <failOnError>true</failOnError>
                         <assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
-                        <!-- Do not fail build on NVD API errors (e.g. rate limiting) -->
-                        <nvdApiFailOnError>false</nvdApiFailOnError>
                     </configuration>
                 </plugin>
             </plugins>
