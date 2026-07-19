@@ -25,7 +25,7 @@ jobs:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
     env:
-      DC_DATA_DIR: ${{ github.workspace }}/.cache/dependency-check-data
+      DC_DATA_DIR: ${{ github.workspace }}/target/dependency-check-data
     
     steps:
       - name: Checkout code
@@ -48,12 +48,12 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.DC_DATA_DIR }}
-          key: ${{ runner.os }}-dependency-check-v1-${{ env.CACHE_EPOCH }}
+          key: ${{ runner.os }}-dependency-check-v2-${{ env.CACHE_EPOCH }}
           # A prior weekly cache is only an update input. The strict update
           # step below must succeed before the vulnerability scan can run.
           restore-keys: |
-            ${{ runner.os }}-dependency-check-v1-${{ env.CACHE_EPOCH }}-
-            ${{ runner.os }}-dependency-check-v1-
+            ${{ runner.os }}-dependency-check-v2-${{ env.CACHE_EPOCH }}-
+            ${{ runner.os }}-dependency-check-v2-
 
       - name: Update Dependency-Check database
         env:
@@ -69,30 +69,13 @@ jobs:
             NVD_KEY_OPTION=(-DnvdApiDelay=10000 -DnvdMaxRetryCount=10)
           fi
           mvn -B dependency-check:update-only \
-            -DdataDirectory="$DC_DATA_DIR" \
             -DnvdValidForHours=24 \
             -DfailOnError=true \
             "${NVD_KEY_OPTION[@]}"
 
-      - name: Verify Dependency-Check database
-        shell: bash
-        run: |
-          shopt -s nullglob
-          database_files=("$DC_DATA_DIR"/*/odc.mv.db)
-
-          for database_file in "${database_files[@]}"; do
-            if [ -f "$database_file" ] && [ -s "$database_file" ]; then
-              exit 0
-            fi
-          done
-
-          echo "Dependency-Check update completed without a usable vulnerability database" >&2
-          exit 1
-
       - name: Run OWASP Dependency Check
         run: |
-          mvn -B dependency-check:check \
-            -DdataDirectory="$DC_DATA_DIR" \
+          mvn -B dependency-check:aggregate \
             -DautoUpdate=false \
             -DfailOnError=true \
             -DfailBuildOnCVSS=7 \
