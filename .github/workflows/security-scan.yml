@@ -75,11 +75,19 @@ jobs:
             "${NVD_KEY_OPTION[@]}"
 
       - name: Verify Dependency-Check database
+        shell: bash
         run: |
-          if [ ! -s "$DC_DATA_DIR/odc.mv.db" ]; then
-            echo "Dependency-Check update completed without a usable vulnerability database" >&2
-            exit 1
-          fi
+          shopt -s nullglob
+          database_files=("$DC_DATA_DIR"/*/odc.mv.db)
+
+          for database_file in "${database_files[@]}"; do
+            if [ -f "$database_file" ] && [ -s "$database_file" ]; then
+              exit 0
+            fi
+          done
+
+          echo "Dependency-Check update completed without a usable vulnerability database" >&2
+          exit 1
 
       - name: Run OWASP Dependency Check
         run: |
