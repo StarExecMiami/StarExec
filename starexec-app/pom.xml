@@ -343,23 +343,15 @@
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-core</artifactId>
             <version>${docker-java.version}</version>
-            <exclusions>
-                <!-- Exclude httpclient5 transport - we use zerodep instead -->
-                <exclusion>
-                    <groupId>com.github.docker-java</groupId>
-                    <artifactId>docker-java-transport-httpclient5</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <!--
-            Zero-dependency transport for docker-java.
-            Uses Java 11+ native HttpClient with Unix socket support.
-            More compatible with Podman than httpclient5.
+            Non-shaded Apache HttpClient 5 transport for docker-java.
+            This lets dependency management keep HttpCore on a patched line.
         -->
         <dependency>
             <groupId>com.github.docker-java</groupId>
-            <artifactId>docker-java-transport-zerodep</artifactId>
+            <artifactId>docker-java-transport-httpclient5</artifactId>
             <version>${docker-java.version}</version>
         </dependency>
 

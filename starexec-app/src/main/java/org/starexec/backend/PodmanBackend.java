@@ -11,7 +11,7 @@ import com.github.dockerjava.api.model.Volume;
 import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientConfig;
 import com.github.dockerjava.core.DockerClientImpl;
-import com.github.dockerjava.zerodep.ZerodepDockerHttpClient;
+import com.github.dockerjava.httpclient5.ApacheDockerHttpClient;
 import com.github.dockerjava.api.model.Event;
 import com.github.dockerjava.api.model.EventType;
 import com.github.dockerjava.api.async.ResultCallbackTemplate;
@@ -244,8 +244,7 @@ public class PodmanBackend implements Backend {
                     (usePrebuiltImage ? jobImage : baseImage + " (JIT build)")
             );
 
-            // Create HTTP client with zerodep implementation (pure Java, no external dependencies)
-            // This avoids intermittent "Broken pipe" errors seen with httpclient5
+            // Create the configured Docker/Podman HTTP client.
             this.dockerClient = createDockerClient();
 
             // Test connection
@@ -3032,8 +3031,8 @@ public class PodmanBackend implements Backend {
                 .withDockerHost(containerSocketPath)
                 .build();
 
-        ZerodepDockerHttpClient httpClient =
-            new ZerodepDockerHttpClient.Builder()
+        ApacheDockerHttpClient httpClient =
+            new ApacheDockerHttpClient.Builder()
                 .dockerHost(config.getDockerHost())
                 .maxConnections(EnvironmentConfig.getContainerMaxConnections())
                 .connectionTimeout(
