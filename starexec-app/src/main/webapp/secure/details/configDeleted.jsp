@@ -19,6 +19,7 @@
     var debugMode=false;
     </script>
     <script type="text/javascript" src="<c:url value='/js/lib/jquery.min.js'/>"></script>
+    <script type="text/javascript" src="<c:url value='/js/lib/jquery-migrate.min.js'/>"></script>
     <script type="text/javascript" src="<c:url value='/js/lib/jquery-ui.min.js'/>"></script>
     <script type="text/javascript" src="<c:url value='/js/lib/jquery.cookie.js'/>"></script>
     <script type="text/javascript" src="<c:url value='/js/master.js'/>"></script>

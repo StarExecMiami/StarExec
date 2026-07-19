@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.4.xsd">
+    <suppress>
+        <notes><![CDATA[
+        CVE-2026-54399 and CVE-2026-54428 apply to Apache HttpCore 5.x.
+        This is the separate HttpCore 4.x artifact and package namespace.
+        ]]></notes>
+        <packageUrl>pkg:maven/org.apache.httpcomponents/httpcore@4.4.16</packageUrl>
+        <cve>CVE-2026-54399</cve>
+        <cve>CVE-2026-54428</cve>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+        CVE-2026-53914 affects Kotlin compiler build-cache metadata. StarExec
+        only includes this runtime library transitively through Fabric8 and
+        does not use Kotlin compilation, Gradle, or a Kotlin build cache.
+        ]]></notes>
+        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@1.8.21</packageUrl>
+        <cve>CVE-2026-53914</cve>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+        CVE-2026-53914 affects Kotlin compiler build-cache metadata, not the
+        kotlin-stdlib-common runtime classes included by Fabric8 dependencies.
+        ]]></notes>
+        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-common@1.9.10</packageUrl>
+        <cve>CVE-2026-53914</cve>
+    </suppress>
+</suppressions>

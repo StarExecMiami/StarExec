@@ -428,7 +428,7 @@
 				.undelegate(".jstree")
 				.removeData("jstree-instance-id")
 				.find("[class^='jstree']")
-				.andSelf()
+				.addBack()
 				.attr("class",
 					function() {
 						return this.className.replace(/jstree[^ ]*|$/ig,
@@ -533,11 +533,11 @@
 				if (!obj.length) { return false; }
 				if (strict) {
 					return (obj.nextAll("li")
-					.size() > 0) ? obj.nextAll("li:eq(0)") : false;
+					.length > 0) ? obj.nextAll("li:eq(0)") : false;
 				}
 
 				if (obj.hasClass("jstree-open")) { return obj.find("li:eq(0)"); }
-				else if (obj.nextAll("li").size() > 0) {
+				else if (obj.nextAll("li").length > 0) {
 					return obj.nextAll("li:eq(0)");
 				}
 				else {
@@ -676,7 +676,7 @@
 				else {
 					original_obj = obj;
 					if (obj.is(".jstree-closed")) {
-						obj = obj.find("li.jstree-closed").andSelf();
+						obj = obj.find("li.jstree-closed").addBack();
 					}
 					else { obj = obj.find("li.jstree-closed"); }
 				}
@@ -703,13 +703,13 @@
 				obj = obj ? this._get_node(obj) : this.get_container();
 				if (!obj || obj === -1) { obj = this.get_container(); }
 				obj.find("li.jstree-open")
-				.andSelf()
+				.addBack()
 				.each(function() { _this.close_node(this); });
 				this.__callback({"obj": obj});
 			},
 			clean_node: function(obj) {
 				obj = obj && obj != -1 ? $(obj) : this.get_container();
-				obj = obj.is("li") ? obj.find("li").andSelf() : obj.find("li");
+				obj = obj.is("li") ? obj.find("li").addBack() : obj.find("li");
 				obj.removeClass("jstree-last")
 				.filter("li:last-child")
 				.addClass("jstree-last")
@@ -981,7 +981,7 @@
 				if (obj.or[0] === obj.o[0]) { return false; }
 				obj.o.each(function() {
 					if (obj.r.parentsUntil(".jstree")
-						.andSelf()
+						.addBack()
 						.filter("li")
 						.index(this) !== -1) {
 						ret = false;
@@ -1008,7 +1008,7 @@
 				var o = false;
 				if (is_copy) {
 					o = obj.o.clone();
-					o.find("*[id]").andSelf().each(function() {
+					o.find("*[id]").addBack().each(function() {
 						if (this.id) { this.id = "copy_" + this.id; }
 					});
 				}
@@ -1280,7 +1280,7 @@
 				if (this._get_settings().crrm.move.open_onmove) {
 					var t = this;
 					data.rslt.np.parentsUntil(".jstree")
-					.andSelf()
+					.addBack()
 					.filter(".jstree-closed")
 					.each(function() {
 						t.open_node(this, false, true);
@@ -1724,7 +1724,7 @@
 				return obj == -1 || !obj || !s.ajax || obj.is(
 					".jstree-open, .jstree-leaf") || obj.children("ul")
 				.children("li")
-				.size() > 0;
+				.length > 0;
 			},
 			load_node_json: function(obj, s_call, e_call) {
 				var s = this.get_settings().json_data, d,
@@ -2697,13 +2697,13 @@
 					"jstree-checked");
 				if (state) {
 					obj.find("li")
-					.andSelf()
+					.addBack()
 					.removeClass("jstree-checked jstree-undetermined")
 					.addClass("jstree-unchecked");
 				}
 				else {
 					obj.find("li")
-					.andSelf()
+					.addBack()
 					.removeClass("jstree-unchecked jstree-undetermined")
 					.addClass("jstree-checked");
 					if (this.data.ui) { this.data.ui.last_selected = obj; }
@@ -2715,7 +2715,7 @@
 						if ($this.children("ul")
 							.children(".jstree-checked, .jstree-undetermined").length) {
 							$this.parentsUntil(".jstree", "li")
-							.andSelf()
+							.addBack()
 							.removeClass("jstree-checked jstree-unchecked")
 							.addClass("jstree-undetermined");
 							return false;
@@ -2730,7 +2730,7 @@
 						if ($this.children("ul")
 							.children(".jstree-unchecked, .jstree-undetermined").length) {
 							$this.parentsUntil(".jstree", "li")
-							.andSelf()
+							.addBack()
 							.removeClass("jstree-checked jstree-unchecked")
 							.addClass("jstree-undetermined");
 							return false;
@@ -3590,7 +3590,7 @@
 			.clone(true);
 			// remove white space from LI node - otherwise nodes appear a bit to the right
 			this.data.html_data.original_container_html.find("li")
-			.andSelf()
+			.addBack()
 			.contents()
 			.filter(function() { return this.nodeType == 3; })
 			.remove();
@@ -3615,7 +3615,7 @@
 				return obj == -1 || !obj || !this._get_settings().html_data.ajax || obj.is(
 					".jstree-open, .jstree-leaf") || obj.children("ul")
 				.children("li")
-				.size() > 0;
+				.length > 0;
 			},
 			load_node_html: function(obj, s_call, e_call) {
 				var d,

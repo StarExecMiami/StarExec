@@ -8,11 +8,17 @@ on:
     paths:
       - 'starexec-app/**'
       - 'pom.xml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'dependency-check-suppressions.xml'
       - '.github/workflows/security-scan.yml'
   push:
     branches: [UMprod, dev, containerised, fb1]
     paths:
       - 'pom.xml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'dependency-check-suppressions.xml'
       - 'starexec-app/**'
       - '.github/workflows/security-scan.yml'
   workflow_dispatch:
@@ -39,6 +45,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
+
+      - name: Audit Node build dependencies
+        run: npm audit --audit-level=high --package-lock-only
       
       - name: Set Dependency-Check cache key
         run: echo "CACHE_EPOCH=$(date +'%Y-W%V')" >> "$GITHUB_ENV"
@@ -81,7 +90,9 @@ jobs:
             -DfailBuildOnCVSS=7 \
             -DskipProvidedScope=true \
             -DskipRuntimeScope=false \
-            -DskipTestScope=true
+            -DskipTestScope=true \
+            -DnodePackageSkipDevDependencies=true \
+            -DnodeAuditSkipDevDependencies=true
 
       - name: Save Dependency-Check database
         if: ${{ success() && github.event_name != 'pull_request' }}

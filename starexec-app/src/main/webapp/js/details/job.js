@@ -1489,7 +1489,7 @@ function initDataTables() {
 			.addClass("first_selected");
 		}
 
-		if ($solveTbl.find(".second_selected").size() > 0) {
+		if ($solveTbl.find(".second_selected").length > 0) {
 			$compareSolvers.show();
 		} else {
 			$compareSolvers.hide();

@@ -39,6 +39,7 @@ public final class Web {
     };
     public static final String[] GLOBAL_JS_FILES = {
         "lib/jquery.min",
+        "lib/jquery-migrate.min",
         "lib/jquery-ui.min",
         "lib/jquery.cookie",
         "common/alerts",
@@ -46,6 +47,7 @@ public final class Web {
     };
     public static final String[] JS_FILES_FOR_LOCAL_JOB = {
         "lib/jquery.min",
+        "lib/jquery-migrate.min",
         "lib/jquery-ui.min",
         "lib/jquery.cookie",
         "common/alerts",

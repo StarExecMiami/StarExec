@@ -693,7 +693,7 @@
 			}
 
 			//Add handler to the inline delete buttons
-			$(".table-action-deletelink", oTable).live("click", function(e) {
+			$(oTable).on("click", ".table-action-deletelink", function(e) {
 
 					e.preventDefault();
 					e.stopPropagation();

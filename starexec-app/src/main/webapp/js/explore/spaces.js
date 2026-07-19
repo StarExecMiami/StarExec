@@ -1366,7 +1366,7 @@ function createTooltip(element, selector, type, message) {
 	else if (type[0] == 'p') {
 		$(element).on('mouseenter mouseleave', selector, function() {
 			//only add this to the row for the current user
-			if ($(this).find("td input[name=\"currentUser\"]").size() > 0) {
+			if ($(this).find("td input[name=\"currentUser\"]").length > 0) {
 				if (!$(this).data("qtip")) {
 					$(this).qtip(getTooltipConfig(type, message));
 				}

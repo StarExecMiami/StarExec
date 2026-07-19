@@ -668,7 +668,7 @@ function popUp(uri) {
   imageTag = $("#popImage");
 
   imageTag.attr("src", uri);
-  imageTag.load(function () {
+  imageTag.on("load", function () {
     $("#popDialog").dialog({
       dialogClass: "popup",
       modal: true,

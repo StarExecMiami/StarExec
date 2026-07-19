@@ -63,7 +63,7 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-compress</artifactId>
-            <version>1.21</version>
+            <version>1.28.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>
@@ -93,7 +93,7 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.12.0</version>
+            <version>3.20.0</version>
         </dependency>
 
         <!-- Kubernetes client for native Kubernetes backend -->
@@ -117,19 +117,19 @@
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-            <version>31.0.1-jre</version>
+            <version>${guava.version}</version>
         </dependency>
 
         <!-- HTTP Components -->
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
-            <version>4.5.13</version>
+            <version>4.5.14</version>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpcore</artifactId>
-            <version>4.4.14</version>
+            <version>4.4.16</version>
         </dependency>
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
@@ -342,7 +342,7 @@
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-core</artifactId>
-            <version>3.3.6</version>
+            <version>${docker-java.version}</version>
             <exclusions>
                 <!-- Exclude httpclient5 transport - we use zerodep instead -->
                 <exclusion>
@@ -360,7 +360,7 @@
         <dependency>
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java-transport-zerodep</artifactId>
-            <version>3.3.6</version>
+            <version>${docker-java.version}</version>
         </dependency>
 
         <!-- Selenium for test framework ResourceLoader -->
@@ -368,6 +368,7 @@
             <groupId>org.seleniumhq.selenium</groupId>
             <artifactId>selenium-java</artifactId>
             <version>4.15.0</version>
+            <scope>test</scope>
         </dependency>
 
     </dependencies>
@@ -395,6 +396,28 @@
                 <version>3.3.2</version>
                 <configuration>
                     <warSourceDirectory>src/main/webapp</warSourceDirectory>
+                    <webResources>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/jquery/dist</directory>
+                            <targetPath>js/lib</targetPath>
+                            <includes><include>jquery.min.js</include></includes>
+                        </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/jquery-migrate/dist</directory>
+                            <targetPath>js/lib</targetPath>
+                            <includes><include>jquery-migrate.min.js</include></includes>
+                        </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/jquery-ui-dist</directory>
+                            <targetPath>js/lib</targetPath>
+                            <includes><include>jquery-ui.min.js</include></includes>
+                        </resource>
+                        <resource>
+                            <directory>${project.basedir}/../node_modules/jquery-validation/dist</directory>
+                            <targetPath>js/lib</targetPath>
+                            <includes><include>jquery.validate.min.js</include></includes>
+                        </resource>
+                    </webResources>
                     <!-- NOTE: webResources are NOT used here because src/main/resources
                          is already processed by the build/resources section and included
                          in WEB-INF/classes. Using webResources would add these files
@@ -462,6 +485,9 @@
                 <groupId>com.github.eirslett</groupId>
                 <artifactId>frontend-maven-plugin</artifactId>
                 <version>1.12.1</version>
+                <configuration>
+                    <installDirectory>${project.basedir}/..</installDirectory>
+                </configuration>
                 <executions>
                     <execution>
                         <id>install-node-and-npm</id>
@@ -480,7 +506,8 @@
                         </goals>
                         <phase>generate-resources</phase>
                         <configuration>
-                            <arguments>install</arguments>
+                            <workingDirectory>${project.basedir}/..</workingDirectory>
+                            <arguments>ci</arguments>
                         </configuration>
                     </execution>
                     <execution>

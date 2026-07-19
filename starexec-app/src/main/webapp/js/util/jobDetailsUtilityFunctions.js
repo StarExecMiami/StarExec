@@ -1,6 +1,6 @@
 $(document).ready(function() {
 	$(".stageSelector").first().each(function() {
-		if ($(this).children().size() <= 2) {
+		if ($(this).children().length <= 2) {
 			hideStageSelectors();
 		}
 	});
