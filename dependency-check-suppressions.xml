@@ -35,4 +35,13 @@
         <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk7@1.8.21</packageUrl>
         <cve>CVE-2026-53914</cve>
     </suppress>
+    <suppress>
+        <notes><![CDATA[
+        CVE-2026-53914 affects Kotlin compiler build-cache metadata. This JDK 8
+        runtime compatibility wrapper is included transitively by OkHttp and
+        does not contain or process Kotlin compiler build-cache metadata.
+        ]]></notes>
+        <packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk8@1.8.21</packageUrl>
+        <cve>CVE-2026-53914</cve>
+    </suppress>
 </suppressions>
