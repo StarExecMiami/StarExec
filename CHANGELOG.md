@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-29
+
 ### Added
 - **Upload extraction controls**: Added `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` and `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` for resumable benchmark upload extraction tuning and safety enforcement.
 - **Upload artifact cleanup**: Added DB-driven cleanup metadata and a background cleanup worker for expired upload source archives, with retry expiry and path-safety validation.
+- **Container CPU partitioning**: Added generic CPU partition scheduling with a shared queue across partition capacities.
+
+### Changed
+- **Long-running commands**: Extended command execution timeouts for operations that legitimately require additional processing time.
 
 ### Fixed
 - **Resumable benchmark uploads**
@@ -18,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Upload-session chunk directories are cleaned up after successful finalization, and partial `.assembling` files are removed on failed assembly.
   - Extraction cleanup now targets only unfinished temporary extraction directories, avoiding accidental removal of finalized benchmark files referenced by the database.
   - Async upload extraction now enforces configured extracted-size limits together with the uploader's remaining disk quota.
+  - Timestamped upload-session paths are accepted by strict artifact validation, preventing valid uploads from failing before the first chunk or extraction.
+  - Terminal upload errors now close the progress dialog before displaying an error, preventing the interface from remaining blocked behind a spinner.
+  - Extraction progress and root causes are exposed for failed archives, and processor execution is skipped for `no_type` benchmarks.
+- **Backend lifecycle**: Kubernetes jobs now transition pairs to running when work starts and detect already-active jobs during reconciliation; Podman preflight starts the rootless socket when needed.
+- **Result classification**: Corrected solved, wrong, and unknown predicates and aligned their UI tooltips with canonical result semantics.
+- **User interface**: Corrected misleading success responses and fixed clipping and close-button alignment in dialogs (#85).
+- **Streaming**: Prevented concurrent timer cascades after broken SSE client connections.
+
+### Security
+- **Dependency hardening**: Remediated container and application dependency vulnerabilities, removed the shaded HTTP core transport, and strengthened CI vulnerability gates.
 
 ## [2.4.0] - 2026-05-06
 
@@ -363,7 +379,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Cluster MachineSpecs and overrides configuration for reproducible builds.
 - Initial implementation of the user Trash Bin/Recycle logic.
 
-[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/StarExecMiami/StarExec/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/StarExecMiami/StarExec/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/StarExecMiami/StarExec/compare/v2.1.0...v2.2.0
