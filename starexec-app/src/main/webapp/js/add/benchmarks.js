@@ -131,6 +131,11 @@ function getErrorMessage(xhr, fallback) {
 	}
 }
 
+function showResumableUploadError(message) {
+	destroyDialog();
+	alert(message);
+}
+
 function ensureUploadProgressDialog() {
 	createDialog('Uploading file to server...');
 	$('#uploadProgressContainer').remove();
@@ -259,7 +264,7 @@ function finalizeResumableUpload() {
 			if (!response.success || !response.jobId) {
 				resumableUploadState.isFinalizing = false;
 				updateUploadControlState();
-				alert(response.message || 'Failed to finalize upload session');
+				showResumableUploadError(response.message || 'Failed to finalize upload session');
 				return;
 			}
 			clearStoredSession(resumableUploadState);
@@ -269,7 +274,7 @@ function finalizeResumableUpload() {
 		.fail(function(xhr) {
 			resumableUploadState.isFinalizing = false;
 			updateUploadControlState();
-			alert(getErrorMessage(xhr, 'Failed to finalize upload session'));
+			showResumableUploadError(getErrorMessage(xhr, 'Failed to finalize upload session'));
 		});
 }
 
@@ -320,7 +325,7 @@ function uploadNextChunk() {
 	}).done(function(session) {
 		resumableUploadState.xhr = null;
 		if (!session.success) {
-			alert(session.message || 'Upload chunk failed');
+			showResumableUploadError(session.message || 'Upload chunk failed');
 			return;
 		}
 		syncStateFromSession(session);
@@ -348,11 +353,11 @@ function uploadNextChunk() {
 						}
 					}
 				} else {
-					alert(session.message || 'Upload failed while recovering session state');
+					showResumableUploadError(session.message || 'Upload failed while recovering session state');
 				}
 			})
 			.fail(function() {
-				alert(getErrorMessage(xhr, 'Upload failed while sending a chunk'));
+				showResumableUploadError(getErrorMessage(xhr, 'Upload failed while sending a chunk'));
 			});
 	});
 }
@@ -380,7 +385,7 @@ function resumeResumableUpload() {
 	fetchUploadSession(resumableUploadState.sessionId)
 		.done(function(session) {
 			if (!session.success) {
-				alert(session.message || 'Could not resume upload session');
+				showResumableUploadError(session.message || 'Could not resume upload session');
 				return;
 			}
 			resumableUploadState.isPaused = false;
@@ -394,7 +399,7 @@ function resumeResumableUpload() {
 			}
 		})
 		.fail(function(xhr) {
-			alert(getErrorMessage(xhr, 'Could not resume upload session'));
+			showResumableUploadError(getErrorMessage(xhr, 'Could not resume upload session'));
 		});
 }
 

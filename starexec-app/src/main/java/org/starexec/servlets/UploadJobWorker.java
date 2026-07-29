@@ -24,8 +24,6 @@ import java.nio.file.Files;
 import java.nio.file.DirectoryStream;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -138,7 +136,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      *
      * Safety constraints:
      * - Only touches directories created by resumable upload sessions
-     *   (upload-session-* under benchmark/{userId}/{yyyyMMdd}/)
+     *   (upload-session-* under benchmark/{userId}/{upload timestamp}/)
      * - Only deletes extraction directories with worker-owned prefix (upload_)
      * - Never traverses arbitrary benchmark hierarchy directories
      */
@@ -220,15 +218,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     }
 
     private boolean looksLikeDateDirectory(String name) {
-        if (name == null || !name.matches("\\d{8}")) {
-            return false;
-        }
-        try {
-            LocalDate.parse(name, DateTimeFormatter.BASIC_ISO_DATE);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        return UploadArtifactPathGuard.isUploadDirectoryName(name);
     }
 
     boolean isTemporaryExtractionDirectory(File extractionDir) {

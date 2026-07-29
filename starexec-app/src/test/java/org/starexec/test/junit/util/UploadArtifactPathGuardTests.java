@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class UploadArtifactPathGuardTests {
@@ -200,5 +202,63 @@ public class UploadArtifactPathGuardTests {
         UploadArtifactPathGuard guard = new UploadArtifactPathGuard(root);
 
         assertEquals(chunks.toAbsolutePath().normalize(), guard.validateUploadSessionChunksDirectory(session, chunks.toString()));
+    }
+
+    @Test
+    public void validateSessionStagingPathAcceptsGeneratedTimestampDirectory() throws Exception {
+        Path root = Files.createTempDirectory("bench-root-");
+        Path sessionDir = root.resolve("7/20260618-13.22.18.964/upload-session-generated");
+        Files.createDirectories(sessionDir);
+        UploadSession session = new UploadSession();
+        session.setId(11L);
+        session.setUserId(7);
+        session.setFileName("AllProblems.tgz");
+        Path stagingPath = sessionDir.resolve("AllProblems.tgz.part");
+        session.setStagingPath(stagingPath.toString());
+
+        UploadArtifactPathGuard guard = new UploadArtifactPathGuard(root);
+
+        assertEquals(stagingPath.toAbsolutePath().normalize(), guard.validateUploadSessionStagingPath(session));
+    }
+
+    @Test
+    public void isUploadDirectoryNameRejectsMalformedTimestamp() {
+        assertFalse(UploadArtifactPathGuard.isUploadDirectoryName("20260618-13.22.invalid.964"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameRejectsSmartNormalizedTimestamp() {
+        assertFalse(UploadArtifactPathGuard.isUploadDirectoryName("20260230-13.22.18.964"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameAcceptsGeneratedTimestamp() {
+        assertTrue(UploadArtifactPathGuard.isUploadDirectoryName("20260618-13.22.18.964"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameAcceptsGeneratedMidnightTimestamp() {
+        assertTrue(UploadArtifactPathGuard.isUploadDirectoryName("20260618-24.00.00.000"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameRejectsNonGeneratedZeroHour() {
+        assertFalse(UploadArtifactPathGuard.isUploadDirectoryName("20260618-00.00.00.000"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameAcceptsExactLegacyDate() {
+        assertTrue(UploadArtifactPathGuard.isUploadDirectoryName("20260704"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameRejectsLegacyDateWithOffset() {
+        assertFalse(UploadArtifactPathGuard.isUploadDirectoryName("20260704+0000"));
+    }
+
+    @Test
+    public void isUploadDirectoryNameRejectsTrailingCharactersAndWidthVariations() {
+        assertFalse(UploadArtifactPathGuard.isUploadDirectoryName("20260618-13.22.18.964-extra"));
+        assertFalse(UploadArtifactPathGuard.isUploadDirectoryName("20260618-1.22.18.964"));
     }
 }

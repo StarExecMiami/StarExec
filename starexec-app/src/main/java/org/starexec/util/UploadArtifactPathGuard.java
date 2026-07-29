@@ -11,13 +11,22 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Validates upload artifact paths before cleanup deletes any filesystem object.
  */
 public class UploadArtifactPathGuard {
+    private static final DateTimeFormatter UPLOAD_DIRECTORY_TIMESTAMP_FORMAT =
+        DateTimeFormatter.ofPattern(R.PATH_DATE_FORMAT);
+    private static final Pattern UPLOAD_DIRECTORY_TIMESTAMP_SHAPE =
+        Pattern.compile("[0-9]{8}-[0-9]{2}\\.[0-9]{2}\\.[0-9]{2}\\.[0-9]{3}");
+    private static final Pattern LEGACY_UPLOAD_DIRECTORY_DATE_SHAPE = Pattern.compile("[0-9]{8}");
+
     private final Path benchmarkRoot;
 
     public UploadArtifactPathGuard() throws IOException {
@@ -30,6 +39,39 @@ public class UploadArtifactPathGuard {
 
     public Path getBenchmarkRoot() {
         return benchmarkRoot;
+    }
+
+    /**
+     * Checks whether a path component is a current timestamped upload directory
+     * name or a legacy date-only upload directory name.
+     *
+     * @param name path component to validate
+     * @return true when the component uses a supported upload directory format
+     */
+    public static boolean isUploadDirectoryName(String name) {
+        if (name == null) {
+            return false;
+        }
+
+        if (UPLOAD_DIRECTORY_TIMESTAMP_SHAPE.matcher(name).matches()) {
+            try {
+                LocalDateTime parsed = LocalDateTime.parse(name, UPLOAD_DIRECTORY_TIMESTAMP_FORMAT);
+                return name.equals(UPLOAD_DIRECTORY_TIMESTAMP_FORMAT.format(parsed));
+            } catch (DateTimeParseException ignored) {
+                return false;
+            }
+        }
+
+        if (!LEGACY_UPLOAD_DIRECTORY_DATE_SHAPE.matcher(name).matches()) {
+            return false;
+        }
+
+        try {
+            LocalDate.parse(name, DateTimeFormatter.BASIC_ISO_DATE);
+            return true;
+        } catch (DateTimeParseException ignored) {
+            return false;
+        }
     }
 
     /**
@@ -237,14 +279,9 @@ public class UploadArtifactPathGuard {
         if (userId == null && !actualUser.matches("\\d+")) {
             throw new IOException("upload path user component is invalid: " + relative);
         }
-        String date = relative.getName(1).toString();
-        if (!date.matches("\\d{8}")) {
+        String uploadDirectory = relative.getName(1).toString();
+        if (!isUploadDirectoryName(uploadDirectory)) {
             throw new IOException("upload path date component is invalid: " + relative);
-        }
-        try {
-            LocalDate.parse(date, DateTimeFormatter.BASIC_ISO_DATE);
-        } catch (Exception e) {
-            throw new IOException("upload path date component is invalid: " + relative, e);
         }
     }
 

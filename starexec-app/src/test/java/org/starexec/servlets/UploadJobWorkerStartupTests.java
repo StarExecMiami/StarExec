@@ -189,6 +189,29 @@ public class UploadJobWorkerStartupTests {
     }
 
     @Test
+    public void cleanupOrphanedExtractionsRecognizesGeneratedTimestampDirectory() throws Exception {
+        Path tempRoot = Files.createTempDirectory("upload-job-worker-timestamp-orphans-");
+        try {
+            Path oldExtraction = tempRoot.resolve(
+                "7/20260618-13.22.18.964/upload-session-old/upload_42_1.extracting"
+            );
+            Files.createDirectories(oldExtraction);
+            Files.writeString(oldExtraction.resolve("old.p"), "old");
+            Files.setLastModifiedTime(
+                oldExtraction,
+                FileTime.fromMillis(System.currentTimeMillis() - (26L * 60 * 60 * 1000))
+            );
+
+            UploadJobWorker worker = new UploadJobWorker(new UploadArtifactPathGuard(tempRoot));
+            worker.cleanupOrphanedExtractions();
+
+            assertFalse(Files.exists(oldExtraction));
+        } finally {
+            FileUtils.deleteQuietly(tempRoot.toFile());
+        }
+    }
+
+    @Test
     public void cleanupOrphanedExtractionsSkipsSymlinkedDirectoriesDuringDiscovery() throws Exception {
         Path tempRoot = Files.createTempDirectory("upload-job-worker-symlink-root-");
         Path outside = Files.createTempDirectory("upload-job-worker-symlink-outside-");
@@ -249,7 +272,7 @@ public class UploadJobWorkerStartupTests {
     }
 
     private Path uploadSessionArchive(Path root, String suffix) {
-        return root.resolve("7/20260704/upload-session-" + suffix + "/AllProblems.tgz");
+        return root.resolve("7/20260618-13.22.18.964/upload-session-" + suffix + "/AllProblems.tgz");
     }
 
     private long countDirectories(Path root) throws IOException {

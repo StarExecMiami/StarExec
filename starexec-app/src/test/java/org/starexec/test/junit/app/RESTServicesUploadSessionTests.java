@@ -73,6 +73,46 @@ public class RESTServicesUploadSessionTests {
 	}
 
 	@Test
+	public void uploadSessionChunkAcceptsGeneratedTimestampDirectory() throws Exception {
+		RESTServices services = new RESTServices();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Path sessionDir = benchmarkRoot().resolve(
+			"41/20260618-13.22.18.964/upload-session-generated"
+		);
+		Files.createDirectories(sessionDir);
+		UploadSession session = new UploadSession();
+		session.setId(41L);
+		session.setUserId(41);
+		session.setFileName("AllProblems.tgz");
+		session.setStagingPath(sessionDir.resolve("AllProblems.tgz.part").toString());
+		session.setTotalBytes(4L);
+		session.setChunkSize(4);
+		session.setTotalChunks(1);
+		session.setStatus("UPLOADING");
+
+		Mockito.when(request.getContentLengthLong()).thenReturn(4L);
+		Mockito.when(request.getInputStream()).thenReturn(servletInputStream("data".getBytes(StandardCharsets.UTF_8)));
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UploadSessionSecurity> security = Mockito.mockStatic(UploadSessionSecurity.class);
+			 MockedStatic<UploadSessions> uploadSessions = Mockito.mockStatic(UploadSessions.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(41);
+			security.when(() -> UploadSessionSecurity.canUserManageUploadSession(41L, 41)).thenReturn(true);
+			uploadSessions.when(() -> UploadSessions.getSession(41L)).thenReturn(Optional.of(session));
+			uploadSessions.when(() -> UploadSessions.isChunkRecorded(41L, 0)).thenReturn(false);
+			uploadSessions.when(() -> UploadSessions.recordChunkIfAbsent(41L, 0, 4)).thenReturn(true);
+
+			String response = services.uploadSessionChunk(41L, 0, request);
+
+			assertTrue(response.contains("\"success\":true"));
+			assertFalse(response.contains("Upload session path is invalid"));
+			assertTrue(Files.exists(sessionDir.resolve("AllProblems.tgz.part.chunks/chunk_0.bin")));
+		} finally {
+			org.apache.commons.io.FileUtils.deleteQuietly(sessionDir.toFile());
+		}
+	}
+
+	@Test
 	public void finalizeUploadSessionReturnsInProgressForConcurrentFinalizer() {
 		RESTServices services = new RESTServices();
 		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
@@ -401,6 +441,31 @@ public class RESTServicesUploadSessionTests {
 		Path root = Path.of(R.getBenchmarkPath()).toAbsolutePath().normalize();
 		Files.createDirectories(root);
 		return root;
+	}
+
+	private ServletInputStream servletInputStream(byte[] content) {
+		ByteArrayInputStream input = new ByteArrayInputStream(content);
+		return new ServletInputStream() {
+			@Override
+			public int read() {
+				return input.read();
+			}
+
+			@Override
+			public boolean isFinished() {
+				return input.available() == 0;
+			}
+
+			@Override
+			public boolean isReady() {
+				return true;
+			}
+
+			@Override
+			public void setReadListener(ReadListener readListener) {
+				// Not used in tests.
+			}
+		};
 	}
 
 	private UploadSession readySession(long sessionId, int userId, Path sessionDir, long totalBytes) {
