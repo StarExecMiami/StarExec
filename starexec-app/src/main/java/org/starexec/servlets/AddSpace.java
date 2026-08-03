@@ -229,12 +229,12 @@ public class AddSpace extends HttpServlet {
 
 			// Description: allow empty but avoid passing null to validator
 			String desc = request.getParameter(description);
-			log.debug(methodName, "Space description: " + desc);
 			if (desc == null) {
 				desc = "";
 			}
+			log.debug(methodName, "Space description length: " + desc.length());
 			if (!Validator.isValidPrimDescription(desc)) {
-				log.warn(methodName, "Invalid description: " + desc);
+				log.warn(methodName, "Invalid description length: " + desc.length());
 				return new ValidatorStatusCode(
 						false,
 						"The given description is invalid-- please reference the help pages to see valid description names"

@@ -1304,9 +1304,16 @@ function setupJobNameAndDescriptionEditing(
 				5000);
 			return;
 		}
+		var postUrl = starexecRoot + 'services/job/edit/' + nameOrDescription + '/' + jobId;
+		var postData = {};
+		if (nameOrDescription === 'name') {
+			postUrl += '/' + encodeURIComponent(name);
+		} else {
+			postData = {description: name};
+		}
 		$.post(
-			starexecRoot + 'services/job/edit/' + nameOrDescription + '/' + jobId + '/' + name,
-			{},
+			postUrl,
+			postData,
 			function(returnCode) {
 				success = parseReturnCode(returnCode);
 				if (success) {

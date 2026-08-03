@@ -3187,25 +3187,40 @@ public class RESTServices {
 	/**
 	 * Update the description of a job.
 	 * 
-	 * @param jobId          ID of the job to impact.
-	 * @param newDescription New description for this job
-	 * @param request        HTTP request
+	 * @param jobId   ID of the job to impact
+	 * @param request HTTP request containing the description form parameter
 	 * @return json ValidatorStatusCode
 	 */
 	@POST
-	@Path("/job/edit/description/{jobId}/{newDescription}")
+	@Path("/job/edit/description/{jobId}")
 	@Produces("application/json")
-	public String editJobDescription(@PathParam("jobId") int jobId, @PathParam("newDescription") String newDescription,
-			@Context HttpServletRequest request) {
+	public String editJobDescription(@PathParam("jobId") int jobId, @Context HttpServletRequest request) {
+		return editJobDescription(jobId, request.getParameter("description"), request);
+	}
+
+	/**
+	 * Applies a validated job description update.
+	 *
+	 * @param jobId          ID of the job to impact
+	 * @param newDescription new description for this job
+	 * @param request        HTTP request
+	 * @return json ValidatorStatusCode
+	 */
+	public String editJobDescription(int jobId, String newDescription, HttpServletRequest request) {
 		final String method = "editJobDescription";
 		log.entry(method);
-		log.debug(method,
-				"Editing job description for job with id=" + jobId + " where the new description=" + newDescription);
+		log.debug(method, "Editing job description for job with id=" + jobId + " and description length=" +
+				(newDescription == null ? 0 : newDescription.length()));
 
 		int userId = SessionUtil.getUserId(request);
 
 		ValidatorStatusCode status = null;
 		if (JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)) {
+			if (!Validator.isValidPrimDescription(newDescription)) {
+				status = new ValidatorStatusCode(false, "The supplied description is invalid");
+				log.exit(method);
+				return gson.toJson(status);
+			}
 			try {
 				Jobs.setJobDescription(jobId, newDescription);
 				status = new ValidatorStatusCode(true, "Description changed successfully.");
@@ -4077,8 +4092,9 @@ public class RESTServices {
 		if ("desc".equalsIgnoreCase(attribute)) {
 			normalizedAttribute = "description";
 		}
+		String valueMetadata = normalizedAttribute.equals("description") ? "descriptionLength=" : "valueLength=";
 		log.info("editCommunityDetails called: attr=" + attribute + " (normalized=" + normalizedAttribute + "), id="
-				+ id + ", userId=" + userId + ", newValue=" + newValue);
+				+ id + ", userId=" + userId + ", " + valueMetadata + (newValue == null ? 0 : newValue.length()));
 		ValidatorStatusCode status = SpaceSecurity.canUpdateSettings(id, normalizedAttribute, newValue, userId);
 
 		if (!status.isSuccess()) {
@@ -4086,8 +4102,8 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 		try {
-			if (Util.isNullOrEmpty((String) request.getParameter("val"))) {
-				log.warn("editCommunityDetails value is empty");
+			if (newValue == null || (!normalizedAttribute.equals("description") && newValue.isEmpty())) {
+				log.warn("editCommunityDetails value is absent");
 				return gson.toJson(ERROR_EDIT_VAL_ABSENT);
 			}
 
@@ -4100,7 +4116,8 @@ public class RESTServices {
 
 			} else if (normalizedAttribute.equals("description")) {
 				String newDesc = (String) request.getParameter("val");
-				log.info("editCommunityDetails calling updateDescription: id=" + id + ", desc=" + newDesc);
+				log.info("editCommunityDetails calling updateDescription: id=" + id + ", descriptionLength="
+						+ newDesc.length());
 				success = Spaces.updateDescription(id, newDesc);
 				log.info("editCommunityDetails updateDescription returned: " + success);
 
@@ -4160,6 +4177,9 @@ public class RESTServices {
 		s.setDescription(request.getParameter("description"));
 		s.setLocked(Boolean.parseBoolean(request.getParameter("locked")));
 		s.setStickyLeaders(Boolean.parseBoolean(request.getParameter("sticky")));
+		if (!Validator.isValidPrimDescription(s.getDescription())) {
+			return gson.toJson(new ValidatorStatusCode(false, "The supplied description is invalid"));
+		}
 		ValidatorStatusCode status = SpaceSecurity.canUpdateProperties(id, userId, s.getName(), s.isStickyLeaders());
 		if (!status.isSuccess()) {
 			return gson.toJson(status);

@@ -446,31 +446,36 @@ function refreshSpaceWebsites() {
 	});
 }*/
 
+function createEditField(attribute, value, useTextarea) {
+	var input = useTextarea ? $('<textarea>') : $('<input>').attr('type', 'text');
+	input
+	.attr('id', 'input_' + attribute)
+	.attr('name', attribute)
+	.val(value);
+
+	var buttons = $('<div>')
+	.addClass('edit-buttons')
+	.append($('<button>').attr('id', 'save' + attribute).text('save'))
+	.append($('<button>').attr('id', 'cancel' + attribute).text('cancel'));
+
+	return $('<td>')
+	.addClass('edit-field-container')
+	.append(input)
+	.append(buttons);
+}
+
+function replaceEditableCell(obj, attr, value) {
+	var cell = $('<td>')
+	.attr('id', 'edit' + attr)
+	.text(value);
+	$(obj).closest('td').after(cell).remove();
+	editable(attr);
+}
+
 function editable(attribute) {
 	$('#edit' + attribute).click(function() {
-		var old = $(this).html();
-
-		if (attribute == "desc") {
-			$(this)
-			.after('<td class="edit-field-container"><textarea id="input_' + attribute + '" name="' + attribute + '">' + old + '</textarea><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
-			.remove();
-		} else if (attribute == "name") {
-			$(this)
-			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
-			.remove();
-		} else if (attribute == "CpuTimeout") {
-			$(this)
-			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
-			.remove();
-		} else if (attribute == "ClockTimeout") {
-			$(this)
-			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
-			.remove();
-		} else if (attribute == "MaxMem") {
-			$(this)
-			.after('<td class="edit-field-container"><input type="text" id="input_' + attribute + '" name="' + attribute + '" value="' + old + '" /><div class="edit-buttons"><button id="save' + attribute + '">save</button><button id="cancel' + attribute + '">cancel</button></div></td>')
-			.remove();
-		}
+		var old = $(this).text();
+		$(this).after(createEditField(attribute, old, attribute == "desc")).remove();
 
 		$('#save' + attribute)
 		.click(function() {saveChanges(this, true, attribute, old);});
@@ -505,6 +510,10 @@ function saveChanges(obj, save, attr, old) {
 			var descMaxLen = $('#descRow').attr('length');
 			if (descMaxLen && newVal.length > parseInt(descMaxLen, 10)) {
 				showMessage('error', descMaxLen + " characters maximum", 5000);
+				return;
+			}
+			if (!new RegExp(getPrimDescRegex()).test(newVal)) {
+				showMessage('error', 'The description contains illegal characters', 5000);
 				return;
 			}
 		} else if (attr == 'name') {
@@ -545,20 +554,9 @@ function saveChanges(obj, save, attr, old) {
 				function(returnCode) {
 					s = parseReturnCode(returnCode);
 					if (s) {
-						// Hide the input box and replace it with the table cell
-						$(obj)
-						.closest('td')
-						.after('<td id="edit' + attr + '">' + newVal + '</td>')
-						.remove();
-						// Make the value editable again
-						editable(attr);
+						replaceEditableCell(obj, attr, newVal);
 					} else {
-						$(obj)
-						.closest('td')
-						.after('<td id="edit' + attr + '">' + old + '</td>')
-						.remove();
-						// Make the value editable again
-						editable(attr);
+						replaceEditableCell(obj, attr, old);
 					}
 				},
 				"json"
@@ -574,20 +572,9 @@ function saveChanges(obj, save, attr, old) {
 				function(returnCode) {
 					s = parseReturnCode(returnCode);
 					if (s) {
-						// Hide the input box and replace it with the table cell
-						$(obj)
-						.closest('td')
-						.after('<td id="edit' + attr + '">' + newVal + '</td>')
-						.remove();
-						// Make the value editable again
-						editable(attr);
+						replaceEditableCell(obj, attr, newVal);
 					} else {
-						$(obj)
-						.closest('td')
-						.after('<td id="edit' + attr + '">' + old + '</td>')
-						.remove();
-						// Make the value editable again
-						editable(attr);
+						replaceEditableCell(obj, attr, old);
 					}
 				},
 				"json"
@@ -597,13 +584,7 @@ function saveChanges(obj, save, attr, old) {
 		}
 
 	} else {
-		// Hide the input box and replace it with the table cell
-		$(obj)
-		.closest('td')
-		.after('<td id="edit' + attr + '">' + old + '</td>')
-		.remove();
-		// Make the value editable again
-		editable(attr);
+		replaceEditableCell(obj, attr, old);
 	}
 }
 

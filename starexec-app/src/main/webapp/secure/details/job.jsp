@@ -403,10 +403,9 @@
 							edit)
 						</td>
 						<td>
-							<span id="jobDescriptionText">${job.description}</span>
+							<span id="jobDescriptionText"><c:out value="${job.description}"/></span>
 							<span id="editJobDescriptionWrapper">
-										<textarea id="editJobDescription"
-										          value="${job.description}"></textarea>
+										<textarea id="editJobDescription"><c:out value="${job.description}"/></textarea>
 										<button id="editJobDescriptionButton" class="btn btn-primary">change</button>
 									</span>
 						</td>

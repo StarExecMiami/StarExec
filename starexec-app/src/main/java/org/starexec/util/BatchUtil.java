@@ -298,6 +298,9 @@ public class BatchUtil {
 		String name = "";//name variable to check
 		//Check Benchmarks and Solvers
 		NodeList listOfSpaces = doc.getElementsByTagName("Space");
+		if (!validateSpaceDescriptions(listOfSpaces)) {
+			return null;
+		}
 		Uploads.setXMLTotalSpaces(statusId, listOfSpaces.getLength());
 		log.info("# of Spaces = " + listOfSpaces.getLength());
 		NodeList listOfSolvers = doc.getElementsByTagName("Solver");
@@ -420,6 +423,26 @@ public class BatchUtil {
 		return true;
 	}
 
+	boolean validateSpaceDescriptions(NodeList spaceElements) {
+		for (int index = 0; index < spaceElements.getLength(); index++) {
+			Node spaceNode = spaceElements.item(index);
+			if (spaceNode.getNodeType() != Node.ELEMENT_NODE) {
+				continue;
+			}
+
+			Element spaceAttributes = DOMHelper.getChildElementByName((Element) spaceNode, "SpaceAttributes");
+			if (spaceAttributes != null && DOMHelper.hasElement(spaceAttributes, "description")) {
+				Element description = DOMHelper.getElementByName(spaceAttributes, "description");
+				if (!Validator.isValidPrimDescription(description.getAttribute("value"))) {
+					errorMessage = "A space description contains invalid characters or exceeds the maximum length";
+					spaceCreationSuccess = false;
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 
 	/**
 	 * Creates space from Element.  Method called from createSpaceFromFile.  Also calls itself recursively.
@@ -438,7 +461,6 @@ public class BatchUtil {
 		Element spaceAttributes = DOMHelper.getChildElementByName(spaceElement, "SpaceAttributes");
 
 		log.info("SpaceAttributes element created");
-		log.debug("spaceAttributes: " + spaceAttributes);
 		// Check for description attribute
 
 		Element ele = null;
@@ -590,9 +612,9 @@ public class BatchUtil {
 			Node childNode = childList.item(i);
 
 			if (childNode.getNodeType() == Node.ELEMENT_NODE) {
-				log.debug("found a new element = " + childNode.toString());
 				Element childElement = (Element) childNode;
 				String elementType = childElement.getTagName();
+				log.debug("found a new element of type " + elementType);
 				switch (elementType) {
 				case "Benchmark":
 					id = Integer.parseInt(childElement.getAttribute("id"));

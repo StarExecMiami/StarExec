@@ -202,11 +202,11 @@ public class Validator {
 	}
 
 	/**
-	 * Validates a generic description and checks that it contains content and is less than 1024
-	 * characters long. ALL characters are allowed in descriptions.
+	 * Validates a generic primitive description. Descriptions may be empty and may contain any characters except
+	 * {@code < > " ' % ; ) ( &}. The maximum length is {@link DB#SPACE_DESC_LEN} characters.
 	 *
 	 * @param desc the description to check
-	 * @return true iff name isn't null or empty and is less than 1024 characters
+	 * @return true iff the description is non-null, within the length limit, and contains no excluded characters
 	 */
 	public static boolean isValidPrimDescription(String desc) {
 		return desc != null && patternPrimDesc.matcher(desc).matches();

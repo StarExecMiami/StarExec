@@ -14,6 +14,7 @@ import org.starexec.command.Connection;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.database.AnonymousLinks.PrimitivesToAnonymize;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.JobSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.*;
@@ -2005,7 +2006,7 @@ public class RESTHelpers {
 			// entry in the DataTable
 			JsonArray entry = new JsonArray();
 			entry.add(new JsonPrimitive(spaceLink));
-			entry.add(new JsonPrimitive(space.getDescription()));
+			entry.add(new JsonPrimitive(GeneralSecurity.getHTMLSafeString(space.getDescription())));
 
 			dataTablePageEntries.add(entry);
 		}

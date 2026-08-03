@@ -115,7 +115,7 @@
 				<tr>
 					<td class="label">description</td>
 					<td><textarea id="description" name="description"
-					              length=${descLength}>${space.description}</textarea>
+					              length="${descLength}"><c:out value="${space.description}"/></textarea>
 					</td>
 				</tr>
 				<tr>

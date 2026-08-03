@@ -103,7 +103,7 @@
 
 	<simpleType name="Description">
 		<restriction base="string">
-			<pattern value="[^&lt;&gt;&quot;&apos;)(&amp;&#37;&#43;&#45;]{0,1024}"/>
+			<pattern value="[^&lt;&gt;&quot;&apos;&#37;&#59;)(&amp;]{0,1024}"/>
 		</restriction>
 	</simpleType>
 

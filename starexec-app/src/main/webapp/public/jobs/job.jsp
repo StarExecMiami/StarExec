@@ -66,7 +66,7 @@
 					</tr>
 					<tr title="the job creator's description for this job">
 						<td scope="row">description</td>
-						<td>${job.description}</td>
+						<td><c:out value="${job.description}"/></td>
 					</tr>
 					<tr title="the user who submitted this job">
 						<td scope="row">owner</td>

@@ -1,6 +1,7 @@
 package org.starexec.data.database;
 
 import org.starexec.constants.PaginationQueries;
+import org.starexec.constants.DB;
 import org.starexec.constants.R;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.SolverSecurity;
@@ -15,9 +16,12 @@ import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 import org.starexec.util.dataStructures.TreeNode;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.FileVisitResult;
@@ -2853,7 +2857,8 @@ public class Spaces {
 		Connection con = null;
 		PreparedStatement ps = null;
 		try {
-			log.info(String.format("updateDescription called: spaceId=%d, newDesc=%s", spaceId, newDesc));
+			log.info(String.format("updateDescription called: spaceId=%d, descriptionLength=%d", spaceId,
+				newDesc == null ? 0 : newDesc.length()));
 			con = Common.getConnection();
 			log.info("updateDescription: got connection");
 			ps = con.prepareStatement("SELECT starexec.UpdateSpaceDescription(?, ?)");
@@ -2861,7 +2866,8 @@ public class Spaces {
 			ps.setString(2, newDesc);
 			log.info("updateDescription: prepared statement with parameters");
 			Common.executeAndDrain(ps);
-			log.info(String.format("Space [%d] updated description to [%s]", spaceId, newDesc));
+			log.info(String.format("Space [%d] updated description; descriptionLength=%d", spaceId,
+				newDesc == null ? 0 : newDesc.length()));
 			return true;
 		} catch (PSQLException e) {
 			log.error(String.format("updateDescription PSQLException: spaceId=%d, SQLState=%s, message=%s",
@@ -3192,11 +3198,71 @@ public class Spaces {
 		);
 	}
 
+	static void validateBenchmarkDescriptionFiles(Path rootDirectory) throws IOException {
+		Path normalizedRoot = rootDirectory.toAbsolutePath().normalize();
+		Files.walkFileTree(normalizedRoot, new SimpleFileVisitor<Path>() {
+			@Override
+			public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) throws IOException {
+				if (directory.equals(normalizedRoot)) {
+					return FileVisitResult.CONTINUE;
+				}
+				String directoryName = directory.getFileName().toString();
+				if (".git".equals(directoryName) || !Validator.isValidSpaceName(directoryName)) {
+					return FileVisitResult.SKIP_SUBTREE;
+				}
+
+				Path descriptionFile = directory.resolve(R.BENCHMARK_DESC_PATH);
+				if (Files.exists(descriptionFile, LinkOption.NOFOLLOW_LINKS)) {
+					readValidBenchmarkDescription(descriptionFile);
+				}
+				return FileVisitResult.CONTINUE;
+			}
+		});
+	}
+
+	private static String readValidBenchmarkDescription(Path descriptionFile) throws IOException {
+		if (!Files.isRegularFile(descriptionFile, LinkOption.NOFOLLOW_LINKS)) {
+			throw new IOException("Space description must be a regular file: " + descriptionFile.getFileName());
+		}
+
+		char[] buffer = new char[DB.SPACE_DESC_LEN + 1];
+		int charactersRead = 0;
+		try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+				Files.newInputStream(descriptionFile, LinkOption.NOFOLLOW_LINKS), StandardCharsets.UTF_8))) {
+			while (charactersRead < buffer.length) {
+				int count = reader.read(buffer, charactersRead, buffer.length - charactersRead);
+				if (count < 0) {
+					break;
+				}
+				charactersRead += count;
+			}
+		}
+
+		if (charactersRead > DB.SPACE_DESC_LEN) {
+			throw new IOException("Space description exceeds " + DB.SPACE_DESC_LEN + " characters");
+		}
+		String description = new String(buffer, 0, charactersRead);
+		if (!Validator.isValidPrimDescription(description)) {
+			throw new IOException("Invalid space description in " + getDescriptionDisplayPath(descriptionFile));
+		}
+		return description;
+	}
+
+	private static Path getDescriptionDisplayPath(Path descriptionFile) {
+		Path fileName = descriptionFile.getFileName();
+		Path parent = descriptionFile.getParent();
+		if (parent == null || parent.getFileName() == null) {
+			return fileName;
+		}
+		return parent.getFileName().resolve(fileName);
+	}
+
 	public static void traverseAndAddBenchmarks(
 			File directory, int spaceId, int userId, int typeId, boolean downloadable, Permission perm, Integer statusId,
 			Boolean usesDeps, Integer depRootSpaceId, Boolean linked, TraversalProgressListener progressListener,
 			String resumeAfterPath)
 			throws IOException, StarExecException {
+		validateBenchmarkDescriptionFiles(directory.toPath());
 
 		final int batchSize = 50;
 		final Timer uploadTimer = new Timer();
@@ -3284,7 +3350,7 @@ public class Spaces {
 
 					Path descFile = dir.resolve(R.BENCHMARK_DESC_PATH);
 					if (Files.exists(descFile)) {
-						sub.setDescription(FileUtils.readFileToString(descFile.toFile(), StandardCharsets.UTF_8));
+						sub.setDescription(readValidBenchmarkDescription(descFile));
 					}
 
 					int subSpaceId;
@@ -3322,6 +3388,8 @@ public class Spaces {
 						log.error("Failed to create subspace " + dir);
 					}
 
+				} catch (IOException e) {
+					throw e;
 				} catch (Exception e) {
 					log.error("Error creating space for directory " + dir, e);
 				}
@@ -3451,7 +3519,7 @@ public class Spaces {
 			File directory, int spaceId, int userId, int typeId, boolean downloadable, Permission perm, Integer statusId,
 			Boolean usesDeps, Integer depRootSpaceId, Boolean linked) throws IOException, StarExecException {
 
-
+		validateBenchmarkDescriptionFiles(directory.toPath());
 		final int batchSize = 50;
 		final Timer uploadTimer = new Timer();
 		
@@ -3522,7 +3590,7 @@ public class Spaces {
 
 					Path descFile = dir.resolve(R.BENCHMARK_DESC_PATH);
 					if (Files.exists(descFile)) {
-						sub.setDescription(FileUtils.readFileToString(descFile.toFile(), StandardCharsets.UTF_8));
+						sub.setDescription(readValidBenchmarkDescription(descFile));
 					}
 
 					int subSpaceId;
@@ -3542,6 +3610,8 @@ public class Spaces {
 						log.error("Failed to create subspace " + dir);
 					}
 
+				} catch (IOException e) {
+					throw e;
 				} catch (Exception e) {
 					log.error("Error creating space for directory " + dir, e);
 				}

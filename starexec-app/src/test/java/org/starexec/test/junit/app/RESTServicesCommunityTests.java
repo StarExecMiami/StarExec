@@ -58,6 +58,35 @@ public class RESTServicesCommunityTests {
 	}
 
 	@Test
+	public void editCommunityDetailsAllowsEmptyDescription() {
+		final int spaceId = 99;
+		final int userId = 42;
+		final String emptyDescription = "";
+
+		HttpServletRequest request = mock(HttpServletRequest.class);
+		when(request.getParameter("val")).thenReturn(emptyDescription);
+
+		try (MockedStatic<SessionUtil> sessionUtilMock = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<SpaceSecurity> spaceSecurityMock = Mockito.mockStatic(SpaceSecurity.class);
+			 MockedStatic<Util> utilMock = Mockito.mockStatic(Util.class);
+			 MockedStatic<Spaces> spacesMock = Mockito.mockStatic(Spaces.class)) {
+
+			sessionUtilMock.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			spaceSecurityMock.when(() -> SpaceSecurity.canUpdateSettings(
+				spaceId, "description", emptyDescription, userId
+			)).thenReturn(new ValidatorStatusCode(true));
+			utilMock.when(() -> Util.isNullOrEmpty(emptyDescription)).thenReturn(true);
+			spacesMock.when(() -> Spaces.updateDescription(spaceId, emptyDescription)).thenReturn(true);
+
+			String resultJson = services.editCommunityDetails("desc", spaceId, request);
+			ValidatorStatusCode result = gson.fromJson(resultJson, ValidatorStatusCode.class);
+
+			assertTrue("Expected an empty description to remain valid", result.isSuccess());
+			spacesMock.verify(() -> Spaces.updateDescription(spaceId, emptyDescription));
+		}
+	}
+
+	@Test
 	public void makeLeaderAllowsAdminSelfPromotionAfterDemotion() {
 		final int spaceId = 77;
 		final int adminId = 7;

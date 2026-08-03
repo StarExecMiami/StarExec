@@ -94,6 +94,9 @@ public class JobUtil {
 		//Check Jobs and Job Pairs
 		NodeList listOfJobs = doc.getElementsByTagName("Job");
 		log.info(method, "# of Jobs = " + listOfJobs.getLength());
+		if (!validateJobDescriptions(listOfJobs)) {
+			return null;
+		}
 		NodeList listOfJobPairs = doc.getElementsByTagName("JobPair");
 		NodeList listOfUploadedSolverJobPairs = doc.getElementsByTagName("UploadedSolverJobPair");
 
@@ -865,6 +868,25 @@ public class JobUtil {
 		ValidatorStatusCode code = XMLUtil.validateAgainstSchema(file, jobXmlType.schemaPath);
 		errorMessage = code.getMessage();
 		return code.isSuccess();
+	}
+
+	boolean validateJobDescriptions(NodeList jobElements) {
+		for (int index = 0; index < jobElements.getLength(); index++) {
+			Node jobNode = jobElements.item(index);
+			if (jobNode.getNodeType() != Node.ELEMENT_NODE) {
+				continue;
+			}
+
+			Element jobAttributes = DOMHelper.getElementByName((Element) jobNode, "JobAttributes");
+			if (jobAttributes != null && DOMHelper.hasElement(jobAttributes, "description")) {
+				Element description = DOMHelper.getElementByName(jobAttributes, "description");
+				if (!Validator.isValidPrimDescription(description.getAttribute("value"))) {
+					errorMessage = "A job description contains invalid characters or exceeds the maximum length";
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	public String getSecondaryErrorMessage() {

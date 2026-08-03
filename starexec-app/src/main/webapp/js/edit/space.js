@@ -48,8 +48,8 @@ function attachFormValidation() {
 			description: {
 				required: false,
 				minlength: 0,
-				maxlength: $("#description").attr("length")
-				//regex	 : getPrimDescRegex()
+				maxlength: $("#description").attr("length"),
+				regex: getPrimDescRegex()
 			}
 		},
 		messages: {
@@ -61,8 +61,8 @@ function attachFormValidation() {
 			description: {
 				required: "enter a description",
 				maxlength: $("#description")
-				.attr("length") + " characters maximum"
-				//regex	 : "invalid character(s)"
+				.attr("length") + " characters maximum",
+				regex: "invalid character(s)"
 			}
 		}
 	});

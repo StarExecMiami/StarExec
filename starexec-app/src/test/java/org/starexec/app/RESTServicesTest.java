@@ -9,8 +9,12 @@ import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
+import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
+import org.starexec.data.security.JobSecurity;
+import org.starexec.data.security.SpaceSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Benchmark;
 import org.starexec.data.to.Processor;
@@ -18,9 +22,13 @@ import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
 import org.starexec.exceptions.RESTException;
 import org.starexec.util.SessionUtil;
+import org.starexec.util.Util;
+import org.starexec.util.Validator;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.ws.rs.Path;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +36,7 @@ import java.util.Optional;
 import java.util.TreeMap;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -36,6 +45,131 @@ public class RESTServicesTest {
 	private static final Gson gson = new GsonBuilder()
 			.setDateFormat("yyyy-MM-dd'T'HH:mm:ss")
 			.create();
+
+	@Test
+	public void editJobDescriptionEndpointKeepsDescriptionOutOfThePath() throws Exception {
+		Method endpoint = RESTServices.class.getMethod(
+			"editJobDescription",
+			int.class,
+			HttpServletRequest.class
+		);
+
+		assertEquals("/job/edit/description/{jobId}", endpoint.getAnnotation(Path.class).value());
+	}
+
+	@Test
+	public void editJobDescriptionRejectsInvalidTextBeforeWriting() throws Exception {
+		final int jobId = 42;
+		final int userId = 7;
+		final String invalidDescription = "<script>stored-xss</script>";
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Validator.initialize();
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			jobSecurity.when(() -> JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)).thenReturn(true);
+
+			String response = new RESTServices().editJobDescription(jobId, invalidDescription, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			jobs.verify(() -> Jobs.setJobDescription(jobId, invalidDescription), Mockito.never());
+		}
+	}
+
+	@Test
+	public void editJobDescriptionAcceptsScientificPunctuation() throws Exception {
+		final int jobId = 42;
+		final int userId = 7;
+		final String description = "C++ solver - https://my-tool.example.com/2017-05-22";
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(request.getParameter("description")).thenReturn(description);
+		Validator.initialize();
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<JobSecurity> jobSecurity = Mockito.mockStatic(JobSecurity.class);
+			 MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			jobSecurity.when(() -> JobSecurity.userOwnsJobOrIsAdmin(jobId, userId)).thenReturn(true);
+
+			String response = new RESTServices().editJobDescription(jobId, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertTrue(status.isSuccess());
+			jobs.verify(() -> Jobs.setJobDescription(jobId, description));
+		}
+	}
+
+	@Test
+	public void editSpaceRejectsInvalidDescriptionBeforeWriting() throws Exception {
+		final int spaceId = 99;
+		final int userId = 7;
+		final String name = "Space name";
+		final String invalidDescription = "<script>stored-xss</script>";
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(request.getParameter("name")).thenReturn(name);
+		Mockito.when(request.getParameter("description")).thenReturn(invalidDescription);
+		Mockito.when(request.getParameter("locked")).thenReturn("false");
+		Mockito.when(request.getParameter("sticky")).thenReturn("false");
+		Validator.initialize();
+
+		try (MockedStatic<Util> util = Mockito.mockStatic(Util.class);
+			 MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<SpaceSecurity> spaceSecurity = Mockito.mockStatic(SpaceSecurity.class);
+			 MockedStatic<Spaces> spaces = Mockito.mockStatic(Spaces.class)) {
+			for (String parameter : new String[]{"name", "description", "locked", "sticky"}) {
+				util.when(() -> Util.paramExists(parameter, request)).thenReturn(true);
+			}
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			spaceSecurity.when(() -> SpaceSecurity.canUpdateProperties(spaceId, userId, name, false))
+				.thenReturn(new ValidatorStatusCode(true));
+			spaces.when(() -> Spaces.updateDetails(Mockito.eq(userId), Mockito.any(Space.class))).thenReturn(true);
+
+			String response = new RESTServices().editSpace(spaceId, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			spaces.verify(() -> Spaces.updateDetails(Mockito.eq(userId), Mockito.any(Space.class)), Mockito.never());
+		}
+	}
+
+	@Test
+	public void editSpaceAcceptsScientificPunctuation() throws Exception {
+		final int spaceId = 99;
+		final int userId = 7;
+		final String name = "Scientific space";
+		final String description = "C++ solver - https://my-tool.example.com/2017-05-22";
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(request.getParameter("name")).thenReturn(name);
+		Mockito.when(request.getParameter("description")).thenReturn(description);
+		Mockito.when(request.getParameter("locked")).thenReturn("false");
+		Mockito.when(request.getParameter("sticky")).thenReturn("false");
+		Validator.initialize();
+
+		try (MockedStatic<Util> util = Mockito.mockStatic(Util.class);
+			 MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<SpaceSecurity> spaceSecurity = Mockito.mockStatic(SpaceSecurity.class);
+			 MockedStatic<Spaces> spaces = Mockito.mockStatic(Spaces.class)) {
+			for (String parameter : new String[]{"name", "description", "locked", "sticky"}) {
+				util.when(() -> Util.paramExists(parameter, request)).thenReturn(true);
+			}
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			spaceSecurity.when(() -> SpaceSecurity.canUpdateProperties(spaceId, userId, name, false))
+				.thenReturn(new ValidatorStatusCode(true));
+			spaces.when(() -> Spaces.updateDetails(Mockito.eq(userId), Mockito.any(Space.class))).thenReturn(true);
+
+			String response = new RESTServices().editSpace(spaceId, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertTrue(status.isSuccess());
+			spaces.verify(() -> Spaces.updateDetails(
+				Mockito.eq(userId),
+				Mockito.argThat(space -> description.equals(space.getDescription()))
+			));
+		}
+	}
 
 	@Test
 	public void getBenchmarkMetadataReturnsJsonForValidBenchmark() throws Exception {

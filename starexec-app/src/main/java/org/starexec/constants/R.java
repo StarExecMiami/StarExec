@@ -197,7 +197,7 @@ public class R {
     public static final String REQUEST_MESSAGE = "^[\\w\\s\\]\\[\\!\"#\\$%&'()\\*\\+,\\./:;=\\?@\\^_`{\\|}~\\-]{2," +
             DB.MSG_LEN +
             "}$";
-    public static final String PRIMITIVE_DESC_PATTERN = "^[^<>\"\'%;)(&\\+-]{0," + DB.SPACE_DESC_LEN + "}$";
+    public static final String PRIMITIVE_DESC_PATTERN = "^[^<>\"\'%;)(&]{0," + DB.SPACE_DESC_LEN + "}$";
     public static final String PASSWORD_PATTERN = "^(?=.*[A-Za-z0-9~`!@#\\$%\\^&\\*\\(\\)_\\-\\+\\=]+$)(?=.*[0-9~`!@#\\$%\\^&\\*\\(\\)_\\-\\+\\=]{1,})(?=.*[A-Za-z]{1,}).{5,"
             +
             DB.PASSWORD_LEN +

@@ -30,7 +30,7 @@ may have these characters and also numbers.</p>
 </p>
 
 <p>In descriptions, all characters are permitted except for the following characters:
-<code>< > " ' % ; ) ( & \ + -</code>
+<code>&lt; &gt; &quot; ' % ; ) ( &amp;</code>
 </p>
 
 <h2>Regular Expressions</h2>
@@ -54,7 +54,7 @@ and the rules laid out above, then these expressions take precedence:
 <dt>request message pattern</dt>
   <dd><code>"^[\\w\\]\\[\\!\"#\\$%&'()\\*\\+,\\./:;=\\?@\\^_`{\\|}~\\- ]{2,512}$"</code></dd>
 <dt>description pattern</dt>
-  <dd><code>"^[^<>\"\'%;)(&\\+-]{0,1024}$"</code></dd>
+  <dd><code>"^[^&lt;&gt;\&quot;\'%;)(&amp;]{0,1024}$"</code></dd>
 <dt>password pattern</dt>
   <dd><code>"^(?=.*[A-Za-z0-9~`!@#\\$%\\^&\\*\\(\\)_\\-\\+\\=]+$)(?=.*[0-9~`!@#\\$%\\^&\\*\\(\\)_\\-\\+\\=]{1,})(?=.*[A-Za-z]{1,}).{5,32}$"</code></dd>
 </dl>

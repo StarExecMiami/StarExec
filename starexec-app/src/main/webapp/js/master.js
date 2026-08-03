@@ -571,7 +571,7 @@ function getPrimNameRegex() {
  * Returns the regular expression used to validate primitive descriptions
  */
 function getPrimDescRegex() {
-  return "^[^<>\"\'%;)(&\\+-]+$";
+  return "^[^<>\"\'%;)(&]{0,1024}$";
 }
 
 /**
