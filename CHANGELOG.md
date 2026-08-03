@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-08-03
+
+### Fixed
+- **Description validation**: Primitive descriptions now consistently accept `+` and `-` across server, client, XML schema, and import paths, including URL-like scientific metadata.
+- **Description editing**: Job descriptions are submitted as form data so values containing `/` round-trip correctly.
+
+### Security
+- **Description hardening**: Added pre-write import validation, contextual output encoding, bounded no-follow filesystem reads, and raw-description log redaction while retaining the legacy safety blacklist.
+
 ## [2.5.0] - 2026-07-29
 
 ### Added
@@ -379,7 +388,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Cluster MachineSpecs and overrides configuration for reproducible builds.
 - Initial implementation of the user Trash Bin/Recycle logic.
 
-[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.5.1...HEAD
+[2.5.1]: https://github.com/StarExecMiami/StarExec/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/StarExecMiami/StarExec/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/StarExecMiami/StarExec/compare/v2.2.0...v2.3.0
