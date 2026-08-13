@@ -296,9 +296,14 @@ RUN addgroup starexec1 starexec && \
 # Sets connection limits to prevent resource exhaustion
 RUN sed -i 's/port="8080"/port="8080" maxThreads="200" minSpareThreads="10"/' ${CATALINA_HOME}/conf/server.xml
 
-# Health check
+# Health check.
+# Uses the readiness endpoint rather than liveness: nothing here restarts on
+# unhealthy, so this status is read by humans and by compose `depends_on:
+# service_healthy`, and both want "can it actually serve?" rather than "is the
+# process up?". It must not be `/starexec/` -- Tomcat serves that page happily
+# with a dead database, so the old check reported healthy through an outage.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/starexec/ || exit 1
+    CMD curl -f http://localhost:8080/starexec/public/health/readiness || exit 1
 
 # Expose port
 EXPOSE 8080

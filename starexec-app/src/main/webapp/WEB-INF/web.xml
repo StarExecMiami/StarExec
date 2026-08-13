@@ -116,6 +116,18 @@
         <url-pattern>/public/registration/manager</url-pattern>
     </servlet-mapping>
 
+    <!-- Orchestrator probes. Must live under /public/ so SessionFilter lets an
+         unauthenticated kubelet through; CsrfFilter guards POST only, so GET is
+         unaffected. Serves /public/health/liveness and /public/health/readiness. -->
+    <servlet>
+        <servlet-name>HealthCheck</servlet-name>
+        <servlet-class>org.starexec.servlets.HealthCheck</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>HealthCheck</servlet-name>
+        <url-pattern>/public/health/*</url-pattern>
+    </servlet-mapping>
+
     <servlet>
         <servlet-name>MoveNodes</servlet-name>
         <servlet-class>org.starexec.servlets.MoveNodes</servlet-class>
