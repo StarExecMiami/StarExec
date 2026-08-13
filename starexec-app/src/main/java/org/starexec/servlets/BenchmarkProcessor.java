@@ -2,11 +2,13 @@ package org.starexec.servlets;
 
 import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
+import org.starexec.data.database.Permissions;
 import org.starexec.data.database.Processors;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.Permission;
 import org.starexec.data.to.Processor;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.SessionUtil;
@@ -121,6 +123,28 @@ public class BenchmarkProcessor extends HttpServlet {
 			}
 			if (!Users.isMemberOfSpace(userId, spaceId) && !GeneralSecurity.hasAdminWritePrivileges(userId)) {
 				return new ValidatorStatusCode(false, "You must be a member of the space you are trying to process");
+			}
+			// Membership alone was the whole test, but processing rewrites the attributes
+			// of benchmarks in this space -- benchmarks that belong to other people --
+			// and clearing destroys the existing ones outright. Everywhere else in the
+			// codebase mutating a benchmark needs ownership or an explicit space right,
+			// so require the matching rights here: writing attributes maps to the
+			// add-benchmark right, and destroying them to the remove-benchmark right.
+			//
+			// Note this authorizes the space named in the request. When the request asks
+			// for the whole hierarchy, subspaces are not checked individually; that is a
+			// narrower residual than the membership-only test it replaces, not a
+			// complete fix, and wants its own change.
+			if (!GeneralSecurity.hasAdminWritePrivileges(userId)) {
+				Permission perm = Permissions.get(userId, spaceId);
+				if (perm == null || !perm.canAddBenchmark()) {
+					return new ValidatorStatusCode(
+							false, "You do not have permission to process benchmarks in this space");
+				}
+				if (Boolean.parseBoolean(request.getParameter(CLEAR_OLD)) && !perm.canRemoveBench()) {
+					return new ValidatorStatusCode(
+							false, "You do not have permission to clear benchmark attributes in this space");
+				}
 			}
 			int commId = Spaces.getCommunityOfSpace(spaceId);
 			if (commId != p.getCommunityId()) {
