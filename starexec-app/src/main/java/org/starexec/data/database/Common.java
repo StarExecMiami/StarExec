@@ -471,7 +471,13 @@ public class Common {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 			T result = work.accept(con);
-			Common.endTransaction(con);
+			// Commit here rather than through endTransaction: that helper swallows a
+			// failed commit, which would let this method return success for work the
+			// database rolled back. Callers would then treat un-persisted rows as
+			// durable -- for the batched upload path, that means advancing a resume
+			// checkpoint past benchmarks that were never written.
+			con.commit();
+			enableAutoCommit(con);
 			return result;
 		} catch (SQLException e) {
 			log.warn("runInTransaction", "Rolling back transaction due to SQLException", e);

@@ -221,7 +221,16 @@ public class UploadJob {
      * Checks if the job is in a terminal state.
      */
     public boolean isTerminal() {
-        return "COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status);
+        // COMPLETED_WITH_ERRORS is as final as COMPLETED -- the run finished and some
+        // files were skipped. Omitting it let callers that gate on this method treat a
+        // finished upload as still cancellable: RESTServices.cancelUploadJob would wave
+        // the request past its guard, fail to cancel an immutable state, and report
+        // "Unable to cancel upload job". The status only became storable when its column
+        // was widened, which is why the gap went unnoticed.
+        return "COMPLETED".equals(status)
+                || "COMPLETED_WITH_ERRORS".equals(status)
+                || "FAILED".equals(status)
+                || "CANCELLED".equals(status);
     }
 
     public boolean canRetry() {

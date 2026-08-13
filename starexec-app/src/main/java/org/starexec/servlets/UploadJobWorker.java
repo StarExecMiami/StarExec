@@ -24,6 +24,9 @@ import java.nio.file.Files;
 import java.nio.file.DirectoryStream;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -370,6 +373,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             // Step 2: Process based on upload method
             // "convert" method requires subspace creation - use legacy synchronous path
             // "dump" method can use the new async processor
+            List<String> rejectedPaths = Collections.emptyList();
             if ("convert".equals(job.getUploadMethod())) {
                 log.info(method, "Using legacy path for 'convert' method to create subspaces");
                 safeToDeleteExtractDir = false;
@@ -380,19 +384,31 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 safeToDeleteExtractDir = false;
                 BoundedUploadProcessor processor = new BoundedUploadProcessor(job, extractDir);
                 processor.process();
+                rejectedPaths = processor.getRejectedPaths();
             }
 
             ensureNotCancelled(job.getId());
             
             // Step 3: Mark as completed
-            if (!UploadJobQueue.completeJob(job.getId())) {
-                if (UploadJobQueue.isCancelRequested(job.getId())) {
+            String completionOutcome = UploadJobQueue.completeJob(job.getId());
+            if (!UploadJobQueue.isCompletedOutcome(completionOutcome)) {
+                if ("CANCEL_REQUESTED".equals(completionOutcome)
+                        || UploadJobQueue.isCancelRequested(job.getId())) {
                     throw new UploadCancellationException("Upload job cancellation requested");
                 }
-                throw new IOException("Failed to mark upload job as completed");
+                // The outcome names which guard rejected the completion, so a failure
+                // here is diagnosable instead of just alarming.
+                throw new IOException("Failed to mark upload job as completed: " + completionOutcome);
             }
             processingSucceeded = true;
             log.info(method, "Completed job " + job.getId());
+
+            // The job reached a completed state and canRetry() admits only FAILED or
+            // CANCELLED, so it can never resume: the files the processor rejected are now
+            // provably garbage. Deleting them earlier would have been unsafe -- the resume
+            // index is positional into a freshly walked file list, so removing one
+            // mid-run shifts every later index.
+            deleteRejectedFiles(job, extractDir, rejectedPaths);
             
             // Step 4: Delete only the source archive file now that extraction is done.
             // The extracted directory must NOT be deleted — DB paths point to it.
@@ -447,6 +463,59 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                 }
             }
         }
+    }
+
+    /**
+     * Deletes the files the benchmark processor rejected during an upload.
+     *
+     * <p>A rejected file was never inserted, so no {@code benchmarks} row references it
+     * and nothing charged its bytes against {@code users.disk_size}. The extraction
+     * directory itself is deliberately preserved — the rows that were inserted point into
+     * it — so without this an upload whose files are all rejected would occupy disk
+     * permanently and outside the quota system entirely.
+     *
+     * <p>Each path is re-checked for containment in this job's own extraction directory.
+     * The paths come from this worker's own traversal, but a deletion loop driven by
+     * stored strings is worth constraining regardless.
+     *
+     * <p>Failures are logged, never rethrown: the upload succeeded, and a stray file left
+     * behind must not turn a completed job into a failed one.
+     */
+    private void deleteRejectedFiles(UploadJob job, File extractDir, List<String> rejectedPaths) {
+        String method = "deleteRejectedFiles";
+        if (rejectedPaths.isEmpty() || extractDir == null) {
+            return;
+        }
+
+        final Path safeExtractDir;
+        try {
+            safeExtractDir = getUploadPathGuard().validateExtractionDirectoryPath(
+                    extractDir.getAbsolutePath(), job.getId(), job.getUserId()
+            ).toAbsolutePath().normalize();
+        } catch (Exception e) {
+            log.warn(method, "Could not resolve extraction directory for job " + job.getId()
+                    + "; leaving " + rejectedPaths.size() + " rejected file(s) in place", e);
+            return;
+        }
+
+        int deleted = 0;
+        for (String rejected : rejectedPaths) {
+            try {
+                Path candidate = Paths.get(rejected).toAbsolutePath().normalize();
+                if (!candidate.startsWith(safeExtractDir)) {
+                    log.error(method, "Refusing to delete path outside the extraction directory of job "
+                            + job.getId() + ": " + rejected);
+                    continue;
+                }
+                UploadArtifactFileSystem.deleteFileWithoutFollowingLinks(candidate);
+                deleted++;
+            } catch (Exception e) {
+                log.warn(method, "Could not delete rejected file " + rejected, e);
+            }
+        }
+
+        log.info(method, "Deleted " + deleted + " of " + rejectedPaths.size()
+                + " rejected file(s) for job " + job.getId());
     }
 
     private boolean isCancellationException(Throwable throwable, long jobId) {
@@ -530,8 +599,11 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      */
     private TraversalProgressListener createProgressListener(UploadJob job) {
         return new TraversalProgressListener() {
-            private int lastUpdateTime = 0;
-            private static final int MIN_UPDATE_INTERVAL_MS = 1000; // Update at most every second
+            // Must be long: (int) System.currentTimeMillis() truncates an epoch
+            // millisecond value, leaving the elapsed comparison permanently above the
+            // interval and defeating the throttle entirely.
+            private long lastUpdateTime = 0L;
+            private static final long MIN_UPDATE_INTERVAL_MS = 1000L; // Update at most every second
             private String lastCommittedPath = job.getLastProcessedPath();
             
             @Override
@@ -548,7 +620,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             public void onProgress(int directoriesVisited, int filesFound, int filesProcessed, int spacesCreated) {
                 long now = System.currentTimeMillis();
                 if (now - lastUpdateTime >= MIN_UPDATE_INTERVAL_MS) {
-                    lastUpdateTime = (int) now;
+                    lastUpdateTime = now;
                     UploadJobQueue.updateProgress(
                         job.getId(),
                         filesFound,
@@ -564,12 +636,18 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
             
             @Override
             public void onComplete(int totalFilesFound, int totalFilesProcessed, int totalSpacesCreated) {
-                log.info("Traversal complete: " + totalFilesFound + " files found, " + 
+                log.info("Traversal complete: " + totalFilesFound + " files found, " +
                          totalFilesProcessed + " processed, " + totalSpacesCreated + " spaces created");
+                // The traversal has finished, so this count is authoritative and replaces
+                // the extraction-time estimate. Passing it through updateProgress would
+                // not work: that merges with GREATEST, so the estimate -- which counts
+                // files the traversal discarded -- would win and leave a fully successful
+                // upload looking like COMPLETED_WITH_ERRORS.
+                UploadJobQueue.setTotalFilesFound(job.getId(), totalFilesFound);
                 // Final update
                 UploadJobQueue.updateProgress(
                     job.getId(),
-                    totalFilesFound,
+                    null,
                     totalFilesProcessed,
                     totalSpacesCreated,
                     lastCommittedPath,

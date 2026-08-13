@@ -4316,8 +4316,7 @@ public class RESTServices {
 		if (!Solvers.restoreRecycledSolvers(userId)) {
 			return gson.toJson(ERROR_DATABASE);
 		}
-		// Fix: was "Solvers restored successfully" — see GitHub issue #85 audit
-		return gson.toJson(new ValidatorStatusCode(true, "Solvers deleted successfully"));
+		return gson.toJson(new ValidatorStatusCode(true, "Solvers restored successfully"));
 	}
 
 	/**
@@ -4355,7 +4354,7 @@ public class RESTServices {
 		if (!Solvers.setRecycledSolversToDeleted(userId)) {
 			return gson.toJson(ERROR_DATABASE);
 		}
-		return gson.toJson(new ValidatorStatusCode(true, "Solvers restored successfully"));
+		return gson.toJson(new ValidatorStatusCode(true, "Solvers deleted successfully"));
 	}
 
 	/**

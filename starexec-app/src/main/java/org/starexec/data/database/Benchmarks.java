@@ -444,22 +444,44 @@ public class Benchmarks {
 	 */
 	public static int addAndAssociate(Benchmark benchmark, Integer spaceId, Integer statusId, Connection con)
 			throws SQLException {
-		if (Benchmarks.isBenchValid(benchmark.getAttributes())) {
-			// Add benchmark to database
-			int benchId = Benchmarks.add(benchmark, statusId, con).getId();
-			if (benchId >= 0) {
-				if (spaceId != null) {
-					Benchmarks.associate(benchId, spaceId, con);
-				}
-				log.debug("bench successfully added");
-				return benchId;
-			}
+		if (!Benchmarks.isBenchValid(benchmark.getAttributes())) {
+			log.debug("Add called on invalid benchmark, no additions will be made to the database");
+			Uploads.setBenchmarkErrorMessage(
+					statusId, "Benchmark validation failed for benchmark " + benchmark.getName() + ".");
+			return -1;
 		}
-		log.debug("Add called on invalid benchmark, no additions will be made to the database");
-		Uploads.setBenchmarkErrorMessage(
-				statusId, "Benchmark validation failed for benchmark " + benchmark.getName() + ".");
 
-		return -1;
+		// add() signals failure by returning null, so its result cannot be dereferenced
+		// directly -- doing so turned a handled database error into a NullPointerException.
+		Benchmark added = Benchmarks.add(benchmark, statusId, con);
+		if (added == null || added.getId() < 0) {
+			log.error("addAndAssociate", "Failed to add benchmark " + benchmark.getName() + " to the database");
+			Uploads.setBenchmarkErrorMessage(
+					statusId, "Benchmark " + benchmark.getName() + " could not be added to the database.");
+			return -1;
+		}
+		int benchId = added.getId();
+
+		// The association is not optional. Benchmarks.associate logs and returns false
+		// rather than throwing, so discarding its result leaves a benchmark that exists,
+		// and whose bytes were charged to the uploader's disk quota, yet is invisible in
+		// the space it was uploaded to -- while the caller is told it succeeded.
+		if (spaceId != null && !Benchmarks.associate(benchId, spaceId, con)) {
+			String message = "Benchmark " + benchmark.getName()
+					+ " was added but could not be associated with space " + spaceId;
+			log.error("addAndAssociate", message);
+			Uploads.setBenchmarkErrorMessage(statusId, message);
+			// add() has already committed on this connection, so the row and the disk
+			// charge it made are durable and the caller's rollback cannot reach them.
+			// Undo them here, or a failed association leaves exactly the state this whole
+			// change exists to prevent: a benchmark that belongs to no space while still
+			// counting against its uploader's quota.
+			compensateOrphanedBenchmark(benchId, benchmark.getName(), con);
+			return -1;
+		}
+
+		log.debug("bench successfully added");
+		return benchId;
 	}
 
 	/**
@@ -613,27 +635,12 @@ public class Benchmarks {
 			Boolean usesDeps, Connection con) throws IOException, SQLException, StarExecException {
 		if (!benchmarks.isEmpty()) {
 			log.info("Adding (with deps) " + benchmarks.size() + " to Space " + spaceId);
-			// Get the processor of the first benchmark (they should all have the same
-			// processor)
-			int processorId = benchmarks.get(0).getType().getId();
 
-			log.info("About to attach attributes to " + benchmarks.size());
-
-			if (processorId == R.NO_TYPE_PROC_ID) {
-				markBenchmarksValidWithoutProcessor(benchmarks);
-				Uploads.incrementValidatedBenchmarks(statusId, benchmarks.size());
-			} else {
-				Processor p = Processors.get(processorId);
-				Benchmarks.attachBenchAttrs(benchmarks, p, statusId);
-			}
-			if (usesDeps) {
-				boolean success = Benchmarks.validateDependencies(benchmarks, depRootSpaceId, linked, statusId);
-				if (!success) {
-					Uploads.setBenchmarkErrorMessage(
-							statusId,
-							"Benchmark dependencies failed to validate. Please check your processor output");
-					return null;
-				}
+			if (!Benchmarks.validateForUpload(benchmarks, depRootSpaceId, linked, usesDeps, statusId)) {
+				Uploads.setBenchmarkErrorMessage(
+						statusId,
+						"Benchmark dependencies failed to validate. Please check your processor output");
+				return null;
 			}
 
 			// Next add them to the database (must happen AFTER they are processed and have
@@ -643,6 +650,109 @@ public class Benchmarks {
 		} else {
 			log.info("No benches to add with this call to addWithDeps from space " + spaceId);
 			return new ArrayList<>();
+		}
+	}
+
+	/**
+	 * Reverses an insert whose space association failed.
+	 *
+	 * <p>{@code SetBenchmarkToDeletedById} subtracts the benchmark's bytes back out of
+	 * {@code users.disk_size} and marks the row deleted, which is precisely the undo for
+	 * an {@link #add} that has already committed. The benchmark's file is left alone; it
+	 * belongs to the upload's extraction directory, whose lifecycle is managed elsewhere.
+	 *
+	 * <p>Best effort by design. This runs only when a statement has just failed on this
+	 * connection, so the compensation can fail too — in which case the log says exactly
+	 * what was left behind, rather than the failure disappearing.
+	 */
+	private static void compensateOrphanedBenchmark(int benchId, String name, Connection con) {
+		try (PreparedStatement ps = con.prepareStatement("SELECT starexec.SetBenchmarkToDeletedById(?)")) {
+			ps.setInt(1, benchId);
+			ps.execute();
+			log.warn("compensateOrphanedBenchmark", "Reversed orphaned benchmark " + benchId + " (" + name
+					+ ") and returned its bytes to the uploader's quota");
+		} catch (SQLException e) {
+			log.error("compensateOrphanedBenchmark", "Could not reverse orphaned benchmark " + benchId + " ("
+					+ name + "); it belongs to no space and still counts against its uploader's quota", e);
+		}
+	}
+
+	/**
+	 * Runs the benchmark processor over the given benchmarks and, when the upload
+	 * declares dependencies, resolves them. This is the in-memory half of
+	 * {@link #processAndAdd} with none of its inserts: afterwards each benchmark carries
+	 * its processor attributes and any resolved dependencies, but nothing has been
+	 * written to the database.
+	 *
+	 * <p>The asynchronous upload path uses this so that it applies exactly the same
+	 * validation rules as the synchronous one while still persisting a whole batch in a
+	 * single transaction. It cannot call {@link #processAndAdd} instead: that path adds
+	 * benchmarks one at a time through {@link #add}, which opens and commits its own
+	 * transaction on the connection and would therefore break the caller's batch
+	 * atomicity.
+	 *
+	 * @param benchmarks     the benchmarks to validate; mutated in place
+	 * @param depRootSpaceId the id of the space where the axiom benchmarks lie
+	 * @param linked         true if depRootSpace is the same as the first directory in
+	 *                       the include statement
+	 * @param usesDeps       if true, resolve dependencies; ignored when null or false
+	 * @param statusId       the id of an upload status if one exists, null otherwise
+	 * @return true if validation succeeded, false if dependency resolution failed
+	 */
+	public static boolean validateForUpload(
+			List<Benchmark> benchmarks, Integer depRootSpaceId, Boolean linked, Boolean usesDeps, Integer statusId)
+			throws IOException, StarExecException {
+		if (benchmarks.isEmpty()) {
+			return true;
+		}
+
+		// The processor of the first benchmark stands for the batch -- they all come
+		// from the same upload and therefore share a type.
+		int processorId = benchmarks.get(0).getType().getId();
+		log.info("About to attach attributes to " + benchmarks.size());
+
+		if (processorId == R.NO_TYPE_PROC_ID) {
+			markBenchmarksValidWithoutProcessor(benchmarks);
+			Uploads.incrementValidatedBenchmarks(statusId, benchmarks.size());
+		} else {
+			Benchmarks.attachBenchAttrs(benchmarks, Processors.get(processorId), statusId);
+		}
+
+		if (Boolean.TRUE.equals(usesDeps)) {
+			return Benchmarks.validateDependencies(benchmarks, depRootSpaceId, linked, statusId);
+		}
+		return true;
+	}
+
+	/**
+	 * Persists the processor attributes and resolved dependencies of benchmarks that
+	 * have already been inserted, reusing the caller's transaction.
+	 *
+	 * <p>Every benchmark must already carry the id assigned by its insert, and must have
+	 * been through {@link #validateForUpload}. Benchmarks whose attributes did not
+	 * validate are skipped rather than rejected -- the asynchronous upload path drops
+	 * those files before insert and reports them through the job's error log.
+	 *
+	 * @param benchmarks benchmarks carrying their assigned ids
+	 * @param con        the caller's open connection
+	 */
+	public static void persistAttributesAndDependencies(List<Benchmark> benchmarks, Connection con)
+			throws SQLException {
+		for (Benchmark b : benchmarks) {
+			addAttributeSetToDbIfValid(con, b.getAttributes(), b, null);
+
+			// Benchmark's constructor installs an empty list, but the field is declared
+			// null and instances that bypass the constructor (Gson deserialization) can
+			// still arrive with none.
+			if (b.getDependencies() == null) {
+				continue;
+			}
+			for (BenchmarkDependency d : b.getDependencies()) {
+				if (d.getSecondaryBench() == null) {
+					continue;
+				}
+				addBenchDependency(b.getId(), d.getSecondaryBench().getId(), d.getDependencyPath(), con);
+			}
 		}
 	}
 
@@ -2295,7 +2405,7 @@ public class Benchmarks {
 	 * @param attrs The attributes of a benchmark
 	 * @return True if the attributes are of a valid benchmark, false otherwise
 	 */
-	private static boolean isBenchValid(Map<String, String> attrs) {
+	public static boolean isBenchValid(Map<String, String> attrs) {
 		// A benchmark is valid if it has attributes and it has the special
 		// R.VALID_BENCHMARK_ATTRIBUTE attribute
 		return (attrs != null && Boolean.parseBoolean(attrs.getOrDefault(R.VALID_BENCHMARK_ATTRIBUTE, "false")));

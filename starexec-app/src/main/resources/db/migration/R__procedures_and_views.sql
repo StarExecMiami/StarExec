@@ -234,6 +234,78 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Set-based sibling of AddAndAssociateBenchmark, for the asynchronous upload
+-- processor (BoundedUploadProcessor), which inserts in batches of 50.
+-- It encodes the same three invariants as the single-row version -- charge the
+-- user's disk quota, insert the benchmark, link it to the space -- so that the
+-- batch path cannot drift away from them again. Returns the new ids paired with
+-- their source path; the path is the join key because RETURNING makes no
+-- ordering guarantee.
+DROP FUNCTION IF EXISTS starexec.AddAndAssociateBenchmarks(TEXT[], TEXT[], BIGINT[], INT, INT, BOOLEAN, INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.AddAndAssociateBenchmarks(
+	_names TEXT[],
+	_paths TEXT[],
+	_diskSizes BIGINT[],
+	_userId INT,
+	_typeId INT,
+	_downloadable BOOLEAN,
+	_spaceId INT
+)
+RETURNS TABLE(bench_id INT, bench_path TEXT) AS $$
+DECLARE
+	_count INT;
+	_totalDiskSize BIGINT;
+BEGIN
+	_count := COALESCE(array_length(_names, 1), 0);
+	IF _count = 0 THEN
+		RETURN;
+	END IF;
+
+	-- The three arrays are positionally zipped below, so a length mismatch would
+	-- silently drop benchmarks. Fail loudly instead.
+	IF COALESCE(array_length(_paths, 1), 0) <> _count
+			OR COALESCE(array_length(_diskSizes, 1), 0) <> _count THEN
+		RAISE EXCEPTION USING
+			ERRCODE = '22023',
+			MESSAGE = format('Array length mismatch: names=%s paths=%s diskSizes=%s',
+				_count, COALESCE(array_length(_paths, 1), 0), COALESCE(array_length(_diskSizes, 1), 0));
+	END IF;
+
+	SELECT COALESCE(SUM(s), 0) INTO _totalDiskSize FROM unnest(_diskSizes) AS s;
+
+	-- One quota charge for the whole batch, equivalent to N single-row charges.
+	UPDATE users SET disk_size = disk_size + _totalDiskSize WHERE id = _userId;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('User %s not found', _userId);
+	END IF;
+
+	RETURN QUERY
+	WITH input AS (
+		SELECT n.ord, n.name, p.path, d.size
+		FROM unnest(_names) WITH ORDINALITY AS n(name, ord)
+		JOIN unnest(_paths) WITH ORDINALITY AS p(path, ord) ON p.ord = n.ord
+		JOIN unnest(_diskSizes) WITH ORDINALITY AS d(size, ord) ON d.ord = n.ord
+	),
+	inserted AS (
+		INSERT INTO benchmarks (user_id, name, bench_type, uploaded, path, downloadable, disk_size)
+		SELECT _userId, i.name, _typeId, CURRENT_TIMESTAMP, i.path, _downloadable, i.size
+		FROM input i
+		RETURNING id, path
+	),
+	-- Data-modifying CTEs always execute to completion even when unreferenced, so
+	-- this needs no RETURNING -- and must not have one: `bench_id` would resolve
+	-- ambiguously against the OUT parameter of the same name.
+	associated AS (
+		INSERT INTO bench_assoc (space_id, bench_id)
+		SELECT _spaceId, ins.id FROM inserted ins
+		ON CONFLICT DO NOTHING
+	)
+	SELECT ins.id, ins.path FROM inserted ins;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Gets all benchmarks that are in a job (in job pairs in that job)
 -- Author: Albert Giegerich
 DROP FUNCTION IF EXISTS starexec.GetBenchmarksByJob(INT) CASCADE;

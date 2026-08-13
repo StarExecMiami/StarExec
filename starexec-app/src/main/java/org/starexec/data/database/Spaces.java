@@ -92,8 +92,16 @@ public class Spaces {
 
 			Permission perm = new Permission(true);
 			perm.setLeader(true);
-			// Set maximal permissions for the user who added the space
-			Permissions.set(userId, newSpaceId, perm, con);
+			// Set maximal permissions for the user who added the space.
+			// Permissions.set reports failure by returning false rather than throwing.
+			// Discarding that left a space whose creator had no permission row, and since
+			// every consumer treats an absent Permission as denial, the creator was locked
+			// out of the space they had just made.
+			if (!Permissions.set(userId, newSpaceId, perm, con)) {
+				log.error(method, "Failed to set creator permissions for user " + userId + " on new space "
+						+ newSpaceId + "; abandoning the space so it is not left unusable");
+				return -1;
+			}
 
 			log.info(method, String.format("New space with name [%s] added by user [%d] to space [%d]", s.getName(), userId,
 			                       s.getParentSpace()
@@ -158,6 +166,12 @@ public class Spaces {
 			Common.beginTransaction(con);
 			// Add space is a multi-step process, so we need to use a transaction
 			int newSpaceId = Spaces.add(con, s, userId);
+			if (newSpaceId < 0) {
+				// The inner add signals failure by returning -1 instead of throwing, so
+				// committing here would persist a half-built space. Returning without
+				// committing lets the finally block roll the whole thing back.
+				return -1;
+			}
 
 			Common.endTransaction(con);
 			return newSpaceId;

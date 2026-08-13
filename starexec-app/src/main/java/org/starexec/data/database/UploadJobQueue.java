@@ -65,7 +65,10 @@ public class UploadJobQueue {
     private static final String UPDATE_PROGRESS_SQL = 
         "SELECT starexec.update_upload_job_progress(?, ?, ?, ?, ?, ?)";
     
-    private static final String COMPLETE_JOB_SQL = 
+    private static final String SET_TOTAL_FILES_SQL =
+        "SELECT starexec.set_upload_job_total_files(?, ?)";
+
+    private static final String COMPLETE_JOB_SQL =
         "SELECT starexec.complete_upload_job(?)";
     
     private static final String FAIL_JOB_SQL = 
@@ -255,88 +258,155 @@ public class UploadJobQueue {
      * @param lastProcessedIndex Index of the last successfully processed benchmark
      * @return true if successful, false otherwise
      */
-    public static boolean updateProgress(long jobId, Integer totalFilesFound, 
-                                         Integer totalFilesProcessed, 
+    public static boolean updateProgress(long jobId, Integer totalFilesFound,
+                                         Integer totalFilesProcessed,
                                          Integer totalSpacesCreated,
                                          String lastProcessedPath,
                                          Integer lastProcessedIndex) {
         Connection con = null;
-        CallableStatement cs = null;
-        
+
         try {
             con = Common.getConnection();
-            cs = con.prepareCall(UPDATE_PROGRESS_SQL);
-            
-            cs.setLong(1, jobId);
-            if (totalFilesFound != null) {
-                cs.setInt(2, totalFilesFound);
-            } else {
-                cs.setNull(2, Types.INTEGER);
-            }
-            if (totalFilesProcessed != null) {
-                cs.setInt(3, totalFilesProcessed);
-            } else {
-                cs.setNull(3, Types.INTEGER);
-            }
-            if (totalSpacesCreated != null) {
-                cs.setInt(4, totalSpacesCreated);
-            } else {
-                cs.setNull(4, Types.INTEGER);
-            }
-            if (lastProcessedPath != null) {
-                cs.setString(5, lastProcessedPath);
-            } else {
-                cs.setNull(5, Types.VARCHAR);
-            }
-            if (lastProcessedIndex != null) {
-                cs.setInt(6, lastProcessedIndex);
-            } else {
-                cs.setNull(6, Types.INTEGER);
-            }
-            
-            cs.execute();
+            updateProgressInTransaction(con, jobId, totalFilesFound, totalFilesProcessed,
+                    totalSpacesCreated, lastProcessedPath, lastProcessedIndex);
             return true;
-            
+
         } catch (SQLException e) {
             log.error("updateProgress", "Failed to update progress for job " + jobId, e);
             return false;
         } finally {
-            Common.safeClose(cs);
             Common.safeClose(con);
         }
     }
     
     /**
-     * Marks a job as completed successfully.
-     * 
-     * @param jobId The job ID
-     * @return true if successful, false otherwise
+     * Writes upload progress using the caller's connection, so the update commits with
+     * whatever else that transaction is doing.
+     *
+     * <p>The asynchronous upload path uses this to checkpoint {@code last_processed_path}
+     * in the same transaction that inserts the batch. Writing the checkpoint separately
+     * would let a crash land between the two, and the retry would then re-insert
+     * benchmarks that were already committed — duplicating rows and, since the disk
+     * accounting was fixed, charging their bytes to the user twice.
+     *
+     * <p>Every counter argument is merged monotonically by
+     * {@code starexec.update_upload_job_progress}; nulls leave the stored value alone.
      */
-    public static boolean completeJob(long jobId) {
-        try {
-            boolean completed = Common.<Boolean, SQLException>runInTransaction(con -> completeJobInTransaction(con, jobId));
-            if (completed) {
-                log.info("completeJob", "Completed upload job " + jobId);
+    public static void updateProgressInTransaction(Connection con, long jobId,
+                                                   Integer totalFilesFound,
+                                                   Integer totalFilesProcessed,
+                                                   Integer totalSpacesCreated,
+                                                   String lastProcessedPath,
+                                                   Integer lastProcessedIndex) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(UPDATE_PROGRESS_SQL)) {
+            ps.setLong(1, jobId);
+            setNullableInt(ps, 2, totalFilesFound);
+            setNullableInt(ps, 3, totalFilesProcessed);
+            setNullableInt(ps, 4, totalSpacesCreated);
+            if (lastProcessedPath != null) {
+                ps.setString(5, lastProcessedPath);
+            } else {
+                ps.setNull(5, Types.VARCHAR);
             }
-            return completed;
-        } catch (SQLException e) {
-            log.error("completeJob", "Failed to complete job " + jobId, e);
-            return false;
+            setNullableInt(ps, 6, lastProcessedIndex);
+            ps.execute();
         }
     }
 
-    static boolean completeJobInTransaction(Connection con, long jobId) throws SQLException {
-        try (CallableStatement cs = con.prepareCall(COMPLETE_JOB_SQL)) {
-            cs.setLong(1, jobId);
-            cs.execute();
+    private static void setNullableInt(PreparedStatement ps, int index, Integer value) throws SQLException {
+        if (value != null) {
+            ps.setInt(index, value);
+        } else {
+            ps.setNull(index, Types.INTEGER);
+        }
+    }
+
+    /**
+     * Records the authoritative number of benchmark files this job will process,
+     * replacing the estimate written while the archive was being extracted.
+     *
+     * <p>That estimate counts every extracted file, including those the benchmark
+     * traversal discards, so leaving it in place makes {@code total_files_processed <
+     * total_files_found} on a wholly successful upload — which
+     * {@code complete_upload_job} reports as COMPLETED_WITH_ERRORS. Call this once the
+     * real count is known.
+     */
+    public static boolean setTotalFilesFound(long jobId, int totalFilesFound) {
+        // Closed through Common.safeClose rather than try-with-resources: safeClose also
+        // decrements the connectionsOpened counter that getConnection incremented, and
+        // that counter is how this codebase detects pool leaks. A plain close() returns
+        // the connection but leaves the count inflated forever, so the leak detector
+        // reports drift that never happened.
+        Connection con = null;
+        try {
+            con = Common.getConnection();
+            try (PreparedStatement ps = con.prepareStatement(SET_TOTAL_FILES_SQL)) {
+                ps.setLong(1, jobId);
+                ps.setInt(2, totalFilesFound);
+                ps.execute();
+            }
+            return true;
+        } catch (SQLException e) {
+            log.error("setTotalFilesFound", "Failed to set total files for job " + jobId, e);
+            return false;
+        } finally {
+            Common.safeClose(con);
+        }
+    }
+
+    /** Outcome reported when the completion call itself failed. */
+    public static final String COMPLETION_ERROR = "ERROR";
+
+    /**
+     * True when an outcome from {@link #completeJob} means the job reached a completed
+     * state. {@code COMPLETED_WITH_ERRORS} counts as completed: the benchmarks were
+     * inserted, some files were merely skipped.
+     */
+    public static boolean isCompletedOutcome(String outcome) {
+        return "COMPLETED".equals(outcome) || "COMPLETED_WITH_ERRORS".equals(outcome);
+    }
+
+    /**
+     * Marks a job as completed successfully.
+     *
+     * @param jobId The job ID
+     * @return the outcome reported by {@code starexec.complete_upload_job}: {@code
+     *         COMPLETED}, {@code COMPLETED_WITH_ERRORS}, {@code NOT_FOUND}, {@code
+     *         CANCEL_REQUESTED}, {@code NOT_PROCESSING:<status>}, or {@link
+     *         #COMPLETION_ERROR} when the call itself failed. Test it with {@link
+     *         #isCompletedOutcome}; the string carries the reason so callers can report
+     *         something more useful than a bare failure.
+     */
+    public static String completeJob(long jobId) {
+        try {
+            String outcome = Common.<String, SQLException>runInTransaction(con -> completeJobInTransaction(con, jobId));
+            if (isCompletedOutcome(outcome)) {
+                log.info("completeJob", "Completed upload job " + jobId + " (" + outcome + ")");
+            } else {
+                log.warn("completeJob", "Upload job " + jobId + " was not completed: " + outcome);
+            }
+            return outcome;
+        } catch (SQLException e) {
+            log.error("completeJob", "Failed to complete job " + jobId, e);
+            return COMPLETION_ERROR;
+        }
+    }
+
+    static String completeJobInTransaction(Connection con, long jobId) throws SQLException {
+        String outcome = COMPLETION_ERROR;
+        try (PreparedStatement ps = con.prepareStatement(COMPLETE_JOB_SQL)) {
+            ps.setLong(1, jobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    outcome = rs.getString(1);
+                }
+            }
         }
 
-        UploadJob job = getJobInTransaction(con, jobId).orElse(null);
-        if (job != null && ("COMPLETED".equals(job.getStatus()) || "COMPLETED_WITH_ERRORS".equals(job.getStatus()))) {
+        if (isCompletedOutcome(outcome)) {
             activateSourceArchiveRetention(con, jobId);
-            return true;
         }
-        return false;
+        return outcome;
     }
     
     /**
@@ -470,18 +540,6 @@ public class UploadJobQueue {
             Common.safeClose(ps);
             Common.safeClose(con);
         }
-    }
-
-    static Optional<UploadJob> getJobInTransaction(Connection con, long jobId) throws SQLException {
-        try (PreparedStatement ps = con.prepareStatement(GET_JOB_BY_ID_SQL)) {
-            ps.setLong(1, jobId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return Optional.of(mapResultSetToJob(rs));
-                }
-            }
-        }
-        return Optional.empty();
     }
 
     /**
