@@ -389,7 +389,15 @@ public class ContainerJobMonitor {
 
         // 1. Parse runsolver output (var.out)
         RunsolverStats stats = parseRunsolverOutput(outputPath);
-        stats.exitCode = info.exitCode; // Use container exit code as fallback
+        // Only when runsolver did not report one. This assignment was unconditional
+        // despite its comment, so the child's real exit status -- read from
+        // "Child status: N" in watcher.out -- was always discarded in favour of the
+        // container's. A wrapper that exits zero over a failed solver then looked
+        // successful. exitCodeReported distinguishes "runsolver said 0" from "runsolver
+        // said nothing", which a plain 0 cannot.
+        if (!stats.exitCodeReported) {
+            stats.exitCode = info.exitCode;
+        }
 
         // 2. Determine job status from stats
         StatusCode status = determineStatus(stats, outputPath);
@@ -417,22 +425,23 @@ public class ContainerJobMonitor {
     private RunsolverStats parseRunsolverOutput(Path outputDir) {
         RunsolverStats stats = new RunsolverStats();
 
-        // Try stats.json first (written by functions.bash in container mode)
-        Path statsJson = outputDir.resolve("stats.json");
-        if (Files.exists(statsJson)) {
-            try {
-                String json = Files.readString(statsJson);
-                parseStatsJson(json, stats);
-                log.debug("Parsed stats from stats.json");
-                return stats;
-            } catch (IOException e) {
-                log.warn(
-                    "Failed to parse stats.json, falling back to var.out",
-                    e
-                );
-            }
-        }
-
+        // stats.json (written by functions.bash in container mode) carries timings and
+        // sizes. It carries NO resource-limit information -- containerWriteStats writes
+        // wallclockTime, cpuTime, userTime, systemTime, maxVirtualMemory,
+        // maxResidentSetSize, diskSize and hostname, and nothing else.
+        //
+        // wallclockExceeded, cpuExceeded and memoryExceeded are set only by
+        // parseWatcherLine, from runsolver's own watcher.out. So returning here once
+        // stats.json was found left all three false, and determineStatus then fell
+        // through to STATUS_COMPLETE: in container mode a solver that exhausted its
+        // wallclock, CPU or memory limit was recorded as having finished successfully,
+        // whenever the container itself exited zero.
+        //
+        // The two files are complementary rather than alternatives, so read both.
+        // watcher.out exists in container mode -- updateStats in functions.bash awks it
+        // for "Child status" and "maximum resident set size" on the same path that
+        // writes stats.json -- and the block below already guards on its existence, so
+        // an installation that somehow lacks it behaves exactly as before.
         // Parse var.out
         Path varFile = outputDir.resolve("var.out");
         if (Files.exists(varFile)) {
@@ -456,6 +465,21 @@ public class ContainerJobMonitor {
                 }
             } catch (IOException e) {
                 log.warn("Failed to parse watcher.out", e);
+            }
+        }
+
+        // stats.json last, so it stays authoritative for the fields it carries and this
+        // remains a purely additive change: in container mode the timings are exactly
+        // what they were before, and the only difference is that the limit flags read
+        // from watcher.out above now survive instead of being skipped.
+        Path statsJson = outputDir.resolve("stats.json");
+        if (Files.exists(statsJson)) {
+            try {
+                String json = Files.readString(statsJson);
+                parseStatsJson(json, stats);
+                log.debug("Parsed stats from stats.json");
+            } catch (IOException e) {
+                log.warn("Failed to parse stats.json; using var.out and watcher.out only", e);
             }
         }
 
@@ -597,6 +621,7 @@ public class ContainerJobMonitor {
             (m = Pattern.compile("Child status: (\\d+)").matcher(line)).find()
         ) {
             stats.exitCode = Integer.parseInt(m.group(1));
+            stats.exitCodeReported = true;
         } else if (
             (m = Pattern.compile("maximum resident set size: (\\d+)").matcher(
                     line
@@ -794,6 +819,8 @@ public class ContainerJobMonitor {
         public long diskSize = 0;
         public int stageNumber = 1;
         public int exitCode = 0;
+        /** True once runsolver reported a child status; 0 alone cannot say. */
+        public boolean exitCodeReported = false;
         public boolean wallclockExceeded = false;
         public boolean cpuExceeded = false;
         public boolean memoryExceeded = false;
