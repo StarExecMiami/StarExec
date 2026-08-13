@@ -67,6 +67,13 @@ public class LocalJobMonitor {
     private final ConcurrentHashMap<String, Integer> trackedPairs = new ConcurrentHashMap<>();
     private final Set<Integer> processedPairIds = ConcurrentHashMap.newKeySet();
 
+    // Consecutive polls on which status.json could not be parsed for a pair. The file is
+    // written in place, so a read can land mid-write; that is transient and must not be
+    // recorded as a failed run. A file that is genuinely corrupt must not be retried
+    // forever either, so give up after this many attempts.
+    private final ConcurrentHashMap<Integer, Integer> statusParseFailures = new ConcurrentHashMap<>();
+    private static final int MAX_STATUS_PARSE_FAILURES = 3;
+
     public LocalJobMonitor() {
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "LocalJobMonitor");
@@ -183,10 +190,15 @@ public class LocalJobMonitor {
             }
         }
 
-        // Also remove the processed status file entry so it gets reprocessed
-        if (removedLogDir != null) {
-            boolean removed = processedPairIds.remove(pairId);
+        // Unconditionally, not only when a logDir entry was found. This removal is what
+        // lets a rerun be processed at all, and gating it on the trackedPairs lookup
+        // meant that a pair whose logDir entry had gone for any reason stayed in
+        // processedPairIds and was skipped forever. A stale parse-failure count would
+        // likewise carry into the new run.
+        boolean removed = processedPairIds.remove(pairId);
+        statusParseFailures.remove(pairId);
 
+        if (removedLogDir != null) {
             log.info(
                     "Cleared tracking for pairId=" +
                             pairId +
@@ -332,6 +344,14 @@ public class LocalJobMonitor {
                                                 pairId +
                                                 " due to processing error");
                                 processedPairIds.add(pairId);
+                                // Stop tracking the directory too. Left in place it was
+                                // counted as work on every later poll, which held the
+                                // adaptive interval at its base and never let the poller
+                                // back off, while the map grew with every failed job.
+                                // Safe now that clearPairTracking no longer depends on
+                                // finding this entry to let a rerun through.
+                                trackedPairs.remove(logDir);
+                                statusParseFailures.remove(pairId);
                             } catch (Exception ex) {
                                 log.error(
                                         "Monitor: CRITICAL - Cannot set error status for pairId=" +
@@ -397,6 +417,24 @@ public class LocalJobMonitor {
 
         // 1. Read status and stageNumber from status.json (single Gson parse)
         StatusAndStage ss = readStatusFile(outputDir, pairId);
+        if (ss == null) {
+            // Not readable yet, most likely read while the producer was writing it.
+            // Leave the pair tracked and unprocessed so the next poll tries again, and
+            // only call it a failure once it has stayed unreadable for several polls --
+            // a file that is genuinely corrupt must not be retried forever either.
+            int failures = statusParseFailures.merge(pairId, 1, Integer::sum);
+            if (failures < MAX_STATUS_PARSE_FAILURES) {
+                log.info("status.json for pairId=" + pairId + " unreadable ("
+                        + failures + "/" + MAX_STATUS_PARSE_FAILURES + "); retrying next poll");
+                return false;
+            }
+            log.error("status.json for pairId=" + pairId + " has been unreadable for "
+                    + failures + " consecutive polls; recording it as a runscript error");
+            statusParseFailures.remove(pairId);
+            ss = new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+        } else {
+            statusParseFailures.remove(pairId);
+        }
 
         // 2. Parse runsolver stats if available
         RunSolverStats stats = parseRunSolverStats(outputDir);
@@ -438,8 +476,12 @@ public class LocalJobMonitor {
             JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
 
             if (!obj.has("status")) {
-                log.warn("Could not parse status from status.json for pairId=" + pairId);
-                return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+                // Present but without the field yet: the producer writes this file in
+                // place, so a read can land mid-write. Treat it as not-ready rather than
+                // as a failed run; the caller retries and gives up only after several
+                // consecutive attempts.
+                log.warn("status.json for pairId=" + pairId + " has no status field yet");
+                return null;
             }
 
             int statusCode = obj.get("status").getAsInt();
@@ -449,9 +491,19 @@ public class LocalJobMonitor {
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
             return new StatusAndStage(resolved, stageNumber);
-        } catch (IOException e) {
-            log.error("Failed to read status.json for pairId=" + pairId, e);
-            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+        } catch (IOException | com.google.gson.JsonParseException | IllegalStateException e) {
+            // JsonParser.parseString throws JsonSyntaxException -- a RuntimeException --
+            // on a truncated file, and getAsJsonObject throws IllegalStateException when
+            // the partial content is not yet an object. Neither was caught here, so both
+            // escaped to the poll loop's catch(Exception), which recorded ERROR_RUNSCRIPT
+            // and marked the pair processed: one unlucky read during a write turned a
+            // healthy run into a permanent failure that was never retried.
+            //
+            // Returning null says "not readable yet" instead. That is not the same as
+            // catching the exception and returning the old error sentinel, which would
+            // have produced the identical permanent failure by a tidier route.
+            log.warn("status.json for pairId=" + pairId + " is not readable yet: " + e.getMessage());
+            return null;
         }
     }
 
