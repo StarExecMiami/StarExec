@@ -631,4 +631,54 @@
         </plugins>
     </build>
 
+    <profiles>
+        <!--
+            Integration tests that need a real PostgreSQL.
+
+                mvn verify -Pit -pl starexec-app
+
+            Deliberately not part of the default build: it starts a container and applies
+            the whole migration chain, which takes far too long to sit in front of every
+            `mvn test`.
+
+            Why this profile exists at all: PostgreSQL plans a PL/pgSQL body lazily, at
+            call time, so CREATE FUNCTION accepts a routine that can never run. Applying
+            the migrations proves the text parsed and nothing more, and the unit suite
+            never touches the database. Routines that could not execute have reached the
+            default branch of this repository more than once.
+
+            No new dependencies. The test shells out to podman or docker rather than
+            using Testcontainers, because docker-java is already a production compile
+            dependency here (PodmanBackend) and Testcontainers ships its own copy;
+            putting a second version on the classpath to test SQL is a poor trade. The
+            test skips itself when no container runtime is present, so it cannot break a
+            build on a machine that cannot run it.
+        -->
+        <profile>
+            <id>it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.2.5</version>
+                        <configuration>
+                            <includes>
+                                <include>**/*IT.java</include>
+                            </includes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>
