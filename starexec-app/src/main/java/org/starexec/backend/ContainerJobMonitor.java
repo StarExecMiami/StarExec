@@ -443,6 +443,27 @@ public class ContainerJobMonitor {
      * Parses runsolver var.out and watcher.out files.
      * Also checks for stats.json as an alternative format.
      */
+    /**
+     * True if any source yielded a measurement, i.e. we learned something about this run.
+     *
+     * <p>Every field of {@link RunsolverStats} starts at zero, so an all-zero object is
+     * indistinguishable from "nothing was parsed" -- and that is precisely the case in
+     * which the values must not be written. A real run always reports a positive
+     * wallclock: runsolver measures wall time as a float and no process takes literally
+     * zero seconds. {@code exitCodeReported} is included because a solver that exited
+     * immediately with a status is a run we did observe.
+     */
+    private static boolean hasAnyMeasurement(RunsolverStats stats) {
+        return stats.wallclockTime > 0
+            || stats.cpuTime > 0
+            || stats.userTime > 0
+            || stats.systemTime > 0
+            || stats.maxVirtualMemory > 0
+            || stats.maxResidentSetSize > 0
+            || stats.diskSize > 0
+            || stats.exitCodeReported;
+    }
+
     private RunsolverStats parseRunsolverOutput(Path outputDir) {
         RunsolverStats stats = new RunsolverStats();
 
@@ -796,7 +817,29 @@ public class ContainerJobMonitor {
             log.warn("Failed to set end_time for pair " + pairId, e);
         }
 
-        // Persist run stats (if available) using JobPairs.updateRunSolverStats
+        // Persist run stats using JobPairs.updateRunSolverStats.
+        //
+        // Only when we actually parsed something. RunsolverStats initialises every
+        // measurement to 0, so if var.out, watcher.out and stats.json were all missing
+        // or unparseable, writing unconditionally pushed wallclock=0, cpu=0, max_vmem=0
+        // into jobpair_stage_data through UpdatePairRunSolverStats -- a solver that ran
+        // for an hour recorded as having taken no time. On a platform whose numbers
+        // decide published rankings that is a wrong result, not a missing one, and the
+        // only trace it left was a debug line.
+        //
+        // LocalJobMonitor has always guarded this; the container path -- the one every
+        // current deployment uses -- did not.
+        if (!hasAnyMeasurement(stats)) {
+            // Deliberately warn rather than debug: a completed run that yielded no
+            // parseable output is a fault worth seeing, and staying silent about it is
+            // how this stayed invisible.
+            log.warn(
+                "No parseable runsolver output for pair " + pairId +
+                " (no var.out, watcher.out or stats.json field was read); leaving the" +
+                " recorded measurements untouched rather than overwriting them with zeros"
+            );
+            return;
+        }
         try {
             String nodeName = (stats.hostname != null &&
                     !stats.hostname.isEmpty())
@@ -811,7 +854,14 @@ public class ContainerJobMonitor {
                 stats.systemTime,
                 stats.maxVirtualMemory,
                 stats.maxResidentSetSize,
-                stats.stageNumber,
+                // The caller's stageNumber, not stats.stageNumber. Both originate from
+                // CURRENT_STAGE_NUMBER in functions.bash and normally agree, but
+                // stats.stageNumber falls back to 1 when stats.json is absent, while
+                // this parameter is the stage read from status.json and already used
+                // for the status write above. Using it keeps the stats and the status
+                // on the same row by construction, instead of landing the stats on
+                // stage 1 or raising "Stage not found" into a swallowed exception.
+                stageNumber,
                 stats.diskSize
             );
             if (ok) {

@@ -301,4 +301,65 @@ public class ContainerJobMonitorTests {
             flag(stats, "memoryExceeded")
         );
     }
+
+    // ---------------------------------------------------------------------
+    // M1 -- a run we learned nothing about must not be written as zeros.
+    //
+    // Every RunsolverStats field starts at 0, so an unparseable run is
+    // indistinguishable from a run that took no time. Writing it recorded
+    // wallclock=0, cpu=0, max_vmem=0 over real measurements.
+    // ---------------------------------------------------------------------
+
+    /** Watcher.hh:454/457 — {@code var << "WCTIME=" ...}, {@code "CPUTIME=" ...}. */
+    private static final String VAR_OUT_REAL_RUN = "WCTIME=12.34\nCPUTIME=11.5\n";
+
+    private boolean hasAnyMeasurement(Object stats) throws Exception {
+        Method m = ContainerJobMonitor.class.getDeclaredMethod(
+            "hasAnyMeasurement", stats.getClass());
+        m.setAccessible(true);
+        return (Boolean) m.invoke(null, stats);
+    }
+
+    @Test
+    public void anOutputDirectoryWithNothingInItIsNotAMeasurement() throws Exception {
+        java.nio.file.Path empty = java.nio.file.Files.createTempDirectory("cjm-empty");
+        empty.toFile().deleteOnExit();
+
+        assertFalse(
+            "an unparseable run must not look like a measurement, or its zeros get"
+                + " written over the real recorded values",
+            hasAnyMeasurement(parseRunsolverOutput(empty))
+        );
+    }
+
+    @Test
+    public void anUnparseableStatsJsonIsNotAMeasurement() throws Exception {
+        Object stats = parseRunsolverOutput(outputDirWith("{ this is not json", null));
+
+        assertFalse(
+            "a corrupt stats.json yields all-zero fields; that must not be persisted",
+            hasAnyMeasurement(stats)
+        );
+    }
+
+    /**
+     * Positive control. Without it the two tests above would pass against a
+     * hasAnyMeasurement that always returned false, which would silently stop
+     * recording every run -- trading a corrupting write for a total loss.
+     */
+    @Test
+    public void aRealRunIsAMeasurement() throws Exception {
+        assertTrue(
+            "a run with timings in var.out must still be persisted",
+            hasAnyMeasurement(parseRunsolverOutputWithVar(VAR_OUT_REAL_RUN))
+        );
+    }
+
+    /** Writes only a var.out, the file runsolver always produces. */
+    private Object parseRunsolverOutputWithVar(String varOut) throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("cjm-var");
+        dir.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(dir.resolve("var.out"), varOut);
+        return parseRunsolverOutput(dir);
+    }
 }
