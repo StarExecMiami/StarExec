@@ -3430,7 +3430,11 @@ public class RESTServices {
 		Connection commandConnection = RESTHelpers.instantiateConnectionForCopyToStardev(instance, request);
 		int loginStatus = commandConnection.login();
 		if (loginStatus < 0) {
-			new ValidatorStatusCode(false, org.starexec.command.Status.getStatusMessage(loginStatus));
+			// The result used to be constructed and dropped, with no return, so a failed
+			// login fell through and the calls below ran on an unauthenticated
+			// connection. The sibling endpoint copyPrimitiveToStarDev returns here.
+			return gson.toJson(
+					new ValidatorStatusCode(false, org.starexec.command.Status.getStatusMessage(loginStatus)));
 		}
 		int spaceId = Integer.parseInt(request.getParameter(R.COPY_TO_STARDEV_SPACE_ID_PARAM));
 		try {
