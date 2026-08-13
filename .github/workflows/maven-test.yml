@@ -44,6 +44,36 @@ jobs:
       - name: Run unit tests
         run: mvn clean test -pl starexec-app
 
+      # Surefire matches **/*Test.java and **/*Tests.java, which do not match *IT.java,
+      # so the step above runs none of the stored routines. Without this step the
+      # StoredRoutineSmokeIT added for exactly that purpose never executed in CI.
+      - name: Run stored-routine integration tests
+        run: mvn verify -Pit -pl starexec-app -Dsurefire.skip=true
+
+      - name: Assert the integration tests actually executed
+        run: |
+          # The IT calls assumeTrue and skips itself when no container runtime is
+          # present. A skip must not read as a pass -- the whole point of this job is
+          # to prove the stored routines really execute against a live PostgreSQL.
+          report=starexec-app/target/failsafe-reports/org.starexec.test.integration.StoredRoutineSmokeIT.txt
+          if [ ! -f "$report" ]; then
+            echo "::error::No failsafe report at $report - the integration test never ran."
+            ls -R starexec-app/target/failsafe-reports 2>/dev/null || echo "(no failsafe-reports directory)"
+            exit 1
+          fi
+          cat "$report"
+          run=$(sed -n 's/.*Tests run: \([0-9]*\).*/\1/p' "$report" | head -1)
+          skipped=$(sed -n 's/.*Skipped: \([0-9]*\).*/\1/p' "$report" | head -1)
+          if [ "${run:-0}" -eq 0 ]; then
+            echo "::error::StoredRoutineSmokeIT reported 0 tests run."
+            exit 1
+          fi
+          if [ "${skipped:-0}" -ne 0 ]; then
+            echo "::error::StoredRoutineSmokeIT skipped ${skipped} test(s) - no container runtime? CI must execute them."
+            exit 1
+          fi
+          echo "✓ StoredRoutineSmokeIT executed ${run} tests, 0 skipped"
+
       - name: Verify multi-module structure
         run: |
           echo "Verifying multi-module build structure..."
