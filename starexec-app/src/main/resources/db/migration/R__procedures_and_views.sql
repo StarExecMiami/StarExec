@@ -1629,6 +1629,8 @@ DECLARE
     _nodeId INT;
     _jobId INT;
     _userId INT;
+    _priorDiskSize BIGINT;
+    _delta BIGINT;
 BEGIN
     SELECT id INTO _nodeId FROM starexec.nodes WHERE name = _nodeName;
     IF NOT FOUND THEN
@@ -1655,8 +1657,37 @@ BEGIN
             MESSAGE = format('Job for job pair %s not found', _jobPairId);
     END IF;
 
+    -- Charge the DIFFERENCE against what this stage already accounts for, not the whole
+    -- figure. This procedure is reachable more than once for the same pair and stage:
+    -- the compute node writes its statistics to stats.json, which no monitor deletes or
+    -- marks consumed, so a redelivery, a monitor restart or a reconciliation pass reads
+    -- the same file again. Adding _diskSize unconditionally charged the user twice while
+    -- the stage row below merely overwrote the old value, and the refund path subtracts
+    -- only the current stage total -- so the surplus was permanent and quota enforcement
+    -- drifted upward for the rest of the account's life.
+    --
+    -- Taking the difference makes the procedure idempotent for every caller, including
+    -- the bash on the execution node, without any of them changing. That matters: the
+    -- node script is deployed separately and cannot be assumed to match this schema.
+    --
+    -- FOR UPDATE serialises concurrent updates of the same stage, which would otherwise
+    -- both read the same prior value and both add the full amount. job_pairs was already
+    -- locked above, so this preserves the job_pairs -> jobpair_stage_data order that
+    -- every routine touching both tables uses.
+    SELECT disk_size INTO _priorDiskSize
+    FROM starexec.jobpair_stage_data
+    WHERE jobpair_id = _jobPairId AND stage_number = _stageNumber
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
+    END IF;
+
+    _delta := _diskSize - COALESCE(_priorDiskSize, 0);
+
     UPDATE users
-    SET disk_size = disk_size + _diskSize
+    SET disk_size = disk_size + _delta
     WHERE id = _userId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -1679,7 +1710,9 @@ BEGIN
             MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
     END IF;
 
-    UPDATE jobs SET disk_size = disk_size + _diskSize WHERE id = _jobId;
+    -- Same difference, for the same reason: the job total drifted upward on every
+    -- redelivery exactly as the user total did.
+    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
