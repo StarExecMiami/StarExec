@@ -208,14 +208,19 @@ public class ContainerJobMonitor {
      * completed just before teardown, preventing pairs from being left in
      * RUNNING status with no container to recover from.</p>
      *
-     * <p>Thread safety: sets running=false and cancels pending poll before
-     * performing the final scan to prevent races with the scheduled poll.</p>
+     * <p>Thread safety: clearing running stops another poll being scheduled, and
+     * cancelling the pending future stops one that has not started yet. Neither stops a
+     * poll that is already executing -- {@code cancel(false)} does not interrupt it --
+     * so the mutual exclusion that actually prevents the final scan from running
+     * alongside it lives on {@link #checkCompletedJobs()}. This comment previously
+     * claimed the cancel was sufficient; it is not.</p>
      */
     public void drainAndStop() {
         log.info("ContainerJobMonitor: draining final completions before stop...");
         running = false;
 
-        // Cancel any pending poll so we don't race with it
+        // Stops a poll that has not started. One already running is handled by the
+        // lock on checkCompletedJobs, which the final scan below must acquire.
         if (scheduledPoll != null) {
             scheduledPoll.cancel(false);
         }
@@ -259,7 +264,23 @@ public class ContainerJobMonitor {
     /**
      * Checks for completed containers and processes their results.
      */
-    private void checkCompletedJobs() {
+    /**
+     * Synchronized because two threads can reach it: the scheduler thread on its normal
+     * poll, and the shutdown thread through {@link #drainAndStop()}. The scheduler is
+     * single-threaded, so polls never overlap each other -- shutdown is the only other
+     * entrant.
+     *
+     * <p>Without this, a drain beginning while a poll was in flight had both threads
+     * fetching the same completed containers and processing them concurrently: two sets
+     * of database writes for one result, and two attempts to remove the same container.
+     * There is no per-container claim or idempotency key here to fall back on.
+     * {@code scheduledPoll.cancel(false)} does not help, because it will not interrupt a
+     * task that has already started.
+     *
+     * <p>The cost is that shutdown waits for an in-flight poll to finish. That is what
+     * draining means.
+     */
+    private synchronized void checkCompletedJobs() {
         try {
             // Get all completed containers that haven't been processed
             List<PodmanBackend.CompletedContainerInfo> completedJobs =

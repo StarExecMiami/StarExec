@@ -134,6 +134,55 @@ public class ContainerJobMonitorTests {
         return f.getDouble(stats);
     }
 
+    /**
+     * A drain beginning while a poll is in flight must not process the same completed
+     * containers twice. The scheduler is single-threaded, so the shutdown thread is the
+     * only other entrant; cancel(false) does not stop a poll that has already started.
+     *
+     * <p>This measures actual overlap rather than asserting the method carries a
+     * modifier: the mocked backend records how many callers are inside it at once.
+     * Without mutual exclusion the observed maximum is 2.
+     */
+    @Test
+    public void concurrentPollAndDrainDoNotOverlap() throws Exception {
+        final java.util.concurrent.atomic.AtomicInteger inside =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger maxInside =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+        when(backend.getCompletedContainers()).thenAnswer(inv -> {
+            maxInside.accumulateAndGet(inside.incrementAndGet(), Math::max);
+            Thread.sleep(120);
+            inside.decrementAndGet();
+            return java.util.Collections.emptyList();
+        });
+
+        Method check = ContainerJobMonitor.class.getDeclaredMethod("checkCompletedJobs");
+        check.setAccessible(true);
+
+        Runnable call = () -> {
+            try {
+                check.invoke(monitor);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+
+        Thread poll = new Thread(call, "test-poll");
+        Thread drain = new Thread(call, "test-drain");
+        poll.start();
+        Thread.sleep(20);   // let the first one get inside
+        drain.start();
+        poll.join(5000);
+        drain.join(5000);
+
+        assertEquals(
+            "poll and drain must not be inside checkCompletedJobs at the same time",
+            1,
+            maxInside.get()
+        );
+    }
+
     @Test
     public void statsJsonDoesNotSuppressWallclockLimitDetection() throws Exception {
         java.nio.file.Path dir = outputDirWith(
