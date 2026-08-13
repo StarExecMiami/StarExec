@@ -17,6 +17,7 @@ import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 
 /**
@@ -340,14 +341,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             111,
                             1,
                             StatusCode.STATUS_COMPLETE.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(false, true);
+                .thenReturn(PairStatusResult.FAILED, PairStatusResult.APPLIED);
 
             assertFalse(callback.onJobComplete(11, "job-11"));
             assertEquals("job-11", execToJob.get(11));
@@ -355,6 +357,56 @@ public class KubernetesNativeBackendTests {
             assertEquals(Path.of("/tmp/output/11"), execToOut.get(11));
 
             assertTrue(callback.onJobComplete(11, "job-11"));
+            assertTrue(execToJob.isEmpty());
+            assertTrue(execToPair.isEmpty());
+            assertTrue(execToOut.isEmpty());
+        }
+    }
+
+    /**
+     * A pair that already holds a different terminal status must be treated as handled,
+     * not retried. Retrying cannot ever succeed -- the status write is refused every time
+     * -- and because the caller only records the exec id as complete when this returns
+     * true, returning false would make the next poll process the same job again without
+     * end. Tracking must still be cleared so the Kubernetes job is cleaned up.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void completionCallbackTreatsSupersededStatusAsHandled() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+
+        execToJob.put(21, "job-21");
+        execToPair.put(21, 211);
+        execToOut.put(21, Path.of("/tmp/output/21"));
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(211))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPreciseResult(
+                            211,
+                            1,
+                            StatusCode.STATUS_COMPLETE.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
+                        )
+                )
+                .thenReturn(PairStatusResult.SUPERSEDED);
+
+            assertTrue(callback.onJobComplete(21, "job-21"));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
@@ -434,15 +486,16 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             313,
                             1,
                             StatusCode.STATUS_COMPLETE.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
                 .thenThrow(new RuntimeException("db down"))
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
 
             assertFalse(callback.onJobComplete(13, "job-13"));
             assertEquals("job-13", execToJob.get(13));

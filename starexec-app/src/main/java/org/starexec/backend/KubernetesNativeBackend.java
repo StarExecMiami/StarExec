@@ -113,6 +113,7 @@ import java.util.concurrent.TimeUnit;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -1894,19 +1895,32 @@ public class KubernetesNativeBackend implements Backend {
                 int terminalStatus = readTerminalStatus(execId, StatusCode.STATUS_COMPLETE.getVal());
                 int stageNumber = readStageNumber(execId, 1);
 
-                boolean updated = JobPairs.setPairStatusPrecise(
+                PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
                     terminalStatus,
-                    StatusCode.STATUS_NOT_REACHED.getVal()
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false
                 );
-                if (!updated) {
+                if (updated == PairStatusResult.FAILED) {
                     log.warn(
                         "Failed updating completed status for pair " +
                         pairId +
                         "; Kubernetes completion will be retried"
                     );
                     return false;
+                }
+                if (updated == PairStatusResult.SUPERSEDED) {
+                    // Another writer already recorded a different terminal result, so
+                    // this pair is finished and retrying can never succeed. Returning
+                    // false here would leave the execId out of completedExecIds and the
+                    // next poll would process the same job again, forever. Treat it as
+                    // handled so the Kubernetes job is cleaned up.
+                    log.info(
+                        "Pair " + pairId +
+                        " already had a different terminal status; keeping the recorded" +
+                        " result and cleaning up the Kubernetes job"
+                    );
                 }
 
                 // Set end_time.

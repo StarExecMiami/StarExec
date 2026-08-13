@@ -2294,6 +2294,28 @@ public class JobPairs {
         int notReachedStatus,
         boolean forceOverride
     ) {
+        return setPairStatusPreciseResult(
+            pairId, stageNumber, terminalStatus, notReachedStatus, forceOverride)
+            == PairStatusResult.APPLIED;
+    }
+
+    /**
+     * As {@link #setPairStatusPrecise(int, int, int, int, boolean)}, but distinguishing a
+     * refusal from a failure.
+     *
+     * <p>Callers that own a container, pod or process for this pair need that
+     * distinction: {@link PairStatusResult#SUPERSEDED} means the pair is finished and the
+     * resource should be released, while {@link PairStatusResult#FAILED} means the work
+     * must stay discoverable for a later attempt. Collapsing them into a boolean forces a
+     * choice between leaking the resource and losing the result.
+     */
+    public static PairStatusResult setPairStatusPreciseResult(
+        int pairId,
+        int stageNumber,
+        int terminalStatus,
+        int notReachedStatus,
+        boolean forceOverride
+    ) {
         Connection con = null;
         PreparedStatement ps = null;
         Integer attemptNoForFinalize = null;
@@ -2319,7 +2341,7 @@ public class JobPairs {
                 // finalize a manifest on disk describing a status the database refused,
                 // leaving the filesystem and the database contradicting each other.
                 Common.doRollback(con);
-                return false;
+                return PairStatusResult.SUPERSEDED;
             }
 
             if (isTerminalStatusCode(terminalStatus)) {
@@ -2334,7 +2356,7 @@ public class JobPairs {
             if (isTerminalStatusCode(terminalStatus) && attemptNoForFinalize != null) {
                 finalizePairManifest(pairId, attemptNoForFinalize, terminalStatus);
             }
-            return true;
+            return PairStatusResult.APPLIED;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
             Common.doRollback(con);
@@ -2342,7 +2364,7 @@ public class JobPairs {
             Common.safeClose(ps);
             Common.safeClose(con);
         }
-        return false;
+        return PairStatusResult.FAILED;
     }
 
     /**

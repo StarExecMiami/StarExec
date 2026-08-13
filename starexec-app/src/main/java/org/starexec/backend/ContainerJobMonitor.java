@@ -10,6 +10,7 @@ import com.google.gson.JsonParser;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -690,12 +691,27 @@ public class ContainerJobMonitor {
         Properties attributes,
         int partitionIndex
     ) throws Exception {
-        JobPairs.setPairStatusPrecise(
+        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
             pairId,
             stageNumber,
             status.getVal(),
-            StatusCode.STATUS_NOT_REACHED.getVal()
+            StatusCode.STATUS_NOT_REACHED.getVal(),
+            false
         );
+        if (statusResult == PairStatusResult.FAILED) {
+            // The status never landed. Throwing keeps the container in place so the next
+            // poll retries; swallowing this would remove the container and lose the
+            // result permanently, since nothing else re-reads its output.
+            throw new Exception(
+                "Could not record terminal status " + status + " for pair " + pairId
+                    + " stage " + stageNumber);
+        }
+        if (statusResult == PairStatusResult.SUPERSEDED) {
+            // Someone else recorded a result first. The pair is finished; carry on and
+            // let the caller release the container rather than retrying forever.
+            log.info("Pair " + pairId + " already had a different terminal status;"
+                + " keeping the recorded result");
+        }
 
         // Set end_time. This call is non-fatal: a failure here does not prevent
         // the rest of the DB update from completing.

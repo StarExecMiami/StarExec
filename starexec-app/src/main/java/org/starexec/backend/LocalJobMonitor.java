@@ -9,6 +9,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -612,11 +613,23 @@ public class LocalJobMonitor {
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);
-        JobPairs.setPairStatusPrecise(
+        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
                 pairId,
                 stageNumber,
                 status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal());
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false);
+        if (statusResult == PairStatusResult.FAILED) {
+            // Not recorded. Throwing leaves the pair tracked so a later poll retries it;
+            // returning normally would mark it processed and the result would be lost.
+            throw new Exception(
+                    "Could not record terminal status " + status + " for pair " + pairId
+                            + " stage " + stageNumber);
+        }
+        if (statusResult == PairStatusResult.SUPERSEDED) {
+            log.info("Pair " + pairId + " already had a different terminal status;"
+                    + " keeping the recorded result");
+        }
 
         // Update attributes if any
         if (!attributes.isEmpty()) {
