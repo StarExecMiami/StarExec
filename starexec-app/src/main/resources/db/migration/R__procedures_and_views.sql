@@ -9580,22 +9580,46 @@ $$ LANGUAGE plpgsql;
 -- - Fires the job_pair_completion side-effects (insertion + job completion check) if terminalStatus is terminal
 -- This replaces the non-atomic two-call sequence of UpdatePairStatus + UpdateLaterStageStatuses.
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT) CASCADE;
-CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatusPrecise(_pairId INT, _stageNumber INT, _terminalStatus INT, _notReachedStatus INT)
-AS $$
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT, BOOLEAN) CASCADE;
+-- Returns TRUE when the pair now holds _terminalStatus, FALSE when another writer had
+-- already recorded a different terminal result and _forceOverride was not given.
+--
+-- Three outcomes, not two. Rejecting every terminal-to-terminal write would break
+-- at-least-once delivery: KubernetesNativeBackend retries whenever this reports false,
+-- so a duplicate completion event for a pair already at the right status would retry
+-- forever. A duplicate is therefore idempotent success; only a CONFLICTING terminal
+-- status is refused.
+CREATE OR REPLACE FUNCTION starexec.UpdatePairStatusPrecise(
+	_pairId INT,
+	_stageNumber INT,
+	_terminalStatus INT,
+	_notReachedStatus INT,
+	_forceOverride BOOLEAN DEFAULT FALSE
+)
+RETURNS BOOLEAN AS $$
 DECLARE
 	_job_id INT;
 	_current_status INT;
 	_count INT;
+	_duplicate BOOLEAN;
 BEGIN
-	-- Get the job_id for the completion check below
-	SELECT job_id, status_code INTO _job_id, _current_status FROM job_pairs WHERE id = _pairId;
+	-- FOR UPDATE, and on job_pairs before jobpair_stage_data: every routine touching
+	-- both tables takes them in that order, so none can deadlock against another.
+	-- Without this lock the read below is a check-then-act -- the caller in
+	-- JobPairs.tryMarkRunningAsFailed says as much, updating "outside the lock
+	-- transaction" -- which let reconciliation overwrite a result recorded in between.
+	SELECT job_id, status_code INTO _job_id, _current_status
+	FROM starexec.job_pairs WHERE id = _pairId
+	FOR UPDATE;
 	IF NOT FOUND THEN
 		RAISE EXCEPTION USING
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
 
-	-- Terminal pairs must not be moved back into an earlier non-terminal state.
+	-- Terminal pairs must not be moved back into an earlier non-terminal state. This
+	-- stays an exception rather than a FALSE return: no caller does it legitimately, so
+	-- it is a programming error, and reporting it as a lost race would hide that.
 	IF starexec.IsTerminalPairStatus(_current_status) AND NOT starexec.IsTerminalPairStatus(_terminalStatus) THEN
 		RAISE EXCEPTION USING
 			ERRCODE = 'P0001',
@@ -9607,16 +9631,29 @@ BEGIN
 			);
 	END IF;
 
-	-- Set the pair-level status
-	UPDATE job_pairs SET status_code = _terminalStatus WHERE id = _pairId;
+	_duplicate := starexec.IsTerminalPairStatus(_current_status) AND _current_status = _terminalStatus;
 
-	-- Set the terminal stage to terminalStatus
-	UPDATE jobpair_stage_data SET status_code = _terminalStatus
-	WHERE jobpair_id = _pairId AND stage_number = _stageNumber;
+	-- A different terminal status means someone already recorded a result for this
+	-- pair. Refuse, and let the caller decide; only an explicit override may replace it.
+	IF starexec.IsTerminalPairStatus(_current_status) AND NOT _duplicate AND NOT _forceOverride THEN
+		RETURN FALSE;
+	END IF;
 
-	-- Set all stages after the terminal stage to notReachedStatus
-	UPDATE jobpair_stage_data SET status_code = _notReachedStatus
-	WHERE jobpair_id = _pairId AND stage_number > _stageNumber;
+	-- Skipped for a duplicate, whose statuses are already correct. The side effects
+	-- below still run: they are idempotent, and running them repairs a pair whose
+	-- earlier attempt set the status but died before completion was recorded.
+	IF NOT _duplicate THEN
+		-- Set the pair-level status
+		UPDATE starexec.job_pairs SET status_code = _terminalStatus WHERE id = _pairId;
+
+		-- Set the terminal stage to terminalStatus
+		UPDATE starexec.jobpair_stage_data SET status_code = _terminalStatus
+		WHERE jobpair_id = _pairId AND stage_number = _stageNumber;
+
+		-- Set all stages after the terminal stage to notReachedStatus
+		UPDATE starexec.jobpair_stage_data SET status_code = _notReachedStatus
+		WHERE jobpair_id = _pairId AND stage_number > _stageNumber;
+	END IF;
 
 	-- Fire job_pair_completion side-effects if terminalStatus is a terminal status code.
 	-- Terminal codes: 7-18 (normal completion, resource limits, common errors), 21 (killed),
@@ -9640,6 +9677,8 @@ BEGIN
 			END IF;
 		END IF;
 	END IF;
+
+	RETURN TRUE;
 END;
 $$ LANGUAGE plpgsql;
 

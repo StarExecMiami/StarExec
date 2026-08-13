@@ -2273,6 +2273,27 @@ public class JobPairs {
         int terminalStatus,
         int notReachedStatus
     ) {
+        return setPairStatusPrecise(pairId, stageNumber, terminalStatus, notReachedStatus, false);
+    }
+
+    /**
+     * As {@link #setPairStatusPrecise(int, int, int, int)}, but able to replace a
+     * terminal status that was already recorded.
+     *
+     * <p>Overriding is for deliberate administrative correction only. Automated writers
+     * -- monitors and reconcilers -- must pass {@code false} and accept losing the race,
+     * or a background sweep can overwrite a real result.
+     *
+     * @return false when the pair already held a different terminal status and
+     *         {@code forceOverride} was not set. Nothing was written in that case.
+     */
+    public static boolean setPairStatusPrecise(
+        int pairId,
+        int stageNumber,
+        int terminalStatus,
+        int notReachedStatus,
+        boolean forceOverride
+    ) {
         Connection con = null;
         PreparedStatement ps = null;
         Integer attemptNoForFinalize = null;
@@ -2280,17 +2301,36 @@ public class JobPairs {
             con = Common.getConnection();
             Common.beginTransaction(con);
             ps = con.prepareStatement(
-                "CALL starexec.UpdatePairStatusPrecise(?, ?, ?, ?)"
+                "SELECT starexec.UpdatePairStatusPrecise(?, ?, ?, ?, ?)"
             );
             ps.setInt(1, pairId);
             ps.setInt(2, stageNumber);
             ps.setInt(3, terminalStatus);
             ps.setInt(4, notReachedStatus);
-            ps.execute();
+            ps.setBoolean(5, forceOverride);
+
+            boolean applied;
+            try (ResultSet rs = ps.executeQuery()) {
+                applied = rs.next() && rs.getBoolean(1);
+            }
+            if (!applied) {
+                // Another writer recorded a different terminal result first. Nothing was
+                // written, so roll back and report the loss. Falling through would
+                // finalize a manifest on disk describing a status the database refused,
+                // leaving the filesystem and the database contradicting each other.
+                Common.doRollback(con);
+                return false;
+            }
+
             if (isTerminalStatusCode(terminalStatus)) {
                 attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
             }
-            Common.endTransaction(con);
+            // Committed here rather than through endTransaction, which swallows a failed
+            // commit. The manifest is written below on the strength of this commit, so a
+            // silently rolled-back transaction would produce exactly the same
+            // disk-versus-database contradiction as the case above.
+            con.commit();
+            Common.enableAutoCommit(con);
             if (isTerminalStatusCode(terminalStatus) && attemptNoForFinalize != null) {
                 finalizePairManifest(pairId, attemptNoForFinalize, terminalStatus);
             }
@@ -3014,9 +3054,20 @@ public class JobPairs {
         // Outside the lock transaction: call the stored procedure which
         // has its own internal transaction for the update + side effects.
         try {
-            setPairStatusPrecise(pairId, 1,
+            // Never overrides. The lock taken above is released before this runs, so the
+            // monitor can record a real result in between; reconciliation has to lose
+            // that race. Reporting UPDATED unconditionally, as this did, is what allowed
+            // a genuine result to be replaced by ERROR_RUNSCRIPT and counted as a fix.
+            boolean applied = setPairStatusPrecise(pairId, 1,
                 StatusCode.ERROR_RUNSCRIPT.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal());
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false);
+            if (!applied) {
+                log.info("tryMarkRunningAsFailed", "pair " + pairId
+                        + " reached a terminal status before reconciliation could mark it"
+                        + " failed; leaving the recorded result alone");
+                return ConditionalPairUpdateResult.STALE;
+            }
             return ConditionalPairUpdateResult.UPDATED;
         } catch (Exception e) {
             log.error("tryMarkRunningAsFailed setPairStatusPrecise pairId=" + pairId, e);
