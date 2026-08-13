@@ -1081,7 +1081,7 @@ RETURNS VOID AS $$
 BEGIN
 	INSERT INTO queue_assoc
 	VALUES(
-		(SELECT id FROM starexec.starexec.queues WHERE name = _queueName),
+		(SELECT id FROM starexec.queues WHERE name = _queueName),
 		(SELECT id FROM starexec.nodes WHERE name = _nodeName))
 	ON CONFLICT DO NOTHING;
 END;
@@ -1130,7 +1130,7 @@ RETURNS TABLE(id INT, name VARCHAR, status VARCHAR, global_access BOOLEAN, cpuTi
 BEGIN
 	RETURN QUERY
 	SELECT q.id, q.name, q.status, q.global_access, q.cpuTimeout, q.clockTimeout
-	FROM starexec.starexec.queues q
+	FROM starexec.queues q
 	WHERE q.status = 'ACTIVE'
 	ORDER BY q.name;
 END;
@@ -1144,7 +1144,7 @@ RETURNS TABLE(id INT, name VARCHAR, status VARCHAR, global_access BOOLEAN, cpuTi
 BEGIN
 	RETURN QUERY
 	SELECT q.id, q.name, q.status, q.global_access, q.cpuTimeout, q.clockTimeout
-	FROM starexec.starexec.queues q
+	FROM starexec.queues q
 	ORDER BY q.id;
 END;
 $$ LANGUAGE plpgsql;
@@ -1166,7 +1166,7 @@ CREATE OR REPLACE FUNCTION starexec.GetQueue(_id INT)
 RETURNS TABLE(id INT, name VARCHAR, status VARCHAR, global_access BOOLEAN, cpuTimeout INT, clockTimeout INT) AS $$
 BEGIN
 	RETURN QUERY SELECT q.id, q.name, q.status, q.global_access, q.cpuTimeout, q.clockTimeout
-	FROM starexec.starexec.queues q WHERE q.id = _id;
+	FROM starexec.queues q WHERE q.id = _id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1281,7 +1281,7 @@ RETURNS TABLE(id INT, name VARCHAR, status VARCHAR) AS $$
 BEGIN
 	RETURN QUERY
 	SELECT q.id, q.name, q.status
-	FROM starexec.starexec.queues q, queue_assoc qa
+	FROM starexec.queues q, queue_assoc qa
 	WHERE q.id = qa.queue_id AND qa.node_id = _nodeId;
 END;
 $$ LANGUAGE plpgsql;
@@ -3899,6 +3899,10 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS starexec.PrepareJobForPostProcessing CASCADE;
 CREATE OR REPLACE FUNCTION starexec.PrepareJobForPostProcessing(_jobId INT, _procId INT, _completeStatus INT, _processingStatus INT, _stageNumber INT)
 RETURNS VOID AS $$
+DECLARE
+    -- The pairs to move, resolved once. Both tables are then updated against this
+    -- fixed set, so neither update depends on a status the other has already changed.
+    _pairIds INT[];
 BEGIN
 	PERFORM 1 FROM starexec.jobs WHERE id = _jobId;
 	IF NOT FOUND THEN
@@ -3907,27 +3911,37 @@ BEGIN
 			MESSAGE = format('Job %s not found', _jobId);
 	END IF;
 
-    UPDATE job_pairs jp
-    SET jp.status_code = _processingStatus
-    FROM starexec.jobpair_stage_data jsd
-    WHERE jsd.jobpair_id = jp.id AND jp.job_id = _jobId AND jp.status_code = _completeStatus
-    AND jsd.status_code = _completeStatus AND jsd.stage_number = _stageNumber;
-    IF NOT FOUND THEN
+    -- This procedure previously wrote "SET jp.status_code = ...". PostgreSQL does not
+    -- accept a qualified target column in SET and rejects it with 'column "jp" of
+    -- relation "job_pairs" does not exist'. PL/pgSQL plans a function body lazily, at
+    -- call time, so CREATE FUNCTION accepted it and the error only ever appeared when
+    -- post-processing was actually requested.
+    --
+    -- The two updates were also order-dependent: the first moved job_pairs off
+    -- _completeStatus, and the second then required that same status, so it matched no
+    -- rows and raised P0002 even once the syntax was corrected. Resolving the pair set
+    -- up front removes that coupling.
+    SELECT array_agg(jp.id) INTO _pairIds
+    FROM starexec.job_pairs jp
+    JOIN starexec.jobpair_stage_data jsd ON jsd.jobpair_id = jp.id
+    WHERE jp.job_id = _jobId
+      AND jp.status_code = _completeStatus
+      AND jsd.status_code = _completeStatus
+      AND jsd.stage_number = _stageNumber;
+
+    IF _pairIds IS NULL OR array_length(_pairIds, 1) = 0 THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('No job pairs in job %s with status %s for stage %s', _jobId, _completeStatus, _stageNumber);
     END IF;
 
-    UPDATE jobpair_stage_data jsd
-    SET jsd.status_code = _processingStatus
-    FROM starexec.job_pairs jp
-    WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jp.status_code = _completeStatus
-    AND jsd.status_code = _completeStatus AND jsd.stage_number = _stageNumber;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('No stage data for job %s with status %s at stage %s', _jobId, _completeStatus, _stageNumber);
-    END IF;
+    UPDATE starexec.jobpair_stage_data
+    SET status_code = _processingStatus
+    WHERE jobpair_id = ANY(_pairIds) AND stage_number = _stageNumber;
+
+    UPDATE starexec.job_pairs
+    SET status_code = _processingStatus
+    WHERE id = ANY(_pairIds);
 
     -- makes sure there is actually an entry in job_stage_params for this job / stage pair.
     INSERT INTO job_stage_params (job_id, stage_number, cpuTimeout, clockTimeout, maximum_memory, space_id, post_processor, pre_processor)
@@ -5201,7 +5215,7 @@ DROP FUNCTION IF EXISTS starexec.RemoveQueue CASCADE;
 CREATE OR REPLACE FUNCTION starexec.RemoveQueue(_queueId INT)
 RETURNS VOID AS $$
 BEGIN
-    DELETE FROM starexec.starexec.queues
+    DELETE FROM starexec.queues
     WHERE id = _queueId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -5219,7 +5233,7 @@ RETURNS TABLE(id INT) AS $$
 BEGIN
     RETURN QUERY
     SELECT q.id
-    FROM starexec.starexec.queues q
+    FROM starexec.queues q
     WHERE q.name = _queueName;
 END;
 $$ LANGUAGE plpgsql;
@@ -5299,7 +5313,7 @@ RETURNS TABLE(name VARCHAR(128)) AS $$
 BEGIN
     RETURN QUERY
     SELECT q.name
-    FROM starexec.starexec.queues q
+    FROM starexec.queues q
     WHERE q.id = _queueId;
 END;
 $$ LANGUAGE plpgsql;
@@ -5346,7 +5360,7 @@ RETURNS TABLE(global_access BOOLEAN) AS $$
 BEGIN
     RETURN QUERY
     SELECT q.global_access
-    FROM starexec.starexec.queues q
+    FROM starexec.queues q
     WHERE q.id = _queueId;
 END;
 $$ LANGUAGE plpgsql;
@@ -5477,7 +5491,7 @@ RETURNS TABLE(id INT, name VARCHAR(128), status VARCHAR(32), global_access BOOLE
 BEGIN
     RETURN QUERY
     SELECT DISTINCT q.id, q.name, q.status, q.global_access, q.cpuTimeout, q.clockTimeout
-    FROM starexec.starexec.queues q
+    FROM starexec.queues q
     LEFT JOIN comm_queue cq ON q.id = cq.queue_id
     WHERE q.status = 'ACTIVE'
     AND (
@@ -5494,7 +5508,7 @@ RETURNS TABLE(description TEXT) AS $$
 BEGIN
     RETURN QUERY
     SELECT q.description::TEXT
-    FROM starexec.starexec.queues q
+    FROM starexec.queues q
     WHERE q.id = _qID;
 END;
 $$ LANGUAGE plpgsql;
@@ -5619,7 +5633,7 @@ BEGIN
     END IF;
 
     IF _queueId IS NOT NULL THEN
-        SELECT q.name INTO _queueName FROM starexec.starexec.queues q WHERE q.id = _queueId;
+        SELECT q.name INTO _queueName FROM starexec.queues q WHERE q.id = _queueId;
         IF NOT FOUND THEN
             RAISE EXCEPTION USING
                 ERRCODE = 'P0002',

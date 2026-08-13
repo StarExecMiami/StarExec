@@ -74,7 +74,10 @@ public class Notifications {
 		PreparedStatement ps = null;
 		try {
 			con = Common.getConnection();
-			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserToJob(?,?)");
+			// The routine is named UnsubscribeUserFromJob. Calling UnsubscribeUserToJob
+			// raised undefined_function every time, so unsubscribing has never worked;
+			// no versioned migration ever defined that name as an alias.
+			ps = con.prepareStatement("SELECT starexec.UnsubscribeUserFromJob(?,?)");
 			ps.setInt(1, user);
 			ps.setInt(2, job);
 			Common.executeAndDrain(ps);
