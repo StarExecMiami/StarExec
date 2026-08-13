@@ -3383,12 +3383,16 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
-    UPDATE jobpair_stage_data jsd SET status_code = 1
-    FROM starexec.job_pairs jp
-    WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jsd.status_code = 20;
+    -- job_pairs first, then jobpair_stage_data. The two updates select on different
+    -- columns (jp.status_code vs jsd.status_code) so neither depends on the other's
+    -- effect; the order is chosen to match every other routine that locks both tables,
+    -- so that none of them can deadlock against another.
     UPDATE job_pairs
     SET status_code = 1
     WHERE job_id = _jobId AND status_code = 20;
+    UPDATE jobpair_stage_data jsd SET status_code = 1
+    FROM starexec.job_pairs jp
+    WHERE jp.id = jsd.jobpair_id AND jp.job_id = _jobId AND jsd.status_code = 20;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3935,13 +3939,17 @@ BEGIN
             MESSAGE = format('No job pairs in job %s with status %s for stage %s', _jobId, _completeStatus, _stageNumber);
     END IF;
 
-    UPDATE starexec.jobpair_stage_data
-    SET status_code = _processingStatus
-    WHERE jobpair_id = ANY(_pairIds) AND stage_number = _stageNumber;
-
+    -- job_pairs before jobpair_stage_data. The pair set is already resolved, so the two
+    -- updates are order-independent in effect and this ordering is purely about locks:
+    -- every other routine that touches both tables takes job_pairs first, and taking
+    -- them in the opposite order here would make this a deadlock counterparty.
     UPDATE starexec.job_pairs
     SET status_code = _processingStatus
     WHERE id = ANY(_pairIds);
+
+    UPDATE starexec.jobpair_stage_data
+    SET status_code = _processingStatus
+    WHERE jobpair_id = ANY(_pairIds) AND stage_number = _stageNumber;
 
     -- makes sure there is actually an entry in job_stage_params for this job / stage pair.
     INSERT INTO job_stage_params (job_id, stage_number, cpuTimeout, clockTimeout, maximum_memory, space_id, post_processor, pre_processor)
