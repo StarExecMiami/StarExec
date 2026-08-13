@@ -4,6 +4,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -63,16 +64,109 @@ public class LocalJobMonitor {
     // Handle for the currently scheduled poll (for cancellation on interval change)
     private volatile ScheduledFuture<?> scheduledPoll;
 
-    // Maps output directories to pair IDs so we can track which jobs we've seen
-    private final ConcurrentHashMap<String, Integer> trackedPairs = new ConcurrentHashMap<>();
-    private final Set<Integer> processedPairIds = ConcurrentHashMap.newKeySet();
+    // One entry per pair, keyed by pair ID.
+    //
+    // Collapsing to a single map is itself part of the fix. This used to be three maps
+    // keyed two different ways -- trackedPairs by logDir, processedPairIds and
+    // statusParseFailures by pairId -- so "what this pair is currently running" was a
+    // fact assembled by hand from three places. A rerun arriving mid-poll could update
+    // some of them while the poller was reading the others, and the poller would then
+    // write its stale conclusion over the new run: the pair ended up untracked AND
+    // marked processed, which stranded it permanently.
+    private final ConcurrentHashMap<Integer, PairExecutionState> pairs = new ConcurrentHashMap<>();
+
+    // Monotonic token stamped onto every registration. A poll captures the state it
+    // began with and refuses to write anything back unless the generation still
+    // matches. That comparison is the entire mechanism keeping run N from clobbering
+    // run N+1; nothing else here distinguishes one run of a pair from the next.
+    private final AtomicLong generationSequence = new AtomicLong();
 
     // Consecutive polls on which status.json could not be parsed for a pair. The file is
     // written in place, so a read can land mid-write; that is transient and must not be
     // recorded as a failed run. A file that is genuinely corrupt must not be retried
-    // forever either, so give up after this many attempts.
-    private final ConcurrentHashMap<Integer, Integer> statusParseFailures = new ConcurrentHashMap<>();
+    // forever either, so give up after this many attempts. The count lives inside
+    // PairExecutionState so that it is reset by a rerun as one atomic act with
+    // everything else, rather than as a separate mutation that could be missed.
     private static final int MAX_STATUS_PARSE_FAILURES = 3;
+
+    /**
+     * Immutable snapshot of one pair's current execution.
+     *
+     * <p>Immutability is deliberate. A poll holds the instance it started with and
+     * compares generations before writing anything back, so there is no window in
+     * which a half-updated state is observable. Every mutation goes through
+     * {@link ConcurrentHashMap#computeIfPresent}, which is atomic per key.
+     */
+    private static final class PairExecutionState {
+        final String logDir;
+        final long generation;
+        final int parseFailures;
+
+        PairExecutionState(String logDir, long generation, int parseFailures) {
+            this.logDir = logDir;
+            this.generation = generation;
+            this.parseFailures = parseFailures;
+        }
+
+        PairExecutionState withParseFailures(int failures) {
+            return new PairExecutionState(logDir, generation, failures);
+        }
+    }
+
+    /**
+     * True if {@code pairId} is still on the generation the caller started with, i.e.
+     * no rerun has superseded the work in flight.
+     */
+    private boolean isCurrent(int pairId, PairExecutionState state) {
+        PairExecutionState current = pairs.get(pairId);
+        return current != null && current.generation == state.generation;
+    }
+
+    /**
+     * Stops tracking a pair, but only if it has not been re-registered since the caller
+     * captured {@code state}.
+     *
+     * @return true if this call removed the pair; false if a rerun had superseded it,
+     *         in which case the caller's result belongs to a run that no longer matters
+     */
+    private boolean retire(int pairId, PairExecutionState state) {
+        final boolean[] retired = { false };
+        pairs.computeIfPresent(pairId, (key, current) -> {
+            if (current.generation == state.generation) {
+                retired[0] = true;
+                return null; // returning null removes the entry
+            }
+            return current;
+        });
+        return retired[0];
+    }
+
+    /**
+     * Increments this pair's consecutive parse-failure count.
+     *
+     * @return the new count, or -1 if a rerun superseded this run, meaning the failure
+     *         belongs to output that is no longer of interest
+     */
+    private int recordParseFailure(int pairId, PairExecutionState state) {
+        final int[] failures = { -1 };
+        pairs.computeIfPresent(pairId, (key, current) -> {
+            if (current.generation != state.generation) {
+                return current;
+            }
+            PairExecutionState next = current.withParseFailures(current.parseFailures + 1);
+            failures[0] = next.parseFailures;
+            return next;
+        });
+        return failures[0];
+    }
+
+    /** Resets the parse-failure count after a successful read, generation permitting. */
+    private void clearParseFailures(int pairId, PairExecutionState state) {
+        pairs.computeIfPresent(pairId, (key, current) ->
+                current.generation == state.generation && current.parseFailures != 0
+                        ? current.withParseFailures(0)
+                        : current);
+    }
 
     public LocalJobMonitor() {
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -91,13 +185,18 @@ public class LocalJobMonitor {
      * @param pairId The database pair ID for this job
      */
     public synchronized void registerJob(String logDir, int pairId) {
-        trackedPairs.put(logDir, pairId);
-
-        // Crucial fix: when a job is re-run, we must clear its processed status
-        // so the monitor will pick up the new run.
-        if (processedPairIds.remove(pairId)) {
-            log.debug("Cleared processed status cache for re-run pairId: " + pairId);
-        }
+        // A fresh generation supersedes whatever was in flight: a poll that started
+        // before this point finds its generation stale and declines to record its
+        // result. This single put replaces what used to be three separate mutations
+        // (track the directory, clear the processed marker, clear the parse-failure
+        // count), any prefix of which the poller could previously observe.
+        //
+        // Still synchronized: incrementAndGet and put are individually atomic but not
+        // atomic together, so two concurrent registrations of the same pair could
+        // otherwise store the lower generation last and leave the map describing an
+        // older run than the one actually starting.
+        long generation = generationSequence.incrementAndGet();
+        pairs.put(pairId, new PairExecutionState(logDir, generation, 0));
 
         // Reset poll interval to base for responsive detection of new job completion
         pollInterval.resetToBase();
@@ -110,7 +209,9 @@ public class LocalJobMonitor {
                 "Registered job for monitoring: pairId=" +
                         pairId +
                         ", logDir=" +
-                        logDir);
+                        logDir +
+                        ", generation=" +
+                        generation);
     }
 
     /**
@@ -175,44 +276,27 @@ public class LocalJobMonitor {
      * @param pairId The pair ID that is being rerun
      */
     public void clearPairTracking(int pairId) {
-        // Find and remove the logDir entry for this pairId
-        // This allows the pair to be re-registered when it's submitted again
-        String removedLogDir = null;
-        Iterator<Map.Entry<String, Integer>> it = trackedPairs
-                .entrySet()
-                .iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, Integer> entry = it.next();
-            if (entry.getValue() == pairId) {
-                removedLogDir = entry.getKey();
-                it.remove();
-                break;
-            }
-        }
+        // One removal now clears everything this pair carried: its directory, its
+        // processed status and its parse-failure count were three separate facts and
+        // are now one entry. A poll already in flight for the removed generation will
+        // find no entry to write back to and discards its result, which is exactly the
+        // outcome wanted -- that result describes the run being replaced.
+        PairExecutionState removed = pairs.remove(pairId);
 
-        // Unconditionally, not only when a logDir entry was found. This removal is what
-        // lets a rerun be processed at all, and gating it on the trackedPairs lookup
-        // meant that a pair whose logDir entry had gone for any reason stayed in
-        // processedPairIds and was skipped forever. A stale parse-failure count would
-        // likewise carry into the new run.
-        boolean removed = processedPairIds.remove(pairId);
-        statusParseFailures.remove(pairId);
-
-        if (removedLogDir != null) {
+        if (removed != null) {
             log.info(
                     "Cleared tracking for pairId=" +
                             pairId +
                             ": logDir=" +
-                            removedLogDir +
-                            ", pairId cleared: " +
-                            removed +
+                            removed.logDir +
+                            ", generation=" +
+                            removed.generation +
                             ". Monitor will reprocess status files on next poll.");
         } else {
             log.warn(
-                    "Could not find logDir for pairId=" +
+                    "No tracking entry for pairId=" +
                             pairId +
-                            " in trackedPairs. " +
-                            "Pair may not have been registered with monitor yet.");
+                            ". Pair may not have been registered with monitor yet.");
         }
     }
 
@@ -292,80 +376,79 @@ public class LocalJobMonitor {
             int checkedCount = 0;
             int foundCount = 0;
 
-            for (Map.Entry<String, Integer> entry : trackedPairs.entrySet()) {
-                String logDir = entry.getKey();
-                int pairId = entry.getValue();
+            for (Map.Entry<Integer, PairExecutionState> entry : pairs.entrySet()) {
+                int pairId = entry.getKey();
+                // The state captured here is what every write below is checked against.
+                // Holding it, rather than re-reading the map, is what makes "has this
+                // pair been rerun since I started?" answerable at all.
+                PairExecutionState state = entry.getValue();
+                String logDir = state.logDir;
                 checkedCount++;
 
                 Path statusFile = Paths.get(logDir).resolve("status.json");
 
-                // Check if status file exists and hasn't been processed yet
-                if (Files.exists(statusFile)) {
-                    foundCount++;
-                    log.info("DEBUG_TRACE: Monitor checking pairId=" + pairId + " exists=true processed="
-                            + processedPairIds.contains(pairId) + " logDir=" + logDir);
-
-                    // Use pairId for tracking instead of path
-                    if (!processedPairIds.contains(pairId)) {
-                        log.info(
-                                "DEBUG_TRACE: Found new status.json for pairId=" +
-                                        pairId +
-                                        ", logDir=" +
-                                        logDir);
-                        // Process the job
-                        // NOTE: If processing fails, we don't add to processedPairIds
-                        // so we can try again next poll
-                        try {
-                            boolean isTerminal = processCompletedJob(pairId, logDir);
-                            log.info("DEBUG_TRACE: processCompletedJob result for pairId=" + pairId + " isTerminal="
-                                    + isTerminal);
-                            if (isTerminal) {
-                                processedPairIds.add(pairId);
-                                log.info(
-                                        "Monitor: Successfully processed pairId=" +
-                                                pairId);
-                            } else {
-                                log.debug("Monitor: Job still running for pairId=" + pairId + ", will re-check later.");
-                            }
-                        } catch (Exception e) {
-                            log.error(
-                                    "Monitor: Error processing pairId=" +
-                                            pairId +
-                                            ", logDir=" +
-                                            logDir,
-                                    e);
-                            // Mark as error so we don't keep retrying
-                            try {
-                                JobPairs.setStatusForPairAndStages(
-                                        pairId,
-                                        StatusCode.ERROR_RUNSCRIPT.getVal());
-                                log.warn(
-                                        "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
-                                                pairId +
-                                                " due to processing error");
-                                processedPairIds.add(pairId);
-                                // Stop tracking the directory too. Left in place it was
-                                // counted as work on every later poll, which held the
-                                // adaptive interval at its base and never let the poller
-                                // back off, while the map grew with every failed job.
-                                // Safe now that clearPairTracking no longer depends on
-                                // finding this entry to let a rerun through.
-                                trackedPairs.remove(logDir);
-                                statusParseFailures.remove(pairId);
-                            } catch (Exception ex) {
-                                log.error(
-                                        "Monitor: CRITICAL - Cannot set error status for pairId=" +
-                                                pairId,
-                                        ex);
-                            }
-                        }
-                    }
-                } else {
+                if (!Files.exists(statusFile)) {
                     log.trace(
                             "Monitor: No status.json yet for pairId=" +
                                     pairId +
                                     ", logDir=" +
                                     logDir);
+                    continue;
+                }
+
+                foundCount++;
+                // A pair present in the map is by definition not yet processed: a
+                // terminal result retires the entry. The separate processedPairIds set
+                // that used to answer this question is gone, and with it the state in
+                // which a pair was both untracked and marked processed.
+                log.debug("Monitor: found status.json for pairId=" + pairId
+                        + ", generation=" + state.generation + ", logDir=" + logDir);
+
+                try {
+                    boolean isTerminal = processCompletedJob(pairId, state);
+                    if (!isTerminal) {
+                        log.debug("Monitor: Job still running for pairId=" + pairId + ", will re-check later.");
+                    } else if (retire(pairId, state)) {
+                        log.info("Monitor: Successfully processed pairId=" + pairId);
+                    } else {
+                        log.info("Monitor: pairId=" + pairId + " was rerun while this poll ran;"
+                                + " discarding the superseded run's result and leaving the new run tracked");
+                    }
+                } catch (Exception e) {
+                    log.error(
+                            "Monitor: Error processing pairId=" +
+                                    pairId +
+                                    ", logDir=" +
+                                    logDir,
+                            e);
+                    try {
+                        // Only blame the run that actually failed. Recording
+                        // ERROR_RUNSCRIPT unconditionally would stamp this failure onto
+                        // a rerun that had already started and was fine.
+                        if (isCurrent(pairId, state)) {
+                            JobPairs.setStatusForPairAndStages(
+                                    pairId,
+                                    StatusCode.ERROR_RUNSCRIPT.getVal());
+                            log.warn(
+                                    "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
+                                            pairId +
+                                            " due to processing error");
+                        } else {
+                            log.warn("Monitor: processing failed for pairId=" + pairId
+                                    + " but it has since been rerun; not recording the failure"
+                                    + " against the new run");
+                        }
+                        // Retire either way, and generation-guarded either way: left in
+                        // place a failed entry was counted as work on every later poll,
+                        // which held the adaptive interval at its base and never let the
+                        // poller back off, while the map grew with every failed job.
+                        retire(pairId, state);
+                    } catch (Exception ex) {
+                        log.error(
+                                "Monitor: CRITICAL - Cannot set error status for pairId=" +
+                                        pairId,
+                                ex);
+                    }
                 }
             }
 
@@ -411,9 +494,9 @@ public class LocalJobMonitor {
         }
     }
 
-    private boolean processCompletedJob(int pairId, String logDir)
+    private boolean processCompletedJob(int pairId, PairExecutionState state)
             throws Exception {
-        Path outputDir = Paths.get(logDir);
+        Path outputDir = Paths.get(state.logDir);
 
         // 1. Read status and stageNumber from status.json (single Gson parse)
         StatusAndStage ss = readStatusFile(outputDir, pairId);
@@ -422,7 +505,12 @@ public class LocalJobMonitor {
             // Leave the pair tracked and unprocessed so the next poll tries again, and
             // only call it a failure once it has stayed unreadable for several polls --
             // a file that is genuinely corrupt must not be retried forever either.
-            int failures = statusParseFailures.merge(pairId, 1, Integer::sum);
+            int failures = recordParseFailure(pairId, state);
+            if (failures < 0) {
+                log.info("status.json for pairId=" + pairId + " was unreadable, but the pair"
+                        + " has been rerun since; discarding the superseded run");
+                return false;
+            }
             if (failures < MAX_STATUS_PARSE_FAILURES) {
                 log.info("status.json for pairId=" + pairId + " unreadable ("
                         + failures + "/" + MAX_STATUS_PARSE_FAILURES + "); retrying next poll");
@@ -430,10 +518,9 @@ public class LocalJobMonitor {
             }
             log.error("status.json for pairId=" + pairId + " has been unreadable for "
                     + failures + " consecutive polls; recording it as a runscript error");
-            statusParseFailures.remove(pairId);
             ss = new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
         } else {
-            statusParseFailures.remove(pairId);
+            clearParseFailures(pairId, state);
         }
 
         // 2. Parse runsolver stats if available
@@ -442,13 +529,27 @@ public class LocalJobMonitor {
         // 3. Parse attributes if post-processor ran
         Properties attributes = parseAttributes(outputDir);
 
-        // 4. Update database
+        // 4. Re-check the generation immediately before writing. Everything above reads
+        //    files and takes real time; a rerun that landed during it has already
+        //    superseded this result, and writing it would record run N's outcome
+        //    against run N+1 -- a wrong recorded result, not merely a stranded pair.
+        //
+        //    This narrows the window to the width of the check-then-write; it cannot
+        //    close it from inside this process. UpdatePairStatusPrecise refusing to
+        //    overwrite an already-terminal status without _forceOverride is the
+        //    backstop for what remains.
+        if (!isCurrent(pairId, state)) {
+            log.info("pairId=" + pairId + " was rerun while its output was being read;"
+                    + " discarding the superseded run's result rather than recording it");
+            return false;
+        }
+
+        // 5. Update database
         updateDatabase(pairId, ss.status, ss.stageNumber, stats, attributes);
 
-        // 5. Check if status is terminal (completed or failed)
-        // If so, remove from tracking. If running/processing, keep tracking.
+        // 6. Report whether this run reached a terminal status. Retiring the pair is the
+        //    caller's job, so that the removal is generation-guarded in one place.
         if (ss.status.finishedRunning() || ss.status.failed() || ss.status == StatusCode.STATUS_COMPLETE) {
-            trackedPairs.remove(logDir);
             log.info("Job execution finished for pairId=" + pairId + " with status=" + ss.status);
             return true;
         } else {
@@ -752,7 +853,7 @@ public class LocalJobMonitor {
      * @return Number of tracked pairs
      */
     public int getTrackedPairCount() {
-        return trackedPairs.size();
+        return pairs.size();
     }
 
     /**
