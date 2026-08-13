@@ -657,7 +657,10 @@ public class Jobs {
             log.debug("finished getting subspaces, adding job");
             // the primary space of a job should be a job space ID instead of a space ID
 
-            Jobs.addJob(con, job);
+            if (!Jobs.addJob(con, job)) {
+                log.error("add", "Could not create the job record; abandoning job creation");
+                return false;
+            }
             job.setPrimarySpace(
                 createJobSpacesForPairs(job.getId(), job.getJobPairs(), con)
             );
@@ -699,7 +702,18 @@ public class Jobs {
 
             log.debug("adding job pairs");
 
-            JobPairs.addJobPairs(con, job.getId(), job.getJobPairs());
+            // addJobPairs reports failure by returning false rather than throwing.
+            // Discarding that committed a job whose pairs were missing or incomplete and
+            // told the user it succeeded: total_pairs then disagreed with the rows that
+            // actually exist, leaving a job that can never finish or that looks complete
+            // before it has run.
+            if (!JobPairs.addJobPairs(con, job.getId(), job.getJobPairs())) {
+                log.error("add", "Failed to add job pairs for job " + job.getId()
+                        + "; rolling back. Note the job row itself was written before this"
+                        + " transaction opened and is not removed by this rollback.");
+                Common.doRollback(con);
+                return false;
+            }
 
             Common.endTransaction(con);
             // Create the output directory for the job up front. This ensures that if a user
@@ -728,7 +742,7 @@ public class Jobs {
      * @param con The connection the update will take place on
      * @param job The job to add
      */
-    private static void addJob(Connection con, Job job) {
+    private static boolean addJob(Connection con, Job job) {
         PreparedStatement procedure = null;
         ResultSet results = null;
 
@@ -761,10 +775,18 @@ public class Jobs {
             if (results.next()) {
                 // Update the job's ID so it can be used outside this method
                 job.setId(results.getInt(1));
+                return true;
             }
+            // No row means no id was assigned. This used to return void, so the caller
+            // carried on and wrote job spaces, stage attributes and pairs against
+            // whatever id the Job object happened to hold.
+            log.error("addJob", "AddJob returned no id for job '" + job.getName() + "'");
+            return false;
         } catch (Exception e) {
             log.error("addJob", e);
+            return false;
         } finally {
+            Common.safeClose(results);
             Common.safeClose(procedure);
         }
     }

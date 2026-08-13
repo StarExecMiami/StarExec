@@ -157,6 +157,7 @@ ops.txt
 .claude/
 .codex
 AGENTS.md
+CLAUDE.md
 
 ####################################
 # Debug / operational artifacts
