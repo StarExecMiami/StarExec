@@ -635,6 +635,26 @@ public class ContainerJobMonitor {
     /**
      * Parses a line from watcher.out (runsolver format).
      */
+    /**
+     * Every literal matched here is quoted from runsolver's own source, which is
+     * vendored at {@code org/starexec/config/sge/RunSolverSource/}. The line numbers
+     * are given so the next person can re-derive them instead of trusting this comment:
+     *
+     * <pre>
+     *   Watcher.hh:325  cout &lt;&lt; "Child status: " &lt;&lt; WEXITSTATUS(childstatus)
+     *   Watcher.hh:396  cout &lt;&lt; "maximum resident set size= " &lt;&lt; r.ru_maxrss
+     *   Watcher.hh:717  stopSolver("Maximum CPU time exceeded: ...")
+     *   Watcher.hh:720  stopSolver("Maximum wall clock time exceeded: ...")
+     *   Watcher.hh:723  stopSolver("Maximum VSize exceeded: ...")
+     *   Watcher.hh:726  stopSolver("Maximum memory exceeded: ...")
+     * </pre>
+     *
+     * <p>The RSS line uses <b>=</b>, not <b>:</b>. This matcher previously used a colon
+     * and so could never fire against real output; the unit test did not catch it because
+     * its fixture had been written from this parser rather than from the producer above.
+     * That is the reason for this comment: a fixture or pattern that cannot be traced to
+     * a line of runsolver source is not evidence.
+     */
     private void parseWatcherLine(String line, RunsolverStats stats) {
         Matcher m;
 
@@ -644,9 +664,9 @@ public class ContainerJobMonitor {
             stats.exitCode = Integer.parseInt(m.group(1));
             stats.exitCodeReported = true;
         } else if (
-            (m = Pattern.compile("maximum resident set size: (\\d+)").matcher(
-                    line
-                )).find()
+            (m = Pattern.compile(
+                    "maximum resident set size=\\s*(\\d+)"
+                ).matcher(line)).find()
         ) {
             stats.maxResidentSetSize = Long.parseLong(m.group(1));
         } else if (line.contains("wall clock time exceeded")) {
@@ -654,6 +674,12 @@ public class ContainerJobMonitor {
         } else if (line.contains("CPU time exceeded")) {
             stats.cpuExceeded = true;
         } else if (line.contains("VSize exceeded")) {
+            stats.memoryExceeded = true;
+        } else if (line.contains("Maximum memory exceeded")) {
+            // Watcher.hh:726, raised when runsolver is given -R. That flag is not
+            // passed today, so this branch is currently unreachable -- but it costs one
+            // line, and without it adding -R later would silently record every memory
+            // kill as a clean completion.
             stats.memoryExceeded = true;
         }
     }

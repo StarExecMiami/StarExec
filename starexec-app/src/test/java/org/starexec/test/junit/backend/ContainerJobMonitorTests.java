@@ -235,12 +235,70 @@ public class ContainerJobMonitorTests {
         Object stats = parseRunsolverOutput(
             outputDirWith(
                 "{\"wallclockTime\": 1.0, \"cpuTime\": 1.0}",
-                "Child status: 0\nmaximum resident set size: 1024\n"
+                WATCHER_CHILD_STATUS_0 + WATCHER_MAX_RSS_1024
             )
         );
 
         assertFalse(flag(stats, "wallclockExceeded"));
         assertFalse(flag(stats, "cpuExceeded"));
         assertFalse(flag(stats, "memoryExceeded"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Fixtures quoted from the producer, not from the parser.
+    //
+    // These strings are transcribed from runsolver's own source, vendored at
+    // org/starexec/config/sge/RunSolverSource/. An earlier version of this file
+    // wrote the RSS line with a colon because that is what the parser matched;
+    // runsolver actually emits "=", so the parser could never fire and this test
+    // suite certified the bug instead of catching it.
+    //
+    // If you add a fixture here, grep the literal out of RunSolverSource first.
+    // ---------------------------------------------------------------------
+
+    /** Watcher.hh:325 — {@code cout << "Child status: " << WEXITSTATUS(...)}. */
+    private static final String WATCHER_CHILD_STATUS_0 = "Child status: 0\n";
+
+    /** Watcher.hh:396 — {@code cout << "maximum resident set size= " << r.ru_maxrss}. */
+    private static final String WATCHER_MAX_RSS_1024 =
+        "maximum resident set size= 1024\n";
+
+    /**
+     * The regression test for the fixture bug itself. RSS was never asserted before, so
+     * the mismatched separator went unnoticed even though a test read the line.
+     */
+    @Test
+    public void maxResidentSetSizeIsParsedFromRealRunsolverOutput() throws Exception {
+        Object stats = parseRunsolverOutput(
+            outputDirWith(null, WATCHER_CHILD_STATUS_0 + WATCHER_MAX_RSS_1024)
+        );
+
+        java.lang.reflect.Field f =
+            stats.getClass().getDeclaredField("maxResidentSetSize");
+        f.setAccessible(true);
+        assertEquals(
+            "runsolver writes 'maximum resident set size= N' with an equals sign"
+                + " (RunSolverSource/Watcher.hh:396); a parser expecting ':' silently"
+                + " records 0 for every run",
+            1024L,
+            f.getLong(stats)
+        );
+    }
+
+    /** Watcher.hh:726. Unreachable without -R today, but must not read as a clean run. */
+    @Test
+    public void maximumMemoryExceededIsTreatedAsAMemoryLimit() throws Exception {
+        Object stats = parseRunsolverOutput(
+            outputDirWith(
+                null,
+                "Maximum memory exceeded: sending SIGTERM then SIGKILL\n"
+            )
+        );
+
+        assertTrue(
+            "runsolver's -R memory kill (Watcher.hh:726) must not be recorded as a"
+                + " completed run",
+            flag(stats, "memoryExceeded")
+        );
     }
 }
