@@ -483,6 +483,30 @@ public class SpaceSecurity {
 	 * @return new ValidatorStatusCode(true) if allowed, or a status code from ValidatorStatusCodes if not
 	 */
 
+	/**
+	 * Checks whether a user may MOVE the given subspaces into another space.
+	 *
+	 * <p>Everything {@link #canCopySpace} requires, plus the constraint that only a move
+	 * has: the destination must not be the space being moved, nor anywhere beneath it.
+	 * Moving a space into its own descendant makes it its own ancestor, and the closure
+	 * rebuild that follows walks direct children -- so it would recurse until the stack
+	 * is exhausted, taking a database connection per level with it.
+	 *
+	 * <p>Deliberately not folded into {@link #canCopySpace}, which the copy endpoint also
+	 * uses. Copying a space into its own subspace produces a new space and no cycle;
+	 * refusing it there would forbid something legitimate.
+	 */
+	public static ValidatorStatusCode canMoveSpace(int toSpaceId, int userId, List<Integer> subspaceIds) {
+		for (Integer sid : subspaceIds) {
+			if (Spaces.isDescendantOf(sid, toSpaceId)) {
+				return new ValidatorStatusCode(
+						false,
+						"A space cannot be moved into itself or into one of its own subspaces");
+			}
+		}
+		return canCopySpace(toSpaceId, userId, subspaceIds);
+	}
+
 	public static ValidatorStatusCode canCopySpace(int toSpaceId, int userId, List<Integer> subspaceIds) {
 		ValidatorStatusCode status = null;
 		for (Integer sid : subspaceIds) {

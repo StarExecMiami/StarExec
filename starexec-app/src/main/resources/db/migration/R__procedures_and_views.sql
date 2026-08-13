@@ -7394,6 +7394,24 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- True when _descendantId lies at or below _ancestorId in the space hierarchy.
+-- Reads the closure table, which is unique on (ancestor, descendant), so this is an
+-- indexed lookup rather than a recursive walk. A space is considered a descendant of
+-- itself, because both cases are equally invalid as a move destination.
+DROP FUNCTION IF EXISTS starexec.IsSpaceDescendant CASCADE;
+CREATE OR REPLACE FUNCTION starexec.IsSpaceDescendant(_ancestorId INT, _descendantId INT)
+RETURNS BOOLEAN AS $$
+BEGIN
+    IF _ancestorId = _descendantId THEN
+        RETURN TRUE;
+    END IF;
+    RETURN EXISTS (
+        SELECT 1 FROM starexec.closure
+        WHERE ancestor = _ancestorId AND descendant = _descendantId
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
 -- Moves an existing space to the new parent
 -- Note: The order of arguments is (Destination, Source) to match
 --       AssociateSpaces, which was apparently written by Intel engineers
@@ -7401,6 +7419,33 @@ DROP FUNCTION IF EXISTS starexec.MoveSpace CASCADE;
 CREATE OR REPLACE FUNCTION starexec.MoveSpace(_parentId INT, _childId INT)
 RETURNS VOID AS $$
 BEGIN
+    -- Refuse to make a space its own ancestor. A child holds exactly one parent row,
+    -- which bounds in-degree but does nothing to prevent a cycle: A parented to B and B
+    -- parented to A is two spaces with one parent each. Spaces.rebuildSpaceClosures then
+    -- walks direct children with no visited set, so a cycle makes it recurse until the
+    -- stack is exhausted, opening a database connection per level on the way down.
+    --
+    -- Checked here as well as in SpaceSecurity because this routine is the only thing
+    -- that can create the state, and a guard that lives solely in the caller protects
+    -- only the callers that remember it.
+    IF _parentId = _childId THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23514',
+            MESSAGE = format('Space %s cannot be moved into itself', _childId);
+    END IF;
+
+    -- The closure table already records every ancestor/descendant pair and is unique on
+    -- (ancestor, descendant), so this is one indexed lookup rather than a recursive walk.
+    IF EXISTS (
+        SELECT 1 FROM starexec.closure
+        WHERE ancestor = _childId AND descendant = _parentId
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23514',
+            MESSAGE = format('Space %s cannot be moved into space %s, which is one of its own descendants',
+                             _childId, _parentId);
+    END IF;
+
     -- remove all existing closures for this child space
     DELETE FROM starexec.closure WHERE descendant = _childId;
     IF NOT FOUND THEN

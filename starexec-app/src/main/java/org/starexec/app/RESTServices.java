@@ -6211,7 +6211,9 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, "No spaceId provided"));
 		}
 		ValidatorStatusCode status;
-		status = SpaceSecurity.canCopySpace(desId, userId, srcId);
+		// canMoveSpace, not canCopySpace: a move additionally requires that the
+		// destination is not the space itself or one of its descendants.
+		status = SpaceSecurity.canMoveSpace(desId, userId, srcId);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
