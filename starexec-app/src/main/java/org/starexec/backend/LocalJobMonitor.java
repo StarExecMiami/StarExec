@@ -544,8 +544,15 @@ public class LocalJobMonitor {
             return false;
         }
 
-        // 5. Update database
-        updateDatabase(pairId, ss.status, ss.stageNumber, stats, attributes);
+        // 5. Update database, with runsolver's verdict allowed to correct the status
+        //    bash derived by grepping prose.
+        updateDatabase(
+            pairId,
+            reconcileWithRunsolver(pairId, ss.status, stats),
+            ss.stageNumber,
+            stats,
+            attributes
+        );
 
         // 6. Report whether this run reached a terminal status. Retiring the pair is the
         //    caller's job, so that the removal is generation-guarded in one place.
@@ -556,6 +563,56 @@ public class LocalJobMonitor {
             log.debug("Job still running (status=" + ss.status + "), continuing to monitor pairId=" + pairId);
             return false;
         }
+    }
+
+    /**
+     * Lets runsolver's own verdict correct a status that bash derived by grepping prose.
+     *
+     * <p>The status in status.json is not an independent observation. {@code jobscript}
+     * decides it with {@code grep 'CPU time exceeded' "$WATCHFILE"} and two siblings —
+     * the same English sentences the Java parser used to depend on, one layer earlier. If
+     * the wording ever changes, every one of those greps misses, status.json says the run
+     * completed, and {@code TIMEOUT=true} sits unread in var.out beside it.
+     *
+     * <p>So when bash reports a clean completion and runsolver reports a limit breach,
+     * runsolver wins: it computed its verdict against the limits it enforced, not against
+     * a sentence it printed.
+     *
+     * <p>The override is deliberately one-directional. Any status other than
+     * {@code STATUS_COMPLETE} is left alone, because bash sees things runsolver cannot —
+     * {@code JOB_PAIR_DEADLOCKED}, {@code ERROR_DISK_QUOTA_EXCEEDED}, and the
+     * {@code job error:} marker in the solver's stderr are all conditions with no
+     * representation in var.out at all. Runsolver is authoritative for the three limits
+     * it enforces, and for nothing else.
+     */
+    private StatusCode reconcileWithRunsolver(
+        int pairId,
+        StatusCode fromStatusFile,
+        RunSolverStats stats
+    ) {
+        if (fromStatusFile != StatusCode.STATUS_COMPLETE) {
+            return fromStatusFile;
+        }
+
+        StatusCode limit = RunsolverVerdict.classify(
+            stats.timeout,
+            stats.memout,
+            stats.cpuExceeded,
+            stats.wallclockExceeded,
+            stats.memoryExceeded
+        );
+        if (limit == null) {
+            return fromStatusFile;
+        }
+
+        log.warn(
+            "pairId=" + pairId + ": status.json reported STATUS_COMPLETE but runsolver" +
+            " reported a limit breach (TIMEOUT=" + stats.timeout + ", MEMOUT=" +
+            stats.memout + "); recording " + limit + " instead. The bash status is" +
+            " derived by grepping watcher.out prose, so this usually means the prose" +
+            " did not match."
+        );
+        return limit;
     }
 
     /**
@@ -686,6 +743,16 @@ public class LocalJobMonitor {
                     } else if (line.startsWith("MAXVM=")) {
                         stats.maxVirtualMemory = Double.parseDouble(
                                 line.substring(6));
+                    } else if (line.startsWith("TIMEOUT=")) {
+                        // Watcher.hh:472, written with boolalpha so the value is the
+                        // lowercase word true/false. The prefix match also keeps us off
+                        // the "# TIMEOUT: ..." comment line above it.
+                        stats.timeout = Boolean.parseBoolean(
+                                line.substring("TIMEOUT=".length()).trim());
+                    } else if (line.startsWith("MEMOUT=")) {
+                        // Watcher.hh:475, same form.
+                        stats.memout = Boolean.parseBoolean(
+                                line.substring("MEMOUT=".length()).trim());
                     }
                 }
                 log.debug("Parsed stats from var.out: " + stats);
@@ -709,6 +776,16 @@ public class LocalJobMonitor {
                     Matcher m = rss.matcher(line);
                     if (m.find()) {
                         stats.maxResidentSetSize = Long.parseLong(m.group(1));
+                    }
+                    // Prose from stopSolver (Watcher.hh:717-726). Used only to say which
+                    // limit fired; TIMEOUT=/MEMOUT= in var.out say whether one did.
+                    if (line.contains("CPU time exceeded")) {
+                        stats.cpuExceeded = true;
+                    } else if (line.contains("wall clock time exceeded")) {
+                        stats.wallclockExceeded = true;
+                    } else if (line.contains("VSize exceeded")
+                            || line.contains("Maximum memory exceeded")) {
+                        stats.memoryExceeded = true;
                     }
                 }
             } catch (IOException | NumberFormatException e) {
@@ -923,6 +1000,13 @@ public class LocalJobMonitor {
         public long maxResidentSetSize = 0;
         public long diskSize = 0;
         public int stageNumber = 1;
+        /** runsolver's own limit verdicts from var.out (Watcher.hh:471-475). */
+        public boolean timeout = false;
+        public boolean memout = false;
+        /** Set from watcher.out prose; discriminates which limit fired. */
+        public boolean cpuExceeded = false;
+        public boolean wallclockExceeded = false;
+        public boolean memoryExceeded = false;
         public String hostname = null;
 
         @Override

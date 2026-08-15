@@ -650,6 +650,18 @@ public class ContainerJobMonitor {
             (m = Pattern.compile("^MAXVM=([0-9.]+)$").matcher(line)).matches()
         ) {
             stats.maxVirtualMemory = Double.parseDouble(m.group(1));
+        } else if (line.startsWith("TIMEOUT=")) {
+            // Watcher.hh:472 writes this with boolalpha, so the value is the lowercase
+            // word "true" or "false". Matching on the "TIMEOUT=" prefix rather than a
+            // bare "TIMEOUT" is deliberate: the file also carries an explanatory comment
+            // line, "# TIMEOUT: did the solver exceed the time limit?", which a looser
+            // match would hit.
+            stats.timeout = Boolean.parseBoolean(
+                line.substring("TIMEOUT=".length()).trim());
+        } else if (line.startsWith("MEMOUT=")) {
+            // Watcher.hh:475, same form, same reason.
+            stats.memout = Boolean.parseBoolean(
+                line.substring("MEMOUT=".length()).trim());
         }
     }
 
@@ -709,13 +721,26 @@ public class ContainerJobMonitor {
      * Determines the job status based on runsolver stats and output files.
      */
     private StatusCode determineStatus(RunsolverStats stats, Path outputDir) {
-        if (stats.wallclockExceeded) {
-            return StatusCode.EXCEED_RUNTIME;
-        } else if (stats.cpuExceeded) {
-            return StatusCode.EXCEED_CPU;
-        } else if (stats.memoryExceeded) {
-            return StatusCode.EXCEED_MEM;
-        } else if (stats.exitCode != 0) {
+        // Detection is runsolver's TIMEOUT=/MEMOUT=; the prose only picks between
+        // EXCEED_CPU and EXCEED_RUNTIME. See RunsolverVerdict for why round that way.
+        //
+        // This used to test the prose flags alone, so a solver killed for exceeding a
+        // limit was recorded as STATUS_COMPLETE whenever the sentence failed to match --
+        // and it fell through to STATUS_COMPLETE for every SIGKILLed solver anyway,
+        // because Watcher.hh:326-331 prints no "Child status:" line on the WIFSIGNALED
+        // path, leaving exitCode at 0.
+        StatusCode limit = RunsolverVerdict.classify(
+            stats.timeout,
+            stats.memout,
+            stats.cpuExceeded,
+            stats.wallclockExceeded,
+            stats.memoryExceeded
+        );
+        if (limit != null) {
+            return limit;
+        }
+
+        if (stats.exitCode != 0) {
             // Check if var.out exists - if not, likely runscript error
             if (!Files.exists(outputDir.resolve("var.out"))) {
                 return StatusCode.ERROR_RUNSCRIPT;
@@ -918,9 +943,16 @@ public class ContainerJobMonitor {
         public int exitCode = 0;
         /** True once runsolver reported a child status; 0 alone cannot say. */
         public boolean exitCodeReported = false;
+        /** Set from watcher.out prose; discriminates which limit fired. */
         public boolean wallclockExceeded = false;
         public boolean cpuExceeded = false;
         public boolean memoryExceeded = false;
+        /**
+         * runsolver's own verdicts from var.out (Watcher.hh:471-475). These, not the
+         * prose above, are what detect that a limit fired at all.
+         */
+        public boolean timeout = false;
+        public boolean memout = false;
         public String hostname = null;
 
         @Override

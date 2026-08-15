@@ -18,6 +18,7 @@ import org.starexec.backend.AdaptivePollInterval;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.data.to.Status.StatusCode;
 
 public class ContainerJobMonitorTests {
 
@@ -361,5 +362,89 @@ public class ContainerJobMonitorTests {
         dir.toFile().deleteOnExit();
         java.nio.file.Files.writeString(dir.resolve("var.out"), varOut);
         return parseRunsolverOutput(dir);
+    }
+
+    // ---------------------------------------------------------------------
+    // M4 -- runsolver's own TIMEOUT=/MEMOUT= verdicts.
+    //
+    // Transcribed from RunSolverSource/Watcher.hh:471-475, which writes them
+    // with boolalpha, so the values are the lowercase words true/false. Note
+    // each is preceded by an explanatory comment line ("# TIMEOUT: did the
+    // solver exceed the time limit?") that a looser match would hit.
+    // ---------------------------------------------------------------------
+
+    private static final String VAR_OUT_TIMED_OUT =
+        "# WCTIME: wall clock time in seconds\n"
+            + "WCTIME=600.1\n"
+            + "# CPUTIME: CPU time in seconds (USERTIME+SYSTEMTIME)\n"
+            + "CPUTIME=599.8\n"
+            + "# TIMEOUT: did the solver exceed the time limit?\n"
+            + "TIMEOUT=true\n"
+            + "# MEMOUT: did the solver exceed the memory limit?\n"
+            + "MEMOUT=false\n";
+
+    private static final String VAR_OUT_CLEAN =
+        "WCTIME=1.5\nCPUTIME=1.4\nTIMEOUT=false\nMEMOUT=false\n";
+
+    private StatusCode determineStatus(Object stats, java.nio.file.Path dir)
+        throws Exception {
+        Method m = ContainerJobMonitor.class.getDeclaredMethod(
+            "determineStatus", stats.getClass(), java.nio.file.Path.class);
+        m.setAccessible(true);
+        return (StatusCode) m.invoke(monitor, stats, dir);
+    }
+
+    @Test
+    public void timeoutFlagIsParsedFromVarOut() throws Exception {
+        Object stats = parseRunsolverOutputWithVar(VAR_OUT_TIMED_OUT);
+
+        assertTrue("TIMEOUT=true must be read", flag(stats, "timeout"));
+        assertFalse("MEMOUT=false must be read as false", flag(stats, "memout"));
+    }
+
+    @Test
+    public void theCommentLineIsNotMistakenForTheValue() throws Exception {
+        // "# TIMEOUT: did the solver exceed the time limit?" precedes TIMEOUT=false here.
+        // A match on the bare word rather than the "TIMEOUT=" prefix would misread it.
+        Object stats = parseRunsolverOutputWithVar(VAR_OUT_CLEAN);
+        assertFalse(flag(stats, "timeout"));
+        assertFalse(flag(stats, "memout"));
+    }
+
+    /**
+     * The end-to-end regression. A SIGKILLed solver leaves no "Child status:" line
+     * (Watcher.hh:326-331), so exitCode stays 0; if the prose sentence is absent too, the
+     * old determineStatus returned STATUS_COMPLETE for a run that timed out.
+     */
+    @Test
+    public void aTimedOutRunIsNotRecordedAsComplete() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("cjm-m4");
+        dir.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(dir.resolve("var.out"), VAR_OUT_TIMED_OUT);
+
+        Object stats = parseRunsolverOutput(dir);
+
+        assertEquals(
+            "runsolver reported TIMEOUT=true, so this run must not be recorded as a"
+                + " clean completion just because no prose line matched",
+            StatusCode.EXCEED_CPU,
+            determineStatus(stats, dir)
+        );
+    }
+
+    @Test
+    public void aCleanRunIsStillComplete() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("cjm-m4-ok");
+        dir.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(dir.resolve("var.out"), VAR_OUT_CLEAN);
+
+        Object stats = parseRunsolverOutput(dir);
+
+        assertEquals(
+            "the inverse error matters as much: a clean run must not be reported as"
+                + " having breached a limit",
+            StatusCode.STATUS_COMPLETE,
+            determineStatus(stats, dir)
+        );
     }
 }
