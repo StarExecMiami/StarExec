@@ -360,15 +360,43 @@ public class KubernetesNativeBackend implements Backend {
         workerNodeSelectorKey = getEnv("STAREXEC_K8S_WORKER_SELECTOR_KEY", WORKER_LABEL);
         workerNodeSelectorValue = getEnv("STAREXEC_K8S_WORKER_SELECTOR_VALUE", "true");
 
-        // Academic reproducibility policy:
-        // keep one job pair per CPU core to reduce L1/L2 cache interference.
-        if (strictOnePairPerCpu && !"1".equals(cpuLimit)) {
-            log.warn(
-                "Overriding STAREXEC_K8S_CPU_LIMIT='" +
-                cpuLimit +
-                "' to '1' due to STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true"
+        // Academic reproducibility policy: a job pair must get whole physical cores that
+        // nothing else runs on, so its measurements are not perturbed by a neighbour.
+        //
+        // This used to force cpuLimit to "1" whenever the flag was set, discarding the
+        // operator's configured value with only a log line. Production sets
+        // STAREXEC_K8S_CPU_LIMIT=32 (a whole compute node) together with this flag, so
+        // the intent -- one pair per node -- was silently replaced by a one-CPU request,
+        // and what actually kept pairs off each other was the 250Gi memory request
+        // exhausting the node. Isolation by accident, and it disappears the moment the
+        // memory limit is lowered.
+        //
+        // The flag now means what its name says: assert that the request can yield
+        // exclusive cores, rather than shrink it to one. Kubernetes grants exclusive CPUs
+        // only for a Guaranteed pod whose cpu request is a whole number, and only when
+        // the kubelet runs --cpu-manager-policy=static. Requests already equal limits in
+        // buildKubernetesJob, so the remaining requirement is the integer.
+        if (strictOnePairPerCpu) {
+            if (!isWholeNumberCpuQuantity(cpuLimit)) {
+                throw new IllegalStateException(
+                    "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true requires" +
+                    " STAREXEC_K8S_CPU_LIMIT to be a whole number of CPUs, but it is '" +
+                    cpuLimit + "'. Kubernetes only assigns exclusive cores to a" +
+                    " Guaranteed pod requesting integer CPUs; a fractional request is a" +
+                    " bandwidth quota and the solver would float across the node's cores," +
+                    " perturbing its own measurements and its neighbours'."
+                );
+            }
+            // Not detectable from the API -- kubelet configuration is not exposed on the
+            // Node object -- so it is stated rather than checked. Without it the request
+            // below is a quota and the pinning is a fiction.
+            log.info(
+                "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true with cpu=" + cpuLimit +
+                ". This grants exclusive cores ONLY if worker nodes run kubelet with" +
+                " --cpu-manager-policy=static. Without it Kubernetes applies a CFS" +
+                " bandwidth quota instead, solver threads float across all cores, and" +
+                " recorded timings are perturbed by co-scheduled work."
             );
-            cpuLimit = "1";
         }
 
         log.info(
@@ -425,6 +453,44 @@ public class KubernetesNativeBackend implements Backend {
             return defaultValue;
         }
         return Boolean.parseBoolean(value.trim());
+    }
+
+    /**
+     * True if a Kubernetes CPU quantity denotes a whole number of CPUs.
+     *
+     * <p>This is the condition Kubernetes requires before it will assign exclusive cores:
+     * the CPU Manager's static policy only pins a Guaranteed pod whose cpu request is an
+     * integer. {@code "2"} qualifies; {@code "1500m"}, {@code "0.5"} and {@code "2.5"} do
+     * not, and such a pod receives a bandwidth quota instead, floating across the node.
+     *
+     * <p>{@code "2000m"} is accepted because milli-CPU is exact here — 2000m is two whole
+     * CPUs — and rejecting a legitimate spelling would be a trap rather than a guard.
+     *
+     * @param quantity the raw value of STAREXEC_K8S_CPU_LIMIT
+     */
+    static boolean isWholeNumberCpuQuantity(String quantity) {
+        if (quantity == null) {
+            return false;
+        }
+        String value = quantity.trim();
+        if (value.isEmpty()) {
+            return false;
+        }
+        try {
+            if (value.endsWith("m")) {
+                long milli = Long.parseLong(value.substring(0, value.length() - 1));
+                return milli > 0 && milli % 1000 == 0;
+            }
+            // Reject "2.0" as well as "2.5": a decimal point in a cpu quantity is a
+            // signal that someone is thinking in fractions, and the next edit is likely
+            // to make it fractional. Integers only.
+            if (value.indexOf('.') >= 0) {
+                return false;
+            }
+            return Long.parseLong(value) > 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private void ensureNamespaceAccessible() {

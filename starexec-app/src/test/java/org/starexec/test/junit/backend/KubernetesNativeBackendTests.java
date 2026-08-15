@@ -592,4 +592,59 @@ public class KubernetesNativeBackendTests {
         constructor.setAccessible(true);
         return constructor.newInstance(PairStatusLookupState.FOUND, statusCode);
     }
+
+    // ---------------------------------------------------------------------
+    // strictOnePairPerCpu
+    //
+    // This used to force cpuLimit to "1" whenever the flag was set, discarding
+    // the operator's value with only a log line. Production sets
+    // STAREXEC_K8S_CPU_LIMIT=32 (a whole compute node) together with the flag,
+    // so the intent -- one pair per node -- became a one-CPU request, and what
+    // actually kept pairs apart was the 250Gi memory request exhausting the
+    // node. Isolation by accident, which vanishes if that limit is lowered.
+    //
+    // The flag now asserts the request CAN yield exclusive cores instead of
+    // shrinking it: Kubernetes pins a Guaranteed pod only when its cpu request
+    // is a whole number.
+    // ---------------------------------------------------------------------
+
+    private boolean isWholeNumberCpuQuantity(String quantity) throws Exception {
+        Method m = KubernetesNativeBackend.class.getDeclaredMethod(
+            "isWholeNumberCpuQuantity", String.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(null, quantity);
+    }
+
+    @Test
+    public void wholeCpuRequestsAreAcceptedIncludingAWholeNodesWorth() throws Exception {
+        assertTrue("1 CPU", isWholeNumberCpuQuantity("1"));
+        assertTrue(
+            "32 is what production configures -- a whole compute node -- and it must no"
+                + " longer be replaced by 1",
+            isWholeNumberCpuQuantity("32")
+        );
+        assertTrue("milli-CPU that divides exactly", isWholeNumberCpuQuantity("2000m"));
+        assertTrue("whitespace tolerated", isWholeNumberCpuQuantity(" 16 "));
+    }
+
+    @Test
+    public void fractionalCpuRequestsAreRejected() throws Exception {
+        // A fractional request cannot receive exclusive cores; Kubernetes gives it a CFS
+        // bandwidth quota and the solver's threads float across the whole node.
+        assertFalse("1500m is 1.5 CPUs", isWholeNumberCpuQuantity("1500m"));
+        assertFalse("half a CPU", isWholeNumberCpuQuantity("500m"));
+        assertFalse("decimal form", isWholeNumberCpuQuantity("2.5"));
+        assertFalse("even a whole-valued decimal", isWholeNumberCpuQuantity("2.0"));
+    }
+
+    @Test
+    public void nonsenseAndNonPositiveCpuRequestsAreRejected() throws Exception {
+        assertFalse(isWholeNumberCpuQuantity(null));
+        assertFalse(isWholeNumberCpuQuantity(""));
+        assertFalse(isWholeNumberCpuQuantity("   "));
+        assertFalse(isWholeNumberCpuQuantity("all"));
+        assertFalse("zero CPUs is not a pair's worth", isWholeNumberCpuQuantity("0"));
+        assertFalse(isWholeNumberCpuQuantity("-4"));
+        assertFalse(isWholeNumberCpuQuantity("0m"));
+    }
 }
