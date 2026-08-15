@@ -653,46 +653,21 @@ public class LocalJobMonitor {
     private RunSolverStats parseRunSolverStats(Path outputDir) {
         RunSolverStats stats = new RunSolverStats();
 
-        // Try stats.json first (written by functions.bash in container/local mode)
-        Path statsJson = outputDir.resolve("stats.json");
-        if (Files.exists(statsJson)) {
-            try {
-                String json = Files.readString(statsJson);
-                stats.wallclockTime = extractDouble(json, "wallclockTime");
-                stats.cpuTime = extractDouble(json, "cpuTime");
-                stats.userTime = extractDouble(json, "userTime");
-                stats.systemTime = extractDouble(json, "systemTime");
-                stats.maxVirtualMemory = extractDouble(
-                        json,
-                        "maxVirtualMemory");
-                stats.maxResidentSetSize = extractLong(
-                        json,
-                        "maxResidentSetSize");
-                stats.stageNumber = extractInt(json, "stageNumber");
+        // The three sources are complementary, not alternatives, so all three are read.
+        //
+        // This used to return as soon as stats.json parsed -- the same defect fixed in
+        // ContainerJobMonitor by 316668fd2 -- which left var.out and watcher.out
+        // unread whenever stats.json existed. It also meant a stats.json that parsed
+        // but was missing fields silently produced zeros, because extractDouble returns
+        // 0.0 on no match, with runsolver's own var.out sitting unread beside it.
+        //
+        // Order matters: var.out and watcher.out first, stats.json last so it stays
+        // authoritative for the fields it carries, and the stats.json application below
+        // only overwrites a field when the key is actually present.
 
-                // Optional: disk size (bytes)
-                long ds = extractLong(json, "diskSize");
-                if (ds > 0) {
-                    stats.diskSize = ds;
-                }
-
-                // Optional: hostname of execution host/container
-                Matcher m = Pattern.compile(
-                        "\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
-                if (m.find()) {
-                    stats.hostname = m.group(1);
-                }
-
-                log.debug("Parsed stats from stats.json: " + stats);
-                return stats;
-            } catch (IOException e) {
-                log.warn(
-                        "Failed to parse stats.json, falling back to var.out",
-                        e);
-            }
-        }
-
-        // Fall back to var.out (runsolver format)
+        // var.out (runsolver's -v output). Keys quoted from RunSolverSource/Watcher.hh:
+        //   :454 "WCTIME="   :457 "CPUTIME="   :460 "USERTIME="
+        //   :463 "SYSTEMTIME="   :469 "MAXVM="
         Path varFile = outputDir.resolve("var.out");
         if (Files.exists(varFile)) {
             try {
@@ -719,18 +694,106 @@ public class LocalJobMonitor {
             }
         }
 
+        // watcher.out (runsolver's -w output). RunSolverSource/Watcher.hh:396 writes
+        //   cout << "maximum resident set size= " << r.ru_maxrss
+        // with an EQUALS sign. functions.bash:869 reads the same line with
+        // awk '{print $5}', which agrees. A parser written against a colon here would
+        // silently record 0 -- that mistake was made in ContainerJobMonitor and fixed
+        // in 623dd295e.
+        Path watcherFile = outputDir.resolve("watcher.out");
+        if (Files.exists(watcherFile)) {
+            try {
+                Pattern rss = Pattern.compile(
+                        "maximum resident set size=\\s*(\\d+)");
+                for (String line : Files.readAllLines(watcherFile)) {
+                    Matcher m = rss.matcher(line);
+                    if (m.find()) {
+                        stats.maxResidentSetSize = Long.parseLong(m.group(1));
+                    }
+                }
+            } catch (IOException | NumberFormatException e) {
+                log.warn("Failed to parse watcher.out", e);
+            }
+        }
+
+        // stats.json last (written by containerWriteStats, functions.bash:47). It
+        // carries timings and sizes only -- no exit code and no limit information.
+        Path statsJson = outputDir.resolve("stats.json");
+        if (Files.exists(statsJson)) {
+            try {
+                String json = Files.readString(statsJson);
+                // Each of these keeps the value already read above when the key is
+                // absent, so a truncated stats.json degrades to var.out instead of
+                // zeroing a measurement that was successfully read.
+                stats.wallclockTime = extractDoubleOr(
+                        json, "wallclockTime", stats.wallclockTime);
+                stats.cpuTime = extractDoubleOr(json, "cpuTime", stats.cpuTime);
+                stats.userTime = extractDoubleOr(json, "userTime", stats.userTime);
+                stats.systemTime = extractDoubleOr(
+                        json, "systemTime", stats.systemTime);
+                stats.maxVirtualMemory = extractDoubleOr(
+                        json, "maxVirtualMemory", stats.maxVirtualMemory);
+                stats.maxResidentSetSize = extractLongOr(
+                        json, "maxResidentSetSize", stats.maxResidentSetSize);
+                stats.stageNumber = extractIntOr(
+                        json, "stageNumber", stats.stageNumber);
+
+                // Optional: disk size (bytes)
+                long ds = extractLong(json, "diskSize");
+                if (ds > 0) {
+                    stats.diskSize = ds;
+                }
+
+                // Optional: hostname of execution host/container
+                Matcher m = Pattern.compile(
+                        "\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
+                if (m.find()) {
+                    stats.hostname = m.group(1);
+                }
+
+                log.debug("Parsed stats from stats.json: " + stats);
+            } catch (IOException e) {
+                log.warn(
+                        "Failed to parse stats.json; using var.out and watcher.out only",
+                        e);
+            }
+        }
+
         return stats;
     }
 
-    private double extractDouble(String json, String key) {
+    /**
+     * Returns the JSON value for {@code key}, or {@code fallback} when the key is
+     * absent.
+     *
+     * <p>Distinct from {@link #extractDouble}, which cannot tell "absent" from "zero"
+     * and so would overwrite a good value with 0 when a field is missing.
+     */
+    private double extractDoubleOr(String json, String key, double fallback) {
         Matcher m = Pattern.compile(
                 "\"" + key + "\"\\s*:\\s*([0-9.]+)").matcher(json);
-        if (m.find()) {
-            return Double.parseDouble(m.group(1));
-        }
-        return 0.0;
+        return m.find() ? Double.parseDouble(m.group(1)) : fallback;
     }
 
+    /** @see #extractDoubleOr */
+    private long extractLongOr(String json, String key, long fallback) {
+        Matcher m = Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(json);
+        return m.find() ? Long.parseLong(m.group(1)) : fallback;
+    }
+
+    /** @see #extractDoubleOr */
+    private int extractIntOr(String json, String key, int fallback) {
+        Matcher m = Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(json);
+        return m.find() ? Integer.parseInt(m.group(1)) : fallback;
+    }
+
+    /**
+     * Only still used for diskSize, where 0 and absent are treated alike because the
+     * caller guards with {@code if (ds > 0)}. Everything else goes through the
+     * {@code ...Or} variants, which can tell the two apart.
+     */
     private long extractLong(String json, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(
                 json);
@@ -738,15 +801,6 @@ public class LocalJobMonitor {
             return Long.parseLong(m.group(1));
         }
         return 0L;
-    }
-
-    private int extractInt(String json, String key) {
-        Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(
-                json);
-        if (m.find()) {
-            return Integer.parseInt(m.group(1));
-        }
-        return 0;
     }
 
     /**

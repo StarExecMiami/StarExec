@@ -121,6 +121,108 @@ public class LocalJobMonitorTests {
     }
 
     // ------------------------------------------------------------------
+    // parseRunSolverStats reads all three sources
+    //
+    // It used to return as soon as stats.json parsed, leaving var.out and
+    // watcher.out unread -- the same defect fixed in ContainerJobMonitor by
+    // 316668fd2. The sharpest consequence was silent: extractDouble returns 0.0
+    // on no match, so a stats.json that parsed but lacked a field produced a
+    // zero while runsolver's own var.out sat unread beside it.
+    //
+    // Fixtures below are transcribed from the producers:
+    //   RunSolverSource/Watcher.hh:454 "WCTIME="   :457 "CPUTIME="
+    //   RunSolverSource/Watcher.hh:396 "maximum resident set size= "
+    // ------------------------------------------------------------------
+
+    private Object parseRunSolverStats(Path dir) throws Exception {
+        Method m = LocalJobMonitor.class.getDeclaredMethod(
+            "parseRunSolverStats", Path.class);
+        m.setAccessible(true);
+        return m.invoke(monitor, dir);
+    }
+
+    private double statDouble(Object stats, String name) throws Exception {
+        Field f = stats.getClass().getDeclaredField(name);
+        f.setAccessible(true);
+        return f.getDouble(stats);
+    }
+
+    private long statLong(Object stats, String name) throws Exception {
+        Field f = stats.getClass().getDeclaredField(name);
+        f.setAccessible(true);
+        return f.getLong(stats);
+    }
+
+    private Path outputDir(String varOut, String watcherOut, String statsJson)
+        throws Exception {
+        Path dir = Files.createTempDirectory("ljm-stats");
+        dir.toFile().deleteOnExit();
+        if (varOut != null) Files.writeString(dir.resolve("var.out"), varOut);
+        if (watcherOut != null) Files.writeString(dir.resolve("watcher.out"), watcherOut);
+        if (statsJson != null) Files.writeString(dir.resolve("stats.json"), statsJson);
+        return dir;
+    }
+
+    /** The regression: a stats.json missing a field must not zero what var.out had. */
+    @Test
+    public void aPartialStatsJsonDoesNotZeroValuesReadFromVarOut() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            "WCTIME=42.5\nCPUTIME=41.25\n",
+            null,
+            "{\"wallclockTime\": 42.5}"   // cpuTime absent
+        ));
+
+        assertEquals(42.5, statDouble(stats, "wallclockTime"), 0.0001);
+        assertEquals(
+            "cpuTime is absent from stats.json, so var.out's value must survive rather"
+                + " than being overwritten with 0",
+            41.25,
+            statDouble(stats, "cpuTime"),
+            0.0001
+        );
+    }
+
+    @Test
+    public void varOutIsReadEvenWhenStatsJsonExists() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            "WCTIME=10.0\nCPUTIME=9.0\nUSERTIME=8.0\nSYSTEMTIME=1.0\nMAXVM=2048\n",
+            null,
+            "{\"wallclockTime\": 10.0}"
+        ));
+
+        assertEquals(8.0, statDouble(stats, "userTime"), 0.0001);
+        assertEquals(2048.0, statDouble(stats, "maxVirtualMemory"), 0.0001);
+    }
+
+    @Test
+    public void watcherOutRssIsReadWithTheProducersEqualsSeparator() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            null,
+            "maximum resident set size= 4096\n",
+            null
+        ));
+
+        assertEquals(
+            "Watcher.hh:396 writes this line with '='; a parser expecting ':' records 0",
+            4096L,
+            statLong(stats, "maxResidentSetSize")
+        );
+    }
+
+    /** stats.json still wins for the fields it does carry. */
+    @Test
+    public void statsJsonRemainsAuthoritativeWhereItHasAValue() throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            "WCTIME=1.0\nCPUTIME=1.0\n",
+            null,
+            "{\"wallclockTime\": 99.0, \"cpuTime\": 98.0}"
+        ));
+
+        assertEquals(99.0, statDouble(stats, "wallclockTime"), 0.0001);
+        assertEquals(98.0, statDouble(stats, "cpuTime"), 0.0001);
+    }
+
+    // ------------------------------------------------------------------
     // status.json read mid-write
     // ------------------------------------------------------------------
 
