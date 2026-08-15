@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
+import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import org.junit.Test;
@@ -646,5 +647,128 @@ public class KubernetesNativeBackendTests {
         assertFalse("zero CPUs is not a pair's worth", isWholeNumberCpuQuantity("0"));
         assertFalse(isWholeNumberCpuQuantity("-4"));
         assertFalse(isWholeNumberCpuQuantity("0m"));
+    }
+
+    // ---------------------------------------------------------------------
+    // End-to-end: the configured CPU value must reach the pod spec.
+    //
+    // The tests above check the validator in isolation, which is not enough:
+    // the original defect was not a bad validator but an assignment that threw
+    // the operator's value away afterwards. A test that never inspects the
+    // generated Job cannot see that, so this one builds the spec and reads the
+    // container's resources.
+    // ---------------------------------------------------------------------
+
+    private void setField(Object target, String name, Object value) throws Exception {
+        Field f = KubernetesNativeBackend.class.getDeclaredField(name);
+        f.setAccessible(true);
+        f.set(target, value);
+    }
+
+    /** Configures just enough state for buildKubernetesJob to produce a spec. */
+    private KubernetesNativeBackend backendWithCpu(String cpu) throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "cpuLimit", cpu);
+        setField(backend, "memoryLimit", "250Gi");
+        setField(backend, "namespace", "starexec");
+        setField(backend, "jobImage", "ghcr.io/starexecmiami/starexec-job-runner:latest");
+        setField(backend, "serviceAccountName", "starexec-job");
+        setField(backend, "dataPvcName", "starexec-data");
+        setField(backend, "dataPvcAccessMode", "ReadWriteMany");
+        setField(backend, "workerNodeSelectorKey", "starexec.org/worker");
+        setField(backend, "workerNodeSelectorValue", "true");
+        setField(backend, "appNodeName", "");
+        setField(backend, "backoffLimit", 0);
+        setField(backend, "ttlSecondsAfterFinished", 3600);
+        return backend;
+    }
+
+    private Container buildContainer(String cpu) throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu(cpu);
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod(
+            "buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+        Job job = (Job) build.invoke(
+            backend, 42, 7, "starexec-job-7", "/script.sh", "/work", "/work/log.txt");
+        return job.getSpec().getTemplate().getSpec().getContainers().get(0);
+    }
+
+    /**
+     * The regression guard. Production configures 32 -- a whole compute node, matching how
+     * SGE runs pairs -- and that value was previously overwritten with "1" after
+     * validation, so the pod requested one CPU while the logs said 32.
+     */
+    @Test
+    public void theConfiguredCpuValueReachesThePodSpec() throws Exception {
+        Container container = buildContainer("32");
+
+        assertEquals(
+            "the operator's CPU limit must survive into the pod spec, not be replaced by 1",
+            "32",
+            container.getResources().getLimits().get("cpu").toString()
+        );
+        assertEquals(
+            "requests must match limits, or the pod is not Guaranteed and Kubernetes will"
+                + " never assign it exclusive cores",
+            "32",
+            container.getResources().getRequests().get("cpu").toString()
+        );
+    }
+
+    @Test
+    public void memoryAlsoRequestsEqualLimitsForGuaranteedQos() throws Exception {
+        Container container = buildContainer("32");
+
+        assertEquals(
+            container.getResources().getLimits().get("memory").toString(),
+            container.getResources().getRequests().get("memory").toString()
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Strict mode must not change the value it is given.
+    //
+    // The pod-spec test above cannot guard this: it injects cpuLimit by
+    // reflection and never runs loadConfiguration, which is precisely where the
+    // original clobber lived. Reintroducing `cpuLimit = "1"` there leaves that
+    // test green. So the pass-through is expressed as a return value, which a
+    // test can assert on directly.
+    // ---------------------------------------------------------------------
+
+    private String resolveCpuLimitForStrictMode(String configured) throws Exception {
+        Method m = KubernetesNativeBackend.class.getDeclaredMethod(
+            "resolveCpuLimitForStrictMode", String.class);
+        m.setAccessible(true);
+        try {
+            return (String) m.invoke(null, configured);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw (Exception) e.getCause();
+        }
+    }
+
+    @Test
+    public void strictModeReturnsTheConfiguredCpuLimitUnchanged() throws Exception {
+        assertEquals(
+            "strict mode must validate the operator's value, never replace it -- a whole"
+                + " compute node is the SGE-equivalent allocation and must survive",
+            "32",
+            resolveCpuLimitForStrictMode("32")
+        );
+        assertEquals("1", resolveCpuLimitForStrictMode("1"));
+        assertEquals("2000m", resolveCpuLimitForStrictMode("2000m"));
+    }
+
+    @Test
+    public void strictModeRejectsAQuantityThatCannotYieldExclusiveCores() throws Exception {
+        try {
+            resolveCpuLimitForStrictMode("1500m");
+            fail("a fractional CPU request cannot receive exclusive cores and must abort");
+        } catch (IllegalStateException expected) {
+            assertTrue(
+                expected.getMessage(),
+                expected.getMessage().contains("whole number of CPUs")
+            );
+        }
     }
 }

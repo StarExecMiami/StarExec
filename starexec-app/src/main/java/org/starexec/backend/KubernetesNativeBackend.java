@@ -377,16 +377,7 @@ public class KubernetesNativeBackend implements Backend {
         // the kubelet runs --cpu-manager-policy=static. Requests already equal limits in
         // buildKubernetesJob, so the remaining requirement is the integer.
         if (strictOnePairPerCpu) {
-            if (!isWholeNumberCpuQuantity(cpuLimit)) {
-                throw new IllegalStateException(
-                    "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true requires" +
-                    " STAREXEC_K8S_CPU_LIMIT to be a whole number of CPUs, but it is '" +
-                    cpuLimit + "'. Kubernetes only assigns exclusive cores to a" +
-                    " Guaranteed pod requesting integer CPUs; a fractional request is a" +
-                    " bandwidth quota and the solver would float across the node's cores," +
-                    " perturbing its own measurements and its neighbours'."
-                );
-            }
+            cpuLimit = resolveCpuLimitForStrictMode(cpuLimit);
             // Not detectable from the API -- kubelet configuration is not exposed on the
             // Node object -- so it is stated rather than checked. Without it the request
             // below is a quota and the pinning is a fiction.
@@ -453,6 +444,33 @@ public class KubernetesNativeBackend implements Backend {
             return defaultValue;
         }
         return Boolean.parseBoolean(value.trim());
+    }
+
+    /**
+     * Returns the CPU quantity strict mode should use — which is the configured one,
+     * unchanged.
+     *
+     * <p>The return value is the point of this method. Strict mode previously *replaced*
+     * the operator's value with {@code "1"}, so a deployment asking for a whole 32-CPU
+     * node silently got one CPU. That the value passes through untouched is now an
+     * asserted contract rather than merely the absence of an assignment, which is
+     * something a test can hold on to: a test that only inspects the generated pod spec
+     * cannot see an assignment made during configuration loading.
+     *
+     * @throws IllegalStateException if the quantity could never yield exclusive cores
+     */
+    static String resolveCpuLimitForStrictMode(String configuredCpuLimit) {
+        if (!isWholeNumberCpuQuantity(configuredCpuLimit)) {
+            throw new IllegalStateException(
+                "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true requires" +
+                " STAREXEC_K8S_CPU_LIMIT to be a whole number of CPUs, but it is '" +
+                configuredCpuLimit + "'. Kubernetes only assigns exclusive cores to a" +
+                " Guaranteed pod requesting integer CPUs; a fractional request is a" +
+                " bandwidth quota and the solver would float across the node's cores," +
+                " perturbing its own measurements and its neighbours'."
+            );
+        }
+        return configuredCpuLimit;
     }
 
     /**
