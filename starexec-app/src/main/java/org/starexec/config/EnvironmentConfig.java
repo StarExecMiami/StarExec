@@ -704,9 +704,33 @@ public class EnvironmentConfig {
 
     /**
      * Default CPU limit for job containers (in seconds).
+     *
+     * <p><b>This is a time limit, not a core count.</b> It becomes the
+     * {@code STAREXEC_CPU_LIMIT} environment variable seen by the job script.
+     * {@code docs/CONFIGURATION.md} describes it as "CPU cores per container", which is
+     * wrong; wiring this into a CFS quota would request a 600-core allocation. For the
+     * CPU quota see {@link #getContainerCpuQuotaCores()}.
      */
     public static int getContainerDefaultCpuLimit() {
         return getEnvInt("STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT", 600);
+    }
+
+    /**
+     * Number of CPU cores' worth of CFS bandwidth to grant a job container when no CPU
+     * partition (cpuset) is configured, or 0 to apply no quota.
+     *
+     * <p>Only consulted in the unpartitioned case. When a partition exists the cpuset is
+     * the boundary and a quota on top of it is redundant — with N CPUs available the most
+     * a container can consume per period is already N periods — while risking throttling
+     * a parallel solver if the two ever disagree.
+     *
+     * <p>Defaults to 0 (no quota). A quota here cannot make an unpartitioned host produce
+     * trustworthy measurements; it only bounds how much of the machine one solver may
+     * take from the app JVM and PostgreSQL, which share it under Podman/DooD. Operators
+     * who need that bound should set this explicitly.
+     */
+    public static int getContainerCpuQuotaCores() {
+        return getEnvInt("STAREXEC_CONTAINER_CPU_QUOTA_CORES", 0);
     }
 
     /**

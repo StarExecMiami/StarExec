@@ -1113,4 +1113,91 @@ public class PodmanBackendTests {
         // Verify: containers are NOT removed during normal shutdown
         verify(mockDockerClient, never()).removeContainerCmd(anyString());
     }
+
+    // ---------------------------------------------------------------------
+    // CPU limits.
+    //
+    // createHostConfig used to hardcode withCpuPeriod(100000L) and
+    // withCpuQuota(100000L) -- one CPU core, regardless of how wide the
+    // container's cpuset was. A job pair is given a whole socket and a parallel
+    // solver is expected to use all of it, so the solver saw N cores and was then
+    // throttled by CFS to one core's worth of bandwidth: wallclock inflated
+    // roughly N x, and the recorded CPU time was measured against a limit it
+    // reached at a different rate. Parallel tracks that run correctly under SGE
+    // were silently mis-measured on this backend.
+    // ---------------------------------------------------------------------
+
+    private void applyCpuLimits(HostConfig hostConfig, CpuPartition partition)
+        throws Exception {
+        Method m = PodmanBackend.class.getDeclaredMethod(
+            "applyCpuLimits", HostConfig.class, CpuPartition.class);
+        m.setAccessible(true);
+        m.invoke(null, hostConfig, partition);
+    }
+
+    @Test
+    public void pinnedContainerGetsNoCfsQuota() throws Exception {
+        HostConfig hostConfig = new HostConfig();
+
+        applyCpuLimits(hostConfig, new CpuPartition(0, "0-7", "0"));
+
+        assertEquals("the cpuset must be applied", "0-7", hostConfig.getCpusetCpus());
+        assertEquals("0", hostConfig.getCpusetMems());
+        assertNull(
+            "a container pinned to a cpuset must not also carry a CFS quota: the cpuset"
+                + " already bounds it, and a mismatched quota throttles parallel solvers",
+            hostConfig.getCpuQuota()
+        );
+        assertNull(hostConfig.getCpuPeriod());
+    }
+
+    /**
+     * The specific regression. A pair is handed a whole 8-CPU socket; the old code then
+     * capped the container at 1.0 CPU, so eight solver threads timeshared one core.
+     */
+    @Test
+    public void aWholeSocketIsNotThrottledToOneCore() throws Exception {
+        HostConfig hostConfig = new HostConfig();
+
+        applyCpuLimits(hostConfig, new CpuPartition(0, "0-7", "0"));
+
+        Long quota = hostConfig.getCpuQuota();
+        assertFalse(
+            "a pair given 8 CPUs must not be limited to one core's bandwidth",
+            quota != null && quota <= 100000L
+        );
+    }
+
+    @Test
+    public void unpartitionedContainerIsNotSilentlyCappedAtOneCore() throws Exception {
+        // The old 1-core quota must not survive as an "safe" default here either: that
+        // is the throttling bug, and keeping it would preserve the regression for
+        // precisely the deployments that have no isolation to begin with.
+        HostConfig hostConfig = new HostConfig();
+
+        applyCpuLimits(hostConfig, null);
+
+        assertNull("no cpuset is expected when no partition is configured",
+            hostConfig.getCpusetCpus());
+        Long quota = hostConfig.getCpuQuota();
+        assertFalse(
+            "an unpartitioned container must not inherit the old hardcoded 1-core quota",
+            quota != null && quota <= 100000L
+        );
+    }
+
+    /** A partition object carrying no cpuset means no pinning, so it is not pinned. */
+    @Test
+    public void partitionWithoutACpusetIsTreatedAsUnpinned() throws Exception {
+        HostConfig hostConfig = new HostConfig();
+
+        applyCpuLimits(hostConfig, new CpuPartition(0, null, null));
+
+        assertNull(hostConfig.getCpusetCpus());
+        Long quota = hostConfig.getCpuQuota();
+        assertFalse(
+            "the no-pinning partition must behave like no partition, not like a 1-core cap",
+            quota != null && quota <= 100000L
+        );
+    }
 }

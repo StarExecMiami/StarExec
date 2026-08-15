@@ -103,6 +103,14 @@ public class PodmanBackend implements Backend {
     // Container name prefix for easy identification
     private static final String CONTAINER_PREFIX = "starexec-job-";
 
+    /**
+     * CFS scheduling period in microseconds. Only used to express an explicitly
+     * configured quota as a number of cores; see
+     * {@link #applyCpuLimits(HostConfig, CpuPartition)} for why a quota is not applied
+     * when a cpuset is in force.
+     */
+    private static final long CPU_PERIOD_MICROS = 100_000L;
+
     // Label keys for container management
     private static final String LABEL_PAIR_ID = "starexec.pair.id";
     private static final String LABEL_EXEC_ID = "starexec.exec.id";
@@ -2000,18 +2008,85 @@ public class PodmanBackend implements Backend {
             .withNetworkMode(networkMode)
             .withMemory(defaultMemoryMb * 1024 * 1024) // Convert MB to bytes
             .withMemorySwap(defaultMemoryMb * 1024 * 1024) // Disable swap
-            .withCpuPeriod(100000L)
-            .withCpuQuota(100000L) // 1 CPU core
             .withAutoRemove(false); // Keep container for inspection after completion
 
-        if (partition != null && partition.cpusetCpus != null) {
-            hostConfig.withCpusetCpus(partition.cpusetCpus);
-        }
-        if (partition != null && partition.cpusetMems != null) {
-            hostConfig.withCpusetMems(partition.cpusetMems);
-        }
+        applyCpuLimits(hostConfig, partition);
 
         return hostConfig;
+    }
+
+    /**
+     * Applies CPU placement and, where appropriate, a CFS bandwidth cap.
+     *
+     * <p>This used to set {@code withCpuPeriod(100000L).withCpuQuota(100000L)}
+     * unconditionally — one CPU core, hardcoded, with no way to configure it, applied
+     * regardless of how wide the container's cpuset was. A job pair is given a whole
+     * socket, and a parallel solver is expected to use every core on it, so the solver
+     * saw N cores through its cpuset and was then throttled by CFS to one core's worth of
+     * bandwidth. Its threads timeshared that single quota: wallclock inflated roughly N×,
+     * and the recorded CPU time was measured against a limit it now reached at a
+     * different rate. Parallel tracks that run correctly under SGE were silently
+     * mis-measured on this backend.
+     *
+     * <p>The cpuset is the boundary, exactly as {@code taskset -c $CORES} is on the SGE
+     * path. A quota scaled to the cpuset width would be redundant — with N CPUs available
+     * a container cannot consume more than N periods per period anyway — and would carry
+     * a live failure mode, because a width that ever computed as 1 would reinstate the
+     * bug silently. So when a partition exists, no quota is set at all.
+     *
+     * @param partition the CPU partition assigned to this pair, or null if the deployment
+     *                  has no CPU partitioning configured
+     */
+    static void applyCpuLimits(HostConfig hostConfig, CpuPartition partition) {
+        boolean pinned = partition != null && partition.cpusetCpus != null;
+
+        if (pinned) {
+            hostConfig.withCpusetCpus(partition.cpusetCpus);
+            if (partition.cpusetMems != null) {
+                hostConfig.withCpusetMems(partition.cpusetMems);
+            }
+            // Recorded per pair so a measurement can be traced back to the CPUs that
+            // produced it. Without this the topology a result was measured on is lost.
+            log.info(
+                "Job container CPU placement: cpuset=" + partition.cpusetCpus +
+                " (" + CpuPartitionManager.expandCpuset(partition.cpusetCpus).size() +
+                " CPUs), mems=" + partition.cpusetMems +
+                ", no CFS quota (cpuset is the boundary)"
+            );
+            return;
+        }
+
+        // Unpartitioned. There is no CPU isolation here, so measurements taken on this
+        // host are not publication-grade whatever we do with the quota -- the fix is to
+        // configure partitioning, not to tune a cap. A quota is still offered because
+        // without one a single solver can take every CPU from the app JVM and PostgreSQL,
+        // which share the machine under Podman/DooD.
+        //
+        // Note we deliberately do not fall back to the old 1-core quota: that is the
+        // throttling bug itself, and keeping it here would preserve the regression for
+        // precisely the deployments that have no isolation to begin with.
+        int quotaCores = EnvironmentConfig.getContainerCpuQuotaCores();
+        if (quotaCores > 0) {
+            hostConfig
+                .withCpuPeriod(CPU_PERIOD_MICROS)
+                .withCpuQuota(CPU_PERIOD_MICROS * quotaCores);
+            log.warn(
+                "No CPU partition configured for this job container; applying a " +
+                quotaCores + "-core CFS quota from STAREXEC_CONTAINER_CPU_QUOTA_CORES." +
+                " Solvers are not pinned, so measurements from this host are not" +
+                " publication-grade -- configure STAREXEC_CPU_PARTITIONS or" +
+                " STAREXEC_CPU_PARTITION_COUNT."
+            );
+        } else {
+            log.warn(
+                "No CPU partition configured for this job container and no CFS quota set." +
+                " Solvers are neither pinned nor bounded: measurements from this host are" +
+                " not publication-grade, and one solver may starve the application and" +
+                " database that share this machine. Configure STAREXEC_CPU_PARTITIONS or" +
+                " STAREXEC_CPU_PARTITION_COUNT, or set STAREXEC_CONTAINER_CPU_QUOTA_CORES" +
+                " to bound it."
+            );
+        }
     }
 
     /**
