@@ -129,6 +129,17 @@ public final class CpuPartitionManager {
                 partitions.add(new CpuPartition(i, cpusets.get(i), "0"));
             }
             return Collections.unmodifiableList(partitions);
+        } catch (UnsafePartitionConfigurationException e) {
+            // Deliberately not caught below. Falling back to no pinning is the right
+            // response to a machine whose topology cannot be read; it is the wrong
+            // response to a configuration a person wrote, because they asked for
+            // isolation and would silently receive none while their numbers kept being
+            // published. Fail loudly instead.
+            log.error(
+                "Refusing to start with an unsafe CPU partition configuration: " +
+                e.getMessage()
+            );
+            throw e;
         } catch (Exception e) {
             log.warn(
                 "CPU partition discovery failed; falling back to legacy no-pinning partition",
@@ -175,7 +186,33 @@ public final class CpuPartitionManager {
         return summary.toString();
     }
 
+    /**
+     * Thrown when an operator's explicit partition configuration would corrupt
+     * measurements.
+     *
+     * <p>Its own type, because {@link #discover} otherwise catches everything and falls
+     * back to no pinning. Degrading silently is right for a machine whose topology cannot
+     * be read; it is wrong for a configuration someone wrote by hand. An operator who set
+     * STAREXEC_CPU_PARTITIONS asked for isolation, and quietly giving them none — while
+     * their jobs keep running and their numbers keep being published — is the worst of
+     * the available outcomes.
+     */
+    static final class UnsafePartitionConfigurationException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        UnsafePartitionConfigurationException(String message) {
+            super(message);
+        }
+    }
+
     private static List<CpuPartition> partitionsFromOverride(String raw) {
+        return partitionsFromOverride(raw, readThreadSiblings(DEFAULT_SYSFS_CPU_PATH));
+    }
+
+    static List<CpuPartition> partitionsFromOverride(
+        String raw,
+        Map<Integer, List<Integer>> siblings
+    ) {
         String[] tokens = raw.trim().split("[\\s;]+");
         List<CpuPartition> partitions = new ArrayList<>();
         for (String token : tokens) {
@@ -193,7 +230,80 @@ public final class CpuPartitionManager {
             );
             return singleNoPinningPartitions();
         }
+        validateExplicitPartitions(partitions, siblings);
         return Collections.unmodifiableList(partitions);
+    }
+
+    /**
+     * Checks a hand-written partition set for layouts that would corrupt measurements.
+     *
+     * <p>{@link #subdivide} cannot protect these: an explicit STAREXEC_CPU_PARTITIONS
+     * value never passes through it. That matters because
+     * {@code docs/cpu-partition-scheduling.md} recommends {@code "0-7 8-15"}, which on the
+     * split-half enumeration is exactly one partition holding every sibling of the other.
+     * An operator following the documentation configures the worst case by hand.
+     *
+     * <p>The two checks are graded deliberately. Overlapping partitions and split
+     * siblings mean two job pairs contend for the same hardware, which corrupts the
+     * measurement, so they abort startup. Including CPU 0 only adds interrupt-handling
+     * noise — it degrades a measurement rather than invalidating it — so it warns, and a
+     * two-core CI box keeps working.
+     */
+    static void validateExplicitPartitions(
+        List<CpuPartition> partitions,
+        Map<Integer, List<Integer>> siblings
+    ) {
+        Map<Integer, Integer> owner = new HashMap<>();
+        for (CpuPartition partition : partitions) {
+            if (partition.cpusetCpus == null) {
+                continue;
+            }
+            for (int cpu : expandCpuset(partition.cpusetCpus)) {
+                Integer previous = owner.put(cpu, partition.index);
+                if (previous != null && previous != partition.index) {
+                    throw new UnsafePartitionConfigurationException(
+                        "STAREXEC_CPU_PARTITIONS places CPU " + cpu +
+                        " in both partition " + previous + " and partition " +
+                        partition.index + ". Two job pairs would run on the same CPU," +
+                        " so neither measurement would be trustworthy."
+                    );
+                }
+            }
+        }
+
+        if (!siblings.isEmpty()) {
+            for (Map.Entry<Integer, Integer> entry : owner.entrySet()) {
+                int cpu = entry.getKey();
+                int partitionIndex = entry.getValue();
+                for (int sibling : siblings.getOrDefault(cpu, Collections.emptyList())) {
+                    Integer siblingPartition = owner.get(sibling);
+                    if (siblingPartition != null && siblingPartition != partitionIndex) {
+                        throw new UnsafePartitionConfigurationException(
+                            "STAREXEC_CPU_PARTITIONS splits SMT siblings: CPU " + cpu +
+                            " is in partition " + partitionIndex + " while its sibling " +
+                            "CPU " + sibling + " is in partition " + siblingPartition +
+                            ". They share an L1 and L2 cache, so two job pairs would" +
+                            " contend for the same cache while appearing isolated." +
+                            " Give each partition whole physical cores instead."
+                        );
+                    }
+                }
+            }
+        } else {
+            log.warn(
+                "SMT topology unavailable, so STAREXEC_CPU_PARTITIONS could not be" +
+                " checked for sibling splits. If this host has hyper-threading, verify" +
+                " by hand that no partition holds a sibling of another's CPUs."
+            );
+        }
+
+        if (owner.containsKey(0)) {
+            log.warn(
+                "STAREXEC_CPU_PARTITIONS includes CPU 0, which handles interrupts and" +
+                " OS work. This adds noise to whatever runs there. Excluding it is" +
+                " preferred where the core count allows."
+            );
+        }
     }
 
     private static List<CpuPartition> singleNoPinningPartitions() {

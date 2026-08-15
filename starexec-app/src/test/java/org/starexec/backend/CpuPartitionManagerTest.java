@@ -248,6 +248,78 @@ public class CpuPartitionManagerTest {
         assertEquals(Arrays.asList("0-1", "2-3"), parts);
     }
 
+    // ------------------------------------------------------------------
+    // Validation of an explicit STAREXEC_CPU_PARTITIONS
+    //
+    // subdivide() cannot protect these -- a hand-written value never passes
+    // through it. That matters because docs/cpu-partition-scheduling.md
+    // recommends "0-7 8-15", which on the split-half enumeration is one
+    // partition holding every sibling of the other.
+    // ------------------------------------------------------------------
+
+    /** The exact string the documentation recommends, on a split-half machine. */
+    @Test
+    public void testExplicitPartitions_rejectsTheDocumentedSiblingSplit() {
+        try {
+            CpuPartitionManager.partitionsFromOverride("0-7 8-15", splitHalfSiblings(16));
+            org.junit.Assert.fail(
+                "a configuration that splits SMT siblings across partitions must abort"
+                    + " startup, not silently degrade to no isolation"
+            );
+        } catch (CpuPartitionManager.UnsafePartitionConfigurationException expected) {
+            org.junit.Assert.assertTrue(
+                "the error should name the hazard: " + expected.getMessage(),
+                expected.getMessage().contains("splits SMT siblings")
+            );
+        }
+    }
+
+    /** The same string is correct on an adjacent-pair machine, and must be accepted. */
+    @Test
+    public void testExplicitPartitions_acceptsASafeLayout() {
+        List<CpuPartition> parts =
+            CpuPartitionManager.partitionsFromOverride("0-7 8-15", adjacentPairSiblings(16));
+
+        assertEquals(2, parts.size());
+        assertEquals("0-7", parts.get(0).cpusetCpus);
+        assertEquals("8-15", parts.get(1).cpusetCpus);
+    }
+
+    @Test
+    public void testExplicitPartitions_rejectsOverlappingPartitions() {
+        try {
+            CpuPartitionManager.partitionsFromOverride("0-7 4-11", adjacentPairSiblings(16));
+            org.junit.Assert.fail("two partitions sharing a CPU must abort startup");
+        } catch (CpuPartitionManager.UnsafePartitionConfigurationException expected) {
+            org.junit.Assert.assertTrue(
+                expected.getMessage(),
+                expected.getMessage().contains("both partition")
+            );
+        }
+    }
+
+    /**
+     * Including CPU 0 degrades a measurement with interrupt noise rather than
+     * invalidating it, so it warns instead of failing — a two-core CI box keeps working.
+     */
+    @Test
+    public void testExplicitPartitions_cpuZeroIsAWarningNotAFailure() {
+        List<CpuPartition> parts =
+            CpuPartitionManager.partitionsFromOverride("0-1 2-3", adjacentPairSiblings(4));
+
+        assertEquals(2, parts.size());
+        assertEquals("0-1", parts.get(0).cpusetCpus);
+    }
+
+    /** With no topology we cannot check for splits, so we must not reject blindly. */
+    @Test
+    public void testExplicitPartitions_withoutTopologyStillAccepts() {
+        List<CpuPartition> parts =
+            CpuPartitionManager.partitionsFromOverride("0-7 8-15", Collections.emptyMap());
+
+        assertEquals(2, parts.size());
+    }
+
     @Test
     public void testDiscoverFallsBackOnSysfsFailure() throws Exception {
         Path tempDir = Files.createTempDirectory("cpu-partitions-garbage");
