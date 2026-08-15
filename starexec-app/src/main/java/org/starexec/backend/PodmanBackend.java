@@ -111,6 +111,16 @@ public class PodmanBackend implements Backend {
      */
     private static final long CPU_PERIOD_MICROS = 100_000L;
 
+    /**
+     * Guards the unpartitioned-CPU warning so it is emitted once per JVM rather than on
+     * every container creation. The condition it reports is a static property of the
+     * deployment's configuration, not of any individual pair, so repeating it per job
+     * would bury the transient errors an operator actually needs to see.
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean
+        UNPARTITIONED_WARNING_EMITTED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     // Label keys for container management
     private static final String LABEL_PAIR_ID = "starexec.pair.id";
     private static final String LABEL_EXEC_ID = "starexec.exec.id";
@@ -2070,21 +2080,35 @@ public class PodmanBackend implements Backend {
             hostConfig
                 .withCpuPeriod(CPU_PERIOD_MICROS)
                 .withCpuQuota(CPU_PERIOD_MICROS * quotaCores);
-            log.warn(
-                "No CPU partition configured for this job container; applying a " +
-                quotaCores + "-core CFS quota from STAREXEC_CONTAINER_CPU_QUOTA_CORES." +
-                " Solvers are not pinned, so measurements from this host are not" +
-                " publication-grade -- configure STAREXEC_CPU_PARTITIONS or" +
-                " STAREXEC_CPU_PARTITION_COUNT."
-            );
+        }
+
+        // Warn once per JVM, not once per container. This describes the deployment's
+        // configuration, which does not change between pairs; repeating it on every job
+        // would drown the transient errors an operator needs to see. Subsequent pairs
+        // still record their placement at debug level.
+        if (UNPARTITIONED_WARNING_EMITTED.compareAndSet(false, true)) {
+            if (quotaCores > 0) {
+                log.warn(
+                    "No CPU partition is configured, so job containers are not pinned;" +
+                    " applying a " + quotaCores + "-core CFS quota from" +
+                    " STAREXEC_CONTAINER_CPU_QUOTA_CORES. Measurements from this host are" +
+                    " not publication-grade -- configure STAREXEC_CPU_PARTITIONS or" +
+                    " STAREXEC_CPU_PARTITION_COUNT. (Logged once per startup.)"
+                );
+            } else {
+                log.warn(
+                    "No CPU partition is configured and no CFS quota is set, so job" +
+                    " containers are neither pinned nor bounded: measurements from this" +
+                    " host are not publication-grade, and one solver may starve the" +
+                    " application and database sharing this machine. Configure" +
+                    " STAREXEC_CPU_PARTITIONS or STAREXEC_CPU_PARTITION_COUNT, or set" +
+                    " STAREXEC_CONTAINER_CPU_QUOTA_CORES to bound it." +
+                    " (Logged once per startup.)"
+                );
+            }
         } else {
-            log.warn(
-                "No CPU partition configured for this job container and no CFS quota set." +
-                " Solvers are neither pinned nor bounded: measurements from this host are" +
-                " not publication-grade, and one solver may starve the application and" +
-                " database that share this machine. Configure STAREXEC_CPU_PARTITIONS or" +
-                " STAREXEC_CPU_PARTITION_COUNT, or set STAREXEC_CONTAINER_CPU_QUOTA_CORES" +
-                " to bound it."
+            log.debug(
+                "Job container CPU placement: unpinned, quotaCores=" + quotaCores
             );
         }
     }
