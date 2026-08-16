@@ -9,6 +9,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.PodConditionBuilder;
+import io.fabric8.kubernetes.api.model.PodList;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobConditionBuilder;
@@ -18,6 +22,7 @@ import io.fabric8.kubernetes.client.dsl.BatchAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable;
 import io.fabric8.kubernetes.client.dsl.MixedOperation;
 import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
+import io.fabric8.kubernetes.client.dsl.PodResource;
 import io.fabric8.kubernetes.client.dsl.ScalableResource;
 import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
 import java.lang.reflect.Field;
@@ -33,6 +38,8 @@ public class KubernetesJobMonitorTests {
     private static final String NAMESPACE = "starexec";
     private static final int EXEC_ID = 101;
     private static final String JOB_NAME = "job-101";
+    private static final String MANAGED_LABEL = "starexec.org/managed";
+    private static final String EXEC_ID_LABEL = "starexec.org/exec-id";
 
     private KubernetesClient kubernetesClient;
     private BatchAPIGroupDSL batchApiGroup;
@@ -40,6 +47,9 @@ public class KubernetesJobMonitorTests {
     private MixedOperation<Job, JobList, ScalableResource<Job>> jobsOperation;
     private NonNamespaceOperation<Job, JobList, ScalableResource<Job>> namespacedJobs;
     private FilterWatchListDeletable<Job, JobList, ScalableResource<Job>> filteredJobs;
+    private MixedOperation<Pod, PodList, PodResource> podsOperation;
+    private NonNamespaceOperation<Pod, PodList, PodResource> namespacedPods;
+    private FilterWatchListDeletable<Pod, PodList, PodResource> filteredPods;
     private KubernetesJobMonitor.JobCompletionCallback callback;
     private KubernetesJobMonitor monitor;
 
@@ -52,15 +62,121 @@ public class KubernetesJobMonitorTests {
         jobsOperation = mock(MixedOperation.class);
         namespacedJobs = mock(NonNamespaceOperation.class);
         filteredJobs = mock(FilterWatchListDeletable.class);
+        podsOperation = mock(MixedOperation.class);
+        namespacedPods = mock(NonNamespaceOperation.class);
+        filteredPods = mock(FilterWatchListDeletable.class);
         callback = mock(KubernetesJobMonitor.JobCompletionCallback.class);
 
         when(kubernetesClient.batch()).thenReturn(batchApiGroup);
         when(batchApiGroup.v1()).thenReturn(v1BatchApiGroup);
         when(v1BatchApiGroup.jobs()).thenReturn(jobsOperation);
         when(jobsOperation.inNamespace(NAMESPACE)).thenReturn(namespacedJobs);
-        when(namespacedJobs.withLabel("starexec.org/managed", "true")).thenReturn(filteredJobs);
+        when(namespacedJobs.withLabel(MANAGED_LABEL, "true")).thenReturn(filteredJobs);
+
+        when(kubernetesClient.pods()).thenReturn(podsOperation);
+        when(podsOperation.inNamespace(NAMESPACE)).thenReturn(namespacedPods);
+        when(namespacedPods.withLabel(MANAGED_LABEL, "true")).thenReturn(filteredPods);
+        givenPods();
 
         monitor = new KubernetesJobMonitor(kubernetesClient, NAMESPACE, callback);
+    }
+
+    /** Stubs the managed-pod listing the monitor performs once per poll. */
+    private void givenPods(Pod... pods) {
+        PodList list = new PodList();
+        list.setItems(List.of(pods));
+        when(filteredPods.list()).thenReturn(list);
+    }
+
+    private Pod podFor(int execId, String phase) {
+        return new PodBuilder()
+            .withNewMetadata()
+            .withName("pod-" + execId)
+            .withCreationTimestamp("2026-08-15T12:00:00Z")
+            .addToLabels(MANAGED_LABEL, "true")
+            .addToLabels(EXEC_ID_LABEL, String.valueOf(execId))
+            .endMetadata()
+            .withNewStatus()
+            .withPhase(phase)
+            .withConditions(
+                new PodConditionBuilder()
+                    .withType("PodScheduled")
+                    .withStatus("Running".equals(phase) ? "True" : "False")
+                    .withReason("Running".equals(phase) ? null : "Unschedulable")
+                    .withMessage(
+                        "Running".equals(phase)
+                            ? null
+                            : "0/6 nodes are available: 6 node(s) didn't match Pod's node affinity/selector."
+                    )
+                    .build()
+            )
+            .endStatus()
+            .build();
+    }
+
+    private Job activeJobFixture() {
+        return new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels(MANAGED_LABEL, "true")
+            .addToLabels(EXEC_ID_LABEL, String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewStatus()
+            .withActive(1)
+            .endStatus()
+            .build();
+    }
+
+    private void givenJobs(Job... jobs) {
+        JobList list = new JobList();
+        list.setItems(List.of(jobs));
+        when(filteredJobs.list()).thenReturn(list);
+    }
+
+    /**
+     * JobStatus.active is "the number of pending and running pods", so a pod the scheduler
+     * has never placed satisfies active > 0. Reporting that pair as RUNNING also hides it
+     * from GetPairsEnqueuedLongerThan, which only looks at STATUS_ENQUEUED.
+     */
+    @Test
+    public void pendingPodIsNotReportedAsRunning() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobRunning(anyInt(), anyString());
+        verify(callback, times(0)).onJobComplete(anyInt(), anyString());
+        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+    }
+
+    /** The correction must not become a dispatch stop: a real pod still reports running. */
+    @Test
+    public void runningPodIsStillReportedAsRunning() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Running"));
+        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
+    }
+
+    /**
+     * The chart's Role granted batch/jobs alone before this feature existed, so an
+     * installation whose RBAC has not been updated gets a 403 here. It must behave exactly
+     * as it did before rather than stop dispatching.
+     */
+    @Test
+    public void podListFailureFallsBackToJobLevelActiveCount() throws Exception {
+        givenJobs(activeJobFixture());
+        when(filteredPods.list()).thenThrow(new RuntimeException("pods is forbidden"));
+        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
     }
 
     @Test
@@ -92,20 +208,8 @@ public class KubernetesJobMonitorTests {
 
     @Test
     public void pollJobsOnce_MarksActiveJobRunningOnlyOnce() throws Exception {
-        Job activeJob = new JobBuilder()
-            .withNewMetadata()
-            .withName(JOB_NAME)
-            .addToLabels("starexec.org/managed", "true")
-            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
-            .endMetadata()
-            .withNewStatus()
-            .withActive(1)
-            .endStatus()
-            .build();
-
-        JobList activeJobs = new JobList();
-        activeJobs.setItems(List.of(activeJob));
-        when(filteredJobs.list()).thenReturn(activeJobs);
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Running"));
         when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
 
         invokePollJobsOnce();
@@ -119,20 +223,8 @@ public class KubernetesJobMonitorTests {
 
     @Test
     public void pollJobsOnce_RetriesRunningJobUntilCallbackSucceeds() throws Exception {
-        Job activeJob = new JobBuilder()
-            .withNewMetadata()
-            .withName(JOB_NAME)
-            .addToLabels("starexec.org/managed", "true")
-            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
-            .endMetadata()
-            .withNewStatus()
-            .withActive(1)
-            .endStatus()
-            .build();
-
-        JobList activeJobs = new JobList();
-        activeJobs.setItems(List.of(activeJob));
-        when(filteredJobs.list()).thenReturn(activeJobs);
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Running"));
         when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(false, true);
 
         invokePollJobsOnce();

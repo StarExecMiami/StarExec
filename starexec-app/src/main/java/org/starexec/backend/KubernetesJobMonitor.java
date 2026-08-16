@@ -256,6 +256,15 @@ public class KubernetesJobMonitor {
             .list()
             .getItems();
 
+        // One listing per poll, not one per job: the pod template carries the same labels
+        // as its Job, so a single labelled call indexes every pod by execution id.
+        PodPhaseView pods = PodPhaseView.list(
+            kubernetesClient,
+            namespace,
+            MANAGED_LABEL_KEY,
+            EXEC_ID_LABEL_KEY
+        );
+
         for (Job job : jobs) {
             Integer execId = extractExecId(job);
             if (execId == null) {
@@ -268,7 +277,7 @@ public class KubernetesJobMonitor {
 
             CompletionState completion = getCompletionState(job);
             if (completion == CompletionState.RUNNING) {
-                if (isActiveJob(job) && !runningExecIds.contains(execId)) {
+                if (isRunningOnANode(job, execId, pods) && !runningExecIds.contains(execId)) {
                     String jobName =
                         (job.getMetadata() != null) ? job.getMetadata().getName() : "unknown";
                     boolean runningProcessed = callback.onJobRunning(execId, jobName);
@@ -361,7 +370,26 @@ public class KubernetesJobMonitor {
         return CompletionState.RUNNING;
     }
 
-    private boolean isActiveJob(Job job) {
+    /**
+     * Whether this job has a pod actually executing on a node.
+     *
+     * <p>Not {@code status.active > 0}, which the Kubernetes API defines as "the number of
+     * pending and running pods which are not terminating". A pod the scheduler has never
+     * placed satisfies that test, so reading it moved a pair to STATUS_RUNNING before
+     * anything ran — and a pair sitting at RUNNING is invisible to
+     * {@code GetPairsEnqueuedLongerThan}, which looks for STATUS_ENQUEUED.
+     *
+     * <p>When pods cannot be listed the old test is all there is, so it is used and the
+     * behaviour is exactly what it was before this distinction existed.
+     */
+    private boolean isRunningOnANode(Job job, int execId, PodPhaseView pods) {
+        if (!pods.isAvailable()) {
+            return hasActivePod(job);
+        }
+        return pods.phaseFor(execId) == PodPhaseView.Phase.RUNNING;
+    }
+
+    private boolean hasActivePod(Job job) {
         JobStatus status = job.getStatus();
         if (status == null) {
             return false;

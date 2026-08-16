@@ -9,13 +9,16 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
 import io.fabric8.kubernetes.api.model.Container;
+import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
+import java.util.List;
 import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
+import org.starexec.backend.PodPhaseView;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.database.PairStatusResult;
@@ -173,7 +176,7 @@ public class KubernetesNativeBackendTests {
             .build();
 
         Method rebuildTrackingFromJob = KubernetesNativeBackend.class
-            .getDeclaredMethod("rebuildTrackingFromJob", Job.class);
+            .getDeclaredMethod("rebuildTrackingFromJob", Job.class, PodPhaseView.class);
         rebuildTrackingFromJob.setAccessible(true);
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
@@ -181,7 +184,7 @@ public class KubernetesNativeBackendTests {
                 .when(() -> JobPairs.trySetPairRunning(707))
                 .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
 
-            rebuildTrackingFromJob.invoke(backend, job);
+            rebuildTrackingFromJob.invoke(backend, job, viewWithPod(77, "Running"));
 
             jobPairsMock.verify(() -> JobPairs.trySetPairRunning(707));
         }
@@ -198,6 +201,11 @@ public class KubernetesNativeBackendTests {
         assertEquals(Path.of("/tmp/starexec/out/707"), execToOut.get(77));
     }
 
+    /**
+     * A restart during a scheduling failure must not re-apply the mislabel. The Job here
+     * reports active=1, which the Kubernetes API defines as counting pending pods as well
+     * as running ones, and its pod has never left phase Pending.
+     */
     @Test
     public void rebuildTrackingFromJobDoesNotMarkPendingJobsRunning() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
@@ -209,14 +217,17 @@ public class KubernetesNativeBackendTests {
                 .addToLabels("starexec.org/pair-id", "708")
                 .addToAnnotations("starexec.org/output-dir", "/tmp/starexec/out/708")
             .endMetadata()
+            .withNewStatus()
+                .withActive(1)
+            .endStatus()
             .build();
 
         Method rebuildTrackingFromJob = KubernetesNativeBackend.class
-            .getDeclaredMethod("rebuildTrackingFromJob", Job.class);
+            .getDeclaredMethod("rebuildTrackingFromJob", Job.class, PodPhaseView.class);
         rebuildTrackingFromJob.setAccessible(true);
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
-            rebuildTrackingFromJob.invoke(backend, job);
+            rebuildTrackingFromJob.invoke(backend, job, viewWithPod(78, "Pending"));
             jobPairsMock.verifyNoInteractions();
         }
 
@@ -562,6 +573,25 @@ public class KubernetesNativeBackendTests {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return field.get(target);
+    }
+
+    /** A pod listing containing one pod for {@code execId} in the given phase. */
+    private PodPhaseView viewWithPod(int execId, String phase) {
+        return PodPhaseView.of(
+            List.of(
+                new PodBuilder()
+                    .withNewMetadata()
+                        .withName("pod-" + execId)
+                        .withCreationTimestamp("2026-08-15T12:00:00Z")
+                        .addToLabels("starexec.org/exec-id", String.valueOf(execId))
+                    .endMetadata()
+                    .withNewStatus()
+                        .withPhase(phase)
+                    .endStatus()
+                    .build()
+            ),
+            "starexec.org/exec-id"
+        );
     }
 
     private KubernetesJobMonitor.JobCompletionCallback instantiateCompletionCallback(

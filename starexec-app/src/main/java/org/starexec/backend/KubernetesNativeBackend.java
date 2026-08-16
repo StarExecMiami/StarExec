@@ -1306,6 +1306,16 @@ public class KubernetesNativeBackend implements Backend {
                 }
             }
 
+            // Whether a recovered job is running or merely waiting to be scheduled cannot
+            // be read from the Job alone, and getting it wrong here re-applies the
+            // mislabel this reconciliation exists to clear.
+            PodPhaseView pods = PodPhaseView.list(
+                kubernetesClient,
+                namespace,
+                MANAGED_LABEL,
+                EXEC_ID_LABEL
+            );
+
             List<Integer> enqueuedIds = JobPairs.getPairIdsByStatusCode(
                 StatusCode.STATUS_ENQUEUED.getVal());
             List<Integer> runningIds = JobPairs.getPairIdsByStatusCode(
@@ -1318,10 +1328,10 @@ public class KubernetesNativeBackend implements Backend {
                 Job activeJob = pairIdToActiveJob.get(pairId);
                 Job terminalJob = pairIdToTerminalJob.get(pairId);
                 if (activeJob != null) {
-                    rebuildTrackingFromJob(activeJob);
+                    rebuildTrackingFromJob(activeJob, pods);
                     enqueuedRebuilt++;
                 } else if (terminalJob != null) {
-                    if (processReconciledJobThroughCallback(terminalJob)) {
+                    if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         enqueuedProcessed++;
                     }
                 } else if (JobPairs.tryResetEnqueuedToPending(pairId)
@@ -1334,10 +1344,10 @@ public class KubernetesNativeBackend implements Backend {
                 Job activeJob = pairIdToActiveJob.get(pairId);
                 Job terminalJob = pairIdToTerminalJob.get(pairId);
                 if (activeJob != null) {
-                    rebuildTrackingFromJob(activeJob);
+                    rebuildTrackingFromJob(activeJob, pods);
                     runningRebuilt++;
                 } else if (terminalJob != null) {
-                    if (processReconciledJobThroughCallback(terminalJob)) {
+                    if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         runningProcessed++;
                     }
                 } else if (JobPairs.tryMarkRunningAsFailed(pairId)
@@ -1377,14 +1387,14 @@ public class KubernetesNativeBackend implements Backend {
         }
     }
 
-    private boolean processReconciledJobThroughCallback(Job job) {
+    private boolean processReconciledJobThroughCallback(Job job, PodPhaseView pods) {
         Integer execId = extractExecId(job);
         String jobName = getJobName(job);
         if (execId == null || jobName == null) {
             return false;
         }
 
-        rebuildTrackingFromJob(job);
+        rebuildTrackingFromJob(job, pods);
         KubernetesJobCompletionCallback callback =
             new KubernetesJobCompletionCallback();
         if (isSucceededJob(job)) {
@@ -1393,7 +1403,7 @@ public class KubernetesNativeBackend implements Backend {
         return callback.onJobFailed(execId, jobName, summarizeJobFailure(job));
     }
 
-    private void rebuildTrackingFromJob(Job job) {
+    private void rebuildTrackingFromJob(Job job, PodPhaseView pods) {
         Integer execId = extractExecId(job);
         Integer pairId = extractPairId(job);
         String jobName = getJobName(job);
@@ -1420,12 +1430,26 @@ public class KubernetesNativeBackend implements Backend {
             );
         }
 
-        if (!isTerminalJob(job) && isActiveJob(job)) {
+        if (!isTerminalJob(job) && isRunningOnANode(job, execId, pods)) {
             markPairRunningSafely(pairId, "startup reconciliation");
         }
     }
 
-    private boolean isActiveJob(Job job) {
+    /**
+     * Whether this job has a pod actually executing on a node.
+     *
+     * <p>The same judgement the monitor makes, through the same classifier, because two
+     * copies of it drifted before: {@code status.active} counts pending pods as well as
+     * running ones, so a restart during a scheduling failure re-marked the pair RUNNING.
+     */
+    private boolean isRunningOnANode(Job job, int execId, PodPhaseView pods) {
+        if (!pods.isAvailable()) {
+            return hasActivePod(job);
+        }
+        return pods.phaseFor(execId) == PodPhaseView.Phase.RUNNING;
+    }
+
+    private boolean hasActivePod(Job job) {
         if (job == null || job.getStatus() == null) {
             return false;
         }
