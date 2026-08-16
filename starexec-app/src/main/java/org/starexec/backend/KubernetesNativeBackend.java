@@ -89,6 +89,7 @@ package org.starexec.backend;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.fabric8.kubernetes.api.model.Node;
+import io.fabric8.kubernetes.api.model.NodeCondition;
 import io.fabric8.kubernetes.api.model.NodeList;
 import io.fabric8.kubernetes.api.model.NodeSpec;
 import io.fabric8.kubernetes.api.model.Quantity;
@@ -244,6 +245,26 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Flag set during graceful shutdown to reject new submissions */
     private volatile boolean shuttingDown = false;
+
+    /**
+     * How long the schedulable-queue view may be reused before it is refetched.
+     *
+     * <p>Short, because it gates dispatch: a queue that has just come back should not wait
+     * long to be used. But not zero, because the check is consulted once per queue per
+     * scheduling pass and per pair on submission, and an uncached lookup would put a node
+     * listing on the API server for every one of those.
+     */
+    private static final long QUEUE_VIEW_TTL_MS = 10_000L;
+
+    /** Queue label values that currently have at least one schedulable node. */
+    private volatile Set<String> schedulableQueues = Collections.emptySet();
+
+    /** Queue label values present on any worker node, schedulable or not. */
+    private volatile Set<String> labelledQueues = Collections.emptySet();
+
+    private volatile long queueViewRefreshedAt = 0L;
+
+    private final Object queueViewLock = new Object();
 
     /** Hard concurrency cap to prevent unbounded K8s Job creation */
     private int maxConcurrentJobs = 50;
@@ -778,6 +799,155 @@ public class KubernetesNativeBackend implements Backend {
      * @param logPath Path for job output logs
      * @return Execution ID (positive) or -1 on error
      */
+    /**
+     * True if a node can actually receive a pod: uncordoned <em>and</em> Ready.
+     *
+     * <p>Both conditions are needed. A node that is merely uncordoned but {@code NotReady}
+     * — kubelet stopped, disk pressure, a network partition — still accepts no pods, so
+     * treating it as available would leave the pod pending exactly as before.
+     */
+    static boolean isNodeSchedulable(Node node) {
+        if (node == null || node.getSpec() == null || node.getStatus() == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(node.getSpec().getUnschedulable())) {
+            return false;
+        }
+        List<NodeCondition> conditions = node.getStatus().getConditions();
+        if (conditions == null) {
+            return false;
+        }
+        for (NodeCondition condition : conditions) {
+            if ("Ready".equals(condition.getType())) {
+                return "True".equals(condition.getStatus());
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Refreshes the queue view if it has aged past {@link #QUEUE_VIEW_TTL_MS}.
+     *
+     * <p>One node listing serves both questions the routing gate asks — which queues exist
+     * at all, and which can take work now — so the two never cost separate API calls.
+     */
+    private void refreshQueueViewIfStale() {
+        if (System.currentTimeMillis() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
+            return;
+        }
+        synchronized (queueViewLock) {
+            // Re-checked inside the lock: several dispatch threads can arrive together
+            // and only the first should pay for the refresh.
+            if (System.currentTimeMillis() - queueViewRefreshedAt < QUEUE_VIEW_TTL_MS) {
+                return;
+            }
+            try {
+                Set<String> labelled = new HashSet<>();
+                Set<String> schedulable = new HashSet<>();
+                List<Node> nodes = kubernetesClient
+                    .nodes()
+                    .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
+                    .list()
+                    .getItems();
+                for (Node node : nodes) {
+                    String queue = node.getMetadata() != null && node.getMetadata().getLabels() != null
+                        ? node.getMetadata().getLabels().get(queueLabelKey)
+                        : null;
+                    // A worker with no queue label belongs to the default queue, which is
+                    // how getNodeQueueAssociations already reads it.
+                    String queueName = (queue == null || queue.trim().isEmpty())
+                        ? DEFAULT_QUEUE_NAME
+                        : queue.trim();
+                    labelled.add(queueName);
+                    if (isNodeSchedulable(node)) {
+                        schedulable.add(queueName);
+                    }
+                }
+                labelledQueues = Collections.unmodifiableSet(labelled);
+                schedulableQueues = Collections.unmodifiableSet(schedulable);
+                queueViewRefreshedAt = System.currentTimeMillis();
+            } catch (Exception e) {
+                // Leave the previous view in place rather than emptying it. Treating an
+                // API blip as "no queue can run anything" would stall all dispatch, and
+                // treating it as "every queue is fine" would resume the pending-pod
+                // black hole. The stale view is the least wrong of the three.
+                log.warn("Could not refresh the Kubernetes queue view; reusing the previous one", e);
+            }
+        }
+    }
+
+    @Override
+    public boolean isQueueDispatchable(String queueName) {
+        if (!initialized || shuttingDown) {
+            return false;
+        }
+        refreshQueueViewIfStale();
+        String name = (queueName == null || queueName.trim().isEmpty())
+            ? DEFAULT_QUEUE_NAME
+            : queueName.trim();
+
+        if (schedulableQueues.contains(name)) {
+            return true;
+        }
+        if (labelledQueues.contains(name)) {
+            // Nodes carry this queue but none can take work: a drain, or nodes that have
+            // gone NotReady. Transient, so defer rather than fail the pairs.
+            log.warn(
+                "Queue '" + name + "' has nodes but none are schedulable right now" +
+                " (cordoned or NotReady); deferring dispatch"
+            );
+            return false;
+        }
+        // No node carries this queue at all. Permanent until someone fixes it, so let the
+        // pairs reach submitScript and be rejected there where the failure is visible,
+        // rather than silently deferring for ever.
+        return true;
+    }
+
+    @Override
+    public int submitScript(
+        int pairId,
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath,
+        String queueName
+    ) {
+        String name = (queueName == null || queueName.trim().isEmpty())
+            ? DEFAULT_QUEUE_NAME
+            : queueName.trim();
+
+        // Static misconfiguration: no worker node carries this queue. It will not resolve
+        // on its own, so reject the pair rather than let its pod pend for ever with
+        // nothing to say why.
+        if (initialized && !shuttingDown) {
+            refreshQueueViewIfStale();
+            if (!labelledQueues.contains(name)) {
+                log.error(
+                    "Refusing to submit pair " + pairId + ": no Kubernetes worker node is" +
+                    " labelled " + queueLabelKey + "=" + name + ", so a pod for queue '" +
+                    name + "' could never be scheduled. Label a node for this queue."
+                );
+                return -1;
+            }
+        }
+
+        pendingQueueName.set(name);
+        try {
+            return submitScript(pairId, scriptPath, workingDirectoryPath, logPath);
+        } finally {
+            pendingQueueName.remove();
+        }
+    }
+
+    /**
+     * Carries the queue from the five-argument entry point to {@code buildKubernetesJob}.
+     *
+     * <p>A thread-local rather than a field because dispatch is not guaranteed to be
+     * single-threaded, and a field would let one submission's queue leak into another's
+     * pod spec — which would be the original routing bug wearing a different hat.
+     */
+    private final ThreadLocal<String> pendingQueueName = new ThreadLocal<>();
+
     @Override
     public int submitScript(
         int pairId,
@@ -894,6 +1064,24 @@ public class KubernetesNativeBackend implements Backend {
         Map<String, String> nodeSelector = new HashMap<>();
         if (workerNodeSelectorKey != null && !workerNodeSelectorKey.trim().isEmpty()) {
             nodeSelector.put(workerNodeSelectorKey, workerNodeSelectorValue);
+        }
+
+        // Route to the queue's nodes. Without this the selector carried only the worker
+        // label, so a pair submitted to one queue could execute on any worker node in any
+        // other -- the queue was recorded in the database and shown in the UI while
+        // meaning nothing to the scheduler. Queues separate competitions and hardware
+        // classes, so that is a correctness failure, not a scheduling inefficiency.
+        //
+        // The default queue is deliberately not selected on: its nodes are the ones with
+        // no queue label at all, and a selector cannot match an absent label. Membership
+        // of the default queue is "not claimed by any other queue", which the scheduler
+        // expresses by placing no constraint.
+        String queueName = pendingQueueName.get();
+        if (queueName != null
+                && !isDefaultQueueName(queueName)
+                && queueLabelKey != null
+                && !queueLabelKey.trim().isEmpty()) {
+            nodeSelector.put(queueLabelKey, queueName);
         }
 
         boolean pinToAppNode = requiresSameNodeDataPvc();

@@ -825,4 +825,123 @@ public class KubernetesNativeBackendTests {
         assertFalse(isDefaultQueueName(null));
         assertFalse(isDefaultQueueName(""));
     }
+
+    // ---------------------------------------------------------------------
+    // B1: node schedulability
+    //
+    // A node must be BOTH uncordoned and Ready to receive a pod. Checking only
+    // the cordon flag would let a NotReady node look available, and a pod sent
+    // there pends exactly as it did before -- which is the failure this whole
+    // section exists to remove.
+    // ---------------------------------------------------------------------
+
+    private boolean isNodeSchedulable(Boolean unschedulable, String readyStatus)
+        throws Exception {
+        io.fabric8.kubernetes.api.model.NodeBuilder builder =
+            new io.fabric8.kubernetes.api.model.NodeBuilder()
+                .withNewMetadata().withName("n021").endMetadata()
+                .withNewSpec().withUnschedulable(unschedulable).endSpec();
+        if (readyStatus == null) {
+            builder = builder.withNewStatus().endStatus();
+        } else {
+            builder = builder.withNewStatus()
+                .addNewCondition().withType("Ready").withStatus(readyStatus).endCondition()
+                .endStatus();
+        }
+        Method m = KubernetesNativeBackend.class.getDeclaredMethod(
+            "isNodeSchedulable", io.fabric8.kubernetes.api.model.Node.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(null, builder.build());
+    }
+
+    @Test
+    public void aReadyUncordonedNodeIsSchedulable() throws Exception {
+        assertTrue(isNodeSchedulable(null, "True"));
+        assertTrue(isNodeSchedulable(Boolean.FALSE, "True"));
+    }
+
+    @Test
+    public void aCordonedNodeIsNotSchedulable() throws Exception {
+        assertFalse(
+            "an operator draining a node must not have work sent to it",
+            isNodeSchedulable(Boolean.TRUE, "True")
+        );
+    }
+
+    @Test
+    public void anUncordonedButNotReadyNodeIsNotSchedulable() throws Exception {
+        // The case a cordon-only check misses: kubelet stopped, disk pressure, a network
+        // partition. The node accepts nothing, so a pod sent there pends indefinitely.
+        assertFalse(isNodeSchedulable(Boolean.FALSE, "False"));
+        assertFalse("Unknown is not Ready", isNodeSchedulable(Boolean.FALSE, "Unknown"));
+        assertFalse("no Ready condition at all", isNodeSchedulable(Boolean.FALSE, null));
+    }
+
+    // ---------------------------------------------------------------------
+    // B1: the routing gate's two branches
+    //
+    // The boundary most likely to be got wrong. "No node carries this queue"
+    // and "this queue's nodes are all down" look similar and must behave
+    // oppositely: the first is permanent and should fail the pair loudly, the
+    // second is transient and must defer, because failing pairs through a
+    // 30-second drain destroys a benchmark run for a condition that fixes
+    // itself.
+    // ---------------------------------------------------------------------
+
+    @SuppressWarnings("unchecked")
+    private KubernetesNativeBackend backendWithQueueView(
+        java.util.Set<String> labelled,
+        java.util.Set<String> schedulable
+    ) throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "labelledQueues", labelled);
+        setField(backend, "schedulableQueues", schedulable);
+        setField(backend, "initialized", true);
+        setField(backend, "shuttingDown", false);
+        // Keep the cached view fresh so the gate does not try to reach a cluster.
+        setField(backend, "queueViewRefreshedAt", System.currentTimeMillis());
+        return backend;
+    }
+
+    @Test
+    public void aQueueWithSchedulableNodesIsDispatchable() throws Exception {
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("casc.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("casc.q"))
+        );
+
+        assertTrue(backend.isQueueDispatchable("casc.q"));
+    }
+
+    @Test
+    public void aQueueWhoseNodesAreAllDownDefersRatherThanFailing() throws Exception {
+        // Labelled but not schedulable: a drain or a NotReady node. Deferring keeps the
+        // pairs alive for a later pass.
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("casc.q")),
+            java.util.Collections.emptySet()
+        );
+
+        assertFalse(
+            "a transient outage must defer dispatch, not let the pairs through to be"
+                + " marked terminally failed",
+            backend.isQueueDispatchable("casc.q")
+        );
+    }
+
+    @Test
+    public void aQueueNoNodeCarriesIsLeftToFailAtSubmission() throws Exception {
+        // Permanent misconfiguration. The gate deliberately lets it through so
+        // submitScript can reject it where the failure is visible, rather than deferring
+        // for ever and hiding the configuration bug behind a queue that never moves.
+        KubernetesNativeBackend backend = backendWithQueueView(
+            java.util.Collections.emptySet(),
+            java.util.Collections.emptySet()
+        );
+
+        assertTrue(
+            "an unlabelled queue must not be deferred silently -- it never resolves",
+            backend.isQueueDispatchable("high-mem.q")
+        );
+    }
 }

@@ -330,6 +330,24 @@ public abstract class JobManager {
 		try {
 			log.entry(methodName);
 
+			// Asked once per queue per pass, before any pair is touched. A queue that
+			// cannot run anything right now -- every node drained or not ready -- is
+			// skipped, leaving its pairs enqueued here for a later pass.
+			//
+			// This cannot be done inside submitScript. That returns an execution id or an
+			// error, and the error branch below records a terminal ERROR_SGE_REJECT; there
+			// is no value meaning "not now". Failing pairs through a brief drain would
+			// destroy a benchmark run for a condition that resolves itself, so the
+			// decision belongs here, where dispatch is decided, rather than there.
+			//
+			// A permanently unroutable queue is a different case and is still rejected at
+			// submission: it will not fix itself and should be visible.
+			if (!R.BACKEND.isQueueDispatchable(q.getName())) {
+				log.warn(methodName, "Queue " + q.getName() + " cannot accept work at the" +
+						" moment; deferring its pairs to a later pass rather than failing them");
+				return;
+			}
+
 			initMainTemplateIf();
 
 			// updates user load values to take into account actual job pair runtimes.
@@ -551,7 +569,13 @@ public abstract class JobManager {
 
 							log.trace("About to submit pair " + pair.getId());
 
-							int execId = R.BACKEND.submitScript(pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath);
+							// The queue is passed explicitly. SGE reads it from the "#$ -q"
+							// line written into the script by buildSchedule, but that line
+							// is an inert comment to a backend that places work itself, so
+							// such a backend had no way to learn which queue a pair
+							// belonged to and could run it anywhere.
+							int execId = R.BACKEND.submitScript(
+									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName());
 
 							log.trace("Just submitted pair " + pair.getId());
 
