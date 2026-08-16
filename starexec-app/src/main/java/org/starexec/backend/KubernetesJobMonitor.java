@@ -168,7 +168,20 @@ public class KubernetesJobMonitor {
      * reclassified as an ordinary running pair, nothing would ever delete the Job and that
      * pod could write results alongside the rerun.
      */
-    private final Map<Integer, String> cleanupPending = new ConcurrentHashMap<>();
+    private final Map<Integer, StuckPendingRecord> cleanupPending =
+        new ConcurrentHashMap<>();
+
+    /** What a stuck-pending transition needs to resume after an incomplete attempt. */
+    private static final class StuckPendingRecord {
+
+        private final String jobName;
+        private final String reason;
+
+        private StuckPendingRecord(String jobName, String reason) {
+            this.jobName = jobName;
+            this.reason = reason;
+        }
+    }
 
     /** How long a pod may be Pending before it is logged, in milliseconds */
     private final long pendingWarnMillis;
@@ -357,11 +370,14 @@ public class KubernetesJobMonitor {
             EXEC_ID_LABEL_KEY
         );
 
+        Set<Integer> execIdsInListing = ConcurrentHashMap.newKeySet();
+
         for (Job job : jobs) {
             Integer execId = extractExecId(job);
             if (execId == null) {
                 continue;
             }
+            execIdsInListing.add(execId);
 
             if (completedExecIds.contains(execId)) {
                 continue;
@@ -393,6 +409,31 @@ public class KubernetesJobMonitor {
             pendingWarnedAt.remove(execId);
             cleanupPending.remove(execId);
         }
+
+        drainCleanupPending(execIdsInListing);
+    }
+
+    /**
+     * Finishes stuck-pending transitions whose Job is no longer listed.
+     *
+     * <p>The Job is deleted before the pair's terminal status is written, so that a pair
+     * can never be rerun-eligible while a pod that might still start belongs to it. That
+     * ordering costs the Job as a retry trigger: if the database write then fails, no
+     * listing will ever bring the pair back. This is the replacement trigger, and it is
+     * the reason the deletion can safely go first.
+     *
+     * <p>Exec ids still present in the listing are skipped — the main loop handles those,
+     * and calling the transition twice in one poll would be pointless work.
+     */
+    private void drainCleanupPending(Set<Integer> execIdsInListing) {
+        for (Map.Entry<Integer, StuckPendingRecord> entry : cleanupPending.entrySet()) {
+            int execId = entry.getKey();
+            if (execIdsInListing.contains(execId) || completedExecIds.contains(execId)) {
+                continue;
+            }
+            StuckPendingRecord record = entry.getValue();
+            completeStuckPending(execId, record.jobName, record.reason);
+        }
     }
 
     /**
@@ -412,9 +453,9 @@ public class KubernetesJobMonitor {
         // now. Its record may already be terminal and eligible for rerun, so letting a
         // late-starting pod reclassify it as running would leave the Job undeleted and
         // that pod free to write results beside the rerun's.
-        String pendingCleanupReason = cleanupPending.get(execId);
-        if (pendingCleanupReason != null) {
-            completeStuckPending(execId, jobName, pendingCleanupReason);
+        StuckPendingRecord pendingCleanup = cleanupPending.get(execId);
+        if (pendingCleanup != null) {
+            completeStuckPending(execId, jobName, pendingCleanup.reason);
             return;
         }
 
@@ -470,7 +511,7 @@ public class KubernetesJobMonitor {
             cleanupPending.remove(execId);
             return;
         }
-        cleanupPending.put(execId, reason);
+        cleanupPending.put(execId, new StuckPendingRecord(jobName, reason));
     }
 
     private void warnAboutStuckPod(

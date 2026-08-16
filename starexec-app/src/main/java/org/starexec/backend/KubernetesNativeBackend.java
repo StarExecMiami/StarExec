@@ -217,6 +217,31 @@ public class KubernetesNativeBackend implements Backend {
      */
     private static final String LEGACY_DEFAULT_QUEUE_LABEL = "default";
 
+    /**
+     * Every node-label value that means "the default queue".
+     *
+     * <p>One list, read by both {@link #normalizeQueueLabel} and
+     * {@link #defaultQueueAffinity}, so the queue a node is reported to belong to and the
+     * nodes the scheduler will actually place a default-queue pod on cannot disagree. When
+     * they disagreed, the backend reported a queue schedulable while every pod for it
+     * stayed unschedulable — a stall with no error anywhere.
+     *
+     * <p>Matched exactly, never case-insensitively: Kubernetes label values are
+     * case-sensitive, so {@code ALL.Q} is a different label from {@code all.q} and
+     * treating them as one would reintroduce exactly that disagreement. The empty value is
+     * included because Kubernetes permits it and {@code kubectl label node n1 key=}
+     * produces it.
+     */
+    private static final List<String> DEFAULT_QUEUE_LABEL_VALUES = Collections
+        .unmodifiableList(
+            Arrays.asList(
+                R.DEFAULT_QUEUE_NAME,
+                "all",
+                "default",
+                ""
+            )
+        );
+
     /** True if {@code queueName} denotes the default queue under any of its spellings. */
     private static boolean isDefaultQueueName(String queueName) {
         if (queueName == null) {
@@ -242,15 +267,11 @@ public class KubernetesNativeBackend implements Backend {
      * accepting a legacy name, and only the first is safe.
      */
     private static String normalizeQueueLabel(String rawLabel) {
-        if (rawLabel == null || rawLabel.trim().isEmpty()) {
+        if (rawLabel == null) {
             return DEFAULT_QUEUE_NAME;
         }
         String name = rawLabel.trim();
-        if (isDefaultQueueName(name)
-                || LEGACY_DEFAULT_QUEUE_LABEL.equalsIgnoreCase(name)) {
-            return DEFAULT_QUEUE_NAME;
-        }
-        return name;
+        return DEFAULT_QUEUE_LABEL_VALUES.contains(name) ? DEFAULT_QUEUE_NAME : name;
     }
 
     // =========================================================================
@@ -1303,11 +1324,9 @@ public class KubernetesNativeBackend implements Backend {
                         .addNewMatchExpression()
                             .withKey(queueLabelKey)
                             .withOperator("In")
-                            .withValues(
-                                DEFAULT_QUEUE_NAME,
-                                SGE_DEFAULT_QUEUE_SHORT_NAME,
-                                LEGACY_DEFAULT_QUEUE_LABEL
-                            )
+                            // The same list normalizeQueueLabel reads, so the two cannot
+                            // classify a node differently.
+                            .withValues(DEFAULT_QUEUE_LABEL_VALUES)
                         .endMatchExpression()
                     .endNodeSelectorTerm()
                 .endRequiredDuringSchedulingIgnoredDuringExecution()
@@ -2639,20 +2658,37 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                // Order is load-bearing, and it is the reverse of the obvious one.
+                // Order is load-bearing. The invariant: the Job is gone before anything
+                // that makes this pair eligible for an automatic rerun is written.
                 //
-                // The Kubernetes Job is this callback's only retry trigger: the monitor
-                // iterates Jobs returned by the API, so once the Job is deleted a
-                // `return false` promises a retry that can never happen -- the pair keeps
-                // its old status, the exec id never reaches completedExecIds, and the
-                // submission slot below is never released. Deleting first therefore turns
-                // any later failure into a stranded pair and a permanently leaked slot.
+                // ERROR_RUNSCRIPT plus a non-null end_time is exactly what
+                // GetJobPairIdsWithStatusNotRerunAfterDate selects, and RERUN_FAILED_PAIRS
+                // dispatches a fresh execution for it. Nothing kills the old one:
+                // rerunPairsBatch only calls killPair for status < STATUS_COMPLETE, and
+                // ERROR_RUNSCRIPT is 11. So publishing that state while the old Job still
+                // exists leaves a pod that can start later and write a second set of
+                // results for the same pair. Deleting first removes that possibility
+                // rather than relying on the deletion retry winning a 90-minute race.
                 //
-                // So every step that can fail runs while the Job still exists, and the
-                // Job is removed last. Each is safe to repeat: UpdatePairStatusPrecise
-                // treats a duplicate terminal write as idempotent success by design (its
-                // own comment says so, precisely to keep this at-least-once retry from
-                // looping forever), and setEndTime is an unconditional UPDATE.
+                // The obvious objection to deleting first is that the Job is the monitor's
+                // retry trigger, so a later failure could never be retried. That is why
+                // KubernetesJobMonitor keeps its own cleanup-pending record and drains it
+                // independently of the Job listing -- see drainCleanupPending. Every step
+                // here is safe to repeat: ensureKubernetesJobGone reports an absent Job as
+                // success, UpdatePairStatusPrecise treats a duplicate terminal write as
+                // idempotent success by design, and setEndTime is an unconditional UPDATE.
+                if (!ensureKubernetesJobGone(jobName)) {
+                    log.warn(
+                        "Kubernetes job " +
+                        jobName +
+                        " could not be deleted and is still present; it has not finished," +
+                        " so ttlSecondsAfterFinished will not reap it. Leaving the pair" +
+                        " untouched and retrying, so it cannot become rerun-eligible while" +
+                        " a pod that may still start belongs to it."
+                    );
+                    return false;
+                }
+
                 int stageNumber = readStageNumber(execId, 1);
 
                 boolean updated = JobPairs.setPairStatusPrecise(
@@ -2665,7 +2701,8 @@ public class KubernetesNativeBackend implements Backend {
                     log.warn(
                         "Failed recording stuck-pending status for pair " +
                         pairId +
-                        "; the Kubernetes job is being left in place so this is retried"
+                        "; the job is already gone, so the monitor's cleanup-pending" +
+                        " record is what brings this back"
                     );
                     return false;
                 }
@@ -2683,25 +2720,15 @@ public class KubernetesNativeBackend implements Backend {
                     endTimeRecorded = false;
                 }
                 if (!endTimeRecorded) {
+                    // The pair is ERROR_RUNSCRIPT with a null end_time, which the rerun
+                    // query excludes -- so it is not yet rerun-eligible and no duplicate
+                    // execution can be dispatched. The cleanup-pending record brings this
+                    // back to finish the job.
                     log.warn(
                         "Could not record end_time for stuck pair " +
                         pairId +
-                        "; without it the pair would stay failed and never be rerun, so" +
-                        " the Kubernetes job is being left in place and this is retried"
-                    );
-                    return false;
-                }
-
-                // Last, because until this succeeds the Job is what brings us back here.
-                // A pod that outlives its Job could later start and write results for a
-                // pair that has since been rerun.
-                if (!ensureKubernetesJobGone(jobName)) {
-                    log.warn(
-                        "Kubernetes job " +
-                        jobName +
-                        " could not be deleted and is still present; it has not finished," +
-                        " so ttlSecondsAfterFinished will not reap it. Retrying rather" +
-                        " than releasing the pair while its pod may still run."
+                        "; without it the pair stays failed and is never rerun, so this" +
+                        " is retried"
                     );
                     return false;
                 }

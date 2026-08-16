@@ -900,8 +900,13 @@ public class KubernetesNativeBackendTests {
     }
 
     /**
-     * A Job that will not delete keeps a pod that may still start. Releasing the pair then
-     * lets that pod run alongside the rerun and write a second set of results for one pair.
+     * The invariant: a pair must not become rerun-eligible while its Job still exists.
+     *
+     * <p>ERROR_RUNSCRIPT plus a non-null end_time is what
+     * GetJobPairIdsWithStatusNotRerunAfterDate selects, and nothing kills the old
+     * execution when RERUN_FAILED_PAIRS dispatches a new one — rerunPairsBatch only calls
+     * killPair for status &lt; STATUS_COMPLETE, and ERROR_RUNSCRIPT is 11. So if deletion
+     * fails, neither write may happen at all.
      */
     @Test
     @SuppressWarnings("unchecked")
@@ -944,6 +949,20 @@ public class KubernetesNativeBackendTests {
             jobPairsMock.when(() -> JobPairs.setEndTime(435)).thenReturn(true);
 
             assertFalse(callback.onJobStuckPending(35, "job-35", "Unschedulable"));
+
+            // Neither write may have happened: together they are precisely what makes the
+            // pair eligible for an automatic rerun, and the old pod is still out there.
+            jobPairsMock.verify(
+                () ->
+                    JobPairs.setPairStatusPrecise(
+                        435,
+                        1,
+                        StatusCode.ERROR_RUNSCRIPT.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal()
+                    ),
+                Mockito.never()
+            );
+            jobPairsMock.verify(() -> JobPairs.setEndTime(435), Mockito.never());
         }
 
         assertEquals(1, activeJobCount.get());
@@ -1107,6 +1126,47 @@ public class KubernetesNativeBackendTests {
         assertEquals("In", legacy.getOperator());
         assertTrue(legacy.getValues().contains("default"));
         assertTrue(legacy.getValues().contains("all.q"));
+        // normalizeQueueLabel treats a present-but-empty label as the default queue, and
+        // Kubernetes permits one, so the scheduler must accept it too. Otherwise the
+        // backend reports the queue schedulable while its pods never place.
+        assertTrue(legacy.getValues().contains(""));
+    }
+
+    /**
+     * The queue view and the affinity must classify a node the same way. Any label value
+     * the view maps to the default queue has to be one the affinity accepts.
+     */
+    @Test
+    public void everyLabelTheViewCallsDefaultIsAcceptedByTheAffinity() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "queueLabelKey", "starexec.org/queue");
+
+        Method normalize = KubernetesNativeBackend.class
+            .getDeclaredMethod("normalizeQueueLabel", String.class);
+        normalize.setAccessible(true);
+        Method defaultQueueAffinity =
+            KubernetesNativeBackend.class.getDeclaredMethod("defaultQueueAffinity");
+        defaultQueueAffinity.setAccessible(true);
+
+        List<String> accepted = ((Affinity) defaultQueueAffinity.invoke(backend))
+            .getNodeAffinity()
+            .getRequiredDuringSchedulingIgnoredDuringExecution()
+            .getNodeSelectorTerms()
+            .get(1)
+            .getMatchExpressions()
+            .get(0)
+            .getValues();
+
+        // Every present label value the view calls the default queue, the scheduler
+        // must also match. An absent label is covered by the DoesNotExist term.
+        for (String label : List.of("", "   ", "default", "all", "all.q", "ALL.Q")) {
+            if ("all.q".equals(normalize.invoke(null, label))) {
+                assertTrue(
+                    "affinity does not accept a label the view calls default: '" + label + "'",
+                    accepted.contains(label.trim())
+                );
+            }
+        }
     }
 
     private JobPairs.PairStatusLookupResult foundLookup(int statusCode)

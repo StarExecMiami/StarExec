@@ -477,6 +477,50 @@ public class KubernetesJobMonitorTests {
         verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
     }
 
+    /**
+     * The Job is deleted before the pair's terminal status is written, so the Job can no
+     * longer serve as the retry trigger. If the database write then fails, no listing will
+     * ever bring the pair back — the monitor's own cleanup-pending record has to, and this
+     * is what makes deleting first safe.
+     */
+    @Test
+    public void cleanupIsRetriedEvenAfterTheJobHasGoneFromTheListing() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(false, true);
+
+        invokePollJobsOnce();
+
+        // The Job was deleted, so it is absent from every later listing.
+        givenJobs();
+        givenPods();
+        invokePollJobsOnce();
+
+        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+    }
+
+    /** And once it has finished, the drain stops calling it. */
+    @Test
+    public void aFinishedCleanupIsNotDrainedAgain() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(false, true);
+
+        invokePollJobsOnce();
+        givenJobs();
+        givenPods();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+    }
+
     /** And it keeps retrying until the transition actually finishes. */
     @Test
     public void stuckPendingCleanupIsDrivenToCompletion() throws Exception {
