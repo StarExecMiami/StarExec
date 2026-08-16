@@ -9,6 +9,14 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # Read-only, and needed to tell a pod that is running from one that has never
+  # started. JobStatus.active counts pending and running pods alike, so without
+  # this the monitor reports an unschedulable pair as RUNNING and it waits
+  # forever holding a submission slot. Absent, the backend degrades to that
+  # earlier behaviour and logs once rather than failing.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 {{- else }}
   []
 {{- end }}
