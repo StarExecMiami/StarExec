@@ -8,10 +8,20 @@ import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
+import io.fabric8.kubernetes.api.model.Affinity;
 import io.fabric8.kubernetes.api.model.Container;
+import io.fabric8.kubernetes.api.model.NodeSelectorRequirement;
 import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.StatusDetails;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
+import io.fabric8.kubernetes.api.model.batch.v1.JobList;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.dsl.BatchAPIGroupDSL;
+import io.fabric8.kubernetes.client.dsl.MixedOperation;
+import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
+import io.fabric8.kubernetes.client.dsl.ScalableResource;
+import io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
@@ -570,6 +580,45 @@ public class KubernetesNativeBackendTests {
         }
     }
 
+    /**
+     * Gives the backend a Kubernetes client whose Job deletion behaves as asked.
+     *
+     * <p>Needed because {@code ensureKubernetesJobGone} reports "not gone" when there is
+     * no client — it cannot confirm otherwise — and the stuck-pending path now treats that
+     * as a reason to retry rather than to release the pair.
+     *
+     * @param deleted   whether the delete call reports a deletion
+     * @param stillThere what a follow-up read finds: the Job, or null if it is really gone
+     */
+    @SuppressWarnings("unchecked")
+    private void givenJobDeletion(
+        KubernetesNativeBackend backend,
+        String jobName,
+        boolean deleted,
+        Job stillThere
+    ) throws Exception {
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
+        V1BatchAPIGroupDSL v1 = Mockito.mock(V1BatchAPIGroupDSL.class);
+        MixedOperation<Job, JobList, ScalableResource<Job>> jobs =
+            Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation<Job, JobList, ScalableResource<Job>> namespaced =
+            Mockito.mock(NonNamespaceOperation.class);
+        ScalableResource<Job> resource = Mockito.mock(ScalableResource.class);
+
+        Mockito.when(client.batch()).thenReturn(batch);
+        Mockito.when(batch.v1()).thenReturn(v1);
+        Mockito.when(v1.jobs()).thenReturn(jobs);
+        Mockito.when(jobs.inNamespace(Mockito.any())).thenReturn(namespaced);
+        Mockito.when(namespaced.withName(jobName)).thenReturn(resource);
+        Mockito
+            .when(resource.delete())
+            .thenReturn(deleted ? List.of(new StatusDetails()) : List.of());
+        Mockito.when(resource.get()).thenReturn(stillThere);
+
+        setField(backend, "kubernetesClient", client);
+    }
+
     private Object getField(Object target, String fieldName) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
@@ -639,6 +688,7 @@ public class KubernetesNativeBackendTests {
         execToOut.put(31, Path.of("/tmp/output/31"));
         holdingSlot.add(31);
         activeJobCount.set(1);
+        givenJobDeletion(backend, "job-31", true, null);
 
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
@@ -707,6 +757,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(32, 432);
         holdingSlot.add(32);
         activeJobCount.set(1);
+        givenJobDeletion(backend, "job-32", true, null);
 
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
@@ -756,6 +807,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(33, 433);
         holdingSlot.add(33);
         activeJobCount.set(1);
+        givenJobDeletion(backend, "job-33", true, null);
 
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
@@ -787,6 +839,193 @@ public class KubernetesNativeBackendTests {
         assertEquals(0, activeJobCount.get());
         assertTrue(holdingSlot.isEmpty());
         assertTrue(execToJob.isEmpty());
+    }
+
+    /**
+     * The Kubernetes Job is this callback's only retry trigger — the monitor iterates Jobs
+     * the API returns — so it must outlive every step that can fail. Deleting it first and
+     * then failing the end-time write would return false while nothing could ever bring
+     * the pair back: it would keep its old status and hold its slot forever.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingKeepsTheJobWhenTheEndTimeWriteFails() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(34, "job-34");
+        execToPair.put(34, 434);
+        holdingSlot.add(34);
+        activeJobCount.set(1);
+        givenJobDeletion(backend, "job-34", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(434))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            434,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(true);
+            jobPairsMock.when(() -> JobPairs.setEndTime(434)).thenReturn(false);
+
+            assertFalse(callback.onJobStuckPending(34, "job-34", "Unschedulable"));
+
+            // Nothing was deleted and nothing was released, so the next poll sees the Job
+            // again and retries.
+            jobPairsMock.verify(() -> JobPairs.setEndTime(434));
+        }
+
+        assertEquals("job-34", execToJob.get(34));
+        assertEquals(1, activeJobCount.get());
+        assertTrue(holdingSlot.contains(34));
+    }
+
+    /**
+     * A Job that will not delete keeps a pod that may still start. Releasing the pair then
+     * lets that pod run alongside the rerun and write a second set of results for one pair.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingKeepsThePairWhenTheJobCannotBeDeleted() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(35, "job-35");
+        execToPair.put(35, 435);
+        holdingSlot.add(35);
+        activeJobCount.set(1);
+        // Delete reports nothing, and the Job is still there afterwards.
+        givenJobDeletion(backend, "job-35", false, new JobBuilder().build());
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(435))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            435,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(true);
+            jobPairsMock.when(() -> JobPairs.setEndTime(435)).thenReturn(true);
+
+            assertFalse(callback.onJobStuckPending(35, "job-35", "Unschedulable"));
+        }
+
+        assertEquals(1, activeJobCount.get());
+        assertTrue(holdingSlot.contains(35));
+    }
+
+    /**
+     * A Job that vanished between the listing and the delete is gone, not undeletable.
+     * Treating an empty delete result as failure would strand the pair forever.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingAcceptsAJobThatHadAlreadyVanished() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(36, "job-36");
+        execToPair.put(36, 436);
+        holdingSlot.add(36);
+        activeJobCount.set(1);
+        // Delete reports nothing because it was already gone; the read confirms it.
+        givenJobDeletion(backend, "job-36", false, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(436))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            436,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(true);
+            jobPairsMock.when(() -> JobPairs.setEndTime(436)).thenReturn(true);
+
+            assertTrue(callback.onJobStuckPending(36, "job-36", "Unschedulable"));
+        }
+
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+    }
+
+    /**
+     * Membership of the default queue is the absence of a queue label, which a
+     * nodeSelector cannot express. Without this a default-queue pair selects on the worker
+     * label alone and can be scheduled onto hardware another queue has claimed — the same
+     * defect the queue selector exists to prevent, in the one case it could not state.
+     */
+    @Test
+    public void defaultQueuePodsAreConfinedToNodesNoOtherQueueClaims() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "queueLabelKey", "starexec.org/queue");
+
+        Method defaultQueueAffinity =
+            KubernetesNativeBackend.class.getDeclaredMethod("defaultQueueAffinity");
+        defaultQueueAffinity.setAccessible(true);
+        Affinity affinity = (Affinity) defaultQueueAffinity.invoke(backend);
+
+        NodeSelectorRequirement requirement = affinity
+            .getNodeAffinity()
+            .getRequiredDuringSchedulingIgnoredDuringExecution()
+            .getNodeSelectorTerms()
+            .get(0)
+            .getMatchExpressions()
+            .get(0);
+
+        assertEquals("starexec.org/queue", requirement.getKey());
+        assertEquals("DoesNotExist", requirement.getOperator());
     }
 
     private JobPairs.PairStatusLookupResult foundLookup(int statusCode)

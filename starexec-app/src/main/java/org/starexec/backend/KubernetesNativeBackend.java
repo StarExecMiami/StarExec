@@ -88,6 +88,8 @@ package org.starexec.backend;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import io.fabric8.kubernetes.api.model.Affinity;
+import io.fabric8.kubernetes.api.model.AffinityBuilder;
 import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.NodeCondition;
 import io.fabric8.kubernetes.api.model.NodeList;
@@ -1084,16 +1086,26 @@ public class KubernetesNativeBackend implements Backend {
         // meaning nothing to the scheduler. Queues separate competitions and hardware
         // classes, so that is a correctness failure, not a scheduling inefficiency.
         //
-        // The default queue is deliberately not selected on: its nodes are the ones with
-        // no queue label at all, and a selector cannot match an absent label. Membership
-        // of the default queue is "not claimed by any other queue", which the scheduler
-        // expresses by placing no constraint.
+        // Membership of the default queue is "not claimed by any other queue", which a
+        // nodeSelector cannot express -- it matches label values, and this is the absence
+        // of a label. That is why the default queue used to carry no queue constraint at
+        // all, which left it selecting on the worker label alone: on a cluster where some
+        // workers are labelled for another queue, a default-queue pair could be scheduled
+        // onto that queue's hardware. It is the same defect the queue selector was added
+        // to fix, surviving in the one case the selector could not state.
+        //
+        // nodeAffinity can state it. DoesNotExist is a required match on the absence of
+        // the key, so a default-queue pod is confined to nodes no other queue claims.
+        // Applied alongside the nodeSelector, which Kubernetes ANDs with it.
         String queueName = pendingQueueName.get();
-        if (queueName != null
-                && !isDefaultQueueName(queueName)
-                && queueLabelKey != null
-                && !queueLabelKey.trim().isEmpty()) {
-            nodeSelector.put(queueLabelKey, queueName);
+        boolean queueLabelUsable = queueLabelKey != null && !queueLabelKey.trim().isEmpty();
+        Affinity queueAffinity = null;
+        if (queueName != null && queueLabelUsable) {
+            if (isDefaultQueueName(queueName)) {
+                queueAffinity = defaultQueueAffinity();
+            } else {
+                nodeSelector.put(queueLabelKey, queueName);
+            }
         }
 
         boolean pinToAppNode = requiresSameNodeDataPvc();
@@ -1127,6 +1139,7 @@ public class KubernetesNativeBackend implements Backend {
                         .withRestartPolicy("Never")
                         .withNodeName(pinnedNodeName)
                         .withNodeSelector(nodeSelector)
+                        .withAffinity(queueAffinity)
                         .addNewContainer()
                             .withName("job-runner")
                             .withImage(jobImage)
@@ -1191,6 +1204,30 @@ public class KubernetesNativeBackend implements Backend {
                     .endSpec()
                 .endTemplate()
             .endSpec()
+            .build();
+    }
+
+    /**
+     * Confines a default-queue pod to nodes that no other queue has claimed.
+     *
+     * <p>{@code DoesNotExist} on the queue label key is the only way to express "this node
+     * belongs to no named queue" to the scheduler. A {@code nodeSelector} matches label
+     * values and so cannot say it, which is why the default queue previously travelled
+     * with no queue constraint at all.
+     *
+     */
+    private Affinity defaultQueueAffinity() {
+        return new AffinityBuilder()
+            .withNewNodeAffinity()
+                .withNewRequiredDuringSchedulingIgnoredDuringExecution()
+                    .addNewNodeSelectorTerm()
+                        .addNewMatchExpression()
+                            .withKey(queueLabelKey)
+                            .withOperator("DoesNotExist")
+                        .endMatchExpression()
+                    .endNodeSelectorTerm()
+                .endRequiredDuringSchedulingIgnoredDuringExecution()
+            .endNodeAffinity()
             .build();
     }
 
@@ -1626,18 +1663,29 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     private void deleteKubernetesJob(Job job) {
-        deleteKubernetesJobByName(getJobName(job));
+        ensureKubernetesJobGone(getJobName(job));
     }
 
     /**
-     * Deletes a Job by name.
+     * Deletes a Job by name and reports whether it is actually gone.
      *
-     * @return true when the API reported a deletion. A Job that is not finished is never
-     *         reaped by ttlSecondsAfterFinished, so a false here leaves a resource an
-     *         operator has to prune by hand and is worth saying out loud.
+     * <p>Not "did the API report a deletion": an empty result also means the Job had
+     * already vanished, and treating that as a failure would strand a pair whose Job
+     * disappeared between the listing and this call. So an empty result is confirmed with
+     * a read, and only a Job still present counts as a failure.
+     *
+     * <p>The distinction matters because callers use the Job's continued existence as
+     * their retry trigger — see {@code onJobStuckPending}. A Job that is not finished is
+     * never reaped by {@code ttlSecondsAfterFinished}, so one that will not delete stays
+     * forever and its pod may still run.
+     *
+     * @return true when the Job is confirmed absent afterwards
      */
-    private boolean deleteKubernetesJobByName(String jobName) {
-        if (jobName == null || kubernetesClient == null) {
+    private boolean ensureKubernetesJobGone(String jobName) {
+        if (jobName == null) {
+            return true;
+        }
+        if (kubernetesClient == null) {
             return false;
         }
         try {
@@ -1648,10 +1696,30 @@ public class KubernetesNativeBackend implements Backend {
                 .inNamespace(namespace)
                 .withName(jobName)
                 .delete();
-            return deleted != null && !deleted.isEmpty();
+            if (deleted != null && !deleted.isEmpty()) {
+                return true;
+            }
+            return !kubernetesJobExists(jobName);
         } catch (Exception e) {
             log.warn("Failed to delete Kubernetes Job: " + jobName, e);
-            return false;
+            return !kubernetesJobExists(jobName);
+        }
+    }
+
+    private boolean kubernetesJobExists(String jobName) {
+        try {
+            return kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .get() != null;
+        } catch (Exception e) {
+            // Cannot tell. Report it as still present so the caller retries rather than
+            // proceeding on an assumption it cannot support.
+            log.warn("Could not confirm whether Kubernetes Job still exists: " + jobName, e);
+            return true;
         }
     }
 
@@ -2472,7 +2540,7 @@ public class KubernetesNativeBackend implements Backend {
                         jobName +
                         ")"
                     );
-                    deleteKubernetesJobByName(jobName);
+                    ensureKubernetesJobGone(jobName);
                     execIdToJobName.remove(execId);
                     execIdToPairId.remove(execId);
                     execIdToOutputDir.remove(execId);
@@ -2488,14 +2556,20 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                if (!deleteKubernetesJobByName(jobName)) {
-                    log.warn(
-                        "Kubernetes reported no deletion for stuck job " +
-                        jobName +
-                        "; it has not finished, so ttlSecondsAfterFinished will not reap it"
-                    );
-                }
-
+                // Order is load-bearing, and it is the reverse of the obvious one.
+                //
+                // The Kubernetes Job is this callback's only retry trigger: the monitor
+                // iterates Jobs returned by the API, so once the Job is deleted a
+                // `return false` promises a retry that can never happen -- the pair keeps
+                // its old status, the exec id never reaches completedExecIds, and the
+                // submission slot below is never released. Deleting first therefore turns
+                // any later failure into a stranded pair and a permanently leaked slot.
+                //
+                // So every step that can fail runs while the Job still exists, and the
+                // Job is removed last. Each is safe to repeat: UpdatePairStatusPrecise
+                // treats a duplicate terminal write as idempotent success by design (its
+                // own comment says so, precisely to keep this at-least-once retry from
+                // looping forever), and setEndTime is an unconditional UPDATE.
                 int stageNumber = readStageNumber(execId, 1);
 
                 boolean updated = JobPairs.setPairStatusPrecise(
@@ -2508,7 +2582,7 @@ public class KubernetesNativeBackend implements Backend {
                     log.warn(
                         "Failed recording stuck-pending status for pair " +
                         pairId +
-                        "; will be retried"
+                        "; the Kubernetes job is being left in place so this is retried"
                     );
                     return false;
                 }
@@ -2516,13 +2590,37 @@ public class KubernetesNativeBackend implements Backend {
                 // Mandatory, not tidiness: GetJobPairIdsWithStatusNotRerunAfterDate also
                 // requires (end_time >= cutoff OR end_time < epoch). With end_time NULL
                 // both comparisons are NULL, the row is excluded, and the rerun this
-                // status exists to trigger would silently never happen.
+                // status exists to trigger would silently never happen. That is why a
+                // failure here returns rather than being logged and stepped over.
+                boolean endTimeRecorded;
                 try {
-                    if (!JobPairs.setEndTime(pairId)) {
-                        log.warn("setEndTime found no row for stuck pair " + pairId);
-                    }
+                    endTimeRecorded = JobPairs.setEndTime(pairId);
                 } catch (Exception e) {
                     log.warn("Failed to set end_time for stuck pair " + pairId, e);
+                    endTimeRecorded = false;
+                }
+                if (!endTimeRecorded) {
+                    log.warn(
+                        "Could not record end_time for stuck pair " +
+                        pairId +
+                        "; without it the pair would stay failed and never be rerun, so" +
+                        " the Kubernetes job is being left in place and this is retried"
+                    );
+                    return false;
+                }
+
+                // Last, because until this succeeds the Job is what brings us back here.
+                // A pod that outlives its Job could later start and write results for a
+                // pair that has since been rerun.
+                if (!ensureKubernetesJobGone(jobName)) {
+                    log.warn(
+                        "Kubernetes job " +
+                        jobName +
+                        " could not be deleted and is still present; it has not finished," +
+                        " so ttlSecondsAfterFinished will not reap it. Retrying rather" +
+                        " than releasing the pair while its pod may still run."
+                    );
+                    return false;
                 }
 
                 log.warn(
