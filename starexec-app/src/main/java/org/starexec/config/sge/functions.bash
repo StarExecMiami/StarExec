@@ -53,6 +53,18 @@ function containerWriteStats {
 	local MAXRSS=$6
 	local STAGE=$7
 	local DISKSIZE=$8
+	# The node this pair ran on, which the database resolves by name.
+	#
+	# Under Kubernetes $(hostname) is the POD name, not the node: nothing in the Job spec
+	# sets spec.hostname or hostNetwork, so a pod is named after itself. Sending that to
+	# UpdatePairRunSolverStats made it raise P0002 -- no such node -- and abort the entire
+	# stats write, losing every measurement for the pair while the pair still looked
+	# successful. STAREXEC_NODE_NAME comes from the downward API (spec.nodeName) and is
+	# exactly the string stored in nodes.name.
+	#
+	# The fallback keeps every other backend working untouched: Podman sets the container
+	# hostname to the worker node name deliberately, and on SGE the hostname is the host.
+	local NODE_NAME="${STAREXEC_NODE_NAME:-$(hostname)}"
 	mkdir -p "$(dirname "$CONTAINER_STATS_FILE")"
 	cat > "$CONTAINER_STATS_FILE" <<EOF
 {
@@ -65,7 +77,7 @@ function containerWriteStats {
   "maxVirtualMemory": $MAXVM,
   "maxResidentSetSize": $MAXRSS,
   "diskSize": $DISKSIZE,
-  "hostname": "$(hostname)"
+  "hostname": "$NODE_NAME"
 }
 EOF
 	log "Container mode: wrote stats for stage $STAGE"

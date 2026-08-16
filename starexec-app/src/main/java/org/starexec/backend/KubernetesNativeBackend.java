@@ -209,9 +209,6 @@ public class KubernetesNativeBackend implements Backend {
             || SGE_DEFAULT_QUEUE_SHORT_NAME.equalsIgnoreCase(name);
     }
 
-    /** Fallback node name when Kubernetes stats do not report a hostname */
-    private static final String DEFAULT_WORKER_NODE_NAME = "kubernetes-worker";
-
     // =========================================================================
     // Runtime State
     // =========================================================================
@@ -1132,6 +1129,37 @@ public class KubernetesNativeBackend implements Backend {
                             .addNewEnv()
                                 .withName("STAREXEC_OUTPUT_DIR")
                                 .withValue(outputDir.toString())
+                            .endEnv()
+                            // The node this pair actually ran on, from the downward API.
+                            //
+                            // Without it every Kubernetes pair lost its measurements.
+                            // containerWriteStats records "hostname": "$(hostname)", and
+                            // in a pod that is the POD name -- nothing here sets
+                            // spec.hostname or hostNetwork, so the default applies.
+                            // resolveStatsNodeName then hands that pod name to
+                            // UpdatePairRunSolverStats, which resolves the node by name
+                            // and raises P0002 when it is absent, aborting the whole
+                            // write: wallclock, cpu, user and system time, max_vmem,
+                            // max_res_set, disk_size and the quota accounting with it.
+                            // The pair still looked successful.
+                            //
+                            // It cannot be a literal: the scheduler picks the node after
+                            // this Job is created, so spec.hostname would have to be
+                            // guessed. fieldRef reads it at pod start, and the value is
+                            // the Node's metadata.name -- the same string
+                            // Cluster.loadWorkerNodes stores in nodes.name, verified
+                            // against the live cluster.
+                            //
+                            // PodmanBackend solves the same problem by setting the
+                            // container hostname to the worker node name; this is the
+                            // Kubernetes equivalent.
+                            .addNewEnv()
+                                .withName("STAREXEC_NODE_NAME")
+                                .withNewValueFrom()
+                                    .withNewFieldRef()
+                                        .withFieldPath("spec.nodeName")
+                                    .endFieldRef()
+                                .endValueFrom()
                             .endEnv()
                             .addNewVolumeMount()
                                 .withName("starexec-data")
@@ -2455,6 +2483,21 @@ public class KubernetesNativeBackend implements Backend {
 
             try {
                 String nodeName = resolveStatsNodeName(stats);
+                if (nodeName == null) {
+                    // Skipping is the lesser loss. UpdatePairRunSolverStats resolves the
+                    // node by name and raises P0002 if it is absent, which aborts the
+                    // whole write anyway -- so guessing a name does not save the
+                    // measurements, it only hides why they vanished.
+                    log.error(
+                        "No node name for pair " + pairId + ", so its runsolver statistics" +
+                        " cannot be recorded: the database resolves stats by node name and" +
+                        " would reject an invented one. stats.json reported hostname='" +
+                        stats.hostname + "'. If this is a Kubernetes pair, check that the" +
+                        " job pod carries STAREXEC_NODE_NAME from the downward API and that" +
+                        " the node is registered in the nodes table."
+                    );
+                    return;
+                }
                 boolean ok = JobPairs.updateRunSolverStats(
                     pairId,
                     nodeName,
@@ -2523,22 +2566,33 @@ public class KubernetesNativeBackend implements Backend {
             }
         }
 
+        /**
+         * The node a pair ran on, or {@code null} when it cannot be determined.
+         *
+         * <p>Returning null rather than a placeholder is the point. This used to end in
+         * the literal {@code "kubernetes-worker"}, which is never a row in {@code nodes},
+         * so it guaranteed the {@code P0002} that aborts the entire stats write. A name that cannot resolve does not preserve the measurements; it only
+         * disguises why they disappeared, since the failure then surfaces as a database
+         * exception rather than as "we did not know the node".
+         *
+         * <p>The first branch is now reliable on Kubernetes too: the job pod carries
+         * {@code STAREXEC_NODE_NAME} from the downward API, so {@code stats.hostname} is
+         * the node rather than the pod.
+         *
+         * <p>{@code appNodeName} remains as a second branch because it is a real node
+         * name, used when the data PVC forces pods onto the application's node.
+         * {@code getWorkerNodes()[0]} is deliberately gone: picking an arbitrary worker
+         * records this pair's measurements against a machine that did not run it, which
+         * is worse than recording nothing.
+         */
         private String resolveStatsNodeName(ContainerJobMonitor.RunsolverStats stats) {
             if (stats.hostname != null && !stats.hostname.trim().isEmpty()) {
-                return stats.hostname;
+                return stats.hostname.trim();
             }
             if (appNodeName != null && !appNodeName.trim().isEmpty()) {
-                return appNodeName;
+                return appNodeName.trim();
             }
-            try {
-                String[] workerNodes = KubernetesNativeBackend.this.getWorkerNodes();
-                if (workerNodes != null && workerNodes.length > 0) {
-                    return workerNodes[0];
-                }
-            } catch (Exception e) {
-                log.debug("Could not resolve Kubernetes worker node for stats fallback", e);
-            }
-            return DEFAULT_WORKER_NODE_NAME;
+            return null;
         }
 
         /**

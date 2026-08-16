@@ -929,6 +929,95 @@ public class KubernetesNativeBackendTests {
         );
     }
 
+    // ---------------------------------------------------------------------
+    // The pod must report the node it ran on.
+    //
+    // containerWriteStats records "hostname": "$(hostname)", and in a pod that
+    // is the POD name -- nothing sets spec.hostname or hostNetwork. That name
+    // is never a row in `nodes`, so UpdatePairRunSolverStats raised P0002 and
+    // aborted the whole write: every Kubernetes pair lost its wallclock, CPU,
+    // memory and disk measurements while still looking successful.
+    //
+    // Verified against the live cluster: a pod's spec.nodeName is "quokka",
+    // byte-identical to the Node's metadata.name, which is the string
+    // Cluster.loadWorkerNodes stores in nodes.name.
+    // ---------------------------------------------------------------------
+
+    private io.fabric8.kubernetes.api.model.EnvVar envVar(Container c, String name) {
+        for (io.fabric8.kubernetes.api.model.EnvVar e : c.getEnv()) {
+            if (name.equals(e.getName())) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    @Test
+    public void thePodIsToldWhichNodeItRunsOn() throws Exception {
+        Container container = buildContainer("16");
+
+        io.fabric8.kubernetes.api.model.EnvVar nodeName =
+            envVar(container, "STAREXEC_NODE_NAME");
+
+        assertNotNull(
+            "without this the pod reports its own name as the host, which is not a row in"
+                + " nodes, and every pair's measurements are lost to P0002",
+            nodeName
+        );
+        assertNotNull(
+            "it must come from the downward API, not a literal: the scheduler picks the"
+                + " node after the Job is created",
+            nodeName.getValueFrom()
+        );
+        assertNotNull(nodeName.getValueFrom().getFieldRef());
+        assertEquals(
+            "spec.nodeName is the Node's metadata.name, which is what nodes.name holds",
+            "spec.nodeName",
+            nodeName.getValueFrom().getFieldRef().getFieldPath()
+        );
+        assertNull(
+            "a literal value would be a guess at where the scheduler will place the pod",
+            nodeName.getValue()
+        );
+    }
+
+    @Test
+    public void statsNodeNameIsNullWhenUnknownRatherThanInvented() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "appNodeName", "");
+
+        Object stats = Class
+            .forName("org.starexec.backend.ContainerJobMonitor$RunsolverStats")
+            .getDeclaredConstructor()
+            .newInstance();
+
+        Method resolve = null;
+        for (Class<?> c : KubernetesNativeBackend.class.getDeclaredClasses()) {
+            for (Method m : c.getDeclaredMethods()) {
+                if (m.getName().equals("resolveStatsNodeName")) {
+                    resolve = m;
+                    resolve.setAccessible(true);
+                }
+            }
+        }
+        assertNotNull("resolveStatsNodeName should exist on an inner class", resolve);
+
+        // Instantiate the inner class that owns it, via its synthetic outer-instance ctor.
+        java.lang.reflect.Constructor<?> ctor =
+            resolve.getDeclaringClass().getDeclaredConstructors()[0];
+        ctor.setAccessible(true);
+        Object owner = ctor.getParameterCount() == 1
+            ? ctor.newInstance(backend)
+            : ctor.newInstance();
+
+        assertNull(
+            "an unknown node must yield null, not a placeholder: a name that cannot"
+                + " resolve guarantees P0002 and discards the pair's measurements while"
+                + " hiding why",
+            resolve.invoke(owner, stats)
+        );
+    }
+
     @Test
     public void aQueueNoNodeCarriesIsLeftToFailAtSubmission() throws Exception {
         // Permanent misconfiguration. The gate deliberately lets it through so
