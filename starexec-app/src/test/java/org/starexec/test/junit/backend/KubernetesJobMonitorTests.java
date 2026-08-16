@@ -452,6 +452,49 @@ public class KubernetesJobMonitorTests {
         verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
     }
 
+    /**
+     * Once a pair has been judged stuck, a pod that starts late must not undo that
+     * judgement. The pair's record may already be terminal and eligible for rerun, so
+     * reclassifying it as running would leave the Job undeleted and let the old pod write
+     * results alongside the rerun's.
+     */
+    @Test
+    public void aPairAlreadyJudgedStuckIsNotReclassifiedAsRunning() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        // The transition does not complete: the callback reports it is not finished.
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(false);
+
+        invokePollJobsOnce();
+
+        // The pod now starts, which before this would have taken the running branch.
+        givenPods(podFor(EXEC_ID, "Running"));
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobRunning(anyInt(), anyString());
+        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+    }
+
+    /** And it keeps retrying until the transition actually finishes. */
+    @Test
+    public void stuckPendingCleanupIsDrivenToCompletion() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(false, false, true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(3)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+    }
+
     @SuppressWarnings("unchecked")
     private Set<Integer> getCompletedExecIds() throws Exception {
         Field completedExecIdsField = KubernetesJobMonitor.class.getDeclaredField(

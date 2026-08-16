@@ -201,6 +201,22 @@ public class KubernetesNativeBackend implements Backend {
      */
     private static final String SGE_DEFAULT_QUEUE_SHORT_NAME = "all";
 
+    /**
+     * The queue label value existing clusters were told to apply.
+     *
+     * <p>Both runbooks instruct operators to run
+     * {@code kubectl label node <n> starexec/queue=default}
+     * ({@code docs/MICROK8S_SINGLE_NODE.md:52}, {@code docs/KUBERNETES_AUTO_DEPLOYMENT.md:60}),
+     * so every already-deployed worker carries it. Renaming the default queue to
+     * {@code all.q} without reading that spelling back would strand exactly those nodes:
+     * they would be associated with a queue called {@code default} while pairs were
+     * submitted to {@code all.q}, which would have no nodes and reject every pair.
+     *
+     * <p>Read on input, never written on output — {@code moveNodes} labels with the
+     * canonical name, so a cluster converges as its nodes are re-labelled.
+     */
+    private static final String LEGACY_DEFAULT_QUEUE_LABEL = "default";
+
     /** True if {@code queueName} denotes the default queue under any of its spellings. */
     private static boolean isDefaultQueueName(String queueName) {
         if (queueName == null) {
@@ -209,6 +225,32 @@ public class KubernetesNativeBackend implements Backend {
         String name = queueName.trim();
         return DEFAULT_QUEUE_NAME.equalsIgnoreCase(name)
             || SGE_DEFAULT_QUEUE_SHORT_NAME.equalsIgnoreCase(name);
+    }
+
+    /**
+     * The canonical queue name for a raw node label value.
+     *
+     * <p>One place, used by every reader of the label, so the queue a node reports and the
+     * queue a pair is submitted to cannot disagree.
+     *
+     * <p>Deliberately wider than {@link #isDefaultQueueName}, and the difference is the
+     * point. That method answers "is this a name StarExec uses for the default queue",
+     * where {@code "default"} is emphatically not one — it was an invented name that
+     * minted a spurious database queue, which is why it was removed. This method answers
+     * "what does this label on a node mean", and there {@code "default"} is simply what
+     * the runbooks told operators to write. Reading a legacy label is not the same as
+     * accepting a legacy name, and only the first is safe.
+     */
+    private static String normalizeQueueLabel(String rawLabel) {
+        if (rawLabel == null || rawLabel.trim().isEmpty()) {
+            return DEFAULT_QUEUE_NAME;
+        }
+        String name = rawLabel.trim();
+        if (isDefaultQueueName(name)
+                || LEGACY_DEFAULT_QUEUE_LABEL.equalsIgnoreCase(name)) {
+            return DEFAULT_QUEUE_NAME;
+        }
+        return name;
     }
 
     // =========================================================================
@@ -262,6 +304,18 @@ public class KubernetesNativeBackend implements Backend {
     private volatile Set<String> labelledQueues = Collections.emptySet();
 
     private volatile long queueViewRefreshedAt = 0L;
+
+    /**
+     * Whether a node listing has ever succeeded.
+     *
+     * <p>Without it, "no node carries this queue" and "we have not managed to look yet"
+     * are the same empty set. The first is a permanent misconfiguration and is answered
+     * with a terminal rejection; the second is a transient failure, and answering it that
+     * way fails every pair dispatched in the window. The refresh keeps a stale view on
+     * error, which covers every case except the one where there is no previous view --
+     * startup.
+     */
+    private volatile boolean queueViewLoaded = false;
 
     private final Object queueViewLock = new Object();
 
@@ -867,11 +921,9 @@ public class KubernetesNativeBackend implements Backend {
                     String queue = node.getMetadata() != null && node.getMetadata().getLabels() != null
                         ? node.getMetadata().getLabels().get(queueLabelKey)
                         : null;
-                    // A worker with no queue label belongs to the default queue, which is
-                    // how getNodeQueueAssociations already reads it.
-                    String queueName = (queue == null || queue.trim().isEmpty())
-                        ? DEFAULT_QUEUE_NAME
-                        : queue.trim();
+                    // A worker with no queue label belongs to the default queue, and so
+                    // does one carrying a legacy spelling of it.
+                    String queueName = normalizeQueueLabel(queue);
                     labelled.add(queueName);
                     if (isNodeSchedulable(node)) {
                         schedulable.add(queueName);
@@ -880,6 +932,7 @@ public class KubernetesNativeBackend implements Backend {
                 labelledQueues = Collections.unmodifiableSet(labelled);
                 schedulableQueues = Collections.unmodifiableSet(schedulable);
                 queueViewRefreshedAt = System.currentTimeMillis();
+                queueViewLoaded = true;
             } catch (Exception e) {
                 // Leave the previous view in place rather than emptying it. Treating an
                 // API blip as "no queue can run anything" would stall all dispatch, and
@@ -899,6 +952,17 @@ public class KubernetesNativeBackend implements Backend {
         String name = (queueName == null || queueName.trim().isEmpty())
             ? DEFAULT_QUEUE_NAME
             : queueName.trim();
+
+        // Never seen the cluster. An empty view is not evidence of anything, and the
+        // branch below reads it as permanent misconfiguration, so defer instead: the
+        // pairs stay enqueued and dispatch resumes as soon as a listing succeeds.
+        if (!queueViewLoaded) {
+            log.warn(
+                "The Kubernetes queue view has never loaded, so whether queue '" + name +
+                "' has nodes is unknown; deferring its pairs rather than failing them"
+            );
+            return false;
+        }
 
         if (schedulableQueues.contains(name)) {
             return true;
@@ -933,9 +997,13 @@ public class KubernetesNativeBackend implements Backend {
         // Static misconfiguration: no worker node carries this queue. It will not resolve
         // on its own, so reject the pair rather than let its pod pend for ever with
         // nothing to say why.
+        // queueViewLoaded, not just the set contents: an empty view because the listing
+        // has never succeeded is not proof that nothing is labelled, and rejecting on it
+        // turns a transient API failure at startup into a terminal status on every pair
+        // dispatched in that window.
         if (initialized && !shuttingDown) {
             refreshQueueViewIfStale();
-            if (!labelledQueues.contains(name)) {
+            if (queueViewLoaded && !labelledQueues.contains(name)) {
                 log.error(
                     "Refusing to submit pair " + pairId + ": no Kubernetes worker node is" +
                     " labelled " + queueLabelKey + "=" + name + ", so a pod for queue '" +
@@ -1217,6 +1285,11 @@ public class KubernetesNativeBackend implements Backend {
      *
      */
     private Affinity defaultQueueAffinity() {
+        // Two terms, because nodeSelectorTerms are OR'd. A node belongs to the default
+        // queue when it carries no queue label at all, or when it carries one of the
+        // default spellings -- including the legacy "default" both runbooks still tell
+        // operators to apply. Without the second term this affinity would exclude
+        // precisely the already-deployed workers it exists to select.
         return new AffinityBuilder()
             .withNewNodeAffinity()
                 .withNewRequiredDuringSchedulingIgnoredDuringExecution()
@@ -1224,6 +1297,17 @@ public class KubernetesNativeBackend implements Backend {
                         .addNewMatchExpression()
                             .withKey(queueLabelKey)
                             .withOperator("DoesNotExist")
+                        .endMatchExpression()
+                    .endNodeSelectorTerm()
+                    .addNewNodeSelectorTerm()
+                        .addNewMatchExpression()
+                            .withKey(queueLabelKey)
+                            .withOperator("In")
+                            .withValues(
+                                DEFAULT_QUEUE_NAME,
+                                SGE_DEFAULT_QUEUE_SHORT_NAME,
+                                LEGACY_DEFAULT_QUEUE_LABEL
+                            )
                         .endMatchExpression()
                     .endNodeSelectorTerm()
                 .endRequiredDuringSchedulingIgnoredDuringExecution()
@@ -1989,7 +2073,7 @@ public class KubernetesNativeBackend implements Backend {
 
                 String queue = node.getMetadata().getLabels().get(queueLabelKey);
                 if (queue != null && !queue.trim().isEmpty()) {
-                    queues.add(queue);
+                    queues.add(normalizeQueueLabel(queue));
                 }
             }
         } catch (Exception e) {
@@ -2026,10 +2110,9 @@ public class KubernetesNativeBackend implements Backend {
 
                 String queueName = DEFAULT_QUEUE_NAME;
                 if (node.getMetadata().getLabels() != null) {
-                    String queue = node.getMetadata().getLabels().get(queueLabelKey);
-                    if (queue != null && !queue.trim().isEmpty()) {
-                        queueName = queue;
-                    }
+                    queueName = normalizeQueueLabel(
+                        node.getMetadata().getLabels().get(queueLabelKey)
+                    );
                 }
 
                 associations.put(node.getMetadata().getName(), queueName);

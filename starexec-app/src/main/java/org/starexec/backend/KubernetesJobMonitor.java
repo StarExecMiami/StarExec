@@ -158,6 +158,18 @@ public class KubernetesJobMonitor {
     /** When each stuck-pending execution id was last warned about, for throttling */
     private final Map<Integer, Long> pendingWarnedAt = new ConcurrentHashMap<>();
 
+    /**
+     * Execution ids judged stuck whose transition did not complete, with the reason they
+     * were judged stuck.
+     *
+     * <p>The judgement is not revisited once made. By the time a transition can fail
+     * part-way the pair may already carry ERROR_RUNSCRIPT and an end_time, which makes it
+     * eligible for RERUN_FAILED_PAIRS; if its pod then started and the monitor let it be
+     * reclassified as an ordinary running pair, nothing would ever delete the Job and that
+     * pod could write results alongside the rerun.
+     */
+    private final Map<Integer, String> cleanupPending = new ConcurrentHashMap<>();
+
     /** How long a pod may be Pending before it is logged, in milliseconds */
     private final long pendingWarnMillis;
 
@@ -379,6 +391,7 @@ public class KubernetesJobMonitor {
 
             runningExecIds.remove(execId);
             pendingWarnedAt.remove(execId);
+            cleanupPending.remove(execId);
         }
     }
 
@@ -394,6 +407,16 @@ public class KubernetesJobMonitor {
      */
     private void handleInFlightJob(Job job, int execId, PodPhaseView pods) {
         String jobName = jobNameOf(job);
+
+        // A pair already judged stuck is driven to completion, whatever its pod is doing
+        // now. Its record may already be terminal and eligible for rerun, so letting a
+        // late-starting pod reclassify it as running would leave the Job undeleted and
+        // that pod free to write results beside the rerun's.
+        String pendingCleanupReason = cleanupPending.get(execId);
+        if (pendingCleanupReason != null) {
+            completeStuckPending(execId, jobName, pendingCleanupReason);
+            return;
+        }
 
         if (isRunningOnANode(job, execId, pods)) {
             if (!runningExecIds.contains(execId) && callback.onJobRunning(execId, jobName)) {
@@ -423,17 +446,31 @@ public class KubernetesJobMonitor {
         String reason = pods.describeWhyPending(execId);
 
         if (pendingTimeoutMillis > 0 && pendingMillis >= pendingTimeoutMillis) {
-            if (callback.onJobStuckPending(execId, jobName, reason)) {
-                completedExecIds.add(execId);
-                runningExecIds.remove(execId);
-                pendingWarnedAt.remove(execId);
-            }
+            completeStuckPending(execId, jobName, reason);
             return;
         }
 
         if (pendingWarnMillis > 0 && pendingMillis >= pendingWarnMillis) {
             warnAboutStuckPod(execId, jobName, pendingMillis, reason);
         }
+    }
+
+    /**
+     * Runs the stuck-pending transition, remembering the pair if it did not finish.
+     *
+     * <p>The callback reports false for any incomplete step — the status write, the end
+     * time, or the Job deletion. Recording the pair here is what makes the next poll
+     * resume the transition instead of re-deciding what the pair is.
+     */
+    private void completeStuckPending(int execId, String jobName, String reason) {
+        if (callback.onJobStuckPending(execId, jobName, reason)) {
+            completedExecIds.add(execId);
+            runningExecIds.remove(execId);
+            pendingWarnedAt.remove(execId);
+            cleanupPending.remove(execId);
+            return;
+        }
+        cleanupPending.put(execId, reason);
     }
 
     private void warnAboutStuckPod(

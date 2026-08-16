@@ -11,6 +11,7 @@ import java.util.Set;
 import io.fabric8.kubernetes.api.model.Affinity;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.NodeSelectorRequirement;
+import io.fabric8.kubernetes.api.model.NodeSelectorTerm;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.StatusDetails;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
@@ -1028,6 +1029,86 @@ public class KubernetesNativeBackendTests {
         assertEquals("DoesNotExist", requirement.getOperator());
     }
 
+    /**
+     * An empty queue view because no listing has ever succeeded is not evidence that a
+     * queue has no nodes. Reading it as such turns a transient API failure at startup into
+     * a terminal status on every pair dispatched in that window.
+     */
+    @Test
+    public void queuesAreDeferredNotRejectedBeforeTheViewHasEverLoaded() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "initialized", true);
+
+        // queueViewLoaded is still false and both sets are empty, exactly as after a
+        // failed first refresh.
+        assertFalse(backend.isQueueDispatchable("all.q"));
+    }
+
+    @Test
+    public void aLoadedViewStillReportsAnUnlabelledQueueAsDispatchable() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "initialized", true);
+        setField(backend, "queueViewLoaded", true);
+        setField(backend, "queueViewRefreshedAt", System.currentTimeMillis());
+
+        // Known state, queue genuinely absent: let it reach submitScript and be rejected
+        // there, where the misconfiguration is visible.
+        assertTrue(backend.isQueueDispatchable("all.q"));
+    }
+
+    /**
+     * Both runbooks tell operators to label workers starexec/queue=default, so every
+     * already-deployed node carries that spelling. Reading it as a queue in its own right
+     * puts those nodes in a queue no pair is ever submitted to, while all.q reports no
+     * nodes and rejects everything.
+     */
+    @Test
+    public void theLegacyDefaultQueueLabelIsReadAsTheCanonicalQueue() throws Exception {
+        Method normalize = KubernetesNativeBackend.class
+            .getDeclaredMethod("normalizeQueueLabel", String.class);
+        normalize.setAccessible(true);
+
+        assertEquals("all.q", normalize.invoke(null, "default"));
+        assertEquals("all.q", normalize.invoke(null, "all"));
+        assertEquals("all.q", normalize.invoke(null, "all.q"));
+        assertEquals("all.q", normalize.invoke(null, (Object) null));
+        assertEquals("all.q", normalize.invoke(null, "   "));
+        // A real queue name is left alone.
+        assertEquals("sat-comp", normalize.invoke(null, "sat-comp"));
+    }
+
+    /**
+     * A legacy-labelled node carries the queue label, so a DoesNotExist term alone would
+     * exclude precisely the workers the default queue is supposed to use.
+     */
+    @Test
+    public void defaultQueueAffinityAlsoMatchesLegacyLabelledNodes() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "queueLabelKey", "starexec.org/queue");
+
+        Method defaultQueueAffinity =
+            KubernetesNativeBackend.class.getDeclaredMethod("defaultQueueAffinity");
+        defaultQueueAffinity.setAccessible(true);
+        Affinity affinity = (Affinity) defaultQueueAffinity.invoke(backend);
+
+        List<NodeSelectorTerm> terms = affinity
+            .getNodeAffinity()
+            .getRequiredDuringSchedulingIgnoredDuringExecution()
+            .getNodeSelectorTerms();
+
+        // Terms are OR'd: absent label, or one of the default spellings.
+        assertEquals(2, terms.size());
+        assertEquals(
+            "DoesNotExist",
+            terms.get(0).getMatchExpressions().get(0).getOperator()
+        );
+
+        NodeSelectorRequirement legacy = terms.get(1).getMatchExpressions().get(0);
+        assertEquals("In", legacy.getOperator());
+        assertTrue(legacy.getValues().contains("default"));
+        assertTrue(legacy.getValues().contains("all.q"));
+    }
+
     private JobPairs.PairStatusLookupResult foundLookup(int statusCode)
         throws Exception {
         Constructor<JobPairs.PairStatusLookupResult> constructor =
@@ -1345,6 +1426,9 @@ public class KubernetesNativeBackendTests {
         setField(backend, "shuttingDown", false);
         // Keep the cached view fresh so the gate does not try to reach a cluster.
         setField(backend, "queueViewRefreshedAt", System.currentTimeMillis());
+        // These cases are all about a view that HAS been read. The separate
+        // never-loaded case is covered by its own test.
+        setField(backend, "queueViewLoaded", true);
         return backend;
     }
 
