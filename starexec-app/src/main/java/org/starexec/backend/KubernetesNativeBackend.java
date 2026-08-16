@@ -172,8 +172,41 @@ public class KubernetesNativeBackend implements Backend {
     /** Label key for worker nodes */
     private static final String WORKER_LABEL = LABEL_PREFIX + "worker";
 
-    /** Default queue name for nodes without queue label */
-    private static final String DEFAULT_QUEUE_NAME = "default";
+    /**
+     * Default queue name for nodes without a queue label.
+     *
+     * <p>Taken from {@link R#DEFAULT_QUEUE_NAME} rather than invented. This used to be
+     * the literal {@code "default"}, which matched nothing else in the system: the
+     * canonical name is {@code all.q}, and it is also the name of the seeded row that
+     * {@code R.DEFAULT_QUEUE_ID} points at. On a fresh cluster {@code getQueues()}
+     * therefore reported a queue called {@code default}, {@code Cluster.loadQueueDetails}
+     * created a new database row for it, and the real {@code all.q} was marked INACTIVE
+     * for having no nodes.
+     */
+    private static final String DEFAULT_QUEUE_NAME = R.DEFAULT_QUEUE_NAME;
+
+    /**
+     * The SGE short form of the default queue, which is a host-group name rather than a
+     * queue name.
+     *
+     * <p>{@link org.starexec.data.database.Queues#getDefaultQueueName()} returns
+     * {@code "all"} because SGE host groups are named {@code @allhosts}; that is an SGE
+     * spelling, not a third queue. {@code Queues.removeQueue} passes it straight to
+     * {@code moveNode}, so without translating it here a node being returned to the
+     * default queue was labelled {@code starexec/queue=all} — minting a spurious third
+     * queue alongside {@code all.q} and {@code default}.
+     */
+    private static final String SGE_DEFAULT_QUEUE_SHORT_NAME = "all";
+
+    /** True if {@code queueName} denotes the default queue under any of its spellings. */
+    private static boolean isDefaultQueueName(String queueName) {
+        if (queueName == null) {
+            return false;
+        }
+        String name = queueName.trim();
+        return DEFAULT_QUEUE_NAME.equalsIgnoreCase(name)
+            || SGE_DEFAULT_QUEUE_SHORT_NAME.equalsIgnoreCase(name);
+    }
 
     /** Fallback node name when Kubernetes stats do not report a hostname */
     private static final String DEFAULT_WORKER_NODE_NAME = "kubernetes-worker";
@@ -1868,7 +1901,10 @@ public class KubernetesNativeBackend implements Backend {
                             n.getMetadata().setLabels(new HashMap<>());
                         }
 
-                        if (DEFAULT_QUEUE_NAME.equals(destQueueName)) {
+                        // Accepts either spelling of the default queue. Queues.removeQueue
+                        // passes the SGE short form "all", which previously failed this
+                        // test and was written as a literal label value.
+                        if (isDefaultQueueName(destQueueName)) {
                             n.getMetadata().getLabels().remove(queueLabelKey);
                         } else {
                             n.getMetadata().getLabels().put(queueLabelKey, destQueueName);

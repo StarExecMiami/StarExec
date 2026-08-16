@@ -771,4 +771,58 @@ public class KubernetesNativeBackendTests {
             );
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Default queue naming
+    //
+    // Three names existed for one thing: R.DEFAULT_QUEUE_NAME is "all.q" and
+    // names the seeded DB row; Queues.getDefaultQueueName() returns "all",
+    // which is the SGE host-group spelling (@allhosts) rather than a queue;
+    // and this backend invented "default", matching neither. The result was a
+    // spurious "default" queue created on a fresh cluster while the real all.q
+    // went INACTIVE, and a third queue named "all" minted whenever
+    // Queues.removeQueue returned a node to the default.
+    // ---------------------------------------------------------------------
+
+    private boolean isDefaultQueueName(String name) throws Exception {
+        Method m = KubernetesNativeBackend.class.getDeclaredMethod(
+            "isDefaultQueueName", String.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(null, name);
+    }
+
+    @Test
+    public void theDefaultQueueIsTheCanonicalOneNotAnInventedName() throws Exception {
+        Field f = KubernetesNativeBackend.class.getDeclaredField("DEFAULT_QUEUE_NAME");
+        f.setAccessible(true);
+
+        assertEquals(
+            "the backend's default queue must be the canonical R.DEFAULT_QUEUE_NAME, or a"
+                + " fresh cluster invents a queue the rest of StarExec does not know",
+            org.starexec.constants.R.DEFAULT_QUEUE_NAME,
+            f.get(null)
+        );
+        assertEquals("all.q", f.get(null));
+    }
+
+    @Test
+    public void bothSpellingsOfTheDefaultQueueAreRecognised() throws Exception {
+        assertTrue("canonical name", isDefaultQueueName("all.q"));
+        assertTrue(
+            "the SGE host-group short form, which Queues.removeQueue passes to moveNode;"
+                + " unrecognised, it was written as a literal label and became a third queue",
+            isDefaultQueueName("all")
+        );
+        assertTrue("case tolerated", isDefaultQueueName("ALL.Q"));
+        assertTrue("whitespace tolerated", isDefaultQueueName(" all.q "));
+    }
+
+    @Test
+    public void arealQueueIsNotMistakenForTheDefault() throws Exception {
+        assertFalse(isDefaultQueueName("casc.q"));
+        assertFalse(isDefaultQueueName("public.q"));
+        assertFalse("the old invented name is not special", isDefaultQueueName("default"));
+        assertFalse(isDefaultQueueName(null));
+        assertFalse(isDefaultQueueName(""));
+    }
 }
