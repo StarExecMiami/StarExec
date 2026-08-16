@@ -297,6 +297,8 @@ public class KubernetesNativeBackend implements Backend {
     private int ttlSecondsAfterFinished;
     private int backoffLimit;
     private boolean strictOnePairPerCpu;
+    private int pendingWarnMinutes;
+    private int pendingTimeoutMinutes;
 
     /** Optional node selector key for worker nodes */
     private String workerNodeSelectorKey;
@@ -350,7 +352,9 @@ public class KubernetesNativeBackend implements Backend {
             jobMonitor = new KubernetesJobMonitor(
                 kubernetesClient,
                 namespace,
-                new KubernetesJobCompletionCallback()
+                new KubernetesJobCompletionCallback(),
+                pendingWarnMinutes,
+                pendingTimeoutMinutes
             );
             jobMonitor.start();
 
@@ -408,6 +412,17 @@ public class KubernetesNativeBackend implements Backend {
             "STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU",
             true
         );
+        // How long a pod may wait to start before the pair is reported, and then failed
+        // for rerun. Setting the timeout to 0 leaves the monitor reporting only.
+        pendingWarnMinutes = getEnvInt(
+            "STAREXEC_K8S_PENDING_WARN_MINUTES",
+            KubernetesJobMonitor.DEFAULT_PENDING_WARN_MINUTES
+        );
+        pendingTimeoutMinutes = getEnvInt(
+            "STAREXEC_K8S_PENDING_TIMEOUT_MINUTES",
+            KubernetesJobMonitor.DEFAULT_PENDING_TIMEOUT_MINUTES
+        );
+
         workerNodeSelectorKey = getEnv("STAREXEC_K8S_WORKER_SELECTOR_KEY", WORKER_LABEL);
         workerNodeSelectorValue = getEnv("STAREXEC_K8S_WORKER_SELECTOR_VALUE", "true");
 
@@ -1611,20 +1626,32 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     private void deleteKubernetesJob(Job job) {
-        String jobName = getJobName(job);
-        if (jobName == null) {
-            return;
+        deleteKubernetesJobByName(getJobName(job));
+    }
+
+    /**
+     * Deletes a Job by name.
+     *
+     * @return true when the API reported a deletion. A Job that is not finished is never
+     *         reaped by ttlSecondsAfterFinished, so a false here leaves a resource an
+     *         operator has to prune by hand and is worth saying out loud.
+     */
+    private boolean deleteKubernetesJobByName(String jobName) {
+        if (jobName == null || kubernetesClient == null) {
+            return false;
         }
         try {
-            kubernetesClient
+            List<?> deleted = kubernetesClient
                 .batch()
                 .v1()
                 .jobs()
                 .inNamespace(namespace)
                 .withName(jobName)
                 .delete();
+            return deleted != null && !deleted.isEmpty();
         } catch (Exception e) {
-            log.warn("Failed to delete orphaned Kubernetes Job: " + jobName, e);
+            log.warn("Failed to delete Kubernetes Job: " + jobName, e);
+            return false;
         }
     }
 
@@ -2388,6 +2415,128 @@ public class KubernetesNativeBackend implements Backend {
                 }
             } catch (Exception e) {
                 log.error("Failed updating failed status for pair " + pairId + ". Reason: " + reason, e);
+                return false;
+            }
+
+            execIdToJobName.remove(execId);
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
+            releaseSubmissionSlot(execId);
+            return true;
+        }
+
+        /**
+         * A pod that has waited past the timeout without starting.
+         *
+         * <p>Recorded as ERROR_RUNSCRIPT because that is StarExec's existing bounded-retry
+         * channel, not because a run script was missing. RERUN_FAILED_PAIRS reruns pairs at
+         * exactly that code, and GetJobPairIdsWithStatusNotRerunAfterDate excludes anything
+         * already in pairs_rerun, so the retry happens exactly once, is recorded in the
+         * database, and survives a restart. Nothing ran, so retrying cannot contaminate a
+         * measurement; if the second attempt also cannot be scheduled it stays failed and
+         * visible.
+         *
+         * <p>The Kubernetes Job is deleted first. Left alone it would keep the pod pending,
+         * and if capacity later appeared the pod would run and write results for a pair
+         * StarExec has already accounted for.
+         */
+        @Override
+        public boolean onJobStuckPending(int execId, String jobName, String reason) {
+            if (killedExecIds.contains(execId)) {
+                log.debug(
+                    "Skipping stuck-pending callback for killed execId " +
+                    execId +
+                    " (K8s job " +
+                    jobName +
+                    ")"
+                );
+                killedExecIds.remove(execId);
+                return true;
+            }
+
+            Integer pairId = resolvePairId(execId, jobName);
+            if (pairId == null) {
+                log.warn(
+                    "Unable to resolve pair ID for stuck job: " + jobName + ". " + reason
+                );
+                return false;
+            }
+
+            try {
+                JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
+                if (lookup.isMissing()) {
+                    log.debug(
+                        "Skipping stuck-pending update for stale pair " +
+                        pairId +
+                        " (K8s job " +
+                        jobName +
+                        ")"
+                    );
+                    deleteKubernetesJobByName(jobName);
+                    execIdToJobName.remove(execId);
+                    execIdToPairId.remove(execId);
+                    execIdToOutputDir.remove(execId);
+                    releaseSubmissionSlot(execId);
+                    return true;
+                }
+                if (lookup.isError()) {
+                    log.warn(
+                        "Could not determine whether pair " +
+                        pairId +
+                        " still exists after its pod failed to start; retrying"
+                    );
+                    return false;
+                }
+
+                if (!deleteKubernetesJobByName(jobName)) {
+                    log.warn(
+                        "Kubernetes reported no deletion for stuck job " +
+                        jobName +
+                        "; it has not finished, so ttlSecondsAfterFinished will not reap it"
+                    );
+                }
+
+                int stageNumber = readStageNumber(execId, 1);
+
+                boolean updated = JobPairs.setPairStatusPrecise(
+                    pairId,
+                    stageNumber,
+                    StatusCode.ERROR_RUNSCRIPT.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal()
+                );
+                if (!updated) {
+                    log.warn(
+                        "Failed recording stuck-pending status for pair " +
+                        pairId +
+                        "; will be retried"
+                    );
+                    return false;
+                }
+
+                // Mandatory, not tidiness: GetJobPairIdsWithStatusNotRerunAfterDate also
+                // requires (end_time >= cutoff OR end_time < epoch). With end_time NULL
+                // both comparisons are NULL, the row is excluded, and the rerun this
+                // status exists to trigger would silently never happen.
+                try {
+                    if (!JobPairs.setEndTime(pairId)) {
+                        log.warn("setEndTime found no row for stuck pair " + pairId);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to set end_time for stuck pair " + pairId, e);
+                }
+
+                log.warn(
+                    "Pair " +
+                    pairId +
+                    " never started: its pod waited past the configured timeout and the" +
+                    " Kubernetes job has been removed so the pair can be rerun. " +
+                    reason
+                );
+            } catch (Exception e) {
+                log.error(
+                    "Failed recording stuck-pending status for pair " + pairId,
+                    e
+                );
                 return false;
             }
 

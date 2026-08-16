@@ -1,13 +1,17 @@
 package org.starexec.test.junit.backend;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+import org.mockito.ArgumentCaptor;
 
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
@@ -298,6 +302,154 @@ public class KubernetesJobMonitorTests {
                 "BackoffLimitExceeded: Pod exited with status 1"
             );
         assertTrue(getCompletedExecIds().contains(EXEC_ID));
+    }
+
+    // =========================================================================
+    // Stale-pending detection
+    // =========================================================================
+
+    /** Matches the creationTimestamp every fixture pod carries. */
+    private static final long POD_CREATED_AT =
+        java.time.Instant.parse("2026-08-15T12:00:00Z").toEpochMilli();
+
+    private void setClockMinutesAfterPodCreation(long minutes) throws Exception {
+        Field clockField = KubernetesJobMonitor.class.getDeclaredField("clock");
+        clockField.setAccessible(true);
+        long now = POD_CREATED_AT + minutes * 60_000L;
+        clockField.set(monitor, (java.util.function.LongSupplier) () -> now);
+    }
+
+    /** Below the acting threshold the pair is reported, never touched. */
+    @Test
+    public void podPendingPastWarnThresholdIsLoggedNotFailed() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(6);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobRunning(anyInt(), anyString());
+        assertFalse(getCompletedExecIds().contains(EXEC_ID));
+    }
+
+    /** A pod still waiting well before the warning threshold is left entirely alone. */
+    @Test
+    public void freshlyPendingPodIsNotEvenWarnedAbout() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(1);
+
+        invokePollJobsOnce();
+
+        verifyNoInteractions(callback);
+    }
+
+    @Test
+    public void podPendingPastTimeoutIsFailedForRerun() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+    }
+
+    /** The scheduler's own account must reach the callback, for the operator's log. */
+    @Test
+    public void theSchedulersReasonIsHandedToTheCallback() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(true);
+
+        invokePollJobsOnce();
+
+        ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
+        verify(callback).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), reason.capture());
+        assertTrue(reason.getValue().contains("Unschedulable"));
+        assertTrue(reason.getValue().contains("node affinity/selector"));
+    }
+
+    @Test
+    public void stuckPendingIsRetriedUntilTheCallbackSucceeds() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(61);
+        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+            .thenReturn(false, true);
+
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+        invokePollJobsOnce();
+
+        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+    }
+
+    /**
+     * A pod that starts late must be treated as running, not as stuck. Reaching the
+     * threshold is not a licence to fail something that is executing.
+     */
+    @Test
+    public void aPodThatStartsLateIsRunning() throws Exception {
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Running"));
+        setClockMinutesAfterPodCreation(120);
+        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
+        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+    }
+
+    /**
+     * An unreadable creation timestamp means the pod's age is unknown, and unknown must
+     * never be read as old.
+     */
+    @Test
+    public void aPodWithNoUsableAgeIsNeverTimedOut() throws Exception {
+        Pod undated = podFor(EXEC_ID, "Pending");
+        undated.getMetadata().setCreationTimestamp("not-a-timestamp");
+        givenJobs(activeJobFixture());
+        givenPods(undated);
+        setClockMinutesAfterPodCreation(600);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+    }
+
+    /** Setting the timeout to zero leaves the monitor reporting only. */
+    @Test
+    public void aZeroTimeoutDisablesTheTransition() throws Exception {
+        monitor = new KubernetesJobMonitor(kubernetesClient, NAMESPACE, callback, 5, 0);
+        givenJobs(activeJobFixture());
+        givenPods(podFor(EXEC_ID, "Pending"));
+        setClockMinutesAfterPodCreation(600);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+    }
+
+    /** Without a pod listing there is no age to measure, so nothing may be failed. */
+    @Test
+    public void podListFailureNeverProducesAStuckPendingTransition() throws Exception {
+        givenJobs(activeJobFixture());
+        when(filteredPods.list()).thenThrow(new RuntimeException("pods is forbidden"));
+        setClockMinutesAfterPodCreation(600);
+        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
     }
 
     @SuppressWarnings("unchecked")

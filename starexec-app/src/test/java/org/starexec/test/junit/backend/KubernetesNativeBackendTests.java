@@ -13,6 +13,7 @@ import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -613,6 +614,181 @@ public class KubernetesNativeBackendTests {
      * Builds a FOUND lookup result for callback tests. Reflection is required
      * because PairStatusLookupResult has no public constructor or factory.
      */
+    /**
+     * A pod that never started is recorded as ERROR_RUNSCRIPT so RERUN_FAILED_PAIRS picks
+     * it up — but that task's query also demands a non-null end_time, so without setEndTime
+     * the pair would sit failed and never be rerun. This test is the guard on that.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingPairGetsAnEndTimeSoTheRerunCanFindIt() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(31, "job-31");
+        execToPair.put(31, 431);
+        execToOut.put(31, Path.of("/tmp/output/31"));
+        holdingSlot.add(31);
+        activeJobCount.set(1);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(431))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            431,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(true);
+            jobPairsMock.when(() -> JobPairs.setEndTime(431)).thenReturn(true);
+
+            assertTrue(
+                callback.onJobStuckPending(
+                    31,
+                    "job-31",
+                    "not scheduled (Unschedulable): 0/6 nodes are available"
+                )
+            );
+
+            jobPairsMock.verify(
+                () ->
+                    JobPairs.setPairStatusPrecise(
+                        431,
+                        1,
+                        StatusCode.ERROR_RUNSCRIPT.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal()
+                    )
+            );
+            jobPairsMock.verify(() -> JobPairs.setEndTime(431));
+        }
+
+        assertTrue(execToJob.isEmpty());
+        assertTrue(execToPair.isEmpty());
+        assertTrue(execToOut.isEmpty());
+    }
+
+    /**
+     * The slot a stuck pair holds is the reason one mislabelled queue can wedge the whole
+     * backend: at maxConcurrentJobs held slots, submitScript rejects everything and
+     * JobManager turns each rejection into a terminal error.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingReleasesTheConcurrencySlot() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(32, "job-32");
+        execToPair.put(32, 432);
+        holdingSlot.add(32);
+        activeJobCount.set(1);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(432))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            432,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(true);
+            jobPairsMock.when(() -> JobPairs.setEndTime(432)).thenReturn(true);
+
+            assertTrue(callback.onJobStuckPending(32, "job-32", "Unschedulable"));
+        }
+
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+    }
+
+    /**
+     * A failed status write must not consume the slot or the tracking, or the pair would
+     * be dropped without ever reaching a status a rerun can find.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingIsRetriedWhenTheStatusWriteFails() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(33, "job-33");
+        execToPair.put(33, 433);
+        holdingSlot.add(33);
+        activeJobCount.set(1);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(433))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPrecise(
+                            433,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal()
+                        )
+                )
+                .thenReturn(false, true);
+
+            assertFalse(callback.onJobStuckPending(33, "job-33", "Unschedulable"));
+            assertEquals("job-33", execToJob.get(33));
+            assertEquals(1, activeJobCount.get());
+
+            jobPairsMock.when(() -> JobPairs.setEndTime(433)).thenReturn(true);
+            assertTrue(callback.onJobStuckPending(33, "job-33", "Unschedulable"));
+        }
+
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+        assertTrue(execToJob.isEmpty());
+    }
+
     private JobPairs.PairStatusLookupResult foundLookup(int statusCode)
         throws Exception {
         Constructor<JobPairs.PairStatusLookupResult> constructor =

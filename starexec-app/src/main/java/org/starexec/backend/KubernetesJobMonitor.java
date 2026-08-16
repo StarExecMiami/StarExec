@@ -81,9 +81,12 @@ import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.api.model.batch.v1.JobStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 import org.starexec.logger.StarLogger;
 
 /**
@@ -109,7 +112,23 @@ public class KubernetesJobMonitor {
 
     /** Poll interval while informer integration is pending */
     private static final long POLL_INTERVAL_MS = 5_000;
-    
+
+    /**
+     * How long a pod may stay Pending before it is worth an operator's attention.
+     *
+     * <p>Five minutes clears normal scheduling latency and a cold image pull without ever
+     * firing on a healthy cluster.
+     */
+    public static final int DEFAULT_PENDING_WARN_MINUTES = 5;
+
+    /**
+     * How long a pod may stay Pending before its pair is failed for rerun.
+     *
+     * <p>An hour rides out a short drain but surfaces a mislabelled queue the same working
+     * day. Zero disables the transition and leaves only the warning.
+     */
+    public static final int DEFAULT_PENDING_TIMEOUT_MINUTES = 60;
+
     // =========================================================================
     // Dependencies
     // =========================================================================
@@ -135,7 +154,25 @@ public class KubernetesJobMonitor {
 
     /** Tracks jobs already transitioned to STATUS_RUNNING */
     private final Set<Integer> runningExecIds = ConcurrentHashMap.newKeySet();
-    
+
+    /** When each stuck-pending execution id was last warned about, for throttling */
+    private final Map<Integer, Long> pendingWarnedAt = new ConcurrentHashMap<>();
+
+    /** How long a pod may be Pending before it is logged, in milliseconds */
+    private final long pendingWarnMillis;
+
+    /**
+     * How long a pod may be Pending before its pair is failed for rerun, in milliseconds.
+     * Zero means never.
+     */
+    private final long pendingTimeoutMillis;
+
+    /**
+     * Source of "now". A field so a test can advance time without sleeping; production
+     * never replaces it.
+     */
+    private volatile LongSupplier clock = System::currentTimeMillis;
+
     /** Monitor thread */
     private Thread monitorThread;
     
@@ -155,10 +192,53 @@ public class KubernetesJobMonitor {
         String namespace,
         JobCompletionCallback callback
     ) {
+        this(
+            kubernetesClient,
+            namespace,
+            callback,
+            DEFAULT_PENDING_WARN_MINUTES,
+            DEFAULT_PENDING_TIMEOUT_MINUTES
+        );
+    }
+
+    /**
+     * Create a new Kubernetes job monitor with explicit stale-pending thresholds.
+     *
+     * @param pendingWarnMinutes    minutes a pod may be Pending before it is logged;
+     *                              zero or less disables the warning
+     * @param pendingTimeoutMinutes minutes a pod may be Pending before its pair is failed
+     *                              for rerun; zero or less disables the transition, which
+     *                              leaves the monitor reporting only
+     */
+    public KubernetesJobMonitor(
+        KubernetesClient kubernetesClient,
+        String namespace,
+        JobCompletionCallback callback,
+        int pendingWarnMinutes,
+        int pendingTimeoutMinutes
+    ) {
         this.kubernetesClient = kubernetesClient;
         this.namespace = namespace;
         this.callback = callback;
-        log.info("KubernetesJobMonitor created for namespace: " + namespace);
+        this.pendingWarnMillis = toMillis(pendingWarnMinutes);
+        this.pendingTimeoutMillis = toMillis(pendingTimeoutMinutes);
+        log.info(
+            "KubernetesJobMonitor created for namespace: " +
+            namespace +
+            " (pending warn=" +
+            describeMinutes(pendingWarnMinutes) +
+            ", pending timeout=" +
+            describeMinutes(pendingTimeoutMinutes) +
+            ")"
+        );
+    }
+
+    private static long toMillis(int minutes) {
+        return (minutes <= 0) ? 0L : TimeUnit.MINUTES.toMillis(minutes);
+    }
+
+    private static String describeMinutes(int minutes) {
+        return (minutes <= 0) ? "disabled" : (minutes + "m");
     }
     
     // =========================================================================
@@ -277,19 +357,11 @@ public class KubernetesJobMonitor {
 
             CompletionState completion = getCompletionState(job);
             if (completion == CompletionState.RUNNING) {
-                if (isRunningOnANode(job, execId, pods) && !runningExecIds.contains(execId)) {
-                    String jobName =
-                        (job.getMetadata() != null) ? job.getMetadata().getName() : "unknown";
-                    boolean runningProcessed = callback.onJobRunning(execId, jobName);
-                    if (runningProcessed) {
-                        runningExecIds.add(execId);
-                    }
-                }
+                handleInFlightJob(job, execId, pods);
                 continue;
             }
 
-            String jobName =
-                (job.getMetadata() != null) ? job.getMetadata().getName() : "unknown";
+            String jobName = jobNameOf(job);
             boolean processed;
             if (completion == CompletionState.SUCCEEDED) {
                 processed = callback.onJobComplete(execId, jobName);
@@ -306,7 +378,93 @@ public class KubernetesJobMonitor {
             }
 
             runningExecIds.remove(execId);
+            pendingWarnedAt.remove(execId);
         }
+    }
+
+    /**
+     * Decides what an unfinished job is doing: executing, or waiting to be scheduled.
+     *
+     * <p>The waiting case has no natural end. With backoffLimit 0, restartPolicy Never and
+     * no activeDeadlineSeconds, an unschedulable pod — or one that cannot pull its image,
+     * which also holds phase Pending — waits indefinitely while its pair holds one of
+     * maxConcurrentJobs submission slots. Enough of those and the backend rejects every
+     * further submission, which JobManager records as a terminal error on pairs that had
+     * nothing wrong with them.
+     */
+    private void handleInFlightJob(Job job, int execId, PodPhaseView pods) {
+        String jobName = jobNameOf(job);
+
+        if (isRunningOnANode(job, execId, pods)) {
+            if (!runningExecIds.contains(execId) && callback.onJobRunning(execId, jobName)) {
+                runningExecIds.add(execId);
+            }
+            pendingWarnedAt.remove(execId);
+            return;
+        }
+
+        // Without a pod listing there is nothing to judge, and a pod that is absent or in
+        // a terminal phase is the Job's business, not this method's.
+        if (!pods.isAvailable() || pods.phaseFor(execId) != PodPhaseView.Phase.PENDING) {
+            return;
+        }
+
+        long createdAt = pods.createdAtMillis(execId);
+        if (createdAt == PodPhaseView.UNKNOWN_TIME) {
+            return;
+        }
+
+        long pendingMillis = clock.getAsLong() - createdAt;
+        if (pendingMillis < 0) {
+            // Clock skew between this host and the API server. Never read it as age.
+            return;
+        }
+
+        String reason = pods.describeWhyPending(execId);
+
+        if (pendingTimeoutMillis > 0 && pendingMillis >= pendingTimeoutMillis) {
+            if (callback.onJobStuckPending(execId, jobName, reason)) {
+                completedExecIds.add(execId);
+                runningExecIds.remove(execId);
+                pendingWarnedAt.remove(execId);
+            }
+            return;
+        }
+
+        if (pendingWarnMillis > 0 && pendingMillis >= pendingWarnMillis) {
+            warnAboutStuckPod(execId, jobName, pendingMillis, reason);
+        }
+    }
+
+    private void warnAboutStuckPod(
+        int execId,
+        String jobName,
+        long pendingMillis,
+        String reason
+    ) {
+        long now = clock.getAsLong();
+        Long lastWarned = pendingWarnedAt.get(execId);
+        if (lastWarned != null && (now - lastWarned) < pendingWarnMillis) {
+            return;
+        }
+        pendingWarnedAt.put(execId, now);
+
+        log.warn(
+            "Kubernetes job " +
+            jobName +
+            " (execId " +
+            execId +
+            ") has had a pod waiting to start for " +
+            TimeUnit.MILLISECONDS.toMinutes(pendingMillis) +
+            " minutes and nothing has run yet. Kubernetes reports: " +
+            reason
+        );
+    }
+
+    private String jobNameOf(Job job) {
+        return (job != null && job.getMetadata() != null && job.getMetadata().getName() != null)
+            ? job.getMetadata().getName()
+            : "unknown";
     }
 
     private Integer extractExecId(Job job) {
@@ -467,5 +625,24 @@ public class KubernetesJobMonitor {
          * @return true when failure handling succeeded and should not be retried
          */
         boolean onJobFailed(int execId, String jobName, String reason);
+
+        /**
+         * Called when a job's pod has waited to start for longer than the configured
+         * timeout, so nothing has run and nothing is going to without intervention.
+         *
+         * <p>Distinct from {@link #onJobFailed} because the causes and the right answer
+         * differ: a failed job produced output and an exit status, while this one never
+         * started. Nothing ran, so nothing measured can be contaminated by trying again,
+         * and the implementation is expected to delete the Kubernetes Job and release the
+         * submission slot the pair has been holding.
+         *
+         * <p>Deliberately not a default method. There is one implementor, and a default
+         * would let a future one inherit silence on the condition that wedges the backend.
+         *
+         * @param reason Kubernetes' own account of why the pod has not started, for the
+         *               log — it is prose and must not be branched on
+         * @return true when the transition was recorded and should not be retried
+         */
+        boolean onJobStuckPending(int execId, String jobName, String reason);
     }
 }
