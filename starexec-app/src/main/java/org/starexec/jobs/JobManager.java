@@ -138,6 +138,17 @@ public abstract class JobManager {
 							m.setUserLoadDataFormattedString();
 						}
 					}
+				} else if (nodeCount == 0) {
+					// Distinct from "the queue is full", and it used to be reported as if
+					// it were the same thing: the gate above is queueSize < MULTIPLIER *
+					// nodeCount, so with no nodes it reads queueSize < 0 and is false
+					// however empty the queue is. An idle queue would then log "which has
+					// 0 pairs enqueued", saying nothing about the actual cause.
+					//
+					// Nothing else reports this either. Queue-level warnings live in
+					// submitJobs, which is never reached from here, so a queue with no
+					// nodes simply stopped dispatching in silence.
+					logQueueHasNoNodes(qname, queueSize);
 				} else {
 					log.info("Not adding more job pairs to queue " + qname + ", which has " + queueSize +
 							" pairs enqueued.");
@@ -322,6 +333,49 @@ public abstract class JobManager {
 	 * @param queueSize The number of job pairs enqueued in the given queue
 	 * @param nodeCount The number of nodes in the given queue
 	 */
+	/**
+	 * Reports a queue that has no nodes associated with it, and says which of the two
+	 * causes it is.
+	 *
+	 * <p>The distinction is the useful part. {@code nodeCount} comes from
+	 * {@code queue_assoc}, which is rebuilt each cycle from the backend's node/queue
+	 * associations. If the backend also considers the queue undispatchable, the cluster
+	 * genuinely has nothing for it — a drain, or a queue nothing is labelled for.
+	 *
+	 * <p>But if the backend reports the queue as dispatchable while StarExec counts zero
+	 * nodes, the two disagree, and that disagreement has a specific cause worth naming:
+	 * the node exists in the cluster but has no row in {@code nodes}, so associating it
+	 * throws every cycle. That same state also makes any pair finishing on that node lose
+	 * its runsolver measurements, because {@code UpdatePairRunSolverStats} resolves the
+	 * node by name and raises when it is missing. Pointing at it here saves an operator
+	 * from staring at a queue that mysteriously never moves.
+	 */
+	private static void logQueueHasNoNodes(String qname, int queueSize) {
+		boolean backendThinksItCanRun;
+		try {
+			backendThinksItCanRun = R.BACKEND.isQueueDispatchable(qname);
+		} catch (Exception e) {
+			// Never let a diagnostic break dispatch for the other queues.
+			log.warn("logQueueHasNoNodes", "Could not ask the backend about queue " + qname, e);
+			return;
+		}
+
+		if (backendThinksItCanRun) {
+			log.error("logQueueHasNoNodes",
+					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
+					" associated with it, yet the backend reports it can accept work. StarExec's" +
+					" node table and the cluster disagree: most likely a node exists in the" +
+					" cluster but was never registered here, so associating it fails every" +
+					" cycle. Pairs finishing on such a node also lose their recorded" +
+					" measurements. No pairs will be dispatched to this queue until it is fixed.");
+		} else {
+			log.warn("logQueueHasNoNodes",
+					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
+					" available; the backend confirms it cannot accept work. No pairs will be" +
+					" dispatched to this queue until a node is attached or comes back.");
+		}
+	}
+
 	public static void submitJobs(final List<Job> joblist, final Queue q, int queueSize, final int nodeCount) {
 		final String methodName = "submitJobs";
 		final LoadBalanceMonitor monitor = getMonitor(q.getId());
