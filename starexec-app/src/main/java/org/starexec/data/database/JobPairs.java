@@ -3360,6 +3360,43 @@ public class JobPairs {
     }
 
     /**
+     * Kills a pair and writes {@code STATUS_KILLED} only if the execution provably stopped.
+     *
+     * <p>{@link #killPair(int, int)} writes that status unconditionally — it discards the
+     * backend's answer, and is {@code void}, so no caller can tell either. On a backend whose
+     * teardown is asynchronous that records "this pair was killed" while its pod is still
+     * running: the pair reads as finished, its node is considered free, and a late write from
+     * the surviving execution lands on a pair nobody is watching.
+     *
+     * <p>On an unproven kill nothing is written at all. The pair keeps its current status, so
+     * it stays visible as in-flight rather than being misreported as terminal.
+     *
+     * @return true only when the execution was confirmed stopped and the status was written
+     */
+    public static boolean killPairConfirmed(int pairId, int execId) {
+        try {
+            org.starexec.backend.Backend.KillOutcome outcome =
+                R.BACKEND.killPairConfirmed(execId);
+            if (outcome != org.starexec.backend.Backend.KillOutcome.CONFIRMED_SAFE) {
+                log.warn(
+                    "Not recording pair " + pairId + " as killed: execution " + execId +
+                        " could not be confirmed stopped"
+                );
+                return false;
+            }
+            JobPairs.setJobPairDiskSizeToZero(pairId);
+            JobPairs.UpdateStatus(
+                pairId,
+                Status.StatusCode.STATUS_KILLED.getVal()
+            );
+            return true;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
      * Updates the status of the given job pair, replacing its current status code
      * with the given one
      *

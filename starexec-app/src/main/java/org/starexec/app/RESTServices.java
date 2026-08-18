@@ -7227,8 +7227,17 @@ public class RESTServices {
 			return gson.toJson(ERROR_INVALID_PERMISSIONS);
 		}
 		log.info("Pausing all jobs in admin/pauseAll REST service");
+		// A false result no longer means only "a database error". It also covers the case
+		// where the system was paused but at least one execution could not be confirmed
+		// stopped, so no pair was returned to PENDING_SUBMIT. Reporting that as a plain
+		// database error would tell an admin the pause did not happen, when it did — and
+		// reporting it as success would claim every execution had stopped.
 		return Jobs.pauseAll() ? gson.toJson(new ValidatorStatusCode(true, "Jobs paused successfully"))
-				: gson.toJson(ERROR_DATABASE);
+				: gson.toJson(new ValidatorStatusCode(false,
+						"The system was paused, but the operation did not complete: one or more"
+								+ " executions could not be confirmed stopped, so their pairs were"
+								+ " left as they are rather than being made runnable again."
+								+ " Check the logs before resuming."));
 	}
 
 	/**

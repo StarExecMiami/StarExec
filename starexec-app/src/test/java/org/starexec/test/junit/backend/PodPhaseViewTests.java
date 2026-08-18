@@ -251,4 +251,93 @@ public class PodPhaseViewTests {
         assertEquals(PodPhaseView.Phase.UNKNOWN, view.phaseFor(1));
         assertEquals(PodPhaseView.Phase.UNKNOWN, view.phaseFor(2));
     }
+
+    // ------------------------------------------------------------------
+    // B3: a managed pod whose identity cannot be parsed must stay visible
+    // ------------------------------------------------------------------
+
+    /** A managed pod carrying whatever raw exec-id label value the cluster gave it. */
+    private Pod podWithRawExecId(String name, String rawExecId, String phase) {
+        java.util.Map<String, String> labels = new java.util.HashMap<>();
+        labels.put("starexec.org/managed", "true");
+        if (rawExecId != null) {
+            labels.put(EXEC_ID_LABEL, rawExecId);
+        }
+        return new PodBuilder()
+            .withNewMetadata()
+            .withName(name)
+            .withCreationTimestamp("2026-08-15T12:00:00Z")
+            .addToLabels(labels)
+            .endMetadata()
+            .withNewSpec()
+            .withNodeName("node-a")
+            .endSpec()
+            .withNewStatus()
+            .withPhase(phase)
+            .endStatus()
+            .build();
+    }
+
+    @Test
+    public void aRunningManagedPodWithNoExecIdLabelIsKeptNotDropped() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podWithRawExecId("orphan-a", null, "Running")), EXEC_ID_LABEL
+        );
+
+        assertTrue("it has no execution identity", view.execIds().isEmpty());
+        assertEquals("but it must not vanish", 1, view.unidentifiedPods().size());
+        assertEquals(1, view.unsafeUnidentifiedPods().size());
+        assertEquals("orphan-a", view.unsafeUnidentifiedPods().get(0).name());
+        assertEquals(
+            "the operator needs the node to find it",
+            "node-a", view.unsafeUnidentifiedPods().get(0).nodeName()
+        );
+    }
+
+    @Test
+    public void aRunningManagedPodWithAMalformedExecIdIsKept() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podWithRawExecId("orphan-b", "12a", "Running")), EXEC_ID_LABEL
+        );
+
+        assertTrue(view.execIds().isEmpty());
+        assertEquals(1, view.unsafeUnidentifiedPods().size());
+        assertEquals(
+            "the raw value is reported rather than guessed at",
+            "12a", view.unsafeUnidentifiedPods().get(0).rawExecIdLabel()
+        );
+    }
+
+    @Test
+    public void aRunningManagedPodWithAnOverflowingExecIdIsKept() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podWithRawExecId("orphan-c", "99999999999999", "Running")), EXEC_ID_LABEL
+        );
+
+        assertTrue(view.execIds().isEmpty());
+        assertEquals(1, view.unsafeUnidentifiedPods().size());
+    }
+
+    @Test
+    public void aTerminatedUnidentifiedPodIsRecordedButDoesNotHoldAdmission() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(podWithRawExecId("orphan-d", null, "Succeeded")), EXEC_ID_LABEL
+        );
+
+        assertEquals(1, view.unidentifiedPods().size());
+        assertTrue(
+            "a Succeeded pod has no running container, so it holds nothing",
+            view.unsafeUnidentifiedPods().isEmpty()
+        );
+    }
+
+    @Test
+    public void anIdentifiedPodIsNeverReportedAsUnidentified() {
+        PodPhaseView view = PodPhaseView.of(
+            List.of(pod(EXEC_ID, "Running", "2026-08-15T12:00:00Z")), EXEC_ID_LABEL
+        );
+
+        assertTrue(view.unidentifiedPods().isEmpty());
+        assertEquals(PodPhaseView.Phase.RUNNING, view.phaseFor(EXEC_ID));
+    }
 }

@@ -563,20 +563,31 @@ public class KubernetesJobMonitor {
         }
     }
 
+    /**
+     * Classifies a Job as terminal <em>only</em> from its terminal conditions.
+     *
+     * <p>This used to short-circuit on {@code status.failed > 0} before the conditions were
+     * read at all. That counter counts failed <em>Pods</em>, not a finished Job: with
+     * {@code backoffLimit > 0} a Job sitting at {@code failed == 1} is still live and will
+     * create the next Pod. Reporting it FAILED made the caller write a terminal pair status
+     * and an {@code end_time} — making the pair rerun-eligible — while the controller was
+     * about to start a replacement execution, so two executions for one pair could write
+     * results.
+     *
+     * <p>The symmetric {@code succeeded > 0} shortcut is gone too. It happens to be
+     * equivalent today because {@code completions} is never set and defaults to 1, but that
+     * is a project-specific assumption propping up an asymmetric rule, and this judgement had
+     * already drifted into several disagreeing copies. The cost of removing it is at most one
+     * extra poll interval before a completed pair is noticed.
+     *
+     * <p>{@code FailureTarget} and {@code SuccessCriteriaMet} are deliberately not matched:
+     * they <em>begin</em> termination, and the real {@code Failed} / {@code Complete}
+     * condition follows.
+     */
     private CompletionState getCompletionState(Job job) {
         JobStatus status = job.getStatus();
         if (status == null) {
             return CompletionState.RUNNING;
-        }
-
-        Integer succeeded = status.getSucceeded();
-        if (succeeded != null && succeeded > 0) {
-            return CompletionState.SUCCEEDED;
-        }
-
-        Integer failed = status.getFailed();
-        if (failed != null && failed > 0) {
-            return CompletionState.FAILED;
         }
 
         List<JobCondition> conditions = status.getConditions();

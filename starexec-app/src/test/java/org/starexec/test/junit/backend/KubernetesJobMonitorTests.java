@@ -183,9 +183,106 @@ public class KubernetesJobMonitorTests {
         verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
     }
 
+    /**
+     * The retryable-Job case, which the default {@code backoffLimit = 0} hides.
+     *
+     * <p>{@code status.failed} counts failed <em>pods</em>. With retries enabled, a Job at
+     * {@code failed == 1} has lost its first attempt and is about to create the next one.
+     * The monitor used to read that as FAILED before it looked at the conditions at all, so
+     * the pair received a terminal status and an {@code end_time} — making it rerun-eligible
+     * — while the controller was still going to run it again. Two executions, one pair, both
+     * writing results.
+     */
+    @Test
+    public void aRetryingJobProducesNoTerminalCallback() throws Exception {
+        Job retrying = new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels("starexec.org/managed", "true")
+            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewSpec()
+            .withBackoffLimit(3)
+            .endSpec()
+            .withNewStatus()
+            .withFailed(1)
+            .endStatus()
+            .build();
+
+        givenJobs(retrying);
+        givenPods();
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobComplete(anyInt(), anyString());
+        assertFalse(
+            "nothing terminal may be recorded for a Job that can still start a pod",
+            getCompletedExecIds().contains(EXEC_ID)
+        );
+    }
+
+    /** Once the controller really is finished, the terminal path proceeds as before. */
+    @Test
+    public void theSameJobTerminalizesOnceItCarriesFailedTrue() throws Exception {
+        Job failed = new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels("starexec.org/managed", "true")
+            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewSpec()
+            .withBackoffLimit(3)
+            .endSpec()
+            .withNewStatus()
+            .withFailed(4)
+            .addNewCondition()
+            .withType("Failed")
+            .withStatus("True")
+            .endCondition()
+            .endStatus()
+            .build();
+
+        givenJobs(failed);
+        givenPods();
+        when(callback.onJobFailed(anyInt(), anyString(), anyString())).thenReturn(true);
+
+        invokePollJobsOnce();
+
+        verify(callback, times(1)).onJobFailed(eq(EXEC_ID), eq(JOB_NAME), anyString());
+    }
+
+    /** FailureTarget begins termination; it is not the terminal condition. */
+    @Test
+    public void aFailureTargetConditionIsNotTreatedAsFailed() throws Exception {
+        Job terminating = new JobBuilder()
+            .withNewMetadata()
+            .withName(JOB_NAME)
+            .addToLabels("starexec.org/managed", "true")
+            .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+            .endMetadata()
+            .withNewStatus()
+            .withFailed(1)
+            .addNewCondition()
+            .withType("FailureTarget")
+            .withStatus("True")
+            .endCondition()
+            .endStatus()
+            .build();
+
+        givenJobs(terminating);
+        givenPods();
+
+        invokePollJobsOnce();
+
+        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+    }
+
     @Test
     public void pollJobsOnce_RetriesCompletedJobUntilCallbackSucceeds()
         throws Exception {
+        // A real Complete=True condition, not withSucceeded(1). The counter counts finished
+        // Pods and no longer makes a Job terminal on its own — see getCompletionState.
         Job completedJob = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
@@ -194,6 +291,10 @@ public class KubernetesJobMonitorTests {
             .endMetadata()
             .withNewStatus()
             .withSucceeded(1)
+            .addNewCondition()
+            .withType("Complete")
+            .withStatus("True")
+            .endCondition()
             .endStatus()
             .build();
 

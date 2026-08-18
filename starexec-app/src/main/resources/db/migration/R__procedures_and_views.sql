@@ -1858,6 +1858,48 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
+-- terminal => end_time, enforced for every writer.
+--
+-- Must live HERE, immediately after IsTerminalPairStatus, and not only in V0116 where it
+-- was first introduced. The DROP ... CASCADE directly above removes anything depending on
+-- that function, and this trigger's WHEN clause depends on it -- so a trigger created by
+-- the versioned migration is silently destroyed the next time this repeatable migration
+-- runs, which Flyway always does after the versioned ones. Verified against a real
+-- database: the trigger was present after V0001..V0116 and absent after R__.
+--
+-- The invariant it enforces: a job pair with a terminal status always carries an
+-- end_time. GetJobPairIdsWithStatusNotRerunAfterDate -- the query behind
+-- RERUN_FAILED_PAIRS, the only automatic retry path -- selects on
+-- (end_time >= _cutoff OR end_time < '1970-01-01'), and a NULL satisfies neither under
+-- three-valued logic, so a terminal pair without one is invisible to it and to
+-- reconciliation, which looks only at ENQUEUED and RUNNING. Terminal statuses are written
+-- from at least four routines plus direct UPDATEs; enforcing it once here is what makes
+-- the invariant total rather than "usually true".
+CREATE OR REPLACE FUNCTION starexec.stamp_terminal_end_time()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.end_time := CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS job_pairs_terminal_end_time ON starexec.job_pairs;
+
+-- The WHEN clause keeps this cheap on a hot table: it is evaluated without entering
+-- plpgsql and excludes every UPDATE that is not a fresh transition into a terminal status
+-- on a row with no end_time. IS DISTINCT FROM so a transition from a NULL status counts.
+-- status_code is SMALLINT (V0001:357) and a trigger WHEN clause does not apply the
+-- implicit widening a normal query would, hence the cast.
+CREATE TRIGGER job_pairs_terminal_end_time
+    BEFORE UPDATE ON starexec.job_pairs
+    FOR EACH ROW
+    WHEN (
+        NEW.end_time IS NULL
+        AND NEW.status_code IS DISTINCT FROM OLD.status_code
+        AND starexec.IsTerminalPairStatus(NEW.status_code::INT)
+    )
+    EXECUTE FUNCTION starexec.stamp_terminal_end_time();
+
 CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatus(_jobPairId INT, _statusCode INT)
 AS $$
 DECLARE
@@ -1896,6 +1938,24 @@ BEGIN
 	-- 25: Pre-processor error
 	-- 26: Post-processor error
 	IF starexec.IsTerminalPairStatus(_statusCode) THEN
+		-- Same invariant as UpdatePairStatusPrecise: a terminal pair always carries an
+		-- end_time, written in the same transaction as the status.
+		--
+		-- Patching only the Precise variant was not enough. This older procedure is
+		-- still live and still reaches ERROR_RUNSCRIPT (11) by three routes that never
+		-- write end_time anywhere: starexec.RunscriptError CALLs it directly with 11;
+		-- functions.bash sendStatus CALLs it for every non-container execution, which is
+		-- the classic SGE and OAR path; and JobPairs.setPairStatus uses it for
+		-- post-processing transitions. On those paths the jobscript's own setEndTime is
+		-- only reached after the stage loop, so an early exit -- verifyWorkspace finding
+		-- no runscript, or markRunscriptError -- left the pair terminal with end_time
+		-- NULL, invisible to RERUN_FAILED_PAIRS exactly as before.
+		--
+		-- Guarded on IS NULL so a real completion timestamp is never overwritten.
+		UPDATE starexec.job_pairs
+		SET end_time = CURRENT_TIMESTAMP
+		WHERE id = _jobPairId AND end_time IS NULL;
+
 		INSERT INTO job_pair_completion (pair_id) VALUES (_jobPairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
@@ -3089,6 +3149,30 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- As GetJobPairsByStatus, but also returns each pair's backend execution id.
+--
+-- Needed because Jobs.setPairsToPending had no way to learn it: GetJobPairsByStatus projects
+-- the id alone, so that method passed a hardcoded 0 to the kill. On Kubernetes that means a
+-- pod census for exec-id=0, which matches nothing, reports safe, and lets the pair be reset
+-- while its real pod is still running.
+--
+-- NOTE the column is sge_id, not backend_exec_id -- the latter is only the Java-side name.
+-- It is nullable with no default, and a NULL means the execution cannot be identified, which
+-- callers must treat as unproven rather than as "execution 0".
+--
+-- Covered by idx_job_pairs_job_id_status_code.
+DROP FUNCTION IF EXISTS starexec.GetJobPairExecutionsByStatus CASCADE;
+CREATE OR REPLACE FUNCTION starexec.GetJobPairExecutionsByStatus(_jobId INT, _statusCode INT)
+RETURNS TABLE(id INT, sge_id INT, status_code SMALLINT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT jp.id, jp.sge_id, jp.status_code
+    FROM starexec.job_pairs jp
+    WHERE jp.job_id = _jobId AND jp.status_code = _statusCode
+    ORDER BY jp.id ASC;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Retrieves ids for job pairs in a given job where either cpu or wallclock is 0 for any stage that has the given status code
 -- Author: Eric Burns
 DROP FUNCTION IF EXISTS starexec.GetTimelessJobPairsByStatus CASCADE;
@@ -3452,12 +3536,24 @@ BEGIN
             MESSAGE = format('Job %s not found', _jobId);
     END IF;
     UPDATE jobs SET paused = false WHERE id = _jobId;
+
+    -- Only pairs with nothing to stop are killed here. 1 = PENDING_SUBMIT (never
+    -- dispatched) and 20 = PAUSED (not executing), so writing the terminal status for them
+    -- claims nothing about a backend execution.
+    --
+    -- ENQUEUED (2) and RUNNING (4) are deliberately NOT included. Each of those has a live
+    -- execution that has to be proven stopped first, and only the Java layer can do that;
+    -- writing status 21 for them here would record "this pair was killed" while its pod was
+    -- still running and still able to write results. Jobs.kill iterates them explicitly.
     UPDATE job_pairs SET status_code = 21 WHERE job_id = _jobId AND (status_code = 1 OR status_code = 20);
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s has no running or paused pairs to kill', _jobId);
-    END IF;
+
+    -- No RAISE when that matched nothing.
+    --
+    -- The removed "IF NOT FOUND THEN RAISE" made killing a job whose pairs were ALL running
+    -- a total no-op: the exception aborted the statement, rolled back the killed = true set
+    -- above, and the Java caller's own loop never ran because the DAO had already returned
+    -- false. A job with no pending or paused pairs is the ordinary case for a job that is
+    -- actually running, not an error.
 END;
 $$ LANGUAGE plpgsql;
 
@@ -4541,17 +4637,23 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- NOTE: this is no longer how the automatic rerun allowance is consumed. The
+-- RERUN_FAILED_PAIRS sweep now calls starexec.RerunJobPairAutomatic (V0117), which writes
+-- the pairs_rerun row in the SAME transaction as the reset. Marking a pair here after a
+-- separate reset is exactly the two-step sequence V0117 exists to eliminate.
+--
+-- The contradictory "IF NOT FOUND THEN RAISE" has been removed. FOUND is false precisely
+-- when ON CONFLICT DO NOTHING suppressed the insert, so the previous body declared the
+-- operation idempotent and then threw P0002 on a re-mark. That exception aborted the
+-- caller's statement and, because PeriodicTasks' catch sat outside its loop, aborted the
+-- whole sweep pass under a message describing a selection failure that had in fact
+-- succeeded.
 DROP FUNCTION IF EXISTS starexec.MarkPairAsRerun CASCADE;
 CREATE OR REPLACE FUNCTION starexec.MarkPairAsRerun(_pairId INT)
 RETURNS VOID AS $$
 BEGIN
     INSERT INTO pairs_rerun (pair_id) VALUES (_pairId)
     ON CONFLICT (pair_id) DO NOTHING;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Pair %s already marked as rerun', _pairId);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -9737,6 +9839,27 @@ BEGIN
 	-- Terminal codes: 7-18 (normal completion, resource limits, common errors), 21 (killed),
 	-- 23 (not reached), 24 (benchmark dependency missing), 25 (pre-processor error), 26 (post-processor error)
 	IF starexec.IsTerminalPairStatus(_terminalStatus) THEN
+		-- A terminal pair must always carry an end_time, and it must be written in the
+		-- same transaction as the status. GetJobPairIdsWithStatusNotRerunAfterDate
+		-- selects on (end_time >= _earliestEndTime OR end_time < '1970-01-01'), and a
+		-- NULL end_time satisfies neither under three-valued logic -- so a terminal pair
+		-- without one is invisible to RERUN_FAILED_PAIRS, the only automatic retry path
+		-- in the system, and to every reconciliation query (which look at ENQUEUED and
+		-- RUNNING only). It is unrecoverable by any code path that exists.
+		--
+		-- Callers used to write this separately via JobPairs.setEndTime after the status
+		-- write committed, which left a crash window between the two, and three callers
+		-- (tryMarkRunningAsFailed and both PodmanBackend reconciliation paths) never
+		-- wrote it at all. Doing it here removes the window instead of asking eight call
+		-- sites to stay correct.
+		--
+		-- Guarded on IS NULL so a genuine completion timestamp is never overwritten, and
+		-- deliberately outside the NOT _duplicate branch so that retrying a terminal
+		-- write repairs a pair whose earlier attempt set the status and then died.
+		UPDATE starexec.job_pairs
+		SET end_time = CURRENT_TIMESTAMP
+		WHERE id = _pairId AND end_time IS NULL;
+
 		INSERT INTO job_pair_completion (pair_id) VALUES (_pairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
@@ -9772,5 +9895,83 @@ BEGIN
     FROM starexec.permissions p
     WHERE p.id = (SELECT ua.permission FROM starexec.user_assoc ua WHERE ua.space_id = _spaceId AND ua.user_id = _userId LIMIT 1);
     RETURN isLeader;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Backend execution ids for every pair of a job, keyed by pair id.
+--
+-- GetJobPairsByJobSimple's RETURNS TABLE does not project sge_id, so every JobPair that
+-- Jobs.getPairsSimple builds carries the field default (-1). A safety gate reading that
+-- value would be deciding on "this query never read the column", not on "this pair has no
+-- identifiable execution" -- two facts that must never be conflated, because only the
+-- second one is a reason to withhold a rerun.
+--
+-- NULL becomes 0 rather than being dropped: sge_id is nullable, and the callers all treat
+-- a non-positive id as unidentifiable and therefore unprovable. A pair missing from this
+-- result is likewise unidentifiable to the caller, so the fail-closed direction is the
+-- same either way.
+CREATE OR REPLACE FUNCTION starexec.GetJobPairBackendExecIds(_jobId INT)
+RETURNS TABLE(pair_id INT, backend_exec_id INT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT jp.id, COALESCE(jp.sge_id, 0)::INT
+      FROM starexec.job_pairs jp
+     WHERE jp.job_id = _jobId;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Manual batch reset that revalidates execution IDENTITY, not just status, under the lock.
+--
+-- RerunJobPairsBatch re-reads only `status_code <> 1`. That drops a pair a concurrent actor
+-- reset to PENDING_SUBMIT, but NOT one it reset and then re-dispatched: such a pair is at
+-- ENQUEUED/RUNNING with a NEW sge_id, so the status test passes and it is reset a second
+-- time -- while the new execution is live. The Java caller proved a specific execution
+-- stopped; that proof does not transfer to whatever execution owns the pair now.
+--
+-- RerunJobPairsBatchCore never clears sge_id, so the column is a stable witness of which
+-- execution the caller's proof was about. This mirrors what RerunJobPairAutomatic already
+-- does for status with its _expectedStatus parameter.
+--
+-- _expectedExecIds must be positionally aligned with _pairIds, and each entry must be the
+-- COALESCE(sge_id, 0) value the caller observed when it took its decision.
+CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchChecked(
+    _pairIds INT[],
+    _expectedExecIds INT[]
+)
+RETURNS INT AS $$
+DECLARE
+    _eligible INT[];
+BEGIN
+    IF _pairIds IS NULL OR cardinality(_pairIds) = 0 THEN
+        RETURN 0;
+    END IF;
+    IF _expectedExecIds IS NULL
+       OR cardinality(_expectedExecIds) <> cardinality(_pairIds) THEN
+        RAISE EXCEPTION 'RerunJobPairsBatchChecked: expected exec id array must align with pair ids';
+    END IF;
+
+    -- Lowest id first, so two overlapping batches cannot deadlock on a shared id set.
+    PERFORM 1
+       FROM starexec.job_pairs jp
+      WHERE jp.id = ANY(_pairIds)
+      ORDER BY jp.id
+        FOR UPDATE;
+
+    SELECT COALESCE(array_agg(jp.id ORDER BY jp.id), ARRAY[]::INT[])
+      INTO _eligible
+      FROM starexec.job_pairs jp
+      JOIN unnest(_pairIds, _expectedExecIds) AS e(pair_id, exec_id) ON e.pair_id = jp.id
+     WHERE jp.status_code <> 1
+       AND COALESCE(jp.sge_id, 0) = e.exec_id;
+
+    IF cardinality(_eligible) = 0 THEN
+        RETURN 0;
+    END IF;
+
+    PERFORM starexec.RerunJobPairsBatchCore(_eligible);
+
+    -- Deliberately no pairs_rerun write: this is the manual path and must not spend the
+    -- pair's automatic-rerun allowance.
+    RETURN cardinality(_eligible);
 END;
 $$ LANGUAGE plpgsql;

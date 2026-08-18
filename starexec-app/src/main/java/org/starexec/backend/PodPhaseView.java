@@ -9,6 +9,7 @@ import io.fabric8.kubernetes.api.model.PodStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -75,15 +76,119 @@ public final class PodPhaseView {
 
     private static final PodPhaseView UNAVAILABLE = new PodPhaseView(
         Collections.emptyMap(),
+        Collections.emptyList(),
         false
     );
 
+    /**
+     * A managed pod whose execution identity could not be recovered.
+     *
+     * <p>Kept rather than discarded. The pod was returned by a listing that selected on the
+     * managed label alone, so it exists and may be executing; only its {@code exec-id} label
+     * is missing, empty, non-numeric, or out of {@code int} range. Dropping it made a
+     * running solver invisible to both slot accounting and admission control.
+     *
+     * <p>Carries the raw label value and the node name because an operator has to find the
+     * object to resolve it, and no execution id can be invented for it.
+     */
+    public static final class UnidentifiedPod {
+        private final String name;
+        private final String nodeName;
+        private final String phase;
+        private final String rawExecIdLabel;
+        private final PodSafety safety;
+
+        private UnidentifiedPod(
+            String name,
+            String nodeName,
+            String phase,
+            String rawExecIdLabel,
+            PodSafety safety
+        ) {
+            this.name = name;
+            this.nodeName = nodeName;
+            this.phase = phase;
+            this.rawExecIdLabel = rawExecIdLabel;
+            this.safety = safety;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        public String nodeName() {
+            return nodeName;
+        }
+
+        public String phase() {
+            return phase;
+        }
+
+        public String rawExecIdLabel() {
+            return rawExecIdLabel;
+        }
+
+        public PodSafety safety() {
+            return safety;
+        }
+
+        /** Whether this pod may still execute or write, or cannot be shown not to. */
+        public boolean mayStillRun() {
+            return safety != PodSafety.SAFE_TERMINATED;
+        }
+
+        @Override
+        public String toString() {
+            return "pod " + orUnknown(name) +
+                " on node " + orUnknown(nodeName) +
+                " phase " + orUnknown(phase) +
+                " exec-id label " +
+                (rawExecIdLabel == null ? "<absent>" : "'" + rawExecIdLabel + "'") +
+                " safety " + safety;
+        }
+    }
+
     private final Map<Integer, Observation> byExecId;
+    private final List<UnidentifiedPod> unidentified;
     private final boolean available;
 
-    private PodPhaseView(Map<Integer, Observation> byExecId, boolean available) {
+    private PodPhaseView(
+        Map<Integer, Observation> byExecId,
+        List<UnidentifiedPod> unidentified,
+        boolean available
+    ) {
         this.byExecId = byExecId;
+        this.unidentified = unidentified;
         this.available = available;
+    }
+
+    /**
+     * Every managed pod in this view whose execution identity could not be parsed.
+     *
+     * <p>Empty when the listing failed — check {@link #isAvailable()} first, because an
+     * unreadable listing disproves nothing and must not clear a degraded condition.
+     */
+    public List<UnidentifiedPod> unidentifiedPods() {
+        return Collections.unmodifiableList(unidentified);
+    }
+
+    /**
+     * The unidentified managed pods that may still be executing or writing.
+     *
+     * <p>A terminal phase is enough to exclude a pod here, matching {@link #safetyOf}: a
+     * Succeeded or Failed pod has no running container. It is not enough to conclude the
+     * <em>execution</em> is over — a controller may create the next pod — which is why the
+     * caller still treats an unidentified object as a reason to hold admission rather than
+     * as something it may delete or account for.
+     */
+    public List<UnidentifiedPod> unsafeUnidentifiedPods() {
+        List<UnidentifiedPod> unsafe = new ArrayList<>();
+        for (UnidentifiedPod pod : unidentified) {
+            if (pod.mayStillRun()) {
+                unsafe.add(pod);
+            }
+        }
+        return unsafe;
     }
 
     /**
@@ -140,6 +245,240 @@ public final class PodPhaseView {
         }
     }
 
+    // =====================================================================
+    // Census: is one execution's pod capable of running or writing results?
+    //
+    // Separate from the snapshot above, and deliberately so. The snapshot answers
+    // "what is this pod doing" for the monitor's routine classification; the census
+    // answers "may I now release, publish, or replace this execution", which is a
+    // safety question and has to fail closed.
+    //
+    // Three reasons it is not an accessor on a snapshot:
+    //
+    //  1. A snapshot is taken before a deletion; the invariant needs a reading taken
+    //     after it.
+    //  2. {@link #of} silently drops any pod whose exec-id label will not parse
+    //     (see extractExecId), so a client-side bucket can report "no pod" for a pod
+    //     that exists. The API server matches a selector itself, so a server-side
+    //     query has no such hole.
+    //  3. phaseFor collapses "no pod", Succeeded, Failed and Kubernetes' literal
+    //     Unknown into one value, and those have opposite safety meanings.
+    // =====================================================================
+
+    /** Whether an execution's pods can still execute or write results. */
+    public enum PodSafety {
+        /** The listing succeeded and matched nothing. */
+        SAFE_ABSENT,
+        /**
+         * Every matching pod is Succeeded or Failed. Kubernetes defines both as "all
+         * containers have terminated and are not restarting", so such a pod cannot
+         * consume CPU or write further output. Treating it as unsafe would let one
+         * harmless historical object hold an execution's accounting forever.
+         */
+        SAFE_TERMINATED,
+        /** At least one matching pod is Pending or Running. */
+        MAY_RUN,
+        /**
+         * Safety could not be established: the listing failed, returned no body, or a
+         * pod reports phase Unknown -- which means the node stopped reporting, so that
+         * pod may well be executing right now. Never readable as safe.
+         */
+        UNDETERMINED,
+    }
+
+    /** The result of one targeted census, taken fresh, for one execution. */
+    public static final class Census {
+
+        private final PodSafety safety;
+        private final int podCount;
+        private final String detail;
+
+        private Census(PodSafety safety, int podCount, String detail) {
+            this.safety = safety;
+            this.podCount = podCount;
+            this.detail = detail;
+        }
+
+        public PodSafety safety() {
+            return safety;
+        }
+
+        /** True only for a positively established safe state. */
+        public boolean isSafe() {
+            return safety == PodSafety.SAFE_ABSENT || safety == PodSafety.SAFE_TERMINATED;
+        }
+
+        public int podCount() {
+            return podCount;
+        }
+
+        /** Pod names, phases and terminating flags, or why the listing failed. For logs. */
+        public String describe() {
+            return detail;
+        }
+
+        @Override
+        public String toString() {
+            return safety + " (" + podCount + " pod(s)): " + detail;
+        }
+    }
+
+    /**
+     * Counts the pods of one execution, identified by its execution id.
+     *
+     * <p>This is the authoritative identity. Prefer it whenever the execution id is
+     * known.
+     */
+    public static Census censusByExecId(
+        KubernetesClient client,
+        String namespace,
+        String managedLabel,
+        String execIdLabel,
+        int execId
+    ) {
+        return census(client, namespace, managedLabel, execIdLabel, String.valueOf(execId));
+    }
+
+    /**
+     * Counts the pods of any attempt of one pair, identified by its pair id.
+     *
+     * <p>A conservative fallback for when the execution id cannot be recovered, and
+     * <em>only</em> that. A pair id is stable across reruns, so this matches pods of
+     * earlier attempts too: a safe answer here means "no pod of any attempt of this pair
+     * can run", which is stronger than needed and therefore sound, while an unsafe answer
+     * must never be reported as identifying the current execution.
+     */
+    public static Census censusByPairId(
+        KubernetesClient client,
+        String namespace,
+        String managedLabel,
+        String pairIdLabel,
+        int pairId
+    ) {
+        return census(client, namespace, managedLabel, pairIdLabel, String.valueOf(pairId));
+    }
+
+    private static Census census(
+        KubernetesClient client,
+        String namespace,
+        String managedLabel,
+        String identityLabel,
+        String identityValue
+    ) {
+        if (client == null) {
+            return new Census(PodSafety.UNDETERMINED, 0, "no Kubernetes client");
+        }
+        Map<String, String> selector = new HashMap<>();
+        selector.put(managedLabel, "true");
+        selector.put(identityLabel, identityValue);
+        try {
+            io.fabric8.kubernetes.api.model.PodList listing = client
+                .pods()
+                .inNamespace(namespace)
+                .withLabels(selector)
+                .list();
+            if (listing == null || listing.getItems() == null) {
+                // A missing body is not an empty listing. Conflating the two is exactly
+                // the fail-open this method exists to prevent.
+                return new Census(
+                    PodSafety.UNDETERMINED,
+                    0,
+                    "the pod listing returned no body for " + identityLabel + "=" + identityValue
+                );
+            }
+            List<Pod> pods = listing.getItems();
+            if (pods.isEmpty()) {
+                return new Census(
+                    PodSafety.SAFE_ABSENT,
+                    0,
+                    "no pod carries " + identityLabel + "=" + identityValue
+                );
+            }
+            return new Census(worstSafety(pods), pods.size(), summarise(pods));
+        } catch (Exception e) {
+            // Deliberately NOT throttled through LISTING_WARNING_EMITTED. That latch is
+            // set once per JVM by the monitor's poll loop, and reusing it here would hide
+            // the evidence behind a decision to hold an execution's accounting.
+            log.warn(
+                "Could not list pods for " + identityLabel + "=" + identityValue +
+                " in namespace " + namespace + "; pod safety cannot be established",
+                e
+            );
+            return new Census(
+                PodSafety.UNDETERMINED,
+                0,
+                e.getClass().getSimpleName() + ": " + e.getMessage()
+            );
+        }
+    }
+
+    /** The least safe verdict across the matched pods. One unsafe pod makes the set unsafe. */
+    private static PodSafety worstSafety(List<Pod> pods) {
+        PodSafety worst = PodSafety.SAFE_TERMINATED;
+        for (Pod pod : pods) {
+            PodSafety safety = safetyOf(pod);
+            if (safety == PodSafety.UNDETERMINED) {
+                return PodSafety.UNDETERMINED;
+            }
+            if (safety == PodSafety.MAY_RUN) {
+                worst = PodSafety.MAY_RUN;
+            }
+        }
+        return worst;
+    }
+
+    /**
+     * The safety of one pod, decided by phase alone.
+     *
+     * <p>{@code deletionTimestamp} is reported but never decides: a pod being torn down
+     * still reports Running until its containers actually stop, and it can still write
+     * during its termination grace period.
+     */
+    private static PodSafety safetyOf(Pod pod) {
+        PodStatus status = pod == null ? null : pod.getStatus();
+        String phase = status == null ? null : status.getPhase();
+        if (phase == null) {
+            return PodSafety.UNDETERMINED;
+        }
+        switch (phase) {
+            case "Succeeded":
+            case "Failed":
+                return PodSafety.SAFE_TERMINATED;
+            case "Pending":
+            case "Running":
+                return PodSafety.MAY_RUN;
+            default:
+                // "Unknown", or a phase this version does not recognise. Kubernetes uses
+                // Unknown when a pod's state cannot be obtained, typically because its
+                // node stopped reporting -- the pod may be running.
+                return PodSafety.UNDETERMINED;
+        }
+    }
+
+    private static String summarise(List<Pod> pods) {
+        StringBuilder sb = new StringBuilder();
+        for (Pod pod : pods) {
+            if (sb.length() > 0) {
+                sb.append("; ");
+            }
+            String name = pod.getMetadata() == null ? "<unnamed>" : pod.getMetadata().getName();
+            PodStatus status = pod.getStatus();
+            boolean terminating =
+                pod.getMetadata() != null && pod.getMetadata().getDeletionTimestamp() != null;
+            sb
+                .append(name)
+                .append(" phase=")
+                .append(status == null || status.getPhase() == null ? "<none>" : status.getPhase())
+                .append(" terminating=")
+                .append(terminating)
+                .append(" node=")
+                .append(pod.getSpec() == null || pod.getSpec().getNodeName() == null
+                    ? "<none>"
+                    : pod.getSpec().getNodeName());
+        }
+        return sb.toString();
+    }
+
     /**
      * Builds a view from a labelled pod listing.
      *
@@ -148,19 +487,45 @@ public final class PodPhaseView {
      */
     public static PodPhaseView of(List<Pod> pods, String execIdLabel) {
         Map<Integer, Observation> observations = new HashMap<>();
+        List<UnidentifiedPod> unidentified = new ArrayList<>();
         if (pods == null) {
-            return new PodPhaseView(observations, true);
+            return new PodPhaseView(observations, unidentified, true);
         }
 
         for (Pod pod : pods) {
             Integer execId = extractExecId(pod, execIdLabel);
             if (execId == null) {
+                // Kept, not dropped. This pod matched the managed selector server-side, so
+                // it exists and may be executing; only its identity is unusable. Silently
+                // discarding it here is what made an unidentifiable solver invisible to
+                // both slot accounting and admission control.
+                unidentified.add(describeUnidentified(pod, execIdLabel));
                 continue;
             }
             Observation observed = observe(pod);
             observations.merge(execId, observed, PodPhaseView::preferred);
         }
-        return new PodPhaseView(observations, true);
+        return new PodPhaseView(observations, unidentified, true);
+    }
+
+    /** Captures what an operator needs to find a pod whose execution id cannot be read. */
+    private static UnidentifiedPod describeUnidentified(Pod pod, String execIdLabel) {
+        String name = null;
+        String nodeName = null;
+        String raw = null;
+        if (pod != null && pod.getMetadata() != null) {
+            name = pod.getMetadata().getName();
+            if (pod.getMetadata().getLabels() != null && execIdLabel != null) {
+                raw = pod.getMetadata().getLabels().get(execIdLabel);
+            }
+        }
+        if (pod != null && pod.getSpec() != null) {
+            nodeName = pod.getSpec().getNodeName();
+        }
+        String phase = (pod == null || pod.getStatus() == null)
+            ? null
+            : pod.getStatus().getPhase();
+        return new UnidentifiedPod(name, nodeName, phase, raw, safetyOf(pod));
     }
 
     /**
@@ -169,6 +534,17 @@ public final class PodPhaseView {
      */
     public boolean isAvailable() {
         return available;
+    }
+
+    /**
+     * Every execution id this view observed a pod for.
+     *
+     * <p>Empty when the listing failed, which is why callers must check
+     * {@link #isAvailable()} first: an unreadable listing and a cluster with no managed pods
+     * are indistinguishable here, and only one of them means "nothing is running".
+     */
+    public java.util.Set<Integer> execIds() {
+        return java.util.Collections.unmodifiableSet(byExecId.keySet());
     }
 
     /** The phase of the pod behind {@code execId}, or {@link Phase#UNKNOWN}. */

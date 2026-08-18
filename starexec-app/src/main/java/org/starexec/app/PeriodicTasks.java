@@ -354,8 +354,28 @@ class PeriodicTasks {
                 );
 
                 for (Integer pairId : pairIdsToRerun) {
-                    Jobs.rerunPair(pairId);
-                    PairsRerun.markPairAsRerun(pairId);
+                    // Per pair, so one failure cannot abort the pass. The previous code
+                    // caught outside this loop, so a single throwing pair skipped every
+                    // remaining one under a message describing a selection failure that
+                    // had already succeeded.
+                    try {
+                        Jobs.RerunOutcome outcome = Jobs.rerunPairAutomatic(pairId);
+                        if (outcome != Jobs.RerunOutcome.COMPLETED) {
+                            // Not an error. Nothing was written, so the pair keeps its
+                            // ERROR_RUNSCRIPT status and end_time and the next pass — or
+                            // the next JVM — selects it again. The database owns this
+                            // retry; there is deliberately no in-memory record of it.
+                            log.info(
+                                "(" + this.name + ") pair " + pairId +
+                                    " not rerun this pass: " + outcome
+                            );
+                        }
+                    } catch (Exception e) {
+                        log.warn(
+                            this.name + " could not rerun pair " + pairId,
+                            e
+                        );
+                    }
                 }
             } catch (SQLException e) {
                 log.warn(

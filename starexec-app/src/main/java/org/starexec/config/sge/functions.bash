@@ -127,6 +127,10 @@ function decodePathArrays {
 		SOLVER_PATHS[i]=$(     base64 -d <<< "${SOLVER_PATHS[i]}")
 		BENCH_SUFFIXES[i]=$(   base64 -d <<< "${BENCH_SUFFIXES[i]}")
 		BENCH_INPUT_PATHS[i]=$(base64 -d <<< "${BENCH_INPUT_PATHS[i]}")
+		# CONFIG_NAMES joined this list when JobManager began base64-encoding it. It was
+		# the one per-stage name still emitted raw, and it is derived from a filename
+		# inside a user-uploaded archive.
+		CONFIG_NAMES[i]=$(     base64 -d <<< "${CONFIG_NAMES[i]}")
 
 		log "decoded the benchmark input ${BENCH_INPUT_PATHS[i]}"
 	done
@@ -1004,6 +1008,34 @@ function copyOutputNoStats {
 # $4 the benchmarking framework
 function copyOutput {
 	updateStats $VARFILE $WATCHFILE $2 $3 $4
+
+	# Runsolver's own verdict files have to leave the sandbox in container mode.
+	#
+	# copyOutputNoStats copies only $STDOUT_FILE and $OUT_DIR/output_files/, so var.out
+	# and watcher.out stayed inside $OUT_DIR and died with the pod. The container
+	# backends read them out of STAREXEC_OUTPUT_DIR to classify limit breaches from
+	# runsolver's authoritative TIMEOUT=/MEMOUT= booleans rather than from grepping its
+	# English prose (see RunsolverVerdict). Without this copy that classification finds
+	# no files, abstains, and silently falls back to the prose-derived status.json --
+	# the very failure the verdict logic exists to remove.
+	#
+	# Same mechanism the post-processor branch below already uses for attributes.txt,
+	# but unconditional: these two files matter whether or not a post-processor is set.
+	# Written before the pod exits, and the Job is only observed complete after that, so
+	# the backend cannot read a half-copied file.
+	if [ "$CONTAINER_MODE" = "true" ] && [ -n "${STAREXEC_OUTPUT_DIR:-}" ]; then
+		mkdir -p "$STAREXEC_OUTPUT_DIR"
+		# if/then rather than `[ -f x ] && cp`, whose non-zero status would abort the
+		# script under set -e when the file is simply absent.
+		if [ -f "$VARFILE" ]; then
+			cp "$VARFILE" "$STAREXEC_OUTPUT_DIR/var.out"
+			log "copied var.out to STAREXEC_OUTPUT_DIR for limit classification"
+		fi
+		if [ -f "$WATCHFILE" ]; then
+			cp "$WATCHFILE" "$STAREXEC_OUTPUT_DIR/watcher.out"
+			log "copied watcher.out to STAREXEC_OUTPUT_DIR for limit classification"
+		fi
+	fi
 
 	if [ "${POST_PROCESSOR_PATH:-}" != "" ]; then
 		log "getting postprocessor"

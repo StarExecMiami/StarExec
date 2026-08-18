@@ -4851,11 +4851,170 @@ public class Jobs {
                 );
                 return false;
             }
-            return Jobs.rerunPairsBatch(pairs, jobId);
+            // getPairsSimple cannot see sge_id, so these pairs still carry the field
+            // default. Hydrate the real execution ids before the safety gate reads them --
+            // without this every pair is withheld on a hydration defect and this endpoint
+            // becomes a deterministic no-op.
+            Map<Integer, Integer> execIds = backendExecIdsForJob(jobId);
+            if (execIds == null) {
+                log.warn(
+                    "setAllPairsToPending: could not read backend execution ids for jobId=" +
+                        jobId + "; refusing to reset rather than deciding on unread values"
+                );
+                return false;
+            }
+            for (JobPair p : pairs) {
+                Integer execId = execIds.get(p.getId());
+                // Absent means the pair vanished between the two reads; 0 is the same
+                // fail-closed "unidentifiable" the gate already applies to a NULL sge_id.
+                p.setBackendExecId(execId == null ? 0 : execId);
+            }
+
+            ManualRerunOutcome outcome = Jobs.rerunPairsBatch(pairs, jobId);
+            if (outcome == ManualRerunOutcome.PARTIALLY_WITHHELD
+                    || outcome == ManualRerunOutcome.ALL_WITHHELD) {
+                // Reported as failure on purpose: a caller that is told "true" after some
+                // pairs were withheld would believe the whole job had been reset.
+                log.warn(
+                    "setAllPairsToPending: jobId=" + jobId + " reported " + outcome +
+                        "; at least one pair was not reset because its previous execution" +
+                        " could not be confirmed stopped"
+                );
+                return false;
+            }
+            return outcome == ManualRerunOutcome.COMPLETED
+                || outcome == ManualRerunOutcome.NOTHING_TO_DO;
         } catch (Exception e) {
             log.error("setAllPairsToPending", e);
         }
         return false;
+    }
+
+    /** What a manual rerun reset actually did. Never inferred from cache invalidation. */
+    public enum ManualRerunOutcome {
+        /** Every candidate was confirmed safe and reset. */
+        COMPLETED,
+        /** No pair needed resetting; all were already PENDING_SUBMIT. */
+        NOTHING_TO_DO,
+        /** Some pairs reset; at least one was withheld as unproven. */
+        PARTIALLY_WITHHELD,
+        /** Every candidate was withheld. Nothing was reset. */
+        ALL_WITHHELD,
+        /** The reset itself failed. */
+        DATABASE_ERROR,
+    }
+
+    /**
+     * Whether a pair's previous backend execution is provably incapable of running or
+     * writing, and may therefore be replaced.
+     *
+     * <p>The decision is driven by execution <em>identity</em>, never by the pair's status
+     * code. A numeric band cannot answer it: {@code ERROR_RUNSCRIPT} is 11 and
+     * {@code STATUS_COMPLETE} is 7, so every {@code code < STATUS_COMPLETE} heuristic
+     * silently skips exactly the state a failed Kubernetes pod publishes while its pod may
+     * still be terminating.
+     *
+     * <p>{@code job_pairs.sge_id} is nullable and {@link JobPair#getBackendExecId()} carries
+     * the field default {@code -1} until some DAO hydrates it, so a non-positive value means
+     * "this execution cannot be named", never "execution 0" — and an execution that cannot
+     * be named cannot be proven stopped.
+     *
+     * <p>The corollary matters just as much: callers must not hand this method a JobPair
+     * built by a projection that never read {@code sge_id}. That default is "the query did
+     * not ask", not "there is no execution", and treating the two alike withholds every pair
+     * on a hydration defect rather than on a safety one — which is exactly what
+     * {@code GetJobPairsByJobSimple} caused, since its RETURNS TABLE omits the column.
+     * {@link #backendExecIdsForJob(int)} exists to close that gap.
+     */
+    private static boolean previousExecutionConfirmedStopped(
+        int pairId,
+        int execId,
+        int statusCode,
+        String context
+    ) {
+        if (execId <= 0) {
+            // One status is positive evidence that nothing was ever created, rather than
+            // evidence that an identity was lost. ERROR_SGE_REJECT is written at exactly
+            // one place -- JobManager, on isError(execId) -- and on the Kubernetes backend
+            // an error return can only come from a path that created no Job: an ambiguous
+            // create either throws SubmissionDeferredException (absent and provably safe)
+            // or returns the positive execId (present, or undetermined and therefore
+            // accounted). So there is no execution to run beside, and withholding here
+            // would strand the pair for good with no operator recourse.
+            //
+            // ERROR_SUBMIT_FAIL is deliberately NOT in this set: it is written after a
+            // submission that SUCCEEDED and whose id could not be persisted, and its
+            // cleanup uses the legacy killPair, which proves nothing. ERROR_BENCHMARK is
+            // a generic catch that also spans the submission call. For both, a missing
+            // sge_id may mean a live execution whose identity is unrecoverable.
+            if (statusCode == StatusCode.ERROR_SGE_REJECT.getVal()) {
+                log.info(
+                    context + ": pair " + pairId + " was rejected before any execution was" +
+                        " created, so there is nothing to confirm stopped"
+                );
+                return true;
+            }
+            log.warn(
+                context + ": pair " + pairId + " has no usable backend execution id;" +
+                    " withholding its reset rather than assuming it stopped"
+            );
+            return false;
+        }
+        Backend.KillOutcome outcome;
+        try {
+            outcome = R.BACKEND.killPairConfirmed(execId);
+        } catch (Exception e) {
+            log.warn(
+                context + ": kill of execId=" + execId + " for pair " + pairId +
+                    " threw; treating as unproven",
+                e
+            );
+            return false;
+        }
+        if (outcome != Backend.KillOutcome.CONFIRMED_SAFE) {
+            log.warn(
+                context + ": execution " + execId + " for pair " + pairId + " could not be" +
+                    " confirmed stopped; its reset is withheld so no replacement runs beside it"
+            );
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * The backend execution id of every pair in a job, keyed by pair id.
+     *
+     * <p>Exists because {@link #getPairsSimple(int)} is backed by
+     * {@code GetJobPairsByJobSimple}, whose projection has no {@code sge_id} column, so the
+     * pairs it returns cannot be used to decide execution safety.
+     *
+     * @return the mapping, or {@code null} when it could not be read — which is "unknown",
+     *         and must not be read as "no pair has an execution"
+     */
+    private static Map<Integer, Integer> backendExecIdsForJob(int jobId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement("SELECT * FROM starexec.GetJobPairBackendExecIds(?)");
+            ps.setInt(1, jobId);
+            rs = ps.executeQuery();
+            Map<Integer, Integer> execIds = new HashMap<>();
+            while (rs.next()) {
+                execIds.put(rs.getInt("pair_id"), rs.getInt("backend_exec_id"));
+            }
+            return execIds;
+        } catch (Exception e) {
+            log.error(
+                "backendExecIdsForJob: could not read execution ids for jobId=" + jobId, e
+            );
+            return null;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
     }
 
     /**
@@ -4867,90 +5026,210 @@ public class Jobs {
      * per-pair kill operation (which requires HPC backend interaction) and the
      * per-job cache invalidation.
      *
+     * <p>This is the <strong>manual</strong> rerun: it resets and deliberately writes no
+     * {@code pairs_rerun} row, so a human's rerun never spends the pair's automatic-rerun
+     * allowance. It is not routed through {@code RerunJobPairAutomatic}.
+     *
+     * <p>Every pair must clear the same strict execution-safety gate the automatic sweep
+     * uses ({@link #rerunPairAutomatic(int)}). The gate is per pair: one unproven execution
+     * withholds only its own reset and can never authorize another pair's.
+     *
      * @param pairs   The job pairs to rerun (must all belong to the same job).
      * @param jobId   The job ID owning the pairs.
-     * @return True if all operations succeeded.
+     * @return what actually happened; only {@link ManualRerunOutcome#COMPLETED} and
+     *         {@link ManualRerunOutcome#NOTHING_TO_DO} mean nothing was withheld
      */
-    public static boolean rerunPairsBatch(List<JobPair> pairs, int jobId) {
-        if (pairs == null || pairs.isEmpty()) return true;
-        if (Jobs.isReadOnly(jobId)) return false;
+    public static ManualRerunOutcome rerunPairsBatch(List<JobPair> pairs, int jobId) {
+        if (pairs == null || pairs.isEmpty()) return ManualRerunOutcome.NOTHING_TO_DO;
+        if (Jobs.isReadOnly(jobId)) return ManualRerunOutcome.DATABASE_ERROR;
 
-        // 1. Kill any pairs that are actively running/enqueued (requires backend).
+        // 1. Establish, per pair, that nothing of the previous execution can still run or
+        //    write. A pair already at PENDING_SUBMIT never had one.
+        List<JobPair> resettable = new ArrayList<>();
+        int withheld = 0;
         for (JobPair p : pairs) {
-            int code = p.getStatus().getCode().getVal();
-            if (code != StatusCode.STATUS_PENDING_SUBMIT.getVal()
-                    && code < StatusCode.STATUS_COMPLETE.getVal()) {
-                JobPairs.killPair(p.getId(), p.getBackendExecId());
+            if (p.getStatus().getCode().getVal()
+                    == StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
+                continue;
             }
+            if (!previousExecutionConfirmedStopped(
+                    p.getId(), p.getBackendExecId(),
+                    p.getStatus().getCode().getVal(), "rerunPairsBatch")) {
+                withheld++;
+                continue;
+            }
+            resettable.add(p);
+        }
+        if (resettable.isEmpty()) {
+            if (withheld > 0) {
+                log.warn(
+                    "rerunPairsBatch: withheld all " + withheld + " candidate pair(s) of" +
+                        " jobId=" + jobId + "; no execution could be confirmed stopped"
+                );
+                return ManualRerunOutcome.ALL_WITHHELD;
+            }
+            return ManualRerunOutcome.NOTHING_TO_DO;
+        }
+        if (withheld > 0) {
+            log.warn(
+                "rerunPairsBatch: resetting " + resettable.size() + " pair(s) of jobId=" +
+                    jobId + "; " + withheld + " withheld because their executions could not" +
+                    " be confirmed stopped"
+            );
         }
 
         // 2. Batch DB reset: disk size, completion table, status codes.
+        //
+        // The gate above ran against a snapshot that may already be stale by the time the
+        // statement runs, and it is NOT the authority. RerunJobPairsBatchChecked locks each
+        // row and re-reads BOTH the status and sge_id inside the lock. Status alone is not
+        // enough: a pair that a concurrent actor reset AND re-dispatched is at
+        // ENQUEUED/RUNNING with a new execution id, so a status-only test passes it through
+        // and it is reset on top of a live execution. Comparing the execution id the gate
+        // actually proved stopped is what makes the proof transfer.
         Connection con = null;
         PreparedStatement ps = null;
+        ResultSet rs = null;
+        int reset = 0;
+        int requested = 0;
         try {
             con = Common.getConnection();
-            ps = con.prepareStatement("SELECT starexec.RerunJobPairsBatch(?::int[])");
-            Integer[] ids = pairs.stream()
-                    .filter(p -> p.getStatus().getCode().getVal()
-                            != StatusCode.STATUS_PENDING_SUBMIT.getVal())
+            ps = con.prepareStatement(
+                    "SELECT starexec.RerunJobPairsBatchChecked(?::int[], ?::int[])");
+            Integer[] ids = resettable.stream()
                     .map(JobPair::getId)
                     .toArray(Integer[]::new);
-            if (ids.length == 0) return true;
+            // The identity each gate decision was actually about. Without this the SQL
+            // revalidates only the status, so a pair that a concurrent actor reset AND
+            // re-dispatched still passes and is reset on top of its new live execution.
+            // COALESCE(sge_id, 0) is what the SQL compares against, so the -1/0
+            // "unidentified" forms normalise to 0.
+            Integer[] expectedExecIds = resettable.stream()
+                    .map(p -> Math.max(p.getBackendExecId(), 0))
+                    .toArray(Integer[]::new);
             Array sqlArray = con.createArrayOf("integer", ids);
             ps.setArray(1, sqlArray);
-            ps.execute();
+            ps.setArray(2, con.createArrayOf("integer", expectedExecIds));
+            rs = ps.executeQuery();
+            reset = rs.next() ? rs.getInt(1) : 0;
+            requested = ids.length;
+            if (reset < requested) {
+                // Either the pair had already reached PENDING_SUBMIT -- the state this call
+                // was asking for -- or its sge_id moved under the lock, meaning a different
+                // execution owns it now and the gate's proof does not apply. The caller is
+                // told the operation was incomplete either way; reporting COMPLETED here
+                // would claim a reset that provably did not happen.
+                log.info(
+                    "rerunPairsBatch: reset " + reset + " of " + requested +
+                        " pair(s) for jobId=" + jobId + "; the rest had already moved or" +
+                        " changed execution under the lock"
+                );
+            }
         } catch (java.sql.SQLException e) {
             log.error("rerunPairsBatch: batch update failed (e.g., corrupt pair). Falling back to individual updates.", e);
             boolean allSuccess = true;
-            Integer[] ids = pairs.stream()
-                    .filter(p -> p.getStatus().getCode().getVal()
-                            != StatusCode.STATUS_PENDING_SUBMIT.getVal())
-                    .map(JobPair::getId)
-                    .toArray(Integer[]::new);
-            for (Integer id : ids) {
-                JobPair pairForId = pairs.stream().filter(p -> p.getId() == id).findFirst().orElse(null);
-                if (pairForId == null || !rerunSinglePairViaBatchFunction(pairForId, jobId)) {
+            // Only pairs whose executions were confirmed stopped above reach this list, so
+            // the fallback cannot widen the set the strict gate admitted.
+            for (JobPair pairForId : resettable) {
+                if (!rerunSinglePairViaBatchFunction(pairForId, jobId)) {
                     allSuccess = false;
                 }
             }
             if (allSuccess) {
-                allSuccess = Jobs.removeCachedJobStats(jobId);
+                // Side effect only — see the note on the main path above.
+                try {
+                    if (!Jobs.removeCachedJobStats(jobId)) {
+                        log.warn("rerunPairsBatch: could not clear cached job stats for jobId=" + jobId);
+                    }
+                } catch (Exception ce) {
+                    log.warn("rerunPairsBatch: could not clear cached job stats for jobId=" + jobId, ce);
+                }
             }
-            return allSuccess;
+            return allSuccess
+                ? (withheld > 0
+                    ? ManualRerunOutcome.PARTIALLY_WITHHELD
+                    : ManualRerunOutcome.COMPLETED)
+                : ManualRerunOutcome.DATABASE_ERROR;
         } catch (Exception e) {
             log.error("rerunPairsBatch", e);
-            return false;
+            return ManualRerunOutcome.DATABASE_ERROR;
         } finally {
+            Common.safeClose(rs);
             Common.safeClose(ps);
             Common.safeClose(con);
         }
 
         // 3. Clear job stats cache once per job (not once per pair).
-        boolean cacheCleared = Jobs.removeCachedJobStats(jobId);
-
-        // 4. Clear backend tracking state for each pair.
-        for (JobPair p : pairs) {
-            if (p.getStatus().getCode().getVal() == StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
-                continue;
+        //
+        // A side effect, not the result. This used to be the return value, which meant a
+        // failed cache invalidation was reported to the caller as "the rerun did not
+        // happen" — and, worse, a successful one as proof that it did.
+        try {
+            if (!Jobs.removeCachedJobStats(jobId)) {
+                log.warn("rerunPairsBatch: could not clear cached job stats for jobId=" + jobId);
             }
+        } catch (Exception e) {
+            log.warn("rerunPairsBatch: could not clear cached job stats for jobId=" + jobId, e);
+        }
+
+        // 4. Clear backend tracking state for each pair that was actually reset.
+        for (JobPair p : resettable) {
             try {
                 R.BACKEND.clearPairTracking(p.getId());
             } catch (Exception e) {
                 log.warn("rerunPairsBatch: could not clear pair tracking for pairId=" + p.getId(), e);
             }
         }
-        return cacheCleared;
+        if (reset == 0) {
+            log.warn(
+                "rerunPairsBatch: nothing was reset for jobId=" + jobId +
+                    "; every candidate was withheld by the gate or dropped under the lock"
+            );
+            return ManualRerunOutcome.ALL_WITHHELD;
+        }
+        return (withheld > 0 || reset < requested)
+            ? ManualRerunOutcome.PARTIALLY_WITHHELD
+            : ManualRerunOutcome.COMPLETED;
     }
 
+    /**
+     * Resets one pair through the checked batch function.
+     *
+     * @return true only when the database actually reset the pair. The absence of an
+     *         exception does not mean it did: {@code RerunJobPairsBatchChecked} returns 0
+     *         when the row it locked no longer carries the execution the Java gate proved
+     *         stopped, which is a correct refusal and must not be reported as a reset.
+     */
     private static boolean rerunSinglePairViaBatchFunction(JobPair pair, int jobId) {
         Connection con = null;
         PreparedStatement ps = null;
+        ResultSet rs = null;
         try {
             con = Common.getConnection();
-            ps = con.prepareStatement("SELECT starexec.RerunJobPairsBatch(?::int[])");
+            ps = con.prepareStatement(
+                    "SELECT starexec.RerunJobPairsBatchChecked(?::int[], ?::int[])");
             Array sqlArray = con.createArrayOf("integer", new Integer[] { pair.getId() });
             ps.setArray(1, sqlArray);
-            ps.execute();
+            ps.setArray(2, con.createArrayOf(
+                    "integer", new Integer[] { Math.max(pair.getBackendExecId(), 0) }));
+            rs = ps.executeQuery();
+            // The returned count is the answer. One pair id goes in, so exactly 1 means the
+            // reset happened; 0 means the function refused it under the lock. Anything else
+            // is a contract this caller does not understand, and fails closed for the same
+            // reason: it cannot claim a reset it cannot account for.
+            int reset = rs.next() ? rs.getInt(1) : 0;
+            if (reset != 1) {
+                log.warn(
+                    "rerunSinglePairViaBatchFunction: the database reset " + reset +
+                        " row(s) for pairId=" + pair.getId() + " in jobId=" + jobId +
+                        "; the pair had already moved or a different execution owns it now," +
+                        " so this reset did not happen"
+                );
+                return false;
+            }
+            // Only on the success path. Clearing the backend's pair tracking for a pair that
+            // was NOT reset would be acting out an operation that did not occur, on a pair a
+            // live execution may still own.
             try {
                 R.BACKEND.clearPairTracking(pair.getId());
             } catch (Exception e) {
@@ -4961,6 +5240,7 @@ public class Jobs {
             log.error("rerunSinglePairViaBatchFunction: failed for pairId=" + pair.getId() + " in jobId=" + jobId, e);
             return false;
         } finally {
+            Common.safeClose(rs);
             Common.safeClose(ps);
             Common.safeClose(con);
         }
@@ -4989,14 +5269,187 @@ public class Jobs {
                 return true;
             }
 
-            // Delegate to the batch path so status reset and attempt increment are
-            // handled atomically by the same SQL function.
-            return rerunPairsBatch(Collections.singletonList(p), p.getJobId());
+            // Delegate to the batch path so status reset and attempt increment are handled
+            // atomically by the same SQL function, and so this single-pair entry point
+            // cannot bypass the execution-safety gate.
+            ManualRerunOutcome outcome =
+                rerunPairsBatch(Collections.singletonList(p), p.getJobId());
+            if (outcome == ManualRerunOutcome.ALL_WITHHELD) {
+                log.warn(
+                    "rerunPair: pair " + pairId + " was not reset because its previous" +
+                        " execution could not be confirmed stopped"
+                );
+            }
+            return outcome == ManualRerunOutcome.COMPLETED
+                || outcome == ManualRerunOutcome.NOTHING_TO_DO;
         } catch (Exception e) {
             log.error("rerunPair", e);
         }
 
         return false;
+    }
+
+    /** What an automatic rerun attempt actually did. */
+    public enum RerunOutcome {
+        /** Reset and automatic-allowance acknowledgment committed together. */
+        COMPLETED,
+        /**
+         * The previous execution could not be proven incapable of running or writing, so
+         * nothing was written. The pair keeps its ERROR_RUNSCRIPT status and its end_time,
+         * which is what makes the next sweep select it again.
+         */
+        DEFERRED_UNPROVEN_EXECUTION,
+        /** The pair moved between selection and the write. Nothing was done. */
+        STALE_OR_NOTHING_TO_DO,
+        /**
+         * The allowance was already spent. Distinct from {@link #STALE_OR_NOTHING_TO_DO}
+         * because it is the observable signature of a retry after a lost response — the
+         * caller committed, never learned it, and asked again.
+         */
+        ALREADY_CONSUMED,
+        /** The call failed. The outcome is unknown, and safe in either direction. */
+        DATABASE_ERROR,
+    }
+
+    /**
+     * Reruns a pair on behalf of the automatic {@code RERUN_FAILED_PAIRS} sweep.
+     *
+     * <p>Distinct from {@link #rerunPair(int)}, which is the manual/admin entry point, and
+     * the distinction is load-bearing rather than cosmetic. The {@code pairs_rerun} table
+     * does not record "this pair was rerun" — its only production writer has ever been the
+     * automatic sweep, so it records "the automatic rerun allowance was consumed". Routing
+     * a human's rerun through this method would silently spend that allowance.
+     *
+     * <p>Two things happen here that the old two-statement sequence could not guarantee:
+     *
+     * <ul>
+     *   <li>the old execution is <em>proven</em> incapable of running or writing before any
+     *       replacement is authorized — previously no kill was even attempted, because
+     *       {@code rerunPairsBatch} gates on {@code code < STATUS_COMPLETE} and
+     *       {@code ERROR_RUNSCRIPT} is 11;</li>
+     *   <li>the reset and the acknowledgment commit as one transaction, so neither
+     *       "tombstone without reset" (the pair becomes permanently invisible to the sweep)
+     *       nor "reset without tombstone" (unbounded reruns — nothing compares
+     *       {@code current_attempt_no} against a maximum) is reachable.</li>
+     * </ul>
+     *
+     * <p>Retry ownership is the database's, not the JVM's: on any outcome other than
+     * {@link RerunOutcome#COMPLETED} nothing is written, so the pair stays selectable across
+     * a restart with no in-memory record needed.
+     *
+     * @param pairId the pair the sweep selected
+     * @return what actually happened; only {@link RerunOutcome#COMPLETED} means the
+     *         allowance was consumed
+     */
+    public static RerunOutcome rerunPairAutomatic(int pairId) {
+        JobPair pair;
+        try {
+            pair = JobPairs.getPair(pairId);
+        } catch (Exception e) {
+            log.error("rerunPairAutomatic: could not load pairId=" + pairId, e);
+            return RerunOutcome.DATABASE_ERROR;
+        }
+        if (pair == null) {
+            return RerunOutcome.STALE_OR_NOTHING_TO_DO;
+        }
+        if (Jobs.isReadOnly(pair.getJobId())) {
+            return RerunOutcome.STALE_OR_NOTHING_TO_DO;
+        }
+
+        final int expectedStatus = StatusCode.ERROR_RUNSCRIPT.getVal();
+        if (pair.getStatus().getCode().getVal() != expectedStatus) {
+            return RerunOutcome.STALE_OR_NOTHING_TO_DO;
+        }
+
+        // The physical column is job_pairs.sge_id, nullable with no default, and
+        // JobPair.getBackendExecId() returns the field default 0 when it is NULL. So a
+        // non-positive value means "this execution cannot be identified", never
+        // "execution 0" — and an execution we cannot name is one we cannot prove stopped.
+        final int execId = pair.getBackendExecId();
+        if (execId <= 0) {
+            log.warn(
+                "rerunPairAutomatic: pairId=" + pairId +
+                    " has no usable backend execution id; deferring rather than authorizing a replacement"
+            );
+            return RerunOutcome.DEFERRED_UNPROVEN_EXECUTION;
+        }
+
+        Backend.KillOutcome killed;
+        try {
+            killed = R.BACKEND.killPairConfirmed(execId);
+        } catch (Exception e) {
+            log.warn(
+                "rerunPairAutomatic: kill of execId=" + execId + " for pairId=" + pairId +
+                    " threw; treating as unproven",
+                e
+            );
+            return RerunOutcome.DEFERRED_UNPROVEN_EXECUTION;
+        }
+        if (killed != Backend.KillOutcome.CONFIRMED_SAFE) {
+            return RerunOutcome.DEFERRED_UNPROVEN_EXECUTION;
+        }
+
+        RerunOutcome outcome = executeAutomaticRerun(pairId, expectedStatus);
+
+        if (outcome == RerunOutcome.COMPLETED) {
+            // Side effects, deliberately after the transaction and deliberately not part of
+            // the return value. A failure to clear a cache does not un-rerun the pair.
+            try {
+                Jobs.removeCachedJobStats(pair.getJobId());
+            } catch (Exception e) {
+                log.warn("rerunPairAutomatic: could not clear cached job stats for jobId=" + pair.getJobId(), e);
+            }
+            try {
+                R.BACKEND.clearPairTracking(pairId);
+            } catch (Exception e) {
+                log.warn("rerunPairAutomatic: could not clear pair tracking for pairId=" + pairId, e);
+            }
+        }
+        return outcome;
+    }
+
+    /**
+     * Runs the one statement that resets the pair and records the automatic allowance.
+     *
+     * <p>Kept to a single statement on a pooled connection on purpose: {@code Common} only
+     * disables autocommit inside {@code beginTransaction}, so one statement is one
+     * transaction and the two effects cannot be separated by a crash between them.
+     */
+    private static RerunOutcome executeAutomaticRerun(int pairId, int expectedStatus) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement("SELECT starexec.RerunJobPairAutomatic(?, ?)");
+            ps.setInt(1, pairId);
+            ps.setInt(2, expectedStatus);
+            rs = ps.executeQuery();
+            String result = rs.next() ? rs.getString(1) : null;
+            if ("UPDATED".equals(result)) {
+                return RerunOutcome.COMPLETED;
+            }
+            if ("ALREADY_CONSUMED".equals(result)) {
+                return RerunOutcome.ALREADY_CONSUMED;
+            }
+            if ("STALE_OR_NOT_ELIGIBLE".equals(result)) {
+                return RerunOutcome.STALE_OR_NOTHING_TO_DO;
+            }
+            log.error(
+                "rerunPairAutomatic: unrecognised result '" + result + "' for pairId=" + pairId
+            );
+            return RerunOutcome.DATABASE_ERROR;
+        } catch (Exception e) {
+            // Whether the transaction committed is unknown here, and it does not matter:
+            // if it did, the pair is PENDING_SUBMIT with a tombstone and the next pass
+            // skips it; if it did not, nothing changed and the next pass retries it.
+            log.error("rerunPairAutomatic: automatic rerun failed for pairId=" + pairId, e);
+            return RerunOutcome.DATABASE_ERROR;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
     }
 
     /**
@@ -5080,65 +5533,202 @@ public class Jobs {
     }
 
     /**
+     * A pair's identity for a reset: its id and the execution that must be stopped first.
+     */
+    private static final class PairExecution {
+        private final int pairId;
+        private final int execId;
+
+        private PairExecution(int pairId, int execId) {
+            this.pairId = pairId;
+            this.execId = execId;
+        }
+    }
+
+    /**
+     * Pairs of a job at a given status, with the backend execution id for each.
+     *
+     * <p>{@link #getPairsByStatus} projects the id alone, which is why the reset path used
+     * to pass a hardcoded execution id.
+     */
+    private static List<PairExecution> getPairExecutionsByStatus(int jobId, int statusCode) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT * FROM starexec.GetJobPairExecutionsByStatus(?,?)"
+            );
+            ps.setInt(1, jobId);
+            ps.setInt(2, statusCode);
+            rs = ps.executeQuery();
+            List<PairExecution> pairs = new ArrayList<>();
+            while (rs.next()) {
+                int execId = rs.getInt("sge_id");
+                // rs.getInt returns 0 for SQL NULL, which is indistinguishable from a real
+                // execution 0 — so wasNull() is the only way to tell "never submitted" from
+                // "submitted as execution 0". Both are treated as unidentifiable below.
+                if (rs.wasNull()) {
+                    execId = 0;
+                }
+                pairs.add(new PairExecution(rs.getInt("id"), execId));
+            }
+            return pairs;
+        } catch (Exception e) {
+            log.error("getPairExecutionsByStatus", e);
+            return null;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+    }
+
+    /**
      * Sets all the job pairs of a given status code and job to pending. Used to
      * rerun pairs that didn't work in an
      * initial job run
      *
+     * <p>Pairs whose previous execution cannot be proven stopped are <strong>excluded</strong>
+     * from the reset rather than reset anyway. Resetting one would let the scheduler dispatch
+     * a replacement while the original still holds a node, so two executions of the same pair
+     * could write results — and on a benchmarking platform the surviving numbers would be
+     * measured against contended hardware.
+     *
      * @param jobId      The id of the job in question
      * @param statusCode The status code of pairs that should be rerun
-     * @return true on success and false otherwise
+     * @return true when every selected pair was reset; false when any was withheld or the
+     *         reset failed
      * @author Eric Burns
      */
     public static boolean setPairsToPending(int jobId, int statusCode) {
         if (Jobs.isReadOnly(jobId)) return false;
         try {
-            List<Integer> pairIds = Jobs.getPairsByStatus(jobId, statusCode);
-            if (pairIds == null || pairIds.isEmpty()) return true;
+            List<PairExecution> selected = getPairExecutionsByStatus(jobId, statusCode);
+            if (selected == null) return false;
+            if (selected.isEmpty()) return true;
 
-            // Kill pairs that are actively running/enqueued in the backend.
-            // STATUS_COMPLETE = 7; pairs with code 2..6 are still in-flight.
-            boolean needsKill = statusCode >= StatusCode.STATUS_ENQUEUED.getVal()
-                    && statusCode < StatusCode.STATUS_COMPLETE.getVal();
-            if (needsKill) {
-                for (Integer id : pairIds) {
-                    JobPairs.killPair(id, 0);
+            // Any pair not already at PENDING_SUBMIT may own a previous execution, so its
+            // safety has to be established. A numeric band cannot decide this:
+            // ERROR_RUNSCRIPT is 11 and STATUS_COMPLETE is 7, so the previous
+            // `statusCode < STATUS_COMPLETE` guard skipped the confirmation for exactly the
+            // status a failed Kubernetes pod publishes while its pod may still be
+            // terminating — the same defect this file's manual batch path carried.
+            boolean needsKill =
+                statusCode != StatusCode.STATUS_PENDING_SUBMIT.getVal();
+
+            List<Integer> pairIds = new ArrayList<>();
+            List<Integer> expectedExecIds = new ArrayList<>();
+            int withheld = 0;
+            for (PairExecution pair : selected) {
+                if (!needsKill) {
+                    pairIds.add(pair.pairId);
+                    expectedExecIds.add(Math.max(pair.execId, 0));
+                    continue;
                 }
+                // One rule, one implementation. This used to be a third inline copy of the
+                // same predicate, which is how the status-band variant survived here after
+                // the batch path was fixed.
+                if (!previousExecutionConfirmedStopped(
+                        pair.pairId, pair.execId, statusCode, "setPairsToPending")) {
+                    withheld++;
+                    continue;
+                }
+                JobPairs.setJobPairDiskSizeToZero(pair.pairId);
+                pairIds.add(pair.pairId);
+                expectedExecIds.add(Math.max(pair.execId, 0));
+            }
+
+            if (pairIds.isEmpty()) {
+                log.warn(
+                    "setPairsToPending: no pair of job " + jobId + " at status " + statusCode +
+                        " could be reset; " + withheld + " withheld as unproven"
+                );
+                return false;
+            }
+            if (withheld > 0) {
+                log.warn(
+                    "setPairsToPending: reset " + pairIds.size() + " pair(s) of job " + jobId +
+                        "; " + withheld + " withheld because their executions could not be" +
+                        " confirmed stopped"
+                );
             }
 
             // Batch DB reset: disk size, completion table, status codes.
+            //
+            // The count this returns is not diagnostic, it is the result. The Java gate
+            // above establishes that a specific execution stopped; the checked function
+            // then re-reads sge_id under the row lock and drops any pair a concurrent
+            // actor has since re-dispatched, because the gate's proof was about the
+            // execution that used to own it. Discarding the count reported those correct
+            // refusals to the caller as a completed reset -- collapsing "the execution is
+            // safe" into "the reset was committed", which are separate facts.
             Connection con = null;
             PreparedStatement ps = null;
+            ResultSet rs = null;
+            int reset = 0;
             try {
                 con = Common.getConnection();
-                ps = con.prepareStatement("SELECT starexec.RerunJobPairsBatch(?::int[])");
+                ps = con.prepareStatement(
+                        "SELECT starexec.RerunJobPairsBatchChecked(?::int[], ?::int[])");
                 Array sqlArray = con.createArrayOf("integer", pairIds.toArray(new Integer[0]));
                 ps.setArray(1, sqlArray);
-                ps.execute();
+                ps.setArray(2, con.createArrayOf(
+                        "integer", expectedExecIds.toArray(new Integer[0])));
+                rs = ps.executeQuery();
+                reset = rs.next() ? rs.getInt(1) : 0;
+                if (reset < pairIds.size()) {
+                    log.warn(
+                        "setPairsToPending: the database reset " + reset + " of " +
+                            pairIds.size() + " candidate pair(s) for jobId=" + jobId +
+                            " at status " + statusCode + "; the rest had already moved or" +
+                            " a different execution owns them now"
+                    );
+                }
             } catch (java.sql.SQLException e) {
                 log.error("setPairsToPending: batch update failed. Falling back to individual updates.", e);
                 boolean allSuccess = true;
                 for (Integer id : pairIds) {
+                    // Only pairs already confirmed safe above reach this list, so the kill
+                    // rerunPair repeats is a no-op on an execution that is already gone.
                     if (!Jobs.rerunPair(id)) {
                         allSuccess = false;
                     }
                 }
-                return allSuccess;
+                return allSuccess && withheld == 0;
             } catch (Exception e) {
                 log.error("setPairsToPending batch DB reset", e);
                 return false;
             } finally {
+                Common.safeClose(rs);
                 Common.safeClose(ps);
                 Common.safeClose(con);
             }
 
-            // Clear job stats cache once per job, then per-pair backend tracking.
-            boolean cacheCleared = Jobs.removeCachedJobStats(jobId);
+            // Clear job stats cache once per job, then per-pair backend tracking. Side
+            // effects: a failed cache invalidation does not un-reset the pairs, so it must
+            // not be reported as the outcome of the reset.
+            try {
+                if (!Jobs.removeCachedJobStats(jobId)) {
+                    log.warn("setPairsToPending: could not clear cached job stats for jobId=" + jobId);
+                }
+            } catch (Exception e) {
+                log.warn("setPairsToPending: could not clear cached job stats for jobId=" + jobId, e);
+            }
             for (Integer id : pairIds) {
                 try { R.BACKEND.clearPairTracking(id); } catch (Exception e) {
                     log.warn("setPairsToPending: could not clear pair tracking for pairId=" + id, e);
                 }
             }
-            return cacheCleared;
+            // Two independent ways this operation can be incomplete, and both have to be
+            // reported. `withheld` counts pairs the Java gate refused to admit because
+            // their previous execution could not be proven stopped. `reset < pairIds.size()`
+            // counts pairs the database refused under the row lock because a different
+            // execution owns them now. The caller asked for every pair at this status; if
+            // either count is non-zero it did not get them, and saying otherwise would
+            // claim resets that provably did not happen.
+            return withheld == 0 && reset == pairIds.size();
         } catch (Exception e) {
             log.error("setPairsToPending", e);
         }
@@ -5902,9 +6492,49 @@ public class Jobs {
 
             log.debug("Killing of job id = " + jobId + " was successful");
 
-            List<JobPair> jobPairsEnqueued = Jobs.getEnqueuedPairs(jobId);
-            for (JobPair jp : jobPairsEnqueued) {
-                JobPairs.killPair(jp.getId(), jp.getBackendExecId());
+            // Both lists, not just the enqueued one.
+            //
+            // KillJob writes the terminal status only for pairs at PENDING_SUBMIT or PAUSED
+            // — the ones with no execution to stop. Everything actually occupying a node is
+            // ENQUEUED or RUNNING, and this loop is the only thing that stops it. Iterating
+            // only the enqueued list meant killing a job whose pairs were all running left
+            // every one of them executing, while the job was marked killed. Jobs.pause
+            // already walks both lists; this now matches it.
+            List<JobPair> toStop = new ArrayList<>();
+            List<JobPair> enqueued = Jobs.getEnqueuedPairs(jobId);
+            if (enqueued != null) {
+                toStop.addAll(enqueued);
+            }
+            List<JobPair> running = Jobs.getRunningPairs(jobId);
+            if (running != null) {
+                toStop.addAll(running);
+            }
+
+            int unproven = 0;
+            for (JobPair jp : toStop) {
+                // A terminal status claiming the pair was killed must not be written for an
+                // execution that may still be running: the pair would read as finished while
+                // its pod continued to consume the node and could still write results.
+                if (jp.getBackendExecId() <= 0) {
+                    log.warn(
+                        "kill: pair " + jp.getId() + " of job " + jobId + " has no usable" +
+                            " backend execution id; not claiming it was killed"
+                    );
+                    unproven++;
+                    continue;
+                }
+                if (!JobPairs.killPairConfirmed(jp.getId(), jp.getBackendExecId())) {
+                    unproven++;
+                }
+            }
+
+            if (unproven > 0) {
+                log.warn(
+                    "kill: job " + jobId + " is marked killed, but " + unproven +
+                        " of its " + toStop.size() + " in-flight pair(s) could not be" +
+                        " confirmed stopped and were left unchanged"
+                );
+                return false;
             }
 
             log.debug(
@@ -6100,7 +6730,26 @@ public class Jobs {
             procedure = con.prepareStatement("SELECT starexec.PauseAll()");
             procedure.execute();
             log.debug("Pause of system was successful");
-            R.BACKEND.killAll();
+
+            // killAll's answer is load-bearing and used to be discarded. It reports false
+            // when at least one execution could not be proven stopped, and the loop below
+            // rewrites every enqueued and running pair to PENDING_SUBMIT — which makes them
+            // dispatchable again. Doing that while an execution survives puts a replacement
+            // on a node the original has not vacated.
+            //
+            // So on an incomplete kill the pair statuses are left exactly as they are. The
+            // system-wide pause flag is still set, which is the substantive effect of this
+            // operation; what is withheld is the part that would authorize new work.
+            if (!R.BACKEND.killAll()) {
+                log.warn(
+                    "pauseAll: at least one execution could not be confirmed stopped." +
+                        " The system is paused, but no pair has been returned to" +
+                        " PENDING_SUBMIT, because doing so would allow a replacement to run" +
+                        " beside an execution that may still be active."
+                );
+                return false;
+            }
+
             List<Integer> jobs = Jobs.getRunningJobs();
             if (jobs != null) {
                 for (Integer jobId : jobs) {

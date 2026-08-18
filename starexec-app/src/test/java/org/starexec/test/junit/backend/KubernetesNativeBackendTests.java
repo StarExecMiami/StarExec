@@ -12,6 +12,7 @@ import io.fabric8.kubernetes.api.model.Affinity;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.NodeSelectorRequirement;
 import io.fabric8.kubernetes.api.model.NodeSelectorTerm;
+import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.StatusDetails;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
@@ -28,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.backend.Backend;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
@@ -103,37 +105,33 @@ public class KubernetesNativeBackendTests {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void killAllClearsTrackingMapsEvenWithoutClient() throws Exception {
+    public void killAllRetainsTrackingWhenNothingCanBeEstablished() throws Exception {
+        // Deliberately reversed. This test used to be named
+        // "killAllClearsTrackingMapsEvenWithoutClient" and asserted that killAll cleared
+        // every map and released every slot when there was no client. "Even without a
+        // client" is precisely the case where clearing is unsafe: nothing can be
+        // established about any pod, so forgetting the executions would let unrelated
+        // pairs be scheduled beside solvers that may still be running -- contaminating
+        // THEIR measurements, not just this pair's. killAll's only caller is
+        // Jobs.pauseAll, an admin endpoint on a live process, so this is not a
+        // shutdown-only path.
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
 
-        Field execIdToJobNameField = KubernetesNativeBackend.class
-            .getDeclaredField("execIdToJobName");
-        Field execIdToPairIdField = KubernetesNativeBackend.class
-            .getDeclaredField("execIdToPairId");
-        Field execIdToOutputDirField = KubernetesNativeBackend.class
-            .getDeclaredField("execIdToOutputDir");
-
-        execIdToJobNameField.setAccessible(true);
-        execIdToPairIdField.setAccessible(true);
-        execIdToOutputDirField.setAccessible(true);
-
         Map<Integer, String> execToJob =
-            (Map<Integer, String>) execIdToJobNameField.get(backend);
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
         Map<Integer, Integer> execToPair =
-            (Map<Integer, Integer>) execIdToPairIdField.get(backend);
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
         Map<Integer, Path> execToOut =
-            (Map<Integer, Path>) execIdToOutputDirField.get(backend);
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
 
         execToJob.put(1, "job-1");
         execToPair.put(1, 111);
         execToOut.put(1, Path.of("/tmp/output/1"));
 
-        // No Kubernetes client initialized: killAll will fail API call but must
-        // still clear all in-memory tracking in finally.
-        assertFalse(backend.killAll());
-        assertTrue(execToJob.isEmpty());
-        assertTrue(execToPair.isEmpty());
-        assertTrue(execToOut.isEmpty());
+        assertFalse("killAll cannot report success when it proved nothing", backend.killAll());
+        assertEquals("tracking must survive an unprovable killAll", 1, execToJob.size());
+        assertEquals(1, execToPair.size());
+        assertEquals(1, execToOut.size());
     }
 
     @Test
@@ -268,6 +266,7 @@ public class KubernetesNativeBackendTests {
         execToJob.put(15, "job-15");
         execToPair.put(15, 515);
 
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -292,6 +291,7 @@ public class KubernetesNativeBackendTests {
     @SuppressWarnings("unchecked")
     public void runningCallbackLeavesKilledMarkerForTerminalCallbacks() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -355,6 +355,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(11, 111);
         execToOut.put(11, Path.of("/tmp/output/11"));
 
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -410,6 +411,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(21, 211);
         execToOut.put(21, Path.of("/tmp/output/21"));
 
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -453,6 +455,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(12, 222);
         execToOut.put(12, Path.of("/tmp/output/12"));
 
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -500,6 +503,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(13, 313);
         execToOut.put(13, Path.of("/tmp/output/13"));
 
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -549,6 +553,7 @@ public class KubernetesNativeBackendTests {
         execToPair.put(14, 414);
         execToOut.put(14, Path.of("/tmp/output/14"));
 
+        givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
             instantiateCompletionCallback(backend);
 
@@ -591,12 +596,731 @@ public class KubernetesNativeBackendTests {
      * @param deleted   whether the delete call reports a deletion
      * @param stillThere what a follow-up read finds: the Job, or null if it is really gone
      */
+    // =====================================================================
+    // Execution-safety invariants.
+    //
+    // The property under test throughout is "no pod capable of executing or
+    // writing results", never "no Job object exists". A stale pod that later
+    // runs contaminates OTHER pairs' measurements through CPU and cache
+    // contention, so an execution that may be alive keeps its accounting.
+    // =====================================================================
+
     @SuppressWarnings("unchecked")
+    private Map<Integer, ?> trackingMap(KubernetesNativeBackend backend, String name)
+        throws Exception {
+        return (Map<Integer, ?>) getField(backend, name);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Integer> holdingSlot(KubernetesNativeBackend backend) throws Exception {
+        return (Set<Integer>) getField(backend, "jobsHoldingSlot");
+    }
+
+    private int activeCount(KubernetesNativeBackend backend) throws Exception {
+        return ((java.util.concurrent.atomic.AtomicInteger)
+            getField(backend, "activeJobCount")).get();
+    }
+
+    private Backend.KillOutcome killConfirmed(KubernetesNativeBackend backend, int execId) {
+        return backend.killPairConfirmed(execId);
+    }
+
+    @Test
+    public void aKillIsUnprovenWhileAPodMayStillRun() throws Exception {
+        // Job confirmed gone is NOT sufficient. The pod outlives it under any propagation
+        // policy that does not block on dependents, so absence of the Job says nothing.
+        for (String phase : List.of("Running", "Pending", "Unknown")) {
+            KubernetesNativeBackend backend = new KubernetesNativeBackend();
+            setField(backend, "namespace", "starexec");
+            ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(7, "job-7");
+            givenJobDeletion(backend, "job-7", true, null, podInPhase(7, phase));
+            restore(backend, 7);
+
+            assertEquals(
+                "a pod in phase " + phase + " means the execution may still run",
+                Backend.KillOutcome.UNPROVEN,
+                killConfirmed(backend, 7)
+            );
+            assertTrue(
+                "accounting must be retained while phase=" + phase,
+                holdingSlot(backend).contains(7)
+            );
+            assertFalse(
+                "tracking must be retained while phase=" + phase,
+                trackingMap(backend, "execIdToJobName").isEmpty()
+            );
+        }
+    }
+
+    @Test
+    public void aKillIsConfirmedOnlyWhenNoPodCanRun() throws Exception {
+        for (String phase : List.of("Succeeded", "Failed")) {
+            KubernetesNativeBackend backend = new KubernetesNativeBackend();
+            setField(backend, "namespace", "starexec");
+            ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(8, "job-8");
+            givenJobDeletion(backend, "job-8", true, null, podInPhase(8, phase));
+            restore(backend, 8);
+
+            // A terminated pod cannot consume CPU or write further output, so holding the
+            // execution for it would wedge admission on a harmless historical object.
+            assertEquals(
+                "phase " + phase + " is terminal and therefore safe",
+                Backend.KillOutcome.CONFIRMED_SAFE,
+                killConfirmed(backend, 8)
+            );
+            assertFalse(holdingSlot(backend).contains(8));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // controller safety: a batch/v1 Job can create a REPLACEMENT pod
+    // ------------------------------------------------------------------
+
+    /**
+     * The defect this whole predicate exists for, exercised at the caller.
+     *
+     * <p>{@code backoffLimit} defaults to 0, which masks it: with no retries a failed pod is
+     * the end of the Job. An operator who enables retries reaches the real case, where
+     * {@code status.failed == 1} means "the first attempt died and the next is coming" — and
+     * the old predicate called that terminal.
+     */
+    @Test
+    public void aRetryingJobIsNotSpentEvenWithNoPodPresent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(21, "job-21");
+
+        Job retrying = jobWithNoConditions(21);
+        retrying.getStatus().setFailed(1);
+        retrying.setSpec(new io.fabric8.kubernetes.api.model.batch.v1.JobSpecBuilder()
+            .withBackoffLimit(3)
+            .build());
+
+        // Job deleted by name, no pods at all -- a pod-only check would call this safe.
+        givenJobDeletion(backend, "job-21", true, null);
+        givenJobsFor((KubernetesClient) getField(backend, "kubernetesClient"), retrying);
+        restore(backend, 21);
+
+        assertEquals(
+            "a Job with backoffLimit=3 at failed=1 can still create another pod",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 21)
+        );
+        assertTrue(
+            "its slot must be retained so no unrelated pair lands beside the retry",
+            holdingSlot(backend).contains(21)
+        );
+        assertFalse(
+            "tracking must be retained",
+            trackingMap(backend, "execIdToJobName").isEmpty()
+        );
+    }
+
+    @Test
+    public void onlyTheTerminalJobConditionsMakeAControllerSpent() throws Exception {
+        // type, status, expected-spent
+        Object[][] cases = {
+            { "Complete", "True", true },
+            { "Failed", "True", true },
+            { "Complete", "False", false },
+            { "Failed", "False", false },
+            // FailureTarget BEGINS termination; the real Failed condition comes later.
+            { "FailureTarget", "True", false },
+            { "SuccessCriteriaMet", "True", false },
+            { "Suspended", "True", false },
+        };
+        for (Object[] c : cases) {
+            String type = (String) c[0];
+            String status = (String) c[1];
+            boolean spent = (Boolean) c[2];
+
+            KubernetesNativeBackend backend = new KubernetesNativeBackend();
+            setField(backend, "namespace", "starexec");
+            ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(22, "job-22");
+            givenJobDeletion(backend, "job-22", true, null);
+            givenJobsFor(
+                (KubernetesClient) getField(backend, "kubernetesClient"),
+                jobWithCondition(22, type, status)
+            );
+            restore(backend, 22);
+
+            assertEquals(
+                type + "=" + status + " should" + (spent ? "" : " not") + " make the"
+                    + " controller spent",
+                spent ? Backend.KillOutcome.CONFIRMED_SAFE : Backend.KillOutcome.UNPROVEN,
+                killConfirmed(backend, 22)
+            );
+        }
+    }
+
+    @Test
+    public void aSucceededCounterAloneDoesNotMakeAControllerSpent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(23, "job-23");
+
+        Job counterOnly = jobWithNoConditions(23);
+        counterOnly.getStatus().setSucceeded(1);
+
+        givenJobDeletion(backend, "job-23", true, null);
+        givenJobsFor((KubernetesClient) getField(backend, "kubernetesClient"), counterOnly);
+        restore(backend, 23);
+
+        assertEquals(
+            "succeeded>0 is a pod counter, not a terminal Job condition",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 23)
+        );
+    }
+
+    @Test
+    public void aJobWithNoStatusIsNeverSpent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(24, "job-24");
+
+        Job noStatus = jobWithNoConditions(24);
+        noStatus.setStatus(null);
+
+        givenJobDeletion(backend, "job-24", true, null);
+        givenJobsFor((KubernetesClient) getField(backend, "kubernetesClient"), noStatus);
+        restore(backend, 24);
+
+        assertEquals(
+            "absence of information is not evidence of safety",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 24)
+        );
+    }
+
+    @Test
+    public void aFailedJobListingIsNeverReadAsControllerAbsence() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(25, "job-25");
+        givenJobDeletion(backend, "job-25", true, null);
+        givenJobListingFails((KubernetesClient) getField(backend, "kubernetesClient"));
+        restore(backend, 25);
+
+        assertEquals(
+            "an unreadable Job listing cannot establish that no controller survives",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 25)
+        );
+        assertTrue(holdingSlot(backend).contains(25));
+    }
+
+    /**
+     * A terminated pod is safe with respect to that pod only. If the Job that owns it is
+     * still live, the execution is not over — it is between attempts.
+     */
+    @Test
+    public void aTerminatedPodDoesNotOverrideALiveController() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(26, "job-26");
+        givenJobDeletion(backend, "job-26", true, null, podInPhase(26, "Failed"));
+        givenJobsFor(
+            (KubernetesClient) getField(backend, "kubernetesClient"),
+            jobWithNoConditions(26)
+        );
+        restore(backend, 26);
+
+        assertEquals(
+            "a Failed pod plus a live Job means the next attempt may still start",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 26)
+        );
+        assertTrue(holdingSlot(backend).contains(26));
+    }
+
+    /** The name is never reconstructed; identity comes from the exec-id label. */
+    @Test
+    public void aControllerIsFoundByLabelWhenTheJobNameIsLost() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        // no execIdToJobName entry at all
+        givenJobDeletion(backend, "unused", true, null);
+        givenJobsFor(
+            (KubernetesClient) getField(backend, "kubernetesClient"),
+            jobWithNoConditions(27)
+        );
+
+        assertEquals(
+            "a live Job carrying exec-id=27 is found by label even with no local name",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 27)
+        );
+    }
+
+    /**
+     * An UNPROVEN hold must have an owner that revisits it. Before this, the field the
+     * javadoc named as the retry owner was never written to, so a hold survived until the
+     * JVM restarted.
+     */
+    @Test
+    public void anUnprovenHoldIsReleasedOnceTheSweepCanEstablishSafety() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(28, "job-28");
+        givenJobDeletion(backend, "job-28", true, null, podInPhase(28, "Running"));
+        restore(backend, 28);
+
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 28));
+        assertTrue("the slot is held", holdingSlot(backend).contains(28));
+        assertFalse(
+            "and the obligation is recorded, not forgotten",
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+        );
+
+        // The pod goes away and no controller remains. The sweep re-checks BOTH halves --
+        // a pod-only design could not make this transition, because it kept no record of
+        // the execution once its pod vanished.
+        givenPodsFor((KubernetesClient) getField(backend, "kubernetesClient"));
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertFalse("the hold is released", holdingSlot(backend).contains(28));
+        assertTrue(
+            "and the record is cleared",
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+        );
+    }
+
+    @Test
+    public void anUnprovenHoldSurvivesASweepThatStillCannotEstablishSafety() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(29, "job-29");
+        givenJobDeletion(backend, "job-29", true, null, podInPhase(29, "Running"));
+        restore(backend, 29);
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 29));
+
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertTrue(
+            "still running, so the slot stays held",
+            holdingSlot(backend).contains(29)
+        );
+        assertFalse(
+            "and the obligation stays on the books",
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+        );
+    }
+
+    /**
+     * B2: "this execution is now safe" and "the operation that was in flight completed" are
+     * different facts, and this sweep can only ever establish the first.
+     */
+    @Test
+    public void aSweepThatEstablishesSafetyMustNotCancelAnOutstandingContinuation()
+        throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(31, "job-31");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(31, 4242);
+        givenJobDeletion(backend, "job-31", true, null, podInPhase(31, "Running"));
+        restore(backend, 31);
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 31));
+
+        // The stuck-Pending shape: that callback returned false, so the monitor kept its
+        // cleanup-pending record, and that record -- not this sweep -- owns writing the
+        // pair's terminal status and end_time.
+        recordUnverifiedWithContinuation(backend, 31, "stuck-pending escalation for pair 4242");
+
+        // The pod goes away, so safety becomes establishable.
+        givenPodsFor((KubernetesClient) getField(backend, "kubernetesClient"));
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertFalse(
+            "marking a merely-safe execution as killed cancels the continuation: every"
+                + " terminal callback short-circuits on killedExecIds and returns true, so"
+                + " the monitor drops its cleanup-pending record with the DB transition"
+                + " never written and the pair stranded at ENQUEUED",
+            ((Set<Integer>) getField(backend, "killedExecIds")).contains(31)
+        );
+        assertEquals(
+            "and the continuation still resolves its pair id from this map",
+            Integer.valueOf(4242),
+            ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).get(31)
+        );
+    }
+
+    private void recordUnverifiedWithContinuation(Object backend, int execId, String reason)
+        throws Exception {
+        java.lang.reflect.Method m = backend.getClass().getDeclaredMethod(
+            "recordUnverified", int.class, String.class, boolean.class
+        );
+        m.setAccessible(true);
+        m.invoke(backend, execId, reason, true);
+    }
+
+    // ------------------------------------------------------------------
+    // B3: admission must degrade on an unaccountable managed pod, and the
+    // condition must be self-healing and fail-closed
+    // ------------------------------------------------------------------
+
+    @Test
+    public void anUnaccountableManagedPodDegradesAdmission() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        setField(backend, "initialized", true);
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        setField(backend, "kubernetesClient", client);
+
+        givenManagedPodListing(client, unlabelledManagedPod("stray-1", "Running"));
+        invokePrivate(backend, "inventoryPodsWithoutJobs");
+
+        assertTrue(
+            "a running managed pod with no usable exec-id cannot hold a slot, so admission"
+                + " itself has to be the thing that defers",
+            admissionDegraded(backend)
+        );
+        assertFalse(
+            "and the defer must be visible at the dispatch gate",
+            backend.isQueueDispatchable("all.q")
+        );
+    }
+
+    @Test
+    public void aLaterSuccessfulInventoryClearsTheDegradedCondition() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        setField(backend, "initialized", true);
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        setField(backend, "kubernetesClient", client);
+
+        givenManagedPodListing(client, unlabelledManagedPod("stray-2", "Running"));
+        invokePrivate(backend, "inventoryPodsWithoutJobs");
+        assertTrue(admissionDegraded(backend));
+
+        // The object is gone and the listing succeeded: that is evidence, so the hold lifts
+        // on its own without an operator having to restart anything.
+        givenManagedPodListing(client);
+        invokePrivate(backend, "inventoryPodsWithoutJobs");
+
+        assertFalse("the condition must be self-healing", admissionDegraded(backend));
+    }
+
+    @Test
+    public void aFailedInventoryLeavesTheDegradedConditionExactlyAsItWas() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        setField(backend, "initialized", true);
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        setField(backend, "kubernetesClient", client);
+
+        givenManagedPodListing(client, unlabelledManagedPod("stray-3", "Running"));
+        invokePrivate(backend, "inventoryPodsWithoutJobs");
+        assertTrue(admissionDegraded(backend));
+
+        // An unreadable listing disproves nothing. Clearing on it would turn a transient
+        // API error into permission to dispatch beside an unaccountable solver.
+        givenManagedPodListingFailure(client);
+        invokePrivate(backend, "inventoryPodsWithoutJobs");
+
+        assertTrue("a failed observation must never clear a safety hold",
+            admissionDegraded(backend));
+    }
+
+    private boolean admissionDegraded(KubernetesNativeBackend backend) throws Exception {
+        return ((java.util.concurrent.atomic.AtomicBoolean)
+            getField(backend, "admissionDegraded")).get();
+    }
+
+    /** A managed pod carrying no exec-id label at all. */
+    private Pod unlabelledManagedPod(String name, String phase) {
+        return new PodBuilder()
+            .withNewMetadata()
+            .withName(name)
+            .addToLabels("starexec.org/managed", "true")
+            .endMetadata()
+            .withNewSpec()
+            .withNodeName("node-z")
+            .endSpec()
+            .withNewStatus()
+            .withPhase(phase)
+            .endStatus()
+            .build();
+    }
+
+    /** PodPhaseView.list selects with withLabel(managed, "true"), not withLabels(map). */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenManagedPodListing(KubernetesClient client, Pod... pods) {
+        MixedOperation podsOp = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespacedPods = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        io.fabric8.kubernetes.api.model.PodList listing =
+            new io.fabric8.kubernetes.api.model.PodList();
+        listing.setItems(List.of(pods));
+        Mockito.when(client.pods()).thenReturn(podsOp);
+        Mockito.when(podsOp.inNamespace(Mockito.any())).thenReturn(namespacedPods);
+        Mockito.when(namespacedPods.withLabel(Mockito.anyString(), Mockito.anyString()))
+            .thenReturn(filtered);
+        Mockito.when(filtered.list()).thenReturn(listing);
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenManagedPodListingFailure(KubernetesClient client) {
+        MixedOperation podsOp = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespacedPods = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        Mockito.when(client.pods()).thenReturn(podsOp);
+        Mockito.when(podsOp.inNamespace(Mockito.any())).thenReturn(namespacedPods);
+        Mockito.when(namespacedPods.withLabel(Mockito.anyString(), Mockito.anyString()))
+            .thenReturn(filtered);
+        Mockito.when(filtered.list())
+            .thenThrow(new io.fabric8.kubernetes.client.KubernetesClientException("boom"));
+    }
+
+    private void invokePrivate(Object target, String method) throws Exception {
+        java.lang.reflect.Method m = target.getClass().getDeclaredMethod(method);
+        m.setAccessible(true);
+        m.invoke(target);
+    }
+
+    // ------------------------------------------------------------------
+    // filesystem absence must fail closed
+    // ------------------------------------------------------------------
+
+    private boolean confirmedAbsent(KubernetesNativeBackend backend, Path path)
+        throws Exception {
+        java.lang.reflect.Method m =
+            backend.getClass().getDeclaredMethod("confirmedAbsent", Path.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(backend, path);
+    }
+
+    @Test
+    public void anAbsentFileIsProvenAbsent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path dir = java.nio.file.Files.createTempDirectory("starexec-absence");
+        try {
+            assertTrue(
+                "a missing file in a readable directory is proven absent",
+                confirmedAbsent(backend, dir.resolve("var.out"))
+            );
+        } finally {
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    public void anExistingFileIsNotAbsent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path dir = java.nio.file.Files.createTempDirectory("starexec-absence");
+        Path artifact = dir.resolve("var.out");
+        java.nio.file.Files.writeString(artifact, "previous attempt");
+        try {
+            assertFalse(confirmedAbsent(backend, artifact));
+        } finally {
+            java.nio.file.Files.deleteIfExists(artifact);
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    /**
+     * The case Files.exists gets wrong: it answers false for "absent" AND for "cannot tell",
+     * so an unreadable output directory used to read as "no stale artifact here" and let a
+     * previous attempt's var.out be scored as this attempt's result.
+     */
+    @Test
+    public void anUnreadableDirectoryIsNotTreatedAsAbsence() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path dir = java.nio.file.Files.createTempDirectory("starexec-absence");
+        Path artifact = dir.resolve("var.out");
+        java.nio.file.Files.writeString(artifact, "previous attempt");
+
+        // An unsearchable parent makes the artifact's existence genuinely undecidable.
+        // (A regular file standing in for a directory does NOT work: the JDK maps ENOTDIR to
+        // NoSuchFileException, which is a legitimate proof of absence.)
+        try {
+            java.nio.file.Files.setPosixFilePermissions(
+                dir, java.nio.file.attribute.PosixFilePermissions.fromString("---------")
+            );
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            org.junit.Assume.assumeNoException("POSIX permissions unavailable", e);
+        }
+        try {
+            // Root ignores the permission bits, so confirm the barrier is real before
+            // asserting on it -- otherwise this test would pass for the wrong reason.
+            boolean barrierHolds;
+            try {
+                java.nio.file.Files.readAttributes(
+                    artifact,
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS
+                );
+                barrierHolds = false;
+            } catch (java.nio.file.NoSuchFileException e) {
+                barrierHolds = false;
+            } catch (java.io.IOException e) {
+                barrierHolds = true;
+            }
+            org.junit.Assume.assumeTrue(
+                "this JVM can read through a 000 directory (running as root?)", barrierHolds
+            );
+
+            assertFalse(
+                "existence that cannot be determined must never be reported as absence",
+                confirmedAbsent(backend, artifact)
+            );
+        } finally {
+            java.nio.file.Files.setPosixFilePermissions(
+                dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")
+            );
+            java.nio.file.Files.deleteIfExists(artifact);
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    /** A dangling symlink is itself a surviving artifact; NOFOLLOW_LINKS must see it. */
+    @Test
+    public void aSymlinkWhereAnArtifactBelongsIsNotAbsent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path dir = java.nio.file.Files.createTempDirectory("starexec-absence");
+        Path link = dir.resolve("var.out");
+        try {
+            java.nio.file.Files.createSymbolicLink(link, dir.resolve("nowhere"));
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            org.junit.Assume.assumeNoException("symlinks unavailable on this filesystem", e);
+        }
+        try {
+            assertFalse(
+                "a symlink standing where an artifact belongs is a surviving artifact",
+                confirmedAbsent(backend, link)
+            );
+        } finally {
+            java.nio.file.Files.deleteIfExists(link);
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    public void aKillIsUnprovenWhenPodsCannotBeListed() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(9, "job-9");
+        givenJobDeletion(backend, "job-9", true, null);
+        givenPodListingFails((KubernetesClient) getField(backend, "kubernetesClient"));
+        restore(backend, 9);
+
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 9));
+        assertTrue(holdingSlot(backend).contains(9));
+    }
+
+    @Test
+    public void aMissingJobNameIsNotProofOfSafety() throws Exception {
+        // Absent local bookkeeping is exactly the post-restart state, which is when a pod
+        // is most likely running unseen. The cluster must still be asked.
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        givenJobDeletion(backend, "starexec-pair-0-exec-10", true, null, podInPhase(10, "Running"));
+
+        assertEquals(
+            "a Running pod carrying the exec-id label means this is not safe,"
+                + " whatever local tracking says",
+            Backend.KillOutcome.UNPROVEN,
+            killConfirmed(backend, 10)
+        );
+        assertTrue(
+            "a discovered live execution must enter the accounting",
+            holdingSlot(backend).contains(10)
+        );
+        assertEquals(1, activeCount(backend));
+        // Identity is the pod's exec-id LABEL, not a reconstructed Job name. A name cannot
+        // be reconstructed -- generateJobName mixes in System.currentTimeMillis() -- and an
+        // earlier draft of this code fabricated one anyway, which would have reported a
+        // live Job as absent. The retry owner is the recurring pod inventory, which selects
+        // by that label.
+        assertNull(
+            "no Job name may be invented for an execution whose name was lost",
+            trackingMap(backend, "execIdToJobName").get(10)
+        );
+    }
+
+    @Test
+    public void aConfirmedSafeMissingJobNameClearsEverySurvivingTrace() throws Exception {
+        // Deliberately inconsistent partial state: the job-name entry is gone but the pair
+        // and output-dir entries and the reservation all survived. Partial loss is not
+        // selective, so confirmation must clean all of it, idempotently.
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(11, 511);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir"))
+            .put(11, Path.of("/tmp/out/11"));
+        givenJobDeletion(backend, "starexec-pair-0-exec-11", true, null);
+        restore(backend, 11);
+
+        assertEquals(Backend.KillOutcome.CONFIRMED_SAFE, killConfirmed(backend, 11));
+        assertFalse("the surviving reservation must go", holdingSlot(backend).contains(11));
+        assertNull(trackingMap(backend, "execIdToPairId").get(11));
+        assertNull(trackingMap(backend, "execIdToOutputDir").get(11));
+        assertEquals(0, activeCount(backend));
+    }
+
+    @Test
+    public void discoveredWorkIsAccountedEvenAboveTheCap() throws Exception {
+        // The cap limits what StarExec may START, never what it may admit EXISTS.
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "maxConcurrentJobs", 1);
+        restore(backend, 10);
+        restore(backend, 11);
+
+        assertEquals("both live executions must be counted", 2, holdingSlot(backend).size());
+        assertEquals("the counter must agree with the set", 2, activeCount(backend));
+    }
+
+    @Test
+    public void newWorkStillRespectsTheCap() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "maxConcurrentJobs", 1);
+        assertTrue(acquire(backend, 20));
+        assertFalse("a second NEW submission must not fit", acquire(backend, 21));
+        assertEquals(1, holdingSlot(backend).size());
+        assertEquals(1, activeCount(backend));
+    }
+
+    private boolean acquire(KubernetesNativeBackend backend, int execId) throws Exception {
+        Method m = KubernetesNativeBackend.class
+            .getDeclaredMethod("tryAcquireSubmissionSlot", int.class);
+        m.setAccessible(true);
+        return (Boolean) m.invoke(backend, execId);
+    }
+
+    private void restore(KubernetesNativeBackend backend, int execId) throws Exception {
+        Method m = KubernetesNativeBackend.class
+            .getDeclaredMethod("restoreSubmissionSlot", int.class);
+        m.setAccessible(true);
+        m.invoke(backend, execId);
+    }
+
+    /** The common case: a deletion with no surviving pods for the execution. */
     private void givenJobDeletion(
         KubernetesNativeBackend backend,
         String jobName,
         boolean deleted,
         Job stillThere
+    ) throws Exception {
+        givenJobDeletion(backend, jobName, deleted, stillThere, new Pod[0]);
+    }
+
+    /**
+     * As above, but with the pods a census will find.
+     *
+     * <p>The pods branch is not optional decoration. Without it {@code client.pods()}
+     * returns null, {@code PodPhaseView} swallows the NPE as an unavailable listing, and
+     * every fail-closed rule reads that as UNDETERMINED — so a test that meant to assert
+     * the happy path would silently assert the held path instead.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenJobDeletion(
+        KubernetesNativeBackend backend,
+        String jobName,
+        boolean deleted,
+        Job stillThere,
+        Pod... podsForExecution
     ) throws Exception {
         KubernetesClient client = Mockito.mock(KubernetesClient.class);
         BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
@@ -606,18 +1330,189 @@ public class KubernetesNativeBackendTests {
         NonNamespaceOperation<Job, JobList, ScalableResource<Job>> namespaced =
             Mockito.mock(NonNamespaceOperation.class);
         ScalableResource<Job> resource = Mockito.mock(ScalableResource.class);
+        io.fabric8.kubernetes.client.GracePeriodConfigurable policyApplied =
+            Mockito.mock(io.fabric8.kubernetes.client.GracePeriodConfigurable.class);
 
         Mockito.when(client.batch()).thenReturn(batch);
         Mockito.when(batch.v1()).thenReturn(v1);
         Mockito.when(v1.jobs()).thenReturn(jobs);
         Mockito.when(jobs.inNamespace(Mockito.any())).thenReturn(namespaced);
         Mockito.when(namespaced.withName(jobName)).thenReturn(resource);
+        // doReturn, not when(...).thenReturn: withPropagationPolicy is declared
+        // PropagationPolicyConfigurable<T> and the wildcard makes thenReturn unassignable.
+        Mockito
+            .doReturn(policyApplied)
+            .when(resource)
+            .withPropagationPolicy(io.fabric8.kubernetes.api.model.DeletionPropagation.FOREGROUND);
+        Mockito
+            .when(policyApplied.delete())
+            .thenReturn(deleted ? List.of(new StatusDetails()) : List.of());
         Mockito
             .when(resource.delete())
             .thenReturn(deleted ? List.of(new StatusDetails()) : List.of());
         Mockito.when(resource.get()).thenReturn(stillThere);
 
+        // The controller half. Without this stub jobs().inNamespace(..).withLabels(..)
+        // returns null, observeControllerFor swallows the NPE as an unreadable API, and
+        // every one of these tests would assert UNPROVEN no matter what it meant to assert.
+        //
+        // Default is the Job the delete targeted, if it survived, and nothing otherwise —
+        // so "deleted, no pods" still means "no controller can create another pod".
+        givenJobsFor(client, stillThere == null ? new Job[0] : new Job[] { stillThere });
+
+        givenPodsFor(client, podsForExecution);
         setField(backend, "kubernetesClient", client);
+    }
+
+    /**
+     * A cluster in which nothing for any execution survives: the Job listing succeeds and
+     * returns none, and no pod matches either.
+     *
+     * <p>Needed by any test that expects a terminal callback to release accounting. A
+     * completion no longer clears tracking on its own say-so — it must first establish that
+     * no controller can create another Pod and no Pod can still write. With no client stubbed
+     * at all, neither can be established and the accounting is correctly retained, so a test
+     * asserting the released state has to say what the cluster looks like.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenSafeCluster(KubernetesNativeBackend backend) throws Exception {
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
+        V1BatchAPIGroupDSL v1 = Mockito.mock(V1BatchAPIGroupDSL.class);
+        MixedOperation jobs = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespaced = Mockito.mock(NonNamespaceOperation.class);
+
+        Mockito.when(client.batch()).thenReturn(batch);
+        Mockito.when(batch.v1()).thenReturn(v1);
+        Mockito.when(v1.jobs()).thenReturn(jobs);
+        Mockito.when(jobs.inNamespace(Mockito.any())).thenReturn(namespaced);
+
+        givenJobsFor(client);
+        givenPodsFor(client);
+        setField(backend, "kubernetesClient", client);
+    }
+
+    /**
+     * Stubs {@code client.batch().v1().jobs().inNamespace(..).withLabels(..).list()}.
+     *
+     * <p>This is how an execution's controllers are found: by label, never by a
+     * reconstructed name. Pass no jobs for "the listing succeeded and found none", which is
+     * positive evidence of controller absence.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenJobsFor(KubernetesClient client, Job... jobs) {
+        NonNamespaceOperation namespaced =
+            client.batch().v1().jobs().inNamespace("any");
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+
+        JobList listing = new JobList();
+        listing.setItems(List.of(jobs));
+
+        Mockito.when(namespaced.withLabels(Mockito.anyMap())).thenReturn(filtered);
+        Mockito.when(filtered.list()).thenReturn(listing);
+    }
+
+    /** Makes the Job listing fail, so controller safety can never be established. */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenJobListingFails(KubernetesClient client) {
+        NonNamespaceOperation namespaced =
+            client.batch().v1().jobs().inNamespace("any");
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        Mockito.when(namespaced.withLabels(Mockito.anyMap())).thenReturn(filtered);
+        Mockito.when(filtered.list()).thenThrow(new RuntimeException("jobs is forbidden"));
+    }
+
+    /**
+     * A Job carrying the identity labels, with one condition.
+     *
+     * @param type   {@code Complete} or {@code Failed} make it spent; anything else
+     *               (notably {@code FailureTarget}) must not
+     * @param status {@code True} / {@code False}
+     */
+    private Job jobWithCondition(int execId, String type, String status) {
+        Job job = jobWithNoConditions(execId);
+        io.fabric8.kubernetes.api.model.batch.v1.JobCondition condition =
+            new io.fabric8.kubernetes.api.model.batch.v1.JobCondition();
+        condition.setType(type);
+        condition.setStatus(status);
+        job.getStatus().setConditions(List.of(condition));
+        return job;
+    }
+
+    /** A live Job: identity labels, a status, but no terminal condition. */
+    private Job jobWithNoConditions(int execId) {
+        java.util.Map<String, String> labels = new java.util.HashMap<>();
+        labels.put("starexec.org/managed", "true");
+        labels.put("starexec.org/exec-id", String.valueOf(execId));
+        labels.put("starexec.org/pair-id", String.valueOf(execId * 10));
+        Job job = new Job();
+        job.setMetadata(
+            new io.fabric8.kubernetes.api.model.ObjectMetaBuilder()
+                .withName("job-" + execId)
+                .withLabels(labels)
+                .build()
+        );
+        job.setStatus(new io.fabric8.kubernetes.api.model.batch.v1.JobStatus());
+        return job;
+    }
+
+    /** Stubs {@code client.pods().inNamespace(..).withLabels(..).list()}. */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenPodsFor(KubernetesClient client, Pod... pods) {
+        MixedOperation podsOp = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespacedPods = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+
+        io.fabric8.kubernetes.api.model.PodList listing =
+            new io.fabric8.kubernetes.api.model.PodList();
+        listing.setItems(List.of(pods));
+
+        Mockito.when(client.pods()).thenReturn(podsOp);
+        Mockito.when(podsOp.inNamespace(Mockito.any())).thenReturn(namespacedPods);
+        Mockito.when(namespacedPods.withLabels(Mockito.anyMap())).thenReturn(filtered);
+        Mockito.when(filtered.list()).thenReturn(listing);
+    }
+
+    /** Makes every pod listing fail, so a census can only report UNDETERMINED. */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenPodListingFails(KubernetesClient client) {
+        MixedOperation podsOp = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespacedPods = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        Mockito.when(client.pods()).thenReturn(podsOp);
+        Mockito.when(podsOp.inNamespace(Mockito.any())).thenReturn(namespacedPods);
+        Mockito.when(namespacedPods.withLabels(Mockito.anyMap())).thenReturn(filtered);
+        Mockito.when(filtered.list()).thenThrow(new RuntimeException("pods is forbidden"));
+    }
+
+    /**
+     * A pod carrying the managed, exec-id and pair-id labels, in the given phase.
+     *
+     * <p>The pair-id label matters now that startup reconciliation censuses by pair — a pair
+     * with no surviving Job has no execution id to offer. Kept consistent with
+     * {@link #jobWithNoConditions}: pair id is exec id times ten.
+     */
+    private Pod podInPhase(int execId, String phase) {
+        java.util.Map<String, String> labels = new java.util.HashMap<>();
+        labels.put("starexec.org/managed", "true");
+        labels.put("starexec.org/exec-id", String.valueOf(execId));
+        labels.put("starexec.org/pair-id", String.valueOf(execId * 10));
+        Pod pod = new Pod();
+        pod.setMetadata(
+            new io.fabric8.kubernetes.api.model.ObjectMetaBuilder()
+                .withName("pod-" + execId)
+                .withLabels(labels)
+                .build()
+        );
+        io.fabric8.kubernetes.api.model.PodStatus status =
+            new io.fabric8.kubernetes.api.model.PodStatus();
+        status.setPhase(phase);
+        pod.setStatus(status);
+        return pod;
     }
 
     private Object getField(Object target, String fieldName) throws Exception {
@@ -669,6 +1564,58 @@ public class KubernetesNativeBackendTests {
      * it up — but that task's query also demands a non-null end_time, so without setEndTime
      * the pair would sit failed and never be rerun. This test is the guard on that.
      */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingPublishesNothingWhileThePodMayStillRun() throws Exception {
+        // The status this path writes -- ERROR_RUNSCRIPT with an end_time -- is exactly what
+        // makes a pair rerun-eligible. Publishing it while a pod for the execution can still
+        // start would let a late pod write results over its own replacement's.
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(41, "job-41");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(41, 441);
+        restore(backend, 41);
+
+        // Named Job deleted, but a pod carrying the exec-id label is still Pending.
+        givenJobDeletion(backend, "job-41", true, null, podInPhase(41, "Pending"));
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(441))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+
+            assertFalse(
+                "the escalation must report incomplete so the monitor retries it",
+                callback.onJobStuckPending(41, "job-41", "not scheduled")
+            );
+
+            jobPairsMock.verify(
+                () ->
+                    JobPairs.setPairStatusPrecise(
+                        Mockito.anyInt(),
+                        Mockito.anyInt(),
+                        Mockito.anyInt(),
+                        Mockito.anyInt()
+                    ),
+                Mockito.never()
+            );
+            jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
+        }
+
+        assertTrue(
+            "the slot stays held while the pod may run",
+            holdingSlot(backend).contains(41)
+        );
+        assertFalse(
+            "and the obligation is recorded for the sweep",
+            ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
+        );
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     public void stuckPendingPairGetsAnEndTimeSoTheRerunCanFindIt() throws Exception {
@@ -1157,16 +2104,36 @@ public class KubernetesNativeBackendTests {
             .get(0)
             .getValues();
 
-        // Every present label value the view calls the default queue, the scheduler
-        // must also match. An absent label is covered by the DoesNotExist term.
-        for (String label : List.of("", "   ", "default", "all", "all.q", "ALL.Q")) {
-            if ("all.q".equals(normalize.invoke(null, label))) {
+        // Both directions, and no silent skip. This loop used to be wrapped in a bare
+        // `if (normalize(label).equals("all.q"))`, which meant the one case it was written
+        // to cover -- 'ALL.Q', where the view is case-sensitive and isDefaultQueueName is
+        // not -- fell through the gate and asserted nothing at all. A test that appears to
+        // cover a case and does not is worse than no test, so the counters below fail the
+        // test if either branch stops being exercised.
+        int defaultLabels = 0;
+        int nonDefaultLabels = 0;
+        for (String label : List.of("", "   ", "default", "all", "all.q", "ALL.Q", "sat-comp")) {
+            String normalized = (String) normalize.invoke(null, label);
+            if ("all.q".equals(normalized)) {
+                defaultLabels++;
                 assertTrue(
                     "affinity does not accept a label the view calls default: '" + label + "'",
                     accepted.contains(label.trim())
                 );
+            } else {
+                nonDefaultLabels++;
+                // The converse matters just as much: if the affinity accepted a label the
+                // view treats as a distinct queue, default-queue pods would be scheduled
+                // onto hardware reserved for that queue.
+                assertFalse(
+                    "affinity accepts '" + label + "', which the view calls queue '"
+                        + normalized + "', not the default",
+                    accepted.contains(label.trim())
+                );
             }
         }
+        assertTrue("vacuous: no default-mapping label exercised", defaultLabels > 0);
+        assertTrue("vacuous: no distinct-queue label exercised", nonDefaultLabels > 0);
     }
 
     private JobPairs.PairStatusLookupResult foundLookup(int statusCode)
@@ -1399,7 +2366,13 @@ public class KubernetesNativeBackendTests {
                 + " unrecognised, it was written as a literal label and became a third queue",
             isDefaultQueueName("all")
         );
-        assertTrue("case tolerated", isDefaultQueueName("ALL.Q"));
+        // Deliberately reversed. This asserted "case tolerated" -- isDefaultQueueName was
+        // the only case-insensitive queue comparison in the system, while the node-label
+        // list and GetIdByName are both exact. That let an admin create a distinct queue
+        // 'ALL.q' whose pairs were then given the default queue's affinity and run on the
+        // default queue's hardware. A case variant is a different queue, everywhere.
+        assertFalse("a case variant is a distinct queue", isDefaultQueueName("ALL.Q"));
+        assertFalse("a case variant is a distinct queue", isDefaultQueueName("All.q"));
         assertTrue("whitespace tolerated", isDefaultQueueName(" all.q "));
     }
 
@@ -1516,6 +2489,348 @@ public class KubernetesNativeBackendTests {
                 + " marked terminally failed",
             backend.isQueueDispatchable("casc.q")
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Measurement fidelity: runsolver's own verdict outranks status.json.
+    //
+    // status.json's status field is written by jobscript grepping runsolver's
+    // English prose out of watcher.out. 73fc0acab replaced that with runsolver's
+    // own TIMEOUT=/MEMOUT= booleans for LocalJobMonitor and ContainerJobMonitor
+    // but never touched this backend, so the one path used in Kubernetes
+    // deployments kept recording a genuine timeout as a clean completion.
+    // ---------------------------------------------------------------------
+
+    private int readTerminalStatus(
+        KubernetesNativeBackend backend,
+        int execId,
+        int fallback
+    ) throws Exception {
+        Class<?> callbackClass = Class.forName(
+            "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback"
+        );
+        Constructor<?> ctor =
+            callbackClass.getDeclaredConstructor(KubernetesNativeBackend.class);
+        ctor.setAccessible(true);
+        Object callback = ctor.newInstance(backend);
+
+        Method m = callbackClass.getDeclaredMethod(
+            "readTerminalStatus", int.class, int.class
+        );
+        m.setAccessible(true);
+        return (Integer) m.invoke(callback, execId, fallback);
+    }
+
+    @SuppressWarnings("unchecked")
+    private KubernetesNativeBackend backendWithOutputDir(int execId, Path dir)
+        throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Field f = KubernetesNativeBackend.class.getDeclaredField("execIdToOutputDir");
+        f.setAccessible(true);
+        ((Map<Integer, Path>) f.get(backend)).put(execId, dir);
+        return backend;
+    }
+
+    @Test
+    public void aRunsolverTimeoutOutranksACleanStatusJson() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-verdict-timeout");
+        // What the prose-grep layer concluded: nothing matched, so a clean completion.
+        java.nio.file.Files.writeString(
+            dir.resolve("status.json"), "{\"status\": 7, \"stageNumber\": 1}"
+        );
+        // What runsolver itself measured, from the final getrusage after the child exited.
+        java.nio.file.Files.writeString(
+            dir.resolve("var.out"),
+            "WCTIME=12.3\nCPUTIME=600.1\nTIMEOUT=true\nMEMOUT=false\n"
+        );
+        // No "Maximum CPU time exceeded" line: the watcher poll never fired because the
+        // solver exited exactly as the limit was crossed. This is the case the prose
+        // grep structurally cannot see.
+        java.nio.file.Files.writeString(dir.resolve("watcher.out"), "Child status: 0\n");
+
+        KubernetesNativeBackend backend = backendWithOutputDir(9001, dir);
+
+        assertEquals(
+            "runsolver reported TIMEOUT=true, so STATUS_COMPLETE from status.json must"
+                + " not be what gets recorded",
+            org.starexec.data.to.Status.StatusCode.EXCEED_CPU.getVal(),
+            readTerminalStatus(
+                backend, 9001,
+                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
+            )
+        );
+    }
+
+    @Test
+    public void watcherProseDiscriminatesWallclockFromCpu() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-verdict-wall");
+        java.nio.file.Files.writeString(
+            dir.resolve("status.json"), "{\"status\": 7, \"stageNumber\": 1}"
+        );
+        java.nio.file.Files.writeString(
+            dir.resolve("var.out"), "TIMEOUT=true\nMEMOUT=false\n"
+        );
+        java.nio.file.Files.writeString(
+            dir.resolve("watcher.out"),
+            "Maximum wall clock time exceeded: sending SIGTERM then SIGKILL\n"
+        );
+
+        KubernetesNativeBackend backend = backendWithOutputDir(9002, dir);
+
+        // TIMEOUT= is a disjunction and cannot say which limit fired; the prose can.
+        assertEquals(
+            org.starexec.data.to.Status.StatusCode.EXCEED_RUNTIME.getVal(),
+            readTerminalStatus(
+                backend, 9002,
+                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
+            )
+        );
+    }
+
+    @Test
+    public void statusJsonStillDecidesWhenRunsolverReportsNoBreach() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-verdict-clean");
+        java.nio.file.Files.writeString(
+            dir.resolve("status.json"), "{\"status\": 11, \"stageNumber\": 1}"
+        );
+        java.nio.file.Files.writeString(
+            dir.resolve("var.out"), "TIMEOUT=false\nMEMOUT=false\n"
+        );
+        java.nio.file.Files.writeString(dir.resolve("watcher.out"), "Child status: 3\n");
+
+        KubernetesNativeBackend backend = backendWithOutputDir(9003, dir);
+
+        // No limit fired, so the verdict abstains and status.json is still authoritative
+        // for non-limit outcomes such as a run-script failure.
+        assertEquals(
+            "the verdict must only override when runsolver actually reports a breach",
+            org.starexec.data.to.Status.StatusCode.ERROR_RUNSCRIPT.getVal(),
+            readTerminalStatus(
+                backend, 9003,
+                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
+            )
+        );
+    }
+
+    @Test
+    public void aRerunDoesNotInheritThePreviousAttemptsVerdict() throws Exception {
+        // The output directory is derived from the pair's stdout path, so it is keyed by
+        // pairId and reused by every rerun. Once var.out outranks status.json, a stale
+        // one would classify an attempt that never even reached runsolver.
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-stale-attempt");
+        java.nio.file.Files.writeString(dir.resolve("var.out"), "TIMEOUT=true\n");
+        java.nio.file.Files.writeString(
+            dir.resolve("watcher.out"), "Maximum CPU time exceeded: ...\n"
+        );
+        java.nio.file.Files.writeString(dir.resolve("status.json"), "{\"status\": 14}");
+        java.nio.file.Files.writeString(dir.resolve("stats.json"), "{}");
+
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Method clear = KubernetesNativeBackend.class.getDeclaredMethod(
+            "clearStaleAttemptArtifacts", Path.class, int.class
+        );
+        clear.setAccessible(true);
+        clear.invoke(backend, dir, 4242);
+
+        for (String name : List.of("var.out", "watcher.out", "status.json", "stats.json")) {
+            assertFalse(
+                "a previous attempt's " + name + " must not survive into the next attempt",
+                java.nio.file.Files.exists(dir.resolve(name))
+            );
+        }
+
+        // With the directory cleared the verdict abstains rather than inventing one, so
+        // the caller's own default stands.
+        KubernetesNativeBackend fresh = backendWithOutputDir(4242, dir);
+        assertEquals(
+            "with no runsolver output the verdict must abstain, not guess",
+            org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal(),
+            readTerminalStatus(
+                fresh, 4242,
+                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
+            )
+        );
+    }
+
+    @Test
+    public void cleanupReportsFailureWhenAStaleArtifactCannotBeRemoved() throws Exception {
+        // Fail closed: the caller decides whether a benchmark may run on the strength of
+        // this return value, so it must report absence, not merely that delete() did not
+        // throw. Simulated by making the containing directory unwritable, which is what a
+        // misconfigured output volume looks like.
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-undeletable");
+        Path stale = dir.resolve("var.out");
+        java.nio.file.Files.writeString(stale, "TIMEOUT=true\n");
+
+        try {
+            java.nio.file.Files.setPosixFilePermissions(
+                dir, java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x")
+            );
+        } catch (UnsupportedOperationException e) {
+            org.junit.Assume.assumeNoException("POSIX permissions unavailable", e);
+        }
+
+        try {
+            KubernetesNativeBackend backend = new KubernetesNativeBackend();
+            Method clear = KubernetesNativeBackend.class.getDeclaredMethod(
+                "clearStaleAttemptArtifacts", Path.class, int.class
+            );
+            clear.setAccessible(true);
+            boolean allAbsent = (Boolean) clear.invoke(backend, dir, 5150);
+
+            // Running as root defeats the permission bits; skip rather than pass vacuously.
+            org.junit.Assume.assumeTrue(
+                "cannot simulate an undeletable file as this user",
+                java.nio.file.Files.exists(stale)
+            );
+
+            assertFalse(
+                "a surviving stale artifact must be reported as failure, so submitScript"
+                    + " refuses to create the Job rather than misclassifying the run",
+                allAbsent
+            );
+        } finally {
+            java.nio.file.Files.setPosixFilePermissions(
+                dir, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x")
+            );
+            java.nio.file.Files.deleteIfExists(stale);
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // getQueues must agree with every other reader of the queue label.
+    //
+    // Cluster.loadQueueDetails marks every queue INACTIVE and reactivates only
+    // the names getQueues returns, so a name missing here is a queue that stops
+    // dispatching with no error anywhere and never self-heals.
+    // ---------------------------------------------------------------------
+
+    private io.fabric8.kubernetes.api.model.Node nodeWithQueueLabel(
+        String name,
+        String queueLabelValue
+    ) {
+        java.util.Map<String, String> labels = new java.util.HashMap<>();
+        labels.put("starexec.org/worker", "true");
+        if (queueLabelValue != null) {
+            labels.put("starexec.org/queue", queueLabelValue);
+        }
+        io.fabric8.kubernetes.api.model.Node node =
+            new io.fabric8.kubernetes.api.model.Node();
+        node.setMetadata(
+            new io.fabric8.kubernetes.api.model.ObjectMetaBuilder()
+                .withName(name)
+                .withLabels(labels)
+                .build()
+        );
+        return node;
+    }
+
+    private KubernetesNativeBackend backendSeeingNodes(
+        io.fabric8.kubernetes.api.model.Node... nodes
+    ) throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "queueLabelKey", "starexec.org/queue");
+        setField(backend, "workerNodeSelectorKey", "starexec.org/worker");
+        setField(backend, "workerNodeSelectorValue", "true");
+
+        io.fabric8.kubernetes.api.model.NodeList list =
+            new io.fabric8.kubernetes.api.model.NodeListBuilder()
+                .withItems(nodes)
+                .build();
+
+        setField(backend, "kubernetesClient", clientListingNodes(list, null));
+        return backend;
+    }
+
+    /**
+     * Mocks {@code client.nodes().withLabel(k, v).list()} one level at a time. Deep stubs
+     * cannot do this: {@code withLabel} is declared on a generic interface and the deep
+     * stub returns null rather than another mock.
+     *
+     * @param list  what the listing returns, or null when {@code failure} is set
+     * @param failure thrown from {@code list()} instead of returning
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private KubernetesClient clientListingNodes(
+        io.fabric8.kubernetes.api.model.NodeList list,
+        RuntimeException failure
+    ) {
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        NonNamespaceOperation nodesOp = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+
+        Mockito.when(client.nodes()).thenReturn(nodesOp);
+        Mockito
+            .when(nodesOp.withLabel("starexec.org/worker", "true"))
+            .thenReturn(filtered);
+        if (failure != null) {
+            Mockito.when(filtered.list()).thenThrow(failure);
+        } else {
+            Mockito.when(filtered.list()).thenReturn(list);
+        }
+        return client;
+    }
+
+    @Test
+    public void anUnlabelledNodeKeepsTheDefaultQueueAlive() throws Exception {
+        // The ordinary state of a cluster where some nodes are the default pool and an
+        // admin has just added a second queue. getQueues used to skip the unlabelled
+        // node entirely, so all.q vanished from the returned set and loadQueueDetails
+        // left it INACTIVE -- permanently, since every later run repeated the omission.
+        KubernetesNativeBackend backend = backendSeeingNodes(
+            nodeWithQueueLabel("n1", "sat-comp"),
+            nodeWithQueueLabel("n2", null)
+        );
+
+        List<String> queues = java.util.Arrays.asList(backend.getQueues());
+
+        assertTrue(
+            "an unlabelled worker node belongs to the default queue everywhere else,"
+                + " so getQueues must report it too: " + queues,
+            queues.contains("all.q")
+        );
+        assertTrue("the real second queue is still reported: " + queues,
+            queues.contains("sat-comp"));
+    }
+
+    @Test
+    public void aBlankQueueLabelAlsoKeepsTheDefaultQueueAlive() throws Exception {
+        // `kubectl label node n2 starexec.org/queue=` produces the empty value, which
+        // DEFAULT_QUEUE_LABEL_VALUES and the affinity both already treat as default.
+        KubernetesNativeBackend backend = backendSeeingNodes(
+            nodeWithQueueLabel("n1", "sat-comp"),
+            nodeWithQueueLabel("n2", "")
+        );
+
+        List<String> queues = java.util.Arrays.asList(backend.getQueues());
+        assertTrue("blank label is default-queue membership: " + queues,
+            queues.contains("all.q"));
+    }
+
+    @Test
+    public void aFailedNodeListingRefusesToReportAQueueList() throws Exception {
+        // Returning {all.q} on failure would make loadQueueDetails deactivate every real
+        // queue in the database on one transient API blip. Same principle as
+        // queueViewLoaded: an unread view is not an empty one.
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "queueLabelKey", "starexec.org/queue");
+        setField(backend, "workerNodeSelectorKey", "starexec.org/worker");
+        setField(backend, "workerNodeSelectorValue", "true");
+
+        setField(
+            backend,
+            "kubernetesClient",
+            clientListingNodes(null, new RuntimeException("API server unreachable"))
+        );
+
+        try {
+            backend.getQueues();
+            fail("a failed node listing must not be reported as a queue list");
+        } catch (IllegalStateException expected) {
+            // loadQueueDetails catches this and aborts before deactivating anything.
+        }
     }
 
     // ---------------------------------------------------------------------

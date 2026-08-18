@@ -65,6 +65,20 @@ export BENCHMARKING_FRAMEWORK="$$BENCHMARKING_FRAMEWORK$$"
 # When true, job scripts skip sudo and use direct execution since containers provide isolation
 export CONTAINER_MODE="${CONTAINER_MODE:-false}"
 
+# Defence in depth for the DB credentials exported above. JobManager already declines to
+# substitute them for the Kubernetes and Podman backends, but CONTAINER_MODE is a runtime
+# signal and LocalBackend sets it too when it runs inside a container, so scrub here as
+# well rather than relying on the writer having known.
+#
+# Nothing is lost: functions.bash dbExec returns early under isContainerMode and the
+# job-runner image ships no psql. What is gained is that the solver -- untrusted
+# third-party code, started as a direct child of this shell with no `sudo -u` to reset the
+# environment in container mode -- does not inherit StarExec's database credentials.
+if [ "$CONTAINER_MODE" = "true" ]; then
+	unset DB_USER
+	unset DB_PASS
+fi
+
 # Path to Olivier Roussel's runSolver
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 

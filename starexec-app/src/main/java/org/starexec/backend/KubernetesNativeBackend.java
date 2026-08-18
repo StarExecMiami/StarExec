@@ -90,6 +90,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.fabric8.kubernetes.api.model.Affinity;
 import io.fabric8.kubernetes.api.model.AffinityBuilder;
+import io.fabric8.kubernetes.api.model.DeletionPropagation;
 import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.NodeCondition;
 import io.fabric8.kubernetes.api.model.NodeList;
@@ -111,8 +112,10 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
@@ -242,14 +245,34 @@ public class KubernetesNativeBackend implements Backend {
             )
         );
 
-    /** True if {@code queueName} denotes the default queue under any of its spellings. */
+    /**
+     * True if {@code queueName} denotes the default queue under any of its spellings.
+     *
+     * <p>Case-SENSITIVE, and that is the whole point. This used to compare with
+     * {@code equalsIgnoreCase}, which disagreed with every other queue comparison in the
+     * system: {@link #DEFAULT_QUEUE_LABEL_VALUES} is matched exactly (see its comment --
+     * Kubernetes label values are case-sensitive), and {@code starexec.GetIdByName} is an
+     * exact Postgres text comparison, so a queue named {@code ALL.q} is a genuinely
+     * distinct row that an admin can create alongside {@code all.q}.
+     *
+     * <p>The two callers ({@code buildKubernetesJob}, {@code moveNodes}) use this to pick
+     * a scheduling constraint. Under the old case-insensitive comparison, a distinct
+     * queue named {@code ALL.q} was handed {@link #defaultQueueAffinity()} -- whose value
+     * list does not contain {@code ALL.q} -- so its pairs were scheduled onto the default
+     * queue's hardware instead of the nodes provisioned for them. Queues separate
+     * competitions and hardware classes, so that is a correctness failure, not a
+     * scheduling inefficiency.
+     *
+     * <p>Whitespace is still trimmed: that is a data-entry artifact, and a Kubernetes
+     * label value cannot carry leading or trailing spaces anyway.
+     */
     private static boolean isDefaultQueueName(String queueName) {
         if (queueName == null) {
             return false;
         }
         String name = queueName.trim();
-        return DEFAULT_QUEUE_NAME.equalsIgnoreCase(name)
-            || SGE_DEFAULT_QUEUE_SHORT_NAME.equalsIgnoreCase(name);
+        return DEFAULT_QUEUE_NAME.equals(name)
+            || SGE_DEFAULT_QUEUE_SHORT_NAME.equals(name);
     }
 
     /**
@@ -346,6 +369,12 @@ public class KubernetesNativeBackend implements Backend {
     /** Periodic orphan sweep interval in milliseconds */
     private int orphanSweepIntervalMs = 300000;
 
+    /**
+     * Source of "now", replaceable by a test rather than slept through. Mirrors
+     * {@code KubernetesJobMonitor.clock}; production never replaces it.
+     */
+    private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
+
     /** Tracks active K8s Jobs against the concurrency cap */
     private final AtomicInteger activeJobCount = new AtomicInteger(0);
 
@@ -354,6 +383,139 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Exec IDs that have been killed to prevent stale completion callbacks */
     private final Set<Integer> killedExecIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Guards the compound (jobsHoldingSlot, activeJobCount) reservation so the set and
+     * the counter can never disagree.
+     */
+    private final Object slotLock = new Object();
+
+    // inventoryHeldExecIds used to sit here and has been removed rather than kept: a Set
+    // that was only ever REMOVED from. Its javadoc described an orphan inventory that owned
+    // the slots it reserved, but nothing ever added to it, so it distinguished nothing.
+    // Ownership is now expressed by unverifiedExecutions below, which is genuinely written
+    // and genuinely read.
+    //
+    // A field whose javadoc asserts a behaviour it does not have is worse than no field: it
+    // reads as a safety mechanism during review and provides nothing at runtime.
+
+    /**
+     * Whether admission must defer because a managed pod exists that StarExec cannot account
+     * for.
+     *
+     * <p>Reinstated deliberately, and this time with the behaviour its predecessor's javadoc
+     * only claimed. That field was removed on the reasoning that an unaccounted-for pod
+     * becomes a held slot through {@link #restoreSubmissionSlot(int, boolean)}, so ordinary
+     * capacity accounting already defers admission. That holds only for a pod whose
+     * {@code exec-id} label parses. A managed pod whose identity cannot be recovered has no
+     * execution id to hold a slot with, and {@link PodPhaseView#of} dropped it from the view
+     * altogether — so it occupied hardware while being invisible to both accounting and
+     * admission.
+     *
+     * <p>Set only by a listing that <em>succeeded</em> and found such a pod; cleared only by
+     * a listing that succeeded and found none. An unreadable listing leaves it exactly as it
+     * was, so a transient API error neither stops dispatch nor clears a real condition —
+     * which was the specific objection that retired the original field.
+     */
+    private final AtomicBoolean admissionDegraded = new AtomicBoolean(false);
+
+    /** What is currently holding admission, for the operator-visible message. */
+    private volatile String admissionDegradedDetail = "";
+
+    /**
+     * Executions whose safety could not be established, and which therefore still hold
+     * accounting that something must eventually release.
+     *
+     * <p>This exists because the field above never had anything added to it. Its javadoc
+     * named an inventory as the retry owner for held slots, but no such inventory was ever
+     * built, so every {@code UNPROVEN} hold survived until the JVM restarted — an accounting
+     * leak that shrinks admission capacity for the lifetime of the process.
+     *
+     * <p>The owner is {@link #sweepOrphanedKubernetesJobs}, which already runs on a timer and
+     * already lists managed Jobs. It re-evaluates each entry with
+     * {@link #observeExecutionSafety(int)} and releases only on {@code CONFIRMED_SAFE}. No new
+     * scheduler is introduced.
+     *
+     * <p>In-memory, so it does not survive a restart. That gap belongs to restart
+     * reconciliation, which reconstructs obligations from durable state plus cluster
+     * observation; a second recovery path here would diverge from it.
+     */
+    private final Map<Integer, UnverifiedExecution> unverifiedExecutions =
+        new ConcurrentHashMap<>();
+
+    /** Why an execution is unverified, and since when. */
+    private static final class UnverifiedExecution {
+        private final long firstSeenMillis;
+        private final String reason;
+        /**
+         * Whether some other retry owner is still waiting to finish an operation on this
+         * execution — today, the monitor's cleanup-pending record for a stuck-Pending pair
+         * whose callback returned false.
+         *
+         * <p>The safety sweep must not touch such an entry. "This execution is now safe"
+         * and "the operation that was in flight completed" are different facts, and only
+         * the continuation can establish the second.
+         */
+        private final boolean continuationOutstanding;
+
+        private UnverifiedExecution(
+            long firstSeenMillis,
+            String reason,
+            boolean continuationOutstanding
+        ) {
+            this.firstSeenMillis = firstSeenMillis;
+            this.reason = reason;
+            this.continuationOutstanding = continuationOutstanding;
+        }
+
+        @Override
+        public String toString() {
+            return reason + " (unverified for " +
+                ((System.currentTimeMillis() - firstSeenMillis) / 1000) + "s" +
+                (continuationOutstanding ? ", continuation outstanding" : "") + ")";
+        }
+    }
+
+    /**
+     * Registers an execution whose safety is unproven, preserving the earliest observation.
+     *
+     * <p>The first sighting is kept rather than overwritten so the age in the log is how long
+     * the obligation has been outstanding, not how long since it was last re-checked — which
+     * would reset on every sweep and never look old.
+     */
+    private void recordUnverified(int execId, String reason) {
+        recordUnverified(execId, reason, false);
+    }
+
+    /**
+     * As above, but records whether an existing retry owner still has work to finish for this
+     * execution.
+     *
+     * <p>Uses {@code compute} rather than {@code putIfAbsent} so that a later sighting can
+     * raise the flag on an entry recorded earlier without it, while still keeping the
+     * original {@code firstSeenMillis}. The flag is only ever raised here, never lowered:
+     * the continuation itself clears the whole record when it completes.
+     */
+    private void recordUnverified(int execId, String reason, boolean continuationOutstanding) {
+        final boolean[] firstSighting = { false };
+        unverifiedExecutions.compute(execId, (id, existing) -> {
+            if (existing == null) {
+                firstSighting[0] = true;
+                return new UnverifiedExecution(
+                    System.currentTimeMillis(), reason, continuationOutstanding
+                );
+            }
+            if (continuationOutstanding && !existing.continuationOutstanding) {
+                return new UnverifiedExecution(
+                    existing.firstSeenMillis, existing.reason, true
+                );
+            }
+            return existing;
+        });
+        if (firstSighting[0]) {
+            log.info("Recorded unverified execution " + execId + ": " + reason);
+        }
+    }
 
     /** Periodic cleanup task that deletes orphaned managed K8s Jobs */
     private ScheduledExecutorService orphanSweepExecutor;
@@ -772,6 +934,16 @@ public class KubernetesNativeBackend implements Backend {
             return;
         }
 
+        // Settle any submission whose create() outcome was never established. Hosted here
+        // rather than in a scheduler of its own: this sweep already runs periodically on
+        // the Kubernetes side and already holds the client. Run first, so a resolution
+        // that releases a reservation is reflected in the rest of this pass.
+        try {
+            resolveAmbiguousSubmissions();
+        } catch (Exception e) {
+            log.error("Failed to resolve ambiguous submissions", e);
+        }
+
         try {
             JobList jobList = kubernetesClient
                 .batch()
@@ -796,11 +968,27 @@ public class KubernetesNativeBackend implements Backend {
                 }
 
                 deleteKubernetesJob(job);
+
+                // deleteKubernetesJob returns void, so the request having been issued says
+                // nothing about whether anything stopped. This site used to release the slot
+                // and clear tracking on the strength of that call alone, taking no census and
+                // consulting no controller -- the weakest release path in the class, on
+                // objects that by definition nobody is watching.
+                if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+                    log.warn(
+                        "Orphan sweep deleted Job " + getJobName(job) + " for execId " + execId +
+                            " but cannot establish that it stopped; accounting retained."
+                    );
+                    recordUnverified(execId, "orphan sweep of " + getJobName(job));
+                    continue;
+                }
+
                 execIdToJobName.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
                 killedExecIds.add(execId);
                 releaseSubmissionSlot(execId);
+                unverifiedExecutions.remove(execId);
                 deleted++;
             }
 
@@ -809,6 +997,155 @@ public class KubernetesNativeBackend implements Backend {
             }
         } catch (Exception e) {
             log.warn("Kubernetes orphan sweep failed", e);
+        }
+
+        // Give every outstanding unverified execution another chance to be resolved. Without
+        // this, an UNPROVEN hold is immortal: the field it used to be recorded in was never
+        // written, so nothing ever revisited it and the slot stayed reserved until restart.
+        try {
+            revisitUnverifiedExecutions();
+        } catch (Exception e) {
+            log.warn("Failed to revisit unverified executions", e);
+        }
+
+        try {
+            inventoryPodsWithoutJobs();
+        } catch (Exception e) {
+            log.warn("Failed to inventory pods without Jobs", e);
+        }
+    }
+
+    /**
+     * Finds managed pods whose Job no longer exists, and brings them into the accounting.
+     *
+     * <p>The sweep above lists Jobs, so a pod that outlived its owner is invisible to it —
+     * and that pod is the one most likely to be forgotten, because nothing else enumerates
+     * it either. Deleting a Job with Background propagation removes the owner first and reaps
+     * dependents afterwards, so a crash in that window leaves exactly this state; startup
+     * reconciliation now refuses to transition such a pair, which makes discovering it here
+     * the thing that eventually unblocks it.
+     *
+     * <p>Only accounting is touched. No DB transition is performed and no pod is deleted —
+     * this backend deliberately holds no pod-delete privilege, and the pair's status is not
+     * this pass's to decide.
+     */
+    private void inventoryPodsWithoutJobs() {
+        if (kubernetesClient == null) {
+            return;
+        }
+        PodPhaseView pods = PodPhaseView.list(
+            kubernetesClient, namespace, MANAGED_LABEL, EXEC_ID_LABEL
+        );
+        if (pods == null || !pods.isAvailable()) {
+            // An unreadable listing is not an empty one. Saying nothing is the only honest
+            // outcome; the next pass tries again.
+            return;
+        }
+        for (int execId : pods.execIds()) {
+            if (jobsHoldingSlot.contains(execId) || unverifiedExecutions.containsKey(execId)) {
+                continue;   // already accounted for
+            }
+            if (observeExecutionSafety(execId) == KillOutcome.CONFIRMED_SAFE) {
+                continue;   // nothing of it can run; nothing owed
+            }
+            log.warn(
+                "Inventory found execution " + execId + " with a live pod that nothing was" +
+                    " accounting for; reserving a slot for it so unrelated pairs are not" +
+                    " scheduled beside it."
+            );
+            restoreSubmissionSlot(execId, true);
+            recordUnverified(execId, "pod discovered without matching accounting");
+        }
+
+        // Managed pods whose execution identity could not be recovered. No execution id may
+        // be invented for them and none may be deleted automatically, so the only correct
+        // response is to stop admitting new work until the object is understood or gone.
+        List<PodPhaseView.UnidentifiedPod> unaccountable = pods.unsafeUnidentifiedPods();
+        if (!unaccountable.isEmpty()) {
+            StringBuilder detail = new StringBuilder();
+            for (PodPhaseView.UnidentifiedPod pod : unaccountable) {
+                if (detail.length() > 0) {
+                    detail.append("; ");
+                }
+                detail.append(pod);
+            }
+            admissionDegradedDetail = detail.toString();
+            if (admissionDegraded.compareAndSet(false, true)) {
+                log.error(
+                    "Admission deferred: " + unaccountable.size() + " managed pod(s) may" +
+                        " still be running but carry no usable " + EXEC_ID_LABEL +
+                        " label, so no slot can be reserved for them. OPERATOR ACTION:" +
+                        " inspect and resolve " + detail
+                );
+            } else {
+                log.warn("Admission still deferred: " + detail);
+            }
+            return;
+        }
+        // Only a listing that succeeded gets here, so this clears the condition on evidence
+        // rather than on silence.
+        if (admissionDegraded.compareAndSet(true, false)) {
+            admissionDegradedDetail = "";
+            log.info(
+                "Admission restored: a successful pod inventory found no unaccountable" +
+                    " managed pods."
+            );
+        }
+    }
+
+    /**
+     * Re-evaluates every execution whose safety was previously unproven.
+     *
+     * <p>Releases accounting only on {@code CONFIRMED_SAFE}. This is the transition a
+     * pod-only design could not make: a pod disappearing is not by itself the end of the
+     * obligation, because the Job that owned it may simply be between attempts. Both halves
+     * are re-checked every pass.
+     *
+     * <p>Releasing the hold is <em>all</em> this does. Whatever operation was originally in
+     * flight — a rerun, an administrative kill — is not resumed here. "The execution is now
+     * safe" and "the requested operation completed" are separate facts, and this pass can
+     * only ever establish the first.
+     */
+    private void revisitUnverifiedExecutions() {
+        if (unverifiedExecutions.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<Integer, UnverifiedExecution> entry : unverifiedExecutions.entrySet()) {
+            int execId = entry.getKey();
+            UnverifiedExecution record = entry.getValue();
+            if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+                log.info("Execution " + execId + " is still unverified: " + record);
+                continue;
+            }
+            if (record.continuationOutstanding) {
+                // Safety is established, but an operation is still in flight and its retry
+                // owner needs this tracking to finish. Releasing here strands the pair: the
+                // continuation resolves its pair id from execIdToPairId, and the Job it
+                // would otherwise fall back to has already been deleted. Leave everything
+                // in place — the continuation calls releaseAccountingIfSafe when it
+                // completes, and that now succeeds because safety is established.
+                log.info(
+                    "Execution " + execId + " is now confirmed safe (" + record + ") but a" +
+                        " continuation still owns its completion; retaining its tracking."
+                );
+                continue;
+            }
+            log.info(
+                "Execution " + execId + " is now confirmed safe (" + record +
+                    "); releasing its retained accounting."
+            );
+            execIdToJobName.remove(execId);
+            execIdToPairId.remove(execId);
+            execIdToOutputDir.remove(execId);
+            ambiguousSubmissions.remove(execId);
+            // Deliberately NOT killedExecIds.add(execId). That set means "explicitly
+            // killed, so ignore any callback for it", and every terminal callback
+            // short-circuits on it and returns true. Marking an execution killed merely
+            // because it became safe cancelled whatever callback was still outstanding:
+            // the monitor treated the work as handled, dropped its cleanup-pending record,
+            // and the pair's terminal DB transition was never written.
+            releaseSubmissionSlot(execId);
+            unverifiedExecutions.remove(execId);
         }
     }
 
@@ -838,13 +1175,21 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
-                // Only process terminal jobs — active jobs are left for
-                // reconciliation on next startup.
-                if (isSucceededJob(job)) {
+                // Only process jobs whose controller is spent — anything still able to
+                // create a Pod is left for reconciliation on next startup.
+                //
+                // This used to dispatch on isSucceededJob/isFailedJob, which accept the Pod
+                // counters. A Job at failed == 1 with backoffLimit > 0 would have had a
+                // terminal pair status and an end_time published for it here, during
+                // shutdown, while the controller was still due to start the next attempt.
+                if (!isControllerSpent(job)) {
+                    continue;
+                }
+                if (hasTrueCondition(job, "Complete")) {
                     if (callback.onJobComplete(execId, jobName)) {
                         processed++;
                     }
-                } else if (isFailedJob(job)) {
+                } else {
                     if (callback.onJobFailed(execId, jobName,
                             summarizeJobFailure(job))) {
                         processed++;
@@ -969,6 +1314,19 @@ public class KubernetesNativeBackend implements Backend {
         if (!initialized || shuttingDown) {
             return false;
         }
+        // A managed pod exists that StarExec cannot account for, so it may be occupying a
+        // node that no capacity check knows about. Deferring through this channel is
+        // deliberate: pairs stay enqueued and dispatch resumes on its own once a successful
+        // inventory shows the object is gone. It must never surface as ERROR_SGE_REJECT or
+        // ERROR_SUBMIT_FAIL — this is a transient safety hold, not a rejected submission.
+        if (admissionDegraded.get()) {
+            log.warn(
+                "Deferring dispatch for queue '" + queueName + "': admission is degraded" +
+                    " because a managed pod cannot be accounted for (" +
+                    admissionDegradedDetail + ")"
+            );
+            return false;
+        }
         refreshQueueViewIfStale();
         String name = (queueName == null || queueName.trim().isEmpty())
             ? DEFAULT_QUEUE_NAME
@@ -1071,19 +1429,26 @@ public class KubernetesNativeBackend implements Backend {
             return -1;
         }
 
-        // Enforce concurrency cap to prevent unbounded K8s Job creation.
-        if (activeJobCount.get() >= maxConcurrentJobs) {
-            log.warn("Rejecting submission for pair " + pairId +
-                     " — at concurrency cap (" +
-                     activeJobCount.get() +
-                     "/" +
-                     maxConcurrentJobs +
-                     ")");
-            return -1;
-        }
-
         int execId = generateExecId();
         String jobName = generateJobName(execId);
+
+        // The AUTHORITATIVE capacity reservation, taken before the Job exists.
+        //
+        // isQueueDispatchable performs the same check earlier, but it is advisory: two
+        // callers can both pass it and only one can have the last slot. This used to be a
+        // check-then-act -- activeJobCount.get() here, incrementAndGet() after create() --
+        // so the loser created a Job anyway and the cap was a suggestion.
+        //
+        // A losing caller must DEFER, not fail. Returning -1 makes isError(-1) true and
+        // JobManager records a terminal ERROR_SGE_REJECT, which RERUN_FAILED_PAIRS does
+        // not even select -- so a full backend would permanently kill blameless pairs, one
+        // per pair per 20-second scheduling pass.
+        if (!tryAcquireSubmissionSlot(execId)) {
+            throw new SubmissionDeferredException(
+                "at concurrency cap (" + activeSlotCount() + "/" + maxConcurrentJobs +
+                "); pair " + pairId + " stays queued"
+            );
+        }
 
         log.info(
             "Submitting K8s Job: execId=" +
@@ -1103,6 +1468,42 @@ public class KubernetesNativeBackend implements Backend {
                 workingDirectoryPath,
                 logPath
             );
+
+            // Clear the previous attempt's result artifacts before this Job can write new
+            // ones. resolveOutputDirectory derives the directory from the pair's stdout
+            // path, so it is keyed by pairId and reused verbatim by every rerun of that
+            // pair, and nothing else ever removes these files.
+            //
+            // This is load-bearing for the runsolver verdict: readTerminalStatus now
+            // trusts var.out's TIMEOUT=/MEMOUT= over status.json, so a var.out left by an
+            // earlier attempt would outrank the current attempt's freshly written
+            // status.json and report EXCEED_CPU for a run that never reached runsolver. A
+            // stale status.json or stats.json was already the same hazard before that
+            // change, so all four go. Done before create() so the pod cannot race it.
+            // Fail CLOSED. If any stale artifact survives, no Job is created.
+            //
+            // This used to log a warning and submit anyway, which contradicted the very
+            // risk the comment above states: the surviving file would be read as this
+            // attempt's result and could record a limit breach for a run that never
+            // reached runsolver. For a platform whose output is competition results,
+            // dispatching and possibly misclassifying is the wrong failure direction.
+            //
+            // The cost is explicit and accepted: there is no defer channel here --
+            // JobManager turns -1 into ERROR_SGE_REJECT and a thrown exception into
+            // ERROR_SUBMIT_FAIL, both terminal -- so a genuinely transient filesystem
+            // fault terminally rejects the pair instead of retrying it. That is loud and
+            // visible to an operator, where a wrong measurement is neither. The usual
+            // cause is a persistently unwritable output volume, which is a static
+            // misconfiguration and terminal is the right answer for it.
+            if (!clearStaleAttemptArtifacts(resolveOutputDirectory(logPath), pairId)) {
+                log.error(
+                    "Refusing to submit pair " + pairId + " (execId " + execId + "):" +
+                    " a previous attempt's classification artifacts could not be removed"
+                );
+                // No Job was created, so the reservation taken above must go back.
+                releaseSubmissionSlot(execId);
+                return -1;
+            }
 
             kubernetesClient
                 .batch()
@@ -1130,17 +1531,110 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobName.put(execId, jobName);
             execIdToPairId.put(execId, pairId);
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
-            activeJobCount.incrementAndGet();
-            jobsHoldingSlot.add(execId);
+            // The slot was reserved before create(); nothing to acquire here.
             log.info("K8s Job submitted successfully: " + jobName);
             return execId;
+        } catch (SubmissionDeferredException e) {
+            // MUST come first. A deferral means no create was attempted, so it must never
+            // be resolved as an ambiguous create outcome. Today the reservation throws
+            // above this try, so this cannot fire -- it is here so that a future edit which
+            // moves the reservation inside the try fails loudly rather than silently
+            // converting a pure capacity race into an invented "established" execution.
+            // That would be worst when the API is also down: kubernetesJobExists fails
+            // closed to "present", so StarExec would account for a Job it never asked for.
+            throw e;
         } catch (Exception e) {
+            log.error("Failed to submit Kubernetes Job: " + jobName, e);
+            return resolveAmbiguousSubmission(execId, pairId, jobName, logPath);
+        }
+    }
+
+    /**
+     * Decides what a failed {@code create()} actually means, immediately.
+     *
+     * <p>A Kubernetes create has an uncertain outcome: the client can see an exception
+     * after the API server has already persisted the Job. Releasing the reservation and
+     * clearing tracking on that basis would leave a real Job and pod running with nothing
+     * counting them, and would let the next scheduling pass admit more work beside it.
+     * Waiting for the five-minute orphan sweep to repair that is not good enough — the
+     * window is the whole point of the invariant.
+     *
+     * <p>So the outcome is resolved here, fail-closed:
+     *
+     * <pre>
+     *   Job present                  -> the submission DID happen; keep the reservation and
+     *                                   tracking and report success, so the monitor owns it
+     *   Job absent AND census safe    -> positively nothing exists; release and defer, which
+     *                                   is safe precisely because there is no first attempt
+     *   anything else (UNDETERMINED,
+     *   MAY_RUN, or an unreadable API) -> may exist; keep everything and report success, so
+     *                                   this pair cannot be submitted a second time while
+     *                                   the first attempt is unresolved
+     * </pre>
+     *
+     * <p>Reporting success for an execution that may not exist is deliberate and is the
+     * lesser risk: the pair becomes ENQUEUED against this execution id, so no duplicate can
+     * be dispatched, and if the Job truly never existed the gated startup reconciliation
+     * resolves it — that path resets an ENQUEUED pair to PENDING_SUBMIT only when a census
+     * positively establishes that no pod for it can run.
+     */
+    private int resolveAmbiguousSubmission(
+        int execId,
+        int pairId,
+        String jobName,
+        String logPath
+    ) {
+        // Tri-state, NOT kubernetesJobExists. That helper reports true when it cannot tell,
+        // which is the correct fail-closed answer to "may I release this execution" but the
+        // wrong one here: it would report an unreachable API as "the Job is present" and so
+        // let StarExec claim an execution it never created. The distinction matters for
+        // what gets logged and for whether a retry owner is registered.
+        JobPresence presence = observeJob(jobName);
+        PodPhaseView.Census census =
+            presence == JobPresence.PRESENT ? null : censusFor(execId);
+
+        if (presence == JobPresence.ABSENT && census != null && census.isSafe()) {
             execIdToJobName.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
-            log.error("Failed to submit Kubernetes Job: " + jobName, e);
-            return -1;
+            releaseSubmissionSlot(execId);
+            log.warn(
+                "Submission of pair " + pairId + " failed and the cluster confirms nothing" +
+                " was created (job " + jobName + " absent, " + census.safety() +
+                "); the reservation is released and the pair stays queued for retry"
+            );
+            throw new SubmissionDeferredException(
+                "create() failed for pair " + pairId + " with no cluster side effect"
+            );
         }
+
+        // Either the Job exists, or we cannot prove it does not. Keep the reservation and
+        // the tracking maps so the execution is accounted and the monitor can resolve it.
+        execIdToJobName.put(execId, jobName);
+        execIdToPairId.put(execId, pairId);
+        try {
+            execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
+        } catch (Exception ignored) {
+            // The output dir is recoverable later from the pair's stdout path; not having
+            // it must not cost us the accounting.
+        }
+        restoreSubmissionSlot(execId);
+        // Register a retry owner. Neither the job monitor nor the orphan inventory can
+        // resolve this on its own: the monitor enumerates Jobs and the inventory
+        // enumerates pods, so a create that produced NEITHER leaves both with nothing to
+        // find, and the slot would be held until the JVM restarted.
+        ambiguousSubmissions.put(
+            execId, new AmbiguousSubmission(pairId, jobName, clock.getAsLong())
+        );
+        log.error(
+            "Submission of pair " + pairId + " (execId " + execId + ", job " + jobName +
+            ") failed with an UNRESOLVED outcome: Job " + presence +
+            (census == null ? "" : ", pods report " + census) +
+            ". Treating the submission as established so no duplicate is dispatched, and" +
+            " retaining its slot and tracking so nothing is scheduled on top of it." +
+            " resolveAmbiguousSubmissions will settle it on the next sweep."
+        );
+        return execId;
     }
 
     private Job buildKubernetesJob(
@@ -1366,26 +1860,320 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
-     * Releases the concurrency slot held by {@code execId}, if any.
+     * Reserves the concurrency slot for {@code execId}.
+     *
+     * <p>{@code jobsHoldingSlot} is the single source of truth and {@code activeJobCount}
+     * is derived from it, both mutated under {@link #slotLock}, so the two cannot drift.
+     * They used to be an independent counter and set updated at different points, which
+     * made the cap advisory: a CAS on the integer followed by an unrelated set insertion
+     * proves neither "never exceeds max" nor "count equals set size".
+     *
+     * <p>Idempotent by design. Restoring a reservation for an execution already holding
+     * one — which startup reconciliation and the orphan inventory both do — succeeds
+     * without double-counting.
+     *
+     * @return false only when the cap is genuinely full; the caller must then defer
      */
-    private void releaseSubmissionSlot(int execId) {
-        if (!jobsHoldingSlot.remove(execId)) {
-            return;
+    private boolean tryAcquireSubmissionSlot(int execId) {
+        synchronized (slotLock) {
+            if (jobsHoldingSlot.contains(execId)) {
+                return true;
+            }
+            if (jobsHoldingSlot.size() >= maxConcurrentJobs) {
+                return false;
+            }
+            jobsHoldingSlot.add(execId);
+            activeJobCount.set(jobsHoldingSlot.size());
+            log.debug(
+                "Reserved K8s concurrency slot (execId=" + execId + ", active=" +
+                jobsHoldingSlot.size() + ", max=" + maxConcurrentJobs + ")"
+            );
+            return true;
         }
-        int remaining = activeJobCount.decrementAndGet();
-        log.debug(
-            "Released K8s concurrency slot (execId=" +
-            execId +
-            ", active=" +
-            remaining +
-            ", max=" +
-            maxConcurrentJobs +
-            ")"
-        );
     }
 
     /**
-     * Releases all concurrency slots (killAll / destroyIf shutdown path).
+     * Accounts for an execution that ALREADY EXISTS, even if that takes the tally past
+     * {@code maxConcurrentJobs}.
+     *
+     * <p>Distinct from {@link #tryAcquireSubmissionSlot} and the distinction is the whole
+     * point. That method admits NEW work and must respect the cap. This one records work
+     * that is already running in the cluster — rebuilt by startup reconciliation, or found
+     * by the orphan inventory — and for that, refusing because the cap is full would mean
+     * discovering a live execution and choosing not to count it. The cap is a limit on what
+     * StarExec may START, never a licence to under-report what exists.
+     *
+     * <p>So if 53 live executions are discovered against a cap of 50, the tally becomes 53
+     * and admission defers until it falls below the limit. Idempotent: restoring an
+     * execution that already holds a slot changes nothing.
+     */
+    private void restoreSubmissionSlot(int execId) {
+        restoreSubmissionSlot(execId, false);
+    }
+
+    /**
+     * @param unidentifiedExecution true when this execution was discovered rather than
+     *        reconstructed from StarExec's own records — an untracked pod, or a kill for
+     *        which no local job name survived. That is a fidelity risk needing operator
+     *        attention, so it is reported at ERROR (and therefore reaches the admin error
+     *        digest) rather than as routine reconstruction noise.
+     */
+    private void restoreSubmissionSlot(int execId, boolean unidentifiedExecution) {
+        synchronized (slotLock) {
+            if (!jobsHoldingSlot.add(execId)) {
+                return;
+            }
+            activeJobCount.set(jobsHoldingSlot.size());
+            int held = jobsHoldingSlot.size();
+            if (unidentifiedExecution) {
+                log.error(
+                    "Accounting for UNIDENTIFIED execution " + execId + ": it was found in" +
+                    " the cluster rather than in StarExec's own tracking, so something ran" +
+                    " outside the accounting. Held slots now " + held + "/" +
+                    maxConcurrentJobs + ". OPERATOR ACTION: identify pods labelled " +
+                    EXEC_ID_LABEL + "=" + execId + " in namespace " + namespace + "."
+                );
+            } else if (held > maxConcurrentJobs) {
+                log.warn(
+                    "Accounting for pre-existing execution " + execId + " takes the held" +
+                    " slot count to " + held + ", above the configured cap of " +
+                    maxConcurrentJobs + ". These executions are real and already consuming" +
+                    " cluster resources, so they are counted rather than hidden; admission" +
+                    " defers until the count falls below the cap."
+                );
+            } else {
+                log.debug(
+                    "Restored K8s concurrency slot for pre-existing execution " + execId +
+                    " (active=" + held + ", max=" + maxConcurrentJobs + ")"
+                );
+            }
+        }
+    }
+
+    /** A submission whose {@code create()} outcome was never established. */
+    private static final class AmbiguousSubmission {
+
+        private final int pairId;
+        private final String jobName;
+        private final long firstSeenAtMillis;
+
+        /**
+         * True once the cluster has positively established that nothing was created.
+         *
+         * <p>Two phases, because they fail independently. Until this is set the record is
+         * AWAITING_CLUSTER_RESOLUTION and each sweep re-observes the Job and re-censuses
+         * the pods. Once set it is AWAITING_DB_RESET: cluster safety is proven and must not
+         * be re-proved, so later sweeps only retry the database reset. Collapsing the two
+         * would either repeat the cluster work forever or, worse, drop the record before
+         * the database caught up.
+         */
+        private volatile boolean clusterProvedAbsent;
+
+        private AmbiguousSubmission(int pairId, String jobName, long firstSeenAtMillis) {
+            this.pairId = pairId;
+            this.jobName = jobName;
+            this.firstSeenAtMillis = firstSeenAtMillis;
+        }
+    }
+
+    /**
+     * Submissions retained as "established" without proof, awaiting resolution.
+     *
+     * <p>These need their own retry owner and cannot borrow one. The job monitor
+     * enumerates Kubernetes Jobs, so a Job that was never created gives it nothing to
+     * process; the orphan inventory enumerates pods, so it finds nothing either. Without
+     * {@link #resolveAmbiguousSubmissions()} such an execution would hold its slot until
+     * the JVM restarted.
+     */
+    private final Map<Integer, AmbiguousSubmission> ambiguousSubmissions =
+        new ConcurrentHashMap<>();
+
+    /**
+     * Resolves submissions whose {@code create()} outcome was never established.
+     *
+     * <p>Driven by the existing periodic orphan sweep rather than a new scheduler.
+     *
+     * <pre>
+     *   Job PRESENT                  -> resolved; the monitor owns it from here
+     *   Job ABSENT + census safe     -> nothing was ever created: release the reservation
+     *                                   and put the pair back for a clean retry
+     *   anything else                -> retain accounting and try again next sweep
+     * </pre>
+     */
+    /**
+     * Returns the pair to PENDING_SUBMIT after cluster absence has been established.
+     *
+     * @return true when the obligation is discharged and the record may be dropped —
+     *         either the reset succeeded, or the pair had already moved on by itself.
+     *         False means retry on the next sweep.
+     */
+    private boolean retryAmbiguousDbReset(int execId, AmbiguousSubmission pending) {
+        try {
+            JobPairs.ConditionalPairUpdateResult result =
+                JobPairs.tryResetEnqueuedToPending(pending.pairId);
+            if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {
+                log.info(
+                    "Pair " + pending.pairId + " returned to PENDING_SUBMIT after its" +
+                    " ambiguous submission (execId " + execId + ") was proved never to have" +
+                    " been created"
+                );
+                return true;
+            }
+            if (result == JobPairs.ConditionalPairUpdateResult.STALE) {
+                // No longer ENQUEUED: something else already moved it on, so there is
+                // nothing left to do and the record would only be noise.
+                log.info(
+                    "Pair " + pending.pairId + " is no longer ENQUEUED; dropping the" +
+                    " ambiguous-submission record for execId " + execId
+                );
+                return true;
+            }
+            log.error(
+                "Could not return pair " + pending.pairId + " to PENDING_SUBMIT after" +
+                " resolving ambiguous submission execId " + execId + " (" + result +
+                "); retaining the record so the next sweep retries. The pair is safe but" +
+                " stuck until this succeeds."
+            );
+            return false;
+        } catch (Exception e) {
+            log.error(
+                "Could not return pair " + pending.pairId + " to PENDING_SUBMIT after" +
+                " resolving ambiguous submission execId " + execId +
+                "; retaining the record so the next sweep retries", e
+            );
+            return false;
+        }
+    }
+
+    private void resolveAmbiguousSubmissions() {
+        for (Map.Entry<Integer, AmbiguousSubmission> entry : ambiguousSubmissions.entrySet()) {
+            int execId = entry.getKey();
+            AmbiguousSubmission pending = entry.getValue();
+            JobPresence presence = observeJob(pending.jobName);
+
+            if (presence == JobPresence.PRESENT) {
+                log.info(
+                    "Ambiguous submission for pair " + pending.pairId + " (execId " + execId +
+                    ") resolved: Job " + pending.jobName + " exists and the monitor now owns it"
+                );
+                ambiguousSubmissions.remove(execId);
+                continue;
+            }
+
+            // Phase 2: cluster safety already proven on an earlier sweep, so do not repeat
+            // the deletion/census work. Only the database reset is outstanding.
+            if (pending.clusterProvedAbsent) {
+                if (retryAmbiguousDbReset(execId, pending)) {
+                    ambiguousSubmissions.remove(execId);
+                }
+                continue;
+            }
+
+            if (presence == JobPresence.ABSENT) {
+                PodPhaseView.Census census = censusFor(execId);
+                if (census.isSafe()) {
+                    log.warn(
+                        "Ambiguous submission for pair " + pending.pairId + " (execId " +
+                        execId + ") resolved: Job " + pending.jobName + " was never created" +
+                        " and no pod for it can run (" + census.safety() + "). Releasing its" +
+                        " reservation and returning the pair for a clean retry."
+                    );
+                    // Capacity can be released the moment absence is established -- that is
+                    // a measurement-safety question and it is now answered.
+                    execIdToJobName.remove(execId);
+                    execIdToPairId.remove(execId);
+                    execIdToOutputDir.remove(execId);
+                    releaseSubmissionSlot(execId);
+
+                    // But the RECORD survives until the database agrees. Dropping it here
+                    // and merely logging a failed reset would leave the pair ENQUEUED
+                    // against an execution that never existed, with nothing in Kubernetes
+                    // for the monitor or the inventory to rediscover -- safe, but stuck
+                    // forever. This is a liveness obligation, not a safety one.
+                    pending.clusterProvedAbsent = true;
+                    if (retryAmbiguousDbReset(execId, pending)) {
+                        ambiguousSubmissions.remove(execId);
+                    }
+                    continue;
+                }
+            }
+
+            log.warn(
+                "Ambiguous submission for pair " + pending.pairId + " (execId " + execId +
+                ", job " + pending.jobName + ") is still unresolved after " +
+                ((clock.getAsLong() - pending.firstSeenAtMillis) / 1000) + "s (Job " +
+                presence + "); its slot and tracking are retained and it will be retried."
+            );
+        }
+    }
+
+    /** The number of executions currently holding a slot. */
+    private int activeSlotCount() {
+        synchronized (slotLock) {
+            return jobsHoldingSlot.size();
+        }
+    }
+
+    /**
+     * Releases the concurrency slot held by {@code execId}, if any.
+     *
+     * <p>Idempotent: the set membership check is the guard, so a second release for the
+     * same execution is a no-op rather than a double decrement.
+     */
+    private void releaseSubmissionSlot(int execId) {
+        synchronized (slotLock) {
+            if (!jobsHoldingSlot.remove(execId)) {
+                return;
+            }
+            activeJobCount.set(jobsHoldingSlot.size());
+            log.debug(
+                "Released K8s concurrency slot (execId=" +
+                execId +
+                ", active=" +
+                jobsHoldingSlot.size() +
+                ", max=" +
+                maxConcurrentJobs +
+                ")"
+            );
+        }
+    }
+
+    /**
+     * Clears an execution's tracking and slot, but only once nothing for it can still run.
+     *
+     * <p>The completion callbacks used to clear all four unconditionally, on the strength of
+     * the Job having reported a terminal outcome. A Job can carry a terminal condition while
+     * its Pod is still terminating, and releasing the slot then lets an unrelated pair be
+     * scheduled onto hardware the previous execution has not finished vacating — which on a
+     * benchmarking platform contaminates the measurement rather than merely wasting capacity.
+     *
+     * <p>When safety is not established the accounting is retained and the execution is
+     * registered for the sweep to revisit, so the hold is bounded by observation rather than
+     * by process lifetime.
+     */
+    private void releaseAccountingIfSafe(int execId, String context) {
+        if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+            log.warn(
+                "Not releasing accounting for execId " + execId + " after " + context +
+                    ": execution safety is not established (controller " +
+                    observeControllerFor(execId) + ", pods " + censusFor(execId) + ")."
+            );
+            recordUnverified(execId, context);
+            return;
+        }
+        execIdToJobName.remove(execId);
+        execIdToPairId.remove(execId);
+        execIdToOutputDir.remove(execId);
+        ambiguousSubmissions.remove(execId);
+        unverifiedExecutions.remove(execId);
+        releaseSubmissionSlot(execId);
+    }
+
+    /**
+     * Releases all concurrency slots. Shutdown only: {@code destroyIf} is the sole caller,
+     * and it runs after the Kubernetes client is closed. {@code killAll} deliberately does
+     * NOT use this -- it releases per execution, so an execution it could not confirm
+     * stopped keeps its slot.
      */
     private void releaseAllSlots() {
         int released = 0;
@@ -1450,7 +2238,11 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
-                if (isTerminalJob(job)) {
+                // isControllerSpent, not isTerminalJob: this bucket decides whether startup
+                // publishes a terminal pair status, and a Job that has merely lost a Pod can
+                // still start the next attempt. Anything not provably spent is treated as
+                // active, which is the conservative direction.
+                if (isControllerSpent(job)) {
                     pairIdToTerminalJob.put(pairId, job);
                 } else {
                     pairIdToActiveJob.put(pairId, job);
@@ -1478,6 +2270,7 @@ public class KubernetesNativeBackend implements Backend {
 
             int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
             int runningFailed = 0, runningProcessed = 0, runningRebuilt = 0;
+            int enqueuedWithheld = 0, runningWithheld = 0;
 
             for (int pairId : enqueuedIds) {
                 Job activeJob = pairIdToActiveJob.get(pairId);
@@ -1489,6 +2282,8 @@ public class KubernetesNativeBackend implements Backend {
                     if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         enqueuedProcessed++;
                     }
+                } else if (!reconciledPairIsSafe(pairId, "reset to PENDING_SUBMIT")) {
+                    enqueuedWithheld++;
                 } else if (JobPairs.tryResetEnqueuedToPending(pairId)
                         == JobPairs.ConditionalPairUpdateResult.UPDATED) {
                     enqueuedReset++;
@@ -1505,6 +2300,8 @@ public class KubernetesNativeBackend implements Backend {
                     if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         runningProcessed++;
                     }
+                } else if (!reconciledPairIsSafe(pairId, "mark failed")) {
+                    runningWithheld++;
                 } else if (JobPairs.tryMarkRunningAsFailed(pairId)
                         == JobPairs.ConditionalPairUpdateResult.UPDATED) {
                     runningFailed++;
@@ -1526,12 +2323,16 @@ public class KubernetesNativeBackend implements Backend {
                     enqueuedProcessed +
                     " rebuilt=" +
                     enqueuedRebuilt +
+                    " withheld=" +
+                    enqueuedWithheld +
                     "; RUNNING failed=" +
                     runningFailed +
                     " processed=" +
                     runningProcessed +
                     " rebuilt=" +
                     runningRebuilt +
+                    " withheld=" +
+                    runningWithheld +
                     "; malformedJobs=" +
                     malformedJobs +
                     "; orphanedKubernetesJobs=" +
@@ -1540,6 +2341,39 @@ public class KubernetesNativeBackend implements Backend {
         } catch (Exception e) {
             log.error("Failed to reconcile Kubernetes orphaned pairs on startup", e);
         }
+    }
+
+    /**
+     * Whether a pair with no surviving Job may have its DB state changed at startup.
+     *
+     * <p>"No Job in the listing" is controller-absence evidence, but only half of what is
+     * needed. A Pod can outlive its Job — deleting a Job with Background propagation removes
+     * the owner first and reaps dependents afterwards, and a crash in that window leaves
+     * exactly this state. Both reconciliation branches are replacement authorizations:
+     * resetting an ENQUEUED pair makes it dispatchable again, and marking a RUNNING pair
+     * failed gives it an {@code end_time} and so makes it eligible for an automatic rerun.
+     * Either one, performed while a Pod for that pair still runs, produces two executions
+     * writing results for one pair.
+     *
+     * <p>Identified by pair id rather than execution id because that is all a pair with no
+     * Job offers. A pair id is stable across reruns, so this over-matches — pods of earlier
+     * attempts count too. Over-matching is the safe direction: it can only withhold a
+     * transition, never authorize one.
+     */
+    private boolean reconciledPairIsSafe(int pairId, String intendedTransition) {
+        PodPhaseView.Census census = censusForPair(pairId);
+        if (census != null && census.isSafe()) {
+            return true;
+        }
+        log.warn(
+            "Startup reconciliation will not " + intendedTransition + " for pair " + pairId +
+                ": no Job survives for it, but its pods are " +
+                (census == null ? "unreadable" : census.describe()) +
+                ", so a pod may still be running. Leaving the pair as it is." +
+                " OPERATOR ACTION: inspect pods labelled " + PAIR_ID_LABEL + "=" + pairId +
+                " in namespace " + namespace + "."
+        );
+        return false;
     }
 
     private boolean processReconciledJobThroughCallback(Job job, PodPhaseView pods) {
@@ -1552,7 +2386,9 @@ public class KubernetesNativeBackend implements Backend {
         rebuildTrackingFromJob(job, pods);
         KubernetesJobCompletionCallback callback =
             new KubernetesJobCompletionCallback();
-        if (isSucceededJob(job)) {
+        // Reached only for Jobs already established as controller-spent by the caller, so
+        // the choice here is purely which terminal condition it carries.
+        if (hasTrueCondition(job, "Complete")) {
             return callback.onJobComplete(execId, jobName);
         }
         return callback.onJobFailed(execId, jobName, summarizeJobFailure(job));
@@ -1572,13 +2408,19 @@ public class KubernetesNativeBackend implements Backend {
 
         // Acquire a concurrency slot so the capacity tracker stays in sync
         // with the number of reconstructed in-memory tracking entries.
-        if (jobsHoldingSlot.add(execId)) {
-            int count = activeJobCount.incrementAndGet();
+        //
+        // Through restoreSubmissionSlot, NOT tryAcquireSubmissionSlot. This execution
+        // already exists in the cluster, so it must be counted even if that takes the
+        // tally past the cap; the capped acquire would have returned false and left a live
+        // execution entirely unaccounted, which an earlier version of this code did while
+        // claiming the opposite.
+        restoreSubmissionSlot(execId);
+        {
             log.debug(
                 "Reclaimed K8s concurrency slot during reconciliation (execId=" +
                 execId +
                 ", active=" +
-                count +
+                activeSlotCount() +
                 ", max=" +
                 maxConcurrentJobs +
                 ")"
@@ -1653,6 +2495,89 @@ public class KubernetesNativeBackend implements Backend {
         }
     }
 
+    /**
+     * Removes the previous attempt's result artifacts from a pair's output directory.
+     *
+     * <p>A result must not be able to outlive the attempt that produced it. The directory
+     * is keyed by pair, not by attempt, so without this a rerun that fails before
+     * runsolver executes would be classified from the earlier run's files.
+     *
+     * <p>Best-effort: a failure here is logged rather than aborting the submission, since
+     * refusing to dispatch is a worse outcome than a stale file, but it is a real
+     * wrong-result risk and so is warned about rather than swallowed.
+     */
+    private boolean clearStaleAttemptArtifacts(Path outputDir, int pairId) {
+        if (outputDir == null) {
+            return true;
+        }
+        boolean allAbsent = true;
+        for (String name : STALE_ATTEMPT_ARTIFACTS) {
+            Path artifact = outputDir.resolve(name);
+            try {
+                Files.deleteIfExists(artifact);
+            } catch (Exception e) {
+                log.error(
+                    "Could not delete stale " + name + " for pair " + pairId +
+                    " in " + outputDir,
+                    e
+                );
+            }
+            // Confirm ABSENCE rather than trusting that delete() did not throw. The
+            // caller is about to decide whether a benchmark may run on the strength of
+            // this, so "the call did not fail" is not the property we need.
+            if (!confirmedAbsent(artifact)) {
+                allAbsent = false;
+                log.error(
+                    "Stale " + name + " from a previous attempt may survive in " + outputDir +
+                    " for pair " + pairId + "; refusing to submit, because it would be" +
+                    " read as this attempt's result"
+                );
+            }
+        }
+        return allAbsent;
+    }
+
+    /**
+     * Whether a path is <em>proven</em> not to exist.
+     *
+     * <p>Not {@code Files.exists}, which this replaced. That method returns false both when
+     * the file is absent and when its existence <em>cannot be determined</em> — an
+     * unreadable parent directory, an I/O error, a security manager — and it collapses those
+     * into the same answer as "definitely not there". Used as a safety check that fails
+     * open: a permission problem on the output directory would read as "no stale artifact"
+     * and let a previous attempt's {@code var.out} be scored as this attempt's result.
+     *
+     * <p>{@link java.nio.file.NoSuchFileException} is the only outcome that proves absence.
+     * Every other exception means "cannot tell", which here must mean "do not proceed".
+     *
+     * <p>{@code NOFOLLOW_LINKS} deliberately: a symlink left where an artifact belongs is
+     * itself a surviving artifact, and following it would ask about the wrong file.
+     */
+    private boolean confirmedAbsent(Path path) {
+        try {
+            Files.readAttributes(
+                path,
+                java.nio.file.attribute.BasicFileAttributes.class,
+                java.nio.file.LinkOption.NOFOLLOW_LINKS
+            );
+            return false;   // it is there
+        } catch (java.nio.file.NoSuchFileException e) {
+            return true;    // proven absent
+        } catch (Exception e) {
+            // IOException, SecurityException, or anything unchecked: existence is unknown.
+            log.warn("Could not establish whether " + path + " exists; treating as present", e);
+            return false;
+        }
+    }
+
+    /** Files a completed attempt leaves behind that would misclassify the next one. */
+    private static final String[] STALE_ATTEMPT_ARTIFACTS = {
+        "var.out",
+        "watcher.out",
+        "status.json",
+        "stats.json",
+    };
+
     private Path resolveOutputDirectory(Job job, int pairId) {
         if (job != null && job.getMetadata() != null
                 && job.getMetadata().getAnnotations() != null) {
@@ -1705,6 +2630,45 @@ public class KubernetesNativeBackend implements Backend {
         return job.getMetadata().getName();
     }
 
+    /**
+     * The canonical predicate: true only when this Job can never create another Pod.
+     *
+     * <p>A {@code batch/v1} Job is a <em>controller</em>. The question every safety-sensitive
+     * release site actually needs answered is not "did a Pod finish" but "can this object
+     * still start a replacement", and only the terminal Job conditions answer it.
+     *
+     * <p>Deliberately narrow. It does <strong>not</strong> consult:
+     * <ul>
+     *   <li>{@code status.failed} or {@code status.succeeded} — counters of <em>Pods</em>;
+     *       with {@code backoffLimit > 0} a Job at {@code failed == 1} is live;</li>
+     *   <li>{@code FailureTarget} / {@code SuccessCriteriaMet} — these <em>begin</em>
+     *       termination; the real {@code Failed} / {@code Complete} condition follows;</li>
+     *   <li>a terminal Pod — that is a fact about one Pod, not about the controller;</li>
+     *   <li>{@code suspend} or {@code deletionTimestamp} — both are reversible or pending.</li>
+     * </ul>
+     *
+     * <p>Necessary but never sufficient: Kubernetes can add the terminal condition while Pods
+     * are still terminating, so an independent Pod census stays mandatory at every caller.
+     *
+     * <p>A null Job or null status is <em>not</em> spent. Absence of information is never
+     * evidence of safety here.
+     */
+    private boolean isControllerSpent(Job job) {
+        if (job == null || job.getStatus() == null) {
+            return false;
+        }
+        return hasTrueCondition(job, "Complete") || hasTrueCondition(job, "Failed");
+    }
+
+    /**
+     * Whether the Job reached a terminal outcome, for reporting and draining.
+     *
+     * <p>Kept separate from {@link #isControllerSpent(Job)} on purpose: this one answers
+     * "what happened to the work", which legitimately tolerates the Pod counters, while the
+     * other answers "can this object still start a replacement". Collapsing two different
+     * questions into one helper hides semantic drift rather than removing it. No release,
+     * terminal publication, or replacement may be authorized from this predicate.
+     */
     private boolean isTerminalJob(Job job) {
         return isSucceededJob(job) || isFailedJob(job);
     }
@@ -1792,38 +2756,77 @@ public class KubernetesNativeBackend implements Backend {
             return false;
         }
         try {
-            List<?> deleted = kubernetesClient
+            // Foreground, explicitly.
+            //
+            // fabric8 6.10.0 sends Background when no policy is given
+            // (HasMetadataOperationsImpl.defaultContext applies withPropagationPolicy(
+            // BACKGROUND) because BaseClient.getOperationContext() is null for a client
+            // built by KubernetesClientBuilder). Background deletes the owner FIRST and
+            // reaps dependents asynchronously, so the Job's disappearance would say
+            // nothing at all about its pod. Foreground keeps the Job alive behind a
+            // foregroundDeletion finalizer until its dependents are gone, which makes the
+            // Job's absence a truthful signal -- though still not a sufficient one, which
+            // is why every caller also takes a pod census.
+            kubernetesClient
                 .batch()
                 .v1()
                 .jobs()
                 .inNamespace(namespace)
                 .withName(jobName)
+                .withPropagationPolicy(DeletionPropagation.FOREGROUND)
                 .delete();
-            if (deleted != null && !deleted.isEmpty()) {
-                return true;
-            }
-            return !kubernetesJobExists(jobName);
         } catch (Exception e) {
             log.warn("Failed to delete Kubernetes Job: " + jobName, e);
-            return !kubernetesJobExists(jobName);
+        }
+        // The delete RESULT is deliberately not consulted. A non-empty StatusDetails list
+        // means "the API accepted the request", and under Foreground propagation that is
+        // returned at the exact moment the Job is still present with its finalizer
+        // attached. This method used to return true on that result without reading, so it
+        // answered a different question from the one its name asks. Only a read can
+        // answer this one.
+        return !kubernetesJobExists(jobName);
+    }
+
+    /** A Job observation that keeps "absent" and "cannot tell" apart. */
+    private enum JobPresence {
+        PRESENT,
+        ABSENT,
+        /** The API could not be read. Never readable as either of the above. */
+        UNDETERMINED,
+    }
+
+    /**
+     * Observes a Job without collapsing uncertainty into a verdict.
+     *
+     * <p>{@link #kubernetesJobExists} deliberately reports an unreadable API as "present",
+     * which is the right fail-closed answer for a caller asking "may I proceed". It is the
+     * wrong answer for a caller that must distinguish "the Job is really there" from "I
+     * cannot see", because those call for different actions and logging them alike misleads
+     * whoever reads the result.
+     */
+    private JobPresence observeJob(String jobName) {
+        if (kubernetesClient == null || jobName == null) {
+            return JobPresence.UNDETERMINED;
+        }
+        try {
+            Job existing = kubernetesClient
+                .batch()
+                .v1()
+                .jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .get();
+            return existing == null ? JobPresence.ABSENT : JobPresence.PRESENT;
+        } catch (Exception e) {
+            log.warn("Could not observe Kubernetes Job " + jobName, e);
+            return JobPresence.UNDETERMINED;
         }
     }
 
     private boolean kubernetesJobExists(String jobName) {
-        try {
-            return kubernetesClient
-                .batch()
-                .v1()
-                .jobs()
-                .inNamespace(namespace)
-                .withName(jobName)
-                .get() != null;
-        } catch (Exception e) {
-            // Cannot tell. Report it as still present so the caller retries rather than
-            // proceeding on an assumption it cannot support.
-            log.warn("Could not confirm whether Kubernetes Job still exists: " + jobName, e);
-            return true;
-        }
+        // Cannot tell is reported as still present, so a caller asking "may I proceed"
+        // retries rather than acting on an assumption it cannot support.
+        return observeJob(jobName) != JobPresence.ABSENT;
     }
 
     /**
@@ -1861,31 +2864,254 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         log.info("Killing K8s Job: execId=" + execId + ", jobName=" + jobName);
+        return killPairConfirmed(execId) == KillOutcome.CONFIRMED_SAFE;
+    }
 
+    /**
+     * Kills an execution and reports whether its pods are provably incapable of running.
+     *
+     * <p>This is the Kubernetes implementation of the strict contract. It is opt-in
+     * precisely because the legacy {@code killPair} boolean cannot be reinterpreted:
+     * {@code LocalBackend} returns false when the job is not in its map and
+     * {@code PodmanBackend} returns false when the container is absent or has already
+     * exited, and in both cases false means <em>already gone</em>, which is the safe case.
+     * Reading those as "unproven" would strand pairs on every other backend.
+     *
+     * <p>On {@code UNPROVEN} the submission slot and every tracking map entry are left
+     * intact. That is deliberate: this method is on the rerun path, so a surviving pod is
+     * a literal duplicate against the replacement execution, and forgetting it would also
+     * remove it from the concurrency accounting that keeps unrelated pairs off the same
+     * hardware.
+     */
+    @Override
+    public KillOutcome killPairConfirmed(int execId) {
+        String jobName = execIdToJobName.get(execId);
+        if (jobName == null) {
+            // Absent local bookkeeping is NOT proof that the execution stopped. This is
+            // exactly the state left by a restart or partial state loss, which is when a
+            // pod is most likely to be running unseen. So still ask the cluster.
+            //
+            // The Job cannot be named here, and must not be guessed. generateJobName
+            // appends System.currentTimeMillis() % 100000, so it is NOT a pure function of
+            // the execution id: a name derived now would not match the one the Job was
+            // created with, and asking about it would report a live Job as absent. An
+            // earlier version of this branch did exactly that.
+            //
+            // Neither observation needs a name. Both select on the exec-id LABEL, which the
+            // Job's own metadata and the pod template both carry, so they are
+            // identity-correct with no local state at all.
+            //
+            // A pod census alone is NOT enough here. A Job is a controller: with no pod
+            // visible it can still be between attempts and about to create the next one, and
+            // releasing on the strength of an empty census would authorize a replacement
+            // alongside it. The controller must be proven spent as well.
+            if (kubernetesClient == null) {
+                log.warn(
+                    "No tracked Kubernetes job for execId " + execId + " and no client;" +
+                    " cannot establish that it stopped"
+                );
+                return KillOutcome.UNPROVEN;
+            }
+            if (observeExecutionSafety(execId) == KillOutcome.CONFIRMED_SAFE) {
+                log.info(
+                    "execId " + execId + " has no local tracking; its controller is spent" +
+                    " and the cluster confirms nothing for it can run"
+                );
+                killedExecIds.add(execId);
+                // Clear ALL tracking, not just the slot. Partial state loss is exactly what
+                // put us in this branch, and it is not selective: only execIdToJobName may
+                // have been lost while the pair and output-dir entries and the reservation
+                // all survived. Every one of these is idempotent, so this is a no-op for
+                // whichever entries were already gone, and it leaves the same clean state
+                // the ordinary successful kill path does.
+                execIdToJobName.remove(execId);
+                execIdToPairId.remove(execId);
+                execIdToOutputDir.remove(execId);
+                ambiguousSubmissions.remove(execId);
+                unverifiedExecutions.remove(execId);
+                releaseSubmissionSlot(execId);
+                return KillOutcome.CONFIRMED_SAFE;
+            }
+            log.error(
+                "execId " + execId + " has no local tracking and the cluster cannot" +
+                " confirm it stopped (controller " + observeControllerFor(execId) +
+                ", pods " + censusFor(execId) + ")." +
+                " Reporting UNPROVEN so no replacement is dispatched. OPERATOR ACTION:" +
+                " inspect Jobs and pods labelled " + EXEC_ID_LABEL + "=" + execId +
+                " in namespace " + namespace + "."
+            );
+            // Bring the discovered live execution back into the accounting rather than
+            // leaving it invisible.
+            //
+            // The retry owner is the surviving Kubernetes object, and it is a real one --
+            // unlike the ambiguous-create case, where nothing exists to enumerate. Whichever
+            // half was unproven (a live Job, a live pod, or an unreadable API) is discoverable
+            // by the exec-id label, so the recurring inventory keeps finding it and can act on
+            // it. No reconstructed Job name is needed, which is just as well, because none can
+            // be reconstructed. Reported as an unidentified execution because it was found in
+            // the cluster rather than in StarExec's own records.
+            restoreSubmissionSlot(execId, true);
+            recordUnverified(execId, "kill without local tracking");
+            return KillOutcome.UNPROVEN;
+        }
+        if (kubernetesClient == null) {
+            log.warn(
+                "Kubernetes client not initialized; cannot establish that execId " + execId +
+                " has stopped. Local tracking preserved."
+            );
+            return KillOutcome.UNPROVEN;
+        }
+
+        if (!ensureKubernetesJobGone(jobName)) {
+            log.error(
+                "Kubernetes Job " + jobName + " (execId " + execId + ") is still present" +
+                " after a foreground delete; refusing to release its accounting because a" +
+                " pod for it may still execute and a replacement could then run twice."
+            );
+            return KillOutcome.UNPROVEN;
+        }
+
+        // The named delete having succeeded is not the end of it. Deleting one Job by name
+        // does not establish that no controller for this execution survives -- a retried
+        // submission can have left a second one -- so the execution-level check runs anyway.
+        if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+            log.error(
+                "Cannot establish that execId " + execId + " (K8s job " + jobName +
+                ") has stopped (controller " + observeControllerFor(execId) +
+                ", pods " + censusFor(execId) + "). Its submission slot and tracking are" +
+                " retained so unrelated pairs are not scheduled on top of it. OPERATOR" +
+                " ACTION: inspect Jobs and pods labelled " + EXEC_ID_LABEL + "=" + execId +
+                " in namespace " + namespace + "."
+            );
+            recordUnverified(execId, "kill of " + jobName);
+            return KillOutcome.UNPROVEN;
+        }
+
+        execIdToJobName.remove(execId);
+        execIdToPairId.remove(execId);
+        execIdToOutputDir.remove(execId);
+        ambiguousSubmissions.remove(execId);
+        unverifiedExecutions.remove(execId);
+        killedExecIds.add(execId);
+        releaseSubmissionSlot(execId);
+        return KillOutcome.CONFIRMED_SAFE;
+    }
+
+    /**
+     * A fresh pod census for one execution, using the authoritative identity when one is
+     * available.
+     *
+     * <p>The execution id is authoritative. A pair id is stable across reruns, so a
+     * pair-id census also matches pods of earlier attempts: safe is still sound there
+     * (nothing for any attempt can run), but unsafe must never be reported as identifying
+     * the current execution.
+     */
+    private PodPhaseView.Census censusFor(int execId) {
+        return PodPhaseView.censusByExecId(
+            kubernetesClient, namespace, MANAGED_LABEL, EXEC_ID_LABEL, execId
+        );
+    }
+
+    private PodPhaseView.Census censusForPair(int pairId) {
+        return PodPhaseView.censusByPairId(
+            kubernetesClient, namespace, MANAGED_LABEL, PAIR_ID_LABEL, pairId
+        );
+    }
+
+    /** Whether any controller for an execution could still create a Pod. */
+    private enum ControllerSafety {
+        /** Established: no Job for this execution can create another Pod. */
+        SPENT,
+        /** Not established, for any reason. Never readable as SPENT. */
+        UNPROVEN,
+    }
+
+    /**
+     * Observes every Job belonging to an execution, by label rather than by name.
+     *
+     * <p>{@code buildKubernetesJob} applies {@code {managed, exec-id, pair-id}} to the Job's
+     * own metadata as well as the pod template, from a single map, so the controller is
+     * recoverable server-side with no local state. That matters because the in-memory job
+     * name is exactly what is missing in the cases this method exists for.
+     *
+     * <p>{@link #generateJobName(int)} must <strong>never</strong> be used to reconstruct an
+     * identity: it appends {@code System.currentTimeMillis() % 100000}, so it is not a
+     * reversible mapping, and a derived name would report a live Job as absent — authorizing
+     * a replacement alongside a running execution.
+     *
+     * <p>Zero results from a <em>successful</em> listing is positive evidence of absence. It
+     * is not evidence that the execution never ran: {@code ttlSecondsAfterFinished} reaps
+     * completed Jobs.
+     */
+    private ControllerSafety observeControllerFor(int execId) {
+        if (kubernetesClient == null) {
+            return ControllerSafety.UNPROVEN;
+        }
         try {
-            List<?> deletedResources = kubernetesClient
+            Map<String, String> selector = new HashMap<>();
+            selector.put(MANAGED_LABEL, "true");
+            selector.put(EXEC_ID_LABEL, String.valueOf(execId));
+
+            JobList list = kubernetesClient
                 .batch()
                 .v1()
                 .jobs()
                 .inNamespace(namespace)
-                .withName(jobName)
-                .delete();
+                .withLabels(selector)
+                .list();
 
-            boolean deleted = deletedResources != null && !deletedResources.isEmpty();
-
-            execIdToJobName.remove(execId);
-            execIdToPairId.remove(execId);
-            execIdToOutputDir.remove(execId);
-            killedExecIds.add(execId);
-            releaseSubmissionSlot(execId);
-            if (!deleted) {
-                log.warn("Kubernetes API reported no deletion for job: " + jobName);
+            if (list == null || list.getItems() == null) {
+                // A null body is not an empty result. Treating it as absence would turn an
+                // unreadable API into proof that nothing is running.
+                log.warn(
+                    "Job listing for exec-id " + execId + " returned no body; controller" +
+                        " safety cannot be established."
+                );
+                return ControllerSafety.UNPROVEN;
             }
-            return true;
+
+            for (Job job : list.getItems()) {
+                if (!isControllerSpent(job)) {
+                    log.info(
+                        "Job " + getJobName(job) + " for exec-id " + execId +
+                            " is not spent; it may still create a Pod."
+                    );
+                    return ControllerSafety.UNPROVEN;
+                }
+            }
+            return ControllerSafety.SPENT;
         } catch (Exception e) {
-            log.error("Failed to kill Kubernetes job: " + jobName, e);
-            return false;
+            log.warn("Could not list Jobs for exec-id " + execId, e);
+            return ControllerSafety.UNPROVEN;
         }
+    }
+
+    /**
+     * The execution-level safety check every release site must pass.
+     *
+     * <p>Both halves are required, and neither implies the other. A spent controller can
+     * still have a terminating Pod; a safe Pod census says nothing about a controller that is
+     * about to create the next one.
+     *
+     * <p>Anything unknown or unobservable is {@link Backend.KillOutcome#UNPROVEN}: an active
+     * Job, a listing that failed, an identity that cannot be recovered, a Pending or Running
+     * Pod, an {@code Unknown} Pod phase, or a null API response.
+     */
+    private Backend.KillOutcome observeExecutionSafety(int execId) {
+        ControllerSafety controller = observeControllerFor(execId);
+        if (controller != ControllerSafety.SPENT) {
+            return Backend.KillOutcome.UNPROVEN;
+        }
+        PodPhaseView.Census census = censusFor(execId);
+        if (census == null || !census.isSafe()) {
+            log.info(
+                "Execution " + execId + " has a spent controller but its pod census is " +
+                    (census == null ? "unavailable" : census.describe()) +
+                    "; safety is not established."
+            );
+            return Backend.KillOutcome.UNPROVEN;
+        }
+        return Backend.KillOutcome.CONFIRMED_SAFE;
     }
 
     /**
@@ -1898,16 +3124,19 @@ public class KubernetesNativeBackend implements Backend {
         log.info("Killing all K8s Jobs in namespace: " + namespace);
 
         if (kubernetesClient == null) {
-            log.info(
-                "Kubernetes client not initialized; clearing local job tracking only"
+            // Nothing can be established without a client, so nothing is released. This
+            // used to clear every slot and map here, which would have declared executions
+            // dead on the strength of the client being absent.
+            log.warn(
+                "Kubernetes client not initialized; cannot establish that any execution" +
+                " has stopped. Tracking and submission slots are retained."
             );
-            releaseAllSlots();
-            execIdToJobName.clear();
-            execIdToPairId.clear();
-            execIdToOutputDir.clear();
             return false;
         }
 
+        // The bulk delete is only the REQUEST. It is not evidence, and its result is not
+        // consulted: a label-selector delete reports that the API accepted it, not that
+        // any pod has stopped.
         try {
             kubernetesClient
                 .batch()
@@ -1915,17 +3144,55 @@ public class KubernetesNativeBackend implements Backend {
                 .jobs()
                 .inNamespace(namespace)
                 .withLabel(MANAGED_LABEL, "true")
+                .withPropagationPolicy(DeletionPropagation.FOREGROUND)
                 .delete();
-            return true;
         } catch (Exception e) {
-            log.error("Failed to kill all Kubernetes jobs", e);
-            return false;
-        } finally {
-            releaseAllSlots();
-            execIdToJobName.clear();
-            execIdToPairId.clear();
-            execIdToOutputDir.clear();
+            log.error("Failed to request deletion of all Kubernetes jobs", e);
         }
+
+        // Then decide PER EXECUTION. This method used to call releaseAllSlots() and clear
+        // all three maps in a finally block, which is a violation of the accounting
+        // invariant during the current process lifetime -- not merely across a restart.
+        // Its only caller is Jobs.pauseAll (admin endpoint RESTServices /pauseAll), so it
+        // runs in a live process that can still admit work, and pausing is reversible.
+        // Forgetting a surviving pod here lets unrelated benchmark pairs be scheduled
+        // beside it and contaminates THEIR measurements.
+        List<Integer> tracked = new ArrayList<>(execIdToJobName.keySet());
+        int released = 0;
+        int retained = 0;
+        for (Integer execId : tracked) {
+            String jobName = execIdToJobName.get(execId);
+            boolean jobGone = ensureKubernetesJobGone(jobName);
+            PodPhaseView.Census census = jobGone
+                ? censusFor(execId)
+                : null;
+
+            if (jobGone && census != null && census.isSafe()) {
+                execIdToJobName.remove(execId);
+                execIdToPairId.remove(execId);
+                execIdToOutputDir.remove(execId);
+                killedExecIds.add(execId);
+                releaseSubmissionSlot(execId);
+                released++;
+            } else {
+                retained++;
+                log.error(
+                    "Cannot establish that execId " + execId + " (K8s job " + jobName +
+                    ") has stopped during killAll: " +
+                    (jobGone ? String.valueOf(census) : "the Job is still present") +
+                    ". Its submission slot and tracking are RETAINED so unrelated pairs" +
+                    " are not scheduled on top of it. OPERATOR ACTION: inspect pods" +
+                    " labelled " + EXEC_ID_LABEL + "=" + execId + " in namespace " +
+                    namespace + "."
+                );
+            }
+        }
+
+        log.info(
+            "killAll complete: " + released + " execution(s) confirmed stopped and" +
+            " released, " + retained + " retained pending verification"
+        );
+        return retained == 0;
     }
 
     /**
@@ -2079,27 +3346,45 @@ public class KubernetesNativeBackend implements Backend {
 
         Set<String> queues = new HashSet<>();
 
+        NodeList nodes;
         try {
-            NodeList nodes = kubernetesClient
+            nodes = kubernetesClient
                 .nodes()
                 .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
                 .list();
-
-            for (Node node : nodes.getItems()) {
-                if (node.getMetadata() == null || node.getMetadata().getLabels() == null) {
-                    continue;
-                }
-
-                String queue = node.getMetadata().getLabels().get(queueLabelKey);
-                if (queue != null && !queue.trim().isEmpty()) {
-                    queues.add(normalizeQueueLabel(queue));
-                }
-            }
         } catch (Exception e) {
-            log.warn("Failed to read queue labels from Kubernetes nodes", e);
+            // Never fabricate an answer here. Cluster.loadQueueDetails marks every queue
+            // INACTIVE and reactivates only the names this returns, so swallowing the
+            // failure and returning {all.q} would deactivate every real queue in the
+            // database on one transient API blip -- and each subsequent run would repeat
+            // it, so nothing self-heals. Throwing lets loadQueueDetails abort before it
+            // has mutated anything; same principle as queueViewLoaded, which exists so an
+            // unread view is never mistaken for an empty one.
+            throw new IllegalStateException(
+                "Could not enumerate Kubernetes worker nodes; refusing to report a queue" +
+                " list that would deactivate existing queues",
+                e
+            );
         }
 
-        // Only add default when no queues discovered from node labels
+        for (Node node : nodes.getItems()) {
+            // Every reader of this label except this method already treats absent and
+            // blank as first-class default-queue membership: refreshQueueViewIfStale and
+            // getNodeQueueAssociations both normalize unconditionally, and
+            // defaultQueueAffinity's DoesNotExist term exists precisely to schedule onto
+            // unlabelled nodes. This method used to skip them instead, so the moment an
+            // admin created a second queue while any node stayed unlabelled, all.q
+            // vanished from the returned set and loadQueueDetails left it INACTIVE --
+            // silently, permanently, with every pair submitted to it simply never
+            // dispatching. Normalizing here makes the five views agree.
+            String queue = (node.getMetadata() == null || node.getMetadata().getLabels() == null)
+                ? null
+                : node.getMetadata().getLabels().get(queueLabelKey);
+            queues.add(normalizeQueueLabel(queue));
+        }
+
+        // Reachable only when the cluster has no worker nodes at all; a node that exists
+        // always contributes a queue name now.
         if (queues.isEmpty()) {
             queues.add(DEFAULT_QUEUE_NAME);
         }
@@ -2434,10 +3719,7 @@ public class KubernetesNativeBackend implements Backend {
                         jobName +
                         ")"
                     );
-                    execIdToJobName.remove(execId);
-                    execIdToPairId.remove(execId);
-                    execIdToOutputDir.remove(execId);
-                    releaseSubmissionSlot(execId);
+                    releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -2500,10 +3782,7 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            execIdToJobName.remove(execId);
-            execIdToPairId.remove(execId);
-            execIdToOutputDir.remove(execId);
-            releaseSubmissionSlot(execId);
+            releaseAccountingIfSafe(execId, "completion of " + jobName);
             return true;
         }
 
@@ -2541,10 +3820,7 @@ public class KubernetesNativeBackend implements Backend {
                         jobName +
                         ")"
                     );
-                    execIdToJobName.remove(execId);
-                    execIdToPairId.remove(execId);
-                    execIdToOutputDir.remove(execId);
-                    releaseSubmissionSlot(execId);
+                    releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -2588,10 +3864,7 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            execIdToJobName.remove(execId);
-            execIdToPairId.remove(execId);
-            execIdToOutputDir.remove(execId);
-            releaseSubmissionSlot(execId);
+            releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
             return true;
         }
 
@@ -2643,10 +3916,7 @@ public class KubernetesNativeBackend implements Backend {
                         ")"
                     );
                     ensureKubernetesJobGone(jobName);
-                    execIdToJobName.remove(execId);
-                    execIdToPairId.remove(execId);
-                    execIdToOutputDir.remove(execId);
-                    releaseSubmissionSlot(execId);
+                    releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -2663,9 +3933,10 @@ public class KubernetesNativeBackend implements Backend {
                 //
                 // ERROR_RUNSCRIPT plus a non-null end_time is exactly what
                 // GetJobPairIdsWithStatusNotRerunAfterDate selects, and RERUN_FAILED_PAIRS
-                // dispatches a fresh execution for it. Nothing kills the old one:
-                // rerunPairsBatch only calls killPair for status < STATUS_COMPLETE, and
-                // ERROR_RUNSCRIPT is 11. So publishing that state while the old Job still
+                // dispatches a fresh execution for it. Both rerun paths now confirm the
+                // old execution stopped before resetting, but neither can confirm anything
+                // about a Job this callback has not yet deleted, so publishing that state
+                // while the old Job still
                 // exists leaves a pod that can start later and write a second set of
                 // results for the same pair. Deleting first removes that possibility
                 // rather than relying on the deletion retry winning a 90-minute race.
@@ -2685,6 +3956,31 @@ public class KubernetesNativeBackend implements Backend {
                         " so ttlSecondsAfterFinished will not reap it. Leaving the pair" +
                         " untouched and retrying, so it cannot become rerun-eligible while" +
                         " a pod that may still start belongs to it."
+                    );
+                    return false;
+                }
+
+                // Deleting the NAMED Job is not the same as establishing that this execution
+                // is over. A retried submission can have left a second controller carrying
+                // the same exec-id label, and foreground propagation can return with the pod
+                // still terminating. The status about to be written is precisely the one
+                // that makes the pair rerun-eligible, so it must not be published while
+                // anything for this execution can still run or write: a late pod would
+                // otherwise overwrite the results of the replacement.
+                if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
+                    log.warn(
+                        "Pair " + pairId + " (execId " + execId + ") looks stuck, but its" +
+                        " execution cannot be established as stopped (controller " +
+                        observeControllerFor(execId) + ", pods " + censusFor(execId) + ")." +
+                        " Not publishing a rerun-eligible status; the monitor's" +
+                        " cleanup-pending record brings this back."
+                    );
+                    // The monitor keeps its cleanup-pending record because this returns
+                    // false, so that record — not the safety sweep — owns finishing this
+                    // pair's DB transition. Flagged so the sweep cannot release the
+                    // tracking the continuation still needs.
+                    recordUnverified(
+                        execId, "stuck-pending escalation for pair " + pairId, true
                     );
                     return false;
                 }
@@ -2748,10 +4044,7 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            execIdToJobName.remove(execId);
-            execIdToPairId.remove(execId);
-            execIdToOutputDir.remove(execId);
-            releaseSubmissionSlot(execId);
+            releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
             return true;
         }
 
@@ -2791,7 +4084,34 @@ public class KubernetesNativeBackend implements Backend {
             }
         }
 
+        /**
+         * The terminal status for a finished pair, with runsolver's own limit verdict
+         * taking precedence over status.json.
+         *
+         * <p>status.json's status field is not an independent measurement: functions.bash
+         * writes it from {@code jobscript:581-589}, which greps runsolver's English prose
+         * out of watcher.out. That is the exact fragility {@link RunsolverVerdict}
+         * documents — a wording change upstream silently reclassifies every timeout as a
+         * clean completion — and it has a second failure mode the prose cannot cover at
+         * all: {@code Watcher.hh:716} fires the prose only from the ~100ms watcher poll
+         * while the child is still alive, whereas {@code TIMEOUT=} ({@code Watcher.hh:438})
+         * is computed from the final getrusage after it exits. A solver that exits exactly
+         * as its limit is crossed therefore produces {@code TIMEOUT=true} with no matching
+         * sentence, and was recorded here as STATUS_COMPLETE.
+         *
+         * <p>{@code 73fc0acab} fixed this for {@link LocalJobMonitor} and
+         * {@link ContainerJobMonitor} by reading runsolver's booleans directly. It did not
+         * touch this backend, so the one path used in Kubernetes deployments kept the
+         * defect the commit existed to remove. Ordering matches
+         * {@code ContainerJobMonitor.determineStatus}: a limit verdict wins, and
+         * status.json decides only when runsolver reports no breach.
+         */
         private int readTerminalStatus(int execId, int defaultStatus) {
+            StatusCode limit = readRunsolverVerdict(execId);
+            if (limit != null) {
+                return limit.getVal();
+            }
+
             Path statusPath = resolveStatusPath(execId);
             if (statusPath == null || !Files.exists(statusPath)) {
                 return defaultStatus;
@@ -2808,6 +4128,81 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             return defaultStatus;
+        }
+
+        /**
+         * Reads runsolver's own limit verdict from var.out and watcher.out.
+         *
+         * <p>Every literal matched here is quoted from the vendored runsolver source at
+         * {@code org/starexec/config/sge/RunSolverSource/} and is kept identical to
+         * {@code ContainerJobMonitor.parseVarLine}/{@code parseWatcherLine} so the two
+         * cannot disagree about the same run:
+         *
+         * <pre>
+         *   Watcher.hh:471-475  TIMEOUT= / MEMOUT=   (boolalpha, so "true"/"false")
+         *   Watcher.hh:717      "Maximum CPU time exceeded: ..."
+         *   Watcher.hh:720      "Maximum wall clock time exceeded: ..."
+         *   Watcher.hh:723      "Maximum VSize exceeded: ..."
+         *   Watcher.hh:726      "Maximum memory exceeded: ..."   (only with -R)
+         * </pre>
+         *
+         * @return the limit status this run breached, or {@code null} if runsolver
+         *         reports no breach or its output is unreadable — never a guess
+         */
+        private StatusCode readRunsolverVerdict(int execId) {
+            Path outputDir = execIdToOutputDir.get(execId);
+            if (outputDir == null) {
+                return null;
+            }
+
+            boolean timeout = false;
+            boolean memout = false;
+            boolean cpuProse = false;
+            boolean wallclockProse = false;
+            boolean memProse = false;
+
+            Path varOut = outputDir.resolve("var.out");
+            if (Files.exists(varOut)) {
+                try {
+                    for (String line : Files.readAllLines(varOut)) {
+                        if (line.startsWith("TIMEOUT=")) {
+                            timeout = Boolean.parseBoolean(
+                                line.substring("TIMEOUT=".length()).trim());
+                        } else if (line.startsWith("MEMOUT=")) {
+                            memout = Boolean.parseBoolean(
+                                line.substring("MEMOUT=".length()).trim());
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to read var.out for execId " + execId, e);
+                }
+            }
+
+            Path watcherOut = outputDir.resolve("watcher.out");
+            if (Files.exists(watcherOut)) {
+                try {
+                    for (String line : Files.readAllLines(watcherOut)) {
+                        if (line.contains("wall clock time exceeded")) {
+                            wallclockProse = true;
+                        } else if (line.contains("CPU time exceeded")) {
+                            cpuProse = true;
+                        } else if (line.contains("VSize exceeded")
+                                || line.contains("Maximum memory exceeded")) {
+                            memProse = true;
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to read watcher.out for execId " + execId, e);
+                }
+            }
+
+            return RunsolverVerdict.classify(
+                timeout,
+                memout,
+                cpuProse,
+                wallclockProse,
+                memProse
+            );
         }
 
         private int readStageNumber(int execId, int defaultStage) {

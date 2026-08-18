@@ -55,10 +55,15 @@ public class Cluster {
 		log.info("Loading queue details into the db");
 		try {
 
+			// Enumerate BEFORE deactivating anything. This used to run the other way
+			// round, so a backend that could not reach its scheduler left every queue in
+			// the database INACTIVE -- the deactivation had already committed by the time
+			// the failure surfaced, and the catch below only logged it. Reading first
+			// means a failed enumeration aborts with the previous state intact.
+			String[] queueNames = R.BACKEND.getQueues();
+
 			// Set all queues as inactive (we will set them as active when we see them)
 			Queues.setStatus(R.QUEUE_STATUS_INACTIVE);
-
-			String[] queueNames = R.BACKEND.getQueues();
 
 			for (String name : queueNames) {
 				// adds queue if it does not already exist: max timeouts are used by

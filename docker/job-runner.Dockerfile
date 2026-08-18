@@ -42,30 +42,68 @@
 # ==============================================================================
 # Stage 1: Build runsolver natively on Alpine (musl libc)
 # ==============================================================================
-FROM docker.io/library/alpine:3.21 AS runsolver-builder
+# Pinned to the SAME base as the root Dockerfile's runsolver-builder stage (alpine:3.19).
+# The two images must ship the same measurement binary, and building identical source on
+# two different Alpine releases means two different musl/gcc toolchains and so potentially
+# two different binaries -- which is the divergence the vendored-source change exists to
+# remove. Deliberately the older of the two bases: a binary built against musl 1.2.4 runs
+# on the 3.21 runtime stage below, and CI asserts the resulting SHA-256 matches the app
+# image's (see .github/workflows/runsolver-parity.yml). Change both stages or neither.
+FROM docker.io/library/alpine:3.19 AS runsolver-builder
 
-WORKDIR /tmp
+# /build, matching the root Dockerfile's runsolver-builder stage, NOT /tmp. gcc embeds the
+# compilation directory in the binary's debug information, so the same source built at a
+# different path produces a different file: measured, the two stages produced SHA-256
+# 05cacb4c... and 08b79941... purely from /build/src versus /tmp/src. Aligning the path is
+# what makes the two images' runsolver byte-identical and the CI parity gate meaningful.
+WORKDIR /build
 
-# Install build dependencies
-RUN apk add --no-cache \
-    curl \
-    build-base \
-    tar \
-    bzip2 \
-    numactl-dev
+# Install build dependencies. curl/tar/bzip2 are gone with the network fetch below.
+RUN apk upgrade --no-cache && \
+    apk add --no-cache build-base
 
-# Download, patch, and compile runsolver
-# Patches match the main Dockerfile: remove NUMA support and fix type issues
-RUN curl -L https://www.cril.univ-artois.fr/~roussel/runsolver/runsolver-3.4.1.tar.bz2 -o runsolver.tar.bz2 && \
-    tar xjf runsolver.tar.bz2 && \
-    cd runsolver/src && \
-    sed -i 's/long long mem,memFree;/long mem,memFree;/g' runsolver.cc && \
-    sed -i 's/-DWITH_NUMA//g' Makefile && \
-    sed -i 's/-lnuma//g' Makefile && \
-    make && \
-    mkdir -p /tmp/runsolver-output && \
-    cp runsolver /tmp/runsolver-output/runsolver && \
-    chmod +x /tmp/runsolver-output/runsolver
+# Build runsolver from the source vendored in this repository.
+#
+# This stage used to curl runsolver-3.4.1.tar.bz2 from cril.univ-artois.fr with no
+# checksum and no pinned digest. The root Dockerfile was moved off that pattern because
+# "runsolver is the instrument every recorded measurement comes from, so its provenance is
+# not a packaging detail" -- but THIS is the image that actually runs solvers under the
+# Kubernetes backend (charts/starexec/values.yaml jobImage -> STAREXEC_K8S_JOB_IMAGE ->
+# KubernetesNativeBackend's Job container), so the fix had to reach here or it protected
+# nothing in K8s mode. The chart pins tag: latest with pullPolicy: Always, which means a
+# rebuild propagates to running clusters with no Helm action -- a silently changed
+# measurement instrument.
+#
+# Kept byte-identical in patches and assertions to the root Dockerfile: two images
+# producing the same measurements must build the same binary from the same source.
+COPY starexec-app/src/main/java/org/starexec/config/sge/RunSolverSource/ ./src/
+
+RUN set -eux; \
+    cd src; \
+    # The repo carries committed build artifacts (runsolver, runsolver.o,
+    # SignalNames.o). Never link against those -- build from source every time.
+    rm -f ./*.o runsolver; \
+    # Patches, applied fail-closed. A sed whose pattern stops matching is a silent
+    # no-op, so each anchor is asserted first: under set -e a failed grep aborts the
+    # build rather than shipping a binary that quietly missed a patch.
+    #
+    # NUMA support is removed because the headers are absent in this image, and
+    # 'long long' becomes 'long' to compile under this toolchain.
+    grep -q 'long long mem,memFree;' runsolver.cc; \
+    sed -i 's/long long mem,memFree;/long mem,memFree;/g' runsolver.cc; \
+    grep -q -- '-DWITH_NUMA' Makefile; \
+    sed -i 's/-DWITH_NUMA//g' Makefile; \
+    grep -q -- '-lnuma' Makefile; \
+    sed -i 's/-lnuma//g' Makefile; \
+    make; \
+    # Smoke test: a binary that cannot report its own version is not one to ship.
+    ./runsolver --version; \
+    mkdir -p /tmp/runsolver-output; \
+    cp runsolver /tmp/runsolver-output/runsolver; \
+    chmod +x /tmp/runsolver-output/runsolver; \
+    # Provenance, so a recorded result can name the instrument that produced it.
+    ./runsolver --version | head -1 > /tmp/runsolver-output/runsolver.version; \
+    sha256sum runsolver | cut -d' ' -f1 > /tmp/runsolver-output/runsolver.sha256
 
 # ==============================================================================
 # Stage 2: Minimal runtime image
@@ -112,8 +150,14 @@ RUN adduser -D -s /bin/bash -h /home/starexec_user starexec_user \
     /starexec/pre-processor /starexec/post-processor \
     && chown -R starexec_user:starexec_user /starexec
 
-# Copy runsolver binary compiled natively on Alpine (musl libc)
+# Copy runsolver binary compiled natively on Alpine (musl libc) from the vendored source.
 COPY --from=runsolver-builder --chmod=755 /tmp/runsolver-output/runsolver /usr/local/bin/runsolver
+
+# Instrument provenance, readable from inside a running job pod. A result recorded by
+# this image can therefore name the binary that produced it, rather than resting on the
+# mutable :latest tag being whatever it was when the measurement was taken.
+COPY --from=runsolver-builder --chmod=444 /tmp/runsolver-output/runsolver.version /usr/local/share/runsolver.version
+COPY --from=runsolver-builder --chmod=444 /tmp/runsolver-output/runsolver.sha256 /usr/local/share/runsolver.sha256
 
 # Copy GetComputerInfo script (shell version - 154 lines vs 36MB Perl)
 # Backward compatibility: create symlink at legacy path

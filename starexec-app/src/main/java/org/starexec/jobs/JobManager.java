@@ -3,6 +3,7 @@ package org.starexec.jobs;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
 import org.starexec.constants.R;
@@ -178,8 +179,37 @@ public abstract class JobManager {
 			return;
 		}
 		mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
-		mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
-		mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_POSTGRES_PASSWORD);
+
+		// The generated jobscript is written world-readable into the shared data volume
+		// (see writeJobScript below) and its exports are inherited by every child of the
+		// shell that runs it -- including the solver, which is untrusted third-party code.
+		// Under SGE the solver is launched through `sudo -u`, whose default env_reset
+		// strips the environment; the container backends removed that boundary without
+		// removing the export, so the migration silently widened the exposure.
+		//
+		// On the container backends these credentials are also dead weight: functions.bash
+		// dbExec short-circuits under isContainerMode ("skipping DB query"), and the
+		// job-runner image deliberately ships no postgresql client at all. So nothing is
+		// lost by never substituting them, and the secret never reaches the file.
+		// LocalBackend is included deliberately: it sets CONTAINER_MODE=true
+		// unconditionally (LocalBackend.java:621-624, "always uses file-based status
+		// reporting"), so its jobscripts never shell out to psql either and the
+		// credentials are dead weight there too. Only the genuinely non-container
+		// backends -- sge and oar, whose sendStatus path really does run
+		// `psql ... CALL UpdatePairStatus` -- still need them substituted.
+		boolean containerizedBackend =
+			R.KUBERNETES_TYPE.equals(R.BACKEND_TYPE)
+				|| R.K8S_TYPE.equals(R.BACKEND_TYPE)
+				|| R.K8S_NATIVE_TYPE.equals(R.BACKEND_TYPE)
+				|| R.PODMAN_TYPE.equals(R.BACKEND_TYPE)
+				|| R.LOCAL_TYPE.equals(R.BACKEND_TYPE);
+		if (containerizedBackend) {
+			mainTemplate = mainTemplate.replace("$$DB_USER$$", "");
+			mainTemplate = mainTemplate.replace("$$DB_PASS$$", "");
+		} else {
+			mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
+			mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_POSTGRES_PASSWORD);
+		}
 		
 		// For containerized job execution, use the container-specific DB host
 		// Job containers are separate from the app pod, so they can't use localhost
@@ -664,6 +694,21 @@ public abstract class JobManager {
 									);
 								}
 							}
+						} catch (SubmissionDeferredException e) {
+							// MUST precede the generic catch below. The backend did not
+							// attempt this submission -- capacity changed between the
+							// dispatchability check and the authoritative reservation --
+							// so the pair is blameless and must simply stay queued for the
+							// next pass. Falling through to ERROR_SUBMIT_FAIL, or letting
+							// the backend return -1 into ERROR_SGE_REJECT above, would
+							// terminally kill pairs that had nothing wrong with them, one
+							// per pair per scheduling pass, for a condition that resolves
+							// itself. This exception is unchecked, so this ordering is the
+							// entire guarantee.
+							log.debug(
+									"submitJobs",
+									"deferring pair " + pair.getId() + ": " + e.getMessage()
+							);
 						} catch (BenchmarkDependencyMissingException e) {
 							log.error("submitJobs", "ERROR_BENCHMARK for pair: " + pair.getId(), e);
 							setStatusForExistingPair(
@@ -1048,7 +1093,14 @@ public abstract class JobManager {
 		replacements.put("$$STAGE_NUMBER_ARRAY$$", numsToBashArray("STAGE_NUMBERS", stageNumbers));
 		replacements.put("$$SOLVER_ID_ARRAY$$", numsToBashArray("SOLVER_IDS", solverIds));
 		replacements.put("$$SOLVER_TIMESTAMP_ARRAY$$", toBashArray("SOLVER_TIMESTAMPS", solverTimestamps, false));
-		replacements.put("$$CONFIG_NAME_ARRAY$$", toBashArray("CONFIG_NAMES", configNames, false));
+		// base64, like SOLVER_NAMES/SOLVER_PATHS/BENCH_INPUT_PATHS below. toBashArray with
+		// base64=false writes NAME[i]="<raw>", so any quote in the value closes the string
+		// and the remainder is parsed as script. Configuration names are validated at
+		// creation now (Solvers.findConfigs), but encoding is what actually makes the
+		// generated script independent of the value's contents -- and it also stops a name
+		// containing $VAR from being expanded inside those double quotes.
+		// Decoded by decodePathArrays in functions.bash.
+		replacements.put("$$CONFIG_NAME_ARRAY$$", toBashArray("CONFIG_NAMES", configNames, true));
 		replacements.put("$$PRE_PROCESSOR_PATH_ARRAY$$", toBashArray("PRE_PROCESSOR_PATHS", preProcessorPaths, false));
 		replacements.put("$$PRE_PROCESSOR_TIME_LIMIT_ARRAY$$",
 				toBashArray("PRE_PROCESSOR_TIME_LIMITS", preProcessorTimeLimits, false));
