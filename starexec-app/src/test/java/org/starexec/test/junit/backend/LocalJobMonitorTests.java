@@ -153,6 +153,12 @@ public class LocalJobMonitorTests {
         return f.getLong(stats);
     }
 
+    private String statString(Object stats, String name) throws Exception {
+        Field f = stats.getClass().getDeclaredField(name);
+        f.setAccessible(true);
+        return (String) f.get(stats);
+    }
+
     private Path outputDir(String varOut, String watcherOut, String statsJson)
         throws Exception {
         Path dir = Files.createTempDirectory("ljm-stats");
@@ -220,6 +226,121 @@ public class LocalJobMonitorTests {
 
         assertEquals(99.0, statDouble(stats, "wallclockTime"), 0.0001);
         assertEquals(98.0, statDouble(stats, "cpuTime"), 0.0001);
+    }
+
+    // ------------------------------------------------------------------
+    // A malformed number in stats.json must not escape parseRunSolverStats
+    //
+    // extractDoubleOr matches [0-9.]+ and extractLongOr/extractIntOr match
+    // [0-9]+, so "1.2.3", ".", "1..2" and digit strings past Integer/Long range
+    // all match the regex and then throw out of the parse. The enclosing catch
+    // took IOException only, so the NumberFormatException left the monitor.
+    //
+    // Both tests below turn on one witness: hostname is applied last, at the very
+    // end of the stats.json block. A malformed value that merely failed to match
+    // would leave the block running and hostname set; hostname being null instead
+    // proves the parse was actually reached and actually threw. That is what makes
+    // these non-vacuous, so the control assertion establishing that hostname is
+    // set at all comes first.
+    // ------------------------------------------------------------------
+
+    /**
+     * The sharpest form: the malformed value is followed by a good one, and the good
+     * one must NOT be applied. If the regex had simply failed to match, userTime
+     * would carry stats.json's 77.0; it carrying var.out's 8.0 is the proof that
+     * Double.parseDouble was reached and threw.
+     */
+    @Test
+    public void aMalformedNumberInStatsJsonDegradesToVarOutInsteadOfEscaping()
+        throws Exception {
+        Object stats = parseRunSolverStats(outputDir(
+            "WCTIME=42.5\nCPUTIME=41.25\nUSERTIME=8.0\n",
+            null,
+            // wallclockTime is applied first and is good; cpuTime throws; userTime
+            // and hostname sit after it in the source and so are never reached.
+            "{\"wallclockTime\": 43.75, \"cpuTime\": 1.2.3,"
+                + " \"userTime\": 77.0, \"hostname\": \"node7\"}"
+        ));
+
+        assertEquals(
+            "the fields applied before the malformed one must still come from"
+                + " stats.json -- the block does run, it just cannot finish",
+            43.75,
+            statDouble(stats, "wallclockTime"),
+            0.0001
+        );
+        assertEquals(
+            "cpuTime must fall back to var.out's measurement, not to 0",
+            41.25,
+            statDouble(stats, "cpuTime"),
+            0.0001
+        );
+        assertEquals(
+            "userTime proves the parse threw rather than failing to match: a"
+                + " non-matching value would have left the block running and"
+                + " applied stats.json's 77.0 here",
+            8.0,
+            statDouble(stats, "userTime"),
+            0.0001
+        );
+        assertNull(
+            "hostname is applied last, so it is only null if the block aborted",
+            statString(stats, "hostname")
+        );
+    }
+
+    /**
+     * One case per flagged conversion: extractDoubleOr, extractLongOr, extractIntOr.
+     * They share a single enclosing catch, so this asserts the same invariants across
+     * all of them rather than repeating three near-identical helper tests.
+     */
+    @Test
+    public void everyMalformedNumericShapeInStatsJsonStaysContained() throws Exception {
+        String varOut = "WCTIME=42.5\nCPUTIME=41.25\n";
+        String watcherOut = "maximum resident set size= 4096\n";
+
+        // Control. Without this, the assertNull below would pass against a build
+        // that never parsed hostname at all.
+        Object good = parseRunSolverStats(outputDir(
+            varOut, watcherOut, "{\"cpuTime\": 9.5, \"hostname\": \"node7\"}"));
+        assertEquals("node7", statString(good, "hostname"));
+        assertEquals(9.5, statDouble(good, "cpuTime"), 0.0001);
+
+        String[][] malformed = {
+            {"a bare dot reaches Double.parseDouble",
+                "{\"cpuTime\": ., \"hostname\": \"node7\"}"},
+            {"a doubled dot reaches Double.parseDouble",
+                "{\"cpuTime\": 1..2, \"hostname\": \"node7\"}"},
+            {"a value past Long range reaches Long.parseLong",
+                "{\"maxResidentSetSize\": 99999999999999999999,"
+                    + " \"hostname\": \"node7\"}"},
+            {"a value past Integer range reaches Integer.parseInt",
+                "{\"stageNumber\": 99999999999, \"hostname\": \"node7\"}"},
+        };
+
+        for (String[] c : malformed) {
+            String why = c[0];
+            // Escaping here surfaces as InvocationTargetException from the reflective
+            // call, so simply completing the loop is part of the assertion.
+            Object stats = parseRunSolverStats(outputDir(varOut, watcherOut, c[1]));
+
+            assertNull(
+                why + ": the block must abort, leaving hostname unapplied",
+                statString(stats, "hostname")
+            );
+            assertEquals(
+                why + ": cpuTime must keep var.out's measurement rather than 0",
+                41.25,
+                statDouble(stats, "cpuTime"),
+                0.0001
+            );
+            assertEquals(
+                why + ": maxResidentSetSize must keep watcher.out's measurement"
+                    + " rather than 0",
+                4096L,
+                statLong(stats, "maxResidentSetSize")
+            );
+        }
     }
 
     // ------------------------------------------------------------------

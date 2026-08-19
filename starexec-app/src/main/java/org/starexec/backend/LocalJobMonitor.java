@@ -829,7 +829,15 @@ public class LocalJobMonitor {
                 }
 
                 log.debug("Parsed stats from stats.json: " + stats);
-            } catch (IOException e) {
+            } catch (IOException | NumberFormatException e) {
+                // NumberFormatException for the same reason var.out and watcher.out catch
+                // it above. The ...Or helpers match on [0-9.]+ / [0-9]+, which admits
+                // "1.2.3", "." and digit strings past Integer/Long range -- a garbled
+                // value throws out of the parse instead of failing to match, so without
+                // this it escapes parseRunSolverStats entirely. Aborting here leaves every
+                // remaining field at the value var.out and watcher.out already established
+                // (the fallback each extractOr was handed), so the supplemental source
+                // degrades on its own rather than taking the measurement down with it.
                 log.warn(
                         "Failed to parse stats.json; using var.out and watcher.out only",
                         e);
