@@ -73,15 +73,22 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # {{branch}} is empty on pull_request, where the ref is
+          # refs/pull/<N>/merge and there is no branch context. The two
+          # {{branch}}-prefixed sha rules therefore rendered a bare "-" prefix
+          # and produced ghcr.io/.../starexec:-<sha>, which buildx rejects as an
+          # invalid reference before the build starts. They were also duplicates
+          # of each other: format=short is the default. One rule survives, gated
+          # to non-PR events; PRs get their own ref-derived tags below.
           tags: |
             type=sha,prefix=sha-,format=long
-            type=sha,prefix={{branch}}-,format=short
-            type=sha,prefix={{branch}}-
+            type=sha,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' }}
             type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=pr,suffix=-{{sha}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' }}
-            type=raw,value=pr-test,enable=${{ github.event_name == 'pull_request' }}
 
       - name: Capture build timestamp
         id: build-metadata
