@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kubernetes health endpoints**: Added `/starexec/public/health/liveness` and `/starexec/public/health/readiness` so orchestrators can distinguish a live process from one able to serve, and pointed the chart's probes at them.
+- **SMT-aware CPU partitioning**: Added sibling-aware CPU partitioning that keeps SMT siblings within a single partition and rejects explicit partition layouts that split them.
+- **Kubernetes execution observability**: Added pod-state observation alongside job state, so a pair whose pod has never started is no longer reported as running, and added the pod read permission the backend needs for it.
+- **Recurring Kubernetes reconciliation**: Added a periodic sweep that settles ambiguous submissions, deletes orphaned jobs, revisits unverified executions, and inventories pods without jobs, configurable through `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` (`kubernetes.orphanSweepIntervalMs`, default `300000`).
+- **Operational audits**: Added read-only SQL audits for disk quota, space hierarchy, and limit misclassification, with a two-phase disk quota repair.
+
+### Changed
+- **Kubernetes execution safety**: Execution is now treated as stopped only when both the controller and its pods are confirmed stopped. Unknown or unobservable cluster state fails closed, so StarExec defers replacement work and retains the accounting rather than risk two executions writing the same measurement.
+- **Admission and dispatch**: A managed pod that cannot be accounted for defers new admission for its queue until it is resolved, instead of allowing unrelated pairs to be scheduled beside it.
+- **Rerun semantics**: Manual reruns now require the previous execution to be confirmed stopped and report how many pairs were actually reset. Automatic reruns reset the pair and consume the automatic-rerun allowance in one atomic step, and execution identity is revalidated under the database row lock so a reset cannot land on a newer execution.
+- **Measurement fidelity**: Timeout and memory-limit classification now uses runsolver's own `TIMEOUT=` and `MEMOUT=` verdicts rather than substring-matching its English output, all three runsolver output sources are read, and a run whose measurements cannot be read is no longer recorded as zero.
+- **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
+
+### Fixed
+- **Disk accounting**: Recording runsolver statistics is now idempotent. Repeated calls previously added the reported figure to user and job totals each time while overwriting the stage row, leaving a surplus that no refund could reclaim.
+- **Space hierarchy**: Moving a space into itself or into one of its own descendants is now rejected, preventing a space from becoming its own ancestor.
+- **Benchmark uploads**: The asynchronous upload path now satisfies the same invariants as the synchronous one, creating the space association and charging disk usage. Uploaded benchmarks were previously invisible in their space, and deleting them could drive recorded disk usage negative.
+- **Result recording**: A write refused because another writer already recorded a result is now distinguished from a write that failed, so a finished pair releases its container and an unfinished one stays discoverable.
+- **Job pair locking**: Normalized job pair lock ordering and repaired stored procedures that returned only the first matching row.
+
+### Security
+- **Servlet authorization**: Corrected authorization checks that reported a failure without returning, so the privileged work ran anyway. The most serious allowed any authenticated user to rewrite the queue-to-community access list.
+- **StarDev transfer**: A failed StarDev login now stops the transfer instead of continuing on a connection that never authenticated.
+- **Build provenance**: The runsolver binary is now compiled from the source vendored in this repository. It was previously downloaded from an external host at image build time with no checksum or pinned digest, so the instrument every recorded measurement comes from is now reproducible from the tree it was audited against.
+
 ## [2.5.1] - 2026-08-03
 
 ### Fixed

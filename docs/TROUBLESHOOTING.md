@@ -834,6 +834,88 @@ kubectl get events -n starexec --sort-by='.lastTimestamp'
 2. **Missing configuration** - Verify secrets exist
 3. **OOM killed** - Increase memory limit
 
+### Rollout never becomes available
+
+**Problem:** `kubectl wait --for=condition=available` times out, or a Helm upgrade never finishes, while the application pod is running but never ready.
+
+**Cause:** Readiness reports whether this instance can serve usefully, which means reaching the database. It returns 503 while PostgreSQL is unreachable. Liveness deliberately does not check the database, so the pod keeps running rather than restarting into an outage. An unready deployment during a database problem is the probe working, not a probe defect.
+
+**Solution:**
+
+```bash
+# 1) Confirm it is readiness, not a crash
+kubectl get pods -n starexec
+kubectl describe pod <pod-name> -n starexec | grep -A5 Readiness
+
+# 2) Ask the endpoint directly
+kubectl exec -n starexec <pod-name> -- \
+  curl -s -o /dev/null -w '%{http_code}\n' \
+  http://localhost:8080/starexec/public/health/readiness
+
+# 3) 503 means the database is unreachable: check it
+kubectl get pods -n starexec -l app.kubernetes.io/component=postgres
+kubectl logs -n starexec <pod-name> | grep -i "database probe failed"
+
+# 4) Verify credentials and service resolution
+kubectl get secret starexec-postgres-credentials -n starexec
+
+# 5) Retry the rollout only once the database is healthy
+```
+
+Do not relax or remove the readiness probe to make the wait succeed; that only hides the dependency failure until a user finds it.
+
+### Kubernetes pair will not rerun or new work remains queued
+
+**Problem:** A manual rerun reports that it did not complete, an automatic rerun stays eligible without resetting, a pair remains enqueued, or a queue stops accepting new work while capacity looks retained.
+
+**Cause:** StarExec will not authorize replacement work until it can positively establish that the previous Kubernetes execution can no longer create a pod, execute, or write results. When the cluster cannot confirm that, the pair is left alone and its accounting is held, so a replacement is never scheduled beside an execution that may still be writing results. This is a deliberate trade: a deferred pair is visible and recoverable, a duplicated measurement is neither.
+
+**Diagnostics:**
+
+```bash
+# What the application says it is waiting on
+kubectl logs -n starexec deploy/<release> | grep -E \
+  "Admission deferred|Admission still deferred|Deferring dispatch for queue|OPERATOR ACTION|could not be confirmed stopped|withholding its reset"
+```
+
+**Common causes:**
+
+1. **A managed pod carries no usable execution identity**
+
+   A pod labelled as managed but missing or carrying a malformed `starexec.org/exec-id` cannot be attributed to any pair, so no slot can be reserved for it. Admission for the affected queue is held until it disappears or is corrected.
+
+   ```bash
+   kubectl get pods -n starexec -l starexec.org/managed=true -o wide
+   kubectl get pods -n starexec -l starexec.org/managed=true \
+     -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,EXEC:.metadata.labels.starexec\.org/exec-id
+   ```
+
+   Recovery is to let the pod finish, or to establish what it is and why it lost its identity. The log line naming it is `Admission deferred`, and `Admission restored` confirms the hold has cleared.
+
+2. **An execution could not be confirmed stopped**
+
+   The controller was deleted but its pods cannot be shown to have stopped, so the slot and tracking are retained. Inspect the execution named in the log line:
+
+   ```bash
+   kubectl get jobs,pods -n starexec -l starexec.org/exec-id=<execId>
+   kubectl get jobs,pods -n starexec -l starexec.org/pair-id=<pairId>
+   ```
+
+   The labels are the supported way to find these objects. Do not reconstruct a job name by hand.
+
+3. **The periodic sweep is disabled**
+
+   The sweep is what settles ambiguous submissions, removes orphaned jobs, revisits executions that were never confirmed stopped, and inventories pods that outlived their job. Disabling it turns all four off, so held capacity is never reclaimed and the admission hold can neither engage nor clear. Recovery then requires restarting the application.
+
+   ```bash
+   kubectl logs -n starexec deploy/<release> | grep "Kubernetes orphan sweep disabled"
+   kubectl get deploy/<release> -n starexec -o yaml | grep -A1 ORPHAN_SWEEP
+   ```
+
+   The interval is `kubernetes.orphanSweepIntervalMs` in the chart, surfaced as `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS`, and defaults to `300000` (five minutes). Setting it to `0` disables the sweep entirely and is not recommended outside short-lived debugging; raise the interval instead if the sweep is too costly.
+
+Deleting pods is not the normal remediation, and the backend deliberately holds no permission to do it. A pair that will not rerun is reporting that the cluster still cannot account for its previous execution — resolve that, and the pair proceeds on the next pass.
+
 ## Performance Issues
 
 ### Slow Startup
