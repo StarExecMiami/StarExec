@@ -300,14 +300,14 @@
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-jdbc</artifactId>
-            <version>9.0.120</version>
+            <version>9.0.121</version>
         </dependency>
 
         <!-- File upload -->
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-util</artifactId>
-            <version>9.0.120</version>
+            <version>9.0.121</version>
         </dependency>
 
         <!-- PostConstruct annotation -->
@@ -321,7 +321,7 @@
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-catalina</artifactId>
-            <version>9.0.120</version>
+            <version>9.0.121</version>
             <scope>provided</scope>
         </dependency>
 
@@ -329,7 +329,7 @@
         <dependency>
             <groupId>org.apache.tomcat</groupId>
             <artifactId>tomcat-jasper</artifactId>
-            <version>9.0.120</version>
+            <version>9.0.121</version>
         </dependency>
         <!-- Eclipse compiler for JSP/annotation compilation -->
         <dependency>

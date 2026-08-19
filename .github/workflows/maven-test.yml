@@ -12,6 +12,10 @@ on:
     paths:
       - "starexec-app/**"
       - "pom.xml"
+      # Without this, a PR that changes only this workflow gets no Maven
+      # validation at all -- push.paths already lists it, pull_request.paths
+      # did not.
+      - ".github/workflows/maven-test.yml"
 
 permissions:
   contents: read
