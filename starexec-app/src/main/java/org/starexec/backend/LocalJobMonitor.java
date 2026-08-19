@@ -4,11 +4,13 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -62,9 +64,109 @@ public class LocalJobMonitor {
     // Handle for the currently scheduled poll (for cancellation on interval change)
     private volatile ScheduledFuture<?> scheduledPoll;
 
-    // Maps output directories to pair IDs so we can track which jobs we've seen
-    private final ConcurrentHashMap<String, Integer> trackedPairs = new ConcurrentHashMap<>();
-    private final Set<Integer> processedPairIds = ConcurrentHashMap.newKeySet();
+    // One entry per pair, keyed by pair ID.
+    //
+    // Collapsing to a single map is itself part of the fix. This used to be three maps
+    // keyed two different ways -- trackedPairs by logDir, processedPairIds and
+    // statusParseFailures by pairId -- so "what this pair is currently running" was a
+    // fact assembled by hand from three places. A rerun arriving mid-poll could update
+    // some of them while the poller was reading the others, and the poller would then
+    // write its stale conclusion over the new run: the pair ended up untracked AND
+    // marked processed, which stranded it permanently.
+    private final ConcurrentHashMap<Integer, PairExecutionState> pairs = new ConcurrentHashMap<>();
+
+    // Monotonic token stamped onto every registration. A poll captures the state it
+    // began with and refuses to write anything back unless the generation still
+    // matches. That comparison is the entire mechanism keeping run N from clobbering
+    // run N+1; nothing else here distinguishes one run of a pair from the next.
+    private final AtomicLong generationSequence = new AtomicLong();
+
+    // Consecutive polls on which status.json could not be parsed for a pair. The file is
+    // written in place, so a read can land mid-write; that is transient and must not be
+    // recorded as a failed run. A file that is genuinely corrupt must not be retried
+    // forever either, so give up after this many attempts. The count lives inside
+    // PairExecutionState so that it is reset by a rerun as one atomic act with
+    // everything else, rather than as a separate mutation that could be missed.
+    private static final int MAX_STATUS_PARSE_FAILURES = 3;
+
+    /**
+     * Immutable snapshot of one pair's current execution.
+     *
+     * <p>Immutability is deliberate. A poll holds the instance it started with and
+     * compares generations before writing anything back, so there is no window in
+     * which a half-updated state is observable. Every mutation goes through
+     * {@link ConcurrentHashMap#computeIfPresent}, which is atomic per key.
+     */
+    private static final class PairExecutionState {
+        final String logDir;
+        final long generation;
+        final int parseFailures;
+
+        PairExecutionState(String logDir, long generation, int parseFailures) {
+            this.logDir = logDir;
+            this.generation = generation;
+            this.parseFailures = parseFailures;
+        }
+
+        PairExecutionState withParseFailures(int failures) {
+            return new PairExecutionState(logDir, generation, failures);
+        }
+    }
+
+    /**
+     * True if {@code pairId} is still on the generation the caller started with, i.e.
+     * no rerun has superseded the work in flight.
+     */
+    private boolean isCurrent(int pairId, PairExecutionState state) {
+        PairExecutionState current = pairs.get(pairId);
+        return current != null && current.generation == state.generation;
+    }
+
+    /**
+     * Stops tracking a pair, but only if it has not been re-registered since the caller
+     * captured {@code state}.
+     *
+     * @return true if this call removed the pair; false if a rerun had superseded it,
+     *         in which case the caller's result belongs to a run that no longer matters
+     */
+    private boolean retire(int pairId, PairExecutionState state) {
+        final boolean[] retired = { false };
+        pairs.computeIfPresent(pairId, (key, current) -> {
+            if (current.generation == state.generation) {
+                retired[0] = true;
+                return null; // returning null removes the entry
+            }
+            return current;
+        });
+        return retired[0];
+    }
+
+    /**
+     * Increments this pair's consecutive parse-failure count.
+     *
+     * @return the new count, or -1 if a rerun superseded this run, meaning the failure
+     *         belongs to output that is no longer of interest
+     */
+    private int recordParseFailure(int pairId, PairExecutionState state) {
+        final int[] failures = { -1 };
+        pairs.computeIfPresent(pairId, (key, current) -> {
+            if (current.generation != state.generation) {
+                return current;
+            }
+            PairExecutionState next = current.withParseFailures(current.parseFailures + 1);
+            failures[0] = next.parseFailures;
+            return next;
+        });
+        return failures[0];
+    }
+
+    /** Resets the parse-failure count after a successful read, generation permitting. */
+    private void clearParseFailures(int pairId, PairExecutionState state) {
+        pairs.computeIfPresent(pairId, (key, current) ->
+                current.generation == state.generation && current.parseFailures != 0
+                        ? current.withParseFailures(0)
+                        : current);
+    }
 
     public LocalJobMonitor() {
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -83,13 +185,18 @@ public class LocalJobMonitor {
      * @param pairId The database pair ID for this job
      */
     public synchronized void registerJob(String logDir, int pairId) {
-        trackedPairs.put(logDir, pairId);
-
-        // Crucial fix: when a job is re-run, we must clear its processed status
-        // so the monitor will pick up the new run.
-        if (processedPairIds.remove(pairId)) {
-            log.debug("Cleared processed status cache for re-run pairId: " + pairId);
-        }
+        // A fresh generation supersedes whatever was in flight: a poll that started
+        // before this point finds its generation stale and declines to record its
+        // result. This single put replaces what used to be three separate mutations
+        // (track the directory, clear the processed marker, clear the parse-failure
+        // count), any prefix of which the poller could previously observe.
+        //
+        // Still synchronized: incrementAndGet and put are individually atomic but not
+        // atomic together, so two concurrent registrations of the same pair could
+        // otherwise store the lower generation last and leave the map describing an
+        // older run than the one actually starting.
+        long generation = generationSequence.incrementAndGet();
+        pairs.put(pairId, new PairExecutionState(logDir, generation, 0));
 
         // Reset poll interval to base for responsive detection of new job completion
         pollInterval.resetToBase();
@@ -102,7 +209,9 @@ public class LocalJobMonitor {
                 "Registered job for monitoring: pairId=" +
                         pairId +
                         ", logDir=" +
-                        logDir);
+                        logDir +
+                        ", generation=" +
+                        generation);
     }
 
     /**
@@ -167,39 +276,27 @@ public class LocalJobMonitor {
      * @param pairId The pair ID that is being rerun
      */
     public void clearPairTracking(int pairId) {
-        // Find and remove the logDir entry for this pairId
-        // This allows the pair to be re-registered when it's submitted again
-        String removedLogDir = null;
-        Iterator<Map.Entry<String, Integer>> it = trackedPairs
-                .entrySet()
-                .iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, Integer> entry = it.next();
-            if (entry.getValue() == pairId) {
-                removedLogDir = entry.getKey();
-                it.remove();
-                break;
-            }
-        }
+        // One removal now clears everything this pair carried: its directory, its
+        // processed status and its parse-failure count were three separate facts and
+        // are now one entry. A poll already in flight for the removed generation will
+        // find no entry to write back to and discards its result, which is exactly the
+        // outcome wanted -- that result describes the run being replaced.
+        PairExecutionState removed = pairs.remove(pairId);
 
-        // Also remove the processed status file entry so it gets reprocessed
-        if (removedLogDir != null) {
-            boolean removed = processedPairIds.remove(pairId);
-
+        if (removed != null) {
             log.info(
                     "Cleared tracking for pairId=" +
                             pairId +
                             ": logDir=" +
-                            removedLogDir +
-                            ", pairId cleared: " +
-                            removed +
+                            removed.logDir +
+                            ", generation=" +
+                            removed.generation +
                             ". Monitor will reprocess status files on next poll.");
         } else {
             log.warn(
-                    "Could not find logDir for pairId=" +
+                    "No tracking entry for pairId=" +
                             pairId +
-                            " in trackedPairs. " +
-                            "Pair may not have been registered with monitor yet.");
+                            ". Pair may not have been registered with monitor yet.");
         }
     }
 
@@ -279,72 +376,79 @@ public class LocalJobMonitor {
             int checkedCount = 0;
             int foundCount = 0;
 
-            for (Map.Entry<String, Integer> entry : trackedPairs.entrySet()) {
-                String logDir = entry.getKey();
-                int pairId = entry.getValue();
+            for (Map.Entry<Integer, PairExecutionState> entry : pairs.entrySet()) {
+                int pairId = entry.getKey();
+                // The state captured here is what every write below is checked against.
+                // Holding it, rather than re-reading the map, is what makes "has this
+                // pair been rerun since I started?" answerable at all.
+                PairExecutionState state = entry.getValue();
+                String logDir = state.logDir;
                 checkedCount++;
 
                 Path statusFile = Paths.get(logDir).resolve("status.json");
 
-                // Check if status file exists and hasn't been processed yet
-                if (Files.exists(statusFile)) {
-                    foundCount++;
-                    log.info("DEBUG_TRACE: Monitor checking pairId=" + pairId + " exists=true processed="
-                            + processedPairIds.contains(pairId) + " logDir=" + logDir);
-
-                    // Use pairId for tracking instead of path
-                    if (!processedPairIds.contains(pairId)) {
-                        log.info(
-                                "DEBUG_TRACE: Found new status.json for pairId=" +
-                                        pairId +
-                                        ", logDir=" +
-                                        logDir);
-                        // Process the job
-                        // NOTE: If processing fails, we don't add to processedPairIds
-                        // so we can try again next poll
-                        try {
-                            boolean isTerminal = processCompletedJob(pairId, logDir);
-                            log.info("DEBUG_TRACE: processCompletedJob result for pairId=" + pairId + " isTerminal="
-                                    + isTerminal);
-                            if (isTerminal) {
-                                processedPairIds.add(pairId);
-                                log.info(
-                                        "Monitor: Successfully processed pairId=" +
-                                                pairId);
-                            } else {
-                                log.debug("Monitor: Job still running for pairId=" + pairId + ", will re-check later.");
-                            }
-                        } catch (Exception e) {
-                            log.error(
-                                    "Monitor: Error processing pairId=" +
-                                            pairId +
-                                            ", logDir=" +
-                                            logDir,
-                                    e);
-                            // Mark as error so we don't keep retrying
-                            try {
-                                JobPairs.setStatusForPairAndStages(
-                                        pairId,
-                                        StatusCode.ERROR_RUNSCRIPT.getVal());
-                                log.warn(
-                                        "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
-                                                pairId +
-                                                " due to processing error");
-                                processedPairIds.add(pairId);
-                            } catch (Exception ex) {
-                                log.error(
-                                        "Monitor: CRITICAL - Cannot set error status for pairId=" +
-                                                pairId,
-                                        ex);
-                            }
-                        }
-                    }
-                } else {
+                if (!Files.exists(statusFile)) {
                     log.trace(
                             "Monitor: No status.json yet for pairId=" +
                                     pairId +
                                     ", logDir=" +
                                     logDir);
+                    continue;
+                }
+
+                foundCount++;
+                // A pair present in the map is by definition not yet processed: a
+                // terminal result retires the entry. The separate processedPairIds set
+                // that used to answer this question is gone, and with it the state in
+                // which a pair was both untracked and marked processed.
+                log.debug("Monitor: found status.json for pairId=" + pairId
+                        + ", generation=" + state.generation + ", logDir=" + logDir);
+
+                try {
+                    boolean isTerminal = processCompletedJob(pairId, state);
+                    if (!isTerminal) {
+                        log.debug("Monitor: Job still running for pairId=" + pairId + ", will re-check later.");
+                    } else if (retire(pairId, state)) {
+                        log.info("Monitor: Successfully processed pairId=" + pairId);
+                    } else {
+                        log.info("Monitor: pairId=" + pairId + " was rerun while this poll ran;"
+                                + " discarding the superseded run's result and leaving the new run tracked");
+                    }
+                } catch (Exception e) {
+                    log.error(
+                            "Monitor: Error processing pairId=" +
+                                    pairId +
+                                    ", logDir=" +
+                                    logDir,
+                            e);
+                    try {
+                        // Only blame the run that actually failed. Recording
+                        // ERROR_RUNSCRIPT unconditionally would stamp this failure onto
+                        // a rerun that had already started and was fine.
+                        if (isCurrent(pairId, state)) {
+                            JobPairs.setStatusForPairAndStages(
+                                    pairId,
+                                    StatusCode.ERROR_RUNSCRIPT.getVal());
+                            log.warn(
+                                    "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
+                                            pairId +
+                                            " due to processing error");
+                        } else {
+                            log.warn("Monitor: processing failed for pairId=" + pairId
+                                    + " but it has since been rerun; not recording the failure"
+                                    + " against the new run");
+                        }
+                        // Retire either way, and generation-guarded either way: left in
+                        // place a failed entry was counted as work on every later poll,
+                        // which held the adaptive interval at its base and never let the
+                        // poller back off, while the map grew with every failed job.
+                        retire(pairId, state);
+                    } catch (Exception ex) {
+                        log.error(
+                                "Monitor: CRITICAL - Cannot set error status for pairId=" +
+                                        pairId,
+                                ex);
+                    }
                 }
             }
 
@@ -390,12 +494,34 @@ public class LocalJobMonitor {
         }
     }
 
-    private boolean processCompletedJob(int pairId, String logDir)
+    private boolean processCompletedJob(int pairId, PairExecutionState state)
             throws Exception {
-        Path outputDir = Paths.get(logDir);
+        Path outputDir = Paths.get(state.logDir);
 
         // 1. Read status and stageNumber from status.json (single Gson parse)
         StatusAndStage ss = readStatusFile(outputDir, pairId);
+        if (ss == null) {
+            // Not readable yet, most likely read while the producer was writing it.
+            // Leave the pair tracked and unprocessed so the next poll tries again, and
+            // only call it a failure once it has stayed unreadable for several polls --
+            // a file that is genuinely corrupt must not be retried forever either.
+            int failures = recordParseFailure(pairId, state);
+            if (failures < 0) {
+                log.info("status.json for pairId=" + pairId + " was unreadable, but the pair"
+                        + " has been rerun since; discarding the superseded run");
+                return false;
+            }
+            if (failures < MAX_STATUS_PARSE_FAILURES) {
+                log.info("status.json for pairId=" + pairId + " unreadable ("
+                        + failures + "/" + MAX_STATUS_PARSE_FAILURES + "); retrying next poll");
+                return false;
+            }
+            log.error("status.json for pairId=" + pairId + " has been unreadable for "
+                    + failures + " consecutive polls; recording it as a runscript error");
+            ss = new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+        } else {
+            clearParseFailures(pairId, state);
+        }
 
         // 2. Parse runsolver stats if available
         RunSolverStats stats = parseRunSolverStats(outputDir);
@@ -403,19 +529,90 @@ public class LocalJobMonitor {
         // 3. Parse attributes if post-processor ran
         Properties attributes = parseAttributes(outputDir);
 
-        // 4. Update database
-        updateDatabase(pairId, ss.status, ss.stageNumber, stats, attributes);
+        // 4. Re-check the generation immediately before writing. Everything above reads
+        //    files and takes real time; a rerun that landed during it has already
+        //    superseded this result, and writing it would record run N's outcome
+        //    against run N+1 -- a wrong recorded result, not merely a stranded pair.
+        //
+        //    This narrows the window to the width of the check-then-write; it cannot
+        //    close it from inside this process. UpdatePairStatusPrecise refusing to
+        //    overwrite an already-terminal status without _forceOverride is the
+        //    backstop for what remains.
+        if (!isCurrent(pairId, state)) {
+            log.info("pairId=" + pairId + " was rerun while its output was being read;"
+                    + " discarding the superseded run's result rather than recording it");
+            return false;
+        }
 
-        // 5. Check if status is terminal (completed or failed)
-        // If so, remove from tracking. If running/processing, keep tracking.
+        // 5. Update database, with runsolver's verdict allowed to correct the status
+        //    bash derived by grepping prose.
+        updateDatabase(
+            pairId,
+            reconcileWithRunsolver(pairId, ss.status, stats),
+            ss.stageNumber,
+            stats,
+            attributes
+        );
+
+        // 6. Report whether this run reached a terminal status. Retiring the pair is the
+        //    caller's job, so that the removal is generation-guarded in one place.
         if (ss.status.finishedRunning() || ss.status.failed() || ss.status == StatusCode.STATUS_COMPLETE) {
-            trackedPairs.remove(logDir);
             log.info("Job execution finished for pairId=" + pairId + " with status=" + ss.status);
             return true;
         } else {
             log.debug("Job still running (status=" + ss.status + "), continuing to monitor pairId=" + pairId);
             return false;
         }
+    }
+
+    /**
+     * Lets runsolver's own verdict correct a status that bash derived by grepping prose.
+     *
+     * <p>The status in status.json is not an independent observation. {@code jobscript}
+     * decides it with {@code grep 'CPU time exceeded' "$WATCHFILE"} and two siblings —
+     * the same English sentences the Java parser used to depend on, one layer earlier. If
+     * the wording ever changes, every one of those greps misses, status.json says the run
+     * completed, and {@code TIMEOUT=true} sits unread in var.out beside it.
+     *
+     * <p>So when bash reports a clean completion and runsolver reports a limit breach,
+     * runsolver wins: it computed its verdict against the limits it enforced, not against
+     * a sentence it printed.
+     *
+     * <p>The override is deliberately one-directional. Any status other than
+     * {@code STATUS_COMPLETE} is left alone, because bash sees things runsolver cannot —
+     * {@code JOB_PAIR_DEADLOCKED}, {@code ERROR_DISK_QUOTA_EXCEEDED}, and the
+     * {@code job error:} marker in the solver's stderr are all conditions with no
+     * representation in var.out at all. Runsolver is authoritative for the three limits
+     * it enforces, and for nothing else.
+     */
+    private StatusCode reconcileWithRunsolver(
+        int pairId,
+        StatusCode fromStatusFile,
+        RunSolverStats stats
+    ) {
+        if (fromStatusFile != StatusCode.STATUS_COMPLETE) {
+            return fromStatusFile;
+        }
+
+        StatusCode limit = RunsolverVerdict.classify(
+            stats.timeout,
+            stats.memout,
+            stats.cpuExceeded,
+            stats.wallclockExceeded,
+            stats.memoryExceeded
+        );
+        if (limit == null) {
+            return fromStatusFile;
+        }
+
+        log.warn(
+            "pairId=" + pairId + ": status.json reported STATUS_COMPLETE but runsolver" +
+            " reported a limit breach (TIMEOUT=" + stats.timeout + ", MEMOUT=" +
+            stats.memout + "); recording " + limit + " instead. The bash status is" +
+            " derived by grepping watcher.out prose, so this usually means the prose" +
+            " did not match."
+        );
+        return limit;
     }
 
     /**
@@ -437,8 +634,12 @@ public class LocalJobMonitor {
             JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
 
             if (!obj.has("status")) {
-                log.warn("Could not parse status from status.json for pairId=" + pairId);
-                return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+                // Present but without the field yet: the producer writes this file in
+                // place, so a read can land mid-write. Treat it as not-ready rather than
+                // as a failed run; the caller retries and gives up only after several
+                // consecutive attempts.
+                log.warn("status.json for pairId=" + pairId + " has no status field yet");
+                return null;
             }
 
             int statusCode = obj.get("status").getAsInt();
@@ -448,9 +649,19 @@ public class LocalJobMonitor {
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
             return new StatusAndStage(resolved, stageNumber);
-        } catch (IOException e) {
-            log.error("Failed to read status.json for pairId=" + pairId, e);
-            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+        } catch (IOException | com.google.gson.JsonParseException | IllegalStateException e) {
+            // JsonParser.parseString throws JsonSyntaxException -- a RuntimeException --
+            // on a truncated file, and getAsJsonObject throws IllegalStateException when
+            // the partial content is not yet an object. Neither was caught here, so both
+            // escaped to the poll loop's catch(Exception), which recorded ERROR_RUNSCRIPT
+            // and marked the pair processed: one unlucky read during a write turned a
+            // healthy run into a permanent failure that was never retried.
+            //
+            // Returning null says "not readable yet" instead. That is not the same as
+            // catching the exception and returning the old error sentinel, which would
+            // have produced the identical permanent failure by a tidier route.
+            log.warn("status.json for pairId=" + pairId + " is not readable yet: " + e.getMessage());
+            return null;
         }
     }
 
@@ -499,46 +710,21 @@ public class LocalJobMonitor {
     private RunSolverStats parseRunSolverStats(Path outputDir) {
         RunSolverStats stats = new RunSolverStats();
 
-        // Try stats.json first (written by functions.bash in container/local mode)
-        Path statsJson = outputDir.resolve("stats.json");
-        if (Files.exists(statsJson)) {
-            try {
-                String json = Files.readString(statsJson);
-                stats.wallclockTime = extractDouble(json, "wallclockTime");
-                stats.cpuTime = extractDouble(json, "cpuTime");
-                stats.userTime = extractDouble(json, "userTime");
-                stats.systemTime = extractDouble(json, "systemTime");
-                stats.maxVirtualMemory = extractDouble(
-                        json,
-                        "maxVirtualMemory");
-                stats.maxResidentSetSize = extractLong(
-                        json,
-                        "maxResidentSetSize");
-                stats.stageNumber = extractInt(json, "stageNumber");
+        // The three sources are complementary, not alternatives, so all three are read.
+        //
+        // This used to return as soon as stats.json parsed -- the same defect fixed in
+        // ContainerJobMonitor by 316668fd2 -- which left var.out and watcher.out
+        // unread whenever stats.json existed. It also meant a stats.json that parsed
+        // but was missing fields silently produced zeros, because extractDouble returns
+        // 0.0 on no match, with runsolver's own var.out sitting unread beside it.
+        //
+        // Order matters: var.out and watcher.out first, stats.json last so it stays
+        // authoritative for the fields it carries, and the stats.json application below
+        // only overwrites a field when the key is actually present.
 
-                // Optional: disk size (bytes)
-                long ds = extractLong(json, "diskSize");
-                if (ds > 0) {
-                    stats.diskSize = ds;
-                }
-
-                // Optional: hostname of execution host/container
-                Matcher m = Pattern.compile(
-                        "\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
-                if (m.find()) {
-                    stats.hostname = m.group(1);
-                }
-
-                log.debug("Parsed stats from stats.json: " + stats);
-                return stats;
-            } catch (IOException e) {
-                log.warn(
-                        "Failed to parse stats.json, falling back to var.out",
-                        e);
-            }
-        }
-
-        // Fall back to var.out (runsolver format)
+        // var.out (runsolver's -v output). Keys quoted from RunSolverSource/Watcher.hh:
+        //   :454 "WCTIME="   :457 "CPUTIME="   :460 "USERTIME="
+        //   :463 "SYSTEMTIME="   :469 "MAXVM="
         Path varFile = outputDir.resolve("var.out");
         if (Files.exists(varFile)) {
             try {
@@ -557,6 +743,16 @@ public class LocalJobMonitor {
                     } else if (line.startsWith("MAXVM=")) {
                         stats.maxVirtualMemory = Double.parseDouble(
                                 line.substring(6));
+                    } else if (line.startsWith("TIMEOUT=")) {
+                        // Watcher.hh:472, written with boolalpha so the value is the
+                        // lowercase word true/false. The prefix match also keeps us off
+                        // the "# TIMEOUT: ..." comment line above it.
+                        stats.timeout = Boolean.parseBoolean(
+                                line.substring("TIMEOUT=".length()).trim());
+                    } else if (line.startsWith("MEMOUT=")) {
+                        // Watcher.hh:475, same form.
+                        stats.memout = Boolean.parseBoolean(
+                                line.substring("MEMOUT=".length()).trim());
                     }
                 }
                 log.debug("Parsed stats from var.out: " + stats);
@@ -565,18 +761,124 @@ public class LocalJobMonitor {
             }
         }
 
+        // watcher.out (runsolver's -w output). RunSolverSource/Watcher.hh:396 writes
+        //   cout << "maximum resident set size= " << r.ru_maxrss
+        // with an EQUALS sign. functions.bash:869 reads the same line with
+        // awk '{print $5}', which agrees. A parser written against a colon here would
+        // silently record 0 -- that mistake was made in ContainerJobMonitor and fixed
+        // in 623dd295e.
+        Path watcherFile = outputDir.resolve("watcher.out");
+        if (Files.exists(watcherFile)) {
+            try {
+                Pattern rss = Pattern.compile(
+                        "maximum resident set size=\\s*(\\d+)");
+                for (String line : Files.readAllLines(watcherFile)) {
+                    Matcher m = rss.matcher(line);
+                    if (m.find()) {
+                        stats.maxResidentSetSize = Long.parseLong(m.group(1));
+                    }
+                    // Prose from stopSolver (Watcher.hh:717-726). Used only to say which
+                    // limit fired; TIMEOUT=/MEMOUT= in var.out say whether one did.
+                    if (line.contains("CPU time exceeded")) {
+                        stats.cpuExceeded = true;
+                    } else if (line.contains("wall clock time exceeded")) {
+                        stats.wallclockExceeded = true;
+                    } else if (line.contains("VSize exceeded")
+                            || line.contains("Maximum memory exceeded")) {
+                        stats.memoryExceeded = true;
+                    }
+                }
+            } catch (IOException | NumberFormatException e) {
+                log.warn("Failed to parse watcher.out", e);
+            }
+        }
+
+        // stats.json last (written by containerWriteStats, functions.bash:47). It
+        // carries timings and sizes only -- no exit code and no limit information.
+        Path statsJson = outputDir.resolve("stats.json");
+        if (Files.exists(statsJson)) {
+            try {
+                String json = Files.readString(statsJson);
+                // Each of these keeps the value already read above when the key is
+                // absent, so a truncated stats.json degrades to var.out instead of
+                // zeroing a measurement that was successfully read.
+                stats.wallclockTime = extractDoubleOr(
+                        json, "wallclockTime", stats.wallclockTime);
+                stats.cpuTime = extractDoubleOr(json, "cpuTime", stats.cpuTime);
+                stats.userTime = extractDoubleOr(json, "userTime", stats.userTime);
+                stats.systemTime = extractDoubleOr(
+                        json, "systemTime", stats.systemTime);
+                stats.maxVirtualMemory = extractDoubleOr(
+                        json, "maxVirtualMemory", stats.maxVirtualMemory);
+                stats.maxResidentSetSize = extractLongOr(
+                        json, "maxResidentSetSize", stats.maxResidentSetSize);
+                stats.stageNumber = extractIntOr(
+                        json, "stageNumber", stats.stageNumber);
+
+                // Optional: disk size (bytes)
+                long ds = extractLong(json, "diskSize");
+                if (ds > 0) {
+                    stats.diskSize = ds;
+                }
+
+                // Optional: hostname of execution host/container
+                Matcher m = Pattern.compile(
+                        "\"hostname\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
+                if (m.find()) {
+                    stats.hostname = m.group(1);
+                }
+
+                log.debug("Parsed stats from stats.json: " + stats);
+            } catch (IOException | NumberFormatException e) {
+                // NumberFormatException for the same reason var.out and watcher.out catch
+                // it above. The ...Or helpers match on [0-9.]+ / [0-9]+, which admits
+                // "1.2.3", "." and digit strings past Integer/Long range -- a garbled
+                // value throws out of the parse instead of failing to match, so without
+                // this it escapes parseRunSolverStats entirely. Aborting here leaves every
+                // remaining field at the value var.out and watcher.out already established
+                // (the fallback each extractOr was handed), so the supplemental source
+                // degrades on its own rather than taking the measurement down with it.
+                log.warn(
+                        "Failed to parse stats.json; using var.out and watcher.out only",
+                        e);
+            }
+        }
+
         return stats;
     }
 
-    private double extractDouble(String json, String key) {
+    /**
+     * Returns the JSON value for {@code key}, or {@code fallback} when the key is
+     * absent.
+     *
+     * <p>Distinct from {@link #extractDouble}, which cannot tell "absent" from "zero"
+     * and so would overwrite a good value with 0 when a field is missing.
+     */
+    private double extractDoubleOr(String json, String key, double fallback) {
         Matcher m = Pattern.compile(
                 "\"" + key + "\"\\s*:\\s*([0-9.]+)").matcher(json);
-        if (m.find()) {
-            return Double.parseDouble(m.group(1));
-        }
-        return 0.0;
+        return m.find() ? Double.parseDouble(m.group(1)) : fallback;
     }
 
+    /** @see #extractDoubleOr */
+    private long extractLongOr(String json, String key, long fallback) {
+        Matcher m = Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(json);
+        return m.find() ? Long.parseLong(m.group(1)) : fallback;
+    }
+
+    /** @see #extractDoubleOr */
+    private int extractIntOr(String json, String key, int fallback) {
+        Matcher m = Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(json);
+        return m.find() ? Integer.parseInt(m.group(1)) : fallback;
+    }
+
+    /**
+     * Only still used for diskSize, where 0 and absent are treated alike because the
+     * caller guards with {@code if (ds > 0)}. Everything else goes through the
+     * {@code ...Or} variants, which can tell the two apart.
+     */
     private long extractLong(String json, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(
                 json);
@@ -584,15 +886,6 @@ public class LocalJobMonitor {
             return Long.parseLong(m.group(1));
         }
         return 0L;
-    }
-
-    private int extractInt(String json, String key) {
-        Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*([0-9]+)").matcher(
-                json);
-        if (m.find()) {
-            return Integer.parseInt(m.group(1));
-        }
-        return 0;
     }
 
     /**
@@ -612,11 +905,23 @@ public class LocalJobMonitor {
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);
-        JobPairs.setPairStatusPrecise(
+        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
                 pairId,
                 stageNumber,
                 status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal());
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false);
+        if (statusResult == PairStatusResult.FAILED) {
+            // Not recorded. Throwing leaves the pair tracked so a later poll retries it;
+            // returning normally would mark it processed and the result would be lost.
+            throw new Exception(
+                    "Could not record terminal status " + status + " for pair " + pairId
+                            + " stage " + stageNumber);
+        }
+        if (statusResult == PairStatusResult.SUPERSEDED) {
+            log.info("Pair " + pairId + " already had a different terminal status;"
+                    + " keeping the recorded result");
+        }
 
         // Update attributes if any
         if (!attributes.isEmpty()) {
@@ -687,7 +992,7 @@ public class LocalJobMonitor {
      * @return Number of tracked pairs
      */
     public int getTrackedPairCount() {
-        return trackedPairs.size();
+        return pairs.size();
     }
 
     /**
@@ -703,6 +1008,13 @@ public class LocalJobMonitor {
         public long maxResidentSetSize = 0;
         public long diskSize = 0;
         public int stageNumber = 1;
+        /** runsolver's own limit verdicts from var.out (Watcher.hh:471-475). */
+        public boolean timeout = false;
+        public boolean memout = false;
+        /** Set from watcher.out prose; discriminates which limit fired. */
+        public boolean cpuExceeded = false;
+        public boolean wallclockExceeded = false;
+        public boolean memoryExceeded = false;
         public String hostname = null;
 
         @Override

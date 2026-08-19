@@ -154,7 +154,13 @@ public class AddSpace extends HttpServlet {
 		Permission perm = Permissions.getFullPermission();
 		for (Integer id : stickyUsers) {
 			Users.associate(id, newSpaceId);
-			Permissions.set(id, newSpaceId, perm);
+			// Not fatal to the request -- the space exists and its creator already has
+			// permissions -- but silently dropping this leaves an inherited leader with no
+			// permission row, which every consumer reads as denial.
+			if (!Permissions.set(id, newSpaceId, perm)) {
+				log.error("doPost", "Failed to grant sticky leader " + id + " permissions on new space "
+						+ newSpaceId);
+			}
 		}
 		
 		// Also add ALL leaders from the direct parent space
@@ -167,7 +173,10 @@ public class AddSpace extends HttpServlet {
 			if (!stickyUsers.contains(leaderId)) {
 				log.debug("Adding parent leader " + leader.getEmail() + " to new subspace");
 				Users.associate(leaderId, newSpaceId);
-				Permissions.set(leaderId, newSpaceId, perm);
+				if (!Permissions.set(leaderId, newSpaceId, perm)) {
+					log.error("doPost", "Failed to grant parent leader " + leaderId
+							+ " permissions on new space " + newSpaceId);
+				}
 			}
 		} try {
 			if (Communities.isCommunity(newSpaceId)) {

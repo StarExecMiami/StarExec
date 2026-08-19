@@ -10,6 +10,7 @@ import com.google.gson.JsonParser;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -207,14 +208,19 @@ public class ContainerJobMonitor {
      * completed just before teardown, preventing pairs from being left in
      * RUNNING status with no container to recover from.</p>
      *
-     * <p>Thread safety: sets running=false and cancels pending poll before
-     * performing the final scan to prevent races with the scheduled poll.</p>
+     * <p>Thread safety: clearing running stops another poll being scheduled, and
+     * cancelling the pending future stops one that has not started yet. Neither stops a
+     * poll that is already executing -- {@code cancel(false)} does not interrupt it --
+     * so the mutual exclusion that actually prevents the final scan from running
+     * alongside it lives on {@link #checkCompletedJobs()}. This comment previously
+     * claimed the cancel was sufficient; it is not.</p>
      */
     public void drainAndStop() {
         log.info("ContainerJobMonitor: draining final completions before stop...");
         running = false;
 
-        // Cancel any pending poll so we don't race with it
+        // Stops a poll that has not started. One already running is handled by the
+        // lock on checkCompletedJobs, which the final scan below must acquire.
         if (scheduledPoll != null) {
             scheduledPoll.cancel(false);
         }
@@ -258,7 +264,23 @@ public class ContainerJobMonitor {
     /**
      * Checks for completed containers and processes their results.
      */
-    private void checkCompletedJobs() {
+    /**
+     * Synchronized because two threads can reach it: the scheduler thread on its normal
+     * poll, and the shutdown thread through {@link #drainAndStop()}. The scheduler is
+     * single-threaded, so polls never overlap each other -- shutdown is the only other
+     * entrant.
+     *
+     * <p>Without this, a drain beginning while a poll was in flight had both threads
+     * fetching the same completed containers and processing them concurrently: two sets
+     * of database writes for one result, and two attempts to remove the same container.
+     * There is no per-container claim or idempotency key here to fall back on.
+     * {@code scheduledPoll.cancel(false)} does not help, because it will not interrupt a
+     * task that has already started.
+     *
+     * <p>The cost is that shutdown waits for an in-flight poll to finish. That is what
+     * draining means.
+     */
+    private synchronized void checkCompletedJobs() {
         try {
             // Get all completed containers that haven't been processed
             List<PodmanBackend.CompletedContainerInfo> completedJobs =
@@ -388,7 +410,15 @@ public class ContainerJobMonitor {
 
         // 1. Parse runsolver output (var.out)
         RunsolverStats stats = parseRunsolverOutput(outputPath);
-        stats.exitCode = info.exitCode; // Use container exit code as fallback
+        // Only when runsolver did not report one. This assignment was unconditional
+        // despite its comment, so the child's real exit status -- read from
+        // "Child status: N" in watcher.out -- was always discarded in favour of the
+        // container's. A wrapper that exits zero over a failed solver then looked
+        // successful. exitCodeReported distinguishes "runsolver said 0" from "runsolver
+        // said nothing", which a plain 0 cannot.
+        if (!stats.exitCodeReported) {
+            stats.exitCode = info.exitCode;
+        }
 
         // 2. Determine job status from stats
         StatusCode status = determineStatus(stats, outputPath);
@@ -413,25 +443,47 @@ public class ContainerJobMonitor {
      * Parses runsolver var.out and watcher.out files.
      * Also checks for stats.json as an alternative format.
      */
+    /**
+     * True if any source yielded a measurement, i.e. we learned something about this run.
+     *
+     * <p>Every field of {@link RunsolverStats} starts at zero, so an all-zero object is
+     * indistinguishable from "nothing was parsed" -- and that is precisely the case in
+     * which the values must not be written. A real run always reports a positive
+     * wallclock: runsolver measures wall time as a float and no process takes literally
+     * zero seconds. {@code exitCodeReported} is included because a solver that exited
+     * immediately with a status is a run we did observe.
+     */
+    private static boolean hasAnyMeasurement(RunsolverStats stats) {
+        return stats.wallclockTime > 0
+            || stats.cpuTime > 0
+            || stats.userTime > 0
+            || stats.systemTime > 0
+            || stats.maxVirtualMemory > 0
+            || stats.maxResidentSetSize > 0
+            || stats.diskSize > 0
+            || stats.exitCodeReported;
+    }
+
     private RunsolverStats parseRunsolverOutput(Path outputDir) {
         RunsolverStats stats = new RunsolverStats();
 
-        // Try stats.json first (written by functions.bash in container mode)
-        Path statsJson = outputDir.resolve("stats.json");
-        if (Files.exists(statsJson)) {
-            try {
-                String json = Files.readString(statsJson);
-                parseStatsJson(json, stats);
-                log.debug("Parsed stats from stats.json");
-                return stats;
-            } catch (IOException e) {
-                log.warn(
-                    "Failed to parse stats.json, falling back to var.out",
-                    e
-                );
-            }
-        }
-
+        // stats.json (written by functions.bash in container mode) carries timings and
+        // sizes. It carries NO resource-limit information -- containerWriteStats writes
+        // wallclockTime, cpuTime, userTime, systemTime, maxVirtualMemory,
+        // maxResidentSetSize, diskSize and hostname, and nothing else.
+        //
+        // wallclockExceeded, cpuExceeded and memoryExceeded are set only by
+        // parseWatcherLine, from runsolver's own watcher.out. So returning here once
+        // stats.json was found left all three false, and determineStatus then fell
+        // through to STATUS_COMPLETE: in container mode a solver that exhausted its
+        // wallclock, CPU or memory limit was recorded as having finished successfully,
+        // whenever the container itself exited zero.
+        //
+        // The two files are complementary rather than alternatives, so read both.
+        // watcher.out exists in container mode -- updateStats in functions.bash awks it
+        // for "Child status" and "maximum resident set size" on the same path that
+        // writes stats.json -- and the block below already guards on its existence, so
+        // an installation that somehow lacks it behaves exactly as before.
         // Parse var.out
         Path varFile = outputDir.resolve("var.out");
         if (Files.exists(varFile)) {
@@ -455,6 +507,21 @@ public class ContainerJobMonitor {
                 }
             } catch (IOException e) {
                 log.warn("Failed to parse watcher.out", e);
+            }
+        }
+
+        // stats.json last, so it stays authoritative for the fields it carries and this
+        // remains a purely additive change: in container mode the timings are exactly
+        // what they were before, and the only difference is that the limit flags read
+        // from watcher.out above now survive instead of being skipped.
+        Path statsJson = outputDir.resolve("stats.json");
+        if (Files.exists(statsJson)) {
+            try {
+                String json = Files.readString(statsJson);
+                parseStatsJson(json, stats);
+                log.debug("Parsed stats from stats.json");
+            } catch (IOException e) {
+                log.warn("Failed to parse stats.json; using var.out and watcher.out only", e);
             }
         }
 
@@ -583,11 +650,43 @@ public class ContainerJobMonitor {
             (m = Pattern.compile("^MAXVM=([0-9.]+)$").matcher(line)).matches()
         ) {
             stats.maxVirtualMemory = Double.parseDouble(m.group(1));
+        } else if (line.startsWith("TIMEOUT=")) {
+            // Watcher.hh:472 writes this with boolalpha, so the value is the lowercase
+            // word "true" or "false". Matching on the "TIMEOUT=" prefix rather than a
+            // bare "TIMEOUT" is deliberate: the file also carries an explanatory comment
+            // line, "# TIMEOUT: did the solver exceed the time limit?", which a looser
+            // match would hit.
+            stats.timeout = Boolean.parseBoolean(
+                line.substring("TIMEOUT=".length()).trim());
+        } else if (line.startsWith("MEMOUT=")) {
+            // Watcher.hh:475, same form, same reason.
+            stats.memout = Boolean.parseBoolean(
+                line.substring("MEMOUT=".length()).trim());
         }
     }
 
     /**
      * Parses a line from watcher.out (runsolver format).
+     */
+    /**
+     * Every literal matched here is quoted from runsolver's own source, which is
+     * vendored at {@code org/starexec/config/sge/RunSolverSource/}. The line numbers
+     * are given so the next person can re-derive them instead of trusting this comment:
+     *
+     * <pre>
+     *   Watcher.hh:325  cout &lt;&lt; "Child status: " &lt;&lt; WEXITSTATUS(childstatus)
+     *   Watcher.hh:396  cout &lt;&lt; "maximum resident set size= " &lt;&lt; r.ru_maxrss
+     *   Watcher.hh:717  stopSolver("Maximum CPU time exceeded: ...")
+     *   Watcher.hh:720  stopSolver("Maximum wall clock time exceeded: ...")
+     *   Watcher.hh:723  stopSolver("Maximum VSize exceeded: ...")
+     *   Watcher.hh:726  stopSolver("Maximum memory exceeded: ...")
+     * </pre>
+     *
+     * <p>The RSS line uses <b>=</b>, not <b>:</b>. This matcher previously used a colon
+     * and so could never fire against real output; the unit test did not catch it because
+     * its fixture had been written from this parser rather than from the producer above.
+     * That is the reason for this comment: a fixture or pattern that cannot be traced to
+     * a line of runsolver source is not evidence.
      */
     private void parseWatcherLine(String line, RunsolverStats stats) {
         Matcher m;
@@ -596,10 +695,11 @@ public class ContainerJobMonitor {
             (m = Pattern.compile("Child status: (\\d+)").matcher(line)).find()
         ) {
             stats.exitCode = Integer.parseInt(m.group(1));
+            stats.exitCodeReported = true;
         } else if (
-            (m = Pattern.compile("maximum resident set size: (\\d+)").matcher(
-                    line
-                )).find()
+            (m = Pattern.compile(
+                    "maximum resident set size=\\s*(\\d+)"
+                ).matcher(line)).find()
         ) {
             stats.maxResidentSetSize = Long.parseLong(m.group(1));
         } else if (line.contains("wall clock time exceeded")) {
@@ -608,6 +708,12 @@ public class ContainerJobMonitor {
             stats.cpuExceeded = true;
         } else if (line.contains("VSize exceeded")) {
             stats.memoryExceeded = true;
+        } else if (line.contains("Maximum memory exceeded")) {
+            // Watcher.hh:726, raised when runsolver is given -R. That flag is not
+            // passed today, so this branch is currently unreachable -- but it costs one
+            // line, and without it adding -R later would silently record every memory
+            // kill as a clean completion.
+            stats.memoryExceeded = true;
         }
     }
 
@@ -615,13 +721,26 @@ public class ContainerJobMonitor {
      * Determines the job status based on runsolver stats and output files.
      */
     private StatusCode determineStatus(RunsolverStats stats, Path outputDir) {
-        if (stats.wallclockExceeded) {
-            return StatusCode.EXCEED_RUNTIME;
-        } else if (stats.cpuExceeded) {
-            return StatusCode.EXCEED_CPU;
-        } else if (stats.memoryExceeded) {
-            return StatusCode.EXCEED_MEM;
-        } else if (stats.exitCode != 0) {
+        // Detection is runsolver's TIMEOUT=/MEMOUT=; the prose only picks between
+        // EXCEED_CPU and EXCEED_RUNTIME. See RunsolverVerdict for why round that way.
+        //
+        // This used to test the prose flags alone, so a solver killed for exceeding a
+        // limit was recorded as STATUS_COMPLETE whenever the sentence failed to match --
+        // and it fell through to STATUS_COMPLETE for every SIGKILLed solver anyway,
+        // because Watcher.hh:326-331 prints no "Child status:" line on the WIFSIGNALED
+        // path, leaving exitCode at 0.
+        StatusCode limit = RunsolverVerdict.classify(
+            stats.timeout,
+            stats.memout,
+            stats.cpuExceeded,
+            stats.wallclockExceeded,
+            stats.memoryExceeded
+        );
+        if (limit != null) {
+            return limit;
+        }
+
+        if (stats.exitCode != 0) {
             // Check if var.out exists - if not, likely runscript error
             if (!Files.exists(outputDir.resolve("var.out"))) {
                 return StatusCode.ERROR_RUNSCRIPT;
@@ -690,12 +809,27 @@ public class ContainerJobMonitor {
         Properties attributes,
         int partitionIndex
     ) throws Exception {
-        JobPairs.setPairStatusPrecise(
+        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
             pairId,
             stageNumber,
             status.getVal(),
-            StatusCode.STATUS_NOT_REACHED.getVal()
+            StatusCode.STATUS_NOT_REACHED.getVal(),
+            false
         );
+        if (statusResult == PairStatusResult.FAILED) {
+            // The status never landed. Throwing keeps the container in place so the next
+            // poll retries; swallowing this would remove the container and lose the
+            // result permanently, since nothing else re-reads its output.
+            throw new Exception(
+                "Could not record terminal status " + status + " for pair " + pairId
+                    + " stage " + stageNumber);
+        }
+        if (statusResult == PairStatusResult.SUPERSEDED) {
+            // Someone else recorded a result first. The pair is finished; carry on and
+            // let the caller release the container rather than retrying forever.
+            log.info("Pair " + pairId + " already had a different terminal status;"
+                + " keeping the recorded result");
+        }
 
         // Set end_time. This call is non-fatal: a failure here does not prevent
         // the rest of the DB update from completing.
@@ -708,7 +842,29 @@ public class ContainerJobMonitor {
             log.warn("Failed to set end_time for pair " + pairId, e);
         }
 
-        // Persist run stats (if available) using JobPairs.updateRunSolverStats
+        // Persist run stats using JobPairs.updateRunSolverStats.
+        //
+        // Only when we actually parsed something. RunsolverStats initialises every
+        // measurement to 0, so if var.out, watcher.out and stats.json were all missing
+        // or unparseable, writing unconditionally pushed wallclock=0, cpu=0, max_vmem=0
+        // into jobpair_stage_data through UpdatePairRunSolverStats -- a solver that ran
+        // for an hour recorded as having taken no time. On a platform whose numbers
+        // decide published rankings that is a wrong result, not a missing one, and the
+        // only trace it left was a debug line.
+        //
+        // LocalJobMonitor has always guarded this; the container path -- the one every
+        // current deployment uses -- did not.
+        if (!hasAnyMeasurement(stats)) {
+            // Deliberately warn rather than debug: a completed run that yielded no
+            // parseable output is a fault worth seeing, and staying silent about it is
+            // how this stayed invisible.
+            log.warn(
+                "No parseable runsolver output for pair " + pairId +
+                " (no var.out, watcher.out or stats.json field was read); leaving the" +
+                " recorded measurements untouched rather than overwriting them with zeros"
+            );
+            return;
+        }
         try {
             String nodeName = (stats.hostname != null &&
                     !stats.hostname.isEmpty())
@@ -723,7 +879,14 @@ public class ContainerJobMonitor {
                 stats.systemTime,
                 stats.maxVirtualMemory,
                 stats.maxResidentSetSize,
-                stats.stageNumber,
+                // The caller's stageNumber, not stats.stageNumber. Both originate from
+                // CURRENT_STAGE_NUMBER in functions.bash and normally agree, but
+                // stats.stageNumber falls back to 1 when stats.json is absent, while
+                // this parameter is the stage read from status.json and already used
+                // for the status write above. Using it keeps the stats and the status
+                // on the same row by construction, instead of landing the stats on
+                // stage 1 or raising "Stage not found" into a swallowed exception.
+                stageNumber,
                 stats.diskSize
             );
             if (ok) {
@@ -778,9 +941,18 @@ public class ContainerJobMonitor {
         public long diskSize = 0;
         public int stageNumber = 1;
         public int exitCode = 0;
+        /** True once runsolver reported a child status; 0 alone cannot say. */
+        public boolean exitCodeReported = false;
+        /** Set from watcher.out prose; discriminates which limit fired. */
         public boolean wallclockExceeded = false;
         public boolean cpuExceeded = false;
         public boolean memoryExceeded = false;
+        /**
+         * runsolver's own verdicts from var.out (Watcher.hh:471-475). These, not the
+         * prose above, are what detect that a limit fired at all.
+         */
+        public boolean timeout = false;
+        public boolean memout = false;
         public String hostname = null;
 
         @Override

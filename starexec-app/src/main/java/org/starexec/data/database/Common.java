@@ -268,6 +268,47 @@ public class Common {
 	}
 
 	/**
+	 * Reports whether the database is currently reachable. Intended for readiness
+	 * probes, which run unattended and on a fixed period.
+	 *
+	 * <p>Deliberately <b>not</b> {@code synchronized}. {@link #getConnection()} holds
+	 * the {@code Common} class monitor for the whole time it blocks inside
+	 * {@code dataPool.getConnection()}, so a probe that took the same monitor would
+	 * queue behind — and lengthen — the exact stall it exists to report, once per
+	 * probe period, forever. A health check must never be able to deepen the outage
+	 * it is reporting.
+	 *
+	 * <p>Borrowing is itself the round trip: the pool is built with
+	 * {@code testOnBorrow=true} and {@code validationQuery="SELECT 1"}, so a
+	 * connection handed back has already answered the database. {@code isValid}
+	 * then bounds the check explicitly, because the pool's {@code maxWait} is 10s —
+	 * longer than a probe's timeout budget — and an unbounded check would be scored
+	 * as a timeout rather than a definite answer.
+	 *
+	 * <p>This bypasses {@link #getConnection()} on purpose, so it does not touch the
+	 * hand-maintained {@code connectionsOpened} counter, and it closes through
+	 * try-with-resources rather than {@code safeClose} for the same reason. Both
+	 * sides of that counter stay balanced.
+	 *
+	 * @param timeoutSeconds how long the validation itself may take
+	 * @return true if a pooled connection was obtained and validated
+	 */
+	public static boolean isDatabaseReachable(int timeoutSeconds) {
+		if (dataPool == null) {
+			// Never initialized: early startup, or a unit test with no pool. Not
+			// reachable is the honest answer — "true" here would report a process
+			// that has no database at all as ready to serve.
+			return false;
+		}
+		try (Connection con = dataPool.getConnection()) {
+			return con.isValid(timeoutSeconds);
+		} catch (SQLException e) {
+			log.warn("isDatabaseReachable", "database probe failed: " + e.getMessage());
+			return false;
+		}
+	}
+
+	/**
 	 * Configures and sets up the Tomcat JDBC connection pool for PostgreSQL.
 	 * This method can only be called once in the lifetime of the application.
 	 * @author Tyler Jensen (adapted for Postgres)
@@ -471,7 +512,13 @@ public class Common {
 			con = Common.getConnection();
 			Common.beginTransaction(con);
 			T result = work.accept(con);
-			Common.endTransaction(con);
+			// Commit here rather than through endTransaction: that helper swallows a
+			// failed commit, which would let this method return success for work the
+			// database rolled back. Callers would then treat un-persisted rows as
+			// durable -- for the batched upload path, that means advancing a resume
+			// checkpoint past benchmarks that were never written.
+			con.commit();
+			enableAutoCommit(con);
 			return result;
 		} catch (SQLException e) {
 			log.warn("runInTransaction", "Rolling back transaction due to SQLException", e);

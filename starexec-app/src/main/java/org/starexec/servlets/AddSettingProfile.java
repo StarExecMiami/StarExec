@@ -108,6 +108,11 @@ public class AddSettingProfile extends HttpServlet {
 						HttpServletResponse.SC_FORBIDDEN,
 						"You do not have permission to add a setting profile for this user."
 				);
+				// sendError does not end the method. Without this return the profile was
+				// created anyway, owned by whichever user the caller named -- note the
+				// validation branch above already returns, so only the authorization
+				// branch was missing it.
+				return;
 			}
 
 			//all profiles must set the following attributes

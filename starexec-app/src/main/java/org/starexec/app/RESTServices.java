@@ -3430,7 +3430,11 @@ public class RESTServices {
 		Connection commandConnection = RESTHelpers.instantiateConnectionForCopyToStardev(instance, request);
 		int loginStatus = commandConnection.login();
 		if (loginStatus < 0) {
-			new ValidatorStatusCode(false, org.starexec.command.Status.getStatusMessage(loginStatus));
+			// The result used to be constructed and dropped, with no return, so a failed
+			// login fell through and the calls below ran on an unauthenticated
+			// connection. The sibling endpoint copyPrimitiveToStarDev returns here.
+			return gson.toJson(
+					new ValidatorStatusCode(false, org.starexec.command.Status.getStatusMessage(loginStatus)));
 		}
 		int spaceId = Integer.parseInt(request.getParameter(R.COPY_TO_STARDEV_SPACE_ID_PARAM));
 		try {
@@ -4316,8 +4320,7 @@ public class RESTServices {
 		if (!Solvers.restoreRecycledSolvers(userId)) {
 			return gson.toJson(ERROR_DATABASE);
 		}
-		// Fix: was "Solvers restored successfully" — see GitHub issue #85 audit
-		return gson.toJson(new ValidatorStatusCode(true, "Solvers deleted successfully"));
+		return gson.toJson(new ValidatorStatusCode(true, "Solvers restored successfully"));
 	}
 
 	/**
@@ -4355,7 +4358,7 @@ public class RESTServices {
 		if (!Solvers.setRecycledSolversToDeleted(userId)) {
 			return gson.toJson(ERROR_DATABASE);
 		}
-		return gson.toJson(new ValidatorStatusCode(true, "Solvers restored successfully"));
+		return gson.toJson(new ValidatorStatusCode(true, "Solvers deleted successfully"));
 	}
 
 	/**
@@ -6212,7 +6215,9 @@ public class RESTServices {
 			return gson.toJson(new ValidatorStatusCode(false, "No spaceId provided"));
 		}
 		ValidatorStatusCode status;
-		status = SpaceSecurity.canCopySpace(desId, userId, srcId);
+		// canMoveSpace, not canCopySpace: a move additionally requires that the
+		// destination is not the space itself or one of its descendants.
+		status = SpaceSecurity.canMoveSpace(desId, userId, srcId);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
 		}
@@ -7222,8 +7227,17 @@ public class RESTServices {
 			return gson.toJson(ERROR_INVALID_PERMISSIONS);
 		}
 		log.info("Pausing all jobs in admin/pauseAll REST service");
+		// A false result no longer means only "a database error". It also covers the case
+		// where the system was paused but at least one execution could not be confirmed
+		// stopped, so no pair was returned to PENDING_SUBMIT. Reporting that as a plain
+		// database error would tell an admin the pause did not happen, when it did — and
+		// reporting it as success would claim every execution had stopped.
 		return Jobs.pauseAll() ? gson.toJson(new ValidatorStatusCode(true, "Jobs paused successfully"))
-				: gson.toJson(ERROR_DATABASE);
+				: gson.toJson(new ValidatorStatusCode(false,
+						"The system was paused, but the operation did not complete: one or more"
+								+ " executions could not be confirmed stopped, so their pairs were"
+								+ " left as they are rather than being made runnable again."
+								+ " Check the logs before resuming."));
 	}
 
 	/**

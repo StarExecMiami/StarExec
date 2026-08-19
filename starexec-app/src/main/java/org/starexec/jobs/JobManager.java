@@ -3,6 +3,7 @@ package org.starexec.jobs;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.DB;
 import org.starexec.constants.R;
@@ -138,6 +139,17 @@ public abstract class JobManager {
 							m.setUserLoadDataFormattedString();
 						}
 					}
+				} else if (nodeCount == 0) {
+					// Distinct from "the queue is full", and it used to be reported as if
+					// it were the same thing: the gate above is queueSize < MULTIPLIER *
+					// nodeCount, so with no nodes it reads queueSize < 0 and is false
+					// however empty the queue is. An idle queue would then log "which has
+					// 0 pairs enqueued", saying nothing about the actual cause.
+					//
+					// Nothing else reports this either. Queue-level warnings live in
+					// submitJobs, which is never reached from here, so a queue with no
+					// nodes simply stopped dispatching in silence.
+					logQueueHasNoNodes(qname, queueSize);
 				} else {
 					log.info("Not adding more job pairs to queue " + qname + ", which has " + queueSize +
 							" pairs enqueued.");
@@ -167,8 +179,37 @@ public abstract class JobManager {
 			return;
 		}
 		mainTemplate = mainTemplate.replace("$$DB_NAME$$", R.POSTGRES_DATABASE);
-		mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
-		mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_POSTGRES_PASSWORD);
+
+		// The generated jobscript is written world-readable into the shared data volume
+		// (see writeJobScript below) and its exports are inherited by every child of the
+		// shell that runs it -- including the solver, which is untrusted third-party code.
+		// Under SGE the solver is launched through `sudo -u`, whose default env_reset
+		// strips the environment; the container backends removed that boundary without
+		// removing the export, so the migration silently widened the exposure.
+		//
+		// On the container backends these credentials are also dead weight: functions.bash
+		// dbExec short-circuits under isContainerMode ("skipping DB query"), and the
+		// job-runner image deliberately ships no postgresql client at all. So nothing is
+		// lost by never substituting them, and the secret never reaches the file.
+		// LocalBackend is included deliberately: it sets CONTAINER_MODE=true
+		// unconditionally (LocalBackend.java:621-624, "always uses file-based status
+		// reporting"), so its jobscripts never shell out to psql either and the
+		// credentials are dead weight there too. Only the genuinely non-container
+		// backends -- sge and oar, whose sendStatus path really does run
+		// `psql ... CALL UpdatePairStatus` -- still need them substituted.
+		boolean containerizedBackend =
+			R.KUBERNETES_TYPE.equals(R.BACKEND_TYPE)
+				|| R.K8S_TYPE.equals(R.BACKEND_TYPE)
+				|| R.K8S_NATIVE_TYPE.equals(R.BACKEND_TYPE)
+				|| R.PODMAN_TYPE.equals(R.BACKEND_TYPE)
+				|| R.LOCAL_TYPE.equals(R.BACKEND_TYPE);
+		if (containerizedBackend) {
+			mainTemplate = mainTemplate.replace("$$DB_USER$$", "");
+			mainTemplate = mainTemplate.replace("$$DB_PASS$$", "");
+		} else {
+			mainTemplate = mainTemplate.replace("$$DB_USER$$", R.COMPUTE_NODE_POSTGRES_USERNAME);
+			mainTemplate = mainTemplate.replace("$$DB_PASS$$", R.COMPUTE_NODE_POSTGRES_PASSWORD);
+		}
 		
 		// For containerized job execution, use the container-specific DB host
 		// Job containers are separate from the app pod, so they can't use localhost
@@ -322,6 +363,49 @@ public abstract class JobManager {
 	 * @param queueSize The number of job pairs enqueued in the given queue
 	 * @param nodeCount The number of nodes in the given queue
 	 */
+	/**
+	 * Reports a queue that has no nodes associated with it, and says which of the two
+	 * causes it is.
+	 *
+	 * <p>The distinction is the useful part. {@code nodeCount} comes from
+	 * {@code queue_assoc}, which is rebuilt each cycle from the backend's node/queue
+	 * associations. If the backend also considers the queue undispatchable, the cluster
+	 * genuinely has nothing for it — a drain, or a queue nothing is labelled for.
+	 *
+	 * <p>But if the backend reports the queue as dispatchable while StarExec counts zero
+	 * nodes, the two disagree, and that disagreement has a specific cause worth naming:
+	 * the node exists in the cluster but has no row in {@code nodes}, so associating it
+	 * throws every cycle. That same state also makes any pair finishing on that node lose
+	 * its runsolver measurements, because {@code UpdatePairRunSolverStats} resolves the
+	 * node by name and raises when it is missing. Pointing at it here saves an operator
+	 * from staring at a queue that mysteriously never moves.
+	 */
+	private static void logQueueHasNoNodes(String qname, int queueSize) {
+		boolean backendThinksItCanRun;
+		try {
+			backendThinksItCanRun = R.BACKEND.isQueueDispatchable(qname);
+		} catch (Exception e) {
+			// Never let a diagnostic break dispatch for the other queues.
+			log.warn("logQueueHasNoNodes", "Could not ask the backend about queue " + qname, e);
+			return;
+		}
+
+		if (backendThinksItCanRun) {
+			log.error("logQueueHasNoNodes",
+					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
+					" associated with it, yet the backend reports it can accept work. StarExec's" +
+					" node table and the cluster disagree: most likely a node exists in the" +
+					" cluster but was never registered here, so associating it fails every" +
+					" cycle. Pairs finishing on such a node also lose their recorded" +
+					" measurements. No pairs will be dispatched to this queue until it is fixed.");
+		} else {
+			log.warn("logQueueHasNoNodes",
+					"Queue " + qname + " has " + queueSize + " pair(s) waiting and no nodes" +
+					" available; the backend confirms it cannot accept work. No pairs will be" +
+					" dispatched to this queue until a node is attached or comes back.");
+		}
+	}
+
 	public static void submitJobs(final List<Job> joblist, final Queue q, int queueSize, final int nodeCount) {
 		final String methodName = "submitJobs";
 		final LoadBalanceMonitor monitor = getMonitor(q.getId());
@@ -329,6 +413,24 @@ public abstract class JobManager {
 
 		try {
 			log.entry(methodName);
+
+			// Asked once per queue per pass, before any pair is touched. A queue that
+			// cannot run anything right now -- every node drained or not ready -- is
+			// skipped, leaving its pairs enqueued here for a later pass.
+			//
+			// This cannot be done inside submitScript. That returns an execution id or an
+			// error, and the error branch below records a terminal ERROR_SGE_REJECT; there
+			// is no value meaning "not now". Failing pairs through a brief drain would
+			// destroy a benchmark run for a condition that resolves itself, so the
+			// decision belongs here, where dispatch is decided, rather than there.
+			//
+			// A permanently unroutable queue is a different case and is still rejected at
+			// submission: it will not fix itself and should be visible.
+			if (!R.BACKEND.isQueueDispatchable(q.getName())) {
+				log.warn(methodName, "Queue " + q.getName() + " cannot accept work at the" +
+						" moment; deferring its pairs to a later pass rather than failing them");
+				return;
+			}
 
 			initMainTemplateIf();
 
@@ -551,7 +653,13 @@ public abstract class JobManager {
 
 							log.trace("About to submit pair " + pair.getId());
 
-							int execId = R.BACKEND.submitScript(pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath);
+							// The queue is passed explicitly. SGE reads it from the "#$ -q"
+							// line written into the script by buildSchedule, but that line
+							// is an inert comment to a backend that places work itself, so
+							// such a backend had no way to learn which queue a pair
+							// belonged to and could run it anywhere.
+							int execId = R.BACKEND.submitScript(
+									pair.getId(), scriptPath, R.BACKEND_WORKING_DIR, logPath, q.getName());
 
 							log.trace("Just submitted pair " + pair.getId());
 
@@ -586,6 +694,21 @@ public abstract class JobManager {
 									);
 								}
 							}
+						} catch (SubmissionDeferredException e) {
+							// MUST precede the generic catch below. The backend did not
+							// attempt this submission -- capacity changed between the
+							// dispatchability check and the authoritative reservation --
+							// so the pair is blameless and must simply stay queued for the
+							// next pass. Falling through to ERROR_SUBMIT_FAIL, or letting
+							// the backend return -1 into ERROR_SGE_REJECT above, would
+							// terminally kill pairs that had nothing wrong with them, one
+							// per pair per scheduling pass, for a condition that resolves
+							// itself. This exception is unchecked, so this ordering is the
+							// entire guarantee.
+							log.debug(
+									"submitJobs",
+									"deferring pair " + pair.getId() + ": " + e.getMessage()
+							);
 						} catch (BenchmarkDependencyMissingException e) {
 							log.error("submitJobs", "ERROR_BENCHMARK for pair: " + pair.getId(), e);
 							setStatusForExistingPair(
@@ -970,7 +1093,14 @@ public abstract class JobManager {
 		replacements.put("$$STAGE_NUMBER_ARRAY$$", numsToBashArray("STAGE_NUMBERS", stageNumbers));
 		replacements.put("$$SOLVER_ID_ARRAY$$", numsToBashArray("SOLVER_IDS", solverIds));
 		replacements.put("$$SOLVER_TIMESTAMP_ARRAY$$", toBashArray("SOLVER_TIMESTAMPS", solverTimestamps, false));
-		replacements.put("$$CONFIG_NAME_ARRAY$$", toBashArray("CONFIG_NAMES", configNames, false));
+		// base64, like SOLVER_NAMES/SOLVER_PATHS/BENCH_INPUT_PATHS below. toBashArray with
+		// base64=false writes NAME[i]="<raw>", so any quote in the value closes the string
+		// and the remainder is parsed as script. Configuration names are validated at
+		// creation now (Solvers.findConfigs), but encoding is what actually makes the
+		// generated script independent of the value's contents -- and it also stops a name
+		// containing $VAR from being expanded inside those double quotes.
+		// Decoded by decodePathArrays in functions.bash.
+		replacements.put("$$CONFIG_NAME_ARRAY$$", toBashArray("CONFIG_NAMES", configNames, true));
 		replacements.put("$$PRE_PROCESSOR_PATH_ARRAY$$", toBashArray("PRE_PROCESSOR_PATHS", preProcessorPaths, false));
 		replacements.put("$$PRE_PROCESSOR_TIME_LIMIT_ARRAY$$",
 				toBashArray("PRE_PROCESSOR_TIME_LIMITS", preProcessorTimeLimits, false));

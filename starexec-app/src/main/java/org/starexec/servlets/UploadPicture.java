@@ -1,9 +1,13 @@
 package org.starexec.servlets;
 
 import org.starexec.constants.R;
+import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Users;
+import org.starexec.data.security.BenchmarkSecurity;
 import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.security.SolverSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.Benchmark;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.PartWrapper;
 import org.starexec.util.SessionUtil;
@@ -53,6 +57,37 @@ public class UploadPicture extends HttpServlet {
 		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Wrong type of request.");
 	}
 
+	/**
+	 * Whether the caller may replace the picture of the entity this request names.
+	 *
+	 * <p>The {@code Id} form field means a user, a solver or a benchmark depending on
+	 * {@code type}, and each is owned by someone different, so each needs its own
+	 * ownership test. An unrecognised type is refused: {@code handleUploadRequest}
+	 * matches no branch for it and would fall through to the default filename.
+	 */
+	private boolean callerMayChangePictureOf(String type, int primId, int userIdOfCaller) {
+		if (Users.isPublicUser(userIdOfCaller)) {
+			return false;
+		}
+		if (GeneralSecurity.hasAdminWritePrivileges(userIdOfCaller)) {
+			return true;
+		}
+		if (type == null) {
+			return false;
+		}
+		switch (type) {
+			case "user":
+				return primId == userIdOfCaller;
+			case R.SOLVER:
+				return SolverSecurity.userOwnsSolverOrIsAdmin(primId, userIdOfCaller);
+			case "benchmark":
+				Benchmark bench = Benchmarks.get(primId);
+				return bench != null && BenchmarkSecurity.userOwnsBenchOrIsAdmin(bench, userIdOfCaller);
+			default:
+				return false;
+		}
+	}
+
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
 		int userIdOfCaller = SessionUtil.getUserId(request);
@@ -60,20 +95,24 @@ public class UploadPicture extends HttpServlet {
 			// Extract data from the multipart request
 			HashMap<String, Object> form = Util.parseMultipartRequest(request);
 
-			String rawUserIdOfOwner = (String) form.get(UploadPicture.ID);
-			int userIdOfOwner = 0;
-			if (Validator.isValidPosInteger(rawUserIdOfOwner)) {
-				userIdOfOwner = Integer.parseInt(rawUserIdOfOwner);
+			String rawPrimId = (String) form.get(UploadPicture.ID);
+			int primId = 0;
+			if (Validator.isValidPosInteger(rawPrimId)) {
+				primId = Integer.parseInt(rawPrimId);
 			} else {
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "User id for request was not an integer.");
+				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Id for request was not an integer.");
 				return;
 			}
 
-
-			boolean callerIsOwner = (userIdOfOwner == userIdOfCaller);
-			boolean callerIsAdmin = GeneralSecurity.hasAdminWritePrivileges(userIdOfCaller);
-			if (!(callerIsOwner || callerIsAdmin) || Users.isPublicUser(userIdOfCaller)) {
-				response.sendError(HttpServletResponse.SC_FORBIDDEN, "You cannot change this user's picture.");
+			// This id names a different entity depending on type, so it has to be
+			// authorized as that entity. It was previously compared against the caller's
+			// user id whatever the type was, so a caller whose own user id happened to
+			// equal some solver's or benchmark's id passed the check and then overwrote
+			// that primitive's picture -- handleUploadRequest writes to
+			// /solvers/Pic<id> or /benchmarks/Pic<id> from the very same parameter.
+			String type = (String) form.get(UploadPicture.TYPE);
+			if (!callerMayChangePictureOf(type, primId, userIdOfCaller)) {
+				response.sendError(HttpServletResponse.SC_FORBIDDEN, "You cannot change this picture.");
 				return;
 			}
 

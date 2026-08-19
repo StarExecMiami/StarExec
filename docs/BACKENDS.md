@@ -6,13 +6,13 @@ Complete guide to StarExec's execution backends: Local, Podman, Kubernetes, SGE,
 
 StarExec supports multiple backends for job execution, each with different characteristics:
 
-| Backend | Isolation | Scalability | Use Case |
-|---------|-----------|-------------|----------|
-| **Local** | ❌ None | Single host, 4-16 jobs | Development, testing |
-| **Podman** | ✅ Container | Single host, 64-100 jobs | Production (single-node) |
-| **Kubernetes** | ✅ Container | Multi-node, scalable | Production (cluster) |
-| **SGE** | ⚠️ Process | Multi-node (HPC) | Legacy HPC clusters |
-| **OAR** | ⚠️ Process | Multi-node (HPC) | Legacy HPC clusters |
+| Backend        | Isolation    | Scalability              | Use Case                 |
+| -------------- | ------------ | ------------------------ | ------------------------ |
+| **Local**      | ❌ None      | Single host, 4-16 jobs   | Development, testing     |
+| **Podman**     | ✅ Container | Single host, 64-100 jobs | Production (single-node) |
+| **Kubernetes** | ✅ Container | Multi-node, scalable     | Production (cluster)     |
+| **SGE**        | ⚠️ Process   | Multi-node (HPC)         | Legacy HPC clusters      |
+| **OAR**        | ⚠️ Process   | Multi-node (HPC)         | Legacy HPC clusters      |
 
 ---
 
@@ -66,11 +66,11 @@ you trust the executed binaries.
 
 Use profiles to balance reproducibility and throughput:
 
-| Profile | Backend | Key knobs | Use when |
-|---|---|---|---|
-| `repro-strict` | Podman | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS=1` | Benchmark reproducibility and cache-noise reduction are the priority |
-| `dev-fast` | Podman | Increase `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` + `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` carefully | Fast local iteration is more important than strict reproducibility |
-| `debug-trusted-local` | Local | `STAREXEC_LOCAL_CONCURRENCY` + `STAREXEC_LOCAL_CORE_LIST` | Deep host-level debugging with trusted workloads |
+| Profile               | Backend | Key knobs                                                                                        | Use when                                                             |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `repro-strict`        | Podman  | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS=1`                                                       | Benchmark reproducibility and cache-noise reduction are the priority |
+| `dev-fast`            | Podman  | Increase `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` + `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` carefully | Fast local iteration is more important than strict reproducibility   |
+| `debug-trusted-local` | Local   | `STAREXEC_LOCAL_CONCURRENCY` + `STAREXEC_LOCAL_CORE_LIST`                                        | Deep host-level debugging with trusted workloads                     |
 
 > Keep resource coupling in mind: total memory pressure scales with concurrent jobs.
 
@@ -109,25 +109,25 @@ or backend mismatch incidents across releases).
 
 ### Feature Matrix
 
-| Feature | Local | Podman | Kubernetes | SGE | OAR |
-|---------|-------|--------|------------|-----|-----|
-| Container isolation | ❌ | ✅ | ✅ | ❌ | ❌ |
-| Resource limits | ⚠️ | ✅ | ✅ | ✅ | ✅ |
-| Job persistence | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Horizontal scaling | ❌ | ❌ | Limited by current implementation maturity | ✅ | ✅ |
-| Untrusted code safe | ❌ | ✅ | ✅ | ⚠️ | ⚠️ |
-| Setup complexity | Low | Medium | High | High | High |
-| Maintenance | Low | Medium | High | High | High |
+| Feature             | Local | Podman | Kubernetes                                 | SGE  | OAR  |
+| ------------------- | ----- | ------ | ------------------------------------------ | ---- | ---- |
+| Container isolation | ❌    | ✅     | ✅                                         | ❌   | ❌   |
+| Resource limits     | ⚠️    | ✅     | ✅                                         | ✅   | ✅   |
+| Job persistence     | ❌    | ✅     | ✅                                         | ✅   | ✅   |
+| Horizontal scaling  | ❌    | ❌     | Limited by current implementation maturity | ✅   | ✅   |
+| Untrusted code safe | ❌    | ✅     | ✅                                         | ⚠️   | ⚠️   |
+| Setup complexity    | Low   | Medium | High                                       | High | High |
+| Maintenance         | Low   | Medium | High                                       | High | High |
 
 ### Performance Comparison
 
-| Backend | Max Concurrent | Jobs/Hour (10-min jobs) | Status |
-|---------|----------------|-------------------------|--------|
-| Local | 4-16 | 24-96 | Stable |
-| Podman | 64-100 | 384-600 | Stable |
-| Kubernetes Native | Not yet validated | Not yet benchmarked | Experimental |
-| SGE | Cluster-dependent | Varies | Legacy |
-| OAR | Cluster-dependent | Varies | Legacy |
+| Backend           | Max Concurrent    | Jobs/Hour (10-min jobs) | Status       |
+| ----------------- | ----------------- | ----------------------- | ------------ |
+| Local             | 4-16              | 24-96                   | Stable       |
+| Podman            | 64-100            | 384-600                 | Stable       |
+| Kubernetes Native | Not yet validated | Not yet benchmarked     | Experimental |
+| SGE               | Cluster-dependent | Varies                  | Legacy       |
+| OAR               | Cluster-dependent | Varies                  | Legacy       |
 
 ---
 
@@ -156,12 +156,12 @@ export STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS=30
 
 ### Concurrency Tuning
 
-| System | Recommended Setting |
-|--------|-------------------|
-| 4-core laptop | `STAREXEC_LOCAL_CONCURRENCY=2` |
-| 8-core workstation | `STAREXEC_LOCAL_CONCURRENCY=4` |
-| 16-core server | `STAREXEC_LOCAL_CONCURRENCY=8` |
-| 32-core server | `STAREXEC_LOCAL_CONCURRENCY=16` |
+| System             | Recommended Setting             |
+| ------------------ | ------------------------------- |
+| 4-core laptop      | `STAREXEC_LOCAL_CONCURRENCY=2`  |
+| 8-core workstation | `STAREXEC_LOCAL_CONCURRENCY=4`  |
+| 16-core server     | `STAREXEC_LOCAL_CONCURRENCY=8`  |
+| 32-core server     | `STAREXEC_LOCAL_CONCURRENCY=16` |
 
 ### Limitations
 
@@ -220,12 +220,12 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5             # Batch size
 
 ### Resource Limits
 
-| Solver Type | Memory | CPU | Wallclock |
-|-------------|--------|-----|-----------|
-| Lightweight (SMT, QF_BV) | 2048 MB | 1 | 300s |
-| Standard (SAT, LIA) | 4096 MB | 1 | 600s |
-| Heavy (QF_NIA) | 8192 MB | 2 | 1200s |
-| Industry (Z3, CVC5) | 16384 MB | 4 | 3600s |
+| Solver Type              | Memory   | CPU | Wallclock |
+| ------------------------ | -------- | --- | --------- |
+| Lightweight (SMT, QF_BV) | 2048 MB  | 1   | 300s      |
+| Standard (SAT, LIA)      | 4096 MB  | 1   | 600s      |
+| Heavy (QF_NIA)           | 8192 MB  | 2   | 1200s     |
+| Industry (Z3, CVC5)      | 16384 MB | 4   | 3600s     |
 
 ### Architecture
 
@@ -258,13 +258,13 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5             # Batch size
 
 Jobs write results to mounted volumes:
 
-| File | Purpose |
-|------|---------|
-| `status.json` | Job status updates |
-| `stats.json` | Runtime statistics |
+| File             | Purpose               |
+| ---------------- | --------------------- |
+| `status.json`    | Job status updates    |
+| `stats.json`     | Runtime statistics    |
 | `attributes.txt` | Post-processor output |
-| `var.out` | Solver stdout |
-| `watcher.out` | Runsolver output |
+| `var.out`        | Solver stdout         |
+| `watcher.out`    | Runsolver output      |
 
 ### Tuning for Performance
 
@@ -358,12 +358,12 @@ preserves still-running Kubernetes Jobs for the next startup recovery pass.
 
 ### Verified differences from the legacy backend
 
-| Aspect | Legacy backend | Current native backend |
-|--------|----------------|------------------------|
-| Execution | Local subprocesses plus `kubectl` | Direct Kubernetes API calls |
-| Monitoring | Legacy backend-specific flow | Polling `KubernetesJobMonitor` |
-| Routing | Dedicated `KubernetesBackend` | `kubernetes`, `k8s`, and `kubernetes-native` all map here |
-| Maturity | Deprecated legacy path with startup warning | Experimental replacement under active development |
+| Aspect     | Legacy backend                              | Current native backend                                    |
+| ---------- | ------------------------------------------- | --------------------------------------------------------- |
+| Execution  | Local subprocesses plus `kubectl`           | Direct Kubernetes API calls                               |
+| Monitoring | Legacy backend-specific flow                | Polling `KubernetesJobMonitor`                            |
+| Routing    | Dedicated `KubernetesBackend`               | `kubernetes`, `k8s`, and `kubernetes-native` all map here |
+| Maturity   | Deprecated legacy path with startup warning | Experimental replacement under active development         |
 
 ### Benchmark isolation policy
 
@@ -415,6 +415,23 @@ export STAREXEC_K8S_JOB_BACKOFF_LIMIT=0
 export STAREXEC_K8S_MAX_CONCURRENT_JOBS=50
 export STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS=300000
 
+# Pods that never start
+# A pod that cannot be scheduled, or cannot pull its image, stays Pending
+# indefinitely: backoffLimit is 0, restartPolicy is Never, and
+# ttlSecondsAfterFinished only reaps Jobs that have finished. Its pair holds a
+# submission slot the whole time, so enough of them stop the backend accepting
+# any work at all.
+#
+# After the warn threshold the pair is logged with Kubernetes' own reason.
+# After the timeout its Job is deleted, the slot is released and the pair is set
+# to ERROR_RUNSCRIPT, which is the status the RERUN_FAILED_PAIRS task reruns --
+# once per pair, recorded in pairs_rerun, surviving a restart. Nothing ran, so
+# no measurement is affected by the retry.
+#
+# Set the timeout to 0 to warn without ever changing a pair's status.
+export STAREXEC_K8S_PENDING_WARN_MINUTES=5
+export STAREXEC_K8S_PENDING_TIMEOUT_MINUTES=60
+
 # Benchmark isolation
 # Keep enabled for academic / competition workloads unless you have measured
 # evidence that sharing CPU resources does not bias benchmark metrics.
@@ -441,6 +458,17 @@ helm install starexec ./charts/starexec \
   - ReadWriteMany is required for validated multi-node shared-PVC scheduling
 - Worker nodes labeled: `starexec.org/worker=true`
 - (Optional) Queue labels: `starexec/queue=<queue-name>`
+- RBAC for the application's ServiceAccount, which the chart's `rbac.yaml`
+  provides: `batch/jobs` (`get, list, watch, create, delete`) and, read-only,
+  `pods` (`get, list`).
+
+  The pods rule is what separates a pod that is running from one that has never
+  started — `JobStatus.active` is defined by Kubernetes as counting pending and
+  running pods alike. Without it StarExec reports an unschedulable pair as
+  RUNNING, `STAREXEC_K8S_PENDING_*` cannot take effect, and the pair waits
+  indefinitely holding a submission slot. The backend degrades to that earlier
+  behaviour and logs once rather than failing, so on an upgrade the chart must
+  land before the feature does anything.
 
 ### Queue Management
 
@@ -536,14 +564,14 @@ export OAR_SERVER=oar-server.example.com
 
 ### Key Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Batch size per submission cycle |
-| `STAREXEC_NODE_MULTIPLIER` | 16 | Queue depth = multiplier × nodes |
-| `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Poll interval for job completion |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Memory limit per container |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | 1 | CPU cores per container |
-| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 300 | Wallclock timeout (seconds) |
+| Parameter                                    | Default | Description                      |
+| -------------------------------------------- | ------- | -------------------------------- |
+| `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`           | 5       | Batch size per submission cycle  |
+| `STAREXEC_NODE_MULTIPLIER`                   | 16      | Queue depth = multiplier × nodes |
+| `STAREXEC_CONTAINER_POLL_INTERVAL_MS`        | 5000    | Poll interval for job completion |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB`       | 4096    | Memory limit per container       |
+| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT`       | 1       | CPU cores per container          |
+| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 300     | Wallclock timeout (seconds)      |
 
 ### Tuning by Workload
 
@@ -578,13 +606,13 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
 
 Track these metrics:
 
-| Metric | Healthy Range | Action if Out of Range |
-|--------|---------------|------------------------|
-| Queue depth | 50-100 | Adjust `NUM_JOB_PAIRS_AT_A_TIME` |
-| CPU utilization | 70-90% | Adjust `CPU_LIMIT` |
-| Memory utilization | 60-80% | Adjust `MEMORY_MB` |
-| Job timeout rate | < 1% | Increase `WALLCLOCK_LIMIT` |
-| OOM kill rate | 0% | Increase `MEMORY_MB` |
+| Metric             | Healthy Range | Action if Out of Range           |
+| ------------------ | ------------- | -------------------------------- |
+| Queue depth        | 50-100        | Adjust `NUM_JOB_PAIRS_AT_A_TIME` |
+| CPU utilization    | 70-90%        | Adjust `CPU_LIMIT`               |
+| Memory utilization | 60-80%        | Adjust `MEMORY_MB`               |
+| Job timeout rate   | < 1%          | Increase `WALLCLOCK_LIMIT`       |
+| OOM kill rate      | 0%            | Increase `MEMORY_MB`             |
 
 ---
 

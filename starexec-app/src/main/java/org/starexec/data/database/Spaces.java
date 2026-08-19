@@ -92,8 +92,16 @@ public class Spaces {
 
 			Permission perm = new Permission(true);
 			perm.setLeader(true);
-			// Set maximal permissions for the user who added the space
-			Permissions.set(userId, newSpaceId, perm, con);
+			// Set maximal permissions for the user who added the space.
+			// Permissions.set reports failure by returning false rather than throwing.
+			// Discarding that left a space whose creator had no permission row, and since
+			// every consumer treats an absent Permission as denial, the creator was locked
+			// out of the space they had just made.
+			if (!Permissions.set(userId, newSpaceId, perm, con)) {
+				log.error(method, "Failed to set creator permissions for user " + userId + " on new space "
+						+ newSpaceId + "; abandoning the space so it is not left unusable");
+				return -1;
+			}
 
 			log.info(method, String.format("New space with name [%s] added by user [%d] to space [%d]", s.getName(), userId,
 			                       s.getParentSpace()
@@ -158,6 +166,12 @@ public class Spaces {
 			Common.beginTransaction(con);
 			// Add space is a multi-step process, so we need to use a transaction
 			int newSpaceId = Spaces.add(con, s, userId);
+			if (newSpaceId < 0) {
+				// The inner add signals failure by returning -1 instead of throwing, so
+				// committing here would persist a half-built space. Returning without
+				// committing lets the finally block roll the whole thing back.
+				return -1;
+			}
 
 			Common.endTransaction(con);
 			return newSpaceId;
@@ -988,7 +1002,29 @@ public class Spaces {
 	}
 
 	private static void rebuildSpaceClosures(int srcId, Connection con) throws SQLException {
-		for (Integer spaceId : getSubSpaceIds(srcId)) {
+		rebuildSpaceClosures(srcId, con, new HashSet<>());
+	}
+
+	/**
+	 * Rebuilds closure entries for every space beneath {@code srcId}.
+	 *
+	 * <p>The {@code visited} set is not an optimisation. This walks direct children, and
+	 * a cycle in the hierarchy would otherwise make it recurse until the stack is
+	 * exhausted, opening a database connection at every level on the way down.
+	 * MoveSpace now refuses to create a cycle, but a database that predates that guard
+	 * may already contain one, and this traversal is what would meet it.
+	 */
+	private static void rebuildSpaceClosures(int srcId, Connection con, Set<Integer> visited) throws SQLException {
+		if (!visited.add(srcId)) {
+			log.warn("rebuildSpaceClosures", "Space " + srcId + " was reached twice while rebuilding closures;"
+					+ " the hierarchy contains a cycle. Stopping this branch rather than recursing forever.");
+			return;
+		}
+		List<Integer> children = getSubSpaceIds(srcId);
+		if (children == null) {
+			return;
+		}
+		for (Integer spaceId : children) {
 			java.sql.PreparedStatement ps = null;
 			try {
 				ps = con.prepareStatement("SELECT starexec.RebuildSpaceClosures(?)");
@@ -997,7 +1033,40 @@ public class Spaces {
 			} finally {
 				Common.safeClose(ps);
 			}
-			rebuildSpaceClosures(spaceId, con);
+			rebuildSpaceClosures(spaceId, con, visited);
+		}
+	}
+
+	/**
+	 * Whether {@code descendantId} lies at or below {@code ancestorId} in the hierarchy.
+	 * A space counts as a descendant of itself: both are equally invalid as the
+	 * destination of a move.
+	 *
+	 * @return true when moving into {@code descendantId} would create a cycle, and on
+	 *         error -- an unanswerable question here must not be read as permission.
+	 */
+	public static boolean isDescendantOf(int ancestorId, int descendantId) {
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
+		try {
+			con = Common.getConnection();
+			ps = con.prepareStatement("SELECT starexec.IsSpaceDescendant(?, ?)");
+			ps.setInt(1, ancestorId);
+			ps.setInt(2, descendantId);
+			results = ps.executeQuery();
+			if (results.next()) {
+				return results.getBoolean(1);
+			}
+			log.error("isDescendantOf", "IsSpaceDescendant returned no row for " + ancestorId + "/" + descendantId);
+			return true;
+		} catch (Exception e) {
+			log.error("isDescendantOf", e);
+			return true;
+		} finally {
+			Common.safeClose(results);
+			Common.safeClose(ps);
+			Common.safeClose(con);
 		}
 	}
 

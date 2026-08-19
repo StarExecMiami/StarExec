@@ -53,6 +53,18 @@ function containerWriteStats {
 	local MAXRSS=$6
 	local STAGE=$7
 	local DISKSIZE=$8
+	# The node this pair ran on, which the database resolves by name.
+	#
+	# Under Kubernetes $(hostname) is the POD name, not the node: nothing in the Job spec
+	# sets spec.hostname or hostNetwork, so a pod is named after itself. Sending that to
+	# UpdatePairRunSolverStats made it raise P0002 -- no such node -- and abort the entire
+	# stats write, losing every measurement for the pair while the pair still looked
+	# successful. STAREXEC_NODE_NAME comes from the downward API (spec.nodeName) and is
+	# exactly the string stored in nodes.name.
+	#
+	# The fallback keeps every other backend working untouched: Podman sets the container
+	# hostname to the worker node name deliberately, and on SGE the hostname is the host.
+	local NODE_NAME="${STAREXEC_NODE_NAME:-$(hostname)}"
 	mkdir -p "$(dirname "$CONTAINER_STATS_FILE")"
 	cat > "$CONTAINER_STATS_FILE" <<EOF
 {
@@ -65,7 +77,7 @@ function containerWriteStats {
   "maxVirtualMemory": $MAXVM,
   "maxResidentSetSize": $MAXRSS,
   "diskSize": $DISKSIZE,
-  "hostname": "$(hostname)"
+  "hostname": "$NODE_NAME"
 }
 EOF
 	log "Container mode: wrote stats for stage $STAGE"
@@ -115,6 +127,10 @@ function decodePathArrays {
 		SOLVER_PATHS[i]=$(     base64 -d <<< "${SOLVER_PATHS[i]}")
 		BENCH_SUFFIXES[i]=$(   base64 -d <<< "${BENCH_SUFFIXES[i]}")
 		BENCH_INPUT_PATHS[i]=$(base64 -d <<< "${BENCH_INPUT_PATHS[i]}")
+		# CONFIG_NAMES joined this list when JobManager began base64-encoding it. It was
+		# the one per-stage name still emitted raw, and it is derived from a filename
+		# inside a user-uploaded archive.
+		CONFIG_NAMES[i]=$(     base64 -d <<< "${CONFIG_NAMES[i]}")
 
 		log "decoded the benchmark input ${BENCH_INPUT_PATHS[i]}"
 	done
@@ -425,15 +441,32 @@ function initSandbox {
 		log "Container mode detected - using container as sandbox (no locking needed)"
 		SANDBOX=1
 		SANDBOX_PARAM=$SANDBOX_USER_ONE
-		# Use all available cores in container - fallback to nproc or 1 if lscpu not available
-		if command -v lscpu &> /dev/null; then
-			coresPerSocket="$(lscpu | grep -E "^ *Core" | sed -e "s/^.* \([0-9][0-9]*\)/\1/")" || coresPerSocket=1
+		# Use the CPUs this container was actually given, not the host's topology.
+		#
+		# This used to compute "0-(N-1)" from lscpu's "Core(s) per socket". lscpu reports
+		# the machine, not the cpuset: it is unaffected by --cpuset-cpus or by a cpuset
+		# the kubelet assigned, so the range it produces names CPU ids we may have no
+		# right to run on. Under a kubelet with --cpu-manager-policy=static a Guaranteed
+		# pod is pinned to whichever CPUs the kubelet chose -- 16-31, say -- and
+		# "--cores 0-15" then asks runsolver to set an affinity outside the container's
+		# cpuset. PodmanBackend now sets a cpuset too, so the same applies there.
+		#
+		# Cpus_allowed_list is the kernel's answer to "which CPUs may this process use",
+		# so it already accounts for the cpuset and for any inherited affinity. Note the
+		# old lscpu branch was the *less* correct of the two: the nproc fallback beneath
+		# it respects sched_getaffinity, while lscpu does not.
+		if [ -r /proc/self/status ] && grep -q '^Cpus_allowed_list:' /proc/self/status; then
+			CORES="$(awk '/^Cpus_allowed_list:/ { print $2 }' /proc/self/status)"
+			log "Container mode: using the CPUs this container is allowed: $CORES"
 		elif command -v nproc &> /dev/null; then
-			coresPerSocket="$(nproc)" || coresPerSocket=1
+			# Correct in count, but loses the real ids -- only right when the container
+			# happens to hold CPU 0 upward.
+			CORES="0-$(($(nproc)-1))"
+			log "Container mode: Cpus_allowed_list unavailable; assuming $CORES from nproc"
 		else
-			coresPerSocket=1
+			CORES="0"
+			log "Container mode: cannot determine allowed CPUs; falling back to $CORES"
 		fi
-		CORES="0-$(($coresPerSocket-1))"
 		WORKING_DIR=$WORKING_DIR_BASE'/sandbox'
 
 		# Ensure working directory exists
@@ -975,6 +1008,34 @@ function copyOutputNoStats {
 # $4 the benchmarking framework
 function copyOutput {
 	updateStats $VARFILE $WATCHFILE $2 $3 $4
+
+	# Runsolver's own verdict files have to leave the sandbox in container mode.
+	#
+	# copyOutputNoStats copies only $STDOUT_FILE and $OUT_DIR/output_files/, so var.out
+	# and watcher.out stayed inside $OUT_DIR and died with the pod. The container
+	# backends read them out of STAREXEC_OUTPUT_DIR to classify limit breaches from
+	# runsolver's authoritative TIMEOUT=/MEMOUT= booleans rather than from grepping its
+	# English prose (see RunsolverVerdict). Without this copy that classification finds
+	# no files, abstains, and silently falls back to the prose-derived status.json --
+	# the very failure the verdict logic exists to remove.
+	#
+	# Same mechanism the post-processor branch below already uses for attributes.txt,
+	# but unconditional: these two files matter whether or not a post-processor is set.
+	# Written before the pod exits, and the Job is only observed complete after that, so
+	# the backend cannot read a half-copied file.
+	if [ "$CONTAINER_MODE" = "true" ] && [ -n "${STAREXEC_OUTPUT_DIR:-}" ]; then
+		mkdir -p "$STAREXEC_OUTPUT_DIR"
+		# if/then rather than `[ -f x ] && cp`, whose non-zero status would abort the
+		# script under set -e when the file is simply absent.
+		if [ -f "$VARFILE" ]; then
+			cp "$VARFILE" "$STAREXEC_OUTPUT_DIR/var.out"
+			log "copied var.out to STAREXEC_OUTPUT_DIR for limit classification"
+		fi
+		if [ -f "$WATCHFILE" ]; then
+			cp "$WATCHFILE" "$STAREXEC_OUTPUT_DIR/watcher.out"
+			log "copied watcher.out to STAREXEC_OUTPUT_DIR for limit classification"
+		fi
+	fi
 
 	if [ "${POST_PROCESSOR_PATH:-}" != "" ]; then
 		log "getting postprocessor"

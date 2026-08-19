@@ -14,6 +14,7 @@ import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
 import org.starexec.util.PaginationQueryBuilder;
 import org.starexec.util.Util;
+import org.starexec.util.Validator;
 
 import org.postgresql.util.PSQLException;
 
@@ -659,8 +660,28 @@ public class Solvers {
 		for (File f : binDir.listFiles()) {
 			if (f.isFile() && f.getName().startsWith(CONFIG_PREFIX)) {
 
+				// This name comes from a filename inside a user-uploaded archive, so it is
+				// attacker-controlled. It used to be trusted verbatim -- the only one of
+				// the three configuration-creation paths that skipped validation
+				// (UploadConfiguration and SaveConfiguration both call this) -- and
+				// JobManager then interpolated it unescaped into the generated bash
+				// jobscript inside double quotes, where a name containing a quote or a
+				// semicolon became executable script text.
+				//
+				// R.PRIMITIVE_NAME_PATTERN admits dots, spaces, dashes and underscores, so
+				// ordinary configuration names are unaffected; it excludes the quoting and
+				// command-separator characters that made this exploitable. Skipped rather
+				// than silently renamed, and logged, so an operator can see which entry in
+				// the archive was rejected and why.
+				String configName = f.getName().substring(CONFIG_PREFIX.length());
+				if (!Validator.isValidConfigurationName(configName)) {
+					log.warn("findConfigs: ignoring configuration with an invalid name in "
+							+ fromPath + " (entry: " + f.getName() + ")");
+					continue;
+				}
+
 				Configuration c = new Configuration();
-				c.setName(f.getName().substring(CONFIG_PREFIX.length()));
+				c.setName(configName);
 				returnList.add(c);
 
 				// Make sure the configuration has the right line endings

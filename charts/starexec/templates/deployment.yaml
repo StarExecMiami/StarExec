@@ -311,18 +311,26 @@ spec:
 {{- end }}
           resources:
 {{ toYaml .Values.resources.app | indent 12 }}
+          # Liveness asks only whether the process still serves. It must not
+          # check the database: restarting cannot fix a database, so a DB-aware
+          # liveness probe turns an outage into a restart storm.
           livenessProbe:
             httpGet:
-              path: /starexec/
+              path: /starexec/public/health/liveness
               port: http
               scheme: HTTP
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 3
+          # Readiness asks whether this instance can serve usefully, which means
+          # reaching the database. replicaCount is pinned to 1 above, so this
+          # cannot shift traffic to a peer; its job is to refuse cutover to a new
+          # pod that cannot reach the database during a rollout.
+          # 3 x 10s absorbs a blip before the endpoint is withdrawn.
           readinessProbe:
             httpGet:
-              path: /starexec/
+              path: /starexec/public/health/readiness
               port: http
               scheme: HTTP
             initialDelaySeconds: 30

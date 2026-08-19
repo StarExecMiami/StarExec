@@ -46,6 +46,11 @@ public class AssocCommunities extends HttpServlet {
 				String message = "You do not have permission to perform this operation";
 				response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE, message));
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, message);
+				// sendError commits a response; it does not end the method. Without this
+				// return the admin check decided nothing: execution fell straight through
+				// to setQueueCommunityAccess, letting any authenticated user rewrite the
+				// queue-to-community access list while being told they were forbidden.
+				return;
 			}
 			String queue_name = (String) request.getParameter(name);
 			int queue_id = Queues.getIdByName(queue_name);

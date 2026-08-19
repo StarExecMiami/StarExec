@@ -1,0 +1,95 @@
+name: Runsolver Parity
+
+# runsolver is the instrument every recorded measurement comes from. Two images ship it:
+# the application image (Dockerfile, used by the Local and Podman backends) and the job
+# runner (docker/job-runner.Dockerfile, which is what actually executes solvers under the
+# Kubernetes backend). If those two binaries differ, results are not comparable across
+# backends, and a migration from one to the other silently changes the instrument.
+#
+# Both stages build the same vendored source at RunSolverSource/. That is necessary but
+# not sufficient: gcc embeds the compilation directory in the binary, so the same source
+# built at a different WORKDIR, or on a different Alpine release, yields a different file.
+# Both differences existed and were caught only by measuring. This job measures it on
+# every change so it cannot drift back.
+
+on:
+  push:
+    paths:
+      - 'Dockerfile'
+      - 'docker/job-runner.Dockerfile'
+      - 'starexec-app/src/main/java/org/starexec/config/sge/RunSolverSource/**'
+      - '.github/workflows/runsolver-parity.yml'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'docker/job-runner.Dockerfile'
+      - 'starexec-app/src/main/java/org/starexec/config/sge/RunSolverSource/**'
+      - '.github/workflows/runsolver-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Both images ship the same runsolver
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # Only the runsolver-builder stage of each file is built. That is the whole
+      # measurement surface and it keeps this gate to a couple of minutes.
+      - name: Build the application image's runsolver stage
+        run: docker build --target runsolver-builder -t rs-app -f Dockerfile .
+
+      - name: Build the job runner's runsolver stage
+        run: docker build --target runsolver-builder -t rs-jobrunner -f docker/job-runner.Dockerfile .
+
+      - name: Compare the two binaries
+        run: |
+          set -euo pipefail
+
+          APP_SHA=$(docker run --rm rs-app cat /tmp/runsolver-output/runsolver.sha256)
+          JOB_SHA=$(docker run --rm rs-jobrunner cat /tmp/runsolver-output/runsolver.sha256)
+          APP_VER=$(docker run --rm rs-app cat /tmp/runsolver-output/runsolver.version)
+          JOB_VER=$(docker run --rm rs-jobrunner cat /tmp/runsolver-output/runsolver.version)
+
+          echo "application image : $APP_SHA"
+          echo "                    $APP_VER"
+          echo "job runner image  : $JOB_SHA"
+          echo "                    $JOB_VER"
+
+          if [ -z "$APP_SHA" ] || [ -z "$JOB_SHA" ]; then
+            echo "::error::A runsolver stage produced no SHA-256. The provenance file is missing from one of the images."
+            exit 1
+          fi
+
+          if [ "$APP_SHA" != "$JOB_SHA" ]; then
+            echo "::error::The application image and the job runner ship DIFFERENT runsolver binaries."
+            echo "Measurements taken on the Kubernetes backend would not be comparable with the"
+            echo "Podman/Local backends. Common causes, both of which have happened here before:"
+            echo "  * the two runsolver-builder stages pin different Alpine bases"
+            echo "  * the two stages build at different WORKDIRs (gcc embeds the build path)"
+            echo "Align both stages, or make them consume one canonical artifact."
+            exit 1
+          fi
+
+          echo "Both images ship runsolver $APP_SHA"
+
+      # A binary compiled on the older base must actually run on the job runner's newer
+      # runtime; a parity check that passed while the binary would not execute is useless.
+      - name: Build the full job runner and run its runsolver
+        run: |
+          set -euo pipefail
+          docker build -t rs-jobrunner-full -f docker/job-runner.Dockerfile .
+          docker run --rm --entrypoint /usr/local/bin/runsolver rs-jobrunner-full --version | head -1
+          RUNTIME_SHA=$(docker run --rm --entrypoint /bin/sh rs-jobrunner-full -c 'sha256sum /usr/local/bin/runsolver | cut -d" " -f1')
+          RECORDED_SHA=$(docker run --rm --entrypoint /bin/sh rs-jobrunner-full -c 'cat /usr/local/share/runsolver.sha256')
+          echo "runtime binary : $RUNTIME_SHA"
+          echo "recorded       : $RECORDED_SHA"
+          if [ "$RUNTIME_SHA" != "$RECORDED_SHA" ]; then
+            echo "::error::The shipped runsolver does not match the provenance file recorded beside it."
+            exit 1
+          fi

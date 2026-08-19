@@ -1,0 +1,55 @@
+# .dto-audit-suppress — Suppressed DTO hydration audit warnings.
+#
+# Format:
+#   procedure:column            — suppress a column mismatch for that procedure
+#   procedure:dto:column        — suppress an inline gap field (procedure→DTO→field)
+#   # comment                   — ignored
+#   blank lines                 — ignored
+#
+# Each entry must be verified safe before adding.  Include a comment explaining
+# WHY the gap is acceptable (e.g. "callers only use id/name").
+#
+# To check for new gaps: python3 scripts/audit-dto-hydration.py --ci
+# To see all mismatches: python3 scripts/audit-dto-hydration.py --verbose
+
+# ──────────────────────────────────────────────────────────────────────────────
+# getPairsDetailed() — Solver stubs (id + name only)
+# All downstream callers (MatrixViewUtil, RESTServices, Download CSV, Jobs
+# internal) only access solver.getId() and solver.getName().
+# Verified 2026-03-27 via grep of all getPairsDetailed consumers.
+# ──────────────────────────────────────────────────────────────────────────────
+getalljobpairsbyjob:solver:user_id
+getalljobpairsbyjob:solver:uploaded
+getalljobpairsbyjob:solver:description
+getalljobpairsbyjob:solver:downloadable
+getalljobpairsbyjob:solver:executable_type
+getalljobpairsbyjob:solver:recycled
+getalljobpairsbyjob:solver:deleted
+getalljobpairsbyjob:solver:build_status
+
+getnewcompletedjobpairsbyjob:solver:user_id
+getnewcompletedjobpairsbyjob:solver:uploaded
+getnewcompletedjobpairsbyjob:solver:description
+getnewcompletedjobpairsbyjob:solver:downloadable
+getnewcompletedjobpairsbyjob:solver:executable_type
+getnewcompletedjobpairsbyjob:solver:recycled
+getnewcompletedjobpairsbyjob:solver:deleted
+getnewcompletedjobpairsbyjob:solver:build_status
+
+# ──────────────────────────────────────────────────────────────────────────────
+# getPairsDetailed() — Benchmark stubs (id + name only)
+# Same consumer audit as Solver above.
+# ──────────────────────────────────────────────────────────────────────────────
+getalljobpairsbyjob:benchmark:user_id
+getalljobpairsbyjob:benchmark:uploaded
+getalljobpairsbyjob:benchmark:description
+getalljobpairsbyjob:benchmark:downloadable
+getalljobpairsbyjob:benchmark:recycled
+getalljobpairsbyjob:benchmark:deleted
+
+getnewcompletedjobpairsbyjob:benchmark:user_id
+getnewcompletedjobpairsbyjob:benchmark:uploaded
+getnewcompletedjobpairsbyjob:benchmark:description
+getnewcompletedjobpairsbyjob:benchmark:downloadable
+getnewcompletedjobpairsbyjob:benchmark:recycled
+getnewcompletedjobpairsbyjob:benchmark:deleted

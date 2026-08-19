@@ -48,6 +48,36 @@ jobs:
       - name: Run unit tests
         run: mvn clean test -pl starexec-app
 
+      # Surefire matches **/*Test.java and **/*Tests.java, which do not match *IT.java,
+      # so the step above runs none of the stored routines. Without this step the
+      # StoredRoutineSmokeIT added for exactly that purpose never executed in CI.
+      - name: Run stored-routine integration tests
+        run: mvn verify -Pit -pl starexec-app -Dsurefire.skip=true
+
+      - name: Assert the integration tests actually executed
+        run: |
+          # The IT calls assumeTrue and skips itself when no container runtime is
+          # present. A skip must not read as a pass -- the whole point of this job is
+          # to prove the stored routines really execute against a live PostgreSQL.
+          report=starexec-app/target/failsafe-reports/org.starexec.test.integration.StoredRoutineSmokeIT.txt
+          if [ ! -f "$report" ]; then
+            echo "::error::No failsafe report at $report - the integration test never ran."
+            ls -R starexec-app/target/failsafe-reports 2>/dev/null || echo "(no failsafe-reports directory)"
+            exit 1
+          fi
+          cat "$report"
+          run=$(sed -n 's/.*Tests run: \([0-9]*\).*/\1/p' "$report" | head -1)
+          skipped=$(sed -n 's/.*Skipped: \([0-9]*\).*/\1/p' "$report" | head -1)
+          if [ "${run:-0}" -eq 0 ]; then
+            echo "::error::StoredRoutineSmokeIT reported 0 tests run."
+            exit 1
+          fi
+          if [ "${skipped:-0}" -ne 0 ]; then
+            echo "::error::StoredRoutineSmokeIT skipped ${skipped} test(s) - no container runtime? CI must execute them."
+            exit 1
+          fi
+          echo "✓ StoredRoutineSmokeIT executed ${run} tests, 0 skipped"
+
       - name: Verify multi-module structure
         run: |
           echo "Verifying multi-module build structure..."
@@ -107,3 +137,89 @@ jobs:
               repo: context.repo.repo,
               body: comment
             });
+
+  db-protocol-tests:
+    name: DB Protocol Tests
+    runs-on: ubuntu-latest
+
+    # JobsRerunProtocolSqlTest and JobsKillProtocolSqlTest call
+    # DatabaseTestSupport.assumeDatabaseAvailable in @BeforeClass, so without a reachable
+    # PostgreSQL JUnit skips the entire class and Surefire still reports success. The
+    # "Unit Tests" job above provisions no database, so before this job existed these two
+    # classes executed zero tests in CI while holding the only executable proof of the
+    # V0117 automatic-rerun transaction, its rollback behaviour, the manual-vs-automatic
+    # and automatic-vs-automatic races, and the kill protocol.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: starexec
+          POSTGRES_PASSWORD: ci_db_protocol_password
+          POSTGRES_DB: starexec
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U starexec"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      # The flyway-maven-plugin configuration interpolates ${starexec.db.*}, and no pom
+      # defines those properties, so every flyway goal must be given them explicitly.
+      # The schema Flyway targets is ${starexec.db.name}, i.e. "starexec" - not "public".
+      - name: Apply migrations with Flyway
+        run: |
+          mvn -B flyway:migrate -pl starexec-app \
+            -Dstarexec.db.host=localhost \
+            -Dstarexec.db.name=starexec \
+            -Dstarexec.db.user=starexec \
+            -Dstarexec.db.password=ci_db_protocol_password
+
+      - name: Run the DB-backed protocol suites
+        env:
+          STAREXEC_DB_URL: jdbc:postgresql://localhost:5432/starexec
+          STAREXEC_DB_USER: starexec
+          STAREXEC_DB_PASSWORD: ci_db_protocol_password
+        run: |
+          mvn -B test -pl starexec-app \
+            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest \
+            -DfailIfNoTests=false
+
+      - name: Assert both suites actually executed
+        run: |
+          # A silent skip must never read as a pass. This mirrors the assertion the
+          # StoredRoutineSmokeIT step above already applies, for the same reason.
+          fail=0
+          for cls in JobsRerunProtocolSqlTest JobsKillProtocolSqlTest; do
+            report="starexec-app/target/surefire-reports/org.starexec.test.junit.database.${cls}.txt"
+            if [ ! -f "$report" ]; then
+              echo "::error::No surefire report at $report - ${cls} never ran."
+              fail=1
+              continue
+            fi
+            run=$(grep -oP 'Tests run: \K[0-9]+' "$report" | head -1)
+            skipped=$(grep -oP 'Skipped: \K[0-9]+' "$report" | head -1)
+            run=${run:-0}
+            skipped=${skipped:-0}
+            if [ "$run" -eq 0 ]; then
+              echo "::error::${cls} reported 0 tests run."
+              fail=1
+            elif [ "$skipped" -gt 0 ]; then
+              echo "::error::${cls} skipped ${skipped} test(s) - the database must be reachable in CI."
+              fail=1
+            else
+              echo "✓ ${cls} executed ${run} tests, 0 skipped"
+            fi
+          done
+          exit $fail

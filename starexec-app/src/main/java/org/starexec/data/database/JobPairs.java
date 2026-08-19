@@ -2273,6 +2273,49 @@ public class JobPairs {
         int terminalStatus,
         int notReachedStatus
     ) {
+        return setPairStatusPrecise(pairId, stageNumber, terminalStatus, notReachedStatus, false);
+    }
+
+    /**
+     * As {@link #setPairStatusPrecise(int, int, int, int)}, but able to replace a
+     * terminal status that was already recorded.
+     *
+     * <p>Overriding is for deliberate administrative correction only. Automated writers
+     * -- monitors and reconcilers -- must pass {@code false} and accept losing the race,
+     * or a background sweep can overwrite a real result.
+     *
+     * @return false when the pair already held a different terminal status and
+     *         {@code forceOverride} was not set. Nothing was written in that case.
+     */
+    public static boolean setPairStatusPrecise(
+        int pairId,
+        int stageNumber,
+        int terminalStatus,
+        int notReachedStatus,
+        boolean forceOverride
+    ) {
+        return setPairStatusPreciseResult(
+            pairId, stageNumber, terminalStatus, notReachedStatus, forceOverride)
+            == PairStatusResult.APPLIED;
+    }
+
+    /**
+     * As {@link #setPairStatusPrecise(int, int, int, int, boolean)}, but distinguishing a
+     * refusal from a failure.
+     *
+     * <p>Callers that own a container, pod or process for this pair need that
+     * distinction: {@link PairStatusResult#SUPERSEDED} means the pair is finished and the
+     * resource should be released, while {@link PairStatusResult#FAILED} means the work
+     * must stay discoverable for a later attempt. Collapsing them into a boolean forces a
+     * choice between leaking the resource and losing the result.
+     */
+    public static PairStatusResult setPairStatusPreciseResult(
+        int pairId,
+        int stageNumber,
+        int terminalStatus,
+        int notReachedStatus,
+        boolean forceOverride
+    ) {
         Connection con = null;
         PreparedStatement ps = null;
         Integer attemptNoForFinalize = null;
@@ -2280,21 +2323,40 @@ public class JobPairs {
             con = Common.getConnection();
             Common.beginTransaction(con);
             ps = con.prepareStatement(
-                "CALL starexec.UpdatePairStatusPrecise(?, ?, ?, ?)"
+                "SELECT starexec.UpdatePairStatusPrecise(?, ?, ?, ?, ?)"
             );
             ps.setInt(1, pairId);
             ps.setInt(2, stageNumber);
             ps.setInt(3, terminalStatus);
             ps.setInt(4, notReachedStatus);
-            ps.execute();
+            ps.setBoolean(5, forceOverride);
+
+            boolean applied;
+            try (ResultSet rs = ps.executeQuery()) {
+                applied = rs.next() && rs.getBoolean(1);
+            }
+            if (!applied) {
+                // Another writer recorded a different terminal result first. Nothing was
+                // written, so roll back and report the loss. Falling through would
+                // finalize a manifest on disk describing a status the database refused,
+                // leaving the filesystem and the database contradicting each other.
+                Common.doRollback(con);
+                return PairStatusResult.SUPERSEDED;
+            }
+
             if (isTerminalStatusCode(terminalStatus)) {
                 attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
             }
-            Common.endTransaction(con);
+            // Committed here rather than through endTransaction, which swallows a failed
+            // commit. The manifest is written below on the strength of this commit, so a
+            // silently rolled-back transaction would produce exactly the same
+            // disk-versus-database contradiction as the case above.
+            con.commit();
+            Common.enableAutoCommit(con);
             if (isTerminalStatusCode(terminalStatus) && attemptNoForFinalize != null) {
                 finalizePairManifest(pairId, attemptNoForFinalize, terminalStatus);
             }
-            return true;
+            return PairStatusResult.APPLIED;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
             Common.doRollback(con);
@@ -2302,7 +2364,7 @@ public class JobPairs {
             Common.safeClose(ps);
             Common.safeClose(con);
         }
-        return false;
+        return PairStatusResult.FAILED;
     }
 
     /**
@@ -3014,9 +3076,20 @@ public class JobPairs {
         // Outside the lock transaction: call the stored procedure which
         // has its own internal transaction for the update + side effects.
         try {
-            setPairStatusPrecise(pairId, 1,
+            // Never overrides. The lock taken above is released before this runs, so the
+            // monitor can record a real result in between; reconciliation has to lose
+            // that race. Reporting UPDATED unconditionally, as this did, is what allowed
+            // a genuine result to be replaced by ERROR_RUNSCRIPT and counted as a fix.
+            boolean applied = setPairStatusPrecise(pairId, 1,
                 StatusCode.ERROR_RUNSCRIPT.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal());
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false);
+            if (!applied) {
+                log.info("tryMarkRunningAsFailed", "pair " + pairId
+                        + " reached a terminal status before reconciliation could mark it"
+                        + " failed; leaving the recorded result alone");
+                return ConditionalPairUpdateResult.STALE;
+            }
             return ConditionalPairUpdateResult.UPDATED;
         } catch (Exception e) {
             log.error("tryMarkRunningAsFailed setPairStatusPrecise pairId=" + pairId, e);
@@ -3283,6 +3356,43 @@ public class JobPairs {
             );
         } catch (Exception e) {
             log.error(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Kills a pair and writes {@code STATUS_KILLED} only if the execution provably stopped.
+     *
+     * <p>{@link #killPair(int, int)} writes that status unconditionally — it discards the
+     * backend's answer, and is {@code void}, so no caller can tell either. On a backend whose
+     * teardown is asynchronous that records "this pair was killed" while its pod is still
+     * running: the pair reads as finished, its node is considered free, and a late write from
+     * the surviving execution lands on a pair nobody is watching.
+     *
+     * <p>On an unproven kill nothing is written at all. The pair keeps its current status, so
+     * it stays visible as in-flight rather than being misreported as terminal.
+     *
+     * @return true only when the execution was confirmed stopped and the status was written
+     */
+    public static boolean killPairConfirmed(int pairId, int execId) {
+        try {
+            org.starexec.backend.Backend.KillOutcome outcome =
+                R.BACKEND.killPairConfirmed(execId);
+            if (outcome != org.starexec.backend.Backend.KillOutcome.CONFIRMED_SAFE) {
+                log.warn(
+                    "Not recording pair " + pairId + " as killed: execution " + execId +
+                        " could not be confirmed stopped"
+                );
+                return false;
+            }
+            JobPairs.setJobPairDiskSizeToZero(pairId);
+            JobPairs.UpdateStatus(
+                pairId,
+                Status.StatusCode.STATUS_KILLED.getVal()
+            );
+            return true;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            return false;
         }
     }
 

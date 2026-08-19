@@ -3,7 +3,7 @@
 ## Overview
 
 StarExec's container backend (PodmanBackend) can pin each job container to a
-dedicated subset of logical CPUs called a *partition*. This prevents competing
+dedicated subset of logical CPUs called a _partition_. This prevents competing
 containers from sharing CPU scheduler time and L1/L2 cache lines, improves
 result reproducibility, and maps naturally to NUMA hardware where partitions
 can align with physical memory domains.
@@ -20,11 +20,11 @@ letting `PodmanBackend` pin containers to partition-specific CPU sets.
 
 ## Configuration reference
 
-| Variable | Default | Description |
-|---|---|---|
-| `STAREXEC_CPU_PARTITION_COUNT` | `auto` | How many partitions to create. `auto` uses NUMA node count when >1 nodes are visible; falls back to legacy single-partition mode on single-NUMA hardware. `1` explicitly disables partitioning. Any integer ≥2 subdivides available CPUs into that many equal groups. Example: `2`, `4`, `auto`. |
-| `STAREXEC_CPU_PARTITIONS` | _(unset)_ | Explicit cpuset strings, whitespace- or semicolon-separated. Overrides `STAREXEC_CPU_PARTITION_COUNT`. Each token becomes one partition with `cpusetMems=0`. Example: `"0-7 8-15"` or `"0-7,16-23;8-15,24-31"`. Use `STAREXEC_CPU_PARTITION_COUNT=auto` instead on multi-NUMA hardware to get correct NUMA memory binding. |
-| `STAREXEC_PARTITION_MAX_JOBS` | _(same as `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS`, default 1)_ | Maximum concurrent job containers per partition. A value of `1` means at most one job runs on each partition at a time. Example: `2`. |
+| Variable                       | Default                                                         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STAREXEC_CPU_PARTITION_COUNT` | `auto`                                                          | How many partitions to create. `auto` uses NUMA node count when >1 nodes are visible; falls back to legacy single-partition mode on single-NUMA hardware. `1` explicitly disables partitioning. Any integer ≥2 subdivides available CPUs into that many equal groups. Example: `2`, `4`, `auto`.                                                                                                                                                                                                                                                  |
+| `STAREXEC_CPU_PARTITIONS`      | _(unset)_                                                       | Explicit cpuset strings, whitespace- or semicolon-separated. Overrides `STAREXEC_CPU_PARTITION_COUNT`. Each token becomes one partition with `cpusetMems=0`. Example: `"0-7 8-15"` **only if `cpu0`'s `thread_siblings_list` is `0-1`** — see "Choosing cpuset strings" below, because on a split-half machine that same value places every SMT sibling of one partition in the other. Prefer `STAREXEC_CPU_PARTITION_COUNT`, which groups whole physical cores automatically, or `=auto` on multi-NUMA hardware for correct NUMA memory binding. |
+| `STAREXEC_PARTITION_MAX_JOBS`  | _(same as `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS`, default 1)_ | Maximum concurrent job containers per partition. A value of `1` means at most one job runs on each partition at a time. Example: `2`.                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ## Startup log
 
@@ -76,6 +76,31 @@ directed from the StarExec UI queue selector. The UI continues to expose the
 single `container.q` queue; `PodmanBackend` chooses the concrete partition worker
 by current load.
 
+## Choosing cpuset strings: check your SMT enumeration first
+
+**`"0-7 8-15"` is safe on some machines and actively harmful on others.** It depends on
+how the kernel numbers hyper-threads, and the two common layouts are opposites:
+
+```
+# Which logical CPUs share a physical core?
+cat /sys/devices/system/cpu/cpu0/topology/thread_siblings_list
+```
+
+- **`0-1`** — adjacent-pair enumeration. `cpu0` and `cpu1` are one core. Here
+  `"0-7 8-15"` gives each partition four whole cores. Safe.
+- **`0,8`** — split-half enumeration. `cpu0`'s sibling is `cpu8`. Here `"0-7 8-15"` puts
+  **every sibling of partition 0 into partition 1**: the two partitions share all eight
+  physical cores, so two job pairs contend for the same L1 and L2 caches while appearing
+  isolated. On such a machine the equivalent safe value is `"0-3,8-11 4-7,12-15"`.
+
+StarExec refuses to start when an explicit `STAREXEC_CPU_PARTITIONS` splits siblings, so
+a wrong value fails loudly rather than quietly producing untrustworthy measurements. It
+also warns if a partition includes CPU 0, which handles interrupts and OS work.
+
+`STAREXEC_CPU_PARTITION_COUNT=N` needs none of this care: it groups whole physical cores
+before splitting, so it cannot separate siblings whichever enumeration the machine uses.
+**Prefer it over an explicit cpuset list.**
+
 ## Known limitations
 
 1. **`STAREXEC_CPU_PARTITIONS` always uses `cpusetMems=0`** regardless of the actual
@@ -108,12 +133,12 @@ To revert to single-partition legacy behavior without redeploying:
 
 ## Changed files
 
-| File | Change |
-|---|---|
-| `org/starexec/backend/CpuPartition.java` | New. Immutable value type representing one CPU partition (index, cpusetCpus, cpusetMems, node name, shared queue name). |
-| `org/starexec/backend/CpuPartitionManager.java` | New. Discovers partitions from NUMA sysfs, env var override, or equal CPU subdivision. Contains `expandCpuset`, `compressCpuset`, `subdivide` helpers. |
-| `org/starexec/backend/PodmanBackend.java` | Replaced single global slot gate with per-partition arrays. Added `selectPartition`, `acquirePartitionSlot`, `releasePartitionSlot`, `getWorkerNodeNameForPartition`. Updated `createHostConfig`, `createContainerLabels`, `createContainerWithCurl`, and all three `Backend` getters. `getWorkerNodes()` returns one worker per partition; `getQueues()` returns the single shared `container.q`; `getNodeQueueAssociations()` maps each partition worker to `container.q`. |
-| `org/starexec/backend/ContainerJobMonitor.java` | `updateDatabase` now takes `partitionIndex`; uses `backend.getWorkerNodeNameForPartition()` instead of the deprecated `CONTAINER_WORKER_NODE` constant. |
-| `org/starexec/backend/KubernetesNativeBackend.java` | Removed cross-backend reference to `PodmanBackend.CONTAINER_WORKER_NODE`. Added local `DEFAULT_WORKER_NODE_NAME` constant and `resolveStatsNodeName()` helper. |
-| `org/starexec/config/EnvironmentConfig.java` | Added `getCpuPartitionCount()`, `getCpuPartitionsOverride()`, `getPartitionMaxJobs()`. |
-| `test/…/PodmanBackendTests.java` | Updated slot-tracking helpers for partition arrays. Added `testGetQueues_*`, `testGetWorkerNodes_*`, `testGetNodeQueueAssociations_*` for two-partition config. |
+| File                                                | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `org/starexec/backend/CpuPartition.java`            | New. Immutable value type representing one CPU partition (index, cpusetCpus, cpusetMems, node name, shared queue name).                                                                                                                                                                                                                                                                                                                                                      |
+| `org/starexec/backend/CpuPartitionManager.java`     | New. Discovers partitions from NUMA sysfs, env var override, or equal CPU subdivision. Contains `expandCpuset`, `compressCpuset`, `subdivide` helpers.                                                                                                                                                                                                                                                                                                                       |
+| `org/starexec/backend/PodmanBackend.java`           | Replaced single global slot gate with per-partition arrays. Added `selectPartition`, `acquirePartitionSlot`, `releasePartitionSlot`, `getWorkerNodeNameForPartition`. Updated `createHostConfig`, `createContainerLabels`, `createContainerWithCurl`, and all three `Backend` getters. `getWorkerNodes()` returns one worker per partition; `getQueues()` returns the single shared `container.q`; `getNodeQueueAssociations()` maps each partition worker to `container.q`. |
+| `org/starexec/backend/ContainerJobMonitor.java`     | `updateDatabase` now takes `partitionIndex`; uses `backend.getWorkerNodeNameForPartition()` instead of the deprecated `CONTAINER_WORKER_NODE` constant.                                                                                                                                                                                                                                                                                                                      |
+| `org/starexec/backend/KubernetesNativeBackend.java` | Removed cross-backend reference to `PodmanBackend.CONTAINER_WORKER_NODE`. Added local `DEFAULT_WORKER_NODE_NAME` constant and `resolveStatsNodeName()` helper.                                                                                                                                                                                                                                                                                                               |
+| `org/starexec/config/EnvironmentConfig.java`        | Added `getCpuPartitionCount()`, `getCpuPartitionsOverride()`, `getPartitionMaxJobs()`.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `test/…/PodmanBackendTests.java`                    | Updated slot-tracking helpers for partition arrays. Added `testGetQueues_*`, `testGetWorkerNodes_*`, `testGetNodeQueueAssociations_*` for two-partition config.                                                                                                                                                                                                                                                                                                              |

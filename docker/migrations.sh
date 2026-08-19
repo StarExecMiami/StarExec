@@ -152,6 +152,13 @@ else
   migration_exit_code=$?
 fi
 
+# The process has been reaped, so there is nothing left to signal. Clearing this
+# stops the EXIT trap from announcing "Received termination signal" and sending
+# SIGTERM to a dead PID on every clean run -- which made successful migrations
+# read like interrupted ones in the deploy logs. A real SIGTERM still arrives
+# while we are blocked in wait above, with java_pid set, so cleanup still works.
+java_pid=""
+
 echo ""
 echo "========================================================================"
 

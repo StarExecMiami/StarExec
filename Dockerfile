@@ -24,30 +24,49 @@ RUN npx sass --style=compressed --load-path src/main/webapp/css src/main/webapp/
 # ==============================================================================
 FROM docker.io/library/alpine:3.19 AS runsolver-builder
 
-WORKDIR /tmp
+WORKDIR /build
 
 # Install build dependencies
 RUN apk upgrade --no-cache && \
-    apk add --no-cache \
-    curl \
-    build-base \
-    tar \
-    bzip2 \
-    numactl-dev
+    apk add --no-cache build-base
 
-# Download, patch, and compile runsolver
-RUN curl -L https://www.cril.univ-artois.fr/~roussel/runsolver/runsolver-3.4.1.tar.bz2 -o runsolver.tar.bz2 && \
-    tar xjf runsolver.tar.bz2 && \
-    cd runsolver/src && \
-    # Apply patches to runsolver to remove NUMA support (not available in containers)
-    # and change 'long long' to 'long' to avoid compilation issues
-    sed -i 's/long long mem,memFree;/long mem,memFree;/g' runsolver.cc && \
-    sed -i 's/-DWITH_NUMA//g' Makefile && \
-    sed -i 's/-lnuma//g' Makefile && \
-    make && \
-    mkdir -p /tmp/runsolver-output && \
-    cp runsolver /tmp/runsolver-output/runsolver && \
-    chmod +x /tmp/runsolver-output/runsolver
+# Build runsolver from the source vendored in this repository.
+#
+# This stage used to curl runsolver-3.4.1.tar.bz2 from cril.univ-artois.fr with no
+# checksum and no pinned digest, while RunSolverSource/ sat in the repo referenced by no
+# COPY at all. runsolver is the instrument every recorded measurement comes from, so its
+# provenance is not a packaging detail: the audit of its output format, units and exit
+# behaviour was performed against the vendored tree, and the shipped binary was only
+# assumed to match it. Building the vendored tree makes the audited source the shipped
+# binary, and removes a network fetch from the image build.
+COPY starexec-app/src/main/java/org/starexec/config/sge/RunSolverSource/ ./src/
+
+RUN set -eux; \
+    cd src; \
+    # The repo carries committed build artifacts (runsolver, runsolver.o,
+    # SignalNames.o). Never link against those -- build from source every time.
+    rm -f ./*.o runsolver; \
+    # Patches, applied fail-closed. A sed whose pattern stops matching is a silent
+    # no-op, so each anchor is asserted first: under set -e a failed grep aborts the
+    # build rather than shipping a binary that quietly missed a patch.
+    #
+    # NUMA support is removed because the headers are absent in this image, and
+    # 'long long' becomes 'long' to compile under this toolchain.
+    grep -q 'long long mem,memFree;' runsolver.cc; \
+    sed -i 's/long long mem,memFree;/long mem,memFree;/g' runsolver.cc; \
+    grep -q -- '-DWITH_NUMA' Makefile; \
+    sed -i 's/-DWITH_NUMA//g' Makefile; \
+    grep -q -- '-lnuma' Makefile; \
+    sed -i 's/-lnuma//g' Makefile; \
+    make; \
+    # Smoke test: a binary that cannot report its own version is not one to ship.
+    ./runsolver --version; \
+    mkdir -p /tmp/runsolver-output; \
+    cp runsolver /tmp/runsolver-output/runsolver; \
+    chmod +x /tmp/runsolver-output/runsolver; \
+    # Provenance, so a recorded result can name the instrument that produced it.
+    ./runsolver --version | head -1 > /tmp/runsolver-output/runsolver.version; \
+    sha256sum runsolver | cut -d' ' -f1 > /tmp/runsolver-output/runsolver.sha256
 
 # ==============================================================================
 # Stage 3: Build Credential Handler for Tomcat lib
@@ -208,6 +227,12 @@ COPY --from=runsolver-builder /tmp/runsolver-output/runsolver /usr/local/bin/run
 RUN chmod +x /usr/local/bin/runsolver && \
     chown root:root /usr/local/bin/runsolver
 
+# Provenance of the measurement instrument, carried into the runtime image so a recorded
+# result can be traced to the binary that produced it. Every timing and memory figure in
+# the database comes from this executable.
+COPY --from=runsolver-builder /tmp/runsolver-output/runsolver.version /usr/local/share/runsolver.version
+COPY --from=runsolver-builder /tmp/runsolver-output/runsolver.sha256 /usr/local/share/runsolver.sha256
+
 # Copy GetComputerInfo binary for system monitoring
 # Note: /home/starexec permissions are set later after sandbox users are added to the starexec group
 COPY scripts/GetComputerInfo /usr/local/bin/GetComputerInfo
@@ -296,9 +321,14 @@ RUN addgroup starexec1 starexec && \
 # Sets connection limits to prevent resource exhaustion
 RUN sed -i 's/port="8080"/port="8080" maxThreads="200" minSpareThreads="10"/' ${CATALINA_HOME}/conf/server.xml
 
-# Health check
+# Health check.
+# Uses the readiness endpoint rather than liveness: nothing here restarts on
+# unhealthy, so this status is read by humans and by compose `depends_on:
+# service_healthy`, and both want "can it actually serve?" rather than "is the
+# process up?". It must not be `/starexec/` -- Tomcat serves that page happily
+# with a dead database, so the old check reported healthy through an outage.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/starexec/ || exit 1
+    CMD curl -f http://localhost:8080/starexec/public/health/readiness || exit 1
 
 # Expose port
 EXPOSE 8080

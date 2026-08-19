@@ -62,11 +62,91 @@ public interface Backend {
     );
 
     /**
+     * Submits a job pair, telling the backend which queue it belongs to.
+     *
+     * <p>The four-argument form carries no queue, because under SGE it never needed to:
+     * {@code JobManager} substitutes the queue into the generated script as
+     * {@code #$ -q <name>} and the grid engine reads it from there. On Kubernetes that
+     * line is an inert bash comment, so a backend that places pods itself has no way to
+     * learn where a pair should run — which is why a pair submitted to one queue could
+     * execute on any worker node in any other.
+     *
+     * <p>Defaulted rather than added to the interface proper so the backends that already
+     * receive the queue through the script — GridEngine, Local, Podman, OAR — are
+     * untouched. Only a backend that needs the queue overrides this.
+     *
+     * @param queueName the queue the pair was submitted to, never null
+     * @return as {@link #submitScript(int, String, String, String)}
+     */
+    default int submitScript(
+        int pairId,
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath,
+        String queueName
+    ) {
+        return submitScript(pairId, scriptPath, workingDirectoryPath, logPath);
+    }
+
+    /**
+     * Whether this queue can accept work right now.
+     *
+     * <p>Asked once per queue per scheduling pass, before any pair is submitted, so a
+     * queue that is temporarily unable to run anything is skipped rather than having its
+     * pairs failed. That distinction matters: {@link #submitScript} can only answer with
+     * an execution id or an error, and {@code JobManager} turns any error into a terminal
+     * status. There is no return value meaning "not now", so a drain or a brief node
+     * outage would otherwise destroy a benchmark run for a condition that fixes itself.
+     *
+     * <p>A permanently unroutable queue is a different matter and is still rejected at
+     * submission, because it will not resolve on its own and should be visible.
+     *
+     * @return true by default, so a backend with no notion of queue readiness is
+     *         unaffected
+     */
+    default boolean isQueueDispatchable(String queueName) {
+        return true;
+    }
+
+    /**
      * @param execId an int that identifies the pair to be killed, should match what is returned by submitScript
      * @return true if successful, false otherwise
      * kills a jobpair
      */
     boolean killPair(int execId);
+
+    /** Whether an execution is provably incapable of running or writing results. */
+    enum KillOutcome {
+        /** Established: no execution of this pair can still run or write. */
+        CONFIRMED_SAFE,
+        /** Not established. The caller must not replace, publish, or release it. */
+        UNPROVEN,
+    }
+
+    /**
+     * Kills an execution and reports whether its absence was <em>established</em>.
+     *
+     * <p>Distinct from {@link #killPair(int)} because that method's boolean cannot carry
+     * this meaning. Audited across the implementations: {@code LocalBackend} returns false
+     * when the job is not in its map, {@code PodmanBackend} returns false when the
+     * container is absent or has already exited (releasing the slot as it does so), and
+     * the SGE and OAR backends return false when {@code qdel}/{@code oardel} throws,
+     * including for a job that no longer exists. In every one of those cases false means
+     * <em>already gone</em> — the safe case. Reinterpreting it as "unproven" would strand
+     * pairs on all four.
+     *
+     * <p>So the strict contract is opt-in. The default keeps each backend's existing
+     * behaviour exactly, and a backend adopts the contract by overriding this method.
+     * Kubernetes does, because deleting a {@code batch/v1} Job does not synchronously stop
+     * its pod. Podman is the next candidate: it has the same asynchronous-teardown shape.
+     *
+     * @return {@link KillOutcome#CONFIRMED_SAFE} only when nothing for this execution can
+     *         still run or write
+     */
+    default KillOutcome killPairConfirmed(int execId) {
+        killPair(execId);
+        return KillOutcome.CONFIRMED_SAFE;
+    }
 
     /**
      * kills all pairs
