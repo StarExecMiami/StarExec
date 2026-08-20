@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-20
+
 ### Added
 - **Kubernetes health endpoints**: Added `/starexec/public/health/liveness` and `/starexec/public/health/readiness` so orchestrators can distinguish a live process from one able to serve, and pointed the chart's probes at them.
 - **SMT-aware CPU partitioning**: Added sibling-aware CPU partitioning that keeps SMT siblings within a single partition and rejects explicit partition layouts that split them.
@@ -35,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.5.1] - 2026-08-03
 
+> **Never published.** This version was prepared and versioned in source and an
+> annotated tag existed only in a local clone; it was never pushed to `origin` and no
+> GitHub Release was ever created for it. Its changes ship publicly for the first time
+> as part of [2.6.0].
+
 ### Fixed
 - **Description validation**: Primitive descriptions now consistently accept `+` and `-` across server, client, XML schema, and import paths, including URL-like scientific metadata.
 - **Description editing**: Job descriptions are submitted as form data so values containing `/` round-trip correctly.
@@ -43,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Description hardening**: Added pre-write import validation, contextual output encoding, bounded no-follow filesystem reads, and raw-description log redaction while retaining the legacy safety blacklist.
 
 ## [2.5.0] - 2026-07-29
+
+> **Never published.** This version was prepared and versioned in source and an
+> annotated tag existed only in a local clone; it was never pushed to `origin` and no
+> GitHub Release was ever created for it. Its changes ship publicly for the first time
+> as part of [2.6.0].
 
 ### Added
 - **Upload extraction controls**: Added `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` and `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` for resumable benchmark upload extraction tuning and safety enforcement.
@@ -414,9 +426,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Cluster MachineSpecs and overrides configuration for reproducible builds.
 - Initial implementation of the user Trash Bin/Recycle logic.
 
-[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.5.1...HEAD
-[2.5.1]: https://github.com/StarExecMiami/StarExec/compare/v2.5.0...v2.5.1
-[2.5.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.5.0
+[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.6.0
+[2.5.1]: https://github.com/StarExecMiami/StarExec/commit/443f935565501ea350488f4ef79ddcdd56cacfa3
+[2.5.0]: https://github.com/StarExecMiami/StarExec/commit/467c5558afb770c8022521363f0b8b40b4890437
 [2.4.0]: https://github.com/StarExecMiami/StarExec/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/StarExecMiami/StarExec/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/StarExecMiami/StarExec/compare/v2.1.0...v2.2.0
