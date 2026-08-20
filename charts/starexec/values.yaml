@@ -276,6 +276,19 @@ security:
   volumePermissions:
     enabled: true
     image: "busybox:1.36"
+    # Declared for every profile because a ResourceQuota that sets requests or
+    # limits refuses any pod with a container that declares neither -- and the
+    # refusal names this container, not the workload. Sized for what it does:
+    # mkdir/chown/chmod over the mounted volumes, which is I/O-bound shell work
+    # in a busybox image, so the request is small and the limit is generous
+    # enough that a large chown cannot be OOM-killed before the app starts.
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "32Mi"
+      limits:
+        cpu: "500m"
+        memory: "128Mi"
 
 # ============================================================================
 # DATABASE MIGRATIONS
