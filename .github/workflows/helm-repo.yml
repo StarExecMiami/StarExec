@@ -27,21 +27,30 @@ jobs:
         with:
           version: v3.15.1
 
-      - name: Build and package charts
+      # Retains every previously published chart package and index entry.
+      # See scripts/helm-repo-prepare.sh for why this replaced a bare
+      # `helm package` + `helm repo index` (which silently dropped old versions).
+      - name: Build repository, retaining published chart versions
         run: |
-          mkdir -p ./helm-repo
-          helm package charts/* --destination ./helm-repo
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          ./scripts/helm-repo-prepare.sh \
+            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" \
+            ./helm-repo
 
-      - name: Generate index
+      - name: Verify old chart versions were retained
         run: |
-          helm repo index ./helm-repo --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          ./scripts/check-helm-retention.sh ./helm-repo 0.1.0 0.2.0
 
       - name: Add landing page
         run: cp .github/helm-landing-page.html ./helm-repo/index.html
 
+      # keep_files preserves anything already on gh-pages that this run did not
+      # rebuild. force_orphan was removed: it recreated the branch from scratch,
+      # which is what destroyed previously published .tgz files.
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./helm-repo
-          force_orphan: true
+          keep_files: true
