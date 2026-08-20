@@ -108,7 +108,11 @@ jobs:
 
           version="${RELEASE_TAG#v}"
           echo "--- Makefile ---"
-          grep -n "IMAGE_VERSION=\${IMAGE_VERSION:-" Makefile
+          # The recipe escapes the shell expansion for Make, so the file really
+          # contains $${IMAGE_VERSION:-...}. Informational only: `|| true` keeps
+          # a non-matching grep from aborting the step under `bash -e` and
+          # masking the assertion that follows.
+          grep -n "IMAGE_VERSION:-" Makefile || true
           grep -q "IMAGE_VERSION:-${version}}" Makefile \
             || { echo "Makefile IMAGE_VERSION default is not ${version}" >&2; exit 1; }
           echo "Makefile default image version is ${version}"
