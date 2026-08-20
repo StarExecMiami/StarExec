@@ -85,6 +85,10 @@ def main():
                     help="path to the source Chart.yaml defining the current version")
     ap.add_argument("--old-index", required=True,
                     help="the previously published index.yaml, saved before packaging")
+    ap.add_argument("--allow-missing-index", action="store_true",
+                    help="accept a declared-empty old index (genuine first publication). "
+                         "Without this, an absent/empty/unreadable old index is an error, "
+                         "because it is indistinguishable from a failed fetch.")
     args = ap.parse_args()
 
     failures = []
@@ -110,12 +114,52 @@ def main():
         sys.exit(f"check-helm-retention: missing or empty proposed index: {new_index_path}")
     new_entries = entries(load_yaml(new_index_path))
 
-    if os.path.isfile(args.old_index) and os.path.getsize(args.old_index) > 0:
-        old_entries = entries(load_yaml(args.old_index))
-    else:
+    # The old index is the ONLY evidence of what was published. If it is absent,
+    # empty, or unreadable, every retention assertion below becomes vacuously
+    # true -- the validator would report that nothing was dropped precisely when
+    # it cannot tell. That is how a transient fetch failure used to publish an
+    # index missing a released version and still pass this check, so all four
+    # cases are fatal unless the caller explicitly declares a first publication.
+    if not os.path.isfile(args.old_index):
+        if args.allow_missing_index:
+            old_entries = {}
+            print("check-helm-retention: no old index and --allow-missing-index given; "
+                  "treating as a declared first publication")
+        else:
+            fail(f"missing old index: {args.old_index} does not exist. Retention cannot be "
+                 "checked without it; pass --allow-missing-index only for a genuine first "
+                 "publication.")
+            old_entries = {}
+    elif os.path.getsize(args.old_index) == 0:
+        # Always fatal, even with the flag: a declared first publication writes a
+        # well-formed empty index. A zero-byte file is what a truncated or failed
+        # download leaves behind, and it cannot express intent.
+        fail(f"empty old index: {args.old_index} is zero bytes. A failed fetch leaves "
+             "exactly this; a declared first publication writes a valid empty index.")
         old_entries = {}
-        print("check-helm-retention: no previously published index "
-              "(first publication) -- retention assertions are vacuous")
+    else:
+        try:
+            old_doc = load_yaml(args.old_index)
+        except Exception as exc:
+            fail(f"malformed old index: {args.old_index} does not parse as YAML "
+                 f"({str(exc).splitlines()[0]})")
+            old_doc = None
+        if old_doc is None:
+            old_entries = {}
+        elif not isinstance(old_doc, dict) or not isinstance(old_doc.get("entries"), dict):
+            fail(f"malformed old index: {args.old_index} parses but has no 'entries' "
+                 "mapping, so it is not a Helm repository index")
+            old_entries = {}
+        else:
+            old_entries = entries(old_doc)
+            if not old_entries:
+                if args.allow_missing_index:
+                    print("check-helm-retention: old index declares no versions of "
+                          f"'{CHART}' and --allow-missing-index given; first publication")
+                else:
+                    fail(f"missing prior chart entry: the old index lists no version of "
+                         f"'{CHART}'. The published repository is expected to contain at "
+                         "least one; pass --allow-missing-index only for a first publication.")
 
     print(f"check-helm-retention: old index versions:  {sorted(old_entries) or '<none>'}")
     print(f"check-helm-retention: new index versions:  {sorted(new_entries)}")
