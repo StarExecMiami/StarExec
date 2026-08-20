@@ -25,6 +25,20 @@ declare -a MARKERS=(
   "2.5.0"
   "2.5.1"
   "2.6.0"
+  # Image publication must be described prospectively. release.yml and
+  # container-publish.yml both fire on the tag but neither waits for the other,
+  # so notes that assert images "are published" state as fact something this
+  # workflow cannot observe -- and that a failed image build would make false.
+  "triggers publication of application-image tags"
+  "Post-publication checklist"
+)
+
+# Wordings that assert image publication as accomplished fact. The release body
+# is written before either publishing workflow has finished, so these can only
+# ever be a guess presented as a result.
+declare -a FORBIDDEN=(
+  "images for this release are published as"
+  "Container images for this release are published"
 )
 
 fail=0
@@ -34,6 +48,17 @@ for m in "${MARKERS[@]}"; do
   else
     echo "check-release-notes: ERROR: missing required marker: $m" >&2
     fail=1
+  fi
+done
+
+for f in "${FORBIDDEN[@]}"; do
+  if grep -qF -- "$f" "$NOTES"; then
+    echo "check-release-notes: ERROR: prospective-wording violation: notes assert image" >&2
+    echo "check-release-notes:        publication as fact via: \"$f\"" >&2
+    echo "check-release-notes:        describe what the tag TRIGGERS, and require verification." >&2
+    fail=1
+  else
+    echo "check-release-notes: OK no unconditional publication claim: $f"
   fi
 done
 
