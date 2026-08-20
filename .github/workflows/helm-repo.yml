@@ -35,12 +35,20 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           ./scripts/helm-repo-prepare.sh \
             "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" \
-            ./helm-repo
+            ./helm-repo \
+            ./published-index.yaml
 
+      # Derived from Chart.yaml and the published index, so it keeps working
+      # when the chart version moves. The previous form asserted the literals
+      # `0.1.0 0.2.0`, which would have had to be hand-edited every release --
+      # and would have quietly stopped protecting anything if it were not.
       - name: Verify old chart versions were retained
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
-          ./scripts/check-helm-retention.sh ./helm-repo 0.1.0 0.2.0
+          ./scripts/check-helm-retention.py \
+            --repo-dir ./helm-repo \
+            --chart charts/starexec/Chart.yaml \
+            --old-index ./published-index.yaml
 
       - name: Add landing page
         run: cp .github/helm-landing-page.html ./helm-repo/index.html

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a Helm repository directory that RETAINS previously published charts.
 #
-# Usage: helm-repo-prepare.sh <base-url> <out-dir>
+# Usage: helm-repo-prepare.sh <base-url> <out-dir> [<save-old-index-path>]
 #
 # The previous workflow packaged only the current chart, regenerated index.yaml
 # from scratch, and published with force_orphan, which rewrote the gh-pages
@@ -13,14 +13,21 @@
 #   1. downloads the currently published index.yaml (if any);
 #   2. downloads every package that index references;
 #   3. packages the charts in this tree alongside them;
-#   4. regenerates the index with --merge so old entries survive.
+#   4. regenerates the index with --merge so old entries survive;
+#   5. optionally saves the ORIGINAL published index to <save-old-index-path>.
+#
+# That saved copy is what makes retention checkable after the fact: once the
+# merge has run, the index in <out-dir> no longer records what was published
+# before, so a validator has nothing to compare against. It is written OUTSIDE
+# <out-dir> so it never becomes a published file itself.
 #
 # It is a no-op-safe bootstrap: if no index is published yet, it simply builds a
 # fresh repository.
 set -euo pipefail
 
-BASE_URL="${1:?usage: helm-repo-prepare.sh <base-url> <out-dir>}"
-OUT_DIR="${2:?usage: helm-repo-prepare.sh <base-url> <out-dir>}"
+BASE_URL="${1:?usage: helm-repo-prepare.sh <base-url> <out-dir> [save-old-index]}"
+OUT_DIR="${2:?usage: helm-repo-prepare.sh <base-url> <out-dir> [save-old-index]}"
+SAVE_OLD_INDEX="${3:-}"
 BASE_URL="${BASE_URL%/}"
 
 WORK="$(mktemp -d)"
@@ -35,6 +42,19 @@ if curl -fsSL --max-time 60 -o "$EXISTING_INDEX" "$BASE_URL/index.yaml"; then
   echo "helm-repo-prepare: found published index at $BASE_URL/index.yaml"
 else
   echo "helm-repo-prepare: no published index at $BASE_URL/index.yaml (first publication)"
+fi
+
+if [ -n "$SAVE_OLD_INDEX" ]; then
+  case "$SAVE_OLD_INDEX" in
+    "$OUT_DIR"/*) echo "helm-repo-prepare: refusing to save the old index inside $OUT_DIR" >&2; exit 1 ;;
+  esac
+  if [ "$HAVE_EXISTING" -eq 1 ]; then
+    cp "$EXISTING_INDEX" "$SAVE_OLD_INDEX"
+    echo "helm-repo-prepare: saved published index to $SAVE_OLD_INDEX"
+  else
+    : > "$SAVE_OLD_INDEX"
+    echo "helm-repo-prepare: no published index; wrote empty $SAVE_OLD_INDEX"
+  fi
 fi
 
 if [ "$HAVE_EXISTING" -eq 1 ]; then
