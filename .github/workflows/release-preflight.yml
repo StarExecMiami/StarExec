@@ -44,6 +44,7 @@ on:
       - "scripts/check-chart-image-reference.py"
       - "scripts/validate-release-tag.sh"
       - "scripts/helm-repo-prepare.sh"
+      - "scripts/test-helm-repo-fetch.py"
       - "docs/release-notes/**"
       - "charts/starexec/Chart.yaml"
       - "CHANGELOG.md"
@@ -176,6 +177,13 @@ jobs:
 
       - name: appVersion does not force the container image tag
         run: ./scripts/check-chart-image-reference.py
+
+      # Deterministic failure modes, driven against a local HTTP fixture. This is
+      # separate from the live proof below on purpose: this one must be able to
+      # fail the PR without depending on the public repository being reachable,
+      # and it exercises the paths a healthy network never produces.
+      - name: Test Helm repository fetch failure handling
+        run: ./scripts/test-helm-repo-fetch.py
 
       - name: Publishing the chart retains every published version
         run: |

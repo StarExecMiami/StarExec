@@ -50,6 +50,7 @@ REQUIRED_PREFLIGHT = [
     ("image metadata harness",   "check-image-metadata.py"),
     ("job-runner isolation",     "check-job-runner-isolation.py"),
     ("helm retention",           "check-helm-retention.py"),
+    ("helm fetch failure modes", "test-helm-repo-fetch.py"),
     ("chart image reference",    "check-chart-image-reference.py"),
     ("workflow security",        "check-workflow-security.py"),
 ]
