@@ -79,15 +79,55 @@ trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$OUT_DIR"
 
-# Write $2 to $1 atomically: a temporary file in the SAME directory, then mv.
-# Same directory so the rename cannot cross a filesystem boundary and degrade
-# into a copy that can itself be interrupted half-written.
-install_atomic() {
-  local dest="$1" src="$2" tmp
-  tmp="$(mktemp "$(dirname "$dest")/.helm-index.XXXXXX")"
-  cat "$src" > "$tmp"
-  mv -f "$tmp" "$dest"
-}
+# Private prefix for the temporary files this script creates inside a
+# destination directory. Defined once because the residue assertion at the end
+# looks for exactly this pattern.
+ATOMIC_TMP_PREFIX=".helm-index."
+
+# Write $2 to $1 atomically, leaving no residue on ANY exit path.
+#
+# Same directory as the destination, so the rename cannot cross a filesystem
+# boundary and degrade into a copy that can itself be interrupted half-written.
+#
+# A subshell rather than a plain function: the traps below must not disturb the
+# script-level `trap ... EXIT` that removes $WORK, and a subshell's traps are
+# scoped to the subshell.
+#
+# mktemp creates the temporary file before cat writes into it, so anything
+# landing in that window -- disk full, OOM, a SIGTERM from a cancelled job --
+# used to leave a .helm-index.* file behind. The destination survived intact,
+# but peaceiris/actions-gh-pages publishes publish_dir wholesale, dotfiles
+# included, so the orphan could reach gh-pages.
+#
+# Cleanup removes only THIS invocation's file, by its exact path: it never
+# globs, so a concurrent run's temporary file and any unrelated hidden file are
+# both untouched, and it can never remove the destination.
+install_atomic() (
+  set -euo pipefail
+  dest="$1"; src="$2"
+  tmp="$(mktemp "$(dirname "$dest")/${ATOMIC_TMP_PREFIX}XXXXXX")"
+
+  # shellcheck disable=SC2329  # invoked from the traps below
+  cleanup() { rm -f -- "$tmp"; }
+  # Signals exit 128+signum so a cancelled job still reports as cancelled
+  # rather than as an ordinary failure.
+  # shellcheck disable=SC2329  # invoked from the traps below
+  on_signal() { cleanup; trap - EXIT; exit "$((128 + $1))"; }
+  trap cleanup EXIT
+  trap 'on_signal 1' HUP
+  trap 'on_signal 2' INT
+  trap 'on_signal 15' TERM
+
+  # An ordinary failure here (cat cannot read, no space left) exits non-zero
+  # under set -e; the EXIT trap removes the temporary file and the original
+  # status is preserved.
+  cat -- "$src" > "$tmp"
+  mv -f -- "$tmp" "$dest"
+
+  # After the rename $tmp no longer exists, so the EXIT trap would be a
+  # harmless no-op; clearing it makes that explicit rather than incidental.
+  trap - EXIT HUP INT TERM
+)
 
 # Classify the response body. Exit status names the problem so the caller can
 # report which of several very different failures actually happened.
@@ -242,6 +282,18 @@ if [ "$HAVE_EXISTING" -eq 1 ]; then
   helm repo index "$OUT_DIR" --url "$BASE_URL" --merge "$EXISTING_INDEX"
 else
   helm repo index "$OUT_DIR" --url "$BASE_URL"
+fi
+
+# The traps above are the guarantee; this is the belt-and-braces check that the
+# directory about to be published holds no internal temporary file. Scoped to
+# this script's own private prefix, and it reports rather than deletes -- a
+# residue here means the guarantee failed and that is worth failing loudly for.
+leaked="$(find "$OUT_DIR" -maxdepth 1 -type f -name "${ATOMIC_TMP_PREFIX}*" 2>/dev/null || true)"
+if [ -n "$leaked" ]; then
+  echo "helm-repo-prepare: ERROR: internal temporary file(s) left in $OUT_DIR:" >&2
+  printf '%s\n' "$leaked" | sed 's/^/helm-repo-prepare:   /' >&2
+  echo "helm-repo-prepare: publishing this directory would copy them to gh-pages." >&2
+  exit 1
 fi
 
 echo "helm-repo-prepare: repository ready in $OUT_DIR"

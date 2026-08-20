@@ -26,8 +26,12 @@ Run: scripts/test-helm-repo-fetch.py [-v]
 """
 import argparse
 import contextlib
+import glob
+import hashlib
 import http.server
 import os
+import re
+import signal
 import shutil
 import socket
 import socketserver
@@ -354,6 +358,150 @@ def case_atomic_destination():
               f"size_before={len(before)} size_after={len(after)}")
 
 
+# --------------------------------------------------------------------------
+# atomic install: temp-file lifecycle
+#
+# mktemp creates the temporary file before cat writes into it. Anything landing
+# in that window used to leave a .helm-index.* orphan in the publication
+# directory, and actions-gh-pages copies publish_dir wholesale, dotfiles
+# included.
+#
+# Every call site inside helm-repo-prepare.sh feeds install_atomic an
+# internally-generated source file, so a black-box run cannot make the copy
+# block long enough to signal it. These cases therefore drive the production
+# function text itself, extracted verbatim; the extraction asserts it found a
+# real trap-bearing installer, so a change in shape fails loudly rather than
+# silently testing nothing. The end-to-end residue assertion below covers the
+# integrated path.
+# --------------------------------------------------------------------------
+TMP_GLOB = ".helm-index.*"
+
+
+def extract_install_atomic():
+    src = open(PREPARE).read()
+    prefix = re.search(r"^ATOMIC_TMP_PREFIX=.*$", src, re.M)
+    fn = re.search(r"^install_atomic\(\) \(\n(.*?)^\)$", src, re.M | re.S)
+    if not prefix or not fn:
+        raise AssertionError(f"could not extract install_atomic from {PREPARE}")
+    body = prefix.group(0) + "\ninstall_atomic() (\n" + fn.group(1) + ")\n"
+    assert "trap" in body and "mktemp" in body, "extracted text is not the atomic installer"
+    return body
+
+
+@contextlib.contextmanager
+def install_fixture():
+    """A destination directory holding a known-good file and an unrelated dotfile."""
+    ws = tempfile.mkdtemp(prefix="atomic-")
+    out = os.path.join(ws, "out"); os.makedirs(out)
+    dest = os.path.join(out, "index.yaml")
+    with open(dest, "wb") as fh:
+        fh.write(b"GOOD-DESTINATION\n")
+    unrelated = os.path.join(out, ".keepme")
+    with open(unrelated, "wb") as fh:
+        fh.write(b"unrelated hidden file\n")
+    driver = os.path.join(ws, "drive.sh")
+    with open(driver, "w") as fh:
+        fh.write("#!/usr/bin/env bash\nset -euo pipefail\n"
+                 + extract_install_atomic()
+                 + 'install_atomic "$1" "$2"\n')
+    os.chmod(driver, 0o755)
+    try:
+        yield ws, out, dest, unrelated, driver
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+
+def sha(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+
+def leftovers(out):
+    return [os.path.basename(x) for x in glob.glob(os.path.join(out, TMP_GLOB))]
+
+
+def case_install_interrupted():
+    with install_fixture() as (ws, out, dest, unrelated, driver):
+        fifo = os.path.join(ws, "slow.fifo")
+        os.mkfifo(fifo)
+        before, before_un = sha(dest), sha(unrelated)
+        p = subprocess.Popen([driver, dest, fifo], start_new_session=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        seen = None
+        for _ in range(300):                       # wait for the private temp file
+            hits = leftovers(out)
+            if hits:
+                seen = hits[0]
+                break
+            time.sleep(0.02)
+        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        try:
+            p.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            p.kill(); p.wait()
+        # The cleanup runs in the subshell, which is a different process from the
+        # one being waited on: the outer shell has no TERM trap and dies at once,
+        # while the subshell still has to take the signal and run its handler.
+        # So poll for the file to go, with a bound -- asserting at the instant the
+        # parent exits would be testing scheduler timing, not the guarantee.
+        cleared_after = None
+        for i in range(200):
+            if not leftovers(out):
+                cleared_after = (i + 1) * 0.02
+                break
+            time.sleep(0.02)
+        after = leftovers(out)
+        ok = (seen is not None and p.returncode != 0 and not after
+              and sha(dest) == before and sha(unrelated) == before_un)
+        check("SIGTERM during install: temp removed, destination intact", ok,
+              f"temp_observed={seen} exit={p.returncode} "
+              f"cleaned_after={f'{cleared_after:.2f}s' if cleared_after else 'NEVER'} "
+              f"leftovers={after or 'none'} dest_unchanged={sha(dest) == before} "
+              f"unrelated_unchanged={sha(unrelated) == before_un}")
+
+
+def case_install_producer_fails():
+    with install_fixture() as (ws, out, dest, unrelated, driver):
+        before, before_un = sha(dest), sha(unrelated)
+        rc, log = run([driver, dest, os.path.join(ws, "does-not-exist")], cwd=ws)
+        after = leftovers(out)
+        ok = (rc != 0 and not after and sha(dest) == before
+              and sha(unrelated) == before_un and "No such file" in log)
+        check("producer fails after temp creation: temp removed, status kept", ok,
+              f"exit={rc} leftovers={after or 'none'} dest_unchanged={sha(dest) == before} "
+              f"diagnostic_kept={'No such file' in log}")
+
+
+def case_install_success():
+    with install_fixture() as (ws, out, dest, unrelated, driver):
+        src = os.path.join(ws, "new.yaml")
+        with open(src, "wb") as fh:
+            fh.write(b"NEW-CONTENT\n")
+        rc1, _ = run([driver, dest, src], cwd=ws)
+        first = open(dest, "rb").read()
+        # A second install proves no trap state leaked out of the first.
+        with open(src, "wb") as fh:
+            fh.write(b"SECOND-CONTENT\n")
+        rc2, _ = run([driver, dest, src], cwd=ws)
+        after = leftovers(out)
+        ok = (rc1 == 0 and rc2 == 0 and first == b"NEW-CONTENT\n"
+              and open(dest, "rb").read() == b"SECOND-CONTENT\n"
+              and not after and sha(unrelated) == sha(unrelated))
+        check("successful install: destination updated, no residue, repeatable", ok,
+              f"exit1={rc1} exit2={rc2} leftovers={after or 'none'} "
+              f"final={open(dest, 'rb').read()!r}")
+
+
+def case_no_temp_residue_after_prepare():
+    """End-to-end: a real successful preparation leaves no internal temp file."""
+    with scenario("ok") as (ws, fx, out, old):
+        rc, log = prepare(ws, fx.url, out, old)
+        residue = [f for f in os.listdir(out) if f.startswith(".helm-index.")]
+        hidden = [f for f in os.listdir(out) if f.startswith(".")]
+        ok = rc == 0 and not residue
+        check("full preparation leaves no internal temp file in the output dir", ok,
+              f"prepare rc={rc} residue={residue or 'none'} all_hidden={hidden or 'none'}")
+
+
 CASES = [
     case_ok200,
     case_http404_default,
@@ -368,6 +516,10 @@ CASES = [
     case_old_package_mutated,
     case_empty_old_index_rejected,
     case_atomic_destination,
+    case_install_interrupted,
+    case_install_producer_fails,
+    case_install_success,
+    case_no_temp_residue_after_prepare,
 ]
 
 
