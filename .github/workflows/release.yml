@@ -8,16 +8,34 @@
 # The previous "release-*" trigger was removed because the tag-to-version guard
 # below can never accept it, so it could only ever produce a failed run.
 #
-# Order matters: every cheap guard (tag/version agreement, release-notes
-# completeness) runs BEFORE the Maven build, and asset verification runs before
-# publication. There is no path on which a GitHub Release is created after a
-# failed version check, notes check, artifact build, or asset check.
+# Order matters: every cheap guard (ref validation, tag/version agreement,
+# release-notes completeness) runs BEFORE the Maven build, and asset
+# verification runs before publication. There is no path on which a GitHub
+# Release is created after a failed validation, notes check, artifact build, or
+# asset check.
 #
 # The release body is the curated, reviewed file docs/release-notes/v<version>.md.
 # It is NOT generated from `git log` and NOT GitHub's auto-generated notes: the
 # previous inline body interpolated an unreliable commit range and asserted
 # "Security scans: Passed" / "Container validation: Passed", which this workflow
 # does not verify.
+#
+# -- Refs are data ------------------------------------------------------------
+# github.ref_name is attacker-influenced. `git tag` refuses most metacharacters,
+# but the ref namespace does not: `git update-ref` on a crafted name followed by
+# a push produces a ref that arrives here as github.ref_name. Interpolated into
+# a `run:` body the shell parses it; interpolated into a github-script `script:`
+# body the JavaScript engine parses it. So it is never interpolated into an
+# executable context anywhere in this file -- it reaches consumers through
+# `env:` and is read as "$RELEASE_TAG" / process.env. Steps after validation
+# prefer the validated outputs of the `tag` step over the raw ref.
+# scripts/check-workflow-security.py enforces both properties structurally.
+#
+# -- Permissions are per job --------------------------------------------------
+# The workflow default is read-only. `release` adds contents: write to create
+# the Release and upload assets. `notify-failure` is a separate job precisely so
+# issues: write is not held by the job that runs the build; it cannot run on
+# success, and it publishes nothing.
 # =============================================================================
 
 name: Release Management
@@ -28,22 +46,33 @@ on:
       - "v*"
 
 permissions:
-  # contents: write — create the release and upload assets.
-  contents: write
-  # issues: write — required by the failure-notification step below, which opens
-  # an issue when a release build fails. Nothing else here needs it.
-  issues: write
+  contents: read
 
 jobs:
-  create-release:
+  release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      # contents: write -- create the Release and upload its assets. Nothing
+      # else in this job needs a write scope, and issues: write deliberately
+      # lives in notify-failure instead.
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ---- Ref validation: first, before anything reads the ref ----------
+      - name: Validate release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/validate-release-tag.sh
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -54,10 +83,14 @@ jobs:
 
       # ---- Guards: cheap, and before anything expensive ------------------
       - name: Verify tag matches the Maven project version
-        run: ./scripts/check-release-version.sh "${{ github.ref_name }}"
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: ./scripts/check-release-version.sh "$RELEASE_TAG"
 
       - name: Verify cumulative release notes
-        run: ./scripts/check-release-notes.sh "docs/release-notes/${{ github.ref_name }}.md"
+        env:
+          NOTES_PATH: ${{ steps.tag.outputs.notes_path }}
+        run: ./scripts/check-release-notes.sh "$NOTES_PATH"
 
       # ---- Build ---------------------------------------------------------
       - name: Build release artifacts
@@ -67,13 +100,16 @@ jobs:
         run: ./scripts/check-release-assets.sh starexec-app/target
 
       # ---- Publish -------------------------------------------------------
+      # prerelease is a literal false: validate-release-tag.sh rejects every
+      # pre-release suffix, so no tag reaching this step can be one.
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
-          tag_name: ${{ github.ref_name }}
-          body_path: docs/release-notes/${{ github.ref_name }}.md
+          prerelease: false
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: ${{ steps.tag.outputs.notes_path }}
           fail_on_unmatched_files: true
           files: |
             starexec-app/target/starexec.war
@@ -85,7 +121,7 @@ jobs:
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ github.ref_name }}
+          name: release-${{ steps.tag.outputs.tag }}
           path: |
             starexec-app/target/starexec.war
             starexec-app/target/starexeccommand.zip
@@ -93,28 +129,67 @@ jobs:
           retention-days: 90
 
       - name: Job summary
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          NOTES_PATH: ${{ steps.tag.outputs.notes_path }}
         run: |
           {
             echo "## Release published"
             echo ""
-            echo "**Tag:** \`${{ github.ref_name }}\`"
-            echo "**Notes:** \`docs/release-notes/${{ github.ref_name }}.md\`"
+            echo "**Tag:** \`$RELEASE_TAG\`"
+            echo "**Notes:** \`$NOTES_PATH\`"
             echo ""
             echo "### Assets"
             echo '```'
             cat starexec-app/target/SHA256SUMS
             echo '```'
+            echo ""
+            echo "Application images are published by container-publish.yml on the"
+            echo "same tag. Verify those tags and their digest before pinning them."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Notify on release failure
-        if: failure()
+  notify-failure:
+    name: Report release failure
+    runs-on: ubuntu-latest
+    needs: release
+    if: failure()
+    permissions:
+      contents: read
+      # issues: write -- this job exists to hold it. Keeping it off the release
+      # job means a compromised build step cannot open or edit issues.
+      issues: write
+
+    steps:
+      - name: Open a release-failure issue
         uses: actions/github-script@v7
+        env:
+          # The raw ref, because the release job may have failed IN validation,
+          # in which case there is no validated output to report. It is read as
+          # data through process.env and sanitised below before use.
+          RELEASE_REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            github.rest.issues.create({
+            const rawRef = process.env.RELEASE_REF || '(unknown ref)';
+            const runUrl = process.env.RUN_URL;
+
+            // The ref is untrusted and may be the very reason the run failed.
+            // Anything outside this set is replaced wholesale, so a hostile ref
+            // cannot inject Markdown, HTML, or issue-body directives.
+            const safeRef = /^[A-Za-z0-9._-]{1,64}$/.test(rawRef)
+              ? rawRef
+              : '(ref rejected as unsafe to display)';
+
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Release ${{ github.ref_name }} - Build Failed`,
-              body: `The release build for tag \`${{ github.ref_name }}\` failed. Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.`,
-              labels: ['bug', 'release']
+              title: `Release ${safeRef} - Build Failed`,
+              body: [
+                `The release build for tag \`${safeRef}\` failed.`,
+                '',
+                `Workflow run: ${runUrl}`,
+                '',
+                'No GitHub Release, asset, or image was published by this run.',
+              ].join('\n'),
+              labels: ['bug', 'release'],
             });
