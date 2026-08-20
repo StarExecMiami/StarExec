@@ -286,6 +286,107 @@ make undeploy-k8s               # Remove deployment
 make k8s-status                 # Show cluster and deployment status
 ```
 
+## Execution-Safety Requirements and Upgrade Notes
+
+The Kubernetes-native backend is deliberately conservative about replacement
+work. Before it dispatches a pair again, releases a submission slot, or admits
+new work to a queue, it establishes that the previous execution can no longer
+create a pod, execute, or write results. These are the requirements and
+behaviors that follow from that, and they are worth reading before an upgrade
+rather than after a surprise.
+
+### Pod read permission
+
+The chart's Role grants the following in addition to its permissions on
+`batch/jobs`:
+
+```yaml
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+```
+
+**Why it is required:** job status alone cannot separate a pod that is running
+from one that has never started, because a job's active count includes pending
+and running pods alike. Without pod reads, an unschedulable pair is reported as
+running and holds a submission slot indefinitely.
+
+**Pod deletion is not required and is not requested.** The backend deletes only
+jobs and relies on owner-reference garbage collection to remove their pods. Do
+not add pod delete permission to make something work; if a pod outlives its job,
+that is a condition the backend is designed to observe rather than resolve by
+force.
+
+The Role and its binding are rendered whenever the chart is configured for a
+Kubernetes backend, so a normal `helm upgrade` applies the permission with no
+manual step. If you manage RBAC outside this chart — a hand-written Role or
+ClusterRole bound to the application's service account — you must carry the
+equivalent pod read permission yourself.
+
+**If the permission is missing** the backend does not fail. It logs once, per
+process, that it cannot list pods in the namespace and that job-level behavior
+is unchanged, then degrades to the earlier behavior in which a pending pod is
+indistinguishable from a running one. Because the message is emitted only once,
+check for it near startup rather than expecting it to repeat:
+
+```bash
+kubectl logs -n <namespace> deploy/<release> | grep -i "Cannot list pods"
+```
+
+### Health endpoints
+
+The chart's probes target two dedicated endpoints:
+
+```text
+/starexec/public/health/liveness    200 "alive"
+/starexec/public/health/readiness   200 "ready" | 503 "not ready"
+```
+
+Both are served under `/public/`, so they are reachable without a session, and
+both answer `GET` only. Any other path below `/starexec/public/health/` returns
+404.
+
+**Liveness reports whether the process can still serve a request.** It never
+touches the database and never reflects scheduler admission state. This is
+deliberate: restarting a pod cannot repair a database, so a database-aware
+liveness probe converts an outage into a restart storm that destroys the one
+process still able to report the problem.
+
+**Readiness reports whether this instance can serve usefully**, which means
+reaching the database. It returns 503 while PostgreSQL is unreachable, bounded
+by a two-second probe timeout so a stalled database cannot hold the probe open.
+
+The operational consequence is worth stating plainly, because it looks like a
+regression the first time it happens:
+
+> While PostgreSQL is unavailable, the deployment stays unready, and a rollout
+> check such as `kubectl wait --for=condition=available` will time out.
+
+That is the endpoint reporting a real dependency failure, not a probe defect.
+Resolve the database problem and repeat the rollout; do not relax the probe to
+make the wait succeed. See the troubleshooting entry below for the sequence.
+
+If you have external health checks — an ingress, a load balancer, an uptime
+monitor — pointed at `/starexec/`, move them to these endpoints. Choose
+liveness for "is the process up" and readiness for "should traffic arrive here";
+`/starexec/` answers neither question accurately.
+
+### Fail-closed scheduling
+
+Uncertainty about cluster state is not read as absence. When the API cannot be
+listed, a pod reports phase `Unknown`, a deletion is not confirmed, or a managed
+pod carries no usable execution identity, StarExec defers replacement work and
+retains the accounting instead of assuming the previous execution has stopped.
+
+The reason is measurement integrity rather than caution for its own sake. Two
+executions of the same pair writing to the same output is not a lost run; it is
+a recorded result that is wrong, and on a platform whose numbers are published
+that is the more expensive failure. A deferred pair is visible and recoverable;
+a contaminated measurement is neither.
+
+Treat a deferral as a signal to inspect the cluster, not as something to work
+around.
+
 ## Troubleshooting
 
 ### "Cannot connect to Kubernetes cluster"
