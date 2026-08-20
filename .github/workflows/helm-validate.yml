@@ -82,6 +82,17 @@ jobs:
             echo "✓ kubernetes validation passed ($LINES lines generated)"
           fi
 
+      # A rendered chart can be perfectly valid YAML and still be refused by the
+      # cluster. Quokka's starexec namespace carries a ResourceQuota that
+      # constrains requests/limits, and a quota of that shape rejects any pod
+      # holding a container that declares neither -- naming the container, not
+      # the workload. That is what stalled Jenkins build #91. helm lint and
+      # helm template both pass such a chart, so the check has to be explicit.
+      - name: Check quota-relevant resources are declared
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-chart-quota-resources.py
+
       - name: Check chart version
         id: chart-info
         run: |

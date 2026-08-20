@@ -72,6 +72,13 @@ spec:
       initContainers:
         - name: fix-permissions
           image: {{ .Values.security.volumePermissions.image | quote }}
+          # Required, not optional tuning: a namespace with a ResourceQuota that
+          # sets requests/limits rejects any pod containing a container that
+          # declares neither. Without this the whole Deployment is refused with
+          # "must specify limits.cpu for: fix-permissions", and under the
+          # Recreate strategy the old pod is already gone by then.
+          resources:
+{{ toYaml .Values.security.volumePermissions.resources | indent 12 }}
           command:
             - sh
             - -c
