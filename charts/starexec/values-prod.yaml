@@ -58,7 +58,7 @@ kubernetes:
       cpu: "100m"
       memory: "256Mi"
     limits:
-      cpu: "32"
+      cpu: "31"
       memory: "250Gi"
 
 persistence:
