@@ -145,6 +145,7 @@ LABEL maintainer="StarExec Team" \
 # - postgresql-client: PostgreSQL client for database connectivity
 # - procps: Provides ps command with -p option for process monitoring
 # - sudo: Required by job execution scripts to switch to sandbox users
+# - file: Required by Util.isBinaryFile(), used by the configuration details page
 # - libstdc++: C++ standard library (required by runsolver)
 # - libgcc: GCC runtime library (required by runsolver)
 # - gcompat: glibc compatibility layer for musl (required by solver binaries compiled against glibc)
@@ -161,6 +162,7 @@ RUN apk upgrade --no-cache && \
     postgresql-client \
     procps \
     sudo \
+    file \
     libstdc++ \
     libgcc \
     gcompat && \
@@ -169,12 +171,13 @@ RUN apk upgrade --no-cache && \
     rm -rf /var/cache/apk/*
 
 # Verify critical tools for job execution
-RUN which flock lscpu psql ps sudo && \
+RUN which flock lscpu psql ps sudo file && \
     flock --version && \
     lscpu --version && \
     psql --version && \
     ps --version && \
-    sudo --version
+    sudo --version && \
+    file --version
 
 # Verify PostgreSQL client tools required for migration checks are present
 RUN echo "Verifying PostgreSQL client tools for migrations..." && \
