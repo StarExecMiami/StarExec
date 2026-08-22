@@ -347,6 +347,18 @@ public class KubernetesNativeBackend implements Backend {
     /** Queue label values present on any worker node, schedulable or not. */
     private volatile Set<String> labelledQueues = Collections.emptySet();
 
+    /**
+     * Largest allocatable CPU, in millicores, among the schedulable nodes of each queue.
+     *
+     * <p>Recomputed by the same node listing that fills {@link #schedulableQueues}, so the
+     * capacity gate costs no extra API call. A queue absent from this map has no
+     * schedulable node and is handled by the existing queue-view branches.
+     */
+    private volatile Map<String, Long> queueMaxAllocatableCpuMillis = Collections.emptyMap();
+
+    /** Human-readable reason the CPU capacity gate is holding dispatch, or "" when clear. */
+    private volatile String cpuCapacityBlockDetail = "";
+
     private volatile long queueViewRefreshedAt = 0L;
 
     /**
@@ -816,6 +828,32 @@ public class KubernetesNativeBackend implements Backend {
         }
     }
 
+    /**
+     * Parses a Kubernetes CPU quantity into millicores, or {@code -1} if it cannot be read.
+     *
+     * <p>Comparing CPU quantities as strings is wrong in both directions — {@code "2"} is
+     * larger than {@code "1500m"} but sorts before it, and {@code "32"} sorts before
+     * {@code "4"}. Everything that compares capacity goes through this method so the
+     * comparison is numeric.
+     *
+     * <p>{@code -1} means "unreadable", never "zero": callers must treat it as unknown and
+     * fail closed rather than concluding the node is small.
+     */
+    static long cpuQuantityToMillis(String quantity) {
+        if (quantity == null || quantity.trim().isEmpty()) {
+            return -1L;
+        }
+        try {
+            java.math.BigDecimal cores = Quantity.getAmountInBytes(new Quantity(quantity.trim()));
+            if (cores == null) {
+                return -1L;
+            }
+            return cores.multiply(java.math.BigDecimal.valueOf(1000L)).longValue();
+        } catch (Exception e) {
+            return -1L;
+        }
+    }
+
     private void ensureNamespaceAccessible() {
         if (kubernetesClient.namespaces().withName(namespace).get() == null) {
             throw new IllegalStateException(
@@ -1260,6 +1298,24 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
+     * A node's allocatable CPU in millicores, or {@code -1} when it cannot be determined.
+     *
+     * <p>Allocatable, not capacity: capacity is the hardware, allocatable is what the
+     * kubelet will actually hand out after its own reservations. Scheduling is decided
+     * against allocatable, so that is what the gate compares.
+     */
+    static long nodeAllocatableCpuMillis(Node node) {
+        if (node == null || node.getStatus() == null || node.getStatus().getAllocatable() == null) {
+            return -1L;
+        }
+        Quantity cpu = node.getStatus().getAllocatable().get("cpu");
+        if (cpu == null) {
+            return -1L;
+        }
+        return cpuQuantityToMillis(cpu.toString());
+    }
+
+    /**
      * Refreshes the queue view if it has aged past {@link #QUEUE_VIEW_TTL_MS}.
      *
      * <p>One node listing serves both questions the routing gate asks — which queues exist
@@ -1278,6 +1334,7 @@ public class KubernetesNativeBackend implements Backend {
             try {
                 Set<String> labelled = new HashSet<>();
                 Set<String> schedulable = new HashSet<>();
+                Map<String, Long> maxCpu = new HashMap<>();
                 List<Node> nodes = kubernetesClient
                     .nodes()
                     .withLabel(workerNodeSelectorKey, workerNodeSelectorValue)
@@ -1293,10 +1350,21 @@ public class KubernetesNativeBackend implements Backend {
                     labelled.add(queueName);
                     if (isNodeSchedulable(node)) {
                         schedulable.add(queueName);
+                        // Only a schedulable node contributes capacity: a cordoned or
+                        // NotReady node accepts nothing, so counting its CPUs would let the
+                        // gate pass on capacity that cannot be used.
+                        long allocatable = nodeAllocatableCpuMillis(node);
+                        if (allocatable > 0) {
+                            Long previous = maxCpu.get(queueName);
+                            if (previous == null || allocatable > previous) {
+                                maxCpu.put(queueName, allocatable);
+                            }
+                        }
                     }
                 }
                 labelledQueues = Collections.unmodifiableSet(labelled);
                 schedulableQueues = Collections.unmodifiableSet(schedulable);
+                queueMaxAllocatableCpuMillis = Collections.unmodifiableMap(maxCpu);
                 queueViewRefreshedAt = System.currentTimeMillis();
                 queueViewLoaded = true;
             } catch (Exception e) {
@@ -1344,6 +1412,49 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         if (schedulableQueues.contains(name)) {
+            // Capacity gate. A pod whose cpu request is not strictly smaller than the
+            // largest allocatable CPU on any node this queue can use is unschedulable for
+            // as long as the configuration stands: no amount of waiting frees capacity that
+            // the node never had. Left ungated it produced the incident this guard exists
+            // for -- pods Pending for ever, the monitor failing each pair for rerun at its
+            // timeout, and the rerun requesting the same impossible size again.
+            //
+            // Strictly smaller, not equal: the node agents and DaemonSets that every node
+            // runs also consume scheduler-visible CPU, so a request exactly equal to
+            // allocatable never fits either. This is a static impossibility check, not a
+            // capacity reservation -- it deliberately does not model what is free right now.
+            long requestMillis = cpuQuantityToMillis(cpuLimit);
+            Long maxAllocatable = queueMaxAllocatableCpuMillis.get(name);
+            if (requestMillis < 0 || maxAllocatable == null || maxAllocatable <= 0) {
+                // Unreadable quantities are not evidence of room. Defer rather than dispatch
+                // into a cluster whose capacity could not be established.
+                log.warn(
+                    "Cannot establish CPU capacity for queue '" + name + "' (request=" +
+                        cpuLimit + ", parsed=" + requestMillis + "m, maxAllocatable=" +
+                        maxAllocatable + "); deferring dispatch rather than assuming it fits"
+                );
+                return false;
+            }
+            if (requestMillis >= maxAllocatable) {
+                cpuCapacityBlockDetail =
+                    "queue '" + name + "' requests " + cpuLimit + " (" + requestMillis +
+                    "m) but its largest schedulable node allocates only " + maxAllocatable + "m";
+                log.error(
+                    "Impossible CPU configuration: STAREXEC_K8S_CPU_LIMIT=" + cpuLimit +
+                        " (" + requestMillis + "m) is not smaller than the largest" +
+                        " allocatable CPU on any schedulable node of queue '" + name +
+                        "' (" + maxAllocatable + "m). Every pod would stay Pending for ever," +
+                        " so dispatch is being held and pairs remain enqueued rather than" +
+                        " failed. Remediation: lower STAREXEC_K8S_CPU_LIMIT below " +
+                        maxAllocatable + "m (chart key kubernetes.resources.limits.cpu)," +
+                        " leaving room for node DaemonSets, or add a node with more CPU."
+                );
+                return false;
+            }
+            if (!cpuCapacityBlockDetail.isEmpty()) {
+                log.info("CPU capacity gate cleared for queue '" + name + "'");
+                cpuCapacityBlockDetail = "";
+            }
             return true;
         }
         if (labelledQueues.contains(name)) {

@@ -2452,11 +2452,35 @@ public class KubernetesNativeBackendTests {
         java.util.Set<String> labelled,
         java.util.Set<String> schedulable
     ) throws Exception {
+        // A whole 32-CPU node per queue, asking for 1: these cases are about routing,
+        // not capacity, so the capacity gate must be satisfied and out of the way.
+        return backendWithQueueView(labelled, schedulable, "1", 32_000L);
+    }
+
+    /**
+     * As above, but with an explicit CPU request and per-queue allocatable ceiling so a
+     * test can drive the capacity gate directly.
+     */
+    @SuppressWarnings("unchecked")
+    private KubernetesNativeBackend backendWithQueueView(
+        java.util.Set<String> labelled,
+        java.util.Set<String> schedulable,
+        String cpuLimit,
+        Long maxAllocatableMillisPerQueue
+    ) throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
         setField(backend, "labelledQueues", labelled);
         setField(backend, "schedulableQueues", schedulable);
         setField(backend, "initialized", true);
         setField(backend, "shuttingDown", false);
+        setField(backend, "cpuLimit", cpuLimit);
+        java.util.Map<String, Long> capacity = new java.util.HashMap<>();
+        if (maxAllocatableMillisPerQueue != null) {
+            for (String q : schedulable) {
+                capacity.put(q, maxAllocatableMillisPerQueue);
+            }
+        }
+        setField(backend, "queueMaxAllocatableCpuMillis", capacity);
         // Keep the cached view fresh so the gate does not try to reach a cluster.
         setField(backend, "queueViewRefreshedAt", System.currentTimeMillis());
         // These cases are all about a view that HAS been read. The separate
@@ -2936,5 +2960,215 @@ public class KubernetesNativeBackendTests {
             "an unlabelled queue must not be deferred silently -- it never resolves",
             backend.isQueueDispatchable("high-mem.q")
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // CPU capacity gate
+    //
+    // Quokka ran with STAREXEC_K8S_CPU_LIMIT=32 against nodes whose allocatable
+    // CPU is exactly 32. calico-node already requests 250m on every node, so
+    // 31750m was schedulable and every solver pod stayed Pending for ever.
+    // KubernetesJobMonitor then failed each pair for rerun at its timeout and the
+    // rerun asked for 32 again -- a livelock that turned a one-line config error
+    // into weeks of a queue that never moved.
+    //
+    // The gate is a static impossibility check: a request that is not strictly
+    // smaller than the biggest node the queue can use never fits, no matter how
+    // long anything waits. It defers; it must never fail a pair.
+    // ---------------------------------------------------------------------
+
+    private long cpuQuantityToMillis(String q) throws Exception {
+        Method m = KubernetesNativeBackend.class.getDeclaredMethod(
+            "cpuQuantityToMillis", String.class);
+        m.setAccessible(true);
+        return (Long) m.invoke(null, q);
+    }
+
+    @Test
+    public void cpuQuantitiesAreComparedNumericallyNotLexically() throws Exception {
+        assertEquals(31_000L, cpuQuantityToMillis("31"));
+        assertEquals(32_000L, cpuQuantityToMillis("32"));
+        assertEquals(1_500L, cpuQuantityToMillis("1500m"));
+        assertEquals(500L, cpuQuantityToMillis("500m"));
+        // The comparison the gate depends on, and the one a string compare gets wrong:
+        // "32" sorts before "4" but is eight times larger.
+        assertTrue(cpuQuantityToMillis("32") > cpuQuantityToMillis("4"));
+        assertTrue(cpuQuantityToMillis("2") > cpuQuantityToMillis("1500m"));
+    }
+
+    @Test
+    public void unreadableCpuQuantitiesAreUnknownNotZero() throws Exception {
+        // -1 rather than 0 matters: 0 would compare as "smaller than the node" and let an
+        // unreadable configuration dispatch.
+        assertEquals(-1L, cpuQuantityToMillis(null));
+        assertEquals(-1L, cpuQuantityToMillis(""));
+        assertEquals(-1L, cpuQuantityToMillis("   "));
+        assertEquals(-1L, cpuQuantityToMillis("all-of-them"));
+    }
+
+    @Test
+    public void aRequestSmallerThanTheNodeIsDispatchable() throws Exception {
+        // 31 on a 32-CPU node: the configuration this incident was fixed to.
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            "31",
+            32_000L
+        );
+
+        assertTrue(
+            "31 CPUs against a 32-CPU node leaves room for node DaemonSets and must be"
+                + " allowed to dispatch",
+            backend.isQueueDispatchable("kubernetes.q")
+        );
+    }
+
+    @Test
+    public void aRequestEqualToNodeAllocatableIsDeferredNotFailed() throws Exception {
+        // The exact Quokka configuration. Equality is unschedulable, because kube-proxy,
+        // the CNI DaemonSet and the kubelet's own reservations are all charged against
+        // the same allocatable figure.
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            "32",
+            32_000L
+        );
+
+        assertFalse(
+            "a request equal to allocatable can never be scheduled and must hold dispatch",
+            backend.isQueueDispatchable("kubernetes.q")
+        );
+    }
+
+    @Test
+    public void aRequestLargerThanTheNodeIsDeferred() throws Exception {
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            "33",
+            32_000L
+        );
+
+        assertFalse(backend.isQueueDispatchable("kubernetes.q"));
+    }
+
+    @Test
+    public void oneBigEnoughNodeAmongSeveralSatisfiesTheGate() throws Exception {
+        // The refresh keeps the MAXIMUM allocatable per queue, so a fleet of small nodes
+        // plus one large one still dispatches -- the scheduler only needs one that fits.
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("mixed.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("mixed.q")),
+            "31",
+            64_000L
+        );
+
+        assertTrue(backend.isQueueDispatchable("mixed.q"));
+    }
+
+    @Test
+    public void aFleetWhereNoNodeIsBigEnoughIsDeferred() throws Exception {
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("small.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("small.q")),
+            "31",
+            8_000L
+        );
+
+        assertFalse(
+            "every node is smaller than the request, so nothing will ever schedule",
+            backend.isQueueDispatchable("small.q")
+        );
+    }
+
+    @Test
+    public void unknownCapacityFailsClosed() throws Exception {
+        // The node listing succeeded for labels but produced no allocatable figure for
+        // this queue. "Could not determine" must never read as "fits".
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            "31",
+            null
+        );
+
+        assertFalse(
+            "capacity that could not be established must defer, not dispatch",
+            backend.isQueueDispatchable("kubernetes.q")
+        );
+    }
+
+    @Test
+    public void anUnreadableCpuRequestFailsClosed() throws Exception {
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            "thirty-one",
+            32_000L
+        );
+
+        assertFalse(backend.isQueueDispatchable("kubernetes.q"));
+    }
+
+    @Test
+    public void onlySchedulableNodesContributeAllocatableCpu() throws Exception {
+        Method reader = KubernetesNativeBackend.class.getDeclaredMethod(
+            "nodeAllocatableCpuMillis", io.fabric8.kubernetes.api.model.Node.class);
+        reader.setAccessible(true);
+
+        io.fabric8.kubernetes.api.model.Node big =
+            new io.fabric8.kubernetes.api.model.NodeBuilder()
+                .withNewMetadata().withName("n021").endMetadata()
+                .withNewStatus()
+                .addToAllocatable("cpu", new io.fabric8.kubernetes.api.model.Quantity("32"))
+                .endStatus()
+                .build();
+        assertEquals(32_000L, ((Long) reader.invoke(null, big)).longValue());
+
+        // A node with no allocatable block at all is unknown, not zero.
+        io.fabric8.kubernetes.api.model.Node blank =
+            new io.fabric8.kubernetes.api.model.NodeBuilder()
+                .withNewMetadata().withName("n022").endMetadata()
+                .build();
+        assertEquals(-1L, ((Long) reader.invoke(null, blank)).longValue());
+
+        // Cordoned and NotReady nodes are excluded upstream by isNodeSchedulable, which is
+        // what the refresh consults before adding a node's CPUs to a queue's ceiling.
+        Method schedulable = KubernetesNativeBackend.class.getDeclaredMethod(
+            "isNodeSchedulable", io.fabric8.kubernetes.api.model.Node.class);
+        schedulable.setAccessible(true);
+        io.fabric8.kubernetes.api.model.Node cordoned =
+            new io.fabric8.kubernetes.api.model.NodeBuilder()
+                .withNewMetadata().withName("n023").endMetadata()
+                .withNewSpec().withUnschedulable(true).endSpec()
+                .withNewStatus()
+                .addToAllocatable("cpu", new io.fabric8.kubernetes.api.model.Quantity("64"))
+                .endStatus()
+                .build();
+        assertFalse(
+            "a cordoned node must not lend its CPUs to the capacity ceiling",
+            (Boolean) schedulable.invoke(null, cordoned)
+        );
+    }
+
+    @Test
+    public void theGateDefersWithoutTouchingTheClusterOrFailingAPair() throws Exception {
+        // The whole point of gating here rather than in submitScript: a blocked dispatch
+        // must create no Kubernetes object and write no terminal pair status. The gate
+        // answers from the cached view, so it must not reach the client at all.
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        KubernetesNativeBackend backend = backendWithQueueView(
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            new java.util.HashSet<>(java.util.Arrays.asList("kubernetes.q")),
+            "32",
+            32_000L
+        );
+        setField(backend, "kubernetesClient", client);
+
+        assertFalse(backend.isQueueDispatchable("kubernetes.q"));
+
+        // No Job created, no pod listed, nothing submitted.
+        Mockito.verifyNoInteractions(client);
     }
 }
