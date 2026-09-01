@@ -10,6 +10,7 @@ import org.starexec.data.to.enums.CopyPrimitivesOption;
 import org.starexec.data.to.enums.ProcessorType;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.exceptions.StarExecDatabaseException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -2594,7 +2595,7 @@ public class Spaces {
 	 * Recursively gathers processor file paths for the given space and all
 	 * of its subspaces, so they can be cleaned up after the DB cascade.
 	 */
-	private static void gatherProcessorFiles(int spaceId, List<String> sink) throws Exception {
+	static void gatherProcessorFiles(int spaceId, List<String> sink) throws Exception {
 		for (ProcessorType type : new ProcessorType[] { ProcessorType.PRE, ProcessorType.POST, ProcessorType.BENCH, ProcessorType.UPDATE }) {
 			List<Processor> processors = Processors.getByCommunity(spaceId, type);
 			if (processors != null) {
@@ -2618,7 +2619,7 @@ public class Spaces {
 	 * cascade removed their rows. Failures are logged but do not roll back
 	 * the already-committed space deletion.
 	 */
-	private static void cleanProcessorFiles(List<String> filePaths) {
+	static void cleanProcessorFiles(List<String> filePaths) {
 		if (filePaths == null || filePaths.isEmpty()) {
 			return;
 		}
@@ -3192,53 +3193,121 @@ public class Spaces {
 	}
 
 	/**
-	 * Gets the personal space for a given user. The personal space is identified by the naming
-	 * convention firstname_lastname in lowercase.
+	 * Gets the personal space for a given user, resolving it structurally rather
+	 * than by name.
+	 *
+	 * <p>This used to rebuild "firstname_lastname" from the users row and compare
+	 * it against space names. UpdateFirstName/UpdateLastName never rename the
+	 * space, so any user who edited their name stopped resolving: deletion then
+	 * logged "No personal space found", carried on, and orphaned the entire
+	 * personal subtree. Resolution is now delegated to
+	 * starexec.GetPersonalSpaceCandidates, which requires the user to hold a
+	 * <em>leader</em> permission in the space and prefers a child of a space named
+	 * "Users"; the reconstructed name is only a fallback for installs whose
+	 * hierarchy has no such parent, and even then leadership is still required, so
+	 * an unrelated space that merely shares a name can never be selected.</p>
 	 *
 	 * @param userId The ID of the user to get the personal space for
-	 * @return The personal space object, or null if not found
-	 * @author Generated for user deletion fix
+	 * @return The personal space, or null if the user genuinely has none
+	 * @throws StarExecDatabaseException if more than one candidate matches. The
+	 *         caller must not guess which subtree to delete.
 	 */
-	public static Space getPersonalSpace(int userId) {
-	Connection con = null;
-	PreparedStatement ps = null;
-	ResultSet results = null;
+	public static Space getPersonalSpace(int userId) throws StarExecDatabaseException {
+		Connection con = null;
+		PreparedStatement ps = null;
+		ResultSet results = null;
 		try {
-			// First, get the user's information to construct the expected space name
-			User user = Users.get(userId);
-			if (user == null) {
-				return null;
-			}
-
-			// Generate the expected personal space name
-			String expectedName = (user.getFirstName() + "_" + user.getLastName()).toLowerCase();
-
 			con = Common.getConnection();
-			// Search for a space with this name that the user owns
-			ps = con.prepareStatement("SELECT * FROM starexec.GetSpacesByUser(?)");
+			ps = con.prepareStatement("SELECT * FROM starexec.GetPersonalSpaceCandidates(?)");
 			ps.setInt(1, userId);
 			results = ps.executeQuery();
 
+			// Prefer structural matches (match_kind 1); only consider the legacy
+			// name fallback (2) when structure yields nothing at all.
+			List<Space> structural = new ArrayList<>();
+			List<Space> fallback = new ArrayList<>();
 			while (results.next()) {
-				String spaceName = results.getString("name");
-				if (expectedName.equals(spaceName)) {
-					Space s = new Space();
-					s.setId(results.getInt("id"));
-					s.setName(spaceName);
-					s.setDescription(results.getString("description"));
-					s.setLocked(results.getBoolean("locked"));
-					s.setStickyLeaders(results.getBoolean("sticky_leaders"));
-					return s;
+				Space s = new Space();
+				s.setId(results.getInt("space_id"));
+				s.setName(results.getString("space_name"));
+				if (results.getInt("match_kind") == 1) {
+					structural.add(s);
+				} else {
+					fallback.add(s);
 				}
 			}
+
+			List<Space> candidates = structural.isEmpty() ? fallback : structural;
+			if (candidates.isEmpty()) {
+				// Genuinely no personal space. Safe: deletion proceeds without one.
+				return null;
+			}
+			if (candidates.size() > 1) {
+				// This layer knows WHY deletion is blocked, so it builds the typed
+				// exception with structured, already-safe fields. Callers render from
+				// those fields; nothing here carries driver or SQL detail.
+				List<Integer> blockingIds = new ArrayList<>();
+				List<String> blockingNames = new ArrayList<>();
+				for (Space s : candidates) {
+					blockingIds.add(s.getId());
+					blockingNames.add(s.getName());
+				}
+				throw new UserDeletionBlockedException(
+						UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE,
+						"Cannot identify a single personal space for user " + userId,
+						blockingIds, blockingNames);
+			}
+
+			// Fill in the remaining detail for the one space we resolved.
+			Space resolved = candidates.get(0);
+			Space full = Spaces.get(resolved.getId());
+			return full != null ? full : resolved;
+		} catch (StarExecDatabaseException e) {
+			throw e;
 		} catch (Exception e) {
 			log.error("getPersonalSpace", e);
+			throw new StarExecDatabaseException(
+					"Failed to resolve the personal space for user " + userId, e);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
 			Common.safeClose(results);
 		}
-		return null;
+	}
+
+	/**
+	 * Removes a space and its entire subspace hierarchy using a connection the
+	 * caller already owns, so the removal can be composed into a larger
+	 * transaction.
+	 *
+	 * <p>This exists because {@link #removeSubspaces(java.util.List)} opens its own
+	 * connection and commits. Deleting a user needs the personal-space removal and
+	 * the user row deletion to succeed or fail together; with two transactions a
+	 * failure in the second left the user in place with their spaces already
+	 * destroyed.</p>
+	 *
+	 * <p>This method neither commits nor rolls back, and it propagates every
+	 * exception, so the caller keeps full control of the transaction. Callers are
+	 * responsible for processor-file cleanup after their commit succeeds - see
+	 * {@link #gatherProcessorFiles(int, java.util.List)} and
+	 * {@link #cleanProcessorFiles(java.util.List)}.</p>
+	 *
+	 * @param subspaceId the space to remove, along with everything beneath it
+	 * @param con an open connection with autoCommit already disabled
+	 */
+	protected static void removeSubspaceWithinTransaction(int subspaceId, Connection con) throws Exception {
+		// Children first, using the existing recursive helper.
+		Spaces.removeSubspaces(subspaceId, con);
+
+		PreparedStatement ps = null;
+		try {
+			ps = con.prepareStatement("SELECT starexec.RemoveSubspace(?)");
+			ps.setInt(1, subspaceId);
+			Common.executeAndDrain(ps);
+			log.info("Space " + subspaceId + " has been deleted.");
+		} finally {
+			Common.safeClose(ps);
+		}
 	}
 	
 	/**

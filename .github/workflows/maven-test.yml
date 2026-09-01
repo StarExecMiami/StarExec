@@ -192,16 +192,25 @@ jobs:
           STAREXEC_DB_USER: starexec
           STAREXEC_DB_PASSWORD: ci_db_protocol_password
         run: |
+          # This is deliberately an explicit allowlist, not a full DB-enabled run.
+          # Widening it to the whole suite would pull in classes that leave pooled
+          # connections in an aborted transaction, which poisons whichever DB class
+          # surefire happens to schedule next and makes results order-dependent.
+          # Add named classes here; do not replace this with a blanket run.
           mvn -B test -pl starexec-app \
-            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest \
+            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,UsersDeletionSqlRegressionTest \
             -DfailIfNoTests=false
 
-      - name: Assert both suites actually executed
+      - name: Assert the DB-backed suites actually executed
         run: |
           # A silent skip must never read as a pass. This mirrors the assertion the
           # StoredRoutineSmokeIT step above already applies, for the same reason.
+          # Every class named in the -Dtest= allowlist above must appear here too:
+          # these classes are gated by DatabaseTestSupport.assumeDatabaseAvailable,
+          # so without the database they report "Tests run: 0" and the job would
+          # otherwise go green having verified nothing.
           fail=0
-          for cls in JobsRerunProtocolSqlTest JobsKillProtocolSqlTest; do
+          for cls in JobsRerunProtocolSqlTest JobsKillProtocolSqlTest UsersDeletionSqlRegressionTest; do
             report="starexec-app/target/surefire-reports/org.starexec.test.junit.database.${cls}.txt"
             if [ ! -f "$report" ]; then
               echo "::error::No surefire report at $report - ${cls} never ran."
