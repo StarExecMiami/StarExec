@@ -9434,18 +9434,109 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Deletes a user from the database. Right now, this is only used to get rid of temporary test users
--- Author: Eric Burns
+-- Returns the candidate personal spaces for a user, so the caller can insist on
+-- a unique match instead of guessing.
+--
+-- The previous Java-side lookup rebuilt the name "first_last" from the users row
+-- and compared it to space names. UpdateFirstName/UpdateLastName never rename
+-- the space, so any user who edited their name stopped resolving, deletion
+-- silently skipped the personal space, and the whole subtree was orphaned.
+--
+-- match_kind 1 - structural: a child of a space named 'Users' in which this user
+--                holds a leader permission. This is the real invariant and does
+--                not depend on names at all.
+-- match_kind 2 - legacy fallback for installs whose hierarchy has no 'Users'
+--                parent. It still requires the user to be a LEADER of the space
+--                and only then falls back to the reconstructed name, so it can
+--                never select an unrelated space that merely shares a name.
+--
+-- Callers must treat more than one candidate as ambiguous and refuse to act.
+-- Author: Andres Caicedo
+DROP FUNCTION IF EXISTS starexec.GetPersonalSpaceCandidates CASCADE;
+CREATE OR REPLACE FUNCTION starexec.GetPersonalSpaceCandidates(_userId INT)
+RETURNS TABLE(space_id INT, space_name TEXT, match_kind INT) AS $$
+DECLARE
+    _expected TEXT;
+BEGIN
+    SELECT lower(u.first_name || '_' || u.last_name) INTO _expected
+    FROM starexec.users u WHERE u.id = _userId;
+
+    RETURN QUERY
+    SELECT s.id, s.name::TEXT, 1
+    FROM starexec.spaces s
+    JOIN starexec.set_assoc  sa     ON sa.child_id = s.id
+    JOIN starexec.spaces     parent ON parent.id = sa.space_id AND parent.name = 'Users'
+    JOIN starexec.user_assoc ua     ON ua.space_id = s.id AND ua.user_id = _userId
+    JOIN starexec.permissions p     ON p.id = ua.permission AND p.is_leader = TRUE
+
+    UNION
+
+    SELECT s.id, s.name::TEXT, 2
+    FROM starexec.spaces s
+    JOIN starexec.user_assoc ua ON ua.space_id = s.id AND ua.user_id = _userId
+    JOIN starexec.permissions p ON p.id = ua.permission AND p.is_leader = TRUE
+    WHERE _expected IS NOT NULL AND lower(s.name) = _expected;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Deletes a user from the database, together with the rows that the FK graph
+-- will not remove on its own.
+--
+-- Two classes of row need explicit handling:
+--
+--   1. Tables whose FK to users(id) is ON DELETE RESTRICT (set by V0110):
+--      logins and analytics_users. The DELETE below aborts with SQLSTATE 23503
+--      unless both are cleared first. analytics_users was missed when V0110
+--      introduced the RESTRICT, which made every user who had ever triggered an
+--      analytics event undeletable.
+--
+--   2. permissions rows reached through user_assoc.permission. That FK is
+--      ON DELETE SET NULL, so when user_assoc cascades away nothing ever reaps
+--      the permission row it pointed at - one orphan per space membership,
+--      forever. LeaveSpace and RemoveSubspace already do this explicitly for
+--      their own cases; this function was the outlier.
+--
+-- The whole body runs in the caller's transaction, so it either fully applies
+-- or fully rolls back.
+--
+-- DO NOT rewrite the single DELETE below into staged explicit DELETEs of the
+-- user's primitives. The FK cascade is load-bearing: prevent_final_manifest_delete
+-- only returns early while pg_trigger_depth() > 1, so a job_pair_repro_manifests
+-- row in state 2 (FINAL) is removable through a cascade but refuses a direct
+-- DELETE. Deleting those rows explicitly would fire the guard and abort the whole
+-- transaction for any user who owns a finalised pair.
+--
+-- Author: Eric Burns (original), Andres Caicedo (RESTRICT + permission reaping)
 DROP FUNCTION IF EXISTS starexec.DeleteUser CASCADE;
 CREATE OR REPLACE FUNCTION starexec.DeleteUser(_userId INT)
 RETURNS VOID AS $$
+DECLARE
+    _permIds INT[];
 BEGIN
-    DELETE FROM starexec.logins WHERE user_id = _userId;
+    -- Capture the permission ids before user_assoc cascades away with the user.
+    SELECT array_agg(ua.permission) INTO _permIds
+    FROM starexec.user_assoc ua
+    WHERE ua.user_id = _userId AND ua.permission IS NOT NULL;
+
+    -- FKs to users(id) that are ON DELETE RESTRICT; these must go first.
+    DELETE FROM starexec.logins          WHERE user_id = _userId;
+    DELETE FROM starexec.analytics_users WHERE user_id = _userId;
+
     DELETE FROM starexec.users WHERE id = _userId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('User %s not found', _userId);
+    END IF;
+
+    -- user_assoc has now cascaded. Reap the permission rows it referenced, but
+    -- never one that is still in use by a surviving membership or by a space
+    -- default - those belong to somebody else.
+    IF _permIds IS NOT NULL THEN
+        DELETE FROM starexec.permissions p
+        WHERE p.id = ANY(_permIds)
+          AND NOT EXISTS (SELECT 1 FROM starexec.user_assoc ua WHERE ua.permission = p.id)
+          AND NOT EXISTS (SELECT 1 FROM starexec.spaces s WHERE s.default_permission = p.id);
     END IF;
 END;
 $$ LANGUAGE plpgsql;

@@ -1298,26 +1298,60 @@ public class Users {
 				}
 			}
 
-			// Delete the user's personal space first to avoid orphan subspaces
+			// Processor file paths must be collected before the cascade removes the
+			// rows that point at them.
+			List<Integer> subtreePermissionIds = new ArrayList<>();
+			List<String> processorFiles = new ArrayList<>();
+			if (personalSpace != null) {
+				try {
+					Spaces.gatherProcessorFiles(personalSpace.getId(), processorFiles);
+				} catch (Exception e) {
+					log.warn("deleteUser: could not gather processor files under space "
+							+ personalSpace.getId() + "; skipping their cleanup", e);
+				}
+			}
+
+			// One connection, one transaction. The personal-space removal and the
+			// user row deletion must succeed or fail together. Previously the space
+			// removal ran through Spaces.removeSubspace, which opened its own
+			// connection and committed; when the user deletion then failed (any user
+			// with analytics_users rows failed with SQLSTATE 23503) the user survived
+			// with their entire space subtree already destroyed.
+			con = Common.getConnection();
+			Common.beginTransaction(con);
+
 			if (personalSpace != null) {
 				log.info("Deleting personal space for user " + userToDeleteId + " with space id "
 						+ personalSpace.getId());
-				if (!Spaces.removeSubspace(personalSpace.getId())) {
-					log.error("Failed to delete personal space for user " + userToDeleteId
-							+ " - aborting user deletion to avoid orphan subspaces");
-					return false;
-				}
+				// Capture the permission rows owned by memberships that will disappear
+				// with this subtree, BEFORE the cascade removes the user_assoc rows that
+				// name them. AddUserToSpace creates a per-association copy via
+				// CopyPermissions, so these rows are owned by those memberships and
+				// nothing else can reap them once the associations are gone. Scoped to
+				// the subtree actually being deleted, not to every permission the user
+				// holds, so ordinary space deletion keeps its existing semantics.
+				subtreePermissionIds = gatherSubtreePermissionIds(personalSpace.getId(), con);
+				Spaces.removeSubspaceWithinTransaction(personalSpace.getId(), con);
 			} else {
 				log.debug("No personal space found for user " + userToDeleteId);
 			}
 
-			// Delete the user from the database - this should delete all benchmarks and
-			// solvers and jobs
-			// from the database using cascading deletes.
-			con = Common.getConnection();
+			// Cascading deletes remove the user's benchmarks, solvers and jobs.
 			procedure = con.prepareStatement("SELECT starexec.DeleteUser(?)");
 			procedure.setInt(1, userToDeleteId);
 			procedure.execute();
+
+			// Commit explicitly instead of via Common.endTransaction, which catches a
+			// failed commit, rolls back and returns void. That silence is exactly how
+			// filesystem cleanup could run for a user who was still in the database -
+			// the "files deleted but the user is still listed" report. A throw here
+			// keeps every irreversible step below unreachable.
+			// The subtree and the user row are both gone on this connection now, so
+			// any captured permission still referenced belongs to somebody else.
+			reapUnreferencedPermissions(subtreePermissionIds, con);
+
+			con.commit();
+			Common.enableAutoCommit(con);
 
 			log.debug("Database deletion successful for user with id=" + userToDeleteId);
 
@@ -1325,9 +1359,11 @@ public class Users {
 			// authorization decisions.
 			isAdminCache.remove(userToDeleteId);
 
-			// Only delete the users primitive directories if both personal space and
-			// database deletion succeeded.
-			// Uses pre-gathered IDs because DB queries return nothing post-cascade.
+			// Everything past this point is irreversible and runs ONLY because the
+			// commit above returned. A failure here leaves files behind for a user
+			// who is genuinely gone - the safe direction - and is logged loudly so
+			// the paths remain discoverable.
+			Spaces.cleanProcessorFiles(processorFiles);
 			deleteUsersPrimitiveDirectories(userToDeleteId, preGatheredJobIds, preGatheredSolverIds, preGatheredBenchmarkIds);
 
 			log.debug("Successfully deleted user with id=" + userToDeleteId + " and all associated data");
@@ -1337,14 +1373,73 @@ public class Users {
 				throw new StarExecDatabaseException("User not found: " + userToDeleteId, e);
 			}
 			log.error("deleteUser", e);
+		} catch (StarExecDatabaseException e) {
+			// Covers UserDeletionBlockedException too, which is a subtype: a
+			// deliberate, administrator-actionable refusal propagates untouched so
+			// REST can render it from its structured fields. Nothing was committed
+			// on this path.
+			// Propagate rather than degrade to a bare false. The important case is a
+			// personal space that cannot be resolved unambiguously: that is a
+			// deliberate refusal to act, and the message names the candidate spaces
+			// so an admin can resolve it. Swallowing it here made that refusal
+			// indistinguishable from any other internal error.
+			throw e;
 		} catch (Exception e) {
 			log.error("deleteUser", e);
 		} finally {
+			// No-op once the commit above re-enabled autoCommit; on every failure
+			// path this rolls the transaction back and restores autoCommit before
+			// the connection returns to the pool.
+			Common.doRollback(con);
 			Common.safeClose(con);
 			Common.safeClose(procedure);
 		}
 		log.debug("internal error trying to delete user with id = " + userToDeleteId);
 		return false;
+	}
+
+	/**
+	 * Collects the permission ids owned by memberships anywhere in the given
+	 * space subtree. Uses the caller's connection so the read sits inside the
+	 * deletion transaction.
+	 */
+	private static List<Integer> gatherSubtreePermissionIds(int rootSpaceId, Connection con) throws SQLException {
+		List<Integer> ids = new ArrayList<>();
+		final String sql =
+				"WITH RECURSIVE sub(id) AS ("
+				+ "  SELECT CAST(? AS INT)"
+				+ "  UNION"
+				+ "  SELECT sa.child_id FROM starexec.set_assoc sa JOIN sub ON sa.space_id = sub.id"
+				+ ") SELECT DISTINCT ua.permission FROM starexec.user_assoc ua"
+				+ " JOIN sub ON ua.space_id = sub.id WHERE ua.permission IS NOT NULL";
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setInt(1, rootSpaceId);
+			try (ResultSet rs = ps.executeQuery()) {
+				while (rs.next()) {
+					ids.add(rs.getInt(1));
+				}
+			}
+		}
+		return ids;
+	}
+
+	/**
+	 * Deletes the given permission rows, but only those no longer referenced by
+	 * any surviving membership or used as a space default. Runs on the caller's
+	 * connection, inside the deletion transaction.
+	 */
+	private static void reapUnreferencedPermissions(List<Integer> permissionIds, Connection con) throws SQLException {
+		if (permissionIds == null || permissionIds.isEmpty()) {
+			return;
+		}
+		final String sql =
+				"DELETE FROM starexec.permissions p WHERE p.id = ANY(?)"
+				+ " AND NOT EXISTS (SELECT 1 FROM starexec.user_assoc ua WHERE ua.permission = p.id)"
+				+ " AND NOT EXISTS (SELECT 1 FROM starexec.spaces s WHERE s.default_permission = p.id)";
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setArray(1, con.createArrayOf("INTEGER", permissionIds.toArray(new Integer[0])));
+			ps.executeUpdate();
+		}
 	}
 
 	/**

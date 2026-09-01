@@ -18,6 +18,7 @@ import org.starexec.data.to.enums.CopyPrimitivesOption;
 import org.starexec.data.to.enums.Primitive;
 import org.starexec.data.to.pipelines.JoblineStage;
 import org.starexec.exceptions.StarExecDatabaseException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.exceptions.StarExecException;
 import org.starexec.exceptions.RESTException;
 import org.starexec.jobs.ClearCacheManager;
@@ -5176,10 +5177,53 @@ public class RESTServices {
 				return gson.toJson(new ValidatorStatusCode(false,
 						"An internal error occurred while attempting to delete the user."));
 			}
+		} catch (UserDeletionBlockedException e) {
+			// A deliberate, administrator-actionable refusal. The message is built
+			// from the exception's STRUCTURED fields - never by parsing a message and
+			// never from the underlying cause, which may carry driver or SQL text.
+			log.info("Deletion of user " + userToDeleteId + " blocked: " + e.getReasonCode());
+			return gson.toJson(new ValidatorStatusCode(false, describeDeletionBlocker(e)));
 		} catch (StarExecDatabaseException e) {
+			// Full diagnostics go to the server log, never to the client.
 			log.error("Failed to delete user " + userToDeleteId, e);
-			return gson.toJson(new ValidatorStatusCode(false, "User not found."));
+			// Only a genuine "not found" is reported as such. P0002 is the not-found
+			// signal raised by the stored procedures; read it through java.sql so the
+			// REST layer keeps no dependency on the driver.
+			Throwable cause = e.getCause();
+			if (cause instanceof java.sql.SQLException
+					&& "P0002".equals(((java.sql.SQLException) cause).getSQLState())) {
+				return gson.toJson(new ValidatorStatusCode(false, "User not found."));
+			}
+			return gson.toJson(new ValidatorStatusCode(false,
+					"Unable to delete user. The failure has been logged for an administrator."));
 		}
+	}
+
+	/**
+	 * Renders an administrator-facing explanation from a deletion blocker's
+	 * structured fields only. No part of the underlying cause reaches the client.
+	 */
+	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE.equals(e.getReasonCode())) {
+			StringBuilder sb = new StringBuilder(
+					"Cannot delete this user: more than one personal space matches, so the "
+							+ "subtree to remove is ambiguous. Candidates: ");
+			List<Integer> ids = e.getBlockingSpaceIds();
+			List<String> names = e.getBlockingSpaceNames();
+			for (int i = 0; i < ids.size(); i++) {
+				if (i > 0) {
+					sb.append(", ");
+				}
+				if (i < names.size()) {
+					sb.append(names.get(i));
+				}
+				sb.append(" (id=").append(ids.get(i)).append(')');
+			}
+			sb.append(". Resolve the duplicate before deleting this user.");
+			return sb.toString();
+		}
+		return "Cannot delete this user: " + e.getReasonCode()
+				+ ". Resolve the reported condition before deleting this user.";
 	}
 
 	/**
