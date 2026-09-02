@@ -13,7 +13,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.UUID;
 
 import static org.junit.Assert.assertEquals;
@@ -50,9 +49,18 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 
 	@After
 	public void cleanUp() throws Exception {
-		try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {
-			st.execute("DELETE FROM starexec.user_roles WHERE email LIKE 'aus-" + TAG + "-%'");
-			st.execute("DELETE FROM starexec.users WHERE email LIKE 'aus-" + TAG + "-%'");
+		final String fixtures = "aus-" + TAG + "-%";
+		try (Connection con = Common.getConnection()) {
+			try (PreparedStatement ps = con.prepareStatement(
+					"DELETE FROM starexec.user_roles WHERE email LIKE ?")) {
+				ps.setString(1, fixtures);
+				ps.executeUpdate();
+			}
+			try (PreparedStatement ps = con.prepareStatement(
+					"DELETE FROM starexec.users WHERE email LIKE ?")) {
+				ps.setString(1, fixtures);
+				ps.executeUpdate();
+			}
 		}
 	}
 
@@ -140,9 +148,17 @@ public class AuthenticatedUserStateLoaderTest extends Common {
 	@Test
 	public void aDeletedUserIsAbsent() throws Exception {
 		int id = userWithRoles("gone", R.DEFAULT_USER_ROLE_NAME);
-		try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {
-			st.execute("DELETE FROM starexec.user_roles WHERE email = '" + emailFor("gone") + "'");
-			st.execute("DELETE FROM starexec.users WHERE id = " + id);
+		try (Connection con = Common.getConnection()) {
+			try (PreparedStatement ps = con.prepareStatement(
+					"DELETE FROM starexec.user_roles WHERE email = ?")) {
+				ps.setString(1, emailFor("gone"));
+				ps.executeUpdate();
+			}
+			try (PreparedStatement ps = con.prepareStatement(
+					"DELETE FROM starexec.users WHERE id = ?")) {
+				ps.setInt(1, id);
+				ps.executeUpdate();
+			}
 		}
 
 		AuthenticatedUserState state = Users.loadAuthenticatedUserState(id);

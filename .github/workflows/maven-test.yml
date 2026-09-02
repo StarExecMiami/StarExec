@@ -198,7 +198,7 @@ jobs:
           # surefire happens to schedule next and makes results order-dependent.
           # Add named classes here; do not replace this with a blanket run.
           mvn -B test -pl starexec-app \
-            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,UsersDeletionSqlRegressionTest \
+            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,UsersDeletionSqlRegressionTest,AuthenticatedUserStateLoaderTest,StaleSessionProcessorRevocationTest \
             -DfailIfNoTests=false
 
       - name: Assert the DB-backed suites actually executed
@@ -209,9 +209,20 @@ jobs:
           # these classes are gated by DatabaseTestSupport.assumeDatabaseAvailable,
           # so without the database they report "Tests run: 0" and the job would
           # otherwise go green having verified nothing.
+          #
+          # Classes are listed fully qualified. Surefire names each report after
+          # the fully qualified class, and these suites no longer share a single
+          # package, so a hardcoded package prefix would look for the security
+          # classes under ...junit.database and silently find nothing.
           fail=0
-          for cls in JobsRerunProtocolSqlTest JobsKillProtocolSqlTest UsersDeletionSqlRegressionTest; do
-            report="starexec-app/target/surefire-reports/org.starexec.test.junit.database.${cls}.txt"
+          for fqcn in \
+            org.starexec.test.junit.database.JobsRerunProtocolSqlTest \
+            org.starexec.test.junit.database.JobsKillProtocolSqlTest \
+            org.starexec.test.junit.database.UsersDeletionSqlRegressionTest \
+            org.starexec.test.junit.security.AuthenticatedUserStateLoaderTest \
+            org.starexec.test.junit.security.StaleSessionProcessorRevocationTest; do
+            cls="${fqcn##*.}"
+            report="starexec-app/target/surefire-reports/${fqcn}.txt"
             if [ ! -f "$report" ]; then
               echo "::error::No surefire report at $report - ${cls} never ran."
               fail=1
