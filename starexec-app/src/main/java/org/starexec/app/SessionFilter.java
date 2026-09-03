@@ -3,6 +3,7 @@ package org.starexec.app;
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
 import org.starexec.data.security.GeneralSecurity;
+import org.starexec.data.to.AuthenticatedUserState;
 import org.starexec.data.to.User;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.SessionUtil;
@@ -128,6 +129,76 @@ public class SessionFilter implements Filter {
 				}
 			}
 
+			// Revalidate the session against the database before the request is
+			// allowed to reach any servlet. The session caches a User object at
+			// login and, before this gate existed, never consulted the database
+			// again: deleting or suspending an account left every open session of
+			// that account fully authorised until the user chose to log out.
+			//
+			// This provides next-request revocation. A request already admitted
+			// when the deletion commits is not interrupted and may complete
+			// afterwards; closing that window needs transaction-level revocation,
+			// which is deliberately out of scope here.
+			User sessionUser = SessionUtil.getUser(httpRequest);
+			if (sessionUser != null && sessionUser.getId() != R.PUBLIC_USER_ID) {
+				HttpSession live = httpRequest.getSession(false);
+				AuthenticatedUserState account = Users.loadAuthenticatedUserState(sessionUser.getId());
+				log.trace(method, "Account state for id=" + sessionUser.getId() + " is " + account.getState());
+
+				switch (account.getState()) {
+					case ACTIVE:
+						// Replace the cached object, so a role change that does not
+						// deny access still takes effect on the next request.
+						if (live != null) {
+							live.setAttribute(SessionUtil.USER, account.getUser());
+						}
+						break;
+
+					case DENIED:
+						if (live != null) {
+							live.setAttribute(SessionUtil.USER, account.getUser());
+						}
+						// Preserved product behaviour: a suspended or unauthorized
+						// user is returned to the index page rather than logged out,
+						// and is still allowed to view that page.
+						if (!isIndexPage(httpRequest)) {
+							log.debug(method, "Denying " + account.getRole() + " account id=" + sessionUser.getId());
+							rejectDeniedAccount(httpRequest, httpResponse, account.getRole());
+							return;
+						}
+						break;
+
+					case ABSENT:
+						// Established by a successful query: the account is gone.
+						log.info(method, "Revoking session for deleted user id=" + sessionUser.getId());
+						if (live != null) {
+							live.invalidate();
+						}
+						rejectUnauthenticated(httpRequest, httpResponse);
+						return;
+
+					case MALFORMED:
+						// The row exists but its role data is unusable. Do not
+						// invalidate: that would report the account as deleted.
+						log.info(method, "Refusing malformed account id=" + sessionUser.getId()
+								+ " (" + account.getDiagnostic() + ")");
+						httpResponse.sendError(HttpServletResponse.SC_FORBIDDEN,
+								"This account's role configuration is invalid. Please contact an administrator.");
+						return;
+
+					case ERROR:
+					default:
+						// The state could not be established, so entitlement has not
+						// been established either. Fail closed for this request only
+						// and keep the session, so recovery needs no new login.
+						log.info(method, "Account state indeterminate for id=" + sessionUser.getId()
+								+ " (" + account.getDiagnostic() + ")");
+						httpResponse.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+								"Account verification is temporarily unavailable. Please retry.");
+						return;
+				}
+			}
+
 			// If the user is logged in...
 			if (SessionUtil.getUser(httpRequest) != null
 					&& SessionUtil.getUser(httpRequest).getId() != R.PUBLIC_USER_ID) {
@@ -148,15 +219,10 @@ public class SessionFilter implements Filter {
 					}
 				}
 				log.trace(method, "User role was found to be " + user.getRole());
-				// suspended and unauthorized users cannot utilize the system: always place them
-				// back on the index page
-				// whenever they try to access anything secure.
-				if (user.getRole().equals(R.SUSPENDED_ROLE_NAME) || user.getRole().equals(R.UNAUTHORIZED_ROLE_NAME)) {
-					if (!httpRequest.getRequestURI().equals("/" + R.STAREXEC_APPNAME + "/")) {
-						log.debug(method, "Redirecting " + user.getRole() + " user to index.");
-						httpResponse.sendRedirect(Util.docRoot(""));
-					}
-				}
+				// Suspended and unauthorized users are handled by the DENIED branch
+				// of the revalidation gate above, which terminates the chain. The
+				// check that used to live here called sendRedirect without
+				// returning, so the request continued to the servlet anyway.
 			} else {
 				// User not logged in - let Tomcat's security system handle authentication
 				// Do NOT redirect manually, as this interferes with j_security_check
@@ -170,6 +236,45 @@ public class SessionFilter implements Filter {
 			log.debug("Caught throwable in doFilter. ", t);
 			throw t;
 		}
+	}
+
+	/** The index page, which a denied account is still permitted to view. */
+	private static boolean isIndexPage(HttpServletRequest request) {
+		return request.getRequestURI().equals("/" + R.STAREXEC_APPNAME + "/");
+	}
+
+	/** Requests under /services/ are API calls; a redirect would be parsed as data. */
+	private static boolean isServiceRequest(HttpServletRequest request) {
+		return request.getRequestURI().startsWith(request.getContextPath() + "/services/");
+	}
+
+	/** StarExecCommand and starexec.py cannot follow an HTML redirect meaningfully. */
+	private static boolean isProgrammaticClient(HttpServletRequest request) {
+		return isFromCommand(request) || isFromPython(request);
+	}
+
+	/**
+	 * The account behind this session no longer exists. The session has already
+	 * been invalidated by the caller.
+	 */
+	private void rejectUnauthenticated(HttpServletRequest request, HttpServletResponse response) throws IOException {
+		if (isProgrammaticClient(request) || isServiceRequest(request)) {
+			response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "This account no longer exists.");
+			return;
+		}
+		response.addCookie(Util.createEncodedCookie(R.STATUS_MESSAGE_COOKIE,
+				"This account no longer exists. Please contact an administrator if that is unexpected."));
+		response.sendRedirect(Util.docRoot(""));
+	}
+
+	/** The account exists but its role forbids use of the system. */
+	private void rejectDeniedAccount(HttpServletRequest request, HttpServletResponse response, String role)
+			throws IOException {
+		if (isProgrammaticClient(request) || isServiceRequest(request)) {
+			response.sendError(HttpServletResponse.SC_FORBIDDEN, "This account is " + role + ".");
+			return;
+		}
+		response.sendRedirect(Util.docRoot(""));
 	}
 
 	/**

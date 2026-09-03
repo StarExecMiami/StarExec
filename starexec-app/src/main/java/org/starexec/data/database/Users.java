@@ -7,6 +7,7 @@ import org.starexec.data.to.DefaultSettings;
 import org.starexec.data.to.DefaultSettings.SettingType;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.Space;
+import org.starexec.data.to.AuthenticatedUserState;
 import org.starexec.data.to.User;
 import org.starexec.data.to.Solver;
 import org.starexec.data.to.Benchmark;
@@ -359,6 +360,122 @@ public class Users {
 			Common.safeClose(results);
 		}
 		return null;
+	}
+
+	/**
+	 * Reads the authoritative account state for an already-authenticated user,
+	 * from the database, on every call.
+	 *
+	 * <p>This exists because the servlet session caches a {@link User} object at
+	 * login and never revalidates it. Deleting, suspending or demoting an account
+	 * therefore had no effect on a session that was already open.</p>
+	 *
+	 * <p>Three reads are required and none of them is redundant:</p>
+	 * <ol>
+	 *   <li>existence of the {@code users} row, which is the only read that may
+	 *       conclude {@code ABSENT};</li>
+	 *   <li>the complete role set, because {@code user_roles} is keyed by
+	 *       {@code (email, role)} and cardinality must be measured rather than
+	 *       assumed by a join that silently returns whichever row it likes;</li>
+	 *   <li>construction of the {@link User} the session will carry.</li>
+	 * </ol>
+	 *
+	 * @param con an open connection; the caller owns it
+	 * @param userId the id held by the session being revalidated
+	 * @return the account state, never null
+	 */
+	public static AuthenticatedUserState loadAuthenticatedUserState(Connection con, int userId) {
+		final String method = "loadAuthenticatedUserState";
+
+		// Read 1. The only read entitled to conclude that the account is gone.
+		String email;
+		try (PreparedStatement ps = con.prepareStatement("SELECT email FROM starexec.users WHERE id = ?")) {
+			ps.setInt(1, userId);
+			try (ResultSet results = ps.executeQuery()) {
+				if (!results.next()) {
+					return AuthenticatedUserState.absent();
+				}
+				email = results.getString("email");
+			}
+		} catch (SQLException e) {
+			// Deliberately log.info: StarLogger routes error and warn through
+			// ErrorLogs.add, which writes to the database that just failed.
+			log.info(method, "user lookup failed for id=" + userId, e);
+			return AuthenticatedUserState.error("user lookup failed");
+		}
+
+		if (email == null) {
+			return AuthenticatedUserState.malformed("user row has no email");
+		}
+
+		// Read 2. The whole role set, ordered so the outcome cannot depend on
+		// physical row order.
+		List<String> roles = new ArrayList<>();
+		try (PreparedStatement ps = con.prepareStatement(
+				"SELECT role FROM starexec.user_roles WHERE email = ? ORDER BY role")) {
+			ps.setString(1, email);
+			try (ResultSet results = ps.executeQuery()) {
+				while (results.next()) {
+					roles.add(results.getString("role"));
+				}
+			}
+		} catch (SQLException e) {
+			log.info(method, "role lookup failed for id=" + userId, e);
+			return AuthenticatedUserState.error("role lookup failed");
+		}
+
+		if (roles.size() != 1) {
+			log.info(method, "user id=" + userId + " has " + roles.size()
+					+ " role rows; the application models exactly one");
+			return AuthenticatedUserState.malformed(roles.size() + " role rows");
+		}
+		final String role = roles.get(0);
+		if (role == null) {
+			return AuthenticatedUserState.malformed("role row has no role");
+		}
+
+		// Read 3. Users.get catches Exception and returns null, so null here is
+		// ambiguous by construction: absent, failed, or malformed, with no way to
+		// tell which from the return value. It must never be read as deletion.
+		final User fresh = Users.get(con, userId);
+		if (fresh == null) {
+			log.info(method, "user construction returned null for id=" + userId
+					+ " after existence and role were established; state is indeterminate");
+			return AuthenticatedUserState.error("user construction indeterminate");
+		}
+
+		// The session carries `fresh`, and every downstream check reads
+		// fresh.getRole(). If that disagrees with the role just validated, the
+		// account changed between reads and neither value is authoritative.
+		if (!role.equals(fresh.getRole())) {
+			log.info(method, "role changed during refresh for id=" + userId
+					+ ": validated=" + role + " constructed=" + fresh.getRole());
+			return AuthenticatedUserState.error("role changed during refresh");
+		}
+
+		if (R.SUSPENDED_ROLE_NAME.equals(role) || R.UNAUTHORIZED_ROLE_NAME.equals(role)) {
+			return AuthenticatedUserState.denied(fresh, role);
+		}
+		return AuthenticatedUserState.active(fresh, role);
+	}
+
+	/**
+	 * Convenience overload that borrows a pooled connection.
+	 *
+	 * @param userId the id held by the session being revalidated
+	 * @return the account state, never null; ERROR if no connection was available
+	 */
+	public static AuthenticatedUserState loadAuthenticatedUserState(int userId) {
+		Connection con = null;
+		try {
+			con = Common.getConnection();
+			return loadAuthenticatedUserState(con, userId);
+		} catch (Exception e) {
+			log.info("loadAuthenticatedUserState", "no connection for id=" + userId, e);
+			return AuthenticatedUserState.error("no database connection");
+		} finally {
+			Common.safeClose(con);
+		}
 	}
 
 	/**
