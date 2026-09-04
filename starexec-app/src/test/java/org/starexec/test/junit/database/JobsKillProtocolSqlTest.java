@@ -1,6 +1,7 @@
 package org.starexec.test.junit.database;
 
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -19,6 +20,7 @@ import java.sql.SQLException;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Caller-level tests for the administrative kill and reset paths, against the real SQL.
@@ -44,11 +46,112 @@ public class JobsKillProtocolSqlTest extends Common {
         Common.initialize();
     }
 
+    /**
+     * The pool hands out connections it does not reset.
+     *
+     * <p>Tomcat JDBC applies {@code defaultAutoCommit} when a physical connection is
+     * created, not when one is borrowed, and this pool is configured without
+     * {@code rollbackOnReturn} (see Common.initialize). A connection returned with
+     * {@code autoCommit=false} therefore arrives at the next borrower still in that
+     * mode, carrying whatever transaction was left open on it.</p>
+     *
+     * <p>That is not a cosmetic detail here. {@code Jobs.kill(int, Connection)} runs
+     * {@code KillJob} on the connection it is given and then borrows further
+     * connections from the same pool for getEnqueuedPairs/getRunningPairs/
+     * killPairConfirmed. Given an uncommitted connection it blocks its own helpers on
+     * the rows it just locked, which was observed as the KillJob backend sitting
+     * {@code idle in transaction} while two other backends waited behind it.</p>
+     */
+    private static void requireCleanPooledConnection(Connection con, String operation)
+            throws SQLException {
+        if (con.getAutoCommit()) {
+            return;
+        }
+        // Make the connection usable again so cleanup can still run, then fail loudly.
+        // Silently normalising it would hide the contamination this test exists to catch.
+        try {
+            con.rollback();
+        } finally {
+            con.setAutoCommit(true);
+        }
+        fail(operation + " borrowed a pooled connection with autoCommit=false: an earlier"
+                + " caller returned it mid-transaction. It has been rolled back and restored"
+                + " so cleanup can proceed, but the pool was contaminated.");
+    }
+
+    /** The state a fixture-owned connection must be in before it returns to the pool. */
+    private static void assertConnectionReturnedClean(Connection con, String operation)
+            throws SQLException {
+        assertTrue(operation + " must explicitly finish its transaction and restore"
+                + " autoCommit before the connection goes back to the pool",
+                con.getAutoCommit());
+    }
+
+    /**
+     * Residue is the observable the defect always violated: before explicit ownership,
+     * cleanup ran inside an inherited uncommitted transaction, so its DELETEs rolled
+     * back when the connection died and one job with two pairs survived every run.
+     *
+     * <p>Secondary evidence only. Which physical connection cleanup borrows varies, so
+     * this is not a reliable negative control on its own; the deterministic check is the
+     * fixture-boundary assertion in {@link #createFixture()}.</p>
+     */
+    @AfterClass
+    public static void fixtureLeavesNothingBehind() throws SQLException {
+        // @AfterClass still runs when @BeforeClass skipped the class by assumption, and
+        // the pool is not initialised in a no-database run.
+        if (!DatabaseTestSupport.isDatabaseConfigured()) {
+            return;
+        }
+        try (Connection con = Common.getConnection()) {
+            assertEquals("kill-protocol fixtures must not survive cleanup", 0,
+                    selectInt(con, "SELECT count(*) FROM starexec.jobs"
+                            + " WHERE name = 'kill-protocol-test'"));
+        }
+    }
+
+    /**
+     * A setup failure must roll back and hand the connection back clean.
+     *
+     * <p>Guards the path that made restoring autoCommit in a bare finally unsafe: JDBC
+     * commits an active transaction when autoCommit becomes true, so a fixture that
+     * failed halfway would have been published rather than discarded.</p>
+     */
+    @Test
+    public void aFailedFixtureSetupRollsBackAndRestoresTheConnection() throws SQLException {
+        final String probe = "kill-protocol-rollback-probe";
+        try (Connection con = Common.getConnection()) {
+            requireCleanPooledConnection(con, "rollback probe");
+            con.setAutoCommit(false);
+            boolean transactionFinished = false;
+            try {
+                int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
+                exec(con, "INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size)"
+                        + " VALUES (" + userId + ", '" + probe + "', 1, 0)");
+                throw new IllegalStateException("induced failure after a fixture write");
+            } catch (IllegalStateException induced) {
+                con.rollback();
+                transactionFinished = true;
+            } finally {
+                if (transactionFinished) {
+                    con.setAutoCommit(true);
+                }
+            }
+
+            assertConnectionReturnedClean(con, "rollback probe");
+            assertEquals("the partially built fixture must not have been committed", 0,
+                    selectInt(con, "SELECT count(*) FROM starexec.jobs WHERE name = '"
+                            + probe + "'"));
+        }
+    }
+
     @Before
     public void createFixture() throws SQLException {
         originalBackend = R.BACKEND;
         try (Connection con = Common.getConnection()) {
+            requireCleanPooledConnection(con, "createFixture");
             con.setAutoCommit(false);
+            boolean transactionFinished = false;
             try {
                 int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
                 jobId = selectInt(con,
@@ -57,10 +160,24 @@ public class JobsKillProtocolSqlTest extends Common {
                 runningPairId = insertPair(con, 771001, StatusCode.STATUS_RUNNING.getVal());
                 enqueuedPairId = insertPair(con, 771002, StatusCode.STATUS_ENQUEUED.getVal());
                 con.commit();
-            } catch (SQLException e) {
-                con.rollback();
-                throw e;
+                transactionFinished = true;
+            } catch (Throwable primary) {
+                try {
+                    con.rollback();
+                    transactionFinished = true;
+                } catch (SQLException rollbackFailure) {
+                    primary.addSuppressed(rollbackFailure);
+                }
+                throw primary;
+            } finally {
+                // Only after an explicit commit or rollback. JDBC commits an active
+                // transaction when autoCommit flips to true, so restoring it first would
+                // publish a half-built fixture on the failure path.
+                if (transactionFinished) {
+                    con.setAutoCommit(true);
+                }
             }
+            assertConnectionReturnedClean(con, "createFixture");
         }
     }
 
@@ -77,9 +194,34 @@ public class JobsKillProtocolSqlTest extends Common {
     @After
     public void dropFixture() throws SQLException {
         R.BACKEND = originalBackend;
+        if (jobId == 0) {
+            return;
+        }
         try (Connection con = Common.getConnection()) {
-            exec(con, "DELETE FROM starexec.job_pairs WHERE job_id = " + jobId);
-            exec(con, "DELETE FROM starexec.jobs WHERE id = " + jobId);
+            requireCleanPooledConnection(con, "dropFixture");
+            con.setAutoCommit(false);
+            boolean transactionFinished = false;
+            try {
+                exec(con, "DELETE FROM starexec.jobpair_stage_data WHERE jobpair_id IN"
+                        + " (SELECT id FROM starexec.job_pairs WHERE job_id = " + jobId + ")");
+                exec(con, "DELETE FROM starexec.job_pairs WHERE job_id = " + jobId);
+                exec(con, "DELETE FROM starexec.jobs WHERE id = " + jobId);
+                con.commit();
+                transactionFinished = true;
+            } catch (Throwable primary) {
+                try {
+                    con.rollback();
+                    transactionFinished = true;
+                } catch (SQLException rollbackFailure) {
+                    primary.addSuppressed(rollbackFailure);
+                }
+                throw primary;
+            } finally {
+                if (transactionFinished) {
+                    con.setAutoCommit(true);
+                }
+            }
+            assertConnectionReturnedClean(con, "dropFixture");
         }
     }
 
@@ -218,6 +360,9 @@ public class JobsKillProtocolSqlTest extends Common {
                 Jobs.class.getDeclaredMethod("kill", int.class, Connection.class);
         m.setAccessible(true);
         try (Connection con = Common.getConnection()) {
+            assertTrue("Jobs.kill writes on the connection it is given and then borrows more"
+                    + " from the same pool; handing it one mid-transaction makes it block on"
+                    + " its own helpers", con.getAutoCommit());
             return (Boolean) m.invoke(null, id, con);
         }
     }
