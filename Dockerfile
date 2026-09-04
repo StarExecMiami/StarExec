@@ -195,7 +195,7 @@ RUN addgroup -g 1000 starexec && \
 
 # Set environment variables
 ENV CATALINA_HOME=/opt/tomcat \
-    TOMCAT_VERSION=9.0.120 \
+    TOMCAT_VERSION=9.0.121 \
     JAVA_OPTS="-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -Xms512m -Xmx2048m -XX:+UseG1GC -XX:+UseStringDeduplication" \
     STAREXEC_DATA_DIR=/var/starexec/data \
     STAREXEC_LOG_DIR=/var/log/starexec \
