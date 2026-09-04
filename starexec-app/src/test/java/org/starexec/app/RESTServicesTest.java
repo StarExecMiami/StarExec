@@ -15,12 +15,15 @@ import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
 import org.starexec.data.security.JobSecurity;
 import org.starexec.data.security.SpaceSecurity;
+import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Benchmark;
 import org.starexec.data.to.Processor;
 import org.starexec.data.to.Space;
 import org.starexec.data.to.User;
 import org.starexec.exceptions.RESTException;
+import org.starexec.exceptions.StarExecDatabaseException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.util.SessionUtil;
 import org.starexec.util.Util;
 import org.starexec.util.Validator;
@@ -340,6 +343,117 @@ public class RESTServicesTest {
 			} catch (RESTException e) {
 				assertSame(RESTException.INTERNAL_SERVER_ERROR, e);
 			}
+		}
+	}
+
+	/**
+	 * A genuinely missing user must still report "User not found." This is the
+	 * pre-existing contract and the only case that could previously occur, so it
+	 * has to survive unchanged.
+	 */
+	@Test
+	public void deleteUserReportsNotFoundOnlyForTheP0002Cause() throws Exception {
+		final int userToDelete = 99;
+		final int adminId = 1;
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+
+		java.sql.SQLException notFound = new java.sql.SQLException("User 99 not found", "P0002");
+		StarExecDatabaseException wrapped =
+				new StarExecDatabaseException("User not found: " + userToDelete, notFound);
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(adminId);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(userToDelete, adminId))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(userToDelete)).thenThrow(wrapped);
+
+			String response = new RESTServices().deleteUser(userToDelete, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			assertEquals("User not found.", status.getMessage());
+		}
+	}
+
+	/**
+	 * A typed, administrator-actionable blocker must keep its useful detail, built
+	 * from the exception's structured fields.
+	 */
+	@Test
+	public void deleteUserRendersTypedBlockerFromStructuredFields() throws Exception {
+		final int userToDelete = 99;
+		final int adminId = 1;
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+
+		UserDeletionBlockedException blocked = new UserDeletionBlockedException(
+				UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE,
+				"Cannot identify a single personal space for user 99",
+				java.util.Arrays.asList(85, 91),
+				java.util.Arrays.asList("alice_smith", "alice_smith"));
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(adminId);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(userToDelete, adminId))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(userToDelete)).thenThrow(blocked);
+
+			String response = new RESTServices().deleteUser(userToDelete, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			String msg = status.getMessage();
+			assertTrue("the blocking space names must survive", msg.contains("alice_smith"));
+			assertTrue("the blocking space ids must survive", msg.contains("id=85"));
+			assertTrue("the blocking space ids must survive", msg.contains("id=91"));
+			assertFalse("a typed blocker must not be reported as a missing user",
+					"User not found.".equals(msg));
+			assertFalse("a typed blocker must not fall through to the generic category",
+					msg.startsWith("Unable to delete user."));
+		}
+	}
+
+	/**
+	 * An unexpected database failure must yield the stable generic category, with
+	 * no internal text reaching the client. This is what makes a future return to
+	 * echoing e.getMessage() fail.
+	 */
+	@Test
+	public void deleteUserHidesInternalDetailOnUnexpectedDatabaseFailure() throws Exception {
+		final int userToDelete = 99;
+		final int adminId = 1;
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+
+		java.sql.SQLException internal = new java.sql.SQLException(
+				"ERROR: null value in column \"zzz\" violates not-null constraint"
+						+ " ; SQL: DELETE FROM starexec.secret_table WHERE id = 1", "23502");
+		StarExecDatabaseException unexpected =
+				new StarExecDatabaseException("constraint zzz_not_null on starexec.secret_table", internal);
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+			 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(adminId);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(userToDelete, adminId))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(userToDelete)).thenThrow(unexpected);
+
+			String response = new RESTServices().deleteUser(userToDelete, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			String msg = status.getMessage();
+			assertEquals("unexpected failures must map to the stable generic category",
+					"Unable to delete user. The failure has been logged for an administrator.", msg);
+			assertFalse("SQL text must not reach the client", msg.contains("DELETE FROM"));
+			assertFalse("table names must not reach the client", msg.contains("secret_table"));
+			assertFalse("constraint names must not reach the client", msg.contains("zzz"));
+			assertFalse("SQLSTATE must not reach the client", msg.contains("23502"));
+			assertFalse("must not be classified as a missing user",
+					"User not found.".equals(msg));
 		}
 	}
 }
