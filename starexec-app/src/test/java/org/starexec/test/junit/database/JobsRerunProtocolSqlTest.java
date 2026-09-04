@@ -25,6 +25,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * Caller-level tests for the automatic-rerun protocol, against the real SQL.
@@ -56,11 +57,53 @@ public class JobsRerunProtocolSqlTest extends Common {
 		Common.initialize();
 	}
 
+	/**
+	 * The pool hands out connections it does not reset.
+	 *
+	 * <p>Tomcat JDBC applies {@code defaultAutoCommit} when a physical connection is
+	 * created, not when one is borrowed, and this pool is configured without
+	 * {@code rollbackOnReturn}. A connection returned with {@code autoCommit=false}
+	 * therefore reaches the next borrower still in that mode, carrying whatever
+	 * transaction was left open on it -- which is how this class came to hand
+	 * JobsKillProtocolSqlTest a connection that made Jobs.kill block on its own
+	 * helper connections.</p>
+	 */
+	private static void requireCleanPooledConnection(Connection con, String operation)
+			throws SQLException {
+		if (con.getAutoCommit()) {
+			return;
+		}
+		try {
+			con.rollback();
+		} finally {
+			con.setAutoCommit(true);
+		}
+		fail(operation + " borrowed a pooled connection with autoCommit=false: an earlier"
+				+ " caller returned it mid-transaction. It has been rolled back and restored"
+				+ " so cleanup can proceed, but the pool was contaminated.");
+	}
+
+	/** The state a fixture-owned connection must be in before it returns to the pool. */
+	private static void assertConnectionReturnedClean(Connection con, String operation)
+			throws SQLException {
+		assertTrue(operation + " must explicitly finish its transaction and restore"
+				+ " autoCommit before the connection goes back to the pool",
+				con.getAutoCommit());
+	}
+
+	/** Rows created only by makeTheFixturePairVisibleToGetPairsSimple; 0 when unused. */
+	private int visibilitySpaceId;
+	private int visibilityBenchId;
+	private int visibilitySolverId;
+	private int visibilityConfigId;
+
 	@Before
 	public void createFixture() throws SQLException {
 		originalBackend = R.BACKEND;
 		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "createFixture");
 			con.setAutoCommit(false);
+			boolean transactionFinished = false;
 			try {
 				int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
 				jobId = selectInt(con,
@@ -77,20 +120,72 @@ public class JobsRerunProtocolSqlTest extends Common {
 						"(jobpair_id, stage_number, status_code, disk_size) VALUES (" +
 						pairId + ", 1, " + StatusCode.ERROR_RUNSCRIPT.getVal() + ", 4096)");
 				con.commit();
-			} catch (SQLException e) {
-				con.rollback();
-				throw e;
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				throw primary;
+			} finally {
+				// Only after an explicit commit or rollback: JDBC commits an active
+				// transaction when autoCommit flips to true, which would publish a
+				// half-built fixture on the failure path.
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
 			}
+			assertConnectionReturnedClean(con, "createFixture");
 		}
 	}
 
 	@After
 	public void dropFixture() throws SQLException {
 		R.BACKEND = originalBackend;
+		if (jobId == 0) {
+			return;
+		}
 		try (Connection con = Common.getConnection()) {
-			// pairs_rerun, job_pair_attempts and jobpair_stage_data all cascade from job_pairs.
-			exec(con, "DELETE FROM starexec.job_pairs WHERE job_id = " + jobId);
-			exec(con, "DELETE FROM starexec.jobs WHERE id = " + jobId);
+			requireCleanPooledConnection(con, "dropFixture");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			try {
+				// pairs_rerun, job_pair_attempts and jobpair_stage_data all cascade from job_pairs.
+				exec(con, "DELETE FROM starexec.job_pairs WHERE job_id = " + jobId);
+				// Only makeTheFixturePairVisibleToGetPairsSimple creates these, and until now
+				// nothing removed them; each run leaked one space, benchmark, solver and
+				// configuration. Order is child-first and each delete is a no-op when unused.
+				if (visibilityConfigId != 0) {
+					exec(con, "DELETE FROM starexec.configurations WHERE id = " + visibilityConfigId);
+				}
+				if (visibilitySolverId != 0) {
+					exec(con, "DELETE FROM starexec.solvers WHERE id = " + visibilitySolverId);
+				}
+				if (visibilityBenchId != 0) {
+					exec(con, "DELETE FROM starexec.benchmarks WHERE id = " + visibilityBenchId);
+				}
+				if (visibilitySpaceId != 0) {
+					exec(con, "DELETE FROM starexec.job_spaces WHERE id = " + visibilitySpaceId);
+				}
+				exec(con, "DELETE FROM starexec.jobs WHERE id = " + jobId);
+				con.commit();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				throw primary;
+			} finally {
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
+			}
+			assertConnectionReturnedClean(con, "dropFixture");
 		}
 	}
 
@@ -281,9 +376,12 @@ public class JobsRerunProtocolSqlTest extends Common {
 	/** Adds a second pair to the fixture job so batch behaviour can be observed. */
 	private int insertPair(int execId, int statusCode) throws SQLException {
 		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "insertPair");
 			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			final int id;
 			try {
-				int id = selectInt(con,
+				id = selectInt(con,
 						"INSERT INTO starexec.job_pairs (job_id, sge_id, status_code, start_time," +
 								" end_time, primary_jobpair_data) VALUES (" + jobId + ", " + execId +
 								", " + statusCode + ", NOW() - INTERVAL \'20 minutes\', " +
@@ -294,11 +392,25 @@ public class JobsRerunProtocolSqlTest extends Common {
 						" (jobpair_id, stage_number, status_code, disk_size) VALUES (" +
 						id + ", 1, " + statusCode + ", 4096)");
 				con.commit();
-				return id;
-			} catch (SQLException e) {
-				con.rollback();
-				throw e;
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				throw primary;
+			} finally {
+				// Only after an explicit commit or rollback: JDBC commits an active
+				// transaction when autoCommit flips to true, which would publish a
+				// half-built fixture on the failure path.
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
 			}
+			assertConnectionReturnedClean(con, "insertPair");
+			return id;
 		}
 	}
 
@@ -360,7 +472,9 @@ public class JobsRerunProtocolSqlTest extends Common {
 	 */
 	private void makeTheFixturePairVisibleToGetPairsSimple() throws SQLException {
 		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "makeTheFixturePairVisibleToGetPairsSimple");
 			con.setAutoCommit(false);
+			boolean transactionFinished = false;
 			try {
 				int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
 				int spaceId = selectInt(con,
@@ -375,6 +489,10 @@ public class JobsRerunProtocolSqlTest extends Common {
 				int configId = selectInt(con,
 						"INSERT INTO starexec.configurations (solver_id, name, updated)" +
 								" VALUES (" + solverId + ", \'c\', NOW()) RETURNING id");
+				visibilitySpaceId = spaceId;
+				visibilityBenchId = benchId;
+				visibilitySolverId = solverId;
+				visibilityConfigId = configId;
 				exec(con, "UPDATE starexec.job_pairs SET job_space_id = " + spaceId +
 						", bench_id = " + benchId + ", bench_name = \'b\', path = \'/\'" +
 						" WHERE id = " + pairId);
@@ -382,10 +500,24 @@ public class JobsRerunProtocolSqlTest extends Common {
 						", solver_name = \'s\', config_id = " + configId +
 						", config_name = \'c\' WHERE jobpair_id = " + pairId);
 				con.commit();
-			} catch (SQLException e) {
-				con.rollback();
-				throw e;
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				throw primary;
+			} finally {
+				// Only after an explicit commit or rollback: JDBC commits an active
+				// transaction when autoCommit flips to true, which would publish a
+				// half-built fixture on the failure path.
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
 			}
+			assertConnectionReturnedClean(con, "makeTheFixturePairVisibleToGetPairsSimple");
 		}
 	}
 
