@@ -38,16 +38,37 @@ public class ArchiveExtractor {
     private static final int BUFFER_SIZE = 8192;
     private static final int MAX_ENTRY_NAME_LENGTH = 255;
 
+    /** Sentinel for {@link ExtractionSettings#withRemainingQuotaBytes(long)}: no quota cap. */
+    public static final long NO_QUOTA_LIMIT = 0L;
+
+    /**
+     * Signals that extraction stopped because it would exceed the uploading user's remaining
+     * disk quota.
+     *
+     * <p>This is an accounting limit, not a security event. It is deliberately distinct from the
+     * {@link SecurityException} raised by the zip-bomb caps so that a user who has simply run out
+     * of space is never told their upload was rejected as malicious.
+     */
+    public static final class QuotaExceededException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        public QuotaExceededException(String message) {
+            super(message);
+        }
+    }
+
     public static final class ExtractionSettings {
         private final long maxUncompressedSizeBytes;
+        private final long remainingQuotaBytes;
         private final int timeoutSeconds;
         private final long deadlineEpochMillis;
         private final Runnable progressCallback;
         private final BooleanSupplier cancellationRequested;
 
-        private ExtractionSettings(long maxUncompressedSizeBytes, int timeoutSeconds, Runnable progressCallback,
-                                   BooleanSupplier cancellationRequested) {
+        private ExtractionSettings(long maxUncompressedSizeBytes, long remainingQuotaBytes, int timeoutSeconds,
+                                   Runnable progressCallback, BooleanSupplier cancellationRequested) {
             this.maxUncompressedSizeBytes = maxUncompressedSizeBytes;
+            this.remainingQuotaBytes = remainingQuotaBytes;
             this.timeoutSeconds = timeoutSeconds;
             this.deadlineEpochMillis = timeoutSeconds > 0
                 ? System.currentTimeMillis() + (timeoutSeconds * 1000L)
@@ -57,33 +78,68 @@ public class ArchiveExtractor {
         }
 
         public static ExtractionSettings defaults() {
-            return new ExtractionSettings(MAX_UNCOMPRESSED_SIZE_BYTES, 0, null, null);
+            return new ExtractionSettings(MAX_UNCOMPRESSED_SIZE_BYTES, NO_QUOTA_LIMIT, 0, null, null);
         }
 
         public static ExtractionSettings fromEnvironment() {
             return new ExtractionSettings(
                 EnvironmentConfig.getUploadExtractionMaxUncompressedBytes(),
+                NO_QUOTA_LIMIT,
                 EnvironmentConfig.getUploadExtractionTimeoutSeconds(),
                 null,
                 null
             );
         }
 
+        /**
+         * Sets the global anti-zip-bomb cap. This is a security limit shared by every upload; it
+         * is not the uploading user's quota -- see {@link #withRemainingQuotaBytes(long)}.
+         */
         public ExtractionSettings withMaxUncompressedSizeBytes(long maxBytes) {
-            return new ExtractionSettings(maxBytes, timeoutSeconds, progressCallback, cancellationRequested);
+            return new ExtractionSettings(maxBytes, remainingQuotaBytes, timeoutSeconds, progressCallback,
+                cancellationRequested);
+        }
+
+        /**
+         * Caps extraction at the uploading user's remaining disk quota. Pass
+         * {@link ArchiveExtractor#NO_QUOTA_LIMIT} (or any non-positive value) to extract with no
+         * quota cap.
+         */
+        public ExtractionSettings withRemainingQuotaBytes(long quotaBytes) {
+            return new ExtractionSettings(maxUncompressedSizeBytes, quotaBytes, timeoutSeconds, progressCallback,
+                cancellationRequested);
         }
 
         public ExtractionSettings withTimeoutSeconds(int newTimeoutSeconds) {
-            return new ExtractionSettings(maxUncompressedSizeBytes, newTimeoutSeconds, progressCallback, cancellationRequested);
+            return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, newTimeoutSeconds,
+                progressCallback, cancellationRequested);
         }
 
         public ExtractionSettings withProgressCallback(Runnable newProgressCallback) {
-            return new ExtractionSettings(maxUncompressedSizeBytes, timeoutSeconds, newProgressCallback, cancellationRequested);
+            return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, timeoutSeconds,
+                newProgressCallback, cancellationRequested);
         }
 
         public ExtractionSettings withCancellationRequested(BooleanSupplier newCancellationRequested) {
-            return new ExtractionSettings(maxUncompressedSizeBytes, timeoutSeconds, progressCallback, newCancellationRequested);
+            return new ExtractionSettings(maxUncompressedSizeBytes, remainingQuotaBytes, timeoutSeconds,
+                progressCallback, newCancellationRequested);
         }
+    }
+
+    /**
+     * Builds the user-facing explanation for an upload that does not fit in the uploader's
+     * remaining disk quota.
+     *
+     * <p>The pre-flight estimate and the streaming check both use this, so the uploader sees the
+     * same explanation and the same remedy whichever one trips first.
+     *
+     * @param requiredBytes bytes the extraction needs, or has already written
+     * @param remainingQuotaBytes bytes the uploader has left
+     */
+    public static String formatQuotaExceededMessage(long requiredBytes, long remainingQuotaBytes) {
+        return "Not enough disk quota to extract this archive: it needs at least " + requiredBytes
+            + " bytes, but only " + remainingQuotaBytes + " bytes remain in your quota. "
+            + "Empty your recycle bin to reclaim space, or ask an administrator to raise your quota.";
     }
     
     /**
@@ -134,6 +190,15 @@ public class ArchiveExtractor {
             } else {
                 throw new IOException("Unsupported archive format: " + archiveFile.getName());
             }
+        } catch (QuotaExceededException e) {
+            // Out of disk quota, not a zip bomb. Pass the message through unprefixed so the
+            // uploader is told what to reclaim instead of being accused of an attack.
+            // Keep the absolute path and the byte counts here: the user-facing message
+            // deliberately carries neither the path nor any server detail.
+            log.info(method, "Disk quota exhausted while extracting archive " + archivePath
+                + ": " + e.getMessage());
+            cleanupOnFailure(extractDir);
+            throw new IOException(e.getMessage());
         } catch (SecurityException e) {
             // Safety limit exceeded - cleanup partial extraction
             log.warn(method, "Safety limit exceeded for archive: " + archivePath, e);
@@ -423,11 +488,18 @@ public class ArchiveExtractor {
     }
 
     private static void validateTotalSize(long totalUncompressedSize, ExtractionSettings settings) {
-        long configuredLimit = settings.maxUncompressedSizeBytes > 0
+        long securityLimit = settings.maxUncompressedSizeBytes > 0
             ? settings.maxUncompressedSizeBytes
             : MAX_UNCOMPRESSED_SIZE_BYTES;
-        if (totalUncompressedSize > configuredLimit) {
-            throw new SecurityException("Total uncompressed size exceeds " + configuredLimit + " bytes");
+        if (totalUncompressedSize > securityLimit) {
+            throw new SecurityException("Total uncompressed size exceeds " + securityLimit + " bytes");
+        }
+        // Checked second and reported separately: running out of quota is the uploader's own
+        // accounting, and must not be surfaced as a zip-bomb rejection.
+        if (settings.remainingQuotaBytes > 0 && totalUncompressedSize > settings.remainingQuotaBytes) {
+            throw new QuotaExceededException(
+                formatQuotaExceededMessage(totalUncompressedSize, settings.remainingQuotaBytes)
+            );
         }
     }
 
@@ -435,13 +507,15 @@ public class ArchiveExtractor {
         throws IOException {
         validateTotalSize(bytesExtracted, settings);
         if (settings.timeoutSeconds > 0 && System.currentTimeMillis() > settings.deadlineEpochMillis) {
+            // File name only: this message is surfaced to the uploader. The full path is
+            // logged separately by the callers that have it.
             throw new IOException(
                 "Archive extraction timed out after " + settings.timeoutSeconds +
-                    " seconds for " + archivePath
+                    " seconds for " + archivePath.getFileName()
             );
         }
         if (settings.cancellationRequested != null && settings.cancellationRequested.getAsBoolean()) {
-            throw new IOException("Archive extraction cancelled for " + archivePath);
+            throw new IOException("Archive extraction cancelled for " + archivePath.getFileName());
         }
     }
 

@@ -43,6 +43,9 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     private static final StarLogger log = StarLogger.getLogger(UploadJobWorker.class);
     
     private static final int POLL_INTERVAL_MS = 5000; // 5 seconds
+
+    /** Returned by the size estimator when no cheap estimate is available. */
+    private static final long UNKNOWN_UNCOMPRESSED_SIZE = -1L;
     private static final int SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final int MAX_CONCURRENT_JOBS = 3; // Allow up to 3 concurrent job processing
     private static final int EXTRACTION_PROGRESS_UPDATE_FILE_INTERVAL = 100;
@@ -732,7 +735,7 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
 
         ArchiveExtractor.ExtractionSettings extractionSettings = ArchiveExtractor.ExtractionSettings.fromEnvironment()
             .withTimeoutSeconds(EnvironmentConfig.getUploadExtractionTimeoutSeconds())
-            .withMaxUncompressedSizeBytes(quota.maxExtractableBytes)
+            .withRemainingQuotaBytes(quota.remainingQuotaBytes)
             .withProgressCallback(createExtractionProgressCallback(job.getId(), extractedCount));
 
         log.info(method, "Extracting archive for job " + job.getId());
@@ -789,7 +792,38 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         if (causeMessage == null || causeMessage.isEmpty()) {
             causeMessage = error.getClass().getSimpleName();
         }
-        return "Failed to extract archive: " + archivePath + " - " + causeMessage;
+        // Name only: the absolute path is already in the logs, and it is noise to the uploader
+        // as well as a needless disclosure of the data volume's internal layout.
+        return "Failed to extract archive: " + archiveDisplayName(archivePath) + " - " + causeMessage;
+    }
+
+    /**
+     * The archive's file name for use in a user-facing message. Never throws: this runs only on a
+     * failure path, where a NullPointerException would replace the error being reported.
+     */
+    private String archiveDisplayName(String archivePath) {
+        if (archivePath == null || archivePath.isEmpty()) {
+            return "the upload archive";
+        }
+        Path fileName = Paths.get(archivePath).getFileName();
+        return fileName == null ? "the upload archive" : fileName.toString();
+    }
+
+    /**
+     * Builds the quota rejection and records it for administrators.
+     *
+     * <p>The thrown message reaches the uploader and so names the archive only. The absolute path
+     * lives in this log line, because a pre-flight rejection happens before extraction logs
+     * anything and the job row would otherwise be the only record of which artifact was refused.
+     */
+    private IOException quotaRejection(UploadJob job, File archiveFile, long requiredBytes,
+                                       long remainingQuotaBytes) {
+        log.info("calculateExtractionQuota", "Rejecting upload job " + job.getId() + " for user "
+            + job.getUserId() + ": needs " + requiredBytes + " bytes, quota has "
+            + remainingQuotaBytes + " bytes remaining. Archive: " + archiveFile.getAbsolutePath());
+        return new IOException(
+            ArchiveExtractor.formatQuotaExceededMessage(requiredBytes, remainingQuotaBytes)
+        );
     }
 
     private UploadExtractionQuota calculateExtractionQuota(UploadJob job, File archiveFile) throws IOException {
@@ -799,43 +833,57 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         }
 
         long remainingQuotaBytes = Math.max(0L, currentUser.getDiskQuota() - currentUser.getDiskUsage());
-        if (remainingQuotaBytes <= 0L) {
-            throw new IOException("The benchmark upload exceeds the remaining disk quota for this user");
-        }
-
         long archiveSizeBytes = archiveFile.length();
-        if (archiveSizeBytes > remainingQuotaBytes) {
-            throw new IOException("The uploaded archive exceeds the remaining disk quota for this user");
+        if (remainingQuotaBytes <= 0L || archiveSizeBytes > remainingQuotaBytes) {
+            throw quotaRejection(job, archiveFile, archiveSizeBytes, remainingQuotaBytes);
         }
 
-        long estimatedUncompressedBytes = shouldEstimateArchiveSize(archiveFile)
-            ? ArchiveUtil.getArchiveSize(archiveFile.getAbsolutePath())
-            : -1L;
+        long estimatedUncompressedBytes = estimateUncompressedSizeBytes(archiveFile);
         if (estimatedUncompressedBytes > 0L && estimatedUncompressedBytes > remainingQuotaBytes) {
-            throw new IOException(
-                "The uploaded archive expands to approximately " + estimatedUncompressedBytes +
-                    " bytes, which exceeds the remaining disk quota of " + remainingQuotaBytes + " bytes"
-            );
+            throw quotaRejection(job, archiveFile, estimatedUncompressedBytes, remainingQuotaBytes);
         }
 
-        long configuredMaxBytes = EnvironmentConfig.getUploadExtractionMaxUncompressedBytes();
-        long maxExtractableBytes = configuredMaxBytes > 0L
-            ? Math.min(configuredMaxBytes, remainingQuotaBytes)
-            : remainingQuotaBytes;
-
-        return new UploadExtractionQuota(maxExtractableBytes);
+        return new UploadExtractionQuota(remainingQuotaBytes);
     }
 
-    private boolean shouldEstimateArchiveSize(File archiveFile) {
+    /**
+     * Exact uncompressed size of an upload in bytes, or {@link #UNKNOWN_UNCOMPRESSED_SIZE} when it
+     * cannot be established without doing the work the check exists to avoid.
+     *
+     * <p>ZIP and TAR record every entry's size in its headers, so the exact payload total is cheap
+     * to read and {@link ArchiveUtil#getArchiveSize} is used directly.
+     *
+     * <p>gzip offers nothing equivalent, and there is deliberately no estimate for {@code .tgz} or
+     * {@code .tar.gz} here. Two tempting shortcuts are both wrong:
+     * <ul>
+     *   <li>Inflating the stream to measure it ({@code ArchiveUtil.getTarGzSize}) costs as much as
+     *       the extraction it is meant to pre-empt -- minutes, for a multi-gigabyte upload.</li>
+     *   <li>The gzip ISIZE trailer is O(1), but it is the size of the <em>TAR stream</em>: entry
+     *       headers, per-entry padding to 512 bytes, the end-of-archive blocks and the blocking
+     *       factor. The quota counts entry payloads only. ISIZE therefore over-states what the
+     *       quota will charge, without bound -- an archive of many tiny files is almost entirely
+     *       TAR overhead -- so rejecting on it would refuse uploads that fit.</li>
+     * </ul>
+     *
+     * <p>No sound cheap pre-flight exists for gzip, so these fall through to the streaming quota
+     * check in {@link ArchiveExtractor}, which counts the same bytes the quota charges and stops
+     * the moment they exceed it.
+     */
+    // Package-private and non-static so tests can force the "no cheap estimate" case and
+    // exercise the streaming quota check behind it.
+    long estimateUncompressedSizeBytes(File archiveFile) {
         String fileName = archiveFile.getName().toLowerCase();
-        return !(fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz"));
+        if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz")) {
+            return UNKNOWN_UNCOMPRESSED_SIZE;
+        }
+        return ArchiveUtil.getArchiveSize(archiveFile.getAbsolutePath());
     }
 
     private static final class UploadExtractionQuota {
-        private final long maxExtractableBytes;
+        private final long remainingQuotaBytes;
 
-        private UploadExtractionQuota(long maxExtractableBytes) {
-            this.maxExtractableBytes = maxExtractableBytes;
+        private UploadExtractionQuota(long remainingQuotaBytes) {
+            this.remainingQuotaBytes = remainingQuotaBytes;
         }
     }
 
