@@ -3,6 +3,7 @@ package org.starexec.test.junit.backend;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.eq;
@@ -35,6 +36,7 @@ import java.util.List;
 import java.util.Set;
 import org.junit.Before;
 import org.junit.Test;
+import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.KubernetesJobMonitor;
 
 public class KubernetesJobMonitorTests {
@@ -42,6 +44,7 @@ public class KubernetesJobMonitorTests {
     private static final String NAMESPACE = "starexec";
     private static final int EXEC_ID = 101;
     private static final String JOB_NAME = "job-101";
+    private static final String JOB_UID = "11111111-1111-1111-1111-111111111101";
     private static final String MANAGED_LABEL = "starexec.org/managed";
     private static final String EXEC_ID_LABEL = "starexec.org/exec-id";
 
@@ -97,6 +100,15 @@ public class KubernetesJobMonitorTests {
             .withNewMetadata()
             .withName("pod-" + execId)
             .withCreationTimestamp("2026-08-15T12:00:00Z")
+            .withOwnerReferences(
+                new io.fabric8.kubernetes.api.model.OwnerReferenceBuilder()
+                    .withApiVersion("batch/v1")
+                    .withKind("Job")
+                    .withName(JOB_NAME)
+                    .withUid(JOB_UID)
+                    .withController(true)
+                    .build()
+            )
             .addToLabels(MANAGED_LABEL, "true")
             .addToLabels(EXEC_ID_LABEL, String.valueOf(execId))
             .endMetadata()
@@ -122,6 +134,7 @@ public class KubernetesJobMonitorTests {
         return new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels(MANAGED_LABEL, "true")
             .addToLabels(EXEC_ID_LABEL, String.valueOf(EXEC_ID))
             .endMetadata()
@@ -149,9 +162,9 @@ public class KubernetesJobMonitorTests {
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobRunning(anyInt(), anyString());
-        verify(callback, times(0)).onJobComplete(anyInt(), anyString());
-        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobRunning(any(ExecutionRef.class));
+        verify(callback, times(0)).onJobComplete(any(ExecutionRef.class));
+        verify(callback, times(0)).onJobFailed(any(ExecutionRef.class), anyString());
     }
 
     /** The correction must not become a dispatch stop: a real pod still reports running. */
@@ -159,12 +172,12 @@ public class KubernetesJobMonitorTests {
     public void runningPodIsStillReportedAsRunning() throws Exception {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Running"));
-        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
 
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
+        verify(callback, times(1)).onJobRunning(execution());
     }
 
     /**
@@ -176,11 +189,11 @@ public class KubernetesJobMonitorTests {
     public void podListFailureFallsBackToJobLevelActiveCount() throws Exception {
         givenJobs(activeJobFixture());
         when(filteredPods.list()).thenThrow(new RuntimeException("pods is forbidden"));
-        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
 
         invokePollJobsOnce();
 
-        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
+        verify(callback, times(1)).onJobRunning(execution());
     }
 
     /**
@@ -198,6 +211,7 @@ public class KubernetesJobMonitorTests {
         Job retrying = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels("starexec.org/managed", "true")
             .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
             .endMetadata()
@@ -214,11 +228,11 @@ public class KubernetesJobMonitorTests {
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
-        verify(callback, times(0)).onJobComplete(anyInt(), anyString());
+        verify(callback, times(0)).onJobFailed(any(ExecutionRef.class), anyString());
+        verify(callback, times(0)).onJobComplete(any(ExecutionRef.class));
         assertFalse(
             "nothing terminal may be recorded for a Job that can still start a pod",
-            getCompletedExecIds().contains(EXEC_ID)
+            getCompletedExecutions().contains(execution())
         );
     }
 
@@ -228,6 +242,7 @@ public class KubernetesJobMonitorTests {
         Job failed = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels("starexec.org/managed", "true")
             .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
             .endMetadata()
@@ -245,11 +260,11 @@ public class KubernetesJobMonitorTests {
 
         givenJobs(failed);
         givenPods();
-        when(callback.onJobFailed(anyInt(), anyString(), anyString())).thenReturn(true);
+        when(callback.onJobFailed(any(ExecutionRef.class), anyString())).thenReturn(true);
 
         invokePollJobsOnce();
 
-        verify(callback, times(1)).onJobFailed(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        verify(callback, times(1)).onJobFailed(eq(execution()), anyString());
     }
 
     /** FailureTarget begins termination; it is not the terminal condition. */
@@ -258,6 +273,7 @@ public class KubernetesJobMonitorTests {
         Job terminating = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels("starexec.org/managed", "true")
             .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
             .endMetadata()
@@ -275,7 +291,7 @@ public class KubernetesJobMonitorTests {
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobFailed(any(ExecutionRef.class), anyString());
     }
 
     @Test
@@ -286,6 +302,7 @@ public class KubernetesJobMonitorTests {
         Job completedJob = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels("starexec.org/managed", "true")
             .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
             .endMetadata()
@@ -301,42 +318,42 @@ public class KubernetesJobMonitorTests {
         JobList completedJobs = new JobList();
         completedJobs.setItems(List.of(completedJob));
         when(filteredJobs.list()).thenReturn(completedJobs);
-        when(callback.onJobComplete(EXEC_ID, JOB_NAME)).thenReturn(false, true);
+        when(callback.onJobComplete(execution())).thenReturn(false, true);
 
         invokePollJobsOnce();
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(2)).onJobComplete(EXEC_ID, JOB_NAME);
-        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+        verify(callback, times(2)).onJobComplete(execution());
+        assertTrue(getCompletedExecutions().contains(execution()));
     }
 
     @Test
     public void pollJobsOnce_MarksActiveJobRunningOnlyOnce() throws Exception {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Running"));
-        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
 
         invokePollJobsOnce();
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
-        verify(callback, times(0)).onJobComplete(anyInt(), anyString());
-        verify(callback, times(0)).onJobFailed(anyInt(), anyString(), anyString());
+        verify(callback, times(1)).onJobRunning(execution());
+        verify(callback, times(0)).onJobComplete(any(ExecutionRef.class));
+        verify(callback, times(0)).onJobFailed(any(ExecutionRef.class), anyString());
     }
 
     @Test
     public void pollJobsOnce_RetriesRunningJobUntilCallbackSucceeds() throws Exception {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Running"));
-        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(false, true);
+        when(callback.onJobRunning(execution())).thenReturn(false, true);
 
         invokePollJobsOnce();
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(2)).onJobRunning(EXEC_ID, JOB_NAME);
+        verify(callback, times(2)).onJobRunning(execution());
     }
 
     @Test
@@ -344,6 +361,7 @@ public class KubernetesJobMonitorTests {
         Job pendingJob = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels("starexec.org/managed", "true")
             .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
             .endMetadata()
@@ -364,6 +382,7 @@ public class KubernetesJobMonitorTests {
         Job failedJob = new JobBuilder()
             .withNewMetadata()
             .withName(JOB_NAME)
+            .withUid(JOB_UID)
             .addToLabels("starexec.org/managed", "true")
             .addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
             .endMetadata()
@@ -385,8 +404,7 @@ public class KubernetesJobMonitorTests {
         when(filteredJobs.list()).thenReturn(failedJobs);
         when(
             callback.onJobFailed(
-                EXEC_ID,
-                JOB_NAME,
+                execution(),
                 "BackoffLimitExceeded: Pod exited with status 1"
             )
         )
@@ -398,11 +416,10 @@ public class KubernetesJobMonitorTests {
 
         verify(callback, times(2))
             .onJobFailed(
-                EXEC_ID,
-                JOB_NAME,
+                execution(),
                 "BackoffLimitExceeded: Pod exited with status 1"
             );
-        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+        assertTrue(getCompletedExecutions().contains(execution()));
     }
 
     // =========================================================================
@@ -429,9 +446,9 @@ public class KubernetesJobMonitorTests {
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
-        verify(callback, times(0)).onJobRunning(anyInt(), anyString());
-        assertFalse(getCompletedExecIds().contains(EXEC_ID));
+        verify(callback, times(0)).onJobStuckPending(any(ExecutionRef.class), anyString());
+        verify(callback, times(0)).onJobRunning(any(ExecutionRef.class));
+        assertFalse(getCompletedExecutions().contains(execution()));
     }
 
     /** A pod still waiting well before the warning threshold is left entirely alone. */
@@ -451,13 +468,13 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(true);
 
         invokePollJobsOnce();
 
-        verify(callback, times(1)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
-        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+        verify(callback, times(1)).onJobStuckPending(eq(execution()), anyString());
+        assertTrue(getCompletedExecutions().contains(execution()));
     }
 
     /** The scheduler's own account must reach the callback, for the operator's log. */
@@ -466,13 +483,13 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(true);
 
         invokePollJobsOnce();
 
         ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
-        verify(callback).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), reason.capture());
+        verify(callback).onJobStuckPending(eq(execution()), reason.capture());
         assertTrue(reason.getValue().contains("Unschedulable"));
         assertTrue(reason.getValue().contains("node affinity/selector"));
     }
@@ -482,15 +499,15 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(false, true);
 
         invokePollJobsOnce();
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
-        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+        verify(callback, times(2)).onJobStuckPending(eq(execution()), anyString());
+        assertTrue(getCompletedExecutions().contains(execution()));
     }
 
     /**
@@ -502,12 +519,12 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Running"));
         setClockMinutesAfterPodCreation(120);
-        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
 
         invokePollJobsOnce();
 
-        verify(callback, times(1)).onJobRunning(EXEC_ID, JOB_NAME);
-        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+        verify(callback, times(1)).onJobRunning(execution());
+        verify(callback, times(0)).onJobStuckPending(any(ExecutionRef.class), anyString());
     }
 
     /**
@@ -524,7 +541,7 @@ public class KubernetesJobMonitorTests {
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobStuckPending(any(ExecutionRef.class), anyString());
     }
 
     /** Setting the timeout to zero leaves the monitor reporting only. */
@@ -537,7 +554,7 @@ public class KubernetesJobMonitorTests {
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobStuckPending(any(ExecutionRef.class), anyString());
     }
 
     /** Without a pod listing there is no age to measure, so nothing may be failed. */
@@ -546,11 +563,11 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         when(filteredPods.list()).thenThrow(new RuntimeException("pods is forbidden"));
         setClockMinutesAfterPodCreation(600);
-        when(callback.onJobRunning(EXEC_ID, JOB_NAME)).thenReturn(true);
+        when(callback.onJobRunning(execution())).thenReturn(true);
 
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobStuckPending(anyInt(), anyString(), anyString());
+        verify(callback, times(0)).onJobStuckPending(any(ExecutionRef.class), anyString());
     }
 
     /**
@@ -565,7 +582,7 @@ public class KubernetesJobMonitorTests {
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
         // The transition does not complete: the callback reports it is not finished.
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(false);
 
         invokePollJobsOnce();
@@ -574,8 +591,8 @@ public class KubernetesJobMonitorTests {
         givenPods(podFor(EXEC_ID, "Running"));
         invokePollJobsOnce();
 
-        verify(callback, times(0)).onJobRunning(anyInt(), anyString());
-        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        verify(callback, times(0)).onJobRunning(any(ExecutionRef.class));
+        verify(callback, times(2)).onJobStuckPending(eq(execution()), anyString());
     }
 
     /**
@@ -589,7 +606,7 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(false, true);
 
         invokePollJobsOnce();
@@ -599,8 +616,8 @@ public class KubernetesJobMonitorTests {
         givenPods();
         invokePollJobsOnce();
 
-        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
-        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+        verify(callback, times(2)).onJobStuckPending(eq(execution()), anyString());
+        assertTrue(getCompletedExecutions().contains(execution()));
     }
 
     /** And once it has finished, the drain stops calling it. */
@@ -609,7 +626,7 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(false, true);
 
         invokePollJobsOnce();
@@ -619,7 +636,7 @@ public class KubernetesJobMonitorTests {
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(2)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
+        verify(callback, times(2)).onJobStuckPending(eq(execution()), anyString());
     }
 
     /** And it keeps retrying until the transition actually finishes. */
@@ -628,7 +645,7 @@ public class KubernetesJobMonitorTests {
         givenJobs(activeJobFixture());
         givenPods(podFor(EXEC_ID, "Pending"));
         setClockMinutesAfterPodCreation(61);
-        when(callback.onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString()))
+        when(callback.onJobStuckPending(eq(execution()), anyString()))
             .thenReturn(false, false, true);
 
         invokePollJobsOnce();
@@ -636,17 +653,21 @@ public class KubernetesJobMonitorTests {
         invokePollJobsOnce();
         invokePollJobsOnce();
 
-        verify(callback, times(3)).onJobStuckPending(eq(EXEC_ID), eq(JOB_NAME), anyString());
-        assertTrue(getCompletedExecIds().contains(EXEC_ID));
+        verify(callback, times(3)).onJobStuckPending(eq(execution()), anyString());
+        assertTrue(getCompletedExecutions().contains(execution()));
     }
 
     @SuppressWarnings("unchecked")
-    private Set<Integer> getCompletedExecIds() throws Exception {
-        Field completedExecIdsField = KubernetesJobMonitor.class.getDeclaredField(
-            "completedExecIds"
-        );
-        completedExecIdsField.setAccessible(true);
-        return (Set<Integer>) completedExecIdsField.get(monitor);
+    /** The identity of the Job every fixture in this class describes. */
+    private static ExecutionRef execution() {
+        return new ExecutionRef(EXEC_ID, JOB_NAME, JOB_UID);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<ExecutionRef> getCompletedExecutions() throws Exception {
+        Field field = KubernetesJobMonitor.class.getDeclaredField("completedExecutions");
+        field.setAccessible(true);
+        return (Set<ExecutionRef>) field.get(monitor);
     }
 
     private void invokePollJobsOnce() throws Exception {

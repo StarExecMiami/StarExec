@@ -1,6 +1,6 @@
 # Kubernetes execution identity
 
-Status: design accepted, implementation staged. Base `aa999b026`.
+Status: increment 1 implemented and tested locally. Base `aa999b026`, design `c81e293a7`.
 
 ## The defect
 
@@ -43,8 +43,8 @@ cancellation marker disappears while suppression persists. Waiting cannot repair
 | `KubernetesJobMonitor` | `completedExecIds`, `runningExecIds`, `pendingWarnedAt`, `cleanupPending` |
 | `PodPhaseView` | `byExecId`, built from the `starexec.org/exec-id` label |
 
-Plus int-only APIs: `Backend.killPair(int)`, `killPairConfirmed(int)`, and
-`JobCompletionCallback.onJobRunning/Complete/Failed(int, String)`.
+Plus int-only APIs: `Backend.killPair(int)`, `killPairConfirmed(int)`, and all four of
+`JobCompletionCallback.onJobRunning/Complete/Failed/StuckPending`.
 
 `PodPhaseView.of()` groups Pods by the `exec-id` **label**, so two Jobs both
 labelled `exec-id: "2"` have their observations merged.
@@ -104,24 +104,101 @@ Artifact paths need the same treatment: `/app/data/logs/3/3/pair_42` is scoped t
 the pair, not the execution, so a later attempt overwrites an earlier one's bytes.
 Ownership cannot rest on timestamps or "the newest file".
 
-## Staging
+## Increment 1, as built
 
-This is a core refactor of dispatch bookkeeping (277 `execId` references in a
-4,512-line file), not a contained patch. Proposed order, each increment
-independently reviewable and testable:
+The first two proposed increments turned out to be one. `ExecutionRef` reaching the
+callback changes nothing while the checks that run *before* and *at* callback admission
+are still keyed on the integer: `killedExecIds.contains(execId)` would have discarded
+the same event, and so would the monitor's `completedExecIds` pre-filter, which is
+consulted before the backend sees anything. The smallest coherent unit is therefore:
 
-1. `ExecutionRef` + capture the Job UID at creation + thread it through the
-   callback interface. Deterministic collision regression (baseline suppressed,
-   treatment ingested) — closes the observed production failure.
-2. Re-key the monitor's four collections and `PodPhaseView` grouping.
-3. Ownership enforcement at DB mutation boundaries + execution-scoped artifact
-   locations.
-4. UID-preconditioned deletion and slot-release ownership.
-5. Durable submission identity + restart reconciliation + ambiguous-create
-   handling; additive migration if required.
+- **`ExecutionRef {execId, jobName, jobUid}`** — immutable, validating, no equality on
+  `execId` alone, no constructor that accepts a missing UID.
+- **UID captured from the created Job.** `.resource(job).create()` returns the object;
+  its `metadata.uid` is recorded in `execIdToJobUid` alongside the name. A response
+  without one is routed to the existing ambiguous-submission path rather than tracked.
+- **All four callbacks carry `ExecutionRef`**, built by the monitor from the `Job` it
+  already holds. A listed Job with no identity is not acted on.
+- **Cancellation scoped to the object.** `killedExecIds` is replaced by
+  `killedExecutions` (`Set<ExecutionRef>`) plus `legacyKilledExecIds`, a tombstone for
+  the one path — `killPairConfirmed` with no local tracking, the path that fired at
+  05:20:39 — where no UID exists. **A tombstone suppresses nothing.** What it recorded
+  was that nothing carrying that exec-id *label* survived, which is not evidence about a
+  Job created afterwards. It is logged when a later execution inherits the number.
+- **The monitor's four collections re-keyed** on `ExecutionRef`:
+  `completedExecutions`, `runningExecutions`, `pendingWarnedAt`, `cleanupPending`. Each
+  belongs to one Kubernetes Job, so each takes the Job's identity.
+- **`PodPhaseView` grouped by the owning Job**, read from the pod's controller
+  `ownerReference` UID, with the exec-id label kept as metadata. Replacement pods under
+  one Job still merge — that is what `preferred` is for. A managed pod naming no
+  controller answers for nothing and is warned about once: it still carries the exec-id
+  label, which is the identity being retired. The bare-id accessor survives for callers
+  holding no Job, but returns `UNKNOWN` when two Jobs carry the id rather than picking one.
 
-Increment 1 alone fixes the reported failure. Increments 3-5 are what make the
-invariants hold generally.
+Two guards the increment could not correctly omit, both named by the primary invariant:
+
+- **`resolvePairId` checks ownership.** `execIdToPairId` describes whichever execution
+  holds the number now, so a superseded Job reading it would write its outcome onto the
+  current execution's pair. When the caller does not own the tracking slot the pair is
+  read from the Job's own label instead, and not cached.
+- **Releasing accounting checks ownership.** A superseded Job's terminal callback would
+  otherwise hand back the *current* execution's submission slot while it is still
+  running, and unrelated pairs would be scheduled on top of it.
+
+A cross-vendor review built an executable harness over these predicates and reproduced
+eight wrong answers. Four were acted on, and a fifth defect was found by auditing what
+those four changed:
+
+- `isSuperseded` read the tracked name twice, once directly and once inside `ownsTracking`.
+  A concurrent release between the two reads looked like a handover, and the execution's
+  own result would have been dropped as superseded. It now answers from one reading.
+- Tracking writes are ordered pair and output directory first, identity last, in both the
+  submit path and reconciliation. The identity is what grants ownership of the rest, so
+  publishing it first left a window where a callback owned the id while still reading the
+  previous execution's pair.
+- `resolvePairId` re-checks ownership after reading the cached pair, and falls through to
+  the Job's own label if the id changed hands during the call.
+- The artifact read is fenced on **positive** ownership. Resolving a pair required
+  owning the execution id; reading `execIdToOutputDir` required only that nobody *else*
+  owned it. Those differ exactly where it matters — absent tracking satisfies the weaker
+  test, as does the window between a concurrent submission publishing its output
+  directory and publishing the identity that would reveal it — so one execution's
+  `status.json` could be read as another's result. `readTerminalStatus`,
+  `readRunsolverVerdict`, `readStageNumber`, `resolveStatusPath`, `persistRunSolverStats`
+  and `persistAttributes` now take the `ExecutionRef` and read through a single
+  ownership-fenced accessor.
+- `PodPhaseView` no longer lets a single unattributable pod answer for a UID-bound
+  execution. That fallback was a hedge against a cluster stripping ownerReferences; the
+  hedge could alias two Jobs, so it is replaced by a one-shot warning that makes the same
+  situation diagnosable instead.
+
+The other four are one pre-existing behaviour, unchanged by this increment: when a create
+fails ambiguously and a Job of that name is present, `resolveAmbiguousSubmission` adopts
+it and records the name with no UID. A callback naming that Job then owns the tracking by
+name. Before this change the same callback read the same pair from the same map, so
+nothing is worse — but nothing is better either, and it is why increment 3 below is about
+ambiguous-create recovery rather than only durable identity.
+
+## What increment 1 does not establish
+
+In-process identity only. Still open, and not weakened by this change:
+
+- durable identity across an application restart, and ambiguous-create recovery;
+- ownership at the DB mutation boundary — the write is still not conditional on the
+  execution that produced it;
+- artifact ownership: `/app/data/logs/3/3/pair_42` remains scoped to the pair;
+- UID-preconditioned deletion;
+- the six remaining int-keyed backend collections (`execIdToJobName`, `execIdToPairId`,
+  `execIdToOutputDir`, `jobsHoldingSlot`, `unverifiedExecutions`, `ambiguousSubmissions`),
+  which the ownership guard now gates on the callback path but does not re-key.
+
+## Remaining staging
+
+1. Ownership enforced in the same transaction as the result write; execution-scoped
+   artifact locations.
+2. UID-preconditioned deletion and slot-release ownership.
+3. Durable submission identity + restart reconciliation + ambiguous-create handling;
+   additive migration if required.
 
 ## Out of scope
 
