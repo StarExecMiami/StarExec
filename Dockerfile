@@ -133,6 +133,25 @@ LABEL maintainer="StarExec Team" \
     org.opencontainers.image.description="Logic solver evaluation platform" \
     org.opencontainers.image.vendor="StarExec"
 
+# Rebuild the package layer on every CI build.
+#
+# `apk upgrade --no-cache` below cannot keep this image patched on its own: --no-cache is
+# apk's *index* cache, not Docker's *layer* cache. This layer's cache key is the base
+# image digest plus the command text, and neither changes when Alpine publishes a security
+# update -- so a cached layer keeps shipping whatever package versions were current when
+# it was first built, indefinitely.
+#
+# That is not hypothetical. On 2026-09-06 the Container Publish scan failed with 203 HIGH
+# findings (8 CVEs across the util-linux family) against an image built from source that
+# had not changed since the previous green run: the cached layer held util-linux
+# 2.42.1-r0 while the same Alpine 3.24 repositories were serving the patched 2.42.3-r1.
+# A build with the cache cold produced 2.42.3-r1 and scanned clean.
+#
+# The workflow passes a fresh BUILD_DATE for every run, so referencing it here changes the
+# key each CI build and the packages are genuinely re-resolved. Local builds leave it at
+# the default and keep their layer cache, so `docker compose up --build` stays fast.
+ARG BUILD_DATE=unknown
+
 # Install runtime dependencies
 # - bash: Required for job execution scripts
 # - curl: Health checks and downloads
@@ -149,7 +168,8 @@ LABEL maintainer="StarExec Team" \
 # - libstdc++: C++ standard library (required by runsolver)
 # - libgcc: GCC runtime library (required by runsolver)
 # - gcompat: glibc compatibility layer for musl (required by solver binaries compiled against glibc)
-RUN apk upgrade --no-cache && \
+RUN echo "package layer built for ${BUILD_DATE}" > /etc/starexec-package-layer && \
+    apk upgrade --no-cache && \
     apk add --no-cache \
     bash \
     curl \
