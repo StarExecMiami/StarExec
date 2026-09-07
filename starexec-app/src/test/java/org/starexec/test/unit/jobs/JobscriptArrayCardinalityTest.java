@@ -132,9 +132,10 @@ public class JobscriptArrayCardinalityTest {
 		Files.writeString(script.toPath(), s.toString());
 
 		// The generated text must be syntactically valid before it is run.
-		assertEquals(label + ": generated script must parse", 0, run("bash", "-n", script.getAbsolutePath()).exit);
+		assertEquals(label + ": generated script must parse", 0,
+				run(Bash.PATH, "-n", script.getAbsolutePath()).exit);
 
-		Result r = run("bash", script.getAbsolutePath());
+		Result r = run(Bash.PATH, script.getAbsolutePath());
 		assertEquals(label + ": must not abort:\n" + r.out, 0, r.exit);
 		assertTrue(label + ": must complete the decode:\n" + r.out, r.out.contains("GEN-DECODE-COMPLETED"));
 		assertEquals(label + ": NUM_STAGES", String.valueOf(stages), value(r.out, "GEN-NUM_STAGES"));

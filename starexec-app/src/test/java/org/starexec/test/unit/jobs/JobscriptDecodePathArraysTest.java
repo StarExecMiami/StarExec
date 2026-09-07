@@ -137,7 +137,7 @@ public class JobscriptDecodePathArraysTest {
 	@Test
 	public void aBase64LookingValueIsNotDoubleDecoded() throws Exception {
 		// "YWJjZA==" is the base64 of "abcd", used here as the literal path content.
-		Decoded d = run(helper(), 1, 1, List.of("YWJjZA=="), null);
+		Decoded d = run(helper(), 1, 1, List.of("YWJjZA=="));
 
 		assertEquals("the value must survive as itself, not as its own decoding",
 				List.of("YWJjZA=="), d.inputs);
@@ -188,11 +188,11 @@ public class JobscriptDecodePathArraysTest {
 	}
 
 	private Decoded run(Path helperDir, int stages, int inputs) throws Exception {
-		return run(helperDir, stages, inputs, null, null);
+		return run(helperDir, stages, inputs, null);
 	}
 
 	private Decoded run(Path helperDir, int stages, int inputs,
-	                    List<String> inputValues, Void unused) throws Exception {
+	                    List<String> inputValues) throws Exception {
 		List<String> wantedInputs =
 				inputValues != null ? inputValues : expectedInputs(inputs);
 
@@ -231,7 +231,7 @@ public class JobscriptDecodePathArraysTest {
 		File file = new File(helperDir.toFile(), "harness.sh");
 		Files.writeString(file.toPath(), script.toString());
 
-		ProcessBuilder pb = new ProcessBuilder("bash", file.getAbsolutePath());
+		ProcessBuilder pb = new ProcessBuilder(Bash.PATH, file.getAbsolutePath());
 		pb.redirectErrorStream(true);
 		Process p = pb.start();
 		String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
