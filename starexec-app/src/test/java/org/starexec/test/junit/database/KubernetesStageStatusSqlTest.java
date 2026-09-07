@@ -352,6 +352,236 @@ public class KubernetesStageStatusSqlTest extends Common {
 		assertEquals("a stale execution must not record stages", ENQUEUED, stageStatus(1));
 	}
 
+	// ------------------------------------------- the real monitor retry mechanism
+
+	/**
+	 * Retry, proven through the monitor rather than by calling the callback twice.
+	 *
+	 * <p>Calling {@code onJobComplete} again by hand shows only that the method is idempotent.
+	 * What actually decides whether a failed ingestion is ever retried is the monitor: a
+	 * callback returning false leaves the execution out of {@code completedExecutions}, the
+	 * completed Job therefore stays in the labelled listing, and the next poll picks it up
+	 * again. That is the mechanism, and it is what this drives.
+	 *
+	 * <p>It is also a finite window. Nothing durable records the outstanding work -- the Job
+	 * object *is* the record -- so retry lasts only as long as Kubernetes retains it,
+	 * {@code ttlSecondsAfterFinished}, 3600s by default. Past that the pair is left unresolved
+	 * with its evidence intact rather than mis-recorded, which is the honest failure mode and
+	 * is documented rather than papered over with a new retry subsystem.
+	 */
+	@Test
+	public void aFailedIngestionIsRetriedByTheRealMonitorPoll() throws Exception {
+		writeStatus(PAIR_ID, EXCEED_CPU, 2);
+		writeSnapshot(1, PAIR_ID, 1, COMPLETE);
+		writeSnapshot(2, PAIR_ID, 2, EXCEED_CPU);
+		writeCpuLimitBreach();
+
+		KubernetesNativeBackend backend = backendOwning(EXEC_ID, PAIR_ID, outputDir);
+		KubernetesJobMonitor monitor = monitorOver(completedJob(), callbackFor(backend));
+
+		// First poll: the stage write is blocked, so ingestion reports retry.
+		blockStageWrites();
+		poll(monitor);
+
+		assertEquals("nothing recorded", ENQUEUED, stageStatus(1));
+		assertEquals("the pair must not be force-failed", ENQUEUED, pairStatus());
+		assertEquals(0, completions());
+		assertTrue("the evidence must survive for the retry",
+				Files.isDirectory(outputDir.resolve("stage-status")));
+		assertFalse("the execution must NOT be marked completed",
+				completedExecutions(monitor).contains(execution()));
+
+		// Second poll: the same Job, same UID, database healthy.
+		unblockStageWrites();
+		poll(monitor);
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals(EXCEED_CPU, stageStatus(2));
+		assertEquals(NOT_REACHED, stageStatus(3));
+		assertEquals(EXCEED_CPU, pairStatus());
+		assertEquals("completion effects exactly once", 1, completions());
+		assertTrue("the execution is now completed and will not be polled again",
+				completedExecutions(monitor).contains(execution()));
+	}
+
+	/** Untrusted content is held for retry too, and never becomes a fabricated solver failure. */
+	@Test
+	public void aForeignSnapshotIsHeldByTheRealMonitorRatherThanFabricatingAFailure()
+			throws Exception {
+		writeStatus(PAIR_ID, COMPLETE, 2);
+		writeSnapshot(1, OTHER_PAIR_ID, 1, COMPLETE);
+		writeCleanRun();
+
+		KubernetesNativeBackend backend = backendOwning(EXEC_ID, PAIR_ID, outputDir);
+		KubernetesJobMonitor monitor = monitorOver(completedJob(), callbackFor(backend));
+		poll(monitor);
+
+		assertEquals(ENQUEUED, stageStatus(1));
+		assertEquals("no ERROR_RUNSCRIPT may be fabricated", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, stageStatus(OTHER_PAIR_ID, 1));
+		assertEquals(0, completions());
+		assertFalse(completedExecutions(monitor).contains(execution()));
+		assertTrue(Files.exists(outputDir.resolve("status.json")));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static java.util.Set<ExecutionRef> completedExecutions(KubernetesJobMonitor monitor)
+			throws Exception {
+		Field f = KubernetesJobMonitor.class.getDeclaredField("completedExecutions");
+		f.setAccessible(true);
+		return (java.util.Set<ExecutionRef>) f.get(monitor);
+	}
+
+	private static void poll(KubernetesJobMonitor monitor) throws Exception {
+		java.lang.reflect.Method m =
+				KubernetesJobMonitor.class.getDeclaredMethod("pollJobsOnce");
+		m.setAccessible(true);
+		m.invoke(monitor);
+	}
+
+	/** A Job carrying a real Complete=True condition, as the monitor requires. */
+	private static io.fabric8.kubernetes.api.model.batch.v1.Job completedJob() {
+		return new io.fabric8.kubernetes.api.model.batch.v1.JobBuilder()
+				.withNewMetadata()
+				.withName(JOB_NAME)
+				.withUid("uid-" + JOB_NAME)
+				.addToLabels("starexec.org/managed", "true")
+				.addToLabels("starexec.org/exec-id", String.valueOf(EXEC_ID))
+				.endMetadata()
+				.withNewStatus()
+				.withSucceeded(1)
+				.addNewCondition()
+				.withType("Complete")
+				.withStatus("True")
+				.endCondition()
+				.endStatus()
+				.build();
+	}
+
+	/** The fabric8 listing chain, stubbed to return exactly this Job on every poll. */
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	private static KubernetesJobMonitor monitorOver(
+			io.fabric8.kubernetes.api.model.batch.v1.Job job,
+			KubernetesJobMonitor.JobCompletionCallback callback) {
+		KubernetesClient client = Mockito.mock(KubernetesClient.class);
+		io.fabric8.kubernetes.client.dsl.BatchAPIGroupDSL batch =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.BatchAPIGroupDSL.class);
+		io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL v1 =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.V1BatchAPIGroupDSL.class);
+		io.fabric8.kubernetes.client.dsl.MixedOperation jobs =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.MixedOperation.class);
+		io.fabric8.kubernetes.client.dsl.NonNamespaceOperation nsJobs =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.NonNamespaceOperation.class);
+		io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+		io.fabric8.kubernetes.client.dsl.MixedOperation pods =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.MixedOperation.class);
+		io.fabric8.kubernetes.client.dsl.NonNamespaceOperation nsPods =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.NonNamespaceOperation.class);
+		io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filteredPods =
+				Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+
+		Mockito.when(client.batch()).thenReturn(batch);
+		Mockito.when(batch.v1()).thenReturn(v1);
+		Mockito.when(v1.jobs()).thenReturn(jobs);
+		Mockito.when(jobs.inNamespace(Mockito.any())).thenReturn(nsJobs);
+		Mockito.when(nsJobs.withLabel(Mockito.anyString(), Mockito.anyString()))
+				.thenReturn(filtered);
+		io.fabric8.kubernetes.api.model.batch.v1.JobList list =
+				new io.fabric8.kubernetes.api.model.batch.v1.JobList();
+		list.setItems(java.util.List.of(job));
+		Mockito.when(filtered.list()).thenReturn(list);
+
+		Mockito.when(client.pods()).thenReturn(pods);
+		Mockito.when(pods.inNamespace(Mockito.any())).thenReturn(nsPods);
+		Mockito.when(nsPods.withLabel(Mockito.anyString(), Mockito.anyString()))
+				.thenReturn(filteredPods);
+		Mockito.when(filteredPods.list())
+				.thenReturn(new io.fabric8.kubernetes.api.model.PodList());
+
+		return new KubernetesJobMonitor(client, "starexec-test", callback);
+	}
+
+	// ------------------------------------------------- stale attempt contamination
+
+	/**
+	 * A rerun must not inherit the previous attempt's stage history.
+	 *
+	 * <p>Output directories are keyed by pair, not by attempt, so attempt B writes into the
+	 * same tree attempt A left behind. Before stage snapshots existed that was harmless --
+	 * nothing read them. Now they are authoritative input, so a two-stage attempt A followed by
+	 * a one-stage attempt B would record A's stage 2 against B.
+	 *
+	 * <p>The clearing happens at the submission boundary, which is where a new attempt begins;
+	 * completion cleanup is too late, because a pair can be rerun without its previous
+	 * completion ever having been processed.
+	 */
+	@Test
+	public void aRerunDoesNotInheritThePreviousAttemptsStages() throws Exception {
+		// Attempt A: two stages, both recorded.
+		writeSnapshot(1, PAIR_ID, 1, COMPLETE);
+		writeSnapshot(2, PAIR_ID, 2, COMPLETE);
+		Files.writeString(outputDir.resolve("stage-status/2.json.tmp"), "partial");
+
+		// The submission boundary for attempt B.
+		assertTrue("clearing must succeed", clearStaleArtifacts());
+		assertFalse("the whole tree must be gone",
+				Files.exists(outputDir.resolve("stage-status")));
+
+		// Attempt B: one stage only.
+		writeStatus(PAIR_ID, COMPLETE, 1);
+		writeSnapshot(1, PAIR_ID, 1, COMPLETE);
+		writeCleanRun();
+
+		assertTrue(complete());
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals("attempt A's stage 2 must not be observed", NOT_REACHED, stageStatus(2));
+		assertEquals(COMPLETE, pairStatus());
+	}
+
+	/** An empty directory, a missing one, and stray temp files are all fine to clear. */
+	@Test
+	public void clearingToleratesEmptyMissingAndPartialTrees() throws Exception {
+		assertTrue("missing directory", clearStaleArtifacts());
+
+		Files.createDirectories(outputDir.resolve("stage-status"));
+		assertTrue("empty directory", clearStaleArtifacts());
+		assertFalse(Files.exists(outputDir.resolve("stage-status")));
+
+		Files.createDirectories(outputDir.resolve("stage-status"));
+		Files.writeString(outputDir.resolve("stage-status/1.json.tmp"), "partial");
+		assertTrue("leftover temp file", clearStaleArtifacts());
+		assertFalse(Files.exists(outputDir.resolve("stage-status")));
+	}
+
+	/**
+	 * If the tree cannot be cleared, submission must be refused rather than risk ingesting a
+	 * previous attempt's history. Enforced by making the directory undeletable.
+	 */
+	@Test
+	public void clearingFailureIsReportedSoSubmissionCanBeRefused() throws Exception {
+		Path dir = outputDir.resolve("stage-status");
+		Files.createDirectories(dir);
+		Files.writeString(dir.resolve("1.json"), record(PAIR_ID, COMPLETE, 1));
+		java.io.File readOnly = dir.toFile();
+		org.junit.Assume.assumeTrue("needs a filesystem where chmod bites",
+				readOnly.setWritable(false, false));
+		try {
+			assertFalse("an unclearable tree must be reported, not ignored", clearStaleArtifacts());
+		} finally {
+			readOnly.setWritable(true, false);
+		}
+	}
+
+	private boolean clearStaleArtifacts() throws Exception {
+		KubernetesNativeBackend backend = backendOwning(EXEC_ID, PAIR_ID, outputDir);
+		java.lang.reflect.Method m = KubernetesNativeBackend.class.getDeclaredMethod(
+				"clearStaleAttemptArtifacts", Path.class, int.class);
+		m.setAccessible(true);
+		return (Boolean) m.invoke(backend, outputDir, PAIR_ID);
+	}
+
 	// ------------------------------------------------------------------------- harness
 
 	/** Runs the real completion callback for a well-owned execution. */
