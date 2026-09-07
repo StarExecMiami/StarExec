@@ -120,6 +120,7 @@ import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -2795,6 +2796,39 @@ public class KubernetesNativeBackend implements Backend {
                 );
             }
         }
+        // The per-stage snapshots too. This directory is not in STALE_ATTEMPT_ARTIFACTS
+        // because nothing read it until stage-status ingestion existed; now that earlier
+        // stages are reconstructed from it, and the output directory is keyed by pair rather
+        // than by attempt, a surviving directory would let a previous attempt's stage history
+        // be recorded against this one.
+        Path staleSnapshots = outputDir.resolve("stage-status");
+        try {
+            if (Files.isDirectory(staleSnapshots)) {
+                try (java.util.stream.Stream<Path> entries = Files.walk(staleSnapshots)) {
+                    entries.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (Exception e) {
+                            log.error("Could not delete stale " + path, e);
+                        }
+                    });
+                }
+            }
+        } catch (Exception e) {
+            log.error(
+                "Could not clear stale stage snapshots for pair " + pairId + " in " + outputDir,
+                e
+            );
+        }
+        if (!confirmedAbsent(staleSnapshots)) {
+            allAbsent = false;
+            log.error(
+                "Stale stage-status snapshots from a previous attempt may survive in " +
+                outputDir + " for pair " + pairId + "; refusing to submit, because they would" +
+                " be read as this attempt's stage history"
+            );
+        }
+
         return allAbsent;
     }
 
@@ -4083,6 +4117,14 @@ public class KubernetesNativeBackend implements Backend {
                 int terminalStatus = readTerminalStatus(execution, StatusCode.STATUS_COMPLETE.getVal());
                 int stageNumber = readStageNumber(execution, 1);
 
+                // Earlier stages, from the per-stage snapshots the job script writes beside
+                // status.json. That file is a single slot every stage truncates, so without
+                // this the pair keeps only its final stage and every earlier one stays at
+                // whatever it was enqueued with.
+                if (!ingestEarlierStageStatuses(execution, pairId, stageNumber)) {
+                    return false;
+                }
+
                 PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
@@ -4111,14 +4153,17 @@ public class KubernetesNativeBackend implements Backend {
                     );
                 }
 
-                // Set end_time.
-                try {
-                    if (!JobPairs.setEndTime(pairId)) {
-                        log.warn("setEndTime found no row for pair " + pairId);
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to set end_time for pair " + pairId, e);
-                }
+                // end_time is deliberately NOT set here. UpdatePairStatusPrecise writes it in
+                // the same transaction as the status, guarded on IS NULL and outside its
+                // duplicate branch, precisely so a retried write repairs a pair whose first
+                // attempt died. This used to call setEndTime unconditionally afterwards -- a
+                // bare "SET end_time = NOW()" -- which was harmless while completion ran once,
+                // but stage-status ingestion makes a retry an ordinary event, and a pair's
+                // recorded finish time must not move every time one happens.
+                //
+                // Only the completion path changes. onJobFailed and onJobStuckPending keep
+                // their own calls: those record statuses through routines that do not write
+                // end_time themselves.
 
                 // Persist run-solver statistics (wallclock, cpu, memory, disk)
                 // so K8s-native jobs produce the same data as container jobs.
@@ -4646,6 +4691,96 @@ public class KubernetesNativeBackend implements Backend {
                 wallclockProse,
                 memProse
             );
+        }
+
+        /**
+         * Records the terminal status of every stage before the one that finished the pair.
+         *
+         * <p>Uses the stage-only routine, so it touches {@code jobpair_stage_data} and nothing
+         * else -- no pair status, no completion, no end time. Pair completion stays exactly
+         * where it was, in the single precise update this runs before. The order matters:
+         * {@code UpdatePairStatusPrecise} rewrites the terminal stage and everything after it,
+         * so anything earlier has to be in place first.
+         *
+         * <p>Returns false for every failure, which the caller turns into this backend's
+         * existing retry outcome. Nothing here records a solver status: a snapshot that cannot
+         * be believed is an evidence problem, and answering it with {@code ERROR_RUNSCRIPT}
+         * would put a scientific failure on a pair whose solver may have been perfectly fine.
+         *
+         * @return true when the earlier stages are recorded, or when there are none to record
+         */
+        private boolean ingestEarlierStageStatuses(
+            ExecutionRef execution,
+            int pairId,
+            int terminalStage
+        ) {
+            // Ownership dominates artifact ownership. ownedOutputDir is gated on positive
+            // ownership of execId, job name and UID; the output directory is keyed by pair
+            // rather than by attempt, so a stale execution pointed at a valid-looking
+            // directory is exactly the case this must refuse.
+            Path outputDir = ownedOutputDir(execution);
+            if (outputDir == null) {
+                log.info(
+                    "Not ingesting stage snapshots for " + execution +
+                    ": this execution no longer owns its tracking"
+                );
+                return true;
+            }
+
+            Map<Integer, Integer> snapshots;
+            try {
+                snapshots = StageStatusSnapshots.read(outputDir, pairId);
+            } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+                log.error(
+                    "Refusing the stage snapshots for pair " + pairId + " (" + execution +
+                    "); nothing was written and the output is retained for diagnosis",
+                    e
+                );
+                return false;
+            } catch (Exception e) {
+                log.error(
+                    "Could not read the stage snapshots for pair " + pairId + " (" + execution +
+                    "); results are retained and ingestion will retry",
+                    e
+                );
+                return false;
+            }
+
+            Map<Integer, Integer> earlier = new TreeMap<>();
+            for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
+                // The terminal stage's own status comes from the runsolver artifacts, and a
+                // pair killed mid-stage legitimately leaves that snapshot non-terminal.
+                if (snapshot.getKey() < terminalStage) {
+                    earlier.put(snapshot.getKey(), snapshot.getValue());
+                }
+            }
+            if (earlier.isEmpty()) {
+                return true;
+            }
+
+            // Re-checked at the mutation boundary, as the terminal write is. Everything above
+            // reads files and takes real time; a rerun that landed meanwhile has already
+            // superseded this result. This narrows the window to the width of the
+            // check-then-write and cannot close it from inside this process --
+            // UpdatePairStageStatusIfUnresolved refusing to overwrite a recorded result is the
+            // backstop for what remains.
+            if (!ownsTracking(execution)) {
+                log.info(
+                    "Discarding stage snapshots for " + execution +
+                    ": ownership changed while its output was being read"
+                );
+                return false;
+            }
+
+            StageStatusBatchResult result = JobPairs.setEarlierStageStatuses(pairId, earlier);
+            if (result == StageStatusBatchResult.APPLIED) {
+                return true;
+            }
+            log.error(
+                "Could not record earlier stage statuses " + earlier + " for pair " + pairId +
+                " (" + result + "); nothing was written and completion will be retried"
+            );
+            return false;
         }
 
         private int readStageNumber(ExecutionRef execution, int defaultStage) {
