@@ -305,6 +305,21 @@ public class KubernetesNativeBackend implements Backend {
     private final Map<Integer, String> execIdToJobName =
         new ConcurrentHashMap<>();
 
+    /**
+     * Maps StarExec execution IDs to the UID of the Kubernetes Job they were submitted as.
+     *
+     * <p>Written wherever {@code execIdToJobName} is, and read only to decide whether an
+     * incoming event belongs to the execution currently occupying that id. Kubernetes assigns
+     * the UID at creation and never reuses it, so it is the only component of the identity
+     * that separates two Jobs -- the name does not: {@code generateJobName} repeats every
+     * hundred seconds for a given execution id.
+     *
+     * <p>An entry can be absent while the name entry is present, for tracking rebuilt from a
+     * Job that carried no UID. That reads as "identity unknown", never as "matches".
+     */
+    private final Map<Integer, String> execIdToJobUid =
+        new ConcurrentHashMap<>();
+
     /** Maps StarExec execution IDs to StarExec pair IDs */
     private final Map<Integer, Integer> execIdToPairId =
         new ConcurrentHashMap<>();
@@ -393,8 +408,33 @@ public class KubernetesNativeBackend implements Backend {
     /** Exec IDs currently holding a concurrency slot */
     private final Set<Integer> jobsHoldingSlot = ConcurrentHashMap.newKeySet();
 
-    /** Exec IDs that have been killed to prevent stale completion callbacks */
-    private final Set<Integer> killedExecIds = ConcurrentHashMap.newKeySet();
+    /**
+     * Executions explicitly stopped, so their own late callbacks can be discarded.
+     *
+     * <p>Keyed on the concrete Kubernetes object, not on the execution id. Keyed on the id
+     * this set suppressed a live Job on 2026-09-05: the restart safety gate stopped
+     * historical execution 2 at 05:20:39, the counter came back round to 2 at 05:55:48, and
+     * the running and completion callbacks of the Job created then were both discarded
+     * against the earlier execution's marker. The pair ran to completion and its result was
+     * never ingested.
+     */
+    private final Set<ExecutionRef> killedExecutions = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Execution ids stopped without a Kubernetes object identity to record it against.
+     *
+     * <p>Only {@link #killPairConfirmed} reaches this, and only in the branch where nothing
+     * about the execution is tracked any more -- the state a restart leaves behind. What was
+     * established there is that no controller and no pod for that <em>label</em> survives; it
+     * is not evidence about a Job created afterwards, and this set is deliberately unable to
+     * express that it is.
+     *
+     * <p>So a tombstone here never suppresses anything. It is kept because it is the only
+     * record that a stop was requested for an execution nobody could identify, and it is
+     * logged when a later execution inherits the number, which is the operator's cue that the
+     * two are being told apart rather than conflated.
+     */
+    private final Set<Integer> legacyKilledExecIds = ConcurrentHashMap.newKeySet();
 
     /**
      * Guards the compound (jobsHoldingSlot, activeJobCount) reservation so the set and
@@ -927,6 +967,7 @@ public class KubernetesNativeBackend implements Backend {
         // 5. Clear tracking maps and release concurrency slots.
         releaseAllSlots();
         execIdToJobName.clear();
+        execIdToJobUid.clear();
         execIdToPairId.clear();
         execIdToOutputDir.clear();
         initialized = false;
@@ -1021,10 +1062,15 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
+                recordExecutionStopped(
+                    ExecutionRef.fromJob(execId, job),
+                    execId,
+                    "orphan sweep of " + getJobName(job)
+                );
                 execIdToJobName.remove(execId);
+                execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
-                killedExecIds.add(execId);
                 releaseSubmissionSlot(execId);
                 unverifiedExecutions.remove(execId);
                 deleted++;
@@ -1173,10 +1219,11 @@ public class KubernetesNativeBackend implements Backend {
                     "); releasing its retained accounting."
             );
             execIdToJobName.remove(execId);
+            execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
             ambiguousSubmissions.remove(execId);
-            // Deliberately NOT killedExecIds.add(execId). That set means "explicitly
+            // Deliberately NOT recordExecutionStopped. That set means "explicitly
             // killed, so ignore any callback for it", and every terminal callback
             // short-circuits on it and returns true. Marking an execution killed merely
             // because it became safe cancelled whatever callback was still outstanding:
@@ -1208,8 +1255,9 @@ public class KubernetesNativeBackend implements Backend {
 
             for (Job job : jobs) {
                 Integer execId = extractExecId(job);
-                String jobName = getJobName(job);
-                if (execId == null || jobName == null) {
+                ExecutionRef execution =
+                    (execId == null) ? null : ExecutionRef.fromJob(execId, job);
+                if (execution == null) {
                     continue;
                 }
 
@@ -1224,12 +1272,11 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
                 if (hasTrueCondition(job, "Complete")) {
-                    if (callback.onJobComplete(execId, jobName)) {
+                    if (callback.onJobComplete(execution)) {
                         processed++;
                     }
                 } else {
-                    if (callback.onJobFailed(execId, jobName,
-                            summarizeJobFailure(job))) {
+                    if (callback.onJobFailed(execution, summarizeJobFailure(job))) {
                         processed++;
                     }
                 }
@@ -1616,13 +1663,29 @@ public class KubernetesNativeBackend implements Backend {
                 return -1;
             }
 
-            kubernetesClient
+            // The created object, not a discarded return value. Its metadata.uid is the
+            // only durable way to tell this Job from the next one to be given the same
+            // execution id, and it is available nowhere later: by the time a callback or a
+            // kill needs it, the Job may already be gone.
+            Job created = kubernetesClient
                 .batch()
                 .v1()
                 .jobs()
                 .inNamespace(namespace)
                 .resource(job)
                 .create();
+
+            ExecutionRef submitted = ExecutionRef.fromJob(execId, created);
+            if (submitted == null) {
+                // The API server stamps a UID on everything it accepts, so a response
+                // without one is not the created object. Whether a Job exists is exactly
+                // what the ambiguous-submission path is for; it is reached by throwing,
+                // which is also what keeps the reservation and tracking honest.
+                throw new IllegalStateException(
+                    "Kubernetes returned no object identity for job " + jobName +
+                    " (pair " + pairId + ", execId " + execId + ")"
+                );
+            }
 
             try {
                 if (!JobPairs.setStartTime(pairId)) {
@@ -1639,10 +1702,22 @@ public class KubernetesNativeBackend implements Backend {
                 );
             }
 
-            execIdToJobName.put(execId, jobName);
+            // Order matters. The identity is what grants ownership of everything else keyed
+            // on this id, so the pair and the output directory are published FIRST: a
+            // callback that arrives between these writes would otherwise own the id while
+            // still reading the previous execution's pair.
             execIdToPairId.put(execId, pairId);
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
+            execIdToJobName.put(execId, submitted.jobName());
+            execIdToJobUid.put(execId, submitted.jobUid());
             // The slot was reserved before create(); nothing to acquire here.
+            if (legacyKilledExecIds.remove(execId)) {
+                log.info(
+                    "Execution id " + execId + " was reused for " + submitted + "; an" +
+                    " unidentifiable earlier execution had been stopped under the same" +
+                    " number and cannot affect this one."
+                );
+            }
             log.info("K8s Job submitted successfully: " + jobName);
             return execId;
         } catch (SubmissionDeferredException e) {
@@ -1706,6 +1781,7 @@ public class KubernetesNativeBackend implements Backend {
 
         if (presence == JobPresence.ABSENT && census != null && census.isSafe()) {
             execIdToJobName.remove(execId);
+            execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
             releaseSubmissionSlot(execId);
@@ -1722,6 +1798,11 @@ public class KubernetesNativeBackend implements Backend {
         // Either the Job exists, or we cannot prove it does not. Keep the reservation and
         // the tracking maps so the execution is accounted and the monitor can resolve it.
         execIdToJobName.put(execId, jobName);
+        // Explicitly no UID. This branch is reached precisely because the create outcome is
+        // unknown, so there is no object identity to record; leaving the entry absent is
+        // what makes ownsTracking fall back to the name rather than compare against
+        // something that was never established.
+        execIdToJobUid.remove(execId);
         execIdToPairId.put(execId, pairId);
         try {
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
@@ -2192,6 +2273,7 @@ public class KubernetesNativeBackend implements Backend {
                     // Capacity can be released the moment absence is established -- that is
                     // a measurement-safety question and it is now answered.
                     execIdToJobName.remove(execId);
+                    execIdToJobUid.remove(execId);
                     execIdToPairId.remove(execId);
                     execIdToOutputDir.remove(execId);
                     releaseSubmissionSlot(execId);
@@ -2262,6 +2344,48 @@ public class KubernetesNativeBackend implements Backend {
      * registered for the sweep to revisit, so the hold is bounded by observation rather than
      * by process lifetime.
      */
+    /**
+     * Records that an execution was stopped, so its own late callbacks can be discarded.
+     *
+     * <p>Against the concrete Kubernetes object when one is known. When it is not, a legacy
+     * tombstone is kept instead, and a tombstone suppresses nothing: it cannot distinguish
+     * the execution that was stopped from a later one handed the same number, and guessing
+     * in that situation is the defect this exists to prevent.
+     */
+    private void recordExecutionStopped(ExecutionRef execution, int execId, String context) {
+        if (execution != null) {
+            killedExecutions.add(execution);
+            return;
+        }
+        legacyKilledExecIds.add(execId);
+        log.warn(
+            "Stopped execId " + execId + " (" + context + ") without a Kubernetes object" +
+            " identity to record it against. A later execution reusing this id will NOT be" +
+            " suppressed by it; a late callback from the stopped execution will be resolved" +
+            " against the Job it names."
+        );
+    }
+
+    /**
+     * As below, for a callback that knows which execution it is speaking for.
+     *
+     * <p>The accounting under an execution id belongs to whichever execution holds the id
+     * now. A superseded Job's terminal callback releasing it would hand the current
+     * execution's submission slot back while it is still running, and unrelated pairs would
+     * be scheduled on top of it — the primary invariant names releasing accounting
+     * explicitly for that reason.
+     */
+    private void releaseAccountingIfSafe(ExecutionRef execution, String context) {
+        if (execution == null || !ownsTracking(execution)) {
+            log.info(
+                "Not releasing accounting after " + context + ": " + execution +
+                " does not hold the tracking under its execution id."
+            );
+            return;
+        }
+        releaseAccountingIfSafe(execution.execId(), context);
+    }
+
     private void releaseAccountingIfSafe(int execId, String context) {
         if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
             log.warn(
@@ -2273,6 +2397,7 @@ public class KubernetesNativeBackend implements Backend {
             return;
         }
         execIdToJobName.remove(execId);
+        execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
         execIdToOutputDir.remove(execId);
         ambiguousSubmissions.remove(execId);
@@ -2489,8 +2614,15 @@ public class KubernetesNativeBackend implements Backend {
 
     private boolean processReconciledJobThroughCallback(Job job, PodPhaseView pods) {
         Integer execId = extractExecId(job);
-        String jobName = getJobName(job);
-        if (execId == null || jobName == null) {
+        if (execId == null) {
+            return false;
+        }
+        ExecutionRef execution = ExecutionRef.fromJob(execId, job);
+        if (execution == null) {
+            log.warn(
+                "Reconciled Kubernetes job " + getJobName(job) + " (execId " + execId +
+                ") carries no object identity; its result is not being applied."
+            );
             return false;
         }
 
@@ -2500,9 +2632,9 @@ public class KubernetesNativeBackend implements Backend {
         // Reached only for Jobs already established as controller-spent by the caller, so
         // the choice here is purely which terminal condition it carries.
         if (hasTrueCondition(job, "Complete")) {
-            return callback.onJobComplete(execId, jobName);
+            return callback.onJobComplete(execution);
         }
-        return callback.onJobFailed(execId, jobName, summarizeJobFailure(job));
+        return callback.onJobFailed(execution, summarizeJobFailure(job));
     }
 
     private void rebuildTrackingFromJob(Job job, PodPhaseView pods) {
@@ -2513,9 +2645,18 @@ public class KubernetesNativeBackend implements Backend {
             return;
         }
 
-        execIdToJobName.put(execId, jobName);
+        // Pair and output directory first, then the identity that grants ownership of them.
+        ExecutionRef execution = ExecutionRef.fromJob(execId, job);
         execIdToPairId.put(execId, pairId);
         execIdToOutputDir.put(execId, resolveOutputDirectory(job, pairId));
+        execIdToJobName.put(execId, jobName);
+        if (execution != null) {
+            execIdToJobUid.put(execId, execution.jobUid());
+        } else {
+            // Tracking is rebuilt, but without an identity to check later events against.
+            // Left absent rather than filled in with something derived from the name.
+            execIdToJobUid.remove(execId);
+        }
 
         // Acquire a concurrency slot so the capacity tracker stays in sync
         // with the number of reconstructed in-memory tracking entries.
@@ -2538,7 +2679,7 @@ public class KubernetesNativeBackend implements Backend {
             );
         }
 
-        if (!isTerminalJob(job) && isRunningOnANode(job, execId, pods)) {
+        if (!isTerminalJob(job) && isRunningOnANode(job, execution, pods)) {
             markPairRunningSafely(pairId, "startup reconciliation");
         }
     }
@@ -2550,11 +2691,20 @@ public class KubernetesNativeBackend implements Backend {
      * copies of it drifted before: {@code status.active} counts pending pods as well as
      * running ones, so a restart during a scheduling failure re-marked the pair RUNNING.
      */
-    private boolean isRunningOnANode(Job job, int execId, PodPhaseView pods) {
+    private boolean isRunningOnANode(Job job, ExecutionRef execution, PodPhaseView pods) {
         if (!pods.isAvailable()) {
             return hasActivePod(job);
         }
-        return pods.phaseFor(execId) == PodPhaseView.Phase.RUNNING;
+        if (execution == null) {
+            // A Job with no object identity, which reconciliation can still meet. Falling
+            // back to hasActivePod here would reinstate exactly what this method exists to
+            // avoid -- status.active counts pending pods -- so the pod listing still
+            // decides, by the bare id, which declines to answer if two Jobs carry it.
+            Integer execId = extractExecId(job);
+            return execId != null
+                && pods.phaseFor(execId) == PodPhaseView.Phase.RUNNING;
+        }
+        return pods.phaseFor(execution) == PodPhaseView.Phase.RUNNING;
     }
 
     private boolean hasActivePod(Job job) {
@@ -2707,6 +2857,77 @@ public class KubernetesNativeBackend implements Backend {
                 "; using default", e);
             return Paths.get(R.JOB_OUTPUT_DIRECTORY);
         }
+    }
+
+    /**
+     * The identity currently tracked under {@code execId}, or null if there is none.
+     *
+     * <p>Null when the name is untracked, and null when the UID is: tracking rebuilt from a
+     * Job that carried no UID identifies nothing, and saying so is the point.
+     */
+    private ExecutionRef trackedExecution(int execId) {
+        String jobName = execIdToJobName.get(execId);
+        String jobUid = execIdToJobUid.get(execId);
+        if (jobName == null || jobUid == null) {
+            return null;
+        }
+        return new ExecutionRef(execId, jobName, jobUid);
+    }
+
+    /**
+     * Whether {@code execution} is the execution the tracking maps under its id describe.
+     *
+     * <p>Everything keyed on the execution id -- the pair, the output directory, the
+     * submission slot -- belongs to whichever execution holds the id now. An event from a
+     * different Job must not read or write any of it, which is what this question gates.
+     *
+     * <p>Tracking without a recorded UID matches on the Job name alone. That is the
+     * pre-existing state of an execution reconstructed from a Job the API returned without
+     * one, and refusing it outright would strand executions that predate this change; the
+     * name is a weaker discriminator, not a meaningless one.
+     */
+    private boolean ownsTracking(ExecutionRef execution) {
+        if (execution == null) {
+            return false;
+        }
+        String trackedName = execIdToJobName.get(execution.execId());
+        if (trackedName == null) {
+            return false;
+        }
+        String trackedUid = execIdToJobUid.get(execution.execId());
+        if (trackedUid != null) {
+            return trackedUid.equals(execution.jobUid());
+        }
+        return trackedName.equals(execution.jobName());
+    }
+
+    /**
+     * Whether a <em>different</em> execution now holds this one's execution id.
+     *
+     * <p>Distinct from {@link #ownsTracking}, and the distinction is load-bearing. Tracking
+     * can be absent for legitimate reasons -- the shutdown drain and startup reconciliation
+     * both reach terminal Jobs StarExec is not tracking -- and refusing those would lose
+     * results this backend is supposed to collect. Refusing is only right when the id has
+     * been handed to someone else, because everything still keyed on the integer, the output
+     * directory above all, now describes that other execution.
+     */
+    private boolean isSuperseded(ExecutionRef execution) {
+        if (execution == null) {
+            return false;
+        }
+        // Read the name ONCE and answer from that reading. Asking ownsTracking() to read it
+        // again turns a concurrent release -- a kill for this same execution, clearing the
+        // maps between the two reads -- into "somebody else owns the id", and this event's
+        // own result would be dropped as superseded.
+        String trackedName = execIdToJobName.get(execution.execId());
+        if (trackedName == null) {
+            return false;
+        }
+        String trackedUid = execIdToJobUid.get(execution.execId());
+        if (trackedUid != null) {
+            return !trackedUid.equals(execution.jobUid());
+        }
+        return !trackedName.equals(execution.jobName());
     }
 
     private Integer extractExecId(Job job) {
@@ -3028,7 +3249,13 @@ public class KubernetesNativeBackend implements Backend {
                     "execId " + execId + " has no local tracking; its controller is spent" +
                     " and the cluster confirms nothing for it can run"
                 );
-                killedExecIds.add(execId);
+                // A LEGACY tombstone, not a cancellation. What the census established is
+                // that nothing carrying this exec-id LABEL survives; the label is not an
+                // identity, and the counter behind it restarts at 1 in every application
+                // lifetime, so this says nothing about a Job created later that inherits the
+                // number. Recording it as a concrete cancellation is what discarded a live
+                // execution's callbacks on 2026-09-05.
+                legacyKilledExecIds.add(execId);
                 // Clear ALL tracking, not just the slot. Partial state loss is exactly what
                 // put us in this branch, and it is not selective: only execIdToJobName may
                 // have been lost while the pair and output-dir entries and the reservation
@@ -3036,6 +3263,7 @@ public class KubernetesNativeBackend implements Backend {
                 // whichever entries were already gone, and it leaves the same clean state
                 // the ordinary successful kill path does.
                 execIdToJobName.remove(execId);
+                execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
                 ambiguousSubmissions.remove(execId);
@@ -3098,12 +3326,13 @@ public class KubernetesNativeBackend implements Backend {
             return KillOutcome.UNPROVEN;
         }
 
+        recordExecutionStopped(trackedExecution(execId), execId, "kill of " + jobName);
         execIdToJobName.remove(execId);
+        execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
         execIdToOutputDir.remove(execId);
         ambiguousSubmissions.remove(execId);
         unverifiedExecutions.remove(execId);
-        killedExecIds.add(execId);
         releaseSubmissionSlot(execId);
         return KillOutcome.CONFIRMED_SAFE;
     }
@@ -3279,10 +3508,13 @@ public class KubernetesNativeBackend implements Backend {
                 : null;
 
             if (jobGone && census != null && census.isSafe()) {
+                recordExecutionStopped(
+                    trackedExecution(execId), execId, "killAll of " + jobName
+                );
                 execIdToJobName.remove(execId);
+                execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
-                killedExecIds.add(execId);
                 releaseSubmissionSlot(execId);
                 released++;
             } else {
@@ -3772,21 +4004,15 @@ public class KubernetesNativeBackend implements Backend {
         implements KubernetesJobMonitor.JobCompletionCallback {
 
         @Override
-        public boolean onJobRunning(int execId, String jobName) {
-            if (killedExecIds.contains(execId)) {
-                log.debug(
-                    "Skipping running callback for killed execId " +
-                    execId +
-                    " (K8s job " +
-                    jobName +
-                    ")"
-                );
+        public boolean onJobRunning(ExecutionRef execution) {
+            if (isStopped(execution)) {
+                log.debug("Skipping running callback for stopped " + execution);
                 return true;
             }
 
-            Integer pairId = resolvePairId(execId, jobName);
+            Integer pairId = resolvePairId(execution);
             if (pairId == null) {
-                log.warn("Unable to resolve pair ID for active job: " + jobName);
+                log.warn("Unable to resolve pair ID for active job: " + execution);
                 return false;
             }
 
@@ -3795,24 +4021,36 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         @Override
-        public boolean onJobComplete(int execId, String jobName) {
-            // Skip processing if this execId was killed — the kill path
-            // already removed tracking maps and released the concurrency slot.
-            if (killedExecIds.contains(execId)) {
-                log.debug(
-                    "Skipping completion callback for killed execId " +
-                    execId +
-                    " (K8s job " +
-                    jobName +
-                    ")"
-                );
-                killedExecIds.remove(execId);
+        public boolean onJobComplete(ExecutionRef execution) {
+            // Skip processing if THIS execution was stopped — the kill path already removed
+            // its tracking maps and released its concurrency slot. Another execution having
+            // been stopped under the same number is not this one's business.
+            if (isStopped(execution)) {
+                log.debug("Skipping completion callback for stopped " + execution);
+                killedExecutions.remove(execution);
                 return true;
             }
 
-            Integer pairId = resolvePairId(execId, jobName);
+            // A superseded execution publishes nothing. Its pair id can still be read from
+            // its own Job label, but everything else this path needs -- the output
+            // directory the status, stats and attributes are read from, the submission slot
+            // -- is keyed on the execution id, and the id now belongs to another execution.
+            // Applying a result from those artifacts would record one execution's run
+            // against the other's pair.
+            if (isSuperseded(execution)) {
+                log.warn(
+                    "Not applying the completion of " + execution + ": execution id " +
+                    execution.execId() + " is now held by " +
+                    execIdToJobName.get(execution.execId()) + ", whose artifacts and" +
+                    " accounting this event must not touch."
+                );
+                return true;
+            }
+
+            String jobName = execution.jobName();
+            Integer pairId = resolvePairId(execution);
             if (pairId == null) {
-                log.warn("Unable to resolve pair ID for completed job: " + jobName);
+                log.warn("Unable to resolve pair ID for completed job: " + execution);
                 return false;
             }
 
@@ -3830,7 +4068,7 @@ public class KubernetesNativeBackend implements Backend {
                         jobName +
                         ")"
                     );
-                    releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
+                    releaseAccountingIfSafe(execution, "terminal callback for " + execution);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -3842,8 +4080,8 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                int terminalStatus = readTerminalStatus(execId, StatusCode.STATUS_COMPLETE.getVal());
-                int stageNumber = readStageNumber(execId, 1);
+                int terminalStatus = readTerminalStatus(execution, StatusCode.STATUS_COMPLETE.getVal());
+                int stageNumber = readStageNumber(execution, 1);
 
                 PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
                     pairId,
@@ -3863,7 +4101,7 @@ public class KubernetesNativeBackend implements Backend {
                 if (updated == PairStatusResult.SUPERSEDED) {
                     // Another writer already recorded a different terminal result, so
                     // this pair is finished and retrying can never succeed. Returning
-                    // false here would leave the execId out of completedExecIds and the
+                    // false here would leave the execution out of completedExecutions and the
                     // next poll would process the same job again, forever. Treat it as
                     // handled so the Kubernetes job is cleaned up.
                     log.info(
@@ -3884,38 +4122,49 @@ public class KubernetesNativeBackend implements Backend {
 
                 // Persist run-solver statistics (wallclock, cpu, memory, disk)
                 // so K8s-native jobs produce the same data as container jobs.
-                persistRunSolverStats(execId, pairId, stageNumber);
+                persistRunSolverStats(execution, pairId, stageNumber);
 
                 // Persist attributes generated by post-processors
-                persistAttributes(execId, pairId, stageNumber);
+                persistAttributes(execution, pairId, stageNumber);
             } catch (Exception e) {
                 log.error("Failed updating completed status for pair " + pairId, e);
                 return false;
             }
 
-            releaseAccountingIfSafe(execId, "completion of " + jobName);
+            releaseAccountingIfSafe(execution, "completion of " + jobName);
             return true;
         }
 
         @Override
-        public boolean onJobFailed(int execId, String jobName, String reason) {
-            // Skip processing if this execId was killed — the kill path
-            // already removed tracking maps and released the concurrency slot.
-            if (killedExecIds.contains(execId)) {
-                log.debug(
-                    "Skipping failure callback for killed execId " +
-                    execId +
-                    " (K8s job " +
-                    jobName +
-                    ")"
-                );
-                killedExecIds.remove(execId);
+        public boolean onJobFailed(ExecutionRef execution, String reason) {
+            // Skip processing if THIS execution was stopped — the kill path already removed
+            // its tracking maps and released its concurrency slot.
+            if (isStopped(execution)) {
+                log.debug("Skipping failure callback for stopped " + execution);
+                killedExecutions.remove(execution);
                 return true;
             }
 
-            Integer pairId = resolvePairId(execId, jobName);
+            // A superseded execution publishes nothing. Its pair id can still be read from
+            // its own Job label, but everything else this path needs -- the output
+            // directory the status, stats and attributes are read from, the submission slot
+            // -- is keyed on the execution id, and the id now belongs to another execution.
+            // Applying a result from those artifacts would record one execution's run
+            // against the other's pair.
+            if (isSuperseded(execution)) {
+                log.warn(
+                    "Not applying the failure of " + execution + ": execution id " +
+                    execution.execId() + " is now held by " +
+                    execIdToJobName.get(execution.execId()) + ", whose artifacts and" +
+                    " accounting this event must not touch."
+                );
+                return true;
+            }
+
+            String jobName = execution.jobName();
+            Integer pairId = resolvePairId(execution);
             if (pairId == null) {
-                log.warn("Unable to resolve pair ID for failed job: " + jobName + ". Reason: " + reason);
+                log.warn("Unable to resolve pair ID for failed job: " + execution + ". Reason: " + reason);
                 return false;
             }
 
@@ -3931,7 +4180,7 @@ public class KubernetesNativeBackend implements Backend {
                         jobName +
                         ")"
                     );
-                    releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
+                    releaseAccountingIfSafe(execution, "terminal callback for " + execution);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -3943,7 +4192,7 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                int stageNumber = readStageNumber(execId, 1);
+                int stageNumber = readStageNumber(execution, 1);
 
                 boolean updated = JobPairs.setPairStatusPrecise(
                     pairId,
@@ -3975,7 +4224,7 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
+            releaseAccountingIfSafe(execution, "terminal callback for " + execution);
             return true;
         }
 
@@ -3995,23 +4244,35 @@ public class KubernetesNativeBackend implements Backend {
          * StarExec has already accounted for.
          */
         @Override
-        public boolean onJobStuckPending(int execId, String jobName, String reason) {
-            if (killedExecIds.contains(execId)) {
-                log.debug(
-                    "Skipping stuck-pending callback for killed execId " +
-                    execId +
-                    " (K8s job " +
-                    jobName +
-                    ")"
-                );
-                killedExecIds.remove(execId);
+        public boolean onJobStuckPending(ExecutionRef execution, String reason) {
+            if (isStopped(execution)) {
+                log.debug("Skipping stuck-pending callback for stopped " + execution);
+                killedExecutions.remove(execution);
                 return true;
             }
 
-            Integer pairId = resolvePairId(execId, jobName);
+            // A superseded execution publishes nothing. Its pair id can still be read from
+            // its own Job label, but everything else this path needs -- the output
+            // directory the status, stats and attributes are read from, the submission slot
+            // -- is keyed on the execution id, and the id now belongs to another execution.
+            // Applying a result from those artifacts would record one execution's run
+            // against the other's pair.
+            if (isSuperseded(execution)) {
+                log.warn(
+                    "Not applying the stuck-pending escalation of " + execution + ": execution id " +
+                    execution.execId() + " is now held by " +
+                    execIdToJobName.get(execution.execId()) + ", whose artifacts and" +
+                    " accounting this event must not touch."
+                );
+                return true;
+            }
+
+            int execId = execution.execId();
+            String jobName = execution.jobName();
+            Integer pairId = resolvePairId(execution);
             if (pairId == null) {
                 log.warn(
-                    "Unable to resolve pair ID for stuck job: " + jobName + ". " + reason
+                    "Unable to resolve pair ID for stuck job: " + execution + ". " + reason
                 );
                 return false;
             }
@@ -4027,7 +4288,7 @@ public class KubernetesNativeBackend implements Backend {
                         ")"
                     );
                     ensureKubernetesJobGone(jobName);
-                    releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
+                    releaseAccountingIfSafe(execution, "terminal callback for " + execution);
                     return true;
                 }
                 if (lookup.isError()) {
@@ -4096,7 +4357,7 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                int stageNumber = readStageNumber(execId, 1);
+                int stageNumber = readStageNumber(execution, 1);
 
                 boolean updated = JobPairs.setPairStatusPrecise(
                     pairId,
@@ -4155,14 +4416,56 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            releaseAccountingIfSafe(execId, "terminal callback for execId " + execId);
+            releaseAccountingIfSafe(execution, "terminal callback for " + execution);
             return true;
         }
 
-        private Integer resolvePairId(int execId, String jobName) {
-            Integer pairIdFromMap = execIdToPairId.get(execId);
-            if (pairIdFromMap != null && pairIdFromMap > 0) {
-                return pairIdFromMap;
+        /**
+         * Whether this exact execution was stopped.
+         *
+         * <p>A legacy tombstone is deliberately not consulted. It records that some
+         * execution holding this number was stopped, which is not evidence about the one
+         * this event came from — and treating it as evidence is what suppressed a live
+         * Job's callbacks on 2026-09-05.
+         */
+        private boolean isStopped(ExecutionRef execution) {
+            if (killedExecutions.contains(execution)) {
+                return true;
+            }
+            if (legacyKilledExecIds.contains(execution.execId())) {
+                log.info(
+                    "An unidentifiable earlier execution was stopped under execId " +
+                    execution.execId() + "; " + execution + " is a different Kubernetes" +
+                    " object and is being processed normally."
+                );
+            }
+            return false;
+        }
+
+        /**
+         * The pair this execution may write to.
+         *
+         * <p>{@code execIdToPairId} is consulted only while this execution is the one holding
+         * the id. It is not an index of executions, it is the state of whichever execution
+         * occupies the number now, so a late event from a superseded Job reading it would
+         * write its result onto the current execution's pair.
+         *
+         * <p>Otherwise the Job's own {@code pair-id} label answers, which is identity-correct
+         * because it is read from the object the event came from. That reading is not cached:
+         * the map entry belongs to the current execution and would be overwritten with a
+         * superseded one's pair.
+         */
+        private Integer resolvePairId(ExecutionRef execution) {
+            int execId = execution.execId();
+            if (ownsTracking(execution)) {
+                Integer pairIdFromMap = execIdToPairId.get(execId);
+                // Re-checked after the read. The tracking maps are not written atomically,
+                // so the id can change hands between the two, and the value read would then
+                // be the incoming execution's pair rather than this one's. Falling through
+                // to the Job's own label is always correct; only the cache is in doubt.
+                if (pairIdFromMap != null && pairIdFromMap > 0 && ownsTracking(execution)) {
+                    return pairIdFromMap;
+                }
             }
 
             try {
@@ -4171,10 +4474,21 @@ public class KubernetesNativeBackend implements Backend {
                     .v1()
                     .jobs()
                     .inNamespace(namespace)
-                    .withName(jobName)
+                    .withName(execution.jobName())
                     .get();
 
                 if (job == null || job.getMetadata() == null || job.getMetadata().getLabels() == null) {
+                    return null;
+                }
+
+                // Same name, different object: a replacement Job created after this event's
+                // Job was deleted. Its labels describe the replacement, not the caller.
+                String uid = job.getMetadata().getUid();
+                if (uid != null && !uid.equals(execution.jobUid())) {
+                    log.warn(
+                        "Job " + execution.jobName() + " now names a different object (" +
+                        uid + ") than " + execution + "; not resolving a pair from it."
+                    );
                     return null;
                 }
 
@@ -4184,13 +4498,12 @@ public class KubernetesNativeBackend implements Backend {
                 }
 
                 Integer parsed = Integer.parseInt(pairIdValue);
-                execIdToPairId.put(execId, parsed);
+                if (ownsTracking(execution)) {
+                    execIdToPairId.put(execId, parsed);
+                }
                 return parsed;
             } catch (Exception e) {
-                log.warn(
-                    "Failed to resolve pair ID for execId=" + execId + ", jobName=" + jobName,
-                    e
-                );
+                log.warn("Failed to resolve pair ID for " + execution, e);
                 return null;
             }
         }
@@ -4217,13 +4530,13 @@ public class KubernetesNativeBackend implements Backend {
          * {@code ContainerJobMonitor.determineStatus}: a limit verdict wins, and
          * status.json decides only when runsolver reports no breach.
          */
-        private int readTerminalStatus(int execId, int defaultStatus) {
-            StatusCode limit = readRunsolverVerdict(execId);
+        private int readTerminalStatus(ExecutionRef execution, int defaultStatus) {
+            StatusCode limit = readRunsolverVerdict(execution);
             if (limit != null) {
                 return limit.getVal();
             }
 
-            Path statusPath = resolveStatusPath(execId);
+            Path statusPath = resolveStatusPath(execution);
             if (statusPath == null || !Files.exists(statusPath)) {
                 return defaultStatus;
             }
@@ -4235,7 +4548,7 @@ public class KubernetesNativeBackend implements Backend {
                     return root.get("status").getAsInt();
                 }
             } catch (Exception e) {
-                log.warn("Failed to parse status.json for execId " + execId, e);
+                log.warn("Failed to parse status.json for " + execution, e);
             }
 
             return defaultStatus;
@@ -4260,8 +4573,27 @@ public class KubernetesNativeBackend implements Backend {
          * @return the limit status this run breached, or {@code null} if runsolver
          *         reports no breach or its output is unreadable — never a guess
          */
-        private StatusCode readRunsolverVerdict(int execId) {
-            Path outputDir = execIdToOutputDir.get(execId);
+        /**
+         * The output directory of the execution this event belongs to, or null.
+         *
+         * <p>Gated on POSITIVE ownership, not on the absence of a competing owner. Those
+         * are not the same condition, and the difference is reachable: tracking is
+         * legitimately absent during the shutdown drain and startup reconciliation, and
+         * "nobody else owns this id" is also true in the window between a concurrent
+         * submission publishing its output directory and publishing the identity that
+         * would reveal it. Reading the map on the weaker condition let one execution's
+         * artifacts be read as another's. Absent tracking already yielded no directory, so
+         * requiring ownership costs nothing that used to work.
+         */
+        private Path ownedOutputDir(ExecutionRef execution) {
+            if (!ownsTracking(execution)) {
+                return null;
+            }
+            return execIdToOutputDir.get(execution.execId());
+        }
+
+        private StatusCode readRunsolverVerdict(ExecutionRef execution) {
+            Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
                 return null;
             }
@@ -4285,7 +4617,7 @@ public class KubernetesNativeBackend implements Backend {
                         }
                     }
                 } catch (Exception e) {
-                    log.warn("Failed to read var.out for execId " + execId, e);
+                    log.warn("Failed to read var.out for " + execution, e);
                 }
             }
 
@@ -4303,7 +4635,7 @@ public class KubernetesNativeBackend implements Backend {
                         }
                     }
                 } catch (Exception e) {
-                    log.warn("Failed to read watcher.out for execId " + execId, e);
+                    log.warn("Failed to read watcher.out for " + execution, e);
                 }
             }
 
@@ -4316,8 +4648,8 @@ public class KubernetesNativeBackend implements Backend {
             );
         }
 
-        private int readStageNumber(int execId, int defaultStage) {
-            Path statusPath = resolveStatusPath(execId);
+        private int readStageNumber(ExecutionRef execution, int defaultStage) {
+            Path statusPath = resolveStatusPath(execution);
             if (statusPath == null || !Files.exists(statusPath)) {
                 return defaultStage;
             }
@@ -4329,14 +4661,14 @@ public class KubernetesNativeBackend implements Backend {
                     return root.get("stageNumber").getAsInt();
                 }
             } catch (Exception e) {
-                log.warn("Failed to parse stage number from status.json for execId " + execId, e);
+                log.warn("Failed to parse stage number from status.json for " + execution, e);
             }
 
             return defaultStage;
         }
 
-        private Path resolveStatusPath(int execId) {
-            Path outputDir = execIdToOutputDir.get(execId);
+        private Path resolveStatusPath(ExecutionRef execution) {
+            Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
                 return null;
             }
@@ -4348,8 +4680,8 @@ public class KubernetesNativeBackend implements Backend {
          * the shared data volume so that K8s-native jobs produce the same
          * resource-usage data as container-mode jobs.
          */
-        private void persistRunSolverStats(int execId, int pairId, int stageNumber) {
-            Path outputDir = execIdToOutputDir.get(execId);
+        private void persistRunSolverStats(ExecutionRef execution, int pairId, int stageNumber) {
+            Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
                 return;
             }
@@ -4414,8 +4746,8 @@ public class KubernetesNativeBackend implements Backend {
          * {@code starexec-unknown} so downstream correctness logic treats
          * timeout/unknown outcomes consistently.</p>
          */
-        private void persistAttributes(int execId, int pairId, int stageNumber) {
-            Path outputDir = execIdToOutputDir.get(execId);
+        private void persistAttributes(ExecutionRef execution, int pairId, int stageNumber) {
+            Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) return;
 
             Path attrsPath = outputDir.resolve("attributes.txt");
