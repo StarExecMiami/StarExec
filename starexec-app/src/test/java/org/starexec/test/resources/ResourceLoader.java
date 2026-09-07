@@ -574,10 +574,12 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 		SolverPipeline pipe = new SolverPipeline();
 		pipe.setName(TestUtil.getRandomAlphaString(10));
 		pipe.setUserId(userId);
-		pipe.setPrimaryStageNumber(1);
 		for (Configuration c : configs) {
 			PipelineStage stage = new PipelineStage();
 			stage.setConfigId(c.getId());
+			// This fixture's primary stage is the first one. It used to say so by writing the
+			// ordinal 1 into the pipeline's primary-stage id field; the stage carries the flag.
+			stage.setPrimary(pipe.getStages().isEmpty());
 			PipelineDependency dep = new PipelineDependency();
 			dep.setType(PipelineInputType.ARTIFACT);
 			dep.setInputNumber(1);

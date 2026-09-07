@@ -152,8 +152,16 @@ public class Pipelines {
 				pipe.setName(results.getString("name"));
 				pipe.setUploadDate(results.getTimestamp("uploaded"));
 				pipe.setUserId(results.getInt("userId"));
-				pipe.setPrimaryStageNumber(results.getInt("primaryStageId"));
+				pipe.setPrimaryStageId(results.getInt("primaryStageId"));
 				pipe.setStages(getStagesForPipeline(id, con));
+				// GetStagesByPipelineId does not carry the primary flag -- the pipeline row
+				// owns it -- so a reloaded pipeline would otherwise have every stage
+				// unflagged, which is a different shape from one built from XML.
+				if (pipe.getStages() != null) {
+					for (PipelineStage stage : pipe.getStages()) {
+						stage.setPrimary(stage.getId() == pipe.getPrimaryStageId());
+					}
+				}
 				return pipe;
 			}
 		} catch (Exception e) {
@@ -234,17 +242,62 @@ public class Pipelines {
 	}
 
 	/**
+	 * The stage a pipeline's {@code primary_stage_id} must end up pointing at.
+	 *
+	 * <p>Which stage is primary is the stage's own flag. Persistence used to compare each
+	 * stage's 1-based position against the pipeline's primary-stage field, which holds a
+	 * persisted stage id -- so it selected whichever stage happened to sit at the position
+	 * numerically equal to some earlier pipeline's stage id, or no stage at all.
+	 *
+	 * <p>Applies the default {@code batchJobSchema.xsd} documents -- if no stage is marked, the
+	 * first one is primary -- marking the chosen stage so the flag and the pipeline agree. This
+	 * is the one place every caller passes through, so no pipeline is persisted without one.
+	 *
+	 * @param stages a non-empty stage list
+	 * @return the primary stage, or null if more than one stage claims it
+	 */
+	public static PipelineStage selectPrimaryStage(List<PipelineStage> stages) {
+		PipelineStage primary = null;
+		for (PipelineStage stage : stages) {
+			if (stage.isPrimary()) {
+				if (primary != null) {
+					return null;
+				}
+				primary = stage;
+			}
+		}
+		if (primary == null) {
+			primary = stages.get(0);
+			primary.setPrimary(true);
+		}
+		return primary;
+	}
+
+	/**
 	 * Adds a solver pipeline to the database, including adding all stages and dependencies present in the object
 	 *
 	 * @param pipe A fully populated solver pipeline object, including dependencies
 	 * @return The ID of the pipeline object, or -1 on failure. The ID will also be set in the given pipeline object on
-	 * success. All stage IDs will also be set
+	 * success. All stage IDs will also be set, as will the pipeline's primary stage ID
 	 */
 	public static int addPipelineToDatabase(SolverPipeline pipe) {
 		Connection con = null;
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
 		try {
+			List<PipelineStage> stages = pipe.getStages();
+			if (stages == null || stages.isEmpty()) {
+				log.error("Refusing to persist pipeline '" + pipe.getName() + "' with no stages");
+				return -1;
+			}
+
+			PipelineStage primary = selectPrimaryStage(stages);
+			if (primary == null) {
+				log.error("Refusing to persist pipeline '" + pipe.getName() +
+				          "': more than one stage is marked primary");
+				return -1;
+			}
+
 			con = Common.getConnection();
 			stmt = con.prepareStatement("SELECT AddPipeline(?,?)");
 			stmt.setInt(1, pipe.getUserId());
@@ -254,18 +307,12 @@ public class Pipelines {
 			int id = rs.getInt(1);
 			pipe.setId(id);
 
-			int number = 1;
-			for (PipelineStage stage : pipe.getStages()) {
+			for (PipelineStage stage : stages) {
 				stage.setPipelineId(pipe.getId());
-				if (number == pipe.getPrimaryStageNumber()) {
-					stage.setPrimary(true);
-				} else {
-					stage.setPrimary(false);
-				}
 				addPipelineStageToDatabase(stage, con);
-				number++;
 			}
-
+			// The field means the persisted id, so it is only writable once there is one.
+			pipe.setPrimaryStageId(primary.getId());
 
 			return id;
 		} catch (Exception e) {

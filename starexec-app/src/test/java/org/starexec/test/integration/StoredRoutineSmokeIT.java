@@ -225,6 +225,75 @@ public class StoredRoutineSmokeIT {
         assertEquals("f", query("SELECT starexec.IsSpaceDescendant(9102,9101);"));
     }
 
+    /**
+     * AddPipelineStage must resolve against the argument types Java actually binds.
+     *
+     * <p>Its third parameter was {@code INT} with {@code IF _primary = 1}, a MySQL
+     * boolean-as-integer that survived the port, while {@code Pipelines} binds it with
+     * {@code setBoolean}. PostgreSQL includes argument types in a routine's identity, so no
+     * overload resolved and every pipelined job failed to persist a single stage -- while
+     * the job and pipeline rows committed, because that path is not transactional.
+     *
+     * <p>Passing a boolean here is what makes this discriminating: against the old signature
+     * the call raises "function ... does not exist", which is the production failure.
+     */
+    @Test
+    public void addPipelineStageAcceptsTheArgumentTypesJavaBinds() throws Exception {
+        run("INSERT INTO starexec.solver_pipelines (id,name,user_id,uploaded) VALUES"
+            + " (9201,'boundTypes',9001,NOW()) ON CONFLICT DO NOTHING;");
+
+        // config_id is nullable and FKs to configurations, which would drag in a solver and
+        // its owner; none of that bears on the argument-type contract under test.
+        String first = query("SELECT starexec.AddPipelineStage(9201, NULL::INT, FALSE, FALSE);");
+        String second = query("SELECT starexec.AddPipelineStage(9201, NULL::INT, TRUE, FALSE);");
+
+        assertEquals("a primary stage must be recorded on the pipeline row",
+            second, query("SELECT primary_stage_id FROM starexec.solver_pipelines WHERE id=9201;"));
+        assertTrue("stage ids must ascend with insertion order, got " + first + " then " + second,
+            Integer.parseInt(second) > Integer.parseInt(first));
+    }
+
+    /**
+     * Exactly one AddPipelineStage may exist. A repeatable migration that left the stale
+     * signature behind would restore the ambiguity even with the new one present.
+     */
+    @Test
+    public void addPipelineStageHasNoSurvivingOverload() throws Exception {
+        assertEquals("AddPipelineStage must not be overloaded", "1", query(
+            "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
+            + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage';"));
+        assertEquals("the surviving signature must take BOOLEAN and return INT", "1", query(
+            "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
+            + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage' AND p.prokind='f'"
+            + " AND pg_get_function_identity_arguments(p.oid)="
+            + "'_pid integer, _cid integer, _primary boolean, _noop boolean'"
+            + " AND pg_get_function_result(p.oid)='integer';"));
+    }
+
+    /**
+     * Stage order is part of a pipeline's meaning -- stage 1 feeds stage 2 -- and
+     * GetStagesByPipelineId had no ORDER BY, so it returned rows in whatever order the scan
+     * produced. Rewriting the first stage is what makes that order diverge: an UPDATE writes
+     * a new tuple version whose line pointer is appended, so a scan reports that row last.
+     */
+    @Test
+    public void stagesComeBackInPipelineOrder() throws Exception {
+        run("INSERT INTO starexec.solver_pipelines (id,name,user_id,uploaded) VALUES"
+            + " (9202,'ordering',9001,NOW()) ON CONFLICT DO NOTHING;");
+        run("DELETE FROM starexec.pipeline_stages WHERE pipeline_id=9202;");
+
+        List<String> inserted = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            inserted.add(query("SELECT starexec.AddPipelineStage(9202, NULL::INT, FALSE, FALSE);"));
+        }
+        run("UPDATE starexec.pipeline_stages SET is_noop = is_noop WHERE stage_id="
+            + inserted.get(0) + ";");
+
+        List<String> returned = List.of(query(
+            "SELECT stage_id FROM starexec.GetStagesByPipelineId(9202);").split("\\R"));
+        assertEquals("stages must come back ordered by stage_id", inserted, returned);
+    }
+
     /** Upload completion must report an outcome rather than nothing. */
     @Test
     public void uploadCompletionRoutinesResolve() throws Exception {

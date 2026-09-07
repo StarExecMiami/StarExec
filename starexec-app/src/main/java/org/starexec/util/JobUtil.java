@@ -245,20 +245,29 @@ public class JobUtil {
 				s.setNoOp(false);
 
 
-				if (stage.hasAttribute("primary")) {
-					boolean currentPrimary = Boolean.parseBoolean(stage.getAttribute("primary"));
-					if (currentPrimary) {
-						if (foundPrimary) {
-							errorMessage = "More than one primary stage for pipeline " + pipeline.getName();
-							return null;
-						}
-						foundPrimary = true;
-					}
-					s.setPrimary(true);
-					pipeline.setPrimaryStageNumber(currentStage);
-				} else {
-					s.setPrimary(false);
+				// The schema types this xs:boolean, whose lexical space is true, false, 1 and 0,
+				// so Boolean.parseBoolean cannot read it: it maps "1" to false. Validation has
+				// already rejected anything outside that space, so a null here would mean the
+				// document reached this method unvalidated.
+				Boolean declaredPrimary = XMLUtil.parseXsdBoolean(stage.getAttribute("primary"));
+				if (stage.hasAttribute("primary") && declaredPrimary == null) {
+					errorMessage = "The primary attribute of a stage in pipeline " + pipeline.getName() +
+					               " must be one of true, false, 1 or 0";
+					return null;
 				}
+				boolean currentPrimary = Boolean.TRUE.equals(declaredPrimary);
+				if (currentPrimary) {
+					if (foundPrimary) {
+						errorMessage = "More than one primary stage for pipeline " + pipeline.getName();
+						return null;
+					}
+					foundPrimary = true;
+				}
+				// The flag is the stage's own. It was set whenever the attribute was merely
+				// present, so primary="false" marked the stage primary; and the pipeline's
+				// primary-stage field was written with this stage's ordinal, which is not what
+				// that field holds -- it holds the persisted stage id.
+				s.setPrimary(currentPrimary);
 
 				s.setConfigId(Integer.parseInt(stage.getAttribute("config-id")));
 				// make sure the user is authorized to use the solver they are trying to use
@@ -340,10 +349,15 @@ public class JobUtil {
 			               R.MAX_STAGES_PER_PIPELINE;
 			return null;
 		}
-		if (!foundPrimary) {
-			errorMessage = "No primary stage specified for pipeline " + pipeline.getName();
+		if (stageList.isEmpty()) {
+			errorMessage = "Pipeline " + pipeline.getName() + " has no stages";
 			return null;
 		}
+		// A pipeline with no stage marked primary used to be rejected here, contradicting the
+		// default batchJobSchema.xsd documents to the author -- the first stage is primary --
+		// so a document valid against the published schema could not be uploaded. Applying
+		// that default is Pipelines.selectPrimaryStage's job, at the persistence boundary
+		// every caller passes through, rather than a second copy of the rule here.
 		pipeline.setStages(stageList);
 		int id = Pipelines.addPipelineToDatabase(pipeline);
 		if (id <= 0) { //if there was a database error

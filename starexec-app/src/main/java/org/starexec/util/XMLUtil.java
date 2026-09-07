@@ -287,6 +287,35 @@ public class XMLUtil {
 	}
 
 	/**
+	 * Parses a value against the XML Schema {@code xs:boolean} lexical space, or null if the
+	 * value is not in it.
+	 *
+	 * <p>That space is {@code true}, {@code false}, {@code 1} and {@code 0} -- all four, and
+	 * nothing else. {@code Boolean.parseBoolean} and {@code Boolean.valueOf} accept only
+	 * "true", case-insensitively, and answer false for everything else, so against a
+	 * schema-typed attribute they read a valid {@code "1"} as false and cannot distinguish a
+	 * malformed value from {@code "false"}. Returning null keeps that distinction with the
+	 * caller, which knows whether the attribute was present and what to report.
+	 *
+	 * <p>The schema collapses whitespace before the lexical check, so it is trimmed here too.
+	 */
+	public static Boolean parseXsdBoolean(String value) {
+		if (value == null) {
+			return null;
+		}
+		switch (value.trim()) {
+			case "true":
+			case "1":
+				return Boolean.TRUE;
+			case "false":
+			case "0":
+				return Boolean.FALSE;
+			default:
+				return null;
+		}
+	}
+
+	/**
 	 * Generates a new, empty XML Document object
 	 *
 	 * @return The new Document
