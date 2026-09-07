@@ -5058,12 +5058,15 @@ $$ LANGUAGE plpgsql;
 -- _primary was INT with `IF _primary = 1`, a MySQL boolean-as-integer that survived the
 -- port -- its sibling AddJobPairStage already takes BOOLEAN. Java called it with
 -- setBoolean, so PostgreSQL could resolve no overload and every pipelined job failed to
--- persist a single stage. Dropping the stale signature explicitly, and with RESTRICT
--- rather than CASCADE, so that a dependent object aborts the migration instead of being
--- silently dropped with it. Both signatures are dropped so this is idempotent whichever
--- one the database currently holds.
+-- persist a single stage.
+--
+-- Only the stale signature is dropped, and with RESTRICT rather than CASCADE, so a
+-- dependent object aborts the migration instead of being silently dropped with it. The
+-- intended signature is replaced in place: this file is a repeatable migration and reruns
+-- whenever its checksum changes, and dropping the correct function first would break its
+-- dependents on every rerun for no gain. The DO block below is what proves the stale
+-- overload is gone, so idempotency does not depend on dropping the good one too.
 DROP FUNCTION IF EXISTS starexec.AddPipelineStage(INT, INT, INT, BOOLEAN) RESTRICT;
-DROP FUNCTION IF EXISTS starexec.AddPipelineStage(INT, INT, BOOLEAN, BOOLEAN) RESTRICT;
 CREATE OR REPLACE FUNCTION starexec.AddPipelineStage(_pid INT, _cid INT, _primary BOOLEAN, _noop BOOLEAN)
 RETURNS INT AS $$
 DECLARE

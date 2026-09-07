@@ -494,27 +494,74 @@ public class StoredRoutineSmokeIT {
         return execWithStdin(timeoutSeconds, null, command);
     }
 
+    /**
+     * Runs a command with {@code stdin} as its input, through temporary files rather than
+     * pipes.
+     *
+     * <p>Pipes deadlock here. This wrote the whole of {@code stdin} before reading any
+     * output, and {@code R__procedures_and_views.sql} is ~400 KB against a 64 KB pipe
+     * buffer, so psql has to be consuming input throughout -- which it stops doing as soon
+     * as its own output fills the other 64 KB pipe. On a fresh database that output is
+     * ~43 KB of "does not exist, skipping" NOTICEs, close enough to the limit that adding
+     * or removing a few DROP statements decides it.
+     *
+     * <p>The failure is also invisible: the blocking {@code readAllBytes} sits before
+     * {@code waitFor}, so the timeout below is never reached and the build hangs instead of
+     * failing. Observed as a 30-minute stall in {@code mvn verify -Pit} that a 180-second
+     * timeout should have caught.
+     *
+     * <p>Files have no such limit and leave the timeout reachable.
+     */
     private static Result execWithStdin(int timeoutSeconds, String stdin, String... command) {
+        Path in = null;
+        Path out = null;
         try {
+            out = Files.createTempFile("smoke-out", ".txt");
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
+            pb.redirectOutput(out.toFile());
             pb.directory(new File("."));
-            Process p = pb.start();
             if (stdin != null) {
-                p.getOutputStream().write(stdin.getBytes(StandardCharsets.UTF_8));
+                in = Files.createTempFile("smoke-in", ".sql");
+                Files.writeString(in, stdin, StandardCharsets.UTF_8);
+                pb.redirectInput(in.toFile());
+            } else {
+                pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
             }
-            p.getOutputStream().close();
-            String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+
+            Process p = pb.start();
             if (!p.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
                 p.destroyForcibly();
-                return new Result(-1, output + "\n[timed out after " + timeoutSeconds + "s]");
+                return new Result(-1, readOrEmpty(out) + "\n[timed out after " + timeoutSeconds + "s]");
             }
-            return new Result(p.exitValue(), output);
+            return new Result(p.exitValue(), readOrEmpty(out));
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             return new Result(-1, String.valueOf(e.getMessage()));
+        } finally {
+            deleteQuietly(in);
+            deleteQuietly(out);
+        }
+    }
+
+    private static String readOrEmpty(Path file) {
+        try {
+            return file == null ? "" : Files.readString(file, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static void deleteQuietly(Path file) {
+        if (file == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // a temp file the OS will clean up
         }
     }
 
