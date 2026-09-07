@@ -146,7 +146,7 @@ public class JobToXMLer {
 				stageElement.appendChild(getDependencyElement(dep));
 			}
 			stageElement.setAttribute("config-id", Integer.toString(stage.getConfigId()));
-			stageElement.setAttribute("primary", Boolean.toString(stage.getId()==pipeline.getPrimaryStageNumber()));
+			stageElement.setAttribute("primary", Boolean.toString(stage.getId() == pipeline.getPrimaryStageId()));
 			return stageElement;
 		}
 	}

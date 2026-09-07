@@ -205,6 +205,159 @@ public class Common {
 		);
 	}
 
+	/** Work to run inside a transaction owned by {@link #inTransaction} or {@link #runTransactional}. */
+	@FunctionalInterface
+	public interface TransactionalWork<T> {
+		T run(Connection con) throws Exception;
+	}
+
+	/**
+	 * Runs {@code work} inside one transaction on a borrowed connection, committing exactly
+	 * once on normal return and rolling back exactly once on any failure.
+	 *
+	 * <p>This is the transaction <em>owner</em>. Everything {@code work} calls receives that
+	 * connection and must not commit, roll back, close it, change its autoCommit setting, or
+	 * acquire a connection of its own -- one independently committing helper is enough to
+	 * break atomicity, because its writes survive this rollback.
+	 *
+	 * <h2>Why cleanup failures are not swallowed</h2>
+	 *
+	 * Returning a connection with {@code autoCommit=false}, or inside an aborted transaction,
+	 * poisons whichever request borrows it next -- a failure that surfaces nowhere near the
+	 * request that caused it. {@code close()} does not prevent that here: it returns the
+	 * connection to the pool, and this pool is configured with neither {@code rollbackOnReturn}
+	 * nor a {@code ConnectionState} interceptor, so nothing resets autoCommit or rolls back on
+	 * return. {@code setDefaultAutoCommit(true)} applies when a physical connection is
+	 * <em>created</em>, not when one is handed back. {@code testOnBorrow} would catch an
+	 * aborted transaction, but {@code validationInterval} is 30s, so a connection returned
+	 * inside that window is handed out unvalidated.
+	 *
+	 * <p>So restoration is part of the operation, not a courtesy:
+	 *
+	 * <ul>
+	 *   <li>work or commit fails -> roll back, restore, and report the <em>original</em>
+	 *       failure with any rollback or restoration failure attached as suppressed;</li>
+	 *   <li>work and commit succeed but restoration fails -> discard the connection, log the
+	 *       failure, and <em>return normally</em>. Once {@code commit()} has returned the
+	 *       write is durable; turning that into an exception would have callers report a
+	 *       failure for work that succeeded, and a client acting on it could submit again.</li>
+	 * </ul>
+	 *
+	 * <p>This is also why it does not use {@link #endTransaction}, which turns a failed commit
+	 * into a silent rollback and returns normally, leaving the caller believing its writes are
+	 * durable.
+	 *
+	 * <h2>Ownership precondition</h2>
+	 *
+	 * The connection must arrive in autoCommit mode. A connection already inside a transaction
+	 * belongs to some other owner, and committing or rolling it back here would settle work
+	 * this method did not do. Nested transactions would need savepoints, which this
+	 * deliberately does not implement.
+	 *
+	 * <p>Deliberately explicit rather than thread-local: the connection is a parameter, so
+	 * every signature says whether that method takes part in a caller's transaction.
+	 *
+	 * @param con  a borrowed connection in autoCommit mode; the caller closes it
+	 * @param work the writes that must all commit or none
+	 */
+	public static <T> T runTransactional(Connection con, TransactionalWork<T> work) throws SQLException {
+		if (!con.getAutoCommit()) {
+			throw new SQLException("runTransactional was given a connection that is already in a"
+					+ " transaction; it will not commit or roll back a transaction it does not own");
+		}
+
+		SQLException failure = null;
+		T result = null;
+		boolean committed = false;
+		try {
+			con.setAutoCommit(false);
+			result = work.run(con);
+			con.commit();
+			committed = true;
+		} catch (Exception e) {
+			failure = (e instanceof SQLException)
+					? (SQLException) e
+					: new SQLException("Transaction rolled back: " + e.getMessage(), e);
+		}
+
+		if (failure != null && !committed) {
+			try {
+				con.rollback();
+			} catch (SQLException rollbackFailure) {
+				failure.addSuppressed(rollbackFailure);
+			}
+		}
+
+		try {
+			con.setAutoCommit(true);
+		} catch (SQLException restoreFailure) {
+			// The connection's state is now unknown, so it must not go back into rotation.
+			discard(con, restoreFailure);
+			if (failure != null) {
+				// Cleanup must not overwrite the reason the caller needs to see.
+				failure.addSuppressed(restoreFailure);
+			} else {
+				// The commit returned. The caller's write is durable, exactly once, and that
+				// is the answer the caller needs -- reporting a failure here would have it
+				// tell the user nothing happened and invite a retry that writes it twice.
+				// What failed is the connection, and that is an operator's problem: it has
+				// been discarded above, and this is the record of why.
+				log.error("runTransactional", "transaction COMMITTED but the connection could"
+						+ " not be restored; it has been discarded. The caller's write is"
+						+ " durable and was reported as successful.", restoreFailure);
+			}
+		}
+
+		if (failure != null) {
+			throw failure;
+		}
+		return result;
+	}
+
+	/**
+	 * Takes a connection out of rotation whose state could not be restored.
+	 *
+	 * <p>{@code close()} is not enough. It hands the connection back to the pool, and this
+	 * pool neither rolls back nor resets autoCommit on return; {@code testOnBorrow} would
+	 * catch a broken one, but {@code validationInterval} is 30s, so a connection returned
+	 * inside that window is handed to the next borrower unvalidated.
+	 *
+	 * <p>Two mechanisms, because neither is guaranteed on its own. Tomcat JDBC's
+	 * {@code PooledConnection.setDiscarded(true)} makes the pool destroy the physical
+	 * connection rather than recycle it, and is the mechanism that actually applies here.
+	 * {@link Connection#abort} is the JDBC-standard way to terminate the physical connection,
+	 * and covers the case where the pool cannot be unwrapped. Failures of either are recorded
+	 * against the caller's exception rather than raised: this runs while something has already
+	 * gone wrong, and losing the original reason would be worse than a leaked connection.
+	 */
+	private static void discard(Connection con, SQLException reason) {
+		try {
+			org.apache.tomcat.jdbc.pool.PooledConnection pooled =
+					con.unwrap(org.apache.tomcat.jdbc.pool.PooledConnection.class);
+			if (pooled != null) {
+				pooled.setDiscarded(true);
+			}
+		} catch (SQLException | RuntimeException e) {
+			reason.addSuppressed(e);
+		}
+		try {
+			con.abort(Runnable::run);
+		} catch (SQLException | RuntimeException | AbstractMethodError e) {
+			reason.addSuppressed(new SQLException("could not abort the unrestorable connection", e));
+		}
+	}
+
+	/** As {@link #runTransactional}, acquiring and returning the connection as well. */
+	public static <T> T inTransaction(TransactionalWork<T> work) throws SQLException {
+		Connection con = null;
+		try {
+			con = getConnection();
+			return runTransactional(con, work);
+		} finally {
+			safeClose(con);
+		}
+	}
+
 	/**
 	 * Ends a transaction by committing any changes and re-enabling auto-commit
 	 */

@@ -86,7 +86,13 @@ public class JobPairs {
         }
     }
 
-    private static void addJobPairInputs(List<JobPair> pairs, Connection con) {
+    /**
+     * @return true when every input was written; false when none were, or an unknown
+     * number were. Returning void here meant a failed batch was logged and then reported
+     * as success by the caller, so a pair could be committed without the inputs its
+     * pipeline requires.
+     */
+    private static boolean addJobPairInputs(List<JobPair> pairs, Connection con) {
         final String methodName = "addJobPairInputs";
         PreparedStatement ps = null;
         int batchCounter = 0;
@@ -130,6 +136,7 @@ public class JobPairs {
                 );
                 ps.executeBatch();
             }
+            return true;
         } catch (Exception e) {
             log.error(
                 methodName,
@@ -139,6 +146,7 @@ public class JobPairs {
         } finally {
             Common.safeClose(ps);
         }
+        return false;
     }
 
     public static Optional<
@@ -382,7 +390,7 @@ public class JobPairs {
      * @param pairs The pairs to add the stages of
      * @param con   The open connection to make the call on
      */
-    private static void addJobPairStages(List<JobPair> pairs, Connection con) {
+    private static boolean addJobPairStages(List<JobPair> pairs, Connection con) {
         final String methodName = "addJobPairStages";
         PreparedStatement ps = null;
         int totalPairsSubmitted = 0;
@@ -447,11 +455,13 @@ public class JobPairs {
                 );
                 ps.executeBatch();
             }
+            return true;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         } finally {
             Common.safeClose(ps);
         }
+        return false;
     }
 
     public static void addJobPairs(int jobId, List<JobPair> pairs) {
@@ -543,10 +553,19 @@ public class JobPairs {
             }
             log.debug(methodName, "Pairs Processed: " + pairsProcessed);
 
+            // A pair row without its stages is a pair that can never run, and one without
+            // its inputs is a pair that runs against the wrong benchmarks. Both used to be
+            // written, logged on failure, and then reported as success from here.
             log.debug(methodName, "Adding job pair stages.");
-            addJobPairStages(pairs, con);
+            if (!addJobPairStages(pairs, con)) {
+                log.error(methodName, "Failed to add stages for the pairs of job " + jobId);
+                return false;
+            }
             log.debug(methodName, "Adding job pair inputs.");
-            addJobPairInputs(pairs, con);
+            if (!addJobPairInputs(pairs, con)) {
+                log.error(methodName, "Failed to add inputs for the pairs of job " + jobId);
+                return false;
+            }
             return true;
         } catch (Exception e) {
             log.error(

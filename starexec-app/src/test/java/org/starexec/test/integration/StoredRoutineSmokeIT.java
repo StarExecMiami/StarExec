@@ -225,6 +225,153 @@ public class StoredRoutineSmokeIT {
         assertEquals("f", query("SELECT starexec.IsSpaceDescendant(9102,9101);"));
     }
 
+    /**
+     * AddPipelineStage must resolve against the argument types Java actually binds.
+     *
+     * <p>Its third parameter was {@code INT} with {@code IF _primary = 1}, a MySQL
+     * boolean-as-integer that survived the port, while {@code Pipelines} binds it with
+     * {@code setBoolean}. PostgreSQL includes argument types in a routine's identity, so no
+     * overload resolved and every pipelined job failed to persist a single stage -- while
+     * the job and pipeline rows committed, because that path is not transactional.
+     *
+     * <p>Passing a boolean here is what makes this discriminating: against the old signature
+     * the call raises "function ... does not exist", which is the production failure.
+     */
+    @Test
+    public void addPipelineStageAcceptsTheArgumentTypesJavaBinds() throws Exception {
+        run("INSERT INTO starexec.solver_pipelines (id,name,user_id,uploaded) VALUES"
+            + " (9201,'boundTypes',9001,NOW()) ON CONFLICT DO NOTHING;");
+
+        // config_id is nullable and FKs to configurations, which would drag in a solver and
+        // its owner; none of that bears on the argument-type contract under test.
+        String first = query("SELECT starexec.AddPipelineStage(9201, NULL::INT, FALSE, FALSE);");
+        String second = query("SELECT starexec.AddPipelineStage(9201, NULL::INT, TRUE, FALSE);");
+
+        assertEquals("a primary stage must be recorded on the pipeline row",
+            second, query("SELECT primary_stage_id FROM starexec.solver_pipelines WHERE id=9201;"));
+        assertTrue("stage ids must ascend with insertion order, got " + first + " then " + second,
+            Integer.parseInt(second) > Integer.parseInt(first));
+    }
+
+    /**
+     * Exactly one AddPipelineStage may exist. A repeatable migration that left the stale
+     * signature behind would restore the ambiguity even with the new one present.
+     */
+    @Test
+    public void addPipelineStageHasNoSurvivingOverload() throws Exception {
+        assertEquals("AddPipelineStage must not be overloaded", "1", query(
+            "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
+            + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage';"));
+        assertEquals("the surviving signature must take BOOLEAN and return INT", "1", query(
+            "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace"
+            + " WHERE n.nspname='starexec' AND p.proname='addpipelinestage' AND p.prokind='f'"
+            + " AND pg_get_function_identity_arguments(p.oid)="
+            + "'_pid integer, _cid integer, _primary boolean, _noop boolean'"
+            + " AND pg_get_function_result(p.oid)='integer';"));
+    }
+
+    /**
+     * Stage order is part of a pipeline's meaning -- stage 1 feeds stage 2 -- and
+     * GetStagesByPipelineId had no ORDER BY, so it returned rows in whatever order the scan
+     * produced. Rewriting the first stage is what makes that order diverge: an UPDATE writes
+     * a new tuple version whose line pointer is appended, so a scan reports that row last.
+     */
+    @Test
+    public void stagesComeBackInPipelineOrder() throws Exception {
+        run("INSERT INTO starexec.solver_pipelines (id,name,user_id,uploaded) VALUES"
+            + " (9202,'ordering',9001,NOW()) ON CONFLICT DO NOTHING;");
+        run("DELETE FROM starexec.pipeline_stages WHERE pipeline_id=9202;");
+
+        List<String> inserted = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            inserted.add(query("SELECT starexec.AddPipelineStage(9202, NULL::INT, FALSE, FALSE);"));
+        }
+        run("UPDATE starexec.pipeline_stages SET is_noop = is_noop WHERE stage_id="
+            + inserted.get(0) + ";");
+
+        List<String> returned = List.of(query(
+            "SELECT stage_id FROM starexec.GetStagesByPipelineId(9202);").split("\\R"));
+        assertEquals("stages must come back ordered by stage_id", inserted, returned);
+    }
+
+    /**
+     * A failure at stage insertion must leave no pipeline behind.
+     *
+     * <p>Pipeline creation ran on its own connection in autoCommit, so the pipeline row was
+     * durable before its stages were attempted and stayed durable when they failed -- the
+     * reproduction database holds two such pipelines with no stages at all. The fix puts the
+     * whole upload in one transaction; this is what that transaction has to do.
+     *
+     * <p>Note the COMMIT: once a statement has failed, PostgreSQL will not honour it. Partial
+     * work cannot be salvaged by asking, which is the property being relied on.
+     */
+    @Test
+    public void aFailureAtStageInsertionLeavesNoPipeline() throws Exception {
+        String before = query("SELECT count(*) FROM starexec.solver_pipelines;");
+
+        Result attempt = psqlTolerant(String.join("\n",
+            "BEGIN;",
+            "SELECT starexec.AddPipeline(9001,'rollbackAtStage');",
+            // Induced failure: pipeline_stages.pipeline_id has a foreign key.
+            "SELECT starexec.AddPipelineStage(999999, NULL::INT, TRUE, FALSE);",
+            "COMMIT;"));
+        assertTrue("the induced failure must be the foreign key, was: " + attempt.output,
+            attempt.output.contains("pipeline_stages_pipeline_id"));
+        assertTrue("an aborted transaction must not commit: " + attempt.output,
+            attempt.output.contains("ROLLBACK"));
+
+        assertEquals("the pipeline must not survive the failure of its stage",
+            "0", query("SELECT count(*) FROM starexec.solver_pipelines"
+                + " WHERE name='rollbackAtStage';"));
+        assertEquals("no other pipeline may be disturbed",
+            before, query("SELECT count(*) FROM starexec.solver_pipelines;"));
+    }
+
+    /**
+     * The second boundary: a failure at pair or stage-data insertion must leave no job, no
+     * pairs, no stage data, and no counter drift.
+     *
+     * <p>The job row used to be written outside any transaction, between two short ones, so
+     * it survived the rollback of the pairs that were meant to fill it -- a job that can
+     * never run, reported as created.
+     */
+    @Test
+    public void aFailureAtPairInsertionLeavesNoJob() throws Exception {
+        String pairsBefore = query("SELECT count(*) FROM starexec.job_pairs;");
+        String stageDataBefore = query("SELECT count(*) FROM starexec.jobpair_stage_data;");
+        final String initiatedCount = "SELECT occurrences FROM starexec.report_data"
+            + " WHERE event_name='jobs initiated' AND queue_name IS NULL;";
+        String initiatedBefore = query(initiatedCount);
+
+        Result attempt = psqlTolerant(String.join("\n",
+            "BEGIN;",
+            "INSERT INTO starexec.jobs (id,user_id,name,created,primary_space,cpuTimeout,",
+            "  clockTimeout,maximum_memory,total_pairs,disk_size)",
+            "  VALUES (9401,9001,'rollbackAtPairs',NOW(),9001,60,60,1073741824,1,0);",
+            "INSERT INTO starexec.job_pairs (id,job_id,status_code,path)",
+            "  VALUES (9401,9401,1,'p1');",
+            // Induced failure: jobpair_stage_data.jobpair_id has a foreign key.
+            "INSERT INTO starexec.jobpair_stage_data (jobpair_id,stage_number,status_code,disk_size)",
+            "  VALUES (999999,1,1,0);",
+            // The counter is part of the same outcome, so it is written inside the same
+            // transaction and has to disappear with it.
+            "CALL starexec.AddToEventOccurrencesNotRelatedToQueue('jobs initiated', 1);",
+            "COMMIT;"));
+        assertTrue("an aborted transaction must not commit: " + attempt.output,
+            attempt.output.contains("ROLLBACK"));
+
+        assertEquals("the job must not survive the failure of its pairs",
+            "0", query("SELECT count(*) FROM starexec.jobs WHERE id=9401;"));
+        assertEquals("no job pair may survive",
+            "0", query("SELECT count(*) FROM starexec.job_pairs WHERE job_id=9401;"));
+        assertEquals("no stage data may survive",
+            stageDataBefore, query("SELECT count(*) FROM starexec.jobpair_stage_data;"));
+        assertEquals("no unrelated pair may be disturbed",
+            pairsBefore, query("SELECT count(*) FROM starexec.job_pairs;"));
+        assertEquals("the jobs-initiated counter must not drift",
+            initiatedBefore, query(initiatedCount));
+    }
+
     /** Upload completion must report an outcome rather than nothing. */
     @Test
     public void uploadCompletionRoutinesResolve() throws Exception {
@@ -333,31 +480,88 @@ public class StoredRoutineSmokeIT {
             "psql", "-U", "starexec", "-d", db, "-tA", "-v", "ON_ERROR_STOP=1");
     }
 
+    /**
+     * Runs SQL that is <em>expected</em> to fail part-way, without ON_ERROR_STOP, so psql
+     * carries on to the closing COMMIT and reports what the server did with it. The output is
+     * the assertion; the exit code is not.
+     */
+    private static Result psqlTolerant(String sql) throws Exception {
+        return execWithStdin(120, sql, runtime, "exec", "-i", CONTAINER,
+            "psql", "-U", "starexec", "-d", DATABASE, "-tA", "-e");
+    }
+
     private static Result exec(int timeoutSeconds, String... command) {
         return execWithStdin(timeoutSeconds, null, command);
     }
 
+    /**
+     * Runs a command with {@code stdin} as its input, through temporary files rather than
+     * pipes.
+     *
+     * <p>Pipes deadlock here. This wrote the whole of {@code stdin} before reading any
+     * output, and {@code R__procedures_and_views.sql} is ~400 KB against a 64 KB pipe
+     * buffer, so psql has to be consuming input throughout -- which it stops doing as soon
+     * as its own output fills the other 64 KB pipe. On a fresh database that output is
+     * ~43 KB of "does not exist, skipping" NOTICEs, close enough to the limit that adding
+     * or removing a few DROP statements decides it.
+     *
+     * <p>The failure is also invisible: the blocking {@code readAllBytes} sits before
+     * {@code waitFor}, so the timeout below is never reached and the build hangs instead of
+     * failing. Observed as a 30-minute stall in {@code mvn verify -Pit} that a 180-second
+     * timeout should have caught.
+     *
+     * <p>Files have no such limit and leave the timeout reachable.
+     */
     private static Result execWithStdin(int timeoutSeconds, String stdin, String... command) {
+        Path in = null;
+        Path out = null;
         try {
+            out = Files.createTempFile("smoke-out", ".txt");
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
+            pb.redirectOutput(out.toFile());
             pb.directory(new File("."));
-            Process p = pb.start();
             if (stdin != null) {
-                p.getOutputStream().write(stdin.getBytes(StandardCharsets.UTF_8));
+                in = Files.createTempFile("smoke-in", ".sql");
+                Files.writeString(in, stdin, StandardCharsets.UTF_8);
+                pb.redirectInput(in.toFile());
+            } else {
+                pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
             }
-            p.getOutputStream().close();
-            String output = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+
+            Process p = pb.start();
             if (!p.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
                 p.destroyForcibly();
-                return new Result(-1, output + "\n[timed out after " + timeoutSeconds + "s]");
+                return new Result(-1, readOrEmpty(out) + "\n[timed out after " + timeoutSeconds + "s]");
             }
-            return new Result(p.exitValue(), output);
+            return new Result(p.exitValue(), readOrEmpty(out));
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             return new Result(-1, String.valueOf(e.getMessage()));
+        } finally {
+            deleteQuietly(in);
+            deleteQuietly(out);
+        }
+    }
+
+    private static String readOrEmpty(Path file) {
+        try {
+            return file == null ? "" : Files.readString(file, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static void deleteQuietly(Path file) {
+        if (file == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // a temp file the OS will clean up
         }
     }
 

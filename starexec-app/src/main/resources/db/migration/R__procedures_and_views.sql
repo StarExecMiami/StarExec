@@ -4983,6 +4983,12 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Gets all the stage information from the pipeline_stages table for the given pipeline
+-- Stage order is part of a pipeline's meaning -- stage 1 feeds stage 2 -- but this returned
+-- rows in whatever order the heap gave them, so a pipeline could be reloaded, exported or
+-- run with its stages permuted. addPipelineToDatabase inserts stages in list order in a
+-- single loop and stage_id defaults to nextval('pipeline_stages_stage_id_seq'), so stage_id
+-- is ascending in insertion order and is the ordering key. That the column doubles as the
+-- order is implicit-order design debt; an explicit stage_order column is the cleaner shape.
 DROP FUNCTION IF EXISTS starexec.GetStagesByPipelineId CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetStagesByPipelineId(_id INT)
 RETURNS TABLE(
@@ -4993,7 +4999,8 @@ RETURNS TABLE(
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT * FROM starexec.pipeline_stages WHERE pipeline_stages.pipeline_id = _id;
+    SELECT * FROM starexec.pipeline_stages WHERE pipeline_stages.pipeline_id = _id
+    ORDER BY pipeline_stages.stage_id;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -5045,10 +5052,22 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- adds a solver pipeline stage for an existing pipeline to the database.
--- pipelines must be added to the database in the order that they are to be used in the pipeline
--- to ensure that the AUTO_INCREMENT IDs are ordered
-DROP FUNCTION IF EXISTS starexec.AddPipelineStage CASCADE;
-CREATE OR REPLACE FUNCTION starexec.AddPipelineStage(_pid INT, _cid INT, _primary INT, _noop BOOLEAN)
+-- stages must be added in the order they are to be used, so that the stage_id
+-- sequence orders them (see GetStagesByPipelineId, which orders by stage_id).
+--
+-- _primary was INT with `IF _primary = 1`, a MySQL boolean-as-integer that survived the
+-- port -- its sibling AddJobPairStage already takes BOOLEAN. Java called it with
+-- setBoolean, so PostgreSQL could resolve no overload and every pipelined job failed to
+-- persist a single stage.
+--
+-- Only the stale signature is dropped, and with RESTRICT rather than CASCADE, so a
+-- dependent object aborts the migration instead of being silently dropped with it. The
+-- intended signature is replaced in place: this file is a repeatable migration and reruns
+-- whenever its checksum changes, and dropping the correct function first would break its
+-- dependents on every rerun for no gain. The DO block below is what proves the stale
+-- overload is gone, so idempotency does not depend on dropping the good one too.
+DROP FUNCTION IF EXISTS starexec.AddPipelineStage(INT, INT, INT, BOOLEAN) RESTRICT;
+CREATE OR REPLACE FUNCTION starexec.AddPipelineStage(_pid INT, _cid INT, _primary BOOLEAN, _noop BOOLEAN)
 RETURNS INT AS $$
 DECLARE
     _id INT;
@@ -5057,7 +5076,7 @@ BEGIN
     VALUES (_pid, _cid, _noop)
     RETURNING stage_id INTO _id;
 
-    IF _primary = 1 THEN
+    IF _primary THEN
         UPDATE solver_pipelines SET primary_stage_id = _id WHERE id = _pid;
         IF NOT FOUND THEN
             RAISE EXCEPTION USING
@@ -5069,6 +5088,33 @@ BEGIN
     RETURN _id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- The defect was an unresolvable overload, so assert the resolution rather than the text:
+-- exactly one AddPipelineStage must remain, and it must be the BOOLEAN form returning INT.
+-- A repeatable migration that left both behind would reintroduce the same ambiguity.
+DO $$
+DECLARE
+    _total INT;
+    _intended INT;
+BEGIN
+    SELECT count(*) INTO _total
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'starexec' AND p.proname = 'addpipelinestage';
+
+    SELECT count(*) INTO _intended
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'starexec' AND p.proname = 'addpipelinestage'
+      AND p.prokind = 'f'
+      AND pg_get_function_identity_arguments(p.oid) = '_pid integer, _cid integer, _primary boolean, _noop boolean'
+      AND pg_get_function_result(p.oid) = 'integer';
+
+    IF _total <> 1 OR _intended <> 1 THEN
+        RAISE EXCEPTION
+            'AddPipelineStage must resolve to exactly one BOOLEAN-primary function returning INT (total=%, intended=%)',
+            _total, _intended;
+    END IF;
+END;
+$$;
 
 -- Adds a dependency for an existing stage.
 DROP FUNCTION IF EXISTS starexec.AddPipelineDependency CASCADE;

@@ -10,6 +10,7 @@ import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -152,8 +153,16 @@ public class Pipelines {
 				pipe.setName(results.getString("name"));
 				pipe.setUploadDate(results.getTimestamp("uploaded"));
 				pipe.setUserId(results.getInt("userId"));
-				pipe.setPrimaryStageNumber(results.getInt("primaryStageId"));
+				pipe.setPrimaryStageId(results.getInt("primaryStageId"));
 				pipe.setStages(getStagesForPipeline(id, con));
+				// GetStagesByPipelineId does not carry the primary flag -- the pipeline row
+				// owns it -- so a reloaded pipeline would otherwise have every stage
+				// unflagged, which is a different shape from one built from XML.
+				if (pipe.getStages() != null) {
+					for (PipelineStage stage : pipe.getStages()) {
+						stage.setPrimary(stage.getId() == pipe.getPrimaryStageId());
+					}
+				}
 				return pipe;
 			}
 		} catch (Exception e) {
@@ -171,8 +180,10 @@ public class Pipelines {
 	 *
 	 * @param dep The dependency to add
 	 * @param con An open SQL connection to make the call on
+	 * @return true if the dependency was written. A stage missing a dependency is a stage
+	 * that runs against the wrong inputs, so this can no longer be discarded.
 	 */
-	public static void addDependencyToDatabase(PipelineDependency dep, Connection con) {
+	public static boolean addDependencyToDatabase(PipelineDependency dep, Connection con) {
 		PreparedStatement ps = null;
 		try {
 			ps = con.prepareStatement("SELECT starexec.AddPipelineDependency(?,?,?,?)");
@@ -189,11 +200,13 @@ public class Pipelines {
 				}
 				Common.safeClose(rs);
 			}
+			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(ps);
 		}
+		return false;
 	}
 
 	/**
@@ -201,8 +214,9 @@ public class Pipelines {
 	 *
 	 * @param stage A fully populated solver pipeline object, including dependencies
 	 * @param con An open SQL connection to make this call on
+	 * @return true if the stage and all of its dependencies were written
 	 */
-	public static void addPipelineStageToDatabase(PipelineStage stage, Connection con) {
+	public static boolean addPipelineStageToDatabase(PipelineStage stage, Connection con) {
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
 		try {
@@ -223,14 +237,50 @@ public class Pipelines {
 
 			for (PipelineDependency dep : stage.getDependencies()) {
 				dep.setStageId(stage.getId());
-				addDependencyToDatabase(dep, con);
+				if (!addDependencyToDatabase(dep, con)) {
+					return false;
+				}
 			}
+			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(rs);
 			Common.safeClose(stmt);
 		}
+		return false;
+	}
+
+	/**
+	 * The stage a pipeline's {@code primary_stage_id} must end up pointing at.
+	 *
+	 * <p>Which stage is primary is the stage's own flag. Persistence used to compare each
+	 * stage's 1-based position against the pipeline's primary-stage field, which holds a
+	 * persisted stage id -- so it selected whichever stage happened to sit at the position
+	 * numerically equal to some earlier pipeline's stage id, or no stage at all.
+	 *
+	 * <p>Applies the default {@code batchJobSchema.xsd} documents -- if no stage is marked, the
+	 * first one is primary -- marking the chosen stage so the flag and the pipeline agree. This
+	 * is the one place every caller passes through, so no pipeline is persisted without one.
+	 *
+	 * @param stages a non-empty stage list
+	 * @return the primary stage, or null if more than one stage claims it
+	 */
+	public static PipelineStage selectPrimaryStage(List<PipelineStage> stages) {
+		PipelineStage primary = null;
+		for (PipelineStage stage : stages) {
+			if (stage.isPrimary()) {
+				if (primary != null) {
+					return null;
+				}
+				primary = stage;
+			}
+		}
+		if (primary == null) {
+			primary = stages.get(0);
+			primary.setPrimary(true);
+		}
+		return primary;
 	}
 
 	/**
@@ -238,14 +288,52 @@ public class Pipelines {
 	 *
 	 * @param pipe A fully populated solver pipeline object, including dependencies
 	 * @return The ID of the pipeline object, or -1 on failure. The ID will also be set in the given pipeline object on
-	 * success. All stage IDs will also be set
+	 * success. All stage IDs will also be set, as will the pipeline's primary stage ID
 	 */
 	public static int addPipelineToDatabase(SolverPipeline pipe) {
-		Connection con = null;
+		try {
+			return Common.inTransaction(con -> {
+				int id = addPipelineToDatabase(pipe, con);
+				if (id <= 0) {
+					throw new SQLException("Could not persist pipeline '" + pipe.getName() + "'");
+				}
+				return id;
+			});
+		} catch (SQLException e) {
+			log.error(e.getMessage(), e);
+			return -1;
+		}
+	}
+
+	/**
+	 * As {@link #addPipelineToDatabase(SolverPipeline)}, on a connection the caller owns.
+	 *
+	 * <p>Borrowed: this does not commit, roll back, close the connection or change its
+	 * autoCommit setting. A pipeline created for a job XML upload has to commit with that
+	 * job, not before it -- the two used to run on different connections, so a pipeline and
+	 * its stages were durable before the job they belong to was even attempted.
+	 *
+	 * @param pipe A fully populated solver pipeline object, including dependencies
+	 * @param con An open SQL connection to make these calls on
+	 * @return The ID of the pipeline object, or -1 on failure
+	 */
+	public static int addPipelineToDatabase(SolverPipeline pipe, Connection con) {
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
 		try {
-			con = Common.getConnection();
+			List<PipelineStage> stages = pipe.getStages();
+			if (stages == null || stages.isEmpty()) {
+				log.error("Refusing to persist pipeline '" + pipe.getName() + "' with no stages");
+				return -1;
+			}
+
+			PipelineStage primary = selectPrimaryStage(stages);
+			if (primary == null) {
+				log.error("Refusing to persist pipeline '" + pipe.getName() +
+				          "': more than one stage is marked primary");
+				return -1;
+			}
+
 			stmt = con.prepareStatement("SELECT AddPipeline(?,?)");
 			stmt.setInt(1, pipe.getUserId());
 			stmt.setString(2, pipe.getName());
@@ -254,24 +342,20 @@ public class Pipelines {
 			int id = rs.getInt(1);
 			pipe.setId(id);
 
-			int number = 1;
-			for (PipelineStage stage : pipe.getStages()) {
+			for (PipelineStage stage : stages) {
 				stage.setPipelineId(pipe.getId());
-				if (number == pipe.getPrimaryStageNumber()) {
-					stage.setPrimary(true);
-				} else {
-					stage.setPrimary(false);
+				if (!addPipelineStageToDatabase(stage, con)) {
+					log.error("Failed to add a stage of pipeline '" + pipe.getName() + "'");
+					return -1;
 				}
-				addPipelineStageToDatabase(stage, con);
-				number++;
 			}
-
+			// The field means the persisted id, so it is only writable once there is one.
+			pipe.setPrimaryStageId(primary.getId());
 
 			return id;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(con);
 			Common.safeClose(rs);
 			Common.safeClose(stmt);
 		}

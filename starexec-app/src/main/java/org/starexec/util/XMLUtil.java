@@ -6,6 +6,10 @@ import org.starexec.logger.StarLogger;
 import org.w3c.dom.Document;
 import org.xml.sax.SAXException;
 
+import org.w3c.dom.ls.LSInput;
+import org.w3c.dom.ls.LSResourceResolver;
+
+import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -21,6 +25,11 @@ import javax.xml.validation.SchemaFactory;
 import javax.xml.validation.Validator;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Contains functionality shared between JobUtil, BatchUtil, and JobToXMLer
@@ -29,6 +38,169 @@ import java.io.IOException;
  */
 public class XMLUtil {
 	private static final StarLogger log = StarLogger.getLogger(XMLUtil.class);
+
+	/**
+	 * Where the bundled schemas live on the classpath.
+	 *
+	 * <p>{@code src/main/resources/schemas} is packaged into {@code WEB-INF/classes/schemas},
+	 * which is the one location carrying every schema this application validates against.
+	 * {@code webapp/public} is a second, hand-maintained copy served over HTTP for authors to
+	 * read, and it had drifted: {@code runSolverOnUploadBatchJobSchema.xsd} was missing from
+	 * it entirely, so the URL {@code JobXmlType.SOLVER_UPLOAD} named returned 404.
+	 */
+	private static final String SCHEMA_CLASSPATH_DIR = "/schemas/";
+
+	/**
+	 * The only schema documents this application will resolve, by file name.
+	 *
+	 * <p>An allowlist rather than a path derived from the reference. Both references this
+	 * class sees are server-side today -- {@code JobXmlType} builds one from the deployment
+	 * URL, and the other is the {@code schemaLocation} written into a bundled schema -- but
+	 * the first is assembled from operator-set environment variables, and neither should be
+	 * able to name a document outside this set. A reference selects a member of it and is
+	 * never used to build a classpath or filesystem path.
+	 */
+	private static final Set<String> BUNDLED_SCHEMAS;
+
+	static {
+		Set<String> schemas = new HashSet<>();
+		schemas.add("batchJobSchema.xsd");
+		schemas.add("batchSpaceSchema.xsd");
+		schemas.add("jobSchemaTypes.xsd");
+		schemas.add("runSolverOnUploadBatchJobSchema.xsd");
+		BUNDLED_SCHEMAS = Collections.unmodifiableSet(schemas);
+	}
+
+	/**
+	 * Resolves schema imports from the bundled copies and refuses everything else.
+	 *
+	 * <p>The shipped schemas declare their imports with an absolute {@code schemaLocation}
+	 * built from a deployment URL, which made validation fetch a schema over HTTP from the
+	 * running server -- and fail outright when that URL was never substituted. Resolving by
+	 * file name against the packaged copies removes both the network dependency and the
+	 * substitution requirement, and does not change any document's namespace.
+	 *
+	 * <p>An unknown reference throws rather than returning null. JAXP defines a null result as
+	 * "resolve this the normal way", so returning null would hand the reference back to the
+	 * processor's own resolution -- which is the opposite of denying it. An exception from the
+	 * resolver aborts schema construction, which is the fail-closed answer.
+	 *
+	 * <p>That distinction is not academic: the external-access properties are the other half
+	 * of the control, and only {@link #validateAgainstSchema} verifies they took effect. This
+	 * resolver has to hold on its own for anything they do not cover -- notably an unexpected
+	 * {@code <xs:import>} added to a bundled schema, which is trusted input that no
+	 * instance-document test would exercise.
+	 */
+	static final class BundledSchemaResolver implements LSResourceResolver {
+		@Override
+		public LSInput resolveResource(
+				String type, String namespaceURI, String publicId, String systemId, String baseURI
+		) {
+			String name = bundledNameFor(systemId);
+			if (name == null) {
+				throw new UnresolvableSchemaReference(systemId, namespaceURI);
+			}
+			return new BundledSchemaInput(name, publicId, systemId, baseURI);
+		}
+	}
+
+	/**
+	 * A schema reference outside the bundled set. Unchecked because {@link LSResourceResolver}
+	 * cannot declare one; {@link #validateAgainstSchema} catches it and turns it into a status.
+	 */
+	static final class UnresolvableSchemaReference extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+
+		private UnresolvableSchemaReference(String systemId, String namespaceURI) {
+			super("Refusing to resolve a schema resource outside the bundled set: systemId=" +
+			      systemId + " namespace=" + namespaceURI);
+		}
+	}
+
+	/** An {@link LSInput} backed by a bundled classpath schema. */
+	private static final class BundledSchemaInput implements LSInput {
+		private final String name;
+		private String publicId;
+		private String systemId;
+		private String baseURI;
+		private String encoding = "UTF-8";
+		private boolean certifiedText;
+
+		private BundledSchemaInput(String name, String publicId, String systemId, String baseURI) {
+			this.name = name;
+			this.publicId = publicId;
+			this.systemId = systemId;
+			this.baseURI = baseURI;
+		}
+
+		@Override
+		public InputStream getByteStream() {
+			return XMLUtil.class.getResourceAsStream(SCHEMA_CLASSPATH_DIR + name);
+		}
+
+		@Override public Reader getCharacterStream() { return null; }
+		@Override public void setCharacterStream(Reader characterStream) { }
+		@Override public void setByteStream(InputStream byteStream) { }
+		@Override public String getStringData() { return null; }
+		@Override public void setStringData(String stringData) { }
+		@Override public String getSystemId() { return systemId; }
+		@Override public void setSystemId(String systemId) { this.systemId = systemId; }
+		@Override public String getPublicId() { return publicId; }
+		@Override public void setPublicId(String publicId) { this.publicId = publicId; }
+		@Override public String getBaseURI() { return baseURI; }
+		@Override public void setBaseURI(String baseURI) { this.baseURI = baseURI; }
+		@Override public String getEncoding() { return encoding; }
+		@Override public void setEncoding(String encoding) { this.encoding = encoding; }
+		@Override public boolean getCertifiedText() { return certifiedText; }
+		@Override public void setCertifiedText(boolean certifiedText) { this.certifiedText = certifiedText; }
+	}
+
+	/**
+	 * Denies every protocol for one external-access property, and fails if the provider will
+	 * not accept the restriction.
+	 *
+	 * <p>The empty string is JAXP's "no protocol is permitted". JAXP 1.5 requires an
+	 * implementation to support both properties, so a provider that rejects one is not a
+	 * provider this method may quietly continue with: warning and carrying on would leave the
+	 * restriction unenforced while the log implies otherwise. {@link #validateAgainstSchema}
+	 * therefore refuses to validate rather than validating unrestricted.
+	 *
+	 * <p>This is why the factory comes from {@link SchemaFactory#newDefaultInstance()}.
+	 * Service-provider lookup selects {@code xerces:xercesImpl}, which arrives transitively
+	 * through {@code org.owasp.antisamy}, and its 2.12.2 {@code SchemaFactory} and
+	 * {@code Validator} recognise neither property -- so under the previous lookup all four
+	 * calls were measured to be inert.
+	 *
+	 * <p>{@code SchemaFactory} and {@code Validator} are configured independently, and
+	 * restricting one leaves the other open.
+	 */
+	private static void denyExternalAccess(String property, PropertySetter setter) throws SAXException {
+		setter.set(property, "");
+	}
+
+	/** {@code SchemaFactory} and {@code Validator} share this signature but no supertype. */
+	@FunctionalInterface
+	private interface PropertySetter {
+		void set(String name, Object value) throws SAXException;
+	}
+
+	/**
+	 * The bundled schema a reference names, or null if it names anything else.
+	 *
+	 * <p>Only the final path segment is considered, and only as a lookup key into
+	 * {@link #BUNDLED_SCHEMAS}. Nothing from the reference reaches a file or classpath path.
+	 */
+	private static String bundledNameFor(String reference) {
+		if (reference == null) {
+			return null;
+		}
+		String trimmed = reference.trim();
+		int lastSlash = trimmed.lastIndexOf('/');
+		if (lastSlash >= 0) {
+			trimmed = trimmed.substring(lastSlash + 1);
+		}
+		return BUNDLED_SCHEMAS.contains(trimmed) ? trimmed : null;
+	}
 
 	/**
 	 * Validates an XML document using a schema
@@ -59,24 +231,105 @@ public class XMLUtil {
 			throw e;
 		}
 
-		SchemaFactory schemaFactory = SchemaFactory.newInstance("http://www.w3.org/2001/XMLSchema");
+		// The schema is selected by name from the bundled set, never fetched from schemaLoc.
+		// schemaLoc has always been a deployment URL or an absolute path, so honouring it
+		// made validation depend on the network -- and on a build-time substitution that no
+		// longer happens, which is why every job XML upload failed. Resolving locally fixes
+		// that without altering any document's namespace.
+		String rootSchema = bundledNameFor(schemaLoc);
+		if (rootSchema == null) {
+			final String message =
+					"No bundled schema is available for '" + schemaLoc + "'";
+			log.error("validateAgainstSchema - " + message);
+			return new ValidatorStatusCode(false, message);
+		}
+
+		// The JDK's own implementation, not whichever provider happens to be on the classpath.
+		// Service-provider lookup finds Xerces 2.12.2 here, which silently ignores both
+		// restrictions below.
+		SchemaFactory schemaFactory = SchemaFactory.newDefaultInstance();
 
 		try {
-			factory.setSchema(schemaFactory.newSchema(new Source[]{new StreamSource(schemaLoc)}));
+			// Deny arbitrary external schema/DTD resolution. Combined with the resolver below,
+			// nothing outside the bundled set can be fetched or read.
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_DTD, schemaFactory::setProperty);
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_SCHEMA, schemaFactory::setProperty);
+		} catch (SAXException e) {
+			final String message = "The XML schema provider will not accept the external-access"
+					+ " restrictions this application requires";
+			log.error("validateAgainstSchema - " + message, e);
+			return new ValidatorStatusCode(false, message);
+		}
+		schemaFactory.setResourceResolver(new BundledSchemaResolver());
+
+		try (InputStream rootStream =
+				     XMLUtil.class.getResourceAsStream(SCHEMA_CLASSPATH_DIR + rootSchema)) {
+			if (rootStream == null) {
+				final String message = "Bundled schema '" + rootSchema + "' is missing from the deployment";
+				log.error("validateAgainstSchema - " + message);
+				return new ValidatorStatusCode(false, message);
+			}
+
+			StreamSource rootSource = new StreamSource(rootStream);
+			// A stable systemId so relative imports have a base to resolve against; the
+			// resolver keys on the file name, so this never becomes a fetchable location.
+			rootSource.setSystemId(SCHEMA_CLASSPATH_DIR + rootSchema);
+
+			factory.setSchema(schemaFactory.newSchema(new Source[]{rootSource}));
 			Schema schema = factory.getSchema();
 			DocumentBuilder builder = factory.newDocumentBuilder();
 			Document document = builder.parse(file);
 			Validator validator = schema.newValidator();
+			// The same restrictions again: newSchema() and validate() are separately
+			// configurable, so restricting one would leave the other open.
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_DTD, validator::setProperty);
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_SCHEMA, validator::setProperty);
+			validator.setResourceResolver(new BundledSchemaResolver());
 			DOMSource source = new DOMSource(document);
 			validator.validate(source);
 			log.debug("XML File has been validated against the schema.");
 			return new ValidatorStatusCode(true);
+		} catch (UnresolvableSchemaReference ex) {
+			// A bundled schema named something outside the bundled set. Trusted input got it
+			// wrong, so this is a deployment fault, not the uploader's.
+			log.error("validateAgainstSchema - " + ex.getMessage());
+			return new ValidatorStatusCode(false, "This deployment's XML schemas are inconsistent"
+					+ " and could not be loaded");
 		} catch (SAXException ex) {
 			final String message = "File '" + file.getName() + "' is not valid because: \"" + ex.getMessage() + "\"";
 			log.warn(message);
 			return new ValidatorStatusCode(false, message);
 		}
 
+	}
+
+	/**
+	 * Parses a value against the XML Schema {@code xs:boolean} lexical space, or null if the
+	 * value is not in it.
+	 *
+	 * <p>That space is {@code true}, {@code false}, {@code 1} and {@code 0} -- all four, and
+	 * nothing else. {@code Boolean.parseBoolean} and {@code Boolean.valueOf} accept only
+	 * "true", case-insensitively, and answer false for everything else, so against a
+	 * schema-typed attribute they read a valid {@code "1"} as false and cannot distinguish a
+	 * malformed value from {@code "false"}. Returning null keeps that distinction with the
+	 * caller, which knows whether the attribute was present and what to report.
+	 *
+	 * <p>The schema collapses whitespace before the lexical check, so it is trimmed here too.
+	 */
+	public static Boolean parseXsdBoolean(String value) {
+		if (value == null) {
+			return null;
+		}
+		switch (value.trim()) {
+			case "true":
+			case "1":
+				return Boolean.TRUE;
+			case "false":
+			case "0":
+				return Boolean.FALSE;
+			default:
+				return null;
+		}
 	}
 
 	/**
