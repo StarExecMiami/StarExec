@@ -62,6 +62,98 @@ public class AdjustForK8sStageIndexTest {
 	}
 
 	/**
+	 * The mixed-version case, and the reason the helper defaults {@code STAGE_INDEX} itself.
+	 *
+	 * <p>{@code functions.bash} lives in the data volume and is only copied when absent, while
+	 * the {@code jobscript} template ships inside the application image. A deployment can
+	 * therefore run this helper against a template generated before {@code STAGE_INDEX=0}
+	 * existed. That template sets the variable nowhere before {@code initSandbox}, and it used
+	 * to work only because {@code adjustForK8s} leaked a value into it.
+	 *
+	 * <p>So: source the helper, never assign {@code STAGE_INDEX}, and do what {@code sendNode}
+	 * does. Under {@code set -u} an unset index is fatal, which would kill every pair on such a
+	 * deployment before its solver ran.
+	 */
+	@Test
+	public void theHelperIsUsableWithAJobscriptThatNeverSetsTheStageIndex() throws Exception {
+		Path dir = folder.newFolder("old-template").toPath();
+		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
+		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
+
+		StringBuilder s = new StringBuilder();
+		s.append("set -euo pipefail\n");
+		s.append(preamble(dir));
+		s.append("SOLVER_PATHS=()\n");
+		s.append("STAGE_NUMBERS=(1 2)\n");
+		s.append(". \"$SCRIPT_DIR/functions.bash\"\n");
+		// No STAGE_INDEX assignment anywhere -- exactly what the old template does.
+		s.append("adjustForK8s\n");
+		s.append("echo \"OUT-STAGE_INDEX|$STAGE_INDEX\"\n");
+		// The read sendNode performs, which is what actually died.
+		s.append("echo \"OUT-STAGE_NUMBER|${STAGE_NUMBERS[STAGE_INDEX]}\"\n");
+
+		File script = new File(dir.toFile(), "old-template.sh");
+		Files.writeString(script.toPath(), s.toString());
+		Result r = run(Bash.PATH, script.getAbsolutePath());
+
+		assertEquals("an old template must not die on an unbound STAGE_INDEX:\n" + r.out,
+				0, r.exit);
+		assertEquals("the helper must default the index to 0", "0", value(r.out, "OUT-STAGE_INDEX"));
+		assertEquals("the initial status must name the first stage that runs",
+				"1", value(r.out, "OUT-STAGE_NUMBER"));
+	}
+
+	/**
+	 * The invariant tests above would all pass if {@code adjustForK8s} did nothing at all, so
+	 * this pins the work it is actually there to do: when it finds the launcher it redirects
+	 * {@code WORKING_DIR_BASE} at the per-pair k8s sandbox.
+	 */
+	@Test
+	public void adjustForK8sStillRedirectsTheWorkingDirWhenItFindsTheLauncher() throws Exception {
+		Path dir = folder.newFolder("still-works").toPath();
+		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
+		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
+		Path solver = dir.resolve("solver0");
+		Files.createDirectories(solver.resolve("bin"));
+		Files.writeString(solver.resolve("bin/run_image_k8s.py"), "#\n");
+
+		StringBuilder s = new StringBuilder();
+		s.append(preamble(dir));
+		s.append("SOLVER_PATHS=(\"").append(Base64.getEncoder().encodeToString(
+				solver.toString().getBytes(StandardCharsets.UTF_8))).append("\")\n");
+		s.append(". \"$SCRIPT_DIR/functions.bash\"\n");
+		s.append("BEFORE=\"$WORKING_DIR_BASE\"\n");
+		s.append("adjustForK8s\n");
+		s.append("echo \"OUT-BEFORE|$BEFORE\"\n");
+		s.append("echo \"OUT-AFTER|$WORKING_DIR_BASE\"\n");
+
+		File script = new File(dir.toFile(), "still-works.sh");
+		Files.writeString(script.toPath(), s.toString());
+		Result r = run(Bash.PATH, script.getAbsolutePath());
+
+		assertEquals("must not abort:\n" + r.out, 0, r.exit);
+		assertTrue("adjustForK8s must still redirect WORKING_DIR_BASE, was "
+						+ value(r.out, "OUT-AFTER"),
+				value(r.out, "OUT-AFTER").endsWith("/k8sSandboxes/41"));
+		assertTrue("and it must have changed from the original",
+				!value(r.out, "OUT-AFTER").equals(value(r.out, "OUT-BEFORE")));
+	}
+
+	/** The exports every generated script carries before it sources the helper. */
+	private static String preamble(Path dir) {
+		StringBuilder s = new StringBuilder();
+		s.append("export SCRIPT_DIR=\"").append(dir).append("\"\n");
+		s.append("export STAREXEC_OUTPUT_DIR=\"").append(dir).append("/out\"\n");
+		s.append("export CONTAINER_MODE=true\n");
+		s.append("export PAIR_ID=41\n");
+		s.append("export SHARED_DIR=\"").append(dir).append("/shared\"\n");
+		s.append("export WORKING_DIR_BASE=\"").append(dir).append("/work\"\n");
+		s.append("export BENCH_PATH=\"$(printf '/bench/primary.p' | base64 -w0)\"\n");
+		s.append("export PAIR_OUTPUT_DIRECTORY=\"$(printf '/out/pair' | base64 -w0)\"\n");
+		return s.toString();
+	}
+
+	/**
 	 * Runs the shipped helper's {@code adjustForK8s} between two reads of the global, and
 	 * requires them to agree.
 	 *

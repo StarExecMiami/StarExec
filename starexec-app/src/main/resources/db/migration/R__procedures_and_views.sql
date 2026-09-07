@@ -2037,7 +2037,23 @@ BEGIN
 			MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
 	END IF;
 
-	-- Already there. Idempotent success, terminal or not, so a replay is a no-op.
+	-- The value being written must itself be a result. STATUS_PROCESSING_RESULTS(19),
+	-- STATUS_PAUSED(20) and STATUS_PROCESSING(22) are not: they mean work is still owed, and
+	-- a stage parked at 22 is picked up by the periodic post-processing task, which then sets
+	-- the whole PAIR to STATUS_COMPLETE. Rejecting them here, rather than only in the caller,
+	-- means the database refuses to hold a laundered result no matter who asks.
+	IF NOT starexec.IsTerminalPairStatus(_statusCode) THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0001',
+			MESSAGE = format(
+				'Status %s is not a terminal result and cannot be recorded for pair %s stage %s',
+				_statusCode,
+				_jobPairId,
+				_stageNumber
+			);
+	END IF;
+
+	-- Already there. Idempotent success, so a replay is a no-op.
 	IF _current = _statusCode THEN
 		RETURN TRUE;
 	END IF;

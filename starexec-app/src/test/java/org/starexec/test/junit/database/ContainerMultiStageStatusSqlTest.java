@@ -10,9 +10,13 @@ import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.JobPairs;
+import org.starexec.backend.exception.RetryableIngestionException;
+import org.starexec.data.database.StageStatusBatchResult;
+import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -21,6 +25,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -73,6 +78,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	private static final int NOT_REACHED = 23;
 
 	private ContainerJobMonitor monitor;
+	/** Held so the lifecycle tests can stub the poll and verify what the monitor did with it. */
+	private PodmanBackend backend;
 	private Path work;
 
 	@BeforeClass
@@ -84,7 +91,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	@Before
 	public void seed() throws Exception {
 		cleanUp();
-		monitor = new ContainerJobMonitor(Mockito.mock(PodmanBackend.class));
+		backend = Mockito.mock(PodmanBackend.class);
+		monitor = new ContainerJobMonitor(backend);
 		work = Files.createTempDirectory("stage-status-probe");
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			s.execute("INSERT INTO starexec.users (id,email,first_name,last_name,institution,"
@@ -202,6 +210,13 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeCpuLimitBreach(out);
 
 		process(out);
+		// job_pair_completion has UNIQUE(pair_id) and the insert is ON CONFLICT DO NOTHING,
+		// so counting rows proves nothing -- it would read 1 even if the terminal routine ran
+		// once per stage. Capture the identity and the timestamps instead: those DO move if
+		// the pair-terminal path executes a second time.
+		int completionIdBefore = completionId();
+		String endTimeBefore = pairEndTime();
+
 		process(out);
 
 		assertEquals(COMPLETE, stageStatus(1));
@@ -209,6 +224,10 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		assertEquals(NOT_REACHED, stageStatus(3));
 		assertEquals(EXCEED_CPU, pairStatus());
 		assertEquals("a replay must not complete the pair twice", 1, completions());
+		assertEquals("the completion row must be the same one",
+				completionIdBefore, completionId());
+		assertEquals("a replay must not move the pair's end_time",
+				endTimeBefore, pairEndTime());
 	}
 
 	/**
@@ -278,7 +297,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeSnapshot(out, OTHER_PAIR_ID, COMPLETE, 1);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out);
+		assertRejectedWithoutWriting(out, "claims pair " + OTHER_PAIR_ID);
 		assertEquals("the pair it tried to reach must be untouched",
 				ENQUEUED, stageStatus(OTHER_PAIR_ID, 1));
 	}
@@ -290,7 +309,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeLegacyStatus(out, OTHER_PAIR_ID, COMPLETE, 2);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out);
+		assertRejectedWithoutWriting(out, "but the container is labelled pair");
 		assertEquals(ENQUEUED, stageStatus(OTHER_PAIR_ID, 2));
 	}
 
@@ -304,7 +323,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 				record(PAIR_ID, COMPLETE, 2));
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out);
+		assertRejectedWithoutWriting(out, "names stage");
 	}
 
 	/**
@@ -409,7 +428,201 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out);
+		assertRejectedWithoutWriting(out, "carries non-terminal status");
+	}
+
+	/**
+	 * The laundering path, refused. A stage parked at {@code STATUS_PROCESSING(22)} is
+	 * selected by the periodic post-processing task, which sets the whole PAIR to
+	 * {@code STATUS_COMPLETE} -- so accepting 22 here would let a container convert its own
+	 * timeout into a clean completion. The pair must be left exactly as it was, with its
+	 * evidence intact for diagnosis.
+	 */
+	@Test
+	public void aSnapshotClaimingProcessingIsRefusedAndCannotReachComplete() throws Exception {
+		Path out = outputDir("launder");
+		writeLegacyStatus(out, PAIR_ID, COMPLETE, 2);
+		writeSnapshot(out, PAIR_ID, 22, 1);
+		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
+		writeCleanRun(out);
+
+		assertRejectedWithoutWriting(out, "carries non-terminal status 22");
+
+		// The post-processing task selects on exactly this, so nothing may be left holding it.
+		try (Connection con = Common.getConnection()) {
+			assertEquals("no stage may be left at STATUS_PROCESSING", 0,
+					scalar(con, "SELECT count(*) FROM starexec.jobpair_stage_data"
+							+ " WHERE jobpair_id=" + PAIR_ID + " AND status_code=22"));
+		}
+	}
+
+	// --------------------------------------------- the real outer monitor lifecycle
+
+	/**
+	 * The property this PR actually claims, proven through the caller that decides it.
+	 *
+	 * <p>{@code processCompletedJob} throwing is not evidence of anything on its own: what
+	 * matters is what {@code checkCompletedJobs} does with the throw. It used to catch
+	 * everything, stamp the pair {@code ERROR_RUNSCRIPT} and delete the container -- so a
+	 * transient database failure during ingestion overwrote a stage that had just been
+	 * recorded {@code COMPLETE} and destroyed the only copy of a good result.
+	 *
+	 * <p>Sequence: stage 1 persists, the pair-level write is blocked, and then the assertions
+	 * are about the outer lifecycle -- the pair is untouched, the container is NOT removed,
+	 * and the execution slot IS handed back so retrying costs no capacity. The block is then
+	 * lifted and a second poll must converge, removing the container only once it has
+	 * succeeded.
+	 */
+	@Test
+	public void aTransientFailureIsRetriedByTheRealMonitorWithoutLosingAnything()
+			throws Exception {
+		Path out = outputDir("lifecycle");
+		writeLegacyStatus(out, PAIR_ID, EXCEED_CPU, 2);
+		writeSnapshot(out, PAIR_ID, COMPLETE, 1);
+		writeSnapshot(out, PAIR_ID, EXCEED_CPU, 2);
+		writeCpuLimitBreach(out);
+
+		PodmanBackend.CompletedContainerInfo info = new PodmanBackend.CompletedContainerInfo(
+				"lifecycle-container", PAIR_ID, out.toString(), 0, 0);
+		Mockito.when(backend.getCompletedContainers())
+				.thenReturn(Collections.singletonList(info));
+
+		// --- B: the pair-level write fails transiently ---
+		installPairStatusBlock();
+		pollOnce();
+
+		// --- C: nothing about the result was altered ---
+		assertEquals("the earlier stage stands", COMPLETE, stageStatus(1));
+		assertEquals("the pair must NOT have been force-failed", ENQUEUED, pairStatus());
+		assertEquals("nothing completed the pair", 0, completions());
+
+		// --- D/F: evidence kept, capacity returned ---
+		Mockito.verify(backend, Mockito.never())
+				.removeCompletedContainer("lifecycle-container");
+		Mockito.verify(backend, Mockito.times(1))
+				.releaseSlotForCompletedContainer("lifecycle-container");
+		assertTrue("the output directory is the only copy and must survive",
+				Files.isDirectory(out.resolve("stage-status")));
+
+		// --- E: a later poll retries and converges ---
+		removePairStatusBlock();
+		resetBackoff();
+		pollOnce();
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals(EXCEED_CPU, stageStatus(2));
+		assertEquals(NOT_REACHED, stageStatus(3));
+		assertEquals(EXCEED_CPU, pairStatus());
+		assertEquals(1, completions());
+
+		// --- F/G: cleanup only after success, slot released exactly once ---
+		Mockito.verify(backend, Mockito.times(1))
+				.removeCompletedContainer("lifecycle-container");
+		Mockito.verify(backend, Mockito.times(1))
+				.releaseSlotForCompletedContainer("lifecycle-container");
+	}
+
+	/**
+	 * Content that will never be valid still resolves, so a genuinely broken container cannot
+	 * occupy the queue forever. This is the other half of the classification: the pair is
+	 * failed and the container released, which is correct here and wrong for the case above.
+	 */
+	@Test
+	public void unusableContentIsStillResolvedAndReleased() throws Exception {
+		Path out = outputDir("unusable");
+		writeLegacyStatus(out, PAIR_ID, COMPLETE, 2);
+		writeSnapshot(out, OTHER_PAIR_ID, COMPLETE, 1);
+		writeCleanRun(out);
+
+		PodmanBackend.CompletedContainerInfo info = new PodmanBackend.CompletedContainerInfo(
+				"unusable-container", PAIR_ID, out.toString(), 0, 0);
+		Mockito.when(backend.getCompletedContainers())
+				.thenReturn(Collections.singletonList(info));
+
+		pollOnce();
+
+		Mockito.verify(backend, Mockito.times(1))
+				.removeCompletedContainer("unusable-container");
+		assertEquals("the pair is resolved rather than left hanging",
+				11, pairStatus());
+	}
+
+	/**
+	 * New application against a database whose migrations have not been applied.
+	 *
+	 * <p>Reachable: {@code SKIP_MIGRATIONS=true} exists, and migrations are routinely applied
+	 * out of band. Calling a stored routine that is not there raises SQLSTATE 42883, and the
+	 * old catch-all turned that into {@code ERROR_RUNSCRIPT} plus container deletion -- so
+	 * deploying the application before the migration silently destroyed every successful
+	 * multi-stage pair. It has to fail closed instead: nothing recorded, nothing deleted,
+	 * retry once the routine exists.
+	 *
+	 * <p>The routine is renamed rather than dropped so the fixture can put it back whatever
+	 * the test does.
+	 */
+	@Test
+	public void anUnmigratedDatabaseFailsClosedAndKeepsTheResults() throws Exception {
+		Path out = outputDir("unmigrated");
+		writeLegacyStatus(out, PAIR_ID, EXCEED_CPU, 2);
+		writeSnapshot(out, PAIR_ID, COMPLETE, 1);
+		writeSnapshot(out, PAIR_ID, EXCEED_CPU, 2);
+		writeCpuLimitBreach(out);
+
+		PodmanBackend.CompletedContainerInfo info = new PodmanBackend.CompletedContainerInfo(
+				"unmigrated-container", PAIR_ID, out.toString(), 0, 0);
+		Mockito.when(backend.getCompletedContainers())
+				.thenReturn(Collections.singletonList(info));
+
+		renameRoutine("UpdatePairStageStatusIfUnresolved", "UpdatePairStageStatusIfUnresolved_hidden");
+		try {
+			pollOnce();
+
+			assertEquals("no stage may be written without the routine", ENQUEUED, stageStatus(1));
+			assertEquals("the pair must not be force-failed", ENQUEUED, pairStatus());
+			assertEquals("nothing may complete the pair", 0, completions());
+			Mockito.verify(backend, Mockito.never())
+					.removeCompletedContainer("unmigrated-container");
+			assertTrue("the results must survive for the retry",
+					Files.isDirectory(out.resolve("stage-status")));
+		} finally {
+			renameRoutine("UpdatePairStageStatusIfUnresolved_hidden", "UpdatePairStageStatusIfUnresolved");
+		}
+
+		// And once the migration has been applied, the same output ingests cleanly.
+		resetBackoff();
+		pollOnce();
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals(EXCEED_CPU, stageStatus(2));
+		assertEquals(NOT_REACHED, stageStatus(3));
+		assertEquals(EXCEED_CPU, pairStatus());
+		Mockito.verify(backend, Mockito.times(1))
+				.removeCompletedContainer("unmigrated-container");
+	}
+
+	private void renameRoutine(String from, String to) throws SQLException {
+		try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {
+			st.execute("ALTER FUNCTION starexec." + from + "(INT, INT, INT) RENAME TO " + to);
+		}
+	}
+
+	/** One poll of the real loop. */
+	private void pollOnce() throws Exception {
+		Method check = ContainerJobMonitor.class.getDeclaredMethod("checkCompletedJobs");
+		check.setAccessible(true);
+		try {
+			check.invoke(monitor);
+		} catch (InvocationTargetException e) {
+			Throwable cause = e.getCause();
+			throw cause instanceof Exception ? (Exception) cause : new Exception(cause);
+		}
+	}
+
+	/** Clears the retry backoff so the second poll is not skipped by the wait. */
+	private void resetBackoff() throws Exception {
+		Field f = ContainerJobMonitor.class.getDeclaredField("ingestionAttempts");
+		f.setAccessible(true);
+		((Map<?, ?>) f.get(monitor)).clear();
 	}
 
 	// ------------------------------------------------- the guard, exercised directly
@@ -417,21 +630,27 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	/** Applying the same terminal status twice is a no-op, not a second write. */
 	@Test
 	public void applyingTheSameStatusTwiceIsIdempotent() throws Exception {
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
 		assertEquals(COMPLETE, stageStatus(1));
 
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(2, EXCEED_CPU)));
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(2, EXCEED_CPU)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(2, EXCEED_CPU)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(2, EXCEED_CPU)));
 		assertEquals(EXCEED_CPU, stageStatus(2));
 	}
 
 	/** A stale record must never move a finished stage backwards. */
 	@Test
 	public void aStaleRunningRecordCannotUndoACompletedStage() throws Exception {
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
 
-		assertTrue("a refusal is reported, not raised",
+		// RUNNING is not a result at all, so the routine refuses it outright now.
+		assertEquals(StageStatusBatchResult.FAILED,
 				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, RUNNING)));
 
 		assertEquals("the completed stage stands", COMPLETE, stageStatus(1));
@@ -440,8 +659,10 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	/** Nor may one terminal result be quietly replaced by a different one. */
 	@Test
 	public void oneTerminalResultDoesNotReplaceAnother() throws Exception {
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
-		assertTrue(JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, EXCEED_CPU)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, EXCEED_CPU)));
 		assertEquals(COMPLETE, stageStatus(1));
 	}
 
@@ -452,19 +673,62 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		batch.put(1, COMPLETE);
 		batch.put(9, COMPLETE);
 
-		assertTrue("the batch must report failure", !JobPairs.setEarlierStageStatuses(PAIR_ID, batch));
+		assertEquals("an unknown stage is bad data, not an outage",
+				StageStatusBatchResult.REJECTED_UNKNOWN_STAGE,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, batch));
 		assertEquals("the stage that would have succeeded must have rolled back",
 				ENQUEUED, stageStatus(1));
 	}
 
+	/**
+	 * The database itself refuses every non-terminal status, for every code the model has.
+	 *
+	 * <p>Enumerated rather than probing the three known mismatches, so a status added later
+	 * cannot quietly become ingestible. The expected answer is taken from
+	 * {@code isTerminalExecutionResult}, and {@code TerminalStatusContractSqlTest} separately
+	 * proves that predicate equals the database's own -- so this asserts the mutation boundary
+	 * and that one asserts the definition.
+	 */
+	@Test
+	public void theRoutineAcceptsExactlyTheTerminalStatuses() throws Exception {
+		for (StatusCode code : StatusCode.values()) {
+			int value = code.getVal();
+			// Reset the stage so each code is judged from the same starting point.
+			try (Connection con = Common.getConnection(); Statement st = con.createStatement()) {
+				st.execute("UPDATE starexec.jobpair_stage_data SET status_code=" + ENQUEUED
+						+ " WHERE jobpair_id=" + PAIR_ID + " AND stage_number=1");
+			}
+			StageStatusBatchResult result =
+					JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, value));
+
+			if (code.isTerminalExecutionResult()) {
+				assertEquals(code + "(" + value + ") is a result and must be accepted",
+						StageStatusBatchResult.APPLIED, result);
+				assertEquals(code + " must have been written", value, stageStatus(1));
+			} else {
+				assertEquals(code + "(" + value + ") is not a result and must be refused",
+						StageStatusBatchResult.FAILED, result);
+				assertEquals(code + " must not have been written",
+						ENQUEUED, stageStatus(1));
+			}
+		}
+	}
+
 	// ------------------------------------------------------------------------- harness
 
-	private void assertRejectedWithoutWriting(Path out) throws Exception {
+	private void assertRejectedWithoutWriting(Path out, String expectedReason) throws Exception {
 		try {
 			process(out);
 			fail("untrusted output must not be processed");
+		} catch (RetryableIngestionException wrongKind) {
+			fail("bad content must be permanent, not retryable: " + wrongKind.getMessage());
 		} catch (Exception expected) {
+			// Pinned to the specific refusal. Accepting any exception would let this pass
+			// for an unrelated reason -- a Gson failure, a refactor moving the throw --
+			// and the test would keep reporting success while proving nothing.
 			assertNotNull(expected.getMessage());
+			assertTrue("wrong refusal: " + expected.getMessage(),
+					expected.getMessage().contains(expectedReason));
 		}
 		assertEquals("stage 1 must be untouched", ENQUEUED, stageStatus(1));
 		assertEquals("stage 2 must be untouched", ENQUEUED, stageStatus(2));
@@ -579,6 +843,23 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	private int pairStatus() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			return scalar(con, "SELECT status_code FROM starexec.job_pairs WHERE id=" + PAIR_ID);
+		}
+	}
+
+	private int completionId() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			return scalar(con, "SELECT coalesce(max(completion_id),-1) FROM"
+					+ " starexec.job_pair_completion WHERE pair_id=" + PAIR_ID);
+		}
+	}
+
+	private String pairEndTime() throws SQLException {
+		try (Connection con = Common.getConnection();
+				Statement st = con.createStatement();
+				ResultSet rs = st.executeQuery("SELECT coalesce(end_time::text,'null')"
+						+ " FROM starexec.job_pairs WHERE id=" + PAIR_ID)) {
+			assertTrue(rs.next());
+			return rs.getString(1);
 		}
 	}
 

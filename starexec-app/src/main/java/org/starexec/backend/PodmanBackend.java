@@ -3299,6 +3299,35 @@ public class PodmanBackend implements Backend {
      *
      * @param containerId The container ID to remove
      */
+    /**
+     * Gives back the execution slot a finished container was holding, without touching the
+     * container or anything it wrote.
+     *
+     * <p>Split out of {@link #removeCompletedContainer(String)} because those two jobs have
+     * different deadlines. Capacity should be returned as soon as the container has
+     * definitively exited -- it is not running, so it is not using its slot. The container
+     * and its output directory, on the other hand, are the only copy of the pair's results
+     * and must survive until they have actually been ingested.
+     *
+     * <p>Bundling them meant the monitor had one lever: keep a slot occupied indefinitely, or
+     * delete the evidence. It chose to delete, so a transient database failure during
+     * ingestion destroyed a good pair's results. With this, a retry costs nothing but disk.
+     *
+     * <p>Idempotent: the tracked execution is removed on the first call, so a second call
+     * finds nothing and releases nothing. That is what makes "released exactly once" hold
+     * across however many retries a container needs.
+     */
+    public void releaseSlotForCompletedContainer(String containerId) {
+        Integer execId = removeTrackedExecutionByContainerId(containerId);
+        if (execId != null) {
+            releaseSubmissionSlot(execId, "container exited; results not yet ingested");
+            log.debug(
+                "Released submission slot for exited container " + containerId +
+                    "; container and output retained for ingestion"
+            );
+        }
+    }
+
     public void removeCompletedContainer(String containerId) {
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {

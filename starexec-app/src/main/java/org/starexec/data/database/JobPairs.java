@@ -2171,14 +2171,17 @@ public class JobPairs {
      *
      * @param pairId        the pair every stage belongs to
      * @param stageStatuses stage number to status code; an empty map is a no-op success
-     * @return true when every stage holds a recorded result, false when nothing was written
+     * @return {@code APPLIED} when the batch committed -- individual stages may still have
+     *         been refused for already holding a result, which is logged, not failed;
+     *         {@code REJECTED_UNKNOWN_STAGE} when the batch names a stage the pair does not
+     *         have; {@code FAILED} when nothing was written for an infrastructure reason
      */
-    public static boolean setEarlierStageStatuses(
+    public static StageStatusBatchResult setEarlierStageStatuses(
         int pairId,
         Map<Integer, Integer> stageStatuses
     ) {
         if (stageStatuses.isEmpty()) {
-            return true;
+            return StageStatusBatchResult.APPLIED;
         }
         Connection con = null;
         PreparedStatement ps = null;
@@ -2207,7 +2210,38 @@ public class JobPairs {
                         " already carried a different result and were left alone"
                 );
             }
-            return true;
+            return StageStatusBatchResult.APPLIED;
+        } catch (SQLException e) {
+            Common.doRollback(con);
+            // P0002 is the routine's own "no such pair or stage" -- the batch names a stage
+            // this pair does not have, which no retry can change. 42883 is the routine
+            // itself being absent, which means migrations have not run: infrastructure, and
+            // it resolves the moment they do. Everything else is treated as infrastructure
+            // too, because assuming otherwise records a solver failure for a lock timeout.
+            String state = e.getSQLState();
+            if ("P0002".equals(state)) {
+                log.warn(
+                    "Pair " + pairId + ": stage batch " + stageStatuses +
+                        " names a stage this pair does not have; nothing written",
+                    e
+                );
+                return StageStatusBatchResult.REJECTED_UNKNOWN_STAGE;
+            }
+            if ("42883".equals(state)) {
+                log.error(
+                    "Pair " + pairId + ": UpdatePairStageStatusIfUnresolved is missing from" +
+                        " the database. Apply the Flyway migrations; results are preserved" +
+                        " and ingestion will retry.",
+                    e
+                );
+            } else {
+                log.error(
+                    "Pair " + pairId + ": could not record earlier stage statuses " +
+                        stageStatuses + " (SQLState " + state + "); nothing written",
+                    e
+                );
+            }
+            return StageStatusBatchResult.FAILED;
         } catch (Exception e) {
             log.error(
                 "Could not record earlier stage statuses " + stageStatuses +
@@ -2215,11 +2249,11 @@ public class JobPairs {
                 e
             );
             Common.doRollback(con);
+            return StageStatusBatchResult.FAILED;
         } finally {
             Common.safeClose(ps);
             Common.safeClose(con);
         }
-        return false;
     }
 
     /**
