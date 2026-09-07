@@ -5,9 +5,16 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.util.XMLUtil;
+import org.xml.sax.SAXNotRecognizedException;
+
+import javax.xml.XMLConstants;
+import javax.xml.transform.stream.StreamSource;
+import javax.xml.validation.SchemaFactory;
+import javax.xml.validation.Validator;
 
 import java.io.File;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.ServerSocket;
@@ -303,6 +310,56 @@ public class SchemaResolutionTest {
 		}
 	}
 
+	/**
+	 * The provider must accept the external-access restrictions, and the one the classpath
+	 * would otherwise select does not.
+	 *
+	 * <p>Service-provider lookup finds {@code xerces:xercesImpl:2.12.2}, which arrives
+	 * transitively through {@code org.owasp.antisamy} and rejects both properties on both
+	 * objects -- so under {@code SchemaFactory.newInstance} all four restrictions were inert
+	 * and the code merely logged that. This pins both halves: the classpath provider is still
+	 * the broken one, and the provider actually used accepts the restrictions.
+	 */
+	@Test
+	public void theProviderInUseAcceptsTheExternalAccessRestrictions() throws Exception {
+		SchemaFactory defaultFactory = SchemaFactory.newDefaultInstance();
+		defaultFactory.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+		defaultFactory.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+
+		Validator validator = defaultFactory
+				.newSchema(new StreamSource(new StringReader(MINIMAL_SCHEMA)))
+				.newValidator();
+		validator.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+		validator.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+
+		// And the reason the code no longer uses service-provider lookup.
+		SchemaFactory lookedUp = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+		try {
+			lookedUp.setProperty(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+			// If this ever starts working the comment in XMLUtil is stale, but nothing is
+			// unsafe: the code uses the default provider either way.
+		} catch (SAXNotRecognizedException expected) {
+			assertTrue("the classpath provider should be the one that cannot be restricted",
+					lookedUp.getClass().getName().contains("xerces"));
+		}
+	}
+
+	/** Every import the bundled schemas actually declare still resolves. */
+	@Test
+	public void everyBundledImportResolves() throws Exception {
+		int imports = 0;
+		for (String name : BUNDLED_SCHEMAS) {
+			Matcher m = Pattern.compile("<import[^>]*schemaLocation=\"([^\"]+)\"")
+					.matcher(readPackaged(name));
+			while (m.find()) {
+				imports++;
+				assertTrue(name + " imports '" + m.group(1) + "', which is not bundled",
+						BUNDLED_SCHEMAS.contains(m.group(1).substring(m.group(1).lastIndexOf('/') + 1)));
+			}
+		}
+		assertTrue("the bundled schemas should declare imports to resolve", imports > 0);
+	}
+
 	// ----------------------------------------------------------- documented gap
 
 	/**
@@ -349,6 +406,10 @@ public class SchemaResolutionTest {
 	}
 
 	// -------------------------------------------------------------------- setup
+
+	private static final String MINIMAL_SCHEMA =
+			"<?xml version=\"1.0\"?><schema xmlns=\"http://www.w3.org/2001/XMLSchema\""
+			+ " targetNamespace=\"urn:t\"><element name=\"r\" type=\"string\"/></schema>";
 
 	private String readPackaged(String name) throws Exception {
 		try (InputStream in = XMLUtil.class.getResourceAsStream(SCHEMA_DIR + name)) {

@@ -30,7 +30,6 @@ import java.io.Reader;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Contains functionality shared between JobUtil, BatchUtil, and JobToXMLer
@@ -72,9 +71,6 @@ public class XMLUtil {
 		BUNDLED_SCHEMAS = Collections.unmodifiableSet(schemas);
 	}
 
-	/** Which {@code "target property"} pairs have already been reported as unsupported. */
-	private static final Set<String> UNSUPPORTED_PROPERTIES_REPORTED = ConcurrentHashMap.newKeySet();
-
 	/**
 	 * Resolves schema imports from the bundled copies and refuses everything else.
 	 *
@@ -84,28 +80,40 @@ public class XMLUtil {
 	 * file name against the packaged copies removes both the network dependency and the
 	 * substitution requirement, and does not change any document's namespace.
 	 *
-	 * <p>Returning null hands the reference back to the processor's own resolution, so denial
-	 * does not rest on the null alone. What bounds resolution is that no attacker-controlled
-	 * reference reaches a resolver at all: the root schema is selected by name from
-	 * {@link #BUNDLED_SCHEMAS} and read from the classpath, its only import is another bundled
-	 * schema, and the compiled schema handed to the validator is fixed -- an uploaded
-	 * document's {@code xsi:schemaLocation} and {@code xsi:noNamespaceSchemaLocation} are
-	 * never consulted. That last part is a property of the bundled parser rather than
-	 * something this class can assert, so {@code SchemaResolutionTest} measures it against a
-	 * loopback listener instead of assuming it.
+	 * <p>An unknown reference throws rather than returning null. JAXP defines a null result as
+	 * "resolve this the normal way", so returning null would hand the reference back to the
+	 * processor's own resolution -- which is the opposite of denying it. An exception from the
+	 * resolver aborts schema construction, which is the fail-closed answer.
+	 *
+	 * <p>That distinction is not academic: the external-access properties are the other half
+	 * of the control, and only {@link #validateAgainstSchema} verifies they took effect. This
+	 * resolver has to hold on its own for anything they do not cover -- notably an unexpected
+	 * {@code <xs:import>} added to a bundled schema, which is trusted input that no
+	 * instance-document test would exercise.
 	 */
-	private static final class BundledSchemaResolver implements LSResourceResolver {
+	static final class BundledSchemaResolver implements LSResourceResolver {
 		@Override
 		public LSInput resolveResource(
 				String type, String namespaceURI, String publicId, String systemId, String baseURI
 		) {
 			String name = bundledNameFor(systemId);
 			if (name == null) {
-				log.warn("Refusing to resolve schema resource outside the bundled set: systemId=" +
-				         systemId + " namespace=" + namespaceURI);
-				return null;
+				throw new UnresolvableSchemaReference(systemId, namespaceURI);
 			}
 			return new BundledSchemaInput(name, publicId, systemId, baseURI);
+		}
+	}
+
+	/**
+	 * A schema reference outside the bundled set. Unchecked because {@link LSResourceResolver}
+	 * cannot declare one; {@link #validateAgainstSchema} catches it and turns it into a status.
+	 */
+	static final class UnresolvableSchemaReference extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+
+		private UnresolvableSchemaReference(String systemId, String namespaceURI) {
+			super("Refusing to resolve a schema resource outside the bundled set: systemId=" +
+			      systemId + " namespace=" + namespaceURI);
 		}
 	}
 
@@ -148,32 +156,26 @@ public class XMLUtil {
 	}
 
 	/**
-	 * Denies every protocol for one external-access property, on whichever JAXP object
-	 * accepts it: {@code SchemaFactory} and {@code Validator} are configured independently,
-	 * and restricting one leaves the other open.
+	 * Denies every protocol for one external-access property, and fails if the provider will
+	 * not accept the restriction.
 	 *
-	 * <p>The empty string is JAXP's "no protocol is permitted". This is defence in depth, not
-	 * the control: {@code xerces:xercesImpl} arrives transitively through
-	 * {@code org.owasp.antisamy} and registers itself as the JAXP provider, and its 2.12.2
-	 * {@code SchemaFactory} and {@code Validator} recognise <em>neither</em> property -- so on
-	 * this deployment all four calls are inert. Keeping them costs nothing and they take
-	 * effect if the provider ever changes; the actual bound on resolution is the bundled-only
-	 * schema selection described on {@link BundledSchemaResolver}.
+	 * <p>The empty string is JAXP's "no protocol is permitted". JAXP 1.5 requires an
+	 * implementation to support both properties, so a provider that rejects one is not a
+	 * provider this method may quietly continue with: warning and carrying on would leave the
+	 * restriction unenforced while the log implies otherwise. {@link #validateAgainstSchema}
+	 * therefore refuses to validate rather than validating unrestricted.
 	 *
-	 * <p>An unsupported property is reported once per JVM rather than once per validation.
-	 * Every job-XML upload takes this path, and the stack trace is the same each time: at
-	 * WARN with a trace it drowned the log and drove a failing {@code ErrorLogs} DB write per
-	 * upload.
+	 * <p>This is why the factory comes from {@link SchemaFactory#newDefaultInstance()}.
+	 * Service-provider lookup selects {@code xerces:xercesImpl}, which arrives transitively
+	 * through {@code org.owasp.antisamy}, and its 2.12.2 {@code SchemaFactory} and
+	 * {@code Validator} recognise neither property -- so under the previous lookup all four
+	 * calls were measured to be inert.
+	 *
+	 * <p>{@code SchemaFactory} and {@code Validator} are configured independently, and
+	 * restricting one leaves the other open.
 	 */
-	private static void setExternalAccessRestriction(String target, String property, PropertySetter setter) {
-		try {
-			setter.set(property, "");
-		} catch (SAXException e) {
-			if (UNSUPPORTED_PROPERTIES_REPORTED.add(target + ' ' + property)) {
-				log.warn(target + " does not support " + property +
-				         "; schema resolution stays bounded by the bundled-schema allowlist");
-			}
-		}
+	private static void denyExternalAccess(String property, PropertySetter setter) throws SAXException {
+		setter.set(property, "");
 	}
 
 	/** {@code SchemaFactory} and {@code Validator} share this signature but no supertype. */
@@ -242,12 +244,22 @@ public class XMLUtil {
 			return new ValidatorStatusCode(false, message);
 		}
 
-		SchemaFactory schemaFactory = SchemaFactory.newInstance("http://www.w3.org/2001/XMLSchema");
+		// The JDK's own implementation, not whichever provider happens to be on the classpath.
+		// Service-provider lookup finds Xerces 2.12.2 here, which silently ignores both
+		// restrictions below.
+		SchemaFactory schemaFactory = SchemaFactory.newDefaultInstance();
 
-		// Deny arbitrary external schema/DTD resolution. Combined with the resolver below,
-		// an uploaded document cannot drive a fetch of anything outside the bundled set.
-		setExternalAccessRestriction("SchemaFactory", XMLConstants.ACCESS_EXTERNAL_DTD, schemaFactory::setProperty);
-		setExternalAccessRestriction("SchemaFactory", XMLConstants.ACCESS_EXTERNAL_SCHEMA, schemaFactory::setProperty);
+		try {
+			// Deny arbitrary external schema/DTD resolution. Combined with the resolver below,
+			// nothing outside the bundled set can be fetched or read.
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_DTD, schemaFactory::setProperty);
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_SCHEMA, schemaFactory::setProperty);
+		} catch (SAXException e) {
+			final String message = "The XML schema provider will not accept the external-access"
+					+ " restrictions this application requires";
+			log.error("validateAgainstSchema - " + message, e);
+			return new ValidatorStatusCode(false, message);
+		}
 		schemaFactory.setResourceResolver(new BundledSchemaResolver());
 
 		try (InputStream rootStream =
@@ -269,15 +281,20 @@ public class XMLUtil {
 			Document document = builder.parse(file);
 			Validator validator = schema.newValidator();
 			// The same restrictions again: newSchema() and validate() are separately
-			// configurable, so restricting one would leave the other open. Both are inert
-			// under the bundled Xerces -- see setExternalAccessRestriction.
-			setExternalAccessRestriction("Validator", XMLConstants.ACCESS_EXTERNAL_DTD, validator::setProperty);
-			setExternalAccessRestriction("Validator", XMLConstants.ACCESS_EXTERNAL_SCHEMA, validator::setProperty);
+			// configurable, so restricting one would leave the other open.
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_DTD, validator::setProperty);
+			denyExternalAccess(XMLConstants.ACCESS_EXTERNAL_SCHEMA, validator::setProperty);
 			validator.setResourceResolver(new BundledSchemaResolver());
 			DOMSource source = new DOMSource(document);
 			validator.validate(source);
 			log.debug("XML File has been validated against the schema.");
 			return new ValidatorStatusCode(true);
+		} catch (UnresolvableSchemaReference ex) {
+			// A bundled schema named something outside the bundled set. Trusted input got it
+			// wrong, so this is a deployment fault, not the uploader's.
+			log.error("validateAgainstSchema - " + ex.getMessage());
+			return new ValidatorStatusCode(false, "This deployment's XML schemas are inconsistent"
+					+ " and could not be loaded");
 		} catch (SAXException ex) {
 			final String message = "File '" + file.getName() + "' is not valid because: \"" + ex.getMessage() + "\"";
 			log.warn(message);
