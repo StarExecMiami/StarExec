@@ -198,7 +198,7 @@ jobs:
           # surefire happens to schedule next and makes results order-dependent.
           # Add named classes here; do not replace this with a blanket run.
           mvn -B test -pl starexec-app \
-            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,UsersDeletionSqlRegressionTest,AuthenticatedUserStateLoaderTest,StaleSessionProcessorRevocationTest \
+            -Dtest=JobsRerunProtocolSqlTest,JobsKillProtocolSqlTest,UsersDeletionSqlRegressionTest,PipelineJobAtomicitySqlTest,AuthenticatedUserStateLoaderTest,StaleSessionProcessorRevocationTest \
             -DfailIfNoTests=false
 
       - name: Assert the DB-backed suites actually executed
@@ -219,6 +219,7 @@ jobs:
             org.starexec.test.junit.database.JobsRerunProtocolSqlTest \
             org.starexec.test.junit.database.JobsKillProtocolSqlTest \
             org.starexec.test.junit.database.UsersDeletionSqlRegressionTest \
+            org.starexec.test.junit.database.PipelineJobAtomicitySqlTest \
             org.starexec.test.junit.security.AuthenticatedUserStateLoaderTest \
             org.starexec.test.junit.security.StaleSessionProcessorRevocationTest; do
             cls="${fqcn##*.}"
