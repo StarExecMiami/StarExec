@@ -134,7 +134,21 @@ public final class StageStatusSnapshots {
                     // any stage, so there is nothing to disbelieve.
                     continue;
                 }
-                int stageFromName = Integer.parseInt(named.group(1));
+                int stageFromName;
+                try {
+                    stageFromName = Integer.parseInt(named.group(1));
+                } catch (NumberFormatException impossible) {
+                    // SNAPSHOT_NAME caps the group at nine digits, so this cannot fire while
+                    // the two agree. Handled anyway rather than relying on a constraint three
+                    // lines away: if that bound is ever loosened, an overflow here would
+                    // escape as an unchecked exception and the caller -- which retains its
+                    // evidence and retries -- would re-read the same file and re-throw on
+                    // every poll. A refusal is recoverable; a wedge is not.
+                    throw new InvalidSnapshotException(
+                        entry + " is named for a stage number that is not a usable integer",
+                        impossible
+                    );
+                }
 
                 long size = Files.size(entry);
                 if (size > MAX_BYTES) {

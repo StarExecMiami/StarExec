@@ -570,7 +570,10 @@ public class KubernetesStageStatusSqlTest extends Common {
 		try {
 			assertFalse("an unclearable tree must be reported, not ignored", clearStaleArtifacts());
 		} finally {
-			readOnly.setWritable(true, false);
+			// Checked: leaving the directory unwritable would strand an undeletable temp tree
+			// on the build machine, and a silently failed restore is exactly how that happens.
+			assertTrue("could not restore write permission on " + readOnly,
+					readOnly.setWritable(true, false));
 		}
 	}
 
