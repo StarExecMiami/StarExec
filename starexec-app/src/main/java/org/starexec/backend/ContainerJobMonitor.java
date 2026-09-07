@@ -8,9 +8,11 @@ import java.util.regex.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.backend.exception.RetryableIngestionException;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -293,17 +295,38 @@ public class ContainerJobMonitor {
             int processedCount = 0;
 
             for (PodmanBackend.CompletedContainerInfo info : completedJobs) {
+                if (ingestionQuarantine.contains(info.containerId)) {
+                    continue;
+                }
+                IngestionAttempt pending = ingestionAttempts.get(info.containerId);
+                if (pending != null
+                    && System.currentTimeMillis() < pending.nextAttemptMillis) {
+                    continue;
+                }
                 try {
                     processCompletedJob(info);
-                    // Remove container after successful processing
+                    // Only now is the container's output no longer the only copy.
                     backend.removeCompletedContainer(info.containerId);
+                    ingestionAttempts.remove(info.containerId);
                     processedCount++;
+                } catch (RetryableIngestionException e) {
+                    // The results are fine; the platform could not record them. Recording a
+                    // solver failure here would falsify the experiment, and deleting the
+                    // container would destroy the only copy of a good result. So: keep both,
+                    // change nothing in the database, and come back to it.
+                    //
+                    // The container has definitively exited, so its execution slot is handed
+                    // back immediately -- retrying must not cost capacity.
+                    backend.releaseSlotForCompletedContainer(info.containerId);
+                    recordIngestionFailure(info, e);
                 } catch (Exception e) {
+                    // The results themselves are unusable and will be on every retry:
+                    // output that names another pair, a stage the pair does not have, a
+                    // status that is not a result. Record the failure and release it.
                     log.error(
-                        "Error processing completed job " + info.pairId,
+                        "Unusable results for completed job " + info.pairId,
                         e
                     );
-                    // Mark as error so we don't keep retrying.
                     // stageNumber is unknown at this point; default to 1 so that
                     // UpdatePairStatusPrecise still fires the job_pair_completion
                     // side effects and marks any stage-2+ rows as NOT_REACHED.
@@ -314,8 +337,8 @@ public class ContainerJobMonitor {
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
                             StatusCode.STATUS_NOT_REACHED.getVal()
                         );
-                        // Still remove the container to avoid infinite loop
                         backend.removeCompletedContainer(info.containerId);
+                        ingestionAttempts.remove(info.containerId);
                     } catch (Exception ex) {
                         log.error(
                             "Failed to set error status for pair " +
@@ -362,6 +385,81 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Counts an infrastructure failure against a container and decides whether to come back.
+     *
+     * <p>After {@link #MAX_INGESTION_ATTEMPTS} the container is quarantined rather than
+     * force-failed. There is no status in the model that means "the solver was fine but we
+     * could not write the result down", and inventing one -- {@code ERROR_RUNSCRIPT}, say --
+     * would record a scientific failure that did not happen. Leaving the pair unresolved with
+     * its evidence intact is the honest outcome, and it is the one an operator can fix.
+     */
+    private void recordIngestionFailure(
+        PodmanBackend.CompletedContainerInfo info,
+        Exception cause
+    ) {
+        IngestionAttempt state = ingestionAttempts.computeIfAbsent(
+            info.containerId,
+            key -> new IngestionAttempt()
+        );
+        state.attempts++;
+
+        if (state.attempts >= MAX_INGESTION_ATTEMPTS) {
+            ingestionQuarantine.add(info.containerId);
+            log.error(
+                "INGESTION INTERVENTION REQUIRED: pair " + info.pairId + " produced results" +
+                    " that could not be recorded after " + state.attempts + " attempts." +
+                    " The pair is left unresolved and its output is retained at " +
+                    info.outputDir + " (container " + info.containerId + ")." +
+                    " No solver status has been invented for this. Resolve the cause and" +
+                    " restart the application to retry.",
+                cause
+            );
+            return;
+        }
+
+        long backoff = Math.min(
+            BASE_INGESTION_BACKOFF_MS << (state.attempts - 1),
+            MAX_INGESTION_BACKOFF_MS
+        );
+        state.nextAttemptMillis = System.currentTimeMillis() + backoff;
+        log.warn(
+            "Could not record results for pair " + info.pairId + " (attempt " +
+                state.attempts + " of " + MAX_INGESTION_ATTEMPTS + "); results retained," +
+                " retrying in " + (backoff / 1000) + "s",
+            cause
+        );
+    }
+
+    /**
+     * How many times ingestion may fail for infrastructure reasons before a container stops
+     * being polled. Five attempts with backoff spans several minutes, which covers a database
+     * restart or a failover without spinning.
+     */
+    private static final int MAX_INGESTION_ATTEMPTS = 5;
+
+    /** First backoff step; doubles per attempt, capped by {@link #MAX_INGESTION_BACKOFF_MS}. */
+    private static final long BASE_INGESTION_BACKOFF_MS = 15_000L;
+
+    private static final long MAX_INGESTION_BACKOFF_MS = 300_000L;
+
+    /** Per-container retry state. Keyed by container id, cleared once ingestion succeeds. */
+    private final Map<String, IngestionAttempt> ingestionAttempts =
+        new ConcurrentHashMap<>();
+
+    /**
+     * Containers whose ingestion has failed too many times. They are skipped rather than
+     * force-failed: their results are still on disk, and inventing a solver status for what
+     * is an infrastructure problem would falsify the experiment. An operator resolves the
+     * cause and restarts; the monitor then picks them up again.
+     */
+    private final Set<String> ingestionQuarantine = ConcurrentHashMap.newKeySet();
+
+    private static final class IngestionAttempt {
+        int attempts;
+        long nextAttemptMillis;
+    }
+
+    /**
      * Processes a completed job by reading output files and updating the database.
      */
     private void processCompletedJob(PodmanBackend.CompletedContainerInfo info)
@@ -370,16 +468,29 @@ public class ContainerJobMonitor {
 
         // Read pairId and stageNumber from status.json. Using Gson rather than
         // regex avoids silent breakage on whitespace or field-order changes.
+        //
+        // The container label is the pair's identity: the application set it when it
+        // created the container and nothing running inside can change it. status.json is
+        // not identity -- the job script writes it into a directory the solver can also
+        // write, because the job container runs everything as root by design
+        // (job-runner.Dockerfile declares no USER, and container mode deliberately drops
+        // the `sudo -u sandbox` the SGE path uses). So its pairId is checked against the
+        // label rather than used in place of it; adopting it, as this did, let a pair's
+        // own solver address a different pair's rows.
         int pairId = info.pairId;
+        // Whether the identity is application-owned. PodmanBackend deliberately leaves
+        // pairId at -1 for pre-v2.3.1 containers whose label cannot be trusted, and expects
+        // the monitor to fall back to status.json for those.
+        final boolean pairIdFromLabel = info.pairId > 0;
         int stageNumber = 1; // safe default if status.json is absent or incomplete
+        Integer declaredPairId = null;
         Path statusJson = outputPath.resolve("status.json");
         if (Files.exists(statusJson)) {
             try {
                 String json = Files.readString(statusJson);
                 JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
                 if (obj.has("pairId")) {
-                    pairId = obj.get("pairId").getAsInt();
-                    log.debug("Extracted pairId from status.json: " + pairId);
+                    declaredPairId = obj.get("pairId").getAsInt();
                 }
                 if (obj.has("stageNumber")) {
                     stageNumber = obj.get("stageNumber").getAsInt();
@@ -390,6 +501,77 @@ public class ContainerJobMonitor {
                     "Failed to read status.json, using label values: pairId=" +
                         info.pairId,
                     e
+                );
+            }
+        }
+        // Outside the catch above, so an ownership violation is not swallowed as a
+        // parse warning.
+        if (declaredPairId != null) {
+            if (pairId <= 0) {
+                // No usable label on the container. Fall back, as this has always done.
+                pairId = declaredPairId;
+                log.warn(
+                    "Container " + info.containerId +
+                        " carries no pair label; using status.json pairId " + pairId
+                );
+            } else if (declaredPairId != pairId) {
+                throw new Exception(
+                    "status.json claims pair " + declaredPairId +
+                        " but the container is labelled pair " + pairId +
+                        "; refusing to write and keeping the container for inspection"
+                );
+            }
+        }
+
+        // Per-stage snapshots, for a pair run by a job script that writes them.
+        //
+        // Only when the pair's identity came from the container label. On the legacy-label
+        // path above, pairId was adopted from status.json -- which the container itself
+        // wrote -- so validating its snapshots against it would be circular: the same
+        // untrusted file supplies both the claim and the thing it is checked against. Those
+        // containers keep the old status.json-only behaviour, which is what they were built
+        // for, and gain no ability to write another pair's stage rows.
+        Map<Integer, Integer> stageSnapshots;
+        if (pairIdFromLabel) {
+            stageSnapshots = readStageSnapshots(outputPath, pairId);
+        } else {
+            stageSnapshots = Collections.emptyMap();
+            if (Files.isDirectory(outputPath.resolve("stage-status"))) {
+                log.warn(
+                    "Container " + info.containerId + " has no authoritative pair label;" +
+                        " ignoring its per-stage snapshots and processing status.json only"
+                );
+            }
+        }
+
+        // Every earlier stage must carry a status that is actually a result.
+        //
+        // Two things are being refused here. One is lost history: a stage still showing
+        // RUNNING while a later stage finished cannot be reconstructed, because sequential
+        // completion is not a safe inference -- a no-op pipeline stage consumes a stage
+        // number without owning a jobpair_stage_data row, so the numbers are not contiguous
+        // and "stage 3 finished" implies nothing about stage 2.
+        //
+        // The other is laundering. STATUS_PROCESSING_RESULTS, STATUS_PAUSED and
+        // STATUS_PROCESSING all mean work is still owed, and a stage parked at
+        // STATUS_PROCESSING is selected by the periodic post-processing task, which then
+        // sets the whole PAIR to STATUS_COMPLETE. Accepting them here would let a container
+        // turn its own timeout into a clean completion. isTerminalExecutionResult is the
+        // set the database itself enforces; a numeric ">= 7" test is not.
+        //
+        // Only stages before the terminal one are checked. The terminal stage's own snapshot
+        // is not used -- its status comes from the runsolver artifacts -- and a pair killed
+        // mid-stage legitimately leaves that one at RUNNING.
+        for (Map.Entry<Integer, Integer> snapshot : stageSnapshots.entrySet()) {
+            if (
+                snapshot.getKey() < stageNumber &&
+                !StatusCode.toStatusCode(snapshot.getValue()).isTerminalExecutionResult()
+            ) {
+                throw new Exception(
+                    "Pair " + pairId + " reports stage " + stageNumber +
+                        " finished, but stage " + snapshot.getKey() +
+                        " carries non-terminal status " + snapshot.getValue() +
+                        "; refusing to record it as a result"
                 );
             }
         }
@@ -433,7 +615,8 @@ public class ContainerJobMonitor {
             stats,
             status,
             attributes,
-            info.partitionIndex
+            info.partitionIndex,
+            stageSnapshots
         );
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
@@ -718,6 +901,133 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Snapshot files the job script writes under {@code stage-status/}, one per stage.
+     *
+     * <p>The digit count is bounded so the stage number always fits in an {@code int}. An
+     * unbounded {@code [0-9]*} would match a twenty-digit name, and parsing that throws
+     * {@link NumberFormatException} out of the whole completion -- which does not reject
+     * the pair, it wedges it, because the container is kept and every later poll hits the
+     * same file again. Nine digits is past any real stage count, and a longer name simply
+     * is not a snapshot.
+     */
+    /** A per-stage snapshot is a single short JSON object; anything larger is not one. */
+    private static final long MAX_SNAPSHOT_BYTES = 8L * 1024L;
+
+    private static final Pattern STAGE_SNAPSHOT_NAME = Pattern.compile(
+        "^([1-9][0-9]{0,8})\\.json$"
+    );
+
+    /**
+     * Reads the per-stage status snapshots a finished container left behind.
+     *
+     * <p>status.json is a single slot and every stage truncates it, so before these
+     * existed only the last stage's status survived a multi-stage pair -- every earlier
+     * stage kept the status it was enqueued with, however far it actually got. The job
+     * script now writes the same record once per stage into {@code stage-status/<n>.json}
+     * beside it.
+     *
+     * <p>Each record is checked against something the solver does not control before it
+     * is believed. The pair comes from the container label, not from the file, and the
+     * file name has to agree with the stage the record names. That matters because the
+     * job container runs the solver as root in the same namespace as the job script, so
+     * this directory is writable by solver code; the label is not.
+     *
+     * <p>A record that fails a check aborts the whole read rather than being skipped. A
+     * pair whose output cannot be trusted must not be half recorded, and throwing here
+     * leaves the container in place for the next poll to retry.
+     *
+     * @param outputDir the container's output directory
+     * @param pairId    the pair the container is labelled with
+     * @return stage number to status code, empty when the directory is absent
+     * @throws Exception when a record is malformed or does not belong to this pair
+     */
+    private Map<Integer, Integer> readStageSnapshots(Path outputDir, int pairId)
+        throws Exception {
+        Map<Integer, Integer> snapshots = new TreeMap<>();
+        Path dir = outputDir.resolve("stage-status");
+        if (!Files.isDirectory(dir)) {
+            // An older job script, or a pair that recorded nothing. Handled exactly as
+            // before, from status.json alone.
+            return snapshots;
+        }
+
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
+            for (Path entry : entries) {
+                String name = entry.getFileName().toString();
+                Matcher named = STAGE_SNAPSHOT_NAME.matcher(name);
+                if (!named.matches()) {
+                    // The writer's own temporary file, or something that is not a
+                    // snapshot at all. Ignored rather than guessed at.
+                    log.debug("Ignoring non-snapshot file in stage-status: " + name);
+                    continue;
+                }
+                int stageFromName = Integer.parseInt(named.group(1));
+
+                // A snapshot is one short JSON object. Reading whatever size the container
+                // chose to write would let it exhaust the heap, and OutOfMemoryError is an
+                // Error rather than an Exception -- it would escape every catch in the poll
+                // loop and stall completion for every pair queued behind this one.
+                long size = Files.size(entry);
+                if (size > MAX_SNAPSHOT_BYTES) {
+                    throw new Exception(
+                        "Stage snapshot " + entry + " is " + size +
+                            " bytes; refusing to read more than " + MAX_SNAPSHOT_BYTES
+                    );
+                }
+
+                JsonObject obj;
+                try {
+                    obj = JsonParser
+                        .parseString(Files.readString(entry))
+                        .getAsJsonObject();
+                } catch (Exception e) {
+                    throw new Exception("Malformed stage snapshot " + entry, e);
+                }
+                if (
+                    !obj.has("pairId") ||
+                    !obj.has("stageNumber") ||
+                    !obj.has("status")
+                ) {
+                    throw new Exception("Incomplete stage snapshot " + entry);
+                }
+
+                int recordPairId = obj.get("pairId").getAsInt();
+                int recordStage = obj.get("stageNumber").getAsInt();
+                int recordStatus = obj.get("status").getAsInt();
+
+                if (recordPairId != pairId) {
+                    throw new Exception(
+                        "Stage snapshot " + entry + " claims pair " + recordPairId +
+                            " but the container is labelled pair " + pairId
+                    );
+                }
+                if (recordStage != stageFromName) {
+                    throw new Exception(
+                        "Stage snapshot " + entry + " names stage " + recordStage
+                    );
+                }
+                if (
+                    StatusCode.toStatusCode(recordStatus) ==
+                        StatusCode.STATUS_UNKNOWN &&
+                    recordStatus != StatusCode.STATUS_UNKNOWN.getVal()
+                ) {
+                    throw new Exception(
+                        "Stage snapshot " + entry + " carries unknown status " +
+                            recordStatus
+                    );
+                }
+
+                snapshots.put(stageFromName, recordStatus);
+            }
+        }
+
+        log.debug(
+            "Pair " + pairId + ": read " + snapshots.size() + " stage snapshots"
+        );
+        return snapshots;
+    }
+
+    /**
      * Determines the job status based on runsolver stats and output files.
      */
     private StatusCode determineStatus(RunsolverStats stats, Path outputDir) {
@@ -807,8 +1117,50 @@ public class ContainerJobMonitor {
         RunsolverStats stats,
         StatusCode status,
         Properties attributes,
-        int partitionIndex
+        int partitionIndex,
+        Map<Integer, Integer> stageSnapshots
     ) throws Exception {
+        // Earlier stages first. UpdatePairStatusPrecise below rewrites the terminal stage
+        // and everything after it, so these survive it; writing them afterwards would
+        // leave the pair briefly complete with a stale stage beside it. Each goes through
+        // the stage-only routine, which touches jobpair_stage_data alone -- no pair
+        // status, no job_pair_completion, no end_time -- so pair completion still fires
+        // exactly once, below.
+        Map<Integer, Integer> earlierStages = new TreeMap<>();
+        for (Map.Entry<Integer, Integer> snapshot : stageSnapshots.entrySet()) {
+            if (snapshot.getKey() < stageNumber) {
+                earlierStages.put(snapshot.getKey(), snapshot.getValue());
+            }
+        }
+        StageStatusBatchResult batch =
+            JobPairs.setEarlierStageStatuses(pairId, earlierStages);
+        if (batch == StageStatusBatchResult.REJECTED_UNKNOWN_STAGE) {
+            // The output names a stage this pair does not have. No retry changes that.
+            throw new Exception(
+                "Stage batch " + earlierStages + " names a stage pair " + pairId +
+                    " does not have"
+            );
+        }
+        if (batch == StageStatusBatchResult.FAILED) {
+            // Nothing was written, for an infrastructure reason. The solver's results are
+            // still good and still on disk; the caller keeps them and tries again.
+            throw new RetryableIngestionException(
+                "Could not record earlier stage statuses " + earlierStages +
+                    " for pair " + pairId
+            );
+        }
+
+        // The status about to be made terminal must actually be a terminal one. determineStatus
+        // only ever returns such codes today, so this is a guard against a future path -- or a
+        // forged artifact -- reaching the pair-level write with STATUS_PROCESSING or PAUSED,
+        // which post-processing would later convert into STATUS_COMPLETE.
+        if (!status.isTerminalExecutionResult()) {
+            throw new Exception(
+                "Refusing to record non-terminal status " + status + " as pair " + pairId +
+                    " stage " + stageNumber + " result"
+            );
+        }
+
         PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
             pairId,
             stageNumber,
@@ -817,10 +1169,10 @@ public class ContainerJobMonitor {
             false
         );
         if (statusResult == PairStatusResult.FAILED) {
-            // The status never landed. Throwing keeps the container in place so the next
-            // poll retries; swallowing this would remove the container and lose the
-            // result permanently, since nothing else re-reads its output.
-            throw new Exception(
+            // The status never landed, and the only reasons it can fail are infrastructure
+            // ones. Retryable, so the caller keeps the container and its output rather than
+            // recording a solver failure that did not happen.
+            throw new RetryableIngestionException(
                 "Could not record terminal status " + status + " for pair " + pairId
                     + " stage " + stageNumber);
         }
@@ -831,16 +1183,14 @@ public class ContainerJobMonitor {
                 + " keeping the recorded result");
         }
 
-        // Set end_time. This call is non-fatal: a failure here does not prevent
-        // the rest of the DB update from completing.
-        try {
-            if (!JobPairs.setEndTime(pairId)) {
-                log.warn("setEndTime found no row for pair " + pairId +
-                         " (pair may have been deleted)");
-            }
-        } catch (Exception e) {
-            log.warn("Failed to set end_time for pair " + pairId, e);
-        }
+        // end_time is deliberately NOT set here. UpdatePairStatusPrecise writes it in the
+        // same transaction as the status -- guarded on IS NULL, and outside its duplicate
+        // branch precisely so a retried write repairs a pair whose first attempt died. This
+        // used to call setEndTime unconditionally afterwards, which is a bare
+        // "SET end_time = NOW()": harmless on the first pass, but it moved the completion
+        // timestamp every time the same output was processed again. Ingestion is now
+        // retryable by design, so a replay is expected rather than exceptional, and a pair's
+        // recorded finish time must not drift each time one happens.
 
         // Persist run stats using JobPairs.updateRunSolverStats.
         //

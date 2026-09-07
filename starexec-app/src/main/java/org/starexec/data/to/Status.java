@@ -147,6 +147,48 @@ public class Status {
 			return (val <= 6 || val >= 19);
 		}
 
+		/**
+		 * Is this a status a stage may legally be left holding as its final result?
+		 *
+		 * <p>Deliberately NOT {@link #finishedRunning()}. That answers "has this stopped being
+		 * queued", a different question, and it is true of {@code STATUS_PROCESSING_RESULTS},
+		 * {@code STATUS_PAUSED} and {@code STATUS_PROCESSING} -- three states that mean work is
+		 * still owed. Treating them as results is exploitable: a stage left at
+		 * {@code STATUS_PROCESSING} is selected by the periodic post-processing task, which then
+		 * sets the whole PAIR to {@code STATUS_COMPLETE}. A solver writing that status into its
+		 * own stage record would have a timeout laundered into a clean completion.
+		 *
+		 * <p>This set mirrors {@code starexec.IsTerminalPairStatus} in
+		 * {@code R__procedures_and_views.sql}, which is what the database enforces. The two are
+		 * compared value by value in {@code TerminalStatusContractSqlTest} so they cannot drift
+		 * apart silently. Enumerated rather than written as a numeric range, so that adding a
+		 * status forces a decision here.
+		 */
+		public boolean isTerminalExecutionResult() {
+			switch (this) {
+				case STATUS_COMPLETE:                 // 7
+				case ERROR_SGE_REJECT:                // 8
+				case ERROR_SUBMIT_FAIL:               // 9
+				case ERROR_RESULTS:                   // 10
+				case ERROR_RUNSCRIPT:                 // 11
+				case ERROR_BENCHMARK:                 // 12
+				case ERROR_DISK_QUOTA_EXCEEDED:       // 13
+				case EXCEED_RUNTIME:                  // 14
+				case EXCEED_CPU:                      // 15
+				case EXCEED_FILE_WRITE:               // 16
+				case EXCEED_MEM:                      // 17
+				case ERROR_GENERAL:                   // 18
+				case STATUS_KILLED:                   // 21
+				case STATUS_NOT_REACHED:              // 23
+				case ERROR_BENCH_DEPENDENCY_MISSING:  // 24
+				case ERROR_PRE_PROCESSOR:             // 25
+				case ERROR_POST_PROCESSOR:            // 26
+					return true;
+				default:
+					return false;
+			}
+		}
+
 		public boolean running() {
 			return val == 4;
 		}

@@ -28,7 +28,21 @@ STATUS_SENT=false
 #################################################################################
 
 # Output directory for container mode (ContainerJobMonitor reads from here)
+# The stage loop in jobscript owns STAGE_INDEX, but sendNode reads
+# STAGE_NUMBERS[STAGE_INDEX] from initSandbox, before that loop runs. adjustForK8s used to
+# leave a value behind by accident -- the last stage index, which is why the pair's initial
+# status named the wrong stage -- and it no longer does.
+#
+# Defaulting it here rather than relying on jobscript alone is what makes this helper safe
+# with an OLDER generated jobscript. The two files reach a running pair by different routes:
+# the template is baked into the application image, while this file is persisted in the data
+# volume and only copied when absent. So a deployment can legitimately pair a new helper with
+# an old template, and without this line every such pair would die on an unbound variable
+# under `set -u` before its solver ever ran. 0 is the index the stage loop itself starts from.
+: "${STAGE_INDEX:=0}"
+
 CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
+CONTAINER_STAGE_STATUS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-status"
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_ATTRS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/attributes.txt"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
@@ -38,8 +52,43 @@ function containerWriteStatus {
 	local STATUS=$1
 	local STAGE_NUMBER=${2:-0}
 	local TIMESTAMP=$(date +%s)
+	local RECORD="{\"pairId\":$PAIR_ID,\"status\":$STATUS,\"stageNumber\":$STAGE_NUMBER,\"timestamp\":$TIMESTAMP}"
 	mkdir -p "$(dirname "$CONTAINER_STATUS_FILE")"
-	echo "{\"pairId\":$PAIR_ID,\"status\":$STATUS,\"stageNumber\":$STAGE_NUMBER,\"timestamp\":$TIMESTAMP}" > "$CONTAINER_STATUS_FILE"
+	echo "$RECORD" > "$CONTAINER_STATUS_FILE"
+
+	# status.json is one slot for the whole pair and this write truncates it, so in a
+	# multi-stage pair each stage erased the previous stage's result and only the last
+	# one ever reached the database. Keep writing it -- the monitor still reads the
+	# stage number from it, and an older monitor reads nothing else -- and record the
+	# same bytes once per stage beside it, so earlier stages survive.
+	#
+	# Stage 0 is the pair-level channel: it owns no jobpair_stage_data row, so it gets
+	# no snapshot. The pattern also rejects anything that is not a plain positive
+	# integer, which keeps a caller from naming a file outside this directory.
+	# Bounded to the same width the monitor accepts, so this cannot emit a name the
+	# reader will silently discard.
+	if [[ "$STAGE_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]; then
+		local SNAPSHOT="$CONTAINER_STAGE_STATUS_DIR/$STAGE_NUMBER.json"
+		# Written beside the target and renamed, so the monitor -- which reads this tree
+		# once the container has exited -- never sees a half-written record. The suffix
+		# keeps the temporary file out of the <n>.json name the monitor accepts, so even
+		# an interrupted write cannot be mistaken for a snapshot.
+		#
+		# Tested as a condition rather than left bare: these commands run under
+		# `set -e`, so a full disk would otherwise abort a pair whose solver had already
+		# finished, and the EXIT trap would file that as ERROR_BENCHMARK -- a benchmark
+		# result for what is a storage failure. This record is required for multi-stage
+		# correctness, so the failure is real and the pair does stop; it just stops
+		# saying what actually happened.
+		if ! { mkdir -p "$CONTAINER_STAGE_STATUS_DIR" \
+				&& echo "$RECORD" > "$SNAPSHOT.tmp" \
+				&& mv -f "$SNAPSHOT.tmp" "$SNAPSHOT"; }; then
+			log "job error: could not record the status of stage $STAGE_NUMBER at $SNAPSHOT"
+			STATUS_SENT=true
+			sendStatus "$ERROR_GENERAL" "$STAGE_NUMBER"
+			exit 1
+		fi
+	fi
 	log "Container mode: wrote status $STATUS for stage $STAGE_NUMBER"
 }
 
@@ -192,12 +241,18 @@ JOB_OUT_DIR="$SHARED_DIR/joboutput"
 #######################################################################
 function adjustForK8s {
     log "adjustForK8s called"
-    # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
-    for STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
-        log "adjustForK8s stage Index: $STAGE_INDEX"
+    # A local iterator, deliberately not the global STAGE_INDEX the stage loop owns.
+    # This function runs before any stage starts, and `for STAGE_INDEX in ...` left the
+    # global at its final value -- so sendNode, reached from initSandbox further down
+    # jobscript, reported the pair's initial RUNNING status against the LAST stage
+    # instead of the first one that actually runs.
+    local K8S_STAGE_INDEX
+    # Loop through SOLVER_PATHS to check for the specific Python script
+    for K8S_STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
+        log "adjustForK8s stage Index: $K8S_STAGE_INDEX"
 
         # Decode the base64 encoded path
-        DECODED_PATH=$(echo "${SOLVER_PATHS[$STAGE_INDEX]}" | base64 -d)
+        DECODED_PATH=$(echo "${SOLVER_PATHS[$K8S_STAGE_INDEX]}" | base64 -d)
 
         # Log directory contents for debugging
         log "Listing contents of: $DECODED_PATH"
