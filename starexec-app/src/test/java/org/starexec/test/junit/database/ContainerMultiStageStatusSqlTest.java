@@ -363,6 +363,35 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		assertEquals(1, completions());
 	}
 
+	/**
+	 * A snapshot file whose name is digits but far too long for an {@code int}.
+	 *
+	 * <p>It has to be ignored rather than rejected. Parsing it would throw
+	 * {@link NumberFormatException} out of the whole completion, and because the container
+	 * is kept for retry, every later poll would read the same file again -- the pair would
+	 * never finish. It is not a stage of anything, so it is not a snapshot, and the pair
+	 * completes on the records that are real.
+	 */
+	@Test
+	public void aStageNumberTooLargeForAnIntIsIgnoredRatherThanWedgingThePair()
+			throws Exception {
+		Path out = outputDir("huge");
+		writeLegacyStatus(out, PAIR_ID, COMPLETE, 2);
+		writeSnapshot(out, PAIR_ID, COMPLETE, 1);
+		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
+		Files.createDirectories(out.resolve("stage-status"));
+		Files.writeString(out.resolve("stage-status/99999999999999999999.json"),
+				record(PAIR_ID, COMPLETE, 1));
+		writeCleanRun(out);
+
+		process(out);
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals(COMPLETE, stageStatus(2));
+		assertEquals(COMPLETE, pairStatus());
+		assertEquals(1, completions());
+	}
+
 	// ------------------------------------------------------------------ consistency
 
 	/**

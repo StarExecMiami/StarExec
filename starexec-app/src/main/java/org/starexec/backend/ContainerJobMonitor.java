@@ -768,9 +768,18 @@ public class ContainerJobMonitor {
         }
     }
 
-    /** Snapshot files the job script writes under {@code stage-status/}, one per stage. */
+    /**
+     * Snapshot files the job script writes under {@code stage-status/}, one per stage.
+     *
+     * <p>The digit count is bounded so the stage number always fits in an {@code int}. An
+     * unbounded {@code [0-9]*} would match a twenty-digit name, and parsing that throws
+     * {@link NumberFormatException} out of the whole completion -- which does not reject
+     * the pair, it wedges it, because the container is kept and every later poll hits the
+     * same file again. Nine digits is past any real stage count, and a longer name simply
+     * is not a snapshot.
+     */
     private static final Pattern STAGE_SNAPSHOT_NAME = Pattern.compile(
-        "^([1-9][0-9]*)\\.json$"
+        "^([1-9][0-9]{0,8})\\.json$"
     );
 
     /**

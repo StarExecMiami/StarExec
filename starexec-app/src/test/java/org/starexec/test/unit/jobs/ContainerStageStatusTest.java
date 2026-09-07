@@ -46,7 +46,7 @@ public class ContainerStageStatusTest {
 	 */
 	@Test
 	public void everyStageKeepsItsOwnStatus() throws Exception {
-		Harness h = new Harness();
+		Harness h = new Harness(folder);
 		h.write(7, 1);
 		h.write(15, 2);
 		h.run();
@@ -61,7 +61,7 @@ public class ContainerStageStatusTest {
 	/** Each snapshot carries the pair, so the monitor can check it against the container. */
 	@Test
 	public void eachSnapshotNamesItsPairAndStage() throws Exception {
-		Harness h = new Harness();
+		Harness h = new Harness(folder);
 		h.write(7, 3);
 		h.run();
 
@@ -76,7 +76,7 @@ public class ContainerStageStatusTest {
 	 */
 	@Test
 	public void thePairLevelChannelWritesNoSnapshot() throws Exception {
-		Harness h = new Harness();
+		Harness h = new Harness(folder);
 		h.write(4, 0);
 		h.run();
 
@@ -92,7 +92,7 @@ public class ContainerStageStatusTest {
 	@Test
 	public void aStageNumberThatIsNotAPositiveIntegerWritesNothing() throws Exception {
 		for (String stage : new String[]{"abc", "-1", "0", "1x", "../escape", "1 2", ""}) {
-			Harness h = new Harness();
+			Harness h = new Harness(folder);
 			h.writeRaw(7, stage);
 			h.run();
 
@@ -106,7 +106,7 @@ public class ContainerStageStatusTest {
 	/** The temporary file the atomic rename goes through must not be left behind. */
 	@Test
 	public void theWriteLeavesNoTemporaryFile() throws Exception {
-		Harness h = new Harness();
+		Harness h = new Harness(folder);
 		h.write(7, 1);
 		h.write(7, 2);
 		h.run();
@@ -120,7 +120,7 @@ public class ContainerStageStatusTest {
 	/** Re-reporting a stage replaces that stage only, and leaves the others alone. */
 	@Test
 	public void rewritingOneStageLeavesTheOthersAlone() throws Exception {
-		Harness h = new Harness();
+		Harness h = new Harness(folder);
 		h.write(4, 1);
 		h.write(7, 1);
 		h.write(4, 2);
@@ -133,13 +133,13 @@ public class ContainerStageStatusTest {
 	// ------------------------------------------------------------------------- harness
 
 	/** A generated script that sources the shipped helper and drives one function. */
-	private final class Harness {
+	private static final class Harness {
 
 		private final Path dir;
 		private final Path out;
 		private final StringBuilder body = new StringBuilder();
 
-		Harness() throws Exception {
+		Harness(TemporaryFolder folder) throws Exception {
 			dir = folder.newFolder("h-" + System.nanoTime()).toPath();
 			out = dir.resolve("out");
 			Files.createDirectories(out);
@@ -225,7 +225,15 @@ public class ContainerStageStatusTest {
 				.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)")
 				.matcher(json);
 		assertTrue("json must carry " + name + ": " + json, m.find());
-		return Integer.parseInt(m.group(1));
+		String raw = m.group(1);
+		try {
+			return Integer.parseInt(raw);
+		} catch (NumberFormatException e) {
+			// Digits, but not necessarily an int: the pattern would also match something
+			// far too long. A test reading its own fixture should say that plainly rather
+			// than die of an unhandled exception halfway through an assertion.
+			throw new AssertionError("json field " + name + " is not an int: " + raw, e);
+		}
 	}
 
 	private static Result exec(String... command) throws Exception {
