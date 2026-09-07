@@ -51,15 +51,7 @@ public class JobUtil {
 		/** The user may not use something the document names. */
 		PERMISSION,
 		/** Something on the server failed. The message is for the log, not the client. */
-		INTERNAL,
-		/**
-		 * The job was committed, and then the connection could not be returned to a usable
-		 * state. The write is durable; only the infrastructure failed afterwards.
-		 *
-		 * <p>Separate from {@link #INTERNAL} because the two need opposite advice. Telling
-		 * someone nothing was created, when it was, invites a retry that creates it twice.
-		 */
-		COMMITTED_WITH_CONNECTION_FAILURE
+		INTERNAL
 	}
 
 	private FailureKind failureKind = FailureKind.VALIDATION;
@@ -250,16 +242,6 @@ public class JobUtil {
 				}
 				return createdIds;
 			});
-		} catch (Common.CommittedButUnrestoredException e) {
-			// The jobs were written. Only the connection's state afterwards is in doubt, and
-			// the ids did not survive the throw -- so the one thing this must not say is that
-			// nothing was created.
-			log.error(method, "Job creation for user " + userId + " COMMITTED, but the connection"
-					+ " could not be restored; the jobs exist and their ids were lost", e);
-			errorMessage = "Your job may have been created despite this error. Check your jobs"
-					+ " before submitting it again.";
-			failureKind = FailureKind.COMMITTED_WITH_CONNECTION_FAILURE;
-			return null;
 		} catch (SQLException e) {
 			log.error(method, "Rolled back job creation for user " + userId, e);
 			// The throw sites above classify their own failures -- a duplicate pipeline name is

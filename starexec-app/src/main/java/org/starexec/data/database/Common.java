@@ -212,22 +212,6 @@ public class Common {
 	}
 
 	/**
-	 * The transaction committed, but the connection could not be returned to its entry state.
-	 *
-	 * <p>Distinct because the two halves point opposite ways: the caller's writes <em>are</em>
-	 * durable, and the connection <em>is</em> suspect. Reporting this as an ordinary failure
-	 * would have the caller tell the user nothing happened, which is false.
-	 */
-	public static final class CommittedButUnrestoredException extends SQLException {
-		private static final long serialVersionUID = 1L;
-
-		CommittedButUnrestoredException(SQLException cause) {
-			super("The transaction committed, but the connection's autoCommit state could not be"
-			      + " restored before returning it to the pool", cause.getSQLState(), cause);
-		}
-	}
-
-	/**
 	 * Runs {@code work} inside one transaction on a borrowed connection, committing exactly
 	 * once on normal return and rolling back exactly once on any failure.
 	 *
@@ -253,9 +237,10 @@ public class Common {
 	 * <ul>
 	 *   <li>work or commit fails -> roll back, restore, and report the <em>original</em>
 	 *       failure with any rollback or restoration failure attached as suppressed;</li>
-	 *   <li>work and commit succeed but restoration fails -> report
-	 *       {@link CommittedButUnrestoredException}, because success is not something this
-	 *       method can honestly report when it does not know the connection's state.</li>
+	 *   <li>work and commit succeed but restoration fails -> discard the connection, log the
+	 *       failure, and <em>return normally</em>. Once {@code commit()} has returned the
+	 *       write is durable; turning that into an exception would have callers report a
+	 *       failure for work that succeeded, and a client acting on it could submit again.</li>
 	 * </ul>
 	 *
 	 * <p>This is also why it does not use {@link #endTransaction}, which turns a failed commit
@@ -312,7 +297,14 @@ public class Common {
 				// Cleanup must not overwrite the reason the caller needs to see.
 				failure.addSuppressed(restoreFailure);
 			} else {
-				failure = new CommittedButUnrestoredException(restoreFailure);
+				// The commit returned. The caller's write is durable, exactly once, and that
+				// is the answer the caller needs -- reporting a failure here would have it
+				// tell the user nothing happened and invite a retry that writes it twice.
+				// What failed is the connection, and that is an operator's problem: it has
+				// been discarded above, and this is the record of why.
+				log.error("runTransactional", "transaction COMMITTED but the connection could"
+						+ " not be restored; it has been discarded. The caller's write is"
+						+ " durable and was reported as successful.", restoreFailure);
 			}
 		}
 

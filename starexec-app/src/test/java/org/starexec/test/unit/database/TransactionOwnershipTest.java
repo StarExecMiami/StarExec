@@ -137,24 +137,25 @@ public class TransactionOwnershipTest {
 	}
 
 	/**
-	 * Work and commit succeed, restoration does not. Returning success here would hand the
-	 * pool a connection in an unknown state while telling the caller everything is fine.
+	 * Work and commit succeed, restoration does not. The write is durable the moment
+	 * {@code commit()} returns, so this is a success as far as the caller is concerned --
+	 * reporting a failure would have it tell the user nothing happened, and a client acting on
+	 * that could submit the same job again.
 	 *
-	 * <p>This pool makes that consequential: it is configured with neither
-	 * {@code rollbackOnReturn} nor a {@code ConnectionState} interceptor, so {@code close()}
-	 * resets nothing, and {@code testOnBorrow} is throttled by a 30s
-	 * {@code validationInterval} -- a connection returned inside that window is handed to the
-	 * next borrower unvalidated.
+	 * <p>The connection is a separate matter, handled separately: it is discarded, which
+	 * {@code CommittedButUnrestoredSqlTest} verifies against the real pool. Nothing else
+	 * would: this pool has neither {@code rollbackOnReturn} nor a {@code ConnectionState}
+	 * interceptor, so {@code close()} resets nothing, and {@code testOnBorrow} is throttled by
+	 * a 30s {@code validationInterval}.
 	 */
 	@Test
-	public void aRestorationFailureAfterCommitIsReportedAsCommitted() {
+	public void aRestorationFailureAfterCommitStillReportsSuccess() throws Exception {
 		RecordingConnection recorder = new RecordingConnection(true);
 		recorder.failOn = "setAutoCommit(true)";
 
-		SQLException surfaced = runExpectingFailure(recorder, con -> "written");
+		String result = Common.runTransactional(recorder.connection(), con -> "written");
 
-		assertTrue("the caller must be told the work committed, not that it was rolled back",
-				surfaced instanceof Common.CommittedButUnrestoredException);
+		assertEquals("the committed result must reach the caller", "written", result);
 		assertEquals("nothing may be rolled back after a successful commit",
 				0, count(recorder.calls, "rollback"));
 		assertEquals(1, count(recorder.calls, "commit"));

@@ -24,10 +24,12 @@ import static org.junit.Assert.fail;
 /**
  * What happens when the commit succeeds and the cleanup after it does not.
  *
- * <p>These two facts point opposite ways and both have to survive: the write is durable, and
- * the connection is unusable. Getting either wrong is worse than the original failure --
- * telling the caller nothing was created invites a retry that creates it twice, and returning
- * the connection to the pool hands the next request a broken or half-transactional one.
+ * <p>These two facts point opposite ways and are handled separately: the write is durable,
+ * and the connection is unusable. The caller is told the truth about the first -- it
+ * succeeded, because {@code commit()} returned -- since telling it otherwise would invite a
+ * retry that creates the job twice. The second is an operator's problem: the connection is
+ * discarded and the failure logged, because returning it to the pool hands the next request a
+ * half-transactional one.
  *
  * <p>Against the real Tomcat JDBC pool, not a stub. Stubs can prove the ordering --
  * {@code TransactionOwnershipTest} does -- but only the real pool can show whether the
@@ -68,8 +70,8 @@ public class CommittedButUnrestoredSqlTest extends Common {
 	}
 
 	/**
-	 * The whole contract in one run: the row is committed once, the caller is told so rather
-	 * than told the work was lost, and the connection that carried it does not come back.
+	 * The whole contract in one run: the row is committed once, the caller is told the work
+	 * succeeded, and the connection that carried it does not come back.
 	 *
 	 * <p>The restoration failure is injected rather than provoked. Killing the backend was the
 	 * realistic way to cause it, but the window between {@code commit()} and the
@@ -79,27 +81,22 @@ public class CommittedButUnrestoredSqlTest extends Common {
 	 * real pooled connection underneath.
 	 */
 	@Test
-	public void aCommitFollowedByAFailedRestorationKeepsTheWriteAndDiscardsTheConnection()
+	public void aCommitFollowedByAFailedRestorationSucceedsAndDiscardsTheConnection()
 			throws Exception {
 		int doomedBackend;
 		try (Connection real = Common.getConnection()) {
 			doomedBackend = backendPid(real);
 			Connection injected = failingRestoration(real);
 
-			try {
-				Common.runTransactional(injected, con -> {
-					try (Statement s = con.createStatement()) {
-						s.execute("INSERT INTO starexec.probe_committed_unrestored (tag)"
-								+ " VALUES (\'" + TAG + "\')");
-					}
-					return null;
-				});
-				fail("a failed restoration after a successful commit must be reported");
-			} catch (Common.CommittedButUnrestoredException expected) {
-				// The one outcome that is neither "it worked" nor "it was rolled back".
-				assertTrue("the caller must be able to tell the work committed",
-						expected.getMessage().contains("committed"));
-			}
+			String outcome = Common.runTransactional(injected, con -> {
+				try (Statement s = con.createStatement()) {
+					s.execute("INSERT INTO starexec.probe_committed_unrestored (tag)"
+							+ " VALUES ('" + TAG + "')");
+				}
+				return "created";
+			});
+			assertEquals("a committed write must be reported as the success it is",
+					"created", outcome);
 		}
 
 		assertEquals("the committed row must be present exactly once", 1, probeRows());
@@ -138,8 +135,6 @@ public class CommittedButUnrestoredSqlTest extends Common {
 				throw new SQLException("induced application failure");
 			});
 			fail("the induced failure must surface");
-		} catch (Common.CommittedButUnrestoredException wrong) {
-			throw new AssertionError("a rolled-back transaction must not report as committed", wrong);
 		} catch (SQLException expected) {
 			assertEquals("induced application failure", expected.getMessage());
 		}

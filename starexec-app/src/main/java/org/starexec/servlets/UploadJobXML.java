@@ -100,14 +100,6 @@ public class UploadJobXML extends HttpServlet {
 							response.sendError(HttpServletResponse.SC_FORBIDDEN,
 							                   jobUtil.getErrorMessage());
 							break;
-						case COMMITTED_WITH_CONNECTION_FAILURE:
-							// The job is durable. The generic internal message below says the
-							// opposite and invites a retry, which would create it twice.
-							log.error(method, "Job XML upload for user " + userId
-									+ " COMMITTED but the connection could not be restored");
-							response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-							                   jobUtil.getErrorMessage());
-							break;
 						case INTERNAL:
 							// The message is for the log. It can carry SQL text, a stored
 							// routine signature or a server path, none of which the client
