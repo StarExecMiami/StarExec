@@ -192,12 +192,18 @@ JOB_OUT_DIR="$SHARED_DIR/joboutput"
 #######################################################################
 function adjustForK8s {
     log "adjustForK8s called"
-    # Loop through SOLVER_PATHS based on STAGE_INDEX to check for the specific Python script
-    for STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
-        log "adjustForK8s stage Index: $STAGE_INDEX"
+    # A local iterator, deliberately not the global STAGE_INDEX the stage loop owns.
+    # This function runs before any stage starts, and `for STAGE_INDEX in ...` left the
+    # global at its final value -- so sendNode, reached from initSandbox further down
+    # jobscript, reported the pair's initial RUNNING status against the LAST stage
+    # instead of the first one that actually runs.
+    local K8S_STAGE_INDEX
+    # Loop through SOLVER_PATHS to check for the specific Python script
+    for K8S_STAGE_INDEX in "${!SOLVER_PATHS[@]}"; do
+        log "adjustForK8s stage Index: $K8S_STAGE_INDEX"
 
         # Decode the base64 encoded path
-        DECODED_PATH=$(echo "${SOLVER_PATHS[$STAGE_INDEX]}" | base64 -d)
+        DECODED_PATH=$(echo "${SOLVER_PATHS[$K8S_STAGE_INDEX]}" | base64 -d)
 
         # Log directory contents for debugging
         log "Listing contents of: $DECODED_PATH"

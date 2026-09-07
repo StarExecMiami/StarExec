@@ -193,6 +193,11 @@ fi
 
 echo ""
 
+# The stage loop below owns STAGE_INDEX, but sendNode reads STAGE_NUMBERS[STAGE_INDEX]
+# from inside initSandbox, before the loop has run. Stage 0 is the first stage that will
+# run, which is what the pair's initial RUNNING status should name.
+STAGE_INDEX=0
+
 initSandbox
 initWorkspaceVariables
 cleanWorkspace 1
