@@ -149,17 +149,22 @@ public class KubernetesJobMonitor {
     /** Running flag */
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    // Every collection below is keyed on {@link ExecutionRef}, not on the execution id.
+    // The id restarts at 1 in each application lifetime, so a second Job can be given one a
+    // first Job's entry is still sitting under; keyed that way, state recorded for the
+    // earlier execution decided the later one's events before the backend ever saw them.
+
     /** Tracks completion callbacks already emitted to avoid duplicate updates */
-    private final Set<Integer> completedExecIds = ConcurrentHashMap.newKeySet();
+    private final Set<ExecutionRef> completedExecutions = ConcurrentHashMap.newKeySet();
 
     /** Tracks jobs already transitioned to STATUS_RUNNING */
-    private final Set<Integer> runningExecIds = ConcurrentHashMap.newKeySet();
+    private final Set<ExecutionRef> runningExecutions = ConcurrentHashMap.newKeySet();
 
-    /** When each stuck-pending execution id was last warned about, for throttling */
-    private final Map<Integer, Long> pendingWarnedAt = new ConcurrentHashMap<>();
+    /** When each stuck-pending execution was last warned about, for throttling */
+    private final Map<ExecutionRef, Long> pendingWarnedAt = new ConcurrentHashMap<>();
 
     /**
-     * Execution ids judged stuck whose transition did not complete, with the reason they
+     * Executions judged stuck whose transition did not complete, with the reason they
      * were judged stuck.
      *
      * <p>The judgement is not revisited once made. By the time a transition can fail
@@ -168,20 +173,8 @@ public class KubernetesJobMonitor {
      * reclassified as an ordinary running pair, nothing would ever delete the Job and that
      * pod could write results alongside the rerun.
      */
-    private final Map<Integer, StuckPendingRecord> cleanupPending =
+    private final Map<ExecutionRef, String> cleanupPending =
         new ConcurrentHashMap<>();
-
-    /** What a stuck-pending transition needs to resume after an incomplete attempt. */
-    private static final class StuckPendingRecord {
-
-        private final String jobName;
-        private final String reason;
-
-        private StuckPendingRecord(String jobName, String reason) {
-            this.jobName = jobName;
-            this.reason = reason;
-        }
-    }
 
     /** How long a pod may be Pending before it is logged, in milliseconds */
     private final long pendingWarnMillis;
@@ -370,47 +363,42 @@ public class KubernetesJobMonitor {
             EXEC_ID_LABEL_KEY
         );
 
-        Set<Integer> execIdsInListing = ConcurrentHashMap.newKeySet();
+        Set<ExecutionRef> executionsInListing = ConcurrentHashMap.newKeySet();
 
         for (Job job : jobs) {
-            Integer execId = extractExecId(job);
-            if (execId == null) {
+            ExecutionRef execution = identify(job);
+            if (execution == null) {
                 continue;
             }
-            execIdsInListing.add(execId);
+            executionsInListing.add(execution);
 
-            if (completedExecIds.contains(execId)) {
+            if (completedExecutions.contains(execution)) {
                 continue;
             }
 
             CompletionState completion = getCompletionState(job);
             if (completion == CompletionState.RUNNING) {
-                handleInFlightJob(job, execId, pods);
+                handleInFlightJob(job, execution, pods);
                 continue;
             }
 
-            String jobName = jobNameOf(job);
             boolean processed;
             if (completion == CompletionState.SUCCEEDED) {
-                processed = callback.onJobComplete(execId, jobName);
+                processed = callback.onJobComplete(execution);
             } else {
-                processed = callback.onJobFailed(
-                    execId,
-                    jobName,
-                    summarizeFailure(job)
-                );
+                processed = callback.onJobFailed(execution, summarizeFailure(job));
             }
 
             if (processed) {
-                completedExecIds.add(execId);
+                completedExecutions.add(execution);
             }
 
-            runningExecIds.remove(execId);
-            pendingWarnedAt.remove(execId);
-            cleanupPending.remove(execId);
+            runningExecutions.remove(execution);
+            pendingWarnedAt.remove(execution);
+            cleanupPending.remove(execution);
         }
 
-        drainCleanupPending(execIdsInListing);
+        drainCleanupPending(executionsInListing);
     }
 
     /**
@@ -422,17 +410,17 @@ public class KubernetesJobMonitor {
      * listing will ever bring the pair back. This is the replacement trigger, and it is
      * the reason the deletion can safely go first.
      *
-     * <p>Exec ids still present in the listing are skipped — the main loop handles those,
+     * <p>Executions still present in the listing are skipped — the main loop handles those,
      * and calling the transition twice in one poll would be pointless work.
      */
-    private void drainCleanupPending(Set<Integer> execIdsInListing) {
-        for (Map.Entry<Integer, StuckPendingRecord> entry : cleanupPending.entrySet()) {
-            int execId = entry.getKey();
-            if (execIdsInListing.contains(execId) || completedExecIds.contains(execId)) {
+    private void drainCleanupPending(Set<ExecutionRef> executionsInListing) {
+        for (Map.Entry<ExecutionRef, String> entry : cleanupPending.entrySet()) {
+            ExecutionRef execution = entry.getKey();
+            if (executionsInListing.contains(execution)
+                    || completedExecutions.contains(execution)) {
                 continue;
             }
-            StuckPendingRecord record = entry.getValue();
-            completeStuckPending(execId, record.jobName, record.reason);
+            completeStuckPending(execution, entry.getValue());
         }
     }
 
@@ -446,34 +434,32 @@ public class KubernetesJobMonitor {
      * further submission, which JobManager records as a terminal error on pairs that had
      * nothing wrong with them.
      */
-    private void handleInFlightJob(Job job, int execId, PodPhaseView pods) {
-        String jobName = jobNameOf(job);
-
+    private void handleInFlightJob(Job job, ExecutionRef execution, PodPhaseView pods) {
         // A pair already judged stuck is driven to completion, whatever its pod is doing
         // now. Its record may already be terminal and eligible for rerun, so letting a
         // late-starting pod reclassify it as running would leave the Job undeleted and
         // that pod free to write results beside the rerun's.
-        StuckPendingRecord pendingCleanup = cleanupPending.get(execId);
+        String pendingCleanup = cleanupPending.get(execution);
         if (pendingCleanup != null) {
-            completeStuckPending(execId, jobName, pendingCleanup.reason);
+            completeStuckPending(execution, pendingCleanup);
             return;
         }
 
-        if (isRunningOnANode(job, execId, pods)) {
-            if (!runningExecIds.contains(execId) && callback.onJobRunning(execId, jobName)) {
-                runningExecIds.add(execId);
+        if (isRunningOnANode(job, execution, pods)) {
+            if (!runningExecutions.contains(execution) && callback.onJobRunning(execution)) {
+                runningExecutions.add(execution);
             }
-            pendingWarnedAt.remove(execId);
+            pendingWarnedAt.remove(execution);
             return;
         }
 
         // Without a pod listing there is nothing to judge, and a pod that is absent or in
         // a terminal phase is the Job's business, not this method's.
-        if (!pods.isAvailable() || pods.phaseFor(execId) != PodPhaseView.Phase.PENDING) {
+        if (!pods.isAvailable() || pods.phaseFor(execution) != PodPhaseView.Phase.PENDING) {
             return;
         }
 
-        long createdAt = pods.createdAtMillis(execId);
+        long createdAt = pods.createdAtMillis(execution);
         if (createdAt == PodPhaseView.UNKNOWN_TIME) {
             return;
         }
@@ -484,15 +470,15 @@ public class KubernetesJobMonitor {
             return;
         }
 
-        String reason = pods.describeWhyPending(execId);
+        String reason = pods.describeWhyPending(execution);
 
         if (pendingTimeoutMillis > 0 && pendingMillis >= pendingTimeoutMillis) {
-            completeStuckPending(execId, jobName, reason);
+            completeStuckPending(execution, reason);
             return;
         }
 
         if (pendingWarnMillis > 0 && pendingMillis >= pendingWarnMillis) {
-            warnAboutStuckPod(execId, jobName, pendingMillis, reason);
+            warnAboutStuckPod(execution, pendingMillis, reason);
         }
     }
 
@@ -503,40 +489,61 @@ public class KubernetesJobMonitor {
      * time, or the Job deletion. Recording the pair here is what makes the next poll
      * resume the transition instead of re-deciding what the pair is.
      */
-    private void completeStuckPending(int execId, String jobName, String reason) {
-        if (callback.onJobStuckPending(execId, jobName, reason)) {
-            completedExecIds.add(execId);
-            runningExecIds.remove(execId);
-            pendingWarnedAt.remove(execId);
-            cleanupPending.remove(execId);
+    private void completeStuckPending(ExecutionRef execution, String reason) {
+        if (callback.onJobStuckPending(execution, reason)) {
+            completedExecutions.add(execution);
+            runningExecutions.remove(execution);
+            pendingWarnedAt.remove(execution);
+            cleanupPending.remove(execution);
             return;
         }
-        cleanupPending.put(execId, new StuckPendingRecord(jobName, reason));
+        cleanupPending.put(execution, reason);
     }
 
     private void warnAboutStuckPod(
-        int execId,
-        String jobName,
+        ExecutionRef execution,
         long pendingMillis,
         String reason
     ) {
         long now = clock.getAsLong();
-        Long lastWarned = pendingWarnedAt.get(execId);
+        Long lastWarned = pendingWarnedAt.get(execution);
         if (lastWarned != null && (now - lastWarned) < pendingWarnMillis) {
             return;
         }
-        pendingWarnedAt.put(execId, now);
+        pendingWarnedAt.put(execution, now);
 
         log.warn(
-            "Kubernetes job " +
-            jobName +
-            " (execId " +
-            execId +
-            ") has had a pod waiting to start for " +
+            "Kubernetes " +
+            execution +
+            " has had a pod waiting to start for " +
             TimeUnit.MILLISECONDS.toMinutes(pendingMillis) +
             " minutes and nothing has run yet. Kubernetes reports: " +
             reason
         );
+    }
+
+    /**
+     * The concrete identity of a listed Job, or null if it does not carry one.
+     *
+     * <p>A Job the API server has accepted always has a UID, so a listing entry without one
+     * is not something to act on: every downstream decision here either suppresses or
+     * publishes an execution's result, and doing that on an identity that cannot be told
+     * apart from another Job's is the failure this method exists to prevent.
+     */
+    private ExecutionRef identify(Job job) {
+        Integer execId = extractExecId(job);
+        if (execId == null) {
+            return null;
+        }
+        ExecutionRef execution = ExecutionRef.fromJob(execId, job);
+        if (execution == null) {
+            log.warn(
+                "Kubernetes job " + jobNameOf(job) + " (execId " + execId +
+                ") carries no object identity; it is not being acted on. OPERATOR ACTION:" +
+                " inspect its metadata.uid."
+            );
+        }
+        return execution;
     }
 
     private String jobNameOf(Job job) {
@@ -629,11 +636,11 @@ public class KubernetesJobMonitor {
      * <p>When pods cannot be listed the old test is all there is, so it is used and the
      * behaviour is exactly what it was before this distinction existed.
      */
-    private boolean isRunningOnANode(Job job, int execId, PodPhaseView pods) {
+    private boolean isRunningOnANode(Job job, ExecutionRef execution, PodPhaseView pods) {
         if (!pods.isAvailable()) {
             return hasActivePod(job);
         }
-        return pods.phaseFor(execId) == PodPhaseView.Phase.RUNNING;
+        return pods.phaseFor(execution) == PodPhaseView.Phase.RUNNING;
     }
 
     private boolean hasActivePod(Job job) {
@@ -692,28 +699,30 @@ public class KubernetesJobMonitor {
         /**
          * Called when a job first becomes active in Kubernetes.
          *
-         * @param execId Execution ID
-         * @param jobName Kubernetes job name
+         * <p>Every method here carries {@link ExecutionRef} rather than the execution id and
+         * name it used to. The monitor holds the Job the event came from, so the identity is
+         * free at this end; passing only the integer made the implementation guess which
+         * execution was meant, and after a restart it guessed wrong.
+         *
+         * @param execution the Kubernetes execution this event belongs to
          * @return true when the running transition was handled and should not be retried
          */
-        boolean onJobRunning(int execId, String jobName);
+        boolean onJobRunning(ExecutionRef execution);
 
         /**
          * Called when a job completes successfully.
-         * @param execId Execution ID
-         * @param jobName Kubernetes job name
+         * @param execution the Kubernetes execution this event belongs to
          * @return true when completion handling succeeded and should not be retried
          */
-        boolean onJobComplete(int execId, String jobName);
+        boolean onJobComplete(ExecutionRef execution);
 
         /**
          * Called when a job fails.
-         * @param execId Execution ID
-         * @param jobName Kubernetes job name
+         * @param execution the Kubernetes execution this event belongs to
          * @param reason Failure reason
          * @return true when failure handling succeeded and should not be retried
          */
-        boolean onJobFailed(int execId, String jobName, String reason);
+        boolean onJobFailed(ExecutionRef execution, String reason);
 
         /**
          * Called when a job's pod has waited to start for longer than the configured
@@ -732,6 +741,6 @@ public class KubernetesJobMonitor {
          *               log — it is prose and must not be branched on
          * @return true when the transition was recorded and should not be retried
          */
-        boolean onJobStuckPending(int execId, String jobName, String reason);
+        boolean onJobStuckPending(ExecutionRef execution, String reason);
     }
 }

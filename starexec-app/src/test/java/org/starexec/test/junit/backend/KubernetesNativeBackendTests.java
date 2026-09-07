@@ -30,6 +30,7 @@ import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.Backend;
+import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
@@ -278,11 +279,11 @@ public class KubernetesNativeBackendTests {
                     JobPairs.ConditionalPairUpdateResult.UPDATED
                 );
 
-            assertFalse(callback.onJobRunning(15, "job-15"));
+            assertFalse(callback.onJobRunning(execution(15, "job-15")));
             assertEquals("job-15", execToJob.get(15));
             assertEquals(Integer.valueOf(515), execToPair.get(15));
 
-            assertTrue(callback.onJobRunning(15, "job-15"));
+            assertTrue(callback.onJobRunning(execution(15, "job-15")));
             jobPairsMock.verify(() -> JobPairs.trySetPairRunning(515), Mockito.times(2));
         }
     }
@@ -296,17 +297,18 @@ public class KubernetesNativeBackendTests {
             instantiateCompletionCallback(backend);
 
         int execId = 16;
-        Set<Integer> killedExecIds =
-            (Set<Integer>) getField(backend, "killedExecIds");
-        killedExecIds.add(execId);
+        ExecutionRef execution = execution(execId, "job-16");
+        Set<ExecutionRef> killedExecutions =
+            (Set<ExecutionRef>) getField(backend, "killedExecutions");
+        killedExecutions.add(execution);
 
         try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
-            assertTrue(callback.onJobRunning(execId, "job-16"));
-            assertTrue(killedExecIds.contains(execId));
+            assertTrue(callback.onJobRunning(execution(execId, "job-16")));
+            assertTrue(killedExecutions.contains(execution));
             jobPairsMock.verifyNoInteractions();
 
-            assertTrue(callback.onJobComplete(execId, "job-16"));
-            assertFalse(killedExecIds.contains(execId));
+            assertTrue(callback.onJobComplete(execution(execId, "job-16")));
+            assertFalse(killedExecutions.contains(execution));
             jobPairsMock.verifyNoInteractions();
         }
     }
@@ -376,12 +378,12 @@ public class KubernetesNativeBackendTests {
                 )
                 .thenReturn(PairStatusResult.FAILED, PairStatusResult.APPLIED);
 
-            assertFalse(callback.onJobComplete(11, "job-11"));
+            assertFalse(callback.onJobComplete(execution(11, "job-11")));
             assertEquals("job-11", execToJob.get(11));
             assertEquals(Integer.valueOf(111), execToPair.get(11));
             assertEquals(Path.of("/tmp/output/11"), execToOut.get(11));
 
-            assertTrue(callback.onJobComplete(11, "job-11"));
+            assertTrue(callback.onJobComplete(execution(11, "job-11")));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
@@ -432,7 +434,7 @@ public class KubernetesNativeBackendTests {
                 )
                 .thenReturn(PairStatusResult.SUPERSEDED);
 
-            assertTrue(callback.onJobComplete(21, "job-21"));
+            assertTrue(callback.onJobComplete(execution(21, "job-21")));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
@@ -475,12 +477,12 @@ public class KubernetesNativeBackendTests {
                 )
                 .thenReturn(false, true);
 
-            assertFalse(callback.onJobFailed(12, "job-12", "BackoffLimitExceeded"));
+            assertFalse(callback.onJobFailed(execution(12, "job-12"), "BackoffLimitExceeded"));
             assertEquals("job-12", execToJob.get(12));
             assertEquals(Integer.valueOf(222), execToPair.get(12));
             assertEquals(Path.of("/tmp/output/12"), execToOut.get(12));
 
-            assertTrue(callback.onJobFailed(12, "job-12", "BackoffLimitExceeded"));
+            assertTrue(callback.onJobFailed(execution(12, "job-12"), "BackoffLimitExceeded"));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
@@ -525,12 +527,12 @@ public class KubernetesNativeBackendTests {
                 .thenThrow(new RuntimeException("db down"))
                 .thenReturn(PairStatusResult.APPLIED);
 
-            assertFalse(callback.onJobComplete(13, "job-13"));
+            assertFalse(callback.onJobComplete(execution(13, "job-13")));
             assertEquals("job-13", execToJob.get(13));
             assertEquals(Integer.valueOf(313), execToPair.get(13));
             assertEquals(Path.of("/tmp/output/13"), execToOut.get(13));
 
-            assertTrue(callback.onJobComplete(13, "job-13"));
+            assertTrue(callback.onJobComplete(execution(13, "job-13")));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
@@ -574,12 +576,12 @@ public class KubernetesNativeBackendTests {
                 .thenThrow(new RuntimeException("db down"))
                 .thenReturn(true);
 
-            assertFalse(callback.onJobFailed(14, "job-14", "BackoffLimitExceeded"));
+            assertFalse(callback.onJobFailed(execution(14, "job-14"), "BackoffLimitExceeded"));
             assertEquals("job-14", execToJob.get(14));
             assertEquals(Integer.valueOf(414), execToPair.get(14));
             assertEquals(Path.of("/tmp/output/14"), execToOut.get(14));
 
-            assertTrue(callback.onJobFailed(14, "job-14", "BackoffLimitExceeded"));
+            assertTrue(callback.onJobFailed(execution(14, "job-14"), "BackoffLimitExceeded"));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
@@ -933,10 +935,16 @@ public class KubernetesNativeBackendTests {
 
         assertFalse(
             "marking a merely-safe execution as killed cancels the continuation: every"
-                + " terminal callback short-circuits on killedExecIds and returns true, so"
-                + " the monitor drops its cleanup-pending record with the DB transition"
-                + " never written and the pair stranded at ENQUEUED",
-            ((Set<Integer>) getField(backend, "killedExecIds")).contains(31)
+                + " terminal callback short-circuits on the stopped-execution state and"
+                + " returns true, so the monitor drops its cleanup-pending record with the"
+                + " DB transition never written and the pair stranded at ENQUEUED",
+            ((Set<Integer>) getField(backend, "legacyKilledExecIds")).contains(31)
+        );
+        assertTrue(
+            "and no concrete cancellation may be recorded for it either",
+            ((Set<ExecutionRef>) getField(backend, "killedExecutions"))
+                .stream()
+                .noneMatch(ref -> ref.execId() == 31)
         );
         assertEquals(
             "and the continuation still resolves its pair id from this map",
@@ -1540,6 +1548,18 @@ public class KubernetesNativeBackendTests {
         );
     }
 
+    /**
+     * The identity a callback event carries.
+     *
+     * <p>The UID is synthesised from the execution id here because these tests exercise the
+     * backend's handling, not Kubernetes' allocation. What matters is that two executions
+     * sharing an id can be told apart, and {@link ExecutionIdentityCollisionTests} is where
+     * that is asserted.
+     */
+    private static ExecutionRef execution(int execId, String jobName) {
+        return new ExecutionRef(execId, jobName, "uid-" + jobName);
+    }
+
     private KubernetesJobMonitor.JobCompletionCallback instantiateCompletionCallback(
         KubernetesNativeBackend backend
     ) throws Exception {
@@ -1590,7 +1610,7 @@ public class KubernetesNativeBackendTests {
 
             assertFalse(
                 "the escalation must report incomplete so the monitor retries it",
-                callback.onJobStuckPending(41, "job-41", "not scheduled")
+                callback.onJobStuckPending(execution(41, "job-41"), "not scheduled")
             );
 
             jobPairsMock.verify(
@@ -1660,8 +1680,7 @@ public class KubernetesNativeBackendTests {
 
             assertTrue(
                 callback.onJobStuckPending(
-                    31,
-                    "job-31",
+                    execution(31, "job-31"),
                     "not scheduled (Unschedulable): 0/6 nodes are available"
                 )
             );
@@ -1727,7 +1746,7 @@ public class KubernetesNativeBackendTests {
                 .thenReturn(true);
             jobPairsMock.when(() -> JobPairs.setEndTime(432)).thenReturn(true);
 
-            assertTrue(callback.onJobStuckPending(32, "job-32", "Unschedulable"));
+            assertTrue(callback.onJobStuckPending(execution(32, "job-32"), "Unschedulable"));
         }
 
         assertEquals(0, activeJobCount.get());
@@ -1776,12 +1795,12 @@ public class KubernetesNativeBackendTests {
                 )
                 .thenReturn(false, true);
 
-            assertFalse(callback.onJobStuckPending(33, "job-33", "Unschedulable"));
+            assertFalse(callback.onJobStuckPending(execution(33, "job-33"), "Unschedulable"));
             assertEquals("job-33", execToJob.get(33));
             assertEquals(1, activeJobCount.get());
 
             jobPairsMock.when(() -> JobPairs.setEndTime(433)).thenReturn(true);
-            assertTrue(callback.onJobStuckPending(33, "job-33", "Unschedulable"));
+            assertTrue(callback.onJobStuckPending(execution(33, "job-33"), "Unschedulable"));
         }
 
         assertEquals(0, activeJobCount.get());
@@ -1834,7 +1853,7 @@ public class KubernetesNativeBackendTests {
                 .thenReturn(true);
             jobPairsMock.when(() -> JobPairs.setEndTime(434)).thenReturn(false);
 
-            assertFalse(callback.onJobStuckPending(34, "job-34", "Unschedulable"));
+            assertFalse(callback.onJobStuckPending(execution(34, "job-34"), "Unschedulable"));
 
             // Nothing was deleted and nothing was released, so the next poll sees the Job
             // again and retries.
@@ -1895,7 +1914,7 @@ public class KubernetesNativeBackendTests {
                 .thenReturn(true);
             jobPairsMock.when(() -> JobPairs.setEndTime(435)).thenReturn(true);
 
-            assertFalse(callback.onJobStuckPending(35, "job-35", "Unschedulable"));
+            assertFalse(callback.onJobStuckPending(execution(35, "job-35"), "Unschedulable"));
 
             // Neither write may have happened: together they are precisely what makes the
             // pair eligible for an automatic rerun, and the old pod is still out there.
@@ -1960,7 +1979,7 @@ public class KubernetesNativeBackendTests {
                 .thenReturn(true);
             jobPairsMock.when(() -> JobPairs.setEndTime(436)).thenReturn(true);
 
-            assertTrue(callback.onJobStuckPending(36, "job-36", "Unschedulable"));
+            assertTrue(callback.onJobStuckPending(execution(36, "job-36"), "Unschedulable"));
         }
 
         assertEquals(0, activeJobCount.get());
@@ -2539,19 +2558,37 @@ public class KubernetesNativeBackendTests {
         Object callback = ctor.newInstance(backend);
 
         Method m = callbackClass.getDeclaredMethod(
-            "readTerminalStatus", int.class, int.class
+            "readTerminalStatus", ExecutionRef.class, int.class
         );
         m.setAccessible(true);
-        return (Integer) m.invoke(callback, execId, fallback);
+        return (Integer) m.invoke(callback, execution(execId, "job-" + execId), fallback);
     }
 
+    /**
+     * A backend whose tracking says this execution owns {@code dir}.
+     *
+     * <p>The job name and UID are seeded too, not just the directory: reading an
+     * execution's artifacts now requires owning the tracking under its id, so a bare
+     * directory entry with nothing claiming it yields no artifacts at all.
+     */
     @SuppressWarnings("unchecked")
     private KubernetesNativeBackend backendWithOutputDir(int execId, Path dir)
         throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
-        Field f = KubernetesNativeBackend.class.getDeclaredField("execIdToOutputDir");
-        f.setAccessible(true);
-        ((Map<Integer, Path>) f.get(backend)).put(execId, dir);
+        ExecutionRef owner = execution(execId, "job-" + execId);
+
+        Field dirs = KubernetesNativeBackend.class.getDeclaredField("execIdToOutputDir");
+        dirs.setAccessible(true);
+        ((Map<Integer, Path>) dirs.get(backend)).put(execId, dir);
+
+        Field names = KubernetesNativeBackend.class.getDeclaredField("execIdToJobName");
+        names.setAccessible(true);
+        ((Map<Integer, String>) names.get(backend)).put(execId, owner.jobName());
+
+        Field uids = KubernetesNativeBackend.class.getDeclaredField("execIdToJobUid");
+        uids.setAccessible(true);
+        ((Map<Integer, String>) uids.get(backend)).put(execId, owner.jobUid());
+
         return backend;
     }
 

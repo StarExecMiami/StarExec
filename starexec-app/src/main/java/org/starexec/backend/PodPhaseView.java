@@ -3,6 +3,7 @@ package org.starexec.backend;
 import io.fabric8.kubernetes.api.model.ContainerState;
 import io.fabric8.kubernetes.api.model.ContainerStateWaiting;
 import io.fabric8.kubernetes.api.model.ContainerStatus;
+import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodCondition;
 import io.fabric8.kubernetes.api.model.PodStatus;
@@ -13,7 +14,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.starexec.logger.StarLogger;
 
@@ -73,6 +77,9 @@ public final class PodPhaseView {
      * permission produces one line rather than one every five seconds.
      */
     private static final AtomicBoolean LISTING_WARNING_EMITTED = new AtomicBoolean(false);
+
+    /** Emitted once, for a managed pod that names no controller. */
+    private static final AtomicBoolean OWNERLESS_POD_WARNING_EMITTED = new AtomicBoolean(false);
 
     private static final PodPhaseView UNAVAILABLE = new PodPhaseView(
         Collections.emptyMap(),
@@ -148,16 +155,16 @@ public final class PodPhaseView {
         }
     }
 
-    private final Map<Integer, Observation> byExecId;
+    private final Map<ExecutionKey, Observation> byExecution;
     private final List<UnidentifiedPod> unidentified;
     private final boolean available;
 
     private PodPhaseView(
-        Map<Integer, Observation> byExecId,
+        Map<ExecutionKey, Observation> byExecution,
         List<UnidentifiedPod> unidentified,
         boolean available
     ) {
-        this.byExecId = byExecId;
+        this.byExecution = byExecution;
         this.unidentified = unidentified;
         this.available = available;
     }
@@ -486,7 +493,7 @@ public final class PodPhaseView {
      * @param execIdLabel  the label key holding the StarExec execution id
      */
     public static PodPhaseView of(List<Pod> pods, String execIdLabel) {
-        Map<Integer, Observation> observations = new HashMap<>();
+        Map<ExecutionKey, Observation> observations = new HashMap<>();
         List<UnidentifiedPod> unidentified = new ArrayList<>();
         if (pods == null) {
             return new PodPhaseView(observations, unidentified, true);
@@ -502,8 +509,17 @@ public final class PodPhaseView {
                 unidentified.add(describeUnidentified(pod, execIdLabel));
                 continue;
             }
+            // Grouped by the Job that owns the pod, not by the label. Two Jobs can carry
+            // the same exec-id label -- the counter behind it restarts at 1 in every
+            // application lifetime -- and merging their pods let one execution's Running
+            // pod answer for another's that had never been scheduled. Replacement pods
+            // under ONE Job still merge, which is the case preferred() is for.
             Observation observed = observe(pod);
-            observations.merge(execId, observed, PodPhaseView::preferred);
+            observations.merge(
+                new ExecutionKey(execId, controllerUidOf(pod)),
+                observed,
+                PodPhaseView::preferred
+            );
         }
         return new PodPhaseView(observations, unidentified, true);
     }
@@ -544,12 +560,29 @@ public final class PodPhaseView {
      * are indistinguishable here, and only one of them means "nothing is running".
      */
     public java.util.Set<Integer> execIds() {
-        return java.util.Collections.unmodifiableSet(byExecId.keySet());
+        Set<Integer> ids = new LinkedHashSet<>();
+        for (ExecutionKey key : byExecution.keySet()) {
+            ids.add(key.execId);
+        }
+        return java.util.Collections.unmodifiableSet(ids);
     }
 
-    /** The phase of the pod behind {@code execId}, or {@link Phase#UNKNOWN}. */
+    /** The phase of {@code execution}'s own pod, or {@link Phase#UNKNOWN}. */
+    public Phase phaseFor(ExecutionRef execution) {
+        Observation observation = observationFor(execution);
+        return (observation == null) ? Phase.UNKNOWN : observation.phase;
+    }
+
+    /**
+     * The phase behind a bare execution id.
+     *
+     * <p>Answers only while the id names one thing: if two Jobs in this view carry it,
+     * the question has no answer and {@link Phase#UNKNOWN} is returned rather than one of
+     * the two. Callers that hold a Job should pass {@link ExecutionRef} and get a reading
+     * in the colliding case too.
+     */
     public Phase phaseFor(int execId) {
-        Observation observation = byExecId.get(execId);
+        Observation observation = soleObservationFor(execId);
         return (observation == null) ? Phase.UNKNOWN : observation.phase;
     }
 
@@ -562,8 +595,14 @@ public final class PodPhaseView {
      * state, the system records the startTime of the Pod"</em>, so it is null for exactly
      * the pods this class exists to find.
      */
+    public long createdAtMillis(ExecutionRef execution) {
+        Observation observation = observationFor(execution);
+        return (observation == null) ? UNKNOWN_TIME : observation.createdAtMillis;
+    }
+
+    /** As above for a bare execution id; UNKNOWN_TIME when two Jobs carry it. */
     public long createdAtMillis(int execId) {
-        Observation observation = byExecId.get(execId);
+        Observation observation = soleObservationFor(execId);
         return (observation == null) ? UNKNOWN_TIME : observation.createdAtMillis;
     }
 
@@ -574,8 +613,14 @@ public final class PodPhaseView {
      * changes between releases; a control-flow decision resting on their wording is the
      * same mistake as parsing a solver's stdout for its exit condition.
      */
+    public String describeWhyPending(ExecutionRef execution) {
+        Observation observation = observationFor(execution);
+        return (observation == null) ? "no pod found for this execution" : observation.reason;
+    }
+
+    /** As above for a bare execution id. */
     public String describeWhyPending(int execId) {
-        Observation observation = byExecId.get(execId);
+        Observation observation = soleObservationFor(execId);
         return (observation == null) ? "no pod found for this execution id" : observation.reason;
     }
 
@@ -591,6 +636,106 @@ public final class PodPhaseView {
      * current attempt, which is the conservative reading — an older timestamp would make
      * a threshold fire sooner.
      */
+    /**
+     * The observation belonging to this execution's own Job.
+     *
+     * <p>The owning Job must match. A pod whose controller cannot be read answers for
+     * nothing: it carries the exec-id label, which is the identity this class exists to
+     * stop trusting, and a second Job holding that label is exactly the case where letting
+     * it answer would report one execution's pod as another's. The Job controller stamps a
+     * controller ownerReference on every pod it creates, so a managed pod without one is a
+     * cluster anomaly and is warned about once rather than guessed at.
+     */
+    private Observation observationFor(ExecutionRef execution) {
+        if (execution == null) {
+            return null;
+        }
+        return byExecution.get(new ExecutionKey(execution.execId(), execution.jobUid()));
+    }
+
+    /** The one observation for {@code execId}, or null when none or more than one. */
+    private Observation soleObservationFor(int execId) {
+        Observation found = null;
+        for (Map.Entry<ExecutionKey, Observation> entry : byExecution.entrySet()) {
+            if (entry.getKey().execId != execId) {
+                continue;
+            }
+            if (found != null) {
+                return null;
+            }
+            found = entry.getValue();
+        }
+        return found;
+    }
+
+    /**
+     * The UID of the Job that created this pod, or null if it does not name one.
+     *
+     * <p>Null is warned about once per process. Kubernetes' Job controller sets a controller
+     * ownerReference on every pod it creates, so an absent one means the pod cannot be
+     * attributed to an execution -- and an execution whose pod cannot be found is neither
+     * marked running nor escalated as stuck, which is a silent degradation worth a line in
+     * the log.
+     */
+    private static String controllerUidOf(Pod pod) {
+        if (pod == null || pod.getMetadata() == null) {
+            return null;
+        }
+        List<OwnerReference> owners = pod.getMetadata().getOwnerReferences();
+        if (owners == null) {
+            return null;
+        }
+        for (OwnerReference owner : owners) {
+            if (owner == null || !Boolean.TRUE.equals(owner.getController())) {
+                continue;
+            }
+            String uid = owner.getUid();
+            if (uid != null && !uid.trim().isEmpty()) {
+                return uid;
+            }
+        }
+        if (OWNERLESS_POD_WARNING_EMITTED.compareAndSet(false, true)) {
+            log.warn(
+                "Managed pod " +
+                (pod.getMetadata() == null ? "<unnamed>" : pod.getMetadata().getName()) +
+                " carries no controller ownerReference, so it cannot be attributed to a" +
+                " Kubernetes Job. Executions whose pods look like this are neither marked" +
+                " running nor escalated as stuck. OPERATOR ACTION: check whether an" +
+                " admission webhook is stripping ownerReferences."
+            );
+        }
+        return null;
+    }
+
+    /** One execution's pods: the legacy id plus the Job that owns them. */
+    private static final class ExecutionKey {
+
+        private final int execId;
+        private final String ownerUid;
+
+        private ExecutionKey(int execId, String ownerUid) {
+            this.execId = execId;
+            this.ownerUid = ownerUid;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof ExecutionKey)) {
+                return false;
+            }
+            ExecutionKey that = (ExecutionKey) other;
+            return execId == that.execId && Objects.equals(ownerUid, that.ownerUid);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(execId, ownerUid);
+        }
+    }
+
     private static Observation preferred(Observation existing, Observation candidate) {
         if (existing.phase == Phase.RUNNING) {
             return existing;
