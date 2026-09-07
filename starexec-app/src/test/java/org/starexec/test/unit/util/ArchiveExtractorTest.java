@@ -141,6 +141,9 @@ public class ArchiveExtractorTest {
             ArchiveExtractor.extractWithCleanup(archive.toString(), tempDir.resolve("cancelled"), null, settings);
         } catch (IOException e) {
             assertTrue(e.getMessage().contains("cancelled"));
+            // This message reaches the uploader, so it must name the archive, not its location.
+            assertFalse("cancellation must not disclose the server path, was: " + e.getMessage(),
+                e.getMessage().contains(tempDir.toAbsolutePath().toString()));
             return;
         }
 
@@ -170,6 +173,122 @@ public class ArchiveExtractorTest {
         }
 
         throw new AssertionError("Expected extraction to stop when the configured size limit is exceeded");
+    }
+
+    @Test
+    public void extractTarGzReportsQuotaExhaustionSeparatelyFromSafetyLimits() throws Exception {
+        Path archive = createTarGzArchive(
+            "bench/file1.p",
+            "0123456789",
+            "bench/file2.p",
+            "abcdefghij"
+        );
+        Path extractDir = tempDir.resolve("quota-exhausted");
+
+        try {
+            ArchiveExtractor.extractWithCleanup(
+                archive.toString(),
+                extractDir,
+                null,
+                ArchiveExtractor.ExtractionSettings.defaults().withRemainingQuotaBytes(5)
+            );
+        } catch (IOException e) {
+            String message = e.getMessage();
+            // Issue #98: a user out of quota was being told their archive broke a safety limit.
+            assertTrue("should name the limit as a disk quota, was: " + message,
+                message.contains("disk quota"));
+            assertTrue("should name the remedy, was: " + message, message.contains("recycle bin"));
+            assertFalse("must not be reported as a security rejection, was: " + message,
+                message.contains("safety limits"));
+            assertFalse("must not reuse the zip-bomb wording, was: " + message,
+                message.contains("Total uncompressed size exceeds"));
+            assertFalse(Files.exists(extractDir));
+            return;
+        }
+
+        throw new AssertionError("Expected extraction to stop when the disk quota is exhausted");
+    }
+
+    @Test
+    public void extractTarGzStillReportsTheZipBombCapAsASafetyLimit() throws Exception {
+        Path archive = createTarGzArchive(
+            "bench/file1.p",
+            "0123456789",
+            "bench/file2.p",
+            "abcdefghij"
+        );
+
+        try {
+            ArchiveExtractor.extractWithCleanup(
+                archive.toString(),
+                tempDir.resolve("bomb-capped"),
+                null,
+                ArchiveExtractor.ExtractionSettings.defaults().withMaxUncompressedSizeBytes(5)
+            );
+        } catch (IOException e) {
+            String message = e.getMessage();
+            assertTrue("the security cap keeps its own wording, was: " + message,
+                message.contains("Archive exceeds safety limits"));
+            assertFalse("the security cap is not a quota problem, was: " + message,
+                message.contains("disk quota"));
+            return;
+        }
+
+        throw new AssertionError("Expected extraction to stop when the security cap is exceeded");
+    }
+
+    @Test
+    public void quotaAndSecurityCapAreIndependentLimits() throws Exception {
+        Path archive = createTarGzArchive(
+            "bench/file1.p",
+            "0123456789",
+            "bench/file2.p",
+            "abcdefghij"
+        );
+        Path extractDir = tempDir.resolve("both-limits");
+
+        // A generous quota must not raise the security cap: the smaller limit still governs.
+        try {
+            ArchiveExtractor.extractWithCleanup(
+                archive.toString(),
+                extractDir,
+                null,
+                ArchiveExtractor.ExtractionSettings.defaults()
+                    .withMaxUncompressedSizeBytes(5)
+                    .withRemainingQuotaBytes(Long.MAX_VALUE)
+            );
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Archive exceeds safety limits"));
+            return;
+        }
+
+        throw new AssertionError("Expected the security cap to apply regardless of the quota");
+    }
+
+    @Test
+    public void noQuotaLimitLeavesExtractionUncapped() throws Exception {
+        Path archive = createTarGzArchive("bench/file1.p", "content-1", "bench/file2.p", "content-2");
+        Path extractDir = tempDir.resolve("uncapped");
+        AtomicInteger extractedCount = new AtomicInteger();
+
+        ArchiveExtractor.extractWithCleanup(
+            archive.toString(),
+            extractDir,
+            extractedCount,
+            ArchiveExtractor.ExtractionSettings.defaults()
+                .withRemainingQuotaBytes(ArchiveExtractor.NO_QUOTA_LIMIT)
+        );
+
+        assertEquals(2, extractedCount.get());
+    }
+
+    @Test
+    public void quotaMessageStatesBothTheRequirementAndTheRemainder() {
+        String message = ArchiveExtractor.formatQuotaExceededMessage(9061416960L, 4952489920L);
+
+        assertTrue(message.contains("9061416960"));
+        assertTrue(message.contains("4952489920"));
+        assertTrue(message.contains("disk quota"));
     }
 
     private Path createTarGzArchive(String firstEntryName, String firstContent, String secondEntryName, String secondContent)
