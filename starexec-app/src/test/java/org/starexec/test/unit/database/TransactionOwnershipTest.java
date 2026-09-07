@@ -44,14 +44,22 @@ public class TransactionOwnershipTest {
 				recorder.calls);
 	}
 
-	/** A connection borrowed mid-transaction goes back the way it came, not reset to true. */
+	/**
+	 * A connection already inside a transaction belongs to another owner. Committing or
+	 * rolling it back here would settle work this method did not do, and the alternative --
+	 * savepoints -- is deliberately not implemented, so it is refused before anything runs.
+	 */
 	@Test
-	public void theEntryStateIsRestoredEvenWhenItWasNotAutoCommit() throws Exception {
+	public void aConnectionAlreadyInATransactionIsRefused() {
 		RecordingConnection recorder = new RecordingConnection(false);
 
-		Common.runTransactional(recorder.connection(), con -> null);
+		SQLException refused = runExpectingFailure(recorder, con -> {
+			fail("the work must not run on a connection this method does not own");
+			return null;
+		});
 
-		assertEquals("setAutoCommit(false)", recorder.calls.get(recorder.calls.size() - 1));
+		assertTrue(refused.getMessage().contains("does not own"));
+		assertEquals("nothing may touch a connection it refused", List.of(), recorder.calls);
 	}
 
 	@Test
@@ -120,15 +128,83 @@ public class TransactionOwnershipTest {
 	/** Restoring autoCommit must not be skipped just because the work failed. */
 	@Test
 	public void theEntryStateIsRestoredOnEveryPath() {
-		for (boolean entry : new boolean[]{true, false}) {
-			RecordingConnection recorder = new RecordingConnection(entry);
-			runExpectingFailure(recorder, con -> {
-				throw new SQLException("failed");
-			});
-			assertEquals("entry autoCommit=" + entry + " must be restored last",
-					"setAutoCommit(" + entry + ")",
-					recorder.calls.get(recorder.calls.size() - 1));
-		}
+		RecordingConnection recorder = new RecordingConnection(true);
+		runExpectingFailure(recorder, con -> {
+			throw new SQLException("failed");
+		});
+		assertEquals("autoCommit must be restored last",
+				"setAutoCommit(true)", recorder.calls.get(recorder.calls.size() - 1));
+	}
+
+	/**
+	 * Work and commit succeed, restoration does not. Returning success here would hand the
+	 * pool a connection in an unknown state while telling the caller everything is fine.
+	 *
+	 * <p>This pool makes that consequential: it is configured with neither
+	 * {@code rollbackOnReturn} nor a {@code ConnectionState} interceptor, so {@code close()}
+	 * resets nothing, and {@code testOnBorrow} is throttled by a 30s
+	 * {@code validationInterval} -- a connection returned inside that window is handed to the
+	 * next borrower unvalidated.
+	 */
+	@Test
+	public void aRestorationFailureAfterCommitIsReportedAsCommitted() {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = "setAutoCommit(true)";
+
+		SQLException surfaced = runExpectingFailure(recorder, con -> "written");
+
+		assertTrue("the caller must be told the work committed, not that it was rolled back",
+				surfaced instanceof Common.CommittedButUnrestoredException);
+		assertEquals("nothing may be rolled back after a successful commit",
+				0, count(recorder.calls, "rollback"));
+		assertEquals(1, count(recorder.calls, "commit"));
+	}
+
+	/**
+	 * A restoration failure on top of an application failure must not become the reported
+	 * cause: the caller needs to know why its work failed.
+	 */
+	@Test
+	public void aRestorationFailureAfterAFailureIsSuppressedNotPromoted() {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = "setAutoCommit(true)";
+
+		SQLException surfaced = runExpectingFailure(recorder, con -> {
+			throw new SQLException("the original failure");
+		});
+
+		assertEquals("the original failure", surfaced.getMessage());
+		assertTrue("the restoration failure must ride along",
+				surfaced.getSuppressed().length >= 1);
+	}
+
+	/** Both cleanup steps failing still leaves the application failure primary. */
+	@Test
+	public void rollbackAndRestorationFailingTogetherStillReportTheOriginal() {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = "rollback";
+		recorder.alsoFailOn = "setAutoCommit(true)";
+
+		SQLException surfaced = runExpectingFailure(recorder, con -> {
+			throw new SQLException("the original failure");
+		});
+
+		assertEquals("the original failure", surfaced.getMessage());
+		assertEquals("both cleanup failures must be attached", 2, surfaced.getSuppressed().length);
+	}
+
+	/** After every path that restores cleanly, the next borrower sees autoCommit=true. */
+	@Test
+	public void aCleanlyRestoredConnectionIsReusable() throws Exception {
+		RecordingConnection ok = new RecordingConnection(true);
+		Common.runTransactional(ok.connection(), con -> "fine");
+		assertTrue("a committed transaction must leave autoCommit on", ok.autoCommit);
+
+		RecordingConnection failed = new RecordingConnection(true);
+		runExpectingFailure(failed, con -> {
+			throw new SQLException("failed");
+		});
+		assertTrue("a rolled-back transaction must leave autoCommit on", failed.autoCommit);
 	}
 
 	/** The owner borrows the connection; whoever opened it closes it. */
@@ -167,6 +243,7 @@ public class TransactionOwnershipTest {
 		private final List<String> calls = new ArrayList<>();
 		private boolean autoCommit;
 		private String failOn;
+		private String alsoFailOn;
 
 		RecordingConnection(boolean autoCommit) {
 			this.autoCommit = autoCommit;
@@ -183,15 +260,20 @@ public class TransactionOwnershipTest {
 			switch (name) {
 				case "getAutoCommit":
 					return autoCommit;
-				case "setAutoCommit":
-					calls.add("setAutoCommit(" + args[0] + ")");
+				case "setAutoCommit": {
+					String call = "setAutoCommit(" + args[0] + ")";
+					calls.add(call);
+					if (call.equals(failOn) || call.equals(alsoFailOn)) {
+						throw new SQLException(call + " failed");
+					}
 					autoCommit = (Boolean) args[0];
 					return null;
+				}
 				case "commit":
 				case "rollback":
 				case "close":
 					calls.add(name);
-					if (name.equals(failOn)) {
+					if (name.equals(failOn) || name.equals(alsoFailOn)) {
 						throw new SQLException(name + " failed");
 					}
 					return null;

@@ -2,6 +2,7 @@ package org.starexec.util;
 
 import org.starexec.constants.R;
 import org.starexec.data.database.*;
+import org.starexec.data.database.Common;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.*;
 import org.starexec.data.to.Queue;
@@ -241,6 +242,16 @@ public class JobUtil {
 				}
 				return createdIds;
 			});
+		} catch (Common.CommittedButUnrestoredException e) {
+			// The jobs were written. Only the connection's state afterwards is in doubt, and
+			// the ids did not survive the throw -- so the one thing this must not say is that
+			// nothing was created.
+			log.error(method, "Job creation for user " + userId + " COMMITTED, but the connection"
+					+ " could not be restored; the jobs exist and their ids were lost", e);
+			errorMessage = "Your job may have been created despite this error. Check your jobs"
+					+ " before submitting it again.";
+			failureKind = FailureKind.INTERNAL;
+			return null;
 		} catch (SQLException e) {
 			log.error(method, "Rolled back job creation for user " + userId, e);
 			// A StarExecDatabaseException thrown by the block above carries a message the

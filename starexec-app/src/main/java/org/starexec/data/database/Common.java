@@ -212,6 +212,22 @@ public class Common {
 	}
 
 	/**
+	 * The transaction committed, but the connection could not be returned to its entry state.
+	 *
+	 * <p>Distinct because the two halves point opposite ways: the caller's writes <em>are</em>
+	 * durable, and the connection <em>is</em> suspect. Reporting this as an ordinary failure
+	 * would have the caller tell the user nothing happened, which is false.
+	 */
+	public static final class CommittedButUnrestoredException extends SQLException {
+		private static final long serialVersionUID = 1L;
+
+		CommittedButUnrestoredException(SQLException cause) {
+			super("The transaction committed, but the connection's autoCommit state could not be"
+			      + " restored before returning it to the pool", cause.getSQLState(), cause);
+		}
+	}
+
+	/**
 	 * Runs {@code work} inside one transaction on a borrowed connection, committing exactly
 	 * once on normal return and rolling back exactly once on any failure.
 	 *
@@ -220,48 +236,88 @@ public class Common {
 	 * acquire a connection of its own -- one independently committing helper is enough to
 	 * break atomicity, because its writes survive this rollback.
 	 *
-	 * <p>The connection's entry autoCommit setting is restored in {@code finally}, before it
-	 * goes back to the pool, so the next borrower cannot inherit a transactional connection.
-	 * A failure while cleaning up is attached to the original exception as a suppressed one
-	 * rather than replacing it -- the application failure is what the caller needs to see.
-	 * That is also why this does not use {@link #endTransaction}, which turns a failed commit
-	 * into a silent rollback and reports nothing.
+	 * <h2>Why cleanup failures are not swallowed</h2>
+	 *
+	 * Returning a connection with {@code autoCommit=false}, or inside an aborted transaction,
+	 * poisons whichever request borrows it next -- a failure that surfaces nowhere near the
+	 * request that caused it. {@code close()} does not prevent that here: it returns the
+	 * connection to the pool, and this pool is configured with neither {@code rollbackOnReturn}
+	 * nor a {@code ConnectionState} interceptor, so nothing resets autoCommit or rolls back on
+	 * return. {@code setDefaultAutoCommit(true)} applies when a physical connection is
+	 * <em>created</em>, not when one is handed back. {@code testOnBorrow} would catch an
+	 * aborted transaction, but {@code validationInterval} is 30s, so a connection returned
+	 * inside that window is handed out unvalidated.
+	 *
+	 * <p>So restoration is part of the operation, not a courtesy:
+	 *
+	 * <ul>
+	 *   <li>work or commit fails -> roll back, restore, and report the <em>original</em>
+	 *       failure with any rollback or restoration failure attached as suppressed;</li>
+	 *   <li>work and commit succeed but restoration fails -> report
+	 *       {@link CommittedButUnrestoredException}, because success is not something this
+	 *       method can honestly report when it does not know the connection's state.</li>
+	 * </ul>
+	 *
+	 * <p>This is also why it does not use {@link #endTransaction}, which turns a failed commit
+	 * into a silent rollback and returns normally, leaving the caller believing its writes are
+	 * durable.
+	 *
+	 * <h2>Ownership precondition</h2>
+	 *
+	 * The connection must arrive in autoCommit mode. A connection already inside a transaction
+	 * belongs to some other owner, and committing or rolling it back here would settle work
+	 * this method did not do. Nested transactions would need savepoints, which this
+	 * deliberately does not implement.
 	 *
 	 * <p>Deliberately explicit rather than thread-local: the connection is a parameter, so
 	 * every signature says whether that method takes part in a caller's transaction.
 	 *
-	 * @param con  a borrowed connection; the caller closes it
+	 * @param con  a borrowed connection in autoCommit mode; the caller closes it
 	 * @param work the writes that must all commit or none
 	 */
 	public static <T> T runTransactional(Connection con, TransactionalWork<T> work) throws SQLException {
-		boolean entryAutoCommit = con.getAutoCommit();
-		boolean settled = false;
+		if (!con.getAutoCommit()) {
+			throw new SQLException("runTransactional was given a connection that is already in a"
+					+ " transaction; it will not commit or roll back a transaction it does not own");
+		}
+
+		SQLException failure = null;
+		T result = null;
+		boolean committed = false;
 		try {
 			con.setAutoCommit(false);
-			T result = work.run(con);
+			result = work.run(con);
 			con.commit();
-			settled = true;
-			return result;
+			committed = true;
 		} catch (Exception e) {
-			SQLException failure = (e instanceof SQLException)
+			failure = (e instanceof SQLException)
 					? (SQLException) e
 					: new SQLException("Transaction rolled back: " + e.getMessage(), e);
-			if (!settled) {
-				try {
-					con.rollback();
-				} catch (SQLException rollbackFailure) {
-					failure.addSuppressed(rollbackFailure);
-				}
-			}
-			throw failure;
-		} finally {
+		}
+
+		if (failure != null && !committed) {
 			try {
-				con.setAutoCommit(entryAutoCommit);
-			} catch (SQLException restoreFailure) {
-				log.error("runTransactional", "could not restore autoCommit before returning the"
-						+ " connection to the pool", restoreFailure);
+				con.rollback();
+			} catch (SQLException rollbackFailure) {
+				failure.addSuppressed(rollbackFailure);
 			}
 		}
+
+		try {
+			con.setAutoCommit(true);
+		} catch (SQLException restoreFailure) {
+			if (failure != null) {
+				// Cleanup must not overwrite the reason the caller needs to see.
+				failure.addSuppressed(restoreFailure);
+			} else {
+				failure = new CommittedButUnrestoredException(restoreFailure);
+			}
+		}
+
+		if (failure != null) {
+			throw failure;
+		}
+		return result;
 	}
 
 	/** As {@link #runTransactional}, acquiring and returning the connection as well. */
