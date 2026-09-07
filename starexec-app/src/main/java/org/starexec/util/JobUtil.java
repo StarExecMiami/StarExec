@@ -51,7 +51,15 @@ public class JobUtil {
 		/** The user may not use something the document names. */
 		PERMISSION,
 		/** Something on the server failed. The message is for the log, not the client. */
-		INTERNAL
+		INTERNAL,
+		/**
+		 * The job was committed, and then the connection could not be returned to a usable
+		 * state. The write is durable; only the infrastructure failed afterwards.
+		 *
+		 * <p>Separate from {@link #INTERNAL} because the two need opposite advice. Telling
+		 * someone nothing was created, when it was, invites a retry that creates it twice.
+		 */
+		COMMITTED_WITH_CONNECTION_FAILURE
 	}
 
 	private FailureKind failureKind = FailureKind.VALIDATION;
@@ -250,12 +258,15 @@ public class JobUtil {
 					+ " could not be restored; the jobs exist and their ids were lost", e);
 			errorMessage = "Your job may have been created despite this error. Check your jobs"
 					+ " before submitting it again.";
-			failureKind = FailureKind.INTERNAL;
+			failureKind = FailureKind.COMMITTED_WITH_CONNECTION_FAILURE;
 			return null;
 		} catch (SQLException e) {
 			log.error(method, "Rolled back job creation for user " + userId, e);
-			// A StarExecDatabaseException thrown by the block above carries a message the
-			// document's author can act on, and the transaction failing on its own does not.
+			// The throw sites above classify their own failures -- a duplicate pipeline name is
+			// the author's to fix, a failed insert is not -- so only an exception that reached
+			// here without passing one of them is reclassified. Treating every
+			// StarExecDatabaseException as the author's fault reported an induced
+			// stage-insertion failure as HTTP 400.
 			if (!(e.getCause() instanceof StarExecDatabaseException)) {
 				failureKind = FailureKind.INTERNAL;
 			}
@@ -437,6 +448,9 @@ public class JobUtil {
 		int id = Pipelines.addPipelineToDatabase(pipeline, con);
 		if (id <= 0) { //if there was a database error
 			errorMessage = " Internal database error adding a pipeline";
+			// Persistence failed. The document may be perfectly correct, so this must not be
+			// reported as something the author can fix.
+			failureKind = FailureKind.INTERNAL;
 			return null;
 		}
 		return pipeline;
@@ -913,6 +927,7 @@ public class JobUtil {
 			boolean submitSuccess = Jobs.add(job, spaceId, con);
 			if (!submitSuccess) {
 				errorMessage = "Error: could not add job with id " + job.getId() + " to space with id " + spaceId;
+				failureKind = FailureKind.INTERNAL;
 				return -1;
 			} else if (startPaused) {
 				// The borrowed connection matters here: the job row is not visible to any

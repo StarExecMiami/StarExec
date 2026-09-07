@@ -306,6 +306,8 @@ public class Common {
 		try {
 			con.setAutoCommit(true);
 		} catch (SQLException restoreFailure) {
+			// The connection's state is now unknown, so it must not go back into rotation.
+			discard(con, restoreFailure);
 			if (failure != null) {
 				// Cleanup must not overwrite the reason the caller needs to see.
 				failure.addSuppressed(restoreFailure);
@@ -318,6 +320,39 @@ public class Common {
 			throw failure;
 		}
 		return result;
+	}
+
+	/**
+	 * Takes a connection out of rotation whose state could not be restored.
+	 *
+	 * <p>{@code close()} is not enough. It hands the connection back to the pool, and this
+	 * pool neither rolls back nor resets autoCommit on return; {@code testOnBorrow} would
+	 * catch a broken one, but {@code validationInterval} is 30s, so a connection returned
+	 * inside that window is handed to the next borrower unvalidated.
+	 *
+	 * <p>Two mechanisms, because neither is guaranteed on its own. Tomcat JDBC's
+	 * {@code PooledConnection.setDiscarded(true)} makes the pool destroy the physical
+	 * connection rather than recycle it, and is the mechanism that actually applies here.
+	 * {@link Connection#abort} is the JDBC-standard way to terminate the physical connection,
+	 * and covers the case where the pool cannot be unwrapped. Failures of either are recorded
+	 * against the caller's exception rather than raised: this runs while something has already
+	 * gone wrong, and losing the original reason would be worse than a leaked connection.
+	 */
+	private static void discard(Connection con, SQLException reason) {
+		try {
+			org.apache.tomcat.jdbc.pool.PooledConnection pooled =
+					con.unwrap(org.apache.tomcat.jdbc.pool.PooledConnection.class);
+			if (pooled != null) {
+				pooled.setDiscarded(true);
+			}
+		} catch (SQLException | RuntimeException e) {
+			reason.addSuppressed(e);
+		}
+		try {
+			con.abort(Runnable::run);
+		} catch (SQLException | RuntimeException | AbstractMethodError e) {
+			reason.addSuppressed(new SQLException("could not abort the unrestorable connection", e));
+		}
 	}
 
 	/** As {@link #runTransactional}, acquiring and returning the connection as well. */
