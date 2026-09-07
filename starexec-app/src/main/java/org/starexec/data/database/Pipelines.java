@@ -10,6 +10,7 @@ import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -179,8 +180,10 @@ public class Pipelines {
 	 *
 	 * @param dep The dependency to add
 	 * @param con An open SQL connection to make the call on
+	 * @return true if the dependency was written. A stage missing a dependency is a stage
+	 * that runs against the wrong inputs, so this can no longer be discarded.
 	 */
-	public static void addDependencyToDatabase(PipelineDependency dep, Connection con) {
+	public static boolean addDependencyToDatabase(PipelineDependency dep, Connection con) {
 		PreparedStatement ps = null;
 		try {
 			ps = con.prepareStatement("SELECT starexec.AddPipelineDependency(?,?,?,?)");
@@ -197,11 +200,13 @@ public class Pipelines {
 				}
 				Common.safeClose(rs);
 			}
+			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(ps);
 		}
+		return false;
 	}
 
 	/**
@@ -209,8 +214,9 @@ public class Pipelines {
 	 *
 	 * @param stage A fully populated solver pipeline object, including dependencies
 	 * @param con An open SQL connection to make this call on
+	 * @return true if the stage and all of its dependencies were written
 	 */
-	public static void addPipelineStageToDatabase(PipelineStage stage, Connection con) {
+	public static boolean addPipelineStageToDatabase(PipelineStage stage, Connection con) {
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
 		try {
@@ -231,14 +237,18 @@ public class Pipelines {
 
 			for (PipelineDependency dep : stage.getDependencies()) {
 				dep.setStageId(stage.getId());
-				addDependencyToDatabase(dep, con);
+				if (!addDependencyToDatabase(dep, con)) {
+					return false;
+				}
 			}
+			return true;
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
 			Common.safeClose(rs);
 			Common.safeClose(stmt);
 		}
+		return false;
 	}
 
 	/**
@@ -281,7 +291,33 @@ public class Pipelines {
 	 * success. All stage IDs will also be set, as will the pipeline's primary stage ID
 	 */
 	public static int addPipelineToDatabase(SolverPipeline pipe) {
-		Connection con = null;
+		try {
+			return Common.inTransaction(con -> {
+				int id = addPipelineToDatabase(pipe, con);
+				if (id <= 0) {
+					throw new SQLException("Could not persist pipeline '" + pipe.getName() + "'");
+				}
+				return id;
+			});
+		} catch (SQLException e) {
+			log.error(e.getMessage(), e);
+			return -1;
+		}
+	}
+
+	/**
+	 * As {@link #addPipelineToDatabase(SolverPipeline)}, on a connection the caller owns.
+	 *
+	 * <p>Borrowed: this does not commit, roll back, close the connection or change its
+	 * autoCommit setting. A pipeline created for a job XML upload has to commit with that
+	 * job, not before it -- the two used to run on different connections, so a pipeline and
+	 * its stages were durable before the job they belong to was even attempted.
+	 *
+	 * @param pipe A fully populated solver pipeline object, including dependencies
+	 * @param con An open SQL connection to make these calls on
+	 * @return The ID of the pipeline object, or -1 on failure
+	 */
+	public static int addPipelineToDatabase(SolverPipeline pipe, Connection con) {
 		PreparedStatement stmt = null;
 		ResultSet rs = null;
 		try {
@@ -298,7 +334,6 @@ public class Pipelines {
 				return -1;
 			}
 
-			con = Common.getConnection();
 			stmt = con.prepareStatement("SELECT AddPipeline(?,?)");
 			stmt.setInt(1, pipe.getUserId());
 			stmt.setString(2, pipe.getName());
@@ -309,7 +344,10 @@ public class Pipelines {
 
 			for (PipelineStage stage : stages) {
 				stage.setPipelineId(pipe.getId());
-				addPipelineStageToDatabase(stage, con);
+				if (!addPipelineStageToDatabase(stage, con)) {
+					log.error("Failed to add a stage of pipeline '" + pipe.getName() + "'");
+					return -1;
+				}
 			}
 			// The field means the persisted id, so it is only writable once there is one.
 			pipe.setPrimaryStageId(primary.getId());
@@ -318,7 +356,6 @@ public class Pipelines {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 		} finally {
-			Common.safeClose(con);
 			Common.safeClose(rs);
 			Common.safeClose(stmt);
 		}

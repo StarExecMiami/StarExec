@@ -294,6 +294,84 @@ public class StoredRoutineSmokeIT {
         assertEquals("stages must come back ordered by stage_id", inserted, returned);
     }
 
+    /**
+     * A failure at stage insertion must leave no pipeline behind.
+     *
+     * <p>Pipeline creation ran on its own connection in autoCommit, so the pipeline row was
+     * durable before its stages were attempted and stayed durable when they failed -- the
+     * reproduction database holds two such pipelines with no stages at all. The fix puts the
+     * whole upload in one transaction; this is what that transaction has to do.
+     *
+     * <p>Note the COMMIT: once a statement has failed, PostgreSQL will not honour it. Partial
+     * work cannot be salvaged by asking, which is the property being relied on.
+     */
+    @Test
+    public void aFailureAtStageInsertionLeavesNoPipeline() throws Exception {
+        String before = query("SELECT count(*) FROM starexec.solver_pipelines;");
+
+        Result attempt = psqlTolerant(String.join("\n",
+            "BEGIN;",
+            "SELECT starexec.AddPipeline(9001,'rollbackAtStage');",
+            // Induced failure: pipeline_stages.pipeline_id has a foreign key.
+            "SELECT starexec.AddPipelineStage(999999, NULL::INT, TRUE, FALSE);",
+            "COMMIT;"));
+        assertTrue("the induced failure must be the foreign key, was: " + attempt.output,
+            attempt.output.contains("pipeline_stages_pipeline_id"));
+        assertTrue("an aborted transaction must not commit: " + attempt.output,
+            attempt.output.contains("ROLLBACK"));
+
+        assertEquals("the pipeline must not survive the failure of its stage",
+            "0", query("SELECT count(*) FROM starexec.solver_pipelines"
+                + " WHERE name='rollbackAtStage';"));
+        assertEquals("no other pipeline may be disturbed",
+            before, query("SELECT count(*) FROM starexec.solver_pipelines;"));
+    }
+
+    /**
+     * The second boundary: a failure at pair or stage-data insertion must leave no job, no
+     * pairs, no stage data, and no counter drift.
+     *
+     * <p>The job row used to be written outside any transaction, between two short ones, so
+     * it survived the rollback of the pairs that were meant to fill it -- a job that can
+     * never run, reported as created.
+     */
+    @Test
+    public void aFailureAtPairInsertionLeavesNoJob() throws Exception {
+        String pairsBefore = query("SELECT count(*) FROM starexec.job_pairs;");
+        String stageDataBefore = query("SELECT count(*) FROM starexec.jobpair_stage_data;");
+        final String initiatedCount = "SELECT occurrences FROM starexec.report_data"
+            + " WHERE event_name='jobs initiated' AND queue_name IS NULL;";
+        String initiatedBefore = query(initiatedCount);
+
+        Result attempt = psqlTolerant(String.join("\n",
+            "BEGIN;",
+            "INSERT INTO starexec.jobs (id,user_id,name,created,primary_space,cpuTimeout,",
+            "  clockTimeout,maximum_memory,total_pairs,disk_size)",
+            "  VALUES (9401,9001,'rollbackAtPairs',NOW(),9001,60,60,1073741824,1,0);",
+            "INSERT INTO starexec.job_pairs (id,job_id,status_code,path)",
+            "  VALUES (9401,9401,1,'p1');",
+            // Induced failure: jobpair_stage_data.jobpair_id has a foreign key.
+            "INSERT INTO starexec.jobpair_stage_data (jobpair_id,stage_number,status_code,disk_size)",
+            "  VALUES (999999,1,1,0);",
+            // The counter is part of the same outcome, so it is written inside the same
+            // transaction and has to disappear with it.
+            "CALL starexec.AddToEventOccurrencesNotRelatedToQueue('jobs initiated', 1);",
+            "COMMIT;"));
+        assertTrue("an aborted transaction must not commit: " + attempt.output,
+            attempt.output.contains("ROLLBACK"));
+
+        assertEquals("the job must not survive the failure of its pairs",
+            "0", query("SELECT count(*) FROM starexec.jobs WHERE id=9401;"));
+        assertEquals("no job pair may survive",
+            "0", query("SELECT count(*) FROM starexec.job_pairs WHERE job_id=9401;"));
+        assertEquals("no stage data may survive",
+            stageDataBefore, query("SELECT count(*) FROM starexec.jobpair_stage_data;"));
+        assertEquals("no unrelated pair may be disturbed",
+            pairsBefore, query("SELECT count(*) FROM starexec.job_pairs;"));
+        assertEquals("the jobs-initiated counter must not drift",
+            initiatedBefore, query(initiatedCount));
+    }
+
     /** Upload completion must report an outcome rather than nothing. */
     @Test
     public void uploadCompletionRoutinesResolve() throws Exception {
@@ -400,6 +478,16 @@ public class StoredRoutineSmokeIT {
     private static Result psql(String db, String sql) throws Exception {
         return execWithStdin(120, sql, runtime, "exec", "-i", CONTAINER,
             "psql", "-U", "starexec", "-d", db, "-tA", "-v", "ON_ERROR_STOP=1");
+    }
+
+    /**
+     * Runs SQL that is <em>expected</em> to fail part-way, without ON_ERROR_STOP, so psql
+     * carries on to the closing COMMIT and reports what the server did with it. The output is
+     * the assertion; the exit code is not.
+     */
+    private static Result psqlTolerant(String sql) throws Exception {
+        return execWithStdin(120, sql, runtime, "exec", "-i", CONTAINER,
+            "psql", "-U", "starexec", "-d", DATABASE, "-tA", "-e");
     }
 
     private static Result exec(int timeoutSeconds, String... command) {

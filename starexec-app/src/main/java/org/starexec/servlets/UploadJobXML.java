@@ -92,17 +92,40 @@ public class UploadJobXML extends HttpServlet {
 					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(result)));
 					response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp"));
 				} else {
-					response.sendError(HttpServletResponse.SC_BAD_REQUEST,
-					                   "Failed to upload Job XML:\n" + jobUtil.getErrorMessage()
-					);
+					// Not every failure is the request's fault. A database failure answered
+					// with 400 tells the user to fix a document that is already correct, and
+					// an authorization failure answered the same way hides what went wrong.
+					switch (jobUtil.getFailureKind()) {
+						case PERMISSION:
+							response.sendError(HttpServletResponse.SC_FORBIDDEN,
+							                   jobUtil.getErrorMessage());
+							break;
+						case INTERNAL:
+							// The message is for the log. It can carry SQL text, a stored
+							// routine signature or a server path, none of which the client
+							// gets to see.
+							log.error(method, "Job XML upload failed internally for user "
+									+ userId + ": " + jobUtil.getErrorMessage());
+							response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+							                   "The job could not be created. No jobs were"
+							                   + " created; please try again or contact an"
+							                   + " administrator.");
+							break;
+						default:
+							response.sendError(HttpServletResponse.SC_BAD_REQUEST,
+							                   "Failed to upload Job XML:\n" + jobUtil.getErrorMessage());
+					}
 				}
 			} else {
 				// Got a non multi-part request, invalid
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 			}
 		} catch (Exception e) {
-			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+			// The exception message can carry SQL text or a server path; it belongs in the log.
 			log.error("Caught Exception in UploadJobXML.doPost", e);
+			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+			                   "The job could not be created. Please try again or contact an"
+			                   + " administrator.");
 		}
 	}
 

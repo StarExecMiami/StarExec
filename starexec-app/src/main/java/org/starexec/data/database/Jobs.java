@@ -601,20 +601,53 @@ public class Jobs {
      * @return True if the operation was successful, false otherwise.
      */
     public static boolean add(Job job, int spaceId) {
-        Connection con = null;
+        try {
+            Common.inTransaction(con -> {
+                if (!add(job, spaceId, con)) {
+                    throw new SQLException("Could not create job '" + job.getName() + "'");
+                }
+                return true;
+            });
+        } catch (SQLException e) {
+            log.error("add", e);
+            return false;
+        }
+        createJobOutputDirectory(job.getId());
+        return true;
+    }
+
+    /**
+     * As {@link #add(Job, int)}, on a connection the caller owns.
+     *
+     * <p>Borrowed: this does not commit, roll back, close the connection or change its
+     * autoCommit setting, so a job created from XML commits with the pipelines it references
+     * and the pairs that make it runnable, or with none of them.
+     *
+     * <p>Previously the job row, its job spaces and its primary-space update were written
+     * outside any transaction, between two short ones, so a job survived the rollback of the
+     * pairs that were supposed to fill it -- the rollback below even said so. Holding one
+     * transaction across the whole thing does hold locks on the space tables for its
+     * duration, which is what the original arrangement was avoiding; committing a job that
+     * can never run is the worse of the two.
+     *
+     * <p>Creating the output directory is left to the caller, so that a filesystem artifact
+     * is not published for a job that is about to be rolled back.
+     *
+     * @param job     The job data to add to the database
+     * @param spaceId The space to associate the job with, or a non-positive value for none
+     * @param con     An open SQL connection, already in the caller's transaction
+     * @return True if the operation was successful, false otherwise
+     */
+    public static boolean add(Job job, int spaceId, Connection con) {
         PreparedStatement procedure = null;
         try {
             log.debug(
                 "starting to add a new job with pair count =  " +
                     job.getJobPairs().size()
             );
-            con = Common.getConnection();
 
             // gets the name of the root job space for this job
             String rootName = job.getRootSpaceName();
-            // start a transaction that encapsulates making new spaces for mirrored
-            // hierarchies
-            Common.beginTransaction(con);
             // get all the different space IDs for the places we need to created mirrors of
             // the job space heirarchy
             HashSet<Integer> uniqueSpaceIds = new HashSet<>();
@@ -647,10 +680,6 @@ public class Jobs {
                     i
                 );
             }
-            // we end the first transaction here so that we don't end up keeping a lock on
-            // the space tables
-            // for the entire duration of job creation
-            Common.endTransaction(con);
             // creates the job space hierarchy for the job and returns the ID of the top
             // level job space
 
@@ -665,20 +694,15 @@ public class Jobs {
                 createJobSpacesForPairs(job.getId(), job.getJobPairs(), con)
             );
             Jobs.updatePrimarySpace(job.getId(), job.getPrimarySpace(), con);
-            // NOTE: By opening the transaction here, we are leaving open the possibility
-            // that some spaces
-            // will be created even if job creation fails. However, this prevents the job
-            // space and the space
-            // tables from being locked for the entire transaction, which may take a long
-            // time.
-            Common.beginTransaction(con);
-            // record the job being added in the reports table
-            Reports.addToEventOccurrencesNotRelatedToQueue("jobs initiated", 1);
-            // record the job being added for the queue it was added to
+            // These counters are part of the same outcome as the job. Written on their own
+            // connections they committed whether or not the job did, so a rolled-back job
+            // still reported itself as initiated.
+            Reports.addToEventOccurrencesNotRelatedToQueue("jobs initiated", 1, con);
             Reports.addToEventOccurrencesForQueue(
                 "jobs initiated",
                 1,
-                job.getQueue().getName()
+                job.getQueue().getName(),
+                con
             );
 
             Analytics.JOB_CREATE.record(job.getUserId());
@@ -708,31 +732,31 @@ public class Jobs {
             // actually exist, leaving a job that can never finish or that looks complete
             // before it has run.
             if (!JobPairs.addJobPairs(con, job.getId(), job.getJobPairs())) {
-                log.error("add", "Failed to add job pairs for job " + job.getId()
-                        + "; rolling back. Note the job row itself was written before this"
-                        + " transaction opened and is not removed by this rollback.");
-                Common.doRollback(con);
+                log.error("add", "Failed to add job pairs for job " + job.getId());
                 return false;
             }
 
-            Common.endTransaction(con);
-            // Create the output directory for the job up front. This ensures that if a user
-            // tries to download output before any exists, they will get a correctly
-            // formatted
-            // zip containing an empty directory.
-            new File(Jobs.getDirectory(job.getId())).mkdirs();
             log.debug("job added successfully");
             Jobs.resume(job.getId(), con); // now that the job has been added, we can resume
             return true;
         } catch (Exception e) {
             log.error("add", e);
-            Common.doRollback(con);
         } finally {
-            Common.safeClose(con);
             Common.safeClose(procedure);
         }
 
         return false;
+    }
+
+    /**
+     * Creates a job's output directory, so that downloading output before any exists yields
+     * a correctly formed zip containing an empty directory.
+     *
+     * <p>Called after the transaction commits: a directory created for a job that then rolls
+     * back is an orphan nothing will ever clean up.
+     */
+    public static void createJobOutputDirectory(int jobId) {
+        new File(Jobs.getDirectory(jobId)).mkdirs();
     }
 
     /**
@@ -6610,7 +6634,7 @@ public class Jobs {
      * @author Wyatt Kaiser
      */
 
-    protected static boolean pause(int jobId, Connection con) {
+    public static boolean pause(int jobId, Connection con) {
         log.info("Pausing job " + jobId);
         PreparedStatement procedure = null;
         try {

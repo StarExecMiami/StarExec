@@ -12,6 +12,7 @@ import org.starexec.data.to.pipelines.*;
 import org.starexec.data.to.pipelines.PipelineDependency.PipelineInputType;
 import org.starexec.data.to.pipelines.StageAttributes.SaveResultsOption;
 import org.starexec.data.to.tuples.ConfigAttrMapPair;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLogger;
 import org.starexec.servlets.CreateJob;
 import org.w3c.dom.Document;
@@ -25,6 +26,8 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import java.io.File;
 import java.io.IOException;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.*;
 
 public class JobUtil {
@@ -33,6 +36,28 @@ public class JobUtil {
 	private Boolean jobCreationSuccess = false;
 	private String errorMessage = "";//this will be used to given information to user about failures in validation
 	private String secondaryErrorMessage = ""; // this will be used for additional error message useful to developers.
+
+	/**
+	 * What kind of failure {@code errorMessage} describes, so a caller can answer with the
+	 * right status rather than reporting every failure the same way.
+	 *
+	 * <p>Every failure here used to reach the client as 400 Bad Request, including a database
+	 * failure the request did nothing to cause and an authorization failure that should say so.
+	 */
+	public enum FailureKind {
+		/** The document or the request is wrong; the message names what to change. */
+		VALIDATION,
+		/** The user may not use something the document names. */
+		PERMISSION,
+		/** Something on the server failed. The message is for the log, not the client. */
+		INTERNAL
+	}
+
+	private FailureKind failureKind = FailureKind.VALIDATION;
+
+	public FailureKind getFailureKind() {
+		return failureKind;
+	}
 
 
 	/**
@@ -54,6 +79,7 @@ public class JobUtil {
 
 		final String method = "createJobsFromFile";
 		List<Integer> jobIds = new ArrayList<>();
+		failureKind = FailureKind.VALIDATION;
 		if (!validateAgainstSchema(file, xmlType)) {
 			log.debug(method, "File '" + file.getName() + "' from User " + userId + " is not Schema valid.");
 			return null;
@@ -65,6 +91,7 @@ public class JobUtil {
 					"User with id=" + userId + " does not have permission to create a job on space with id=" +
 					spaceId);
 			errorMessage = "You do not have permission to create a job on this space";
+			failureKind = FailureKind.PERMISSION;
 			return null;
 		}
 
@@ -131,29 +158,6 @@ public class JobUtil {
 			return null;
 		}
 
-		//validate all solver pipelines
-
-		//data structure to ensure all pipeline names in this upload are unique
-		HashMap<String, SolverPipeline> pipelineNames = new HashMap<>();
-		log.info(method, "Creating pipelines from elements.");
-		for (int i = 0; i < listOfPipelines.getLength(); i++) {
-			Node pipeline = listOfPipelines.item(i);
-			SolverPipeline pipe = createPipelineFromElement(userId, (Element) pipeline);
-			if (pipe == null) {
-				log.info("error creating pipeline");
-				secondaryErrorMessage = "Solver pipeline was null.";
-				return null; // this means there was some error. The error message should have been set already
-				// the call to createPipelineFromElement
-			}
-			if (pipelineNames.containsKey(pipe.getName())) {
-				errorMessage = " Duplicate pipeline name = " + pipe.getName() +
-				               ". All pipelines in this upload must have unique names";
-				return null;
-			}
-			pipelineNames.put(pipe.getName(), pipe);
-		}
-		log.info(method, "Finished creating pipelines from elements.");
-
 		// Make sure jobs are named
 		log.info(method, "Checking to make sure jobs are named.");
 		for (int i = 0; i < listOfJobs.getLength(); i++) {
@@ -180,23 +184,82 @@ public class JobUtil {
 
 		log.info(method, "Finished checking to make sure jobs are named.");
 
+		// One transaction owns every write this upload makes. The pipelines, their stages and
+		// dependencies, the jobs, their spaces, their pairs and stage data, and the counters
+		// that record them all commit together or not at all.
+		//
+		// They used to be spread over several connections, each committing on its own:
+		// createPipelineFromElement committed a pipeline before the job that references it
+		// was attempted, and Jobs.add committed the job row before opening the transaction
+		// that wrote its pairs. A failure anywhere left durable rows behind and reported
+		// success -- which is how a job could be created with zero pipeline stages and zero
+		// job pairs, over HTTP 200.
+		//
+		// Everything above this point is parsing, validation and quota checks -- reads only,
+		// so they stay outside and do not hold a transaction open while they run.
+		try {
+			jobIds = Common.inTransaction(con -> {
+				List<Integer> createdIds = new ArrayList<>();
 
-		log.info(method, "Creating jobs from elements.");
-		for (int i = 0; i < listOfJobElements.getLength(); i++) {
-			Node jobNode = listOfJobElements.item(i);
-			if (jobNode.getNodeType() == Node.ELEMENT_NODE) {
-				Element jobElement = (Element) jobNode;
-				log.info("about to create job from element");
-
-				Integer id = createJobFromElement(userId, spaceId, jobElement, pipelineNames, configAttrMapPair);
-
-				if (id < 0) {
-					secondaryErrorMessage = "createJobFromElement returned: " + id;
-					return null; // means there was an error. Error message should have been set
+				//data structure to ensure all pipeline names in this upload are unique
+				HashMap<String, SolverPipeline> pipelineNames = new HashMap<>();
+				log.info(method, "Creating pipelines from elements.");
+				for (int i = 0; i < listOfPipelines.getLength(); i++) {
+					Node pipeline = listOfPipelines.item(i);
+					SolverPipeline pipe = createPipelineFromElement(userId, (Element) pipeline, con);
+					if (pipe == null) {
+						log.info("error creating pipeline");
+						secondaryErrorMessage = "Solver pipeline was null.";
+						// The user-facing message was set by createPipelineFromElement.
+						throw new StarExecDatabaseException(errorMessage);
+					}
+					if (pipelineNames.containsKey(pipe.getName())) {
+						errorMessage = " Duplicate pipeline name = " + pipe.getName() +
+						               ". All pipelines in this upload must have unique names";
+						throw new StarExecDatabaseException(errorMessage);
+					}
+					pipelineNames.put(pipe.getName(), pipe);
 				}
-				jobIds.add(id);
+				log.info(method, "Finished creating pipelines from elements.");
+
+				log.info(method, "Creating jobs from elements.");
+				for (int i = 0; i < listOfJobElements.getLength(); i++) {
+					Node jobNode = listOfJobElements.item(i);
+					if (jobNode.getNodeType() == Node.ELEMENT_NODE) {
+						Element jobElement = (Element) jobNode;
+						log.info("about to create job from element");
+
+						Integer id = createJobFromElement(
+								userId, spaceId, jobElement, pipelineNames, configAttrMapPair, con);
+
+						if (id < 0) {
+							secondaryErrorMessage = "createJobFromElement returned: " + id;
+							throw new StarExecDatabaseException(errorMessage);
+						}
+						createdIds.add(id);
+					}
+				}
+				return createdIds;
+			});
+		} catch (SQLException e) {
+			log.error(method, "Rolled back job creation for user " + userId, e);
+			// A StarExecDatabaseException thrown by the block above carries a message the
+			// document's author can act on, and the transaction failing on its own does not.
+			if (!(e.getCause() instanceof StarExecDatabaseException)) {
+				failureKind = FailureKind.INTERNAL;
 			}
+			if (errorMessage == null || errorMessage.isEmpty()) {
+				errorMessage = "Internal error while creating your job. No jobs were created.";
+				failureKind = FailureKind.INTERNAL;
+			}
+			return null;
 		}
+
+		// After the commit, so a job that rolled back leaves no directory behind.
+		for (Integer id : jobIds) {
+			Jobs.createJobOutputDirectory(id);
+		}
+
 		log.info(method, "Finished creating jobs from elements, returning job ids.");
 		this.jobCreationSuccess = true;
 
@@ -213,7 +276,7 @@ public class JobUtil {
 	 * @return The SolverPipeline object, where the pipeline will already have been added to the database.
 	 * On error, null is returned, and the errorMessage string will be set
 	 */
-	private SolverPipeline createPipelineFromElement(int userId, Element pipeElement) {
+	private SolverPipeline createPipelineFromElement(int userId, Element pipeElement, Connection con) {
 		boolean foundPrimary = false;
 		SolverPipeline pipeline = new SolverPipeline();
 		pipeline.setUserId(userId);
@@ -278,6 +341,7 @@ public class JobUtil {
 				}
 				if (!Permissions.canUserSeeSolver(solver.getId(), userId)) {
 					errorMessage = "You do not have permission to see the solver" + solver.getId();
+					failureKind = FailureKind.PERMISSION;
 					return null;
 				}
 
@@ -359,7 +423,7 @@ public class JobUtil {
 		// that default is Pipelines.selectPrimaryStage's job, at the persistence boundary
 		// every caller passes through, rather than a second copy of the rule here.
 		pipeline.setStages(stageList);
-		int id = Pipelines.addPipelineToDatabase(pipeline);
+		int id = Pipelines.addPipelineToDatabase(pipeline, con);
 		if (id <= 0) { //if there was a database error
 			errorMessage = " Internal database error adding a pipeline";
 			return null;
@@ -476,6 +540,7 @@ public class JobUtil {
 			if (!p.canAddBenchmark() || !p.canAddSpace()) {
 				errorMessage =
 						"You do not have permission to add benchmarks or spaces to the space with id = " + stageSpace;
+				failureKind = FailureKind.PERMISSION;
 				return null;
 			}
 		}
@@ -499,7 +564,7 @@ public class JobUtil {
 	 * @author Tim Smith
 	 */
 	private Integer createJobFromElement(int userId, Integer spaceId, Element jobElement, HashMap<String,
-			SolverPipeline> pipelines, ConfigAttrMapPair configAttrMapPair) {
+			SolverPipeline> pipelines, ConfigAttrMapPair configAttrMapPair, Connection con) {
 		try {
 			// final String method = "createJobFromElement";
 
@@ -717,6 +782,7 @@ public class JobUtil {
 						b = Benchmarks.get(benchmarkId);
 						if (!Permissions.canUserSeeBench(benchmarkId, userId)) {
 							errorMessage = "You do not have permission to see benchmark " + benchmarkId;
+							failureKind = FailureKind.PERMISSION;
 							return -1;
 						}
 						accessibleCachedBenchmarks.put(benchmarkId, b);
@@ -732,6 +798,7 @@ public class JobUtil {
 						if (!accessibleCachedBenchmarks.containsKey(benchmarkInput)) {
 							if (!Permissions.canUserSeeBench(benchmarkInput, userId)) {
 								errorMessage = "You do not have permission to see benchmark input " + benchmarkId;
+								failureKind = FailureKind.PERMISSION;
 								return -1;
 							}
 						}
@@ -765,6 +832,7 @@ public class JobUtil {
 								Solver solver = Solvers.getSolverByConfig(configId, false);
 								if (!Permissions.canUserSeeSolver(solver.getId(), userId)) {
 									errorMessage = "You do not have permission to see the solver " + solver.getId();
+									failureKind = FailureKind.PERMISSION;
 									return -1;
 								}
 								solver.addConfiguration(Solvers.getConfiguration(configId));
@@ -831,12 +899,15 @@ public class JobUtil {
 
 			log.info("start-paused: " + (Boolean.toString(startPaused)));
 
-			boolean submitSuccess = Jobs.add(job, spaceId);
+			boolean submitSuccess = Jobs.add(job, spaceId, con);
 			if (!submitSuccess) {
 				errorMessage = "Error: could not add job with id " + job.getId() + " to space with id " + spaceId;
 				return -1;
 			} else if (startPaused) {
-				Jobs.pause(job.getId());
+				// The borrowed connection matters here: the job row is not visible to any
+				// other connection until this transaction commits, so pausing on a connection
+				// of its own would update no rows and report success.
+				Jobs.pause(job.getId(), con);
 			}
 
 			int newJobId = job.getId();
@@ -849,6 +920,7 @@ public class JobUtil {
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
 			errorMessage = "Internal error when creating your job: " + e.getMessage();
+			failureKind = FailureKind.INTERNAL;
 			return -1;
 		}
 	}

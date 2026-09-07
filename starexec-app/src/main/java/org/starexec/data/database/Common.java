@@ -205,6 +205,76 @@ public class Common {
 		);
 	}
 
+	/** Work to run inside a transaction owned by {@link #inTransaction} or {@link #runTransactional}. */
+	@FunctionalInterface
+	public interface TransactionalWork<T> {
+		T run(Connection con) throws Exception;
+	}
+
+	/**
+	 * Runs {@code work} inside one transaction on a borrowed connection, committing exactly
+	 * once on normal return and rolling back exactly once on any failure.
+	 *
+	 * <p>This is the transaction <em>owner</em>. Everything {@code work} calls receives that
+	 * connection and must not commit, roll back, close it, change its autoCommit setting, or
+	 * acquire a connection of its own -- one independently committing helper is enough to
+	 * break atomicity, because its writes survive this rollback.
+	 *
+	 * <p>The connection's entry autoCommit setting is restored in {@code finally}, before it
+	 * goes back to the pool, so the next borrower cannot inherit a transactional connection.
+	 * A failure while cleaning up is attached to the original exception as a suppressed one
+	 * rather than replacing it -- the application failure is what the caller needs to see.
+	 * That is also why this does not use {@link #endTransaction}, which turns a failed commit
+	 * into a silent rollback and reports nothing.
+	 *
+	 * <p>Deliberately explicit rather than thread-local: the connection is a parameter, so
+	 * every signature says whether that method takes part in a caller's transaction.
+	 *
+	 * @param con  a borrowed connection; the caller closes it
+	 * @param work the writes that must all commit or none
+	 */
+	public static <T> T runTransactional(Connection con, TransactionalWork<T> work) throws SQLException {
+		boolean entryAutoCommit = con.getAutoCommit();
+		boolean settled = false;
+		try {
+			con.setAutoCommit(false);
+			T result = work.run(con);
+			con.commit();
+			settled = true;
+			return result;
+		} catch (Exception e) {
+			SQLException failure = (e instanceof SQLException)
+					? (SQLException) e
+					: new SQLException("Transaction rolled back: " + e.getMessage(), e);
+			if (!settled) {
+				try {
+					con.rollback();
+				} catch (SQLException rollbackFailure) {
+					failure.addSuppressed(rollbackFailure);
+				}
+			}
+			throw failure;
+		} finally {
+			try {
+				con.setAutoCommit(entryAutoCommit);
+			} catch (SQLException restoreFailure) {
+				log.error("runTransactional", "could not restore autoCommit before returning the"
+						+ " connection to the pool", restoreFailure);
+			}
+		}
+	}
+
+	/** As {@link #runTransactional}, acquiring and returning the connection as well. */
+	public static <T> T inTransaction(TransactionalWork<T> work) throws SQLException {
+		Connection con = null;
+		try {
+			con = getConnection();
+			return runTransactional(con, work);
+		} finally {
+			safeClose(con);
+		}
+	}
+
 	/**
 	 * Ends a transaction by committing any changes and re-enabling auto-commit
 	 */
