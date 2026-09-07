@@ -1999,6 +1999,61 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Sets the status code for the given stage, but never over a result already recorded.
+--
+-- UpdatePairStageStatus above overwrites unconditionally, which is right for the job
+-- script: it is the single writer for its own pair and reports each stage once, in order.
+-- It is wrong for ContainerJobMonitor, which reconstructs earlier stages from files a
+-- finished container left behind and may run the same reconstruction more than once --
+-- after a partial write, a duplicate completion event, or an application restart. An
+-- unconditional write there could move a stage that already completed back to RUNNING.
+--
+-- Returns TRUE when the stage now holds _statusCode, FALSE when it already carried a
+-- different terminal result. FALSE rather than an exception because a replay is expected
+-- rather than exceptional, and the caller has to distinguish the two.
+DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatusIfUnresolved(INT, INT, INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatusIfUnresolved(_jobPairId INT, _stageNumber INT, _statusCode INT)
+RETURNS BOOLEAN AS $$
+DECLARE
+	_current INT;
+BEGIN
+	-- job_pairs before jobpair_stage_data, the same order UpdatePairStatusPrecise takes
+	-- them in. The monitor calls both inside one transaction, so locking only the stage
+	-- row here would let two writers take the two tables in opposite orders and deadlock.
+	PERFORM 1 FROM starexec.job_pairs WHERE id = _jobPairId FOR UPDATE;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Job pair %s not found', _jobPairId);
+	END IF;
+
+	SELECT status_code INTO _current
+	FROM starexec.jobpair_stage_data
+	WHERE jobpair_id = _jobPairId AND stage_number = _stageNumber
+	FOR UPDATE;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
+	END IF;
+
+	-- Already there. Idempotent success, terminal or not, so a replay is a no-op.
+	IF _current = _statusCode THEN
+		RETURN TRUE;
+	END IF;
+
+	-- A stage carrying a result is history, not a slot. Refuse to move it -- backwards to
+	-- a non-terminal state, or sideways to a different result -- and report the refusal.
+	IF starexec.IsTerminalPairStatus(_current) THEN
+		RETURN FALSE;
+	END IF;
+
+	UPDATE starexec.jobpair_stage_data SET status_code = _statusCode
+	WHERE jobpair_id = _jobPairId AND stage_number = _stageNumber;
+	RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Sets the status code of every stage occurring after the given stage to the given status code.
 -- We do this, for example, when an early stage times out and so later stages are never run
 DROP ROUTINE IF EXISTS starexec.UpdateLaterStageStatuses(INT, INT, SMALLINT) CASCADE;

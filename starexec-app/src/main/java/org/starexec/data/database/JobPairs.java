@@ -2149,6 +2149,80 @@ public class JobPairs {
     }
 
     /**
+     * Records statuses a monitor reconstructed for stages of a pair that finished
+     * earlier, without moving any stage that already carries a result.
+     *
+     * <p>Separate from {@link #setPairStageStatus} because the writers differ. That one is
+     * called by the job script, which is the only writer for its own pair and reports each
+     * stage exactly once and in order, so an unconditional write is correct there. This one
+     * is called by {@code ContainerJobMonitor} from files a finished container left behind,
+     * and the same files can be read more than once -- after a partial write, a duplicate
+     * completion event, or an application restart. It therefore goes through
+     * {@code UpdatePairStageStatusIfUnresolved}, which refuses to overwrite a result rather
+     * than moving a completed stage back to RUNNING.
+     *
+     * <p>One transaction for the whole set. A stage number that does not belong to this
+     * pair raises {@code P0002} and rolls the batch back, so rejected input leaves no
+     * partial write behind for the caller to reason about.
+     *
+     * <p>A stage the database refuses is logged, not failed: it means some other writer
+     * recorded a different terminal result for it first, which is the same situation
+     * {@link PairStatusResult#SUPERSEDED} describes at the pair level.
+     *
+     * @param pairId        the pair every stage belongs to
+     * @param stageStatuses stage number to status code; an empty map is a no-op success
+     * @return true when every stage holds a recorded result, false when nothing was written
+     */
+    public static boolean setEarlierStageStatuses(
+        int pairId,
+        Map<Integer, Integer> stageStatuses
+    ) {
+        if (stageStatuses.isEmpty()) {
+            return true;
+        }
+        Connection con = null;
+        PreparedStatement ps = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+            ps = con.prepareStatement(
+                "SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?)"
+            );
+            List<Integer> refused = new ArrayList<>();
+            for (Entry<Integer, Integer> stage : stageStatuses.entrySet()) {
+                ps.setInt(1, pairId);
+                ps.setInt(2, stage.getKey());
+                ps.setInt(3, stage.getValue());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!(rs.next() && rs.getBoolean(1))) {
+                        refused.add(stage.getKey());
+                    }
+                }
+            }
+            con.commit();
+            Common.enableAutoCommit(con);
+            if (!refused.isEmpty()) {
+                log.info(
+                    "Pair " + pairId + ": stages " + refused +
+                        " already carried a different result and were left alone"
+                );
+            }
+            return true;
+        } catch (Exception e) {
+            log.error(
+                "Could not record earlier stage statuses " + stageStatuses +
+                    " for pair " + pairId,
+                e
+            );
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return false;
+    }
+
+    /**
      * Sets the status code of every stage that comes after the given stage to the
      * given value
      *

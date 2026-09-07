@@ -29,6 +29,7 @@ STATUS_SENT=false
 
 # Output directory for container mode (ContainerJobMonitor reads from here)
 CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
+CONTAINER_STAGE_STATUS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-status"
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_ATTRS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/attributes.txt"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
@@ -38,8 +39,29 @@ function containerWriteStatus {
 	local STATUS=$1
 	local STAGE_NUMBER=${2:-0}
 	local TIMESTAMP=$(date +%s)
+	local RECORD="{\"pairId\":$PAIR_ID,\"status\":$STATUS,\"stageNumber\":$STAGE_NUMBER,\"timestamp\":$TIMESTAMP}"
 	mkdir -p "$(dirname "$CONTAINER_STATUS_FILE")"
-	echo "{\"pairId\":$PAIR_ID,\"status\":$STATUS,\"stageNumber\":$STAGE_NUMBER,\"timestamp\":$TIMESTAMP}" > "$CONTAINER_STATUS_FILE"
+	echo "$RECORD" > "$CONTAINER_STATUS_FILE"
+
+	# status.json is one slot for the whole pair and this write truncates it, so in a
+	# multi-stage pair each stage erased the previous stage's result and only the last
+	# one ever reached the database. Keep writing it -- the monitor still reads the
+	# stage number from it, and an older monitor reads nothing else -- and record the
+	# same bytes once per stage beside it, so earlier stages survive.
+	#
+	# Stage 0 is the pair-level channel: it owns no jobpair_stage_data row, so it gets
+	# no snapshot. The pattern also rejects anything that is not a plain positive
+	# integer, which keeps a caller from naming a file outside this directory.
+	if [[ "$STAGE_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+		mkdir -p "$CONTAINER_STAGE_STATUS_DIR"
+		local SNAPSHOT="$CONTAINER_STAGE_STATUS_DIR/$STAGE_NUMBER.json"
+		# Written beside the target and renamed, so the monitor -- which polls this
+		# tree while the pair is still running -- never reads a half-written record.
+		# The suffix keeps the temporary file out of the <n>.json name the monitor
+		# accepts, so even an interrupted write cannot be mistaken for a snapshot.
+		echo "$RECORD" > "$SNAPSHOT.tmp"
+		mv -f "$SNAPSHOT.tmp" "$SNAPSHOT"
+	fi
 	log "Container mode: wrote status $STATUS for stage $STAGE_NUMBER"
 }
 
