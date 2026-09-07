@@ -118,20 +118,38 @@ function getProcessorScript {
 #################################################################################
 
 # will do a base 64 decode on all solver_names, all solver_paths, and the bench path
+#
+# Two loops because the arrays have two different cardinalities. JobManager fills the
+# per-stage arrays inside its `for (JoblineStage stage : pair.getStages())` loop, but fills
+# BENCH_INPUT_PATHS before it, from pair.getBenchInputPaths() -- the benchmark inputs belong
+# to the pair, and every stage draws from that one pool by ordinal. The two counts are
+# unrelated: a pipeline may declare more inputs than it has stages, or none at all.
+#
+# Decoding the inputs on the stage loop was wrong in both directions. With more stages than
+# inputs -- two stages and no inputs being the common case -- it read past the end of the
+# array, which `set -u` turns into a fatal `unbound variable` before any stage runs. With
+# more inputs than stages it left the later entries encoded, and copyBenchmarkDependencies
+# below then cp'd base64 text as if it were a path.
 function decodePathArrays {
 	log "decoding all base 64 encoded strings"
 
 	#decode every solver name, solver path, and benchmark suffix in the arrays
 	for (( i = 0; i < NUM_STAGES; ++i )); do
-		SOLVER_NAMES[i]=$(     base64 -d <<< "${SOLVER_NAMES[i]}")
-		SOLVER_PATHS[i]=$(     base64 -d <<< "${SOLVER_PATHS[i]}")
-		BENCH_SUFFIXES[i]=$(   base64 -d <<< "${BENCH_SUFFIXES[i]}")
-		BENCH_INPUT_PATHS[i]=$(base64 -d <<< "${BENCH_INPUT_PATHS[i]}")
+		SOLVER_NAMES[i]=$(   base64 -d <<< "${SOLVER_NAMES[i]}")
+		SOLVER_PATHS[i]=$(   base64 -d <<< "${SOLVER_PATHS[i]}")
+		BENCH_SUFFIXES[i]=$( base64 -d <<< "${BENCH_SUFFIXES[i]}")
 		# CONFIG_NAMES joined this list when JobManager began base64-encoding it. It was
 		# the one per-stage name still emitted raw, and it is derived from a filename
 		# inside a user-uploaded archive.
-		CONFIG_NAMES[i]=$(     base64 -d <<< "${CONFIG_NAMES[i]}")
+		CONFIG_NAMES[i]=$(   base64 -d <<< "${CONFIG_NAMES[i]}")
+	done
 
+	# NUM_BENCH_INPUTS is the producer's own count of real inputs. The array carries one
+	# extra element -- the empty string JobManager appends so it is never undeclared -- and
+	# that sentinel is not an input, so this stops before it, exactly as the consumer in
+	# copyBenchmarkDependencies does.
+	for (( i = 0; i < NUM_BENCH_INPUTS; ++i )); do
+		BENCH_INPUT_PATHS[i]=$(base64 -d <<< "${BENCH_INPUT_PATHS[i]}")
 		log "decoded the benchmark input ${BENCH_INPUT_PATHS[i]}"
 	done
 }
