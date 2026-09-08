@@ -40,7 +40,23 @@ backend:
 
 kubernetes:
   jobNamespace: starexec
-  jobImage: ghcr.io/starexecmiami/starexec-job-runner:latest
+  # Immutable linux/amd64 manifest digest, not a tag.
+  #
+  # The compute nodes are isolated from the public registry and receive this image by
+  # cluster-local side-load, so the reference has to name bytes that are already resident
+  # rather than something to fetch. A tag cannot do that: ":latest" is mutable, and
+  # Kubernetes derives Always as the pull policy from it, which asks isolated nodes to
+  # reach a registry they cannot see.
+  #
+  # This pin previously lived only as a live Helm override while the chart default stayed
+  # ":latest", so an upgrade whose values omitted it silently reverted the reference.
+  # Recording it here is what stops that from recurring.
+  #
+  # sha256:63ae82d5... is the linux/amd64 manifest inside index sha256:b3b08512...,
+  # built from StarExec revision faccd0aac917a9ce54d68dabd2e664a49beaaf18.
+  # Deliberately the platform manifest and not the index digest, because that is the form
+  # the workers' side-load was validated against.
+  jobImage: ghcr.io/starexecmiami/starexec-job-runner@sha256:63ae82d539f7c26bc70f42036f968897fc110416043d2fedc8a917b828537cdd
   jobImagePullPolicy: IfNotPresent
   jobServiceAccount: starexec-job
   maxConcurrentJobs: 50
