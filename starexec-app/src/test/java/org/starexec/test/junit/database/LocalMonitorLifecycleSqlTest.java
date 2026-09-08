@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -349,6 +350,83 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		}
 		assertTrue("retry-pending means tracked", isTracked(monitor));
 		assertEquals("and unresolved, not failed", ENQUEUED, pairStatus());
+	}
+
+	// --------------------------------------------------- stale attempt contamination
+
+	/**
+	 * A rerun must not inherit the previous attempt's stage history.
+	 *
+	 * <p>LocalBackend output directories are keyed by pair, not by attempt --
+	 * {@code new File(job.logPath).getParentFile()} over
+	 * {@code JobPairs.getStdout(pairId)} -- so attempt B writes into the tree attempt A left
+	 * behind. {@code cleanupPreviousRunArtifacts} already cleared seven fixed names at the
+	 * right moment, before the pair is registered with the monitor, but not
+	 * {@code stage-status/}, which nothing read until stage-history ingestion existed.
+	 */
+	@Test
+	public void aRerunDoesNotInheritThePreviousAttemptsStages() throws Exception {
+		// Attempt A: two stages.
+		writeSnapshot(1, PAIR_ID, 1, COMPLETE);
+		writeSnapshot(2, PAIR_ID, 2, COMPLETE);
+		Files.writeString(logDir.resolve("stage-status/2.json.tmp"), "partial");
+
+		assertTrue("the attempt boundary must clear it", clearPreviousAttempt());
+		assertFalse("the whole tree must be gone",
+				Files.exists(logDir.resolve("stage-status")));
+
+		// Attempt B: one stage only.
+		writeStatus(COMPLETE, 1);
+		writeSnapshot(1, PAIR_ID, 1, COMPLETE);
+		writeCleanRun();
+
+		poll(freshMonitor());
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals("attempt A's stage 2 must not be observed", NOT_REACHED, stageStatus(2));
+		assertEquals(COMPLETE, pairStatus());
+	}
+
+	/** Missing and empty trees are both success; a leftover temp file goes with the tree. */
+	@Test
+	public void clearingToleratesMissingEmptyAndPartialTrees() throws Exception {
+		assertTrue("missing directory", clearPreviousAttempt());
+
+		Files.createDirectories(logDir.resolve("stage-status"));
+		assertTrue("empty directory", clearPreviousAttempt());
+		assertFalse(Files.exists(logDir.resolve("stage-status")));
+
+		Files.createDirectories(logDir.resolve("stage-status"));
+		Files.writeString(logDir.resolve("stage-status/1.json.tmp"), "partial");
+		assertTrue("leftover temp file", clearPreviousAttempt());
+		assertFalse(Files.exists(logDir.resolve("stage-status")));
+	}
+
+	/** An unclearable tree must be reported so the attempt does not start. */
+	@Test
+	public void clearingFailureIsReportedSoTheAttemptCanBeRefused() throws Exception {
+		Path dir = logDir.resolve("stage-status");
+		Files.createDirectories(dir);
+		Files.writeString(dir.resolve("1.json"), "{}");
+		java.io.File readOnly = dir.toFile();
+		org.junit.Assume.assumeTrue("needs a filesystem where chmod bites",
+				readOnly.setWritable(false, false));
+		try {
+			assertFalse("an unclearable tree must be reported, not ignored",
+					clearPreviousAttempt());
+		} finally {
+			assertTrue("restore write permission on " + readOnly,
+					readOnly.setWritable(true, false));
+		}
+	}
+
+	private boolean clearPreviousAttempt() throws Exception {
+		org.starexec.backend.LocalBackend backend = new org.starexec.backend.LocalBackend();
+		java.lang.reflect.Method m =
+				org.starexec.backend.LocalBackend.class.getDeclaredMethod(
+						"cleanupPreviousRunArtifacts", java.io.File.class);
+		m.setAccessible(true);
+		return (Boolean) m.invoke(backend, logDir.toFile());
 	}
 
 	// ------------------------------------------------------ stage-history ingestion
