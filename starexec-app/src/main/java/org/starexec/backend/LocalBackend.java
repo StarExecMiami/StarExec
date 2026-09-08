@@ -273,9 +273,19 @@ public class LocalBackend implements Backend {
      *
      * @param outputDir The directory containing job output
      */
-    private void cleanupPreviousRunArtifacts(File outputDir) {
+    /**
+     * Removes the previous attempt's results so this one cannot be judged on them.
+     *
+     * <p>Output directories are keyed by pair, not by attempt --
+     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} comes from
+     * {@code JobPairs.getStdout(pairId)} -- so a rerun writes into exactly the tree its
+     * predecessor left behind.
+     *
+     * @return true when nothing from a previous attempt can still be read
+     */
+    private boolean cleanupPreviousRunArtifacts(File outputDir) {
         if (outputDir == null || !outputDir.exists()) {
-            return;
+            return true;
         }
 
         String[] artifacts = {
@@ -288,15 +298,152 @@ public class LocalBackend implements Backend {
                 "stderr.txt"
         };
 
+        boolean allRemoved = true;
         for (String artifact : artifacts) {
             File file = new File(outputDir, artifact);
-            if (file.exists()) {
-                if (file.delete()) {
-                    log.debug("Deleted previous run artifact: " + file.getAbsolutePath());
+            if (!deleteTree(file) || pathStillPresent(file)) {
+                // Fail closed, not warn-and-continue. The monitor is registered immediately
+                // after this returns, so a surviving status.json is read as THIS generation's
+                // result before the new process has written anything -- the previous attempt's
+                // outcome recorded against this one. The same reasoning covers stats.json,
+                // var.out, watcher.out and attributes.txt: all are ingestion inputs.
+                //
+                // stdout.txt and stderr.txt are not on that list. They are the solver's own
+                // output, copied back for the user rather than parsed for a status, so a
+                // stale one is a cosmetic problem and blocking a run over it would be worse
+                // than the fault. They are still cleared; they just do not gate the attempt.
+                if (AUTHORITATIVE_INGESTION_INPUTS.contains(artifact)) {
+                    allRemoved = false;
+                    log.error(
+                            "Stale " + artifact + " from a previous attempt survives in " +
+                                    outputDir.getAbsolutePath() +
+                                    "; refusing to start this attempt, because it would be" +
+                                    " read as this attempt's result");
                 } else {
                     log.warn("Failed to delete previous run artifact: " + file.getAbsolutePath());
                 }
             }
+        }
+
+        // The per-stage snapshots, which the list above predates. They were not read by
+        // anything until stage-history ingestion existed, so leaving them was harmless;
+        // now they are authoritative input, and a surviving directory would let this
+        // attempt be recorded with its predecessor's stage history.
+        //
+        // Reported rather than merely logged, unlike the files above: a stale status.json
+        // is overwritten by this run, whereas a stale stage-status/2.json for a run that
+        // only reaches stage 1 is never overwritten by anything.
+        File staleSnapshots = new File(outputDir, STAGE_STATUS_DIRECTORY);
+        boolean snapshotsRemoved = deleteTree(staleSnapshots);
+        if (!snapshotsRemoved || pathStillPresent(staleSnapshots)) {
+            log.error(
+                    "Stale stage-status snapshots from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its stage history");
+            return false;
+        }
+        return allRemoved;
+    }
+
+    /** Fixed, application-defined name. Never derived from anything a job supplies. */
+    private static final String STAGE_STATUS_DIRECTORY = "stage-status";
+
+    /**
+     * Artifacts a later attempt would READ as its own result, so a stale one is a wrong
+     * measurement rather than untidiness. Deleting any of these must succeed before a new
+     * attempt may start.
+     */
+    private static final java.util.Set<String> AUTHORITATIVE_INGESTION_INPUTS =
+            java.util.Set.of(
+                    "status.json",
+                    "stats.json",
+                    "var.out",
+                    "watcher.out",
+                    "attributes.txt");
+
+    /** Existence of the entry itself, following no links, treating doubt as presence. */
+    private boolean pathStillPresent(File path) {
+        try {
+            java.nio.file.Files.readAttributes(
+                    path.toPath(),
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            return true;
+        } catch (java.nio.file.NoSuchFileException absent) {
+            return false;
+        } catch (Exception e) {
+            log.warn("Could not establish whether " + path + " exists; treating as present", e);
+            return true;
+        }
+    }
+
+    /**
+     * Removes a tree without ever following a symbolic link out of it.
+     *
+     * <p>This matters because the tree being removed is solver-writable. A previous attempt's
+     * solver can leave {@code stage-status/link -> /anywhere}, and a traversal that follows it
+     * would have the next attempt's cleanup delete somebody else's files. {@code File.listFiles}
+     * and {@code File.delete} establish no link boundary at all, which is what the first
+     * version of this used.
+     *
+     * <p>{@code walkFileTree} without {@code FOLLOW_LINKS} visits a symbolic link as a file --
+     * so the link itself is deleted and its target is never entered, whether the link is inside
+     * the tree or is the root of it. A broken link is likewise just a file to unlink.
+     *
+     * @return true when nothing of the tree remains
+     */
+    private boolean deleteTree(File target) {
+        java.nio.file.Path root = target.toPath();
+        // No existence check via File.exists(): that follows links, so a dangling link would
+        // report absent and be left in place. readAttributes with NOFOLLOW_LINKS asks about
+        // the entry itself.
+        try {
+            java.nio.file.Files.readAttributes(
+                    root,
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        } catch (java.nio.file.NoSuchFileException absent) {
+            return true;
+        } catch (Exception e) {
+            log.error("Could not determine whether " + root + " exists", e);
+            return false;
+        }
+
+        try {
+            java.nio.file.Files.walkFileTree(
+                    root,
+                    java.util.EnumSet.noneOf(java.nio.file.FileVisitOption.class),
+                    Integer.MAX_VALUE,
+                    new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                        @Override
+                        public java.nio.file.FileVisitResult visitFile(
+                                java.nio.file.Path file,
+                                java.nio.file.attribute.BasicFileAttributes attrs)
+                                throws java.io.IOException {
+                            // Symbolic links arrive here rather than in preVisitDirectory,
+                            // because FOLLOW_LINKS is absent. Deleting one unlinks it.
+                            java.nio.file.Files.delete(file);
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public java.nio.file.FileVisitResult postVisitDirectory(
+                                java.nio.file.Path dir, java.io.IOException failure)
+                                throws java.io.IOException {
+                            if (failure != null) {
+                                throw failure;
+                            }
+                            java.nio.file.Files.delete(dir);
+                            return java.nio.file.FileVisitResult.CONTINUE;
+                        }
+                    });
+            return true;
+        } catch (Exception e) {
+            // Reported, not swallowed. Inferring success from the root having disappeared
+            // would call a partial deletion clean.
+            log.error("Could not remove " + root, e);
+            return false;
         }
     }
 
@@ -314,7 +461,20 @@ public class LocalBackend implements Backend {
         // CLEANUP: Delete artifacts from previous runs BEFORE registering with monitor
         // This prevents the race condition where monitor sees old status.json
         File outputDir = new File(job.logPath).getParentFile();
-        cleanupPreviousRunArtifacts(outputDir);
+        if (!cleanupPreviousRunArtifacts(outputDir)) {
+            // Fail closed at the attempt boundary. Starting anyway would let this run be
+            // recorded with the previous attempt's stage history, which is a wrong
+            // measurement -- worse than a job that visibly did not start.
+            job.state = LocalJob.JobState.FAILED;
+            failedJobCount.incrementAndGet();
+            if (pairId > 0) {
+                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
+            }
+            log.error(
+                    "Refusing to execute pair " + pairId + " (execId " + job.execId +
+                            "): a previous attempt's stage snapshots could not be removed");
+            return;
+        }
 
         if (pairId > 0 && jobMonitor != null) {
             jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId);
