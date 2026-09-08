@@ -1,0 +1,27 @@
+apiVersion: v1
+entries:
+  starexec:
+  - apiVersion: v2
+    appVersion: "2025.12"
+    created: "2026-09-08T18:34:16.041664205Z"
+    description: StarExec - Logic Solver Competition Platform (containerised version)
+    digest: 275f8f6bfc1993ef183e2de241de79592d89e5bc2b238ff40e8624e01e8ddf9a
+    home: https://github.com/StarExecMiami/StarExec
+    keywords:
+    - starexec
+    - solver
+    - smt
+    - theorem-proving
+    - benchmark
+    kubeVersion: '>=1.16.0'
+    maintainers:
+    - email: ancaicedou@unal.edu.co
+      name: Andres Caicedo
+    name: starexec
+    sources:
+    - https://github.com/StarExecMiami/StarExec
+    type: application
+    urls:
+    - https://StarExecMiami.github.io/StarExec/starexec-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-09-08T18:34:16.040645601Z"
