@@ -133,8 +133,17 @@ kubernetes:
   # ServiceAccount are namespaced resources.
   jobNamespace: ""
 
-  # Job runner configuration
+  # Job runner configuration.
+  #
+  # Prefer an immutable digest (repository@sha256:...) in any environment whose compute
+  # nodes cannot reach the registry. The reference form also selects the pull policy when
+  # jobImagePullPolicy is left empty: Kubernetes defaults a ":latest" tag to Always and
+  # everything else, digests included, to IfNotPresent.
   jobImage: "ghcr.io/starexecmiami/starexec-job-runner:latest"
+
+  # Pull policy for the job container. Empty means "do not set it", leaving the
+  # Kubernetes default described above. Set it explicitly to make the contract visible.
+  jobImagePullPolicy: ""
   jobServiceAccount: ""
 
   # Data PVC for shared storage (required for kubernetes-native backend)

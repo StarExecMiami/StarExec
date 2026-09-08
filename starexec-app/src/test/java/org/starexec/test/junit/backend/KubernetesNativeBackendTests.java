@@ -2299,6 +2299,96 @@ public class KubernetesNativeBackendTests {
     }
 
     // ---------------------------------------------------------------------
+    // Image pull policy.
+    //
+    // kubernetes.jobImagePullPolicy sat in values-prod.yaml and values-dev.yaml for a long
+    // time while no template and no Java code read it, so an operator could set
+    // IfNotPresent, see it in the values, and still get a pod that carried no policy at
+    // all. These two tests pin both halves of the contract: the setting reaches the pod
+    // when configured, and stays absent when it is not.
+    // ---------------------------------------------------------------------
+
+    private Container buildContainerWithPullPolicy(String policy) throws Exception {
+        return buildContainerWithPullPolicy(policy, null);
+    }
+
+    private Container buildContainerWithPullPolicy(String policy, String image)
+            throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu("32");
+        setField(backend, "jobImagePullPolicy", policy);
+        if (image != null) {
+            setField(backend, "jobImage", image);
+        }
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod(
+            "buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+        Job job = (Job) build.invoke(
+            backend, 42, 7, "starexec-job-7", "/script.sh", "/work", "/work/log.txt");
+        return job.getSpec().getTemplate().getSpec().getContainers().get(0);
+    }
+
+    @Test
+    public void theConfiguredPullPolicyReachesThePodSpec() throws Exception {
+        Container container = buildContainerWithPullPolicy("IfNotPresent");
+
+        assertEquals(
+            "the operator's pull policy must reach the pod, or isolated workers are asked"
+                + " to re-resolve an image from a registry they cannot reach",
+            "IfNotPresent",
+            container.getImagePullPolicy()
+        );
+    }
+
+    /**
+     * The production pairing, asserted together rather than separately: the pinned digest
+     * and IfNotPresent have to arrive on the same container, because it is the combination
+     * that lets an isolated worker run an image it already holds.
+     */
+    @Test
+    public void theProductionDigestAndPolicyArriveTogether() throws Exception {
+        String digest = "ghcr.io/starexecmiami/starexec-job-runner@sha256:"
+            + "63ae82d539f7c26bc70f42036f968897fc110416043d2fedc8a917b828537cdd";
+        Container container = buildContainerWithPullPolicy("IfNotPresent", digest);
+
+        assertEquals(digest, container.getImage());
+        assertEquals("IfNotPresent", container.getImagePullPolicy());
+    }
+
+    /**
+     * Proves the value is carried, not recognised. If the plumbing ever grew a whitelist or
+     * a coerced default, a policy this backend has no reason to prefer would expose it.
+     * Kubernetes API validation remains the guard on what is actually a legal policy.
+     */
+    @Test
+    public void anyConfiguredPolicyIsCarriedVerbatim() throws Exception {
+        assertEquals("Always", buildContainerWithPullPolicy("Always").getImagePullPolicy());
+        assertEquals("Never", buildContainerWithPullPolicy("Never").getImagePullPolicy());
+    }
+
+    /**
+     * The negative control. An unconfigured deployment must behave exactly as it did before
+     * the setting existed: no policy on the container, so Kubernetes derives one from the
+     * image reference. Fabricating a default here would silently change every existing
+     * deployment that never asked for one.
+     */
+    @Test
+    public void anUnsetPullPolicyLeavesKubernetesToDeriveItFromTheImageReference()
+            throws Exception {
+        Container unset = buildContainerWithPullPolicy("");
+        assertNull(
+            "an empty setting must leave the field absent, not stamp a fabricated default",
+            unset.getImagePullPolicy()
+        );
+
+        Container never = buildContainer("32");
+        assertNull(
+            "a backend that never loaded the setting must behave the same way",
+            never.getImagePullPolicy()
+        );
+    }
+
+    // ---------------------------------------------------------------------
     // Strict mode must not change the value it is given.
     //
     // The pod-spec test above cannot guard this: it injects cpuLimit by
