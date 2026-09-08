@@ -39,7 +39,14 @@ backend:
 kubernetes:
   jobNamespace: starexec-dev
   jobImage: ghcr.io/starexecmiami/starexec-job-runner:latest
-  jobImagePullPolicy: IfNotPresent
+  # Always, because this profile deliberately tracks a mutable ":latest" and a developer
+  # who pushes a new job-runner expects the next pair to run it.
+  #
+  # Written out because this key used to be inert -- nothing read it -- so it had no
+  # bearing on behaviour, and Kubernetes derived Always from the ":latest" tag anyway.
+  # Now that the value is wired through to the pod, leaving the previous IfNotPresent here
+  # would quietly pin development to whatever image each node happened to cache.
+  jobImagePullPolicy: Always
   jobServiceAccount: starexec-job
   maxConcurrentJobs: 10
   nodeSelector:
