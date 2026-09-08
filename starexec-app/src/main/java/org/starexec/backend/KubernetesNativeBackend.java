@@ -579,6 +579,20 @@ public class KubernetesNativeBackend implements Backend {
 
     private String namespace;
     private String jobImage;
+    /**
+     * Empty unless an operator sets one, and empty means "say nothing", which is not the
+     * same as choosing a policy: Kubernetes then applies its own default, and that default
+     * is derived from the image reference -- {@code Always} for a {@code :latest} tag,
+     * {@code IfNotPresent} for anything else, a digest reference included.
+     *
+     * <p>That derivation is why the workers' offline contract rests on the reference form.
+     * Compute nodes are isolated from the public registry, so a floating {@code :latest}
+     * asks them to re-resolve an image they cannot reach, while a digest both pins the
+     * bytes and selects {@code IfNotPresent}. Setting this explicitly does not change that
+     * outcome; it makes the intended contract visible and survives a future change of the
+     * image reference.
+     */
+    private String jobImagePullPolicy;
     private String dataPvcName;
     private String dataPvcAccessMode;
     private String serviceAccountName;
@@ -670,6 +684,7 @@ public class KubernetesNativeBackend implements Backend {
             "STAREXEC_K8S_JOB_IMAGE",
             EnvironmentConfig.getContainerJobImage()
         );
+        jobImagePullPolicy = getEnv("STAREXEC_K8S_JOB_IMAGE_PULL_POLICY", "");
         dataPvcName = getEnv("STAREXEC_K8S_DATA_PVC", "starexec-data");
         dataPvcAccessMode = getEnv("STAREXEC_K8S_DATA_PVC_ACCESS_MODE", "ReadWriteMany");
         serviceAccountName = getEnv(
@@ -781,6 +796,20 @@ public class KubernetesNativeBackend implements Backend {
     private String getEnv(String key, String defaultValue) {
         String value = System.getenv(key);
         return (value != null && !value.isEmpty()) ? value : defaultValue;
+    }
+
+    /**
+     * The pull policy to stamp on the job container, or {@code null} to leave the field
+     * absent so Kubernetes applies its own image-reference-derived default.
+     *
+     * <p>Returning {@code null} rather than a fabricated default is deliberate: an
+     * unconfigured deployment must keep exactly the behaviour it had before this setting
+     * existed.
+     */
+    private String configuredImagePullPolicy() {
+        return (jobImagePullPolicy == null || jobImagePullPolicy.isEmpty())
+            ? null
+            : jobImagePullPolicy;
     }
 
     private int getEnvInt(String key, int defaultValue) {
@@ -1919,6 +1948,7 @@ public class KubernetesNativeBackend implements Backend {
                         .addNewContainer()
                             .withName("job-runner")
                             .withImage(jobImage)
+                            .withImagePullPolicy(configuredImagePullPolicy())
                             .withCommand("/bin/bash")
                             .withArgs(scriptPath)
                             .withWorkingDir(workingDirectoryPath)
