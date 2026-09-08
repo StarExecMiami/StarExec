@@ -5,6 +5,7 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.starexec.backend.LocalBackend;
+import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.Common;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
@@ -16,6 +17,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -155,17 +157,38 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 		// The process really did write the protocol, rather than the test writing it.
 		assertTrue(Files.exists(outputDir.resolve("stage-status/1.json")));
 		assertTrue(Files.exists(outputDir.resolve("stage-status/2.json")));
+
+		// And what it wrote is the protocol the shared validator accepts -- read back through
+		// StageStatusSnapshots itself, so this fixture cannot drift into a private dialect
+		// that only this test understands. If the production contract changes, this fails.
+		Map<Integer, Integer> parsed = StageStatusSnapshots.read(outputDir, PAIR_ID);
+		assertEquals("the shared validator must see both stages", 2, parsed.size());
+		assertEquals(Integer.valueOf(COMPLETE), parsed.get(1));
+		assertEquals(Integer.valueOf(COMPLETE), parsed.get(2));
 	}
 
-	/** The one-stage regression: unchanged behaviour, no invented history. */
+	/**
+	 * The regression: a pair that stops after its first stage.
+	 *
+	 * <p>The fixture seeds three {@code jobpair_stage_data} rows, as the two-stage case does --
+	 * the pair is configured for three stages and only the first one runs. So stage 2 reading
+	 * {@code STATUS_NOT_REACHED} is the correct outcome, written by
+	 * {@code UpdatePairStatusPrecise} for every {@code stage_number > terminal}, not evidence of
+	 * a one-stage pair. Named for the execution rather than the configuration, because the
+	 * earlier name ("single stage execution ... stage2 NOT_REACHED") read as a contradiction.
+	 *
+	 * <p>What it guards is that stage-history ingestion changes nothing when there is no
+	 * earlier history to ingest.
+	 */
 	@Test
-	public void aRealSingleStageExecutionIsUnchanged() throws Exception {
-		submit(singleStageScript());
+	public void aRealExecutionThatStopsAfterStageOneIsUnchanged() throws Exception {
+		submit(firstStageOnlyScript());
 
 		awaitTerminal();
 
 		assertEquals(COMPLETE, stageStatus(1));
-		assertEquals(NOT_REACHED, stageStatus(2));
+		assertEquals("configured but never reached", NOT_REACHED, stageStatus(2));
+		assertEquals("configured but never reached", NOT_REACHED, stageStatus(3));
 		assertEquals(COMPLETE, pairStatus());
 		assertEquals(1, completions());
 	}
@@ -216,7 +239,7 @@ public class LocalBackendMultiStageE2ESqlTest extends Common {
 				+ runsolverArtifacts();
 	}
 
-	private String singleStageScript() {
+	private String firstStageOnlyScript() {
 		return "#!/bin/bash\nset -eu\n"
 				+ "OUT=" + outputDir + "\n"
 				+ "mkdir -p \"$OUT/stage-status\"\n"
