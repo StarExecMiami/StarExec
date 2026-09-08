@@ -352,6 +352,218 @@ public class LocalMonitorLifecycleSqlTest extends Common {
 		assertEquals("and unresolved, not failed", ENQUEUED, pairStatus());
 	}
 
+	// ------------------------------------------------------- cleanup is link-safe
+
+	/**
+	 * Cleanup must not delete through a symbolic link a previous solver left behind.
+	 *
+	 * <p>The stage-status tree is solver-writable, so {@code stage-status/link -> /anywhere} is
+	 * something a hostile or merely buggy solver can create. A traversal built on
+	 * {@code File.listFiles} follows it, and the next attempt's cleanup then deletes somebody
+	 * else's files.
+	 */
+	@Test
+	public void cleanupDeletesTheLinkAndNotItsTarget() throws Exception {
+		Path external = Files.createTempDirectory("outside-the-pair");
+		Path sentinel = external.resolve("sentinel.txt");
+		Files.writeString(sentinel, "must survive");
+
+		Path snapshots = logDir.resolve("stage-status");
+		Files.createDirectories(snapshots);
+		Files.writeString(snapshots.resolve("1.json"), "{}");
+		assumeSymlinks(() -> Files.createSymbolicLink(snapshots.resolve("link"), external));
+
+		assertTrue("cleanup must succeed", clearPreviousAttempt());
+
+		assertFalse("the tree must be gone", Files.exists(snapshots));
+		assertTrue("the link's TARGET must be untouched", Files.exists(external));
+		assertTrue("and everything inside it", Files.exists(sentinel));
+	}
+
+	/** The same when the tree root itself is a link: unlink it, never follow it. */
+	@Test
+	public void cleanupUnlinksASymlinkedTreeRootWithoutFollowingIt() throws Exception {
+		Path external = Files.createTempDirectory("outside-root");
+		Path sentinel = external.resolve("sentinel.txt");
+		Files.writeString(sentinel, "must survive");
+		assumeSymlinks(() -> Files.createSymbolicLink(logDir.resolve("stage-status"), external));
+
+		assertTrue(clearPreviousAttempt());
+
+		assertFalse("the link must be gone",
+				Files.exists(logDir.resolve("stage-status"), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+		assertTrue("its target must survive", Files.exists(sentinel));
+	}
+
+	/** A dangling link is still an entry that must be removed, not skipped as "absent". */
+	@Test
+	public void cleanupRemovesABrokenSymlink() throws Exception {
+		Path snapshots = logDir.resolve("stage-status");
+		Files.createDirectories(snapshots);
+		assumeSymlinks(() -> Files.createSymbolicLink(
+				snapshots.resolve("dangling"), logDir.resolve("nothing-here")));
+
+		assertTrue(clearPreviousAttempt());
+		assertFalse(Files.exists(snapshots, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+	}
+
+	/** Ordinary nesting still works. */
+	@Test
+	public void cleanupRemovesNestedDirectories() throws Exception {
+		Path deep = logDir.resolve("stage-status/a/b/c");
+		Files.createDirectories(deep);
+		Files.writeString(deep.resolve("1.json"), "{}");
+
+		assertTrue(clearPreviousAttempt());
+		assertFalse(Files.exists(logDir.resolve("stage-status")));
+	}
+
+	/**
+	 * Symbolic links need privilege on some platforms. A test that quietly passes when it
+	 * could not create the link would assert nothing, so the limitation is made explicit.
+	 */
+	private static void assumeSymlinks(SymlinkAction action) throws Exception {
+		try {
+			action.run();
+		} catch (UnsupportedOperationException | java.io.IOException e) {
+			org.junit.Assume.assumeNoException(
+					"this platform will not create symbolic links; the link-boundary"
+							+ " behaviour is NOT covered here", e);
+		}
+	}
+
+	private interface SymlinkAction {
+		void run() throws Exception;
+	}
+
+	// ------------------------------------------ stale authoritative artifacts
+
+	/**
+	 * A surviving {@code status.json} must stop the attempt, not merely warn.
+	 *
+	 * <p>The monitor is registered immediately after cleanup returns, so a stale status file is
+	 * read as this generation's result before the new process writes anything.
+	 */
+	@Test
+	public void anUndeletableStatusFileRefusesTheAttempt() throws Exception {
+		writeStatus(COMPLETE, 1);
+		// Make the parent unwritable so the entry cannot be unlinked.
+		java.io.File readOnly = logDir.toFile();
+		org.junit.Assume.assumeTrue("needs a filesystem where chmod bites",
+				readOnly.setWritable(false, false));
+		try {
+			assertFalse("a stale authoritative artifact must refuse the attempt",
+					clearPreviousAttempt());
+		} finally {
+			assertTrue("restore write permission", readOnly.setWritable(true, false));
+		}
+	}
+
+	// ----------------------------------------------- parse failures are not results
+
+	/**
+	 * A status file that never parses must block, not become {@code ERROR_RUNSCRIPT}.
+	 *
+	 * <p>Polls past the parse-failure threshold, which is where the old code synthesised a
+	 * runscript error and persisted it.
+	 */
+	@Test
+	public void aPermanentlyMalformedStatusBlocksRatherThanFabricating() throws Exception {
+		Files.writeString(logDir.resolve("status.json"), "{ this is not json");
+		writeCleanRun();
+
+		LocalJobMonitor monitor = freshMonitor();
+		for (int poll = 0; poll < 5; poll++) {
+			poll(monitor);
+		}
+
+		assertEquals("no solver status may be invented", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, stageStatus(1));
+		assertEquals("nothing may complete the pair", 0, completions());
+		assertTrue("the unreadable evidence must be retained",
+				Files.exists(logDir.resolve("status.json")));
+		assertTrue("and the pair held for intervention", isBlocked(monitor));
+	}
+
+	/** A truncated file that is later repaired must converge, not block permanently. */
+	@Test
+	public void aTruncatedStatusThatIsRepairedConverges() throws Exception {
+		Files.writeString(logDir.resolve("status.json"), "{\"pairId\":");
+		writeCleanRun();
+
+		LocalJobMonitor monitor = freshMonitor();
+		poll(monitor);
+		assertEquals("a truncated read must not mutate anything", ENQUEUED, pairStatus());
+
+		writeStatus(COMPLETE, 1);
+		poll(monitor);
+
+		assertEquals(COMPLETE, pairStatus());
+		assertEquals(COMPLETE, stageStatus(1));
+	}
+
+	/** A file that vanishes between discovery and read is a race, not a solver failure. */
+	@Test
+	public void aStatusFileVanishingBetweenChecksFabricatesNothing() throws Exception {
+		writeStatus(COMPLETE, 1);
+		writeCleanRun();
+		LocalJobMonitor monitor = freshMonitor();
+
+		Files.delete(logDir.resolve("status.json"));
+		poll(monitor);
+
+		assertEquals("a vanished file is not a runscript error", ENQUEUED, pairStatus());
+		assertEquals(ENQUEUED, stageStatus(1));
+		assertEquals(0, completions());
+	}
+
+	// --------------------------------------------- the authoritative terminal predicate
+
+	/**
+	 * Retirement must follow the same terminal contract the database enforces.
+	 *
+	 * <p>Compared against {@code isTerminalExecutionResult()} for every status rather than a
+	 * second hand-maintained list; {@code TerminalStatusContractSqlTest} separately pins that
+	 * predicate to {@code starexec.IsTerminalPairStatus}.
+	 */
+	@Test
+	public void onlyTerminalExecutionResultsRetireTracking() throws Exception {
+		for (StatusCode code : StatusCode.values()) {
+			cleanUp();
+			seed();
+			writeStatus(code.getVal(), 1);
+			writeCleanRun();
+
+			LocalJobMonitor monitor = freshMonitor();
+			poll(monitor);
+
+			if (code.isTerminalExecutionResult()) {
+				assertFalse(code + " is a result and must retire tracking", isTracked(monitor));
+			} else {
+				assertTrue(code + " is not a result and must NOT retire tracking",
+						isTracked(monitor));
+			}
+		}
+	}
+
+	/** Named individually, because these three are why the predicate had to change. */
+	@Test
+	public void processingPausedAndProcessingResultsDoNotRetireTracking() throws Exception {
+		for (StatusCode code : new StatusCode[]{StatusCode.STATUS_PROCESSING_RESULTS,
+				StatusCode.STATUS_PAUSED, StatusCode.STATUS_PROCESSING}) {
+			cleanUp();
+			seed();
+			writeStatus(code.getVal(), 1);
+			writeCleanRun();
+
+			LocalJobMonitor monitor = freshMonitor();
+			poll(monitor);
+
+			assertTrue(code + "(" + code.getVal() + ") means work is still owed",
+					isTracked(monitor));
+		}
+	}
+
 	// --------------------------------------------------- stale attempt contamination
 
 	/**

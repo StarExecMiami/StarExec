@@ -710,9 +710,19 @@ public class LocalJobMonitor {
                         + failures + "/" + MAX_STATUS_PARSE_FAILURES + "); retrying next poll");
                 return false;
             }
-            log.error("status.json for pairId=" + pairId + " has been unreadable for "
-                    + failures + " consecutive polls; recording it as a runscript error");
-            ss = new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+            // NOT a solver status. This used to synthesise ERROR_RUNSCRIPT here, which is
+            // the same "N failures becomes a scientific result" pattern removed from the
+            // outer catch, one layer further in. A status file that will not parse is an
+            // evidence problem: the solver may have run perfectly and the platform simply
+            // cannot read what it wrote.
+            //
+            // Thrown as a deterministic invalid artifact, so the outer lifecycle marks the
+            // pair INGESTION_BLOCKED, keeps its output, logs actionably and leaves the pair
+            // unresolved. A transient read failure never reaches this point: it returns
+            // above and is retried.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + pairId + " has been unreadable for " + failures
+                            + " consecutive polls; refusing to invent a result for it");
         } else {
             clearParseFailures(pairId, state);
         }
@@ -761,7 +771,12 @@ public class LocalJobMonitor {
 
         // 6. Report whether this run reached a terminal status. Retiring the pair is the
         //    caller's job, so that the removal is generation-guarded in one place.
-        if (ss.status.finishedRunning() || ss.status.failed() || ss.status == StatusCode.STATUS_COMPLETE) {
+        // isTerminalExecutionResult, not finishedRunning. The latter is val >= 7, which is
+        // true of STATUS_PROCESSING_RESULTS(19), STATUS_PAUSED(20) and STATUS_PROCESSING(22) --
+        // three states that mean work is still owed. Retiring on any of them would stop
+        // tracking a pair that has not finished, and it is the same predicate whose divergence
+        // from the database contract allowed status laundering elsewhere.
+        if (ss.status.isTerminalExecutionResult()) {
             log.info("Job execution finished for pairId=" + pairId + " with status=" + ss.status);
             return true;
         } else {
