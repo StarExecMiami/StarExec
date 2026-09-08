@@ -10,6 +10,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
@@ -61,6 +62,15 @@ public class LocalJobMonitor {
     // Adaptive polling interval manager
     private final AdaptivePollInterval pollInterval;
 
+    /**
+     * Elapsed-time source for retry deadlines, monotonic rather than wall-clock.
+     *
+     * <p>Retry eligibility must not move when the system clock does. An NTP correction or a
+     * daylight-saving step should never make a pair eligible early, and must never defer one
+     * indefinitely. Injectable so tests advance it explicitly instead of sleeping.
+     */
+    private java.util.function.LongSupplier nanoTime = System::nanoTime;
+
     // Handle for the currently scheduled poll (for cancellation on interval change)
     private volatile ScheduledFuture<?> scheduledPoll;
 
@@ -89,6 +99,9 @@ public class LocalJobMonitor {
     // everything else, rather than as a separate mutation that could be missed.
     private static final int MAX_STATUS_PARSE_FAILURES = 3;
 
+    /** Ceiling for ingestion retry backoff: a long outage settles into occasional checks. */
+    private static final long MAX_INGESTION_BACKOFF_MS = 300_000L;
+
     /**
      * Immutable snapshot of one pair's current execution.
      *
@@ -102,14 +115,52 @@ public class LocalJobMonitor {
         final long generation;
         final int parseFailures;
 
+        /**
+         * Ingestion retry state, deliberately carried here rather than in a map keyed by
+         * pair id. A pair can be rerun, and a rerun replaces this whole record -- so a new
+         * generation starts at zero failures with no inherited deadline and no inherited
+         * blocked flag, and the superseded generation's retry state is discarded with it.
+         * Keying on pair id alone would leak one run's backoff onto the next.
+         */
+        final int ingestionFailures;
+        final long nextRetryAtNanos;
+        final boolean ingestionBlocked;
+        final String lastIngestionFailure;
+
         PairExecutionState(String logDir, long generation, int parseFailures) {
+            this(logDir, generation, parseFailures, 0, 0L, false, null);
+        }
+
+        PairExecutionState(
+                String logDir,
+                long generation,
+                int parseFailures,
+                int ingestionFailures,
+                long nextRetryAtNanos,
+                boolean ingestionBlocked,
+                String lastIngestionFailure) {
             this.logDir = logDir;
             this.generation = generation;
             this.parseFailures = parseFailures;
+            this.ingestionFailures = ingestionFailures;
+            this.nextRetryAtNanos = nextRetryAtNanos;
+            this.ingestionBlocked = ingestionBlocked;
+            this.lastIngestionFailure = lastIngestionFailure;
         }
 
         PairExecutionState withParseFailures(int failures) {
-            return new PairExecutionState(logDir, generation, failures);
+            return new PairExecutionState(logDir, generation, failures,
+                    ingestionFailures, nextRetryAtNanos, ingestionBlocked, lastIngestionFailure);
+        }
+
+        PairExecutionState withIngestionRetry(long dueAtNanos, String cause) {
+            return new PairExecutionState(logDir, generation, parseFailures,
+                    ingestionFailures + 1, dueAtNanos, false, cause);
+        }
+
+        PairExecutionState blockedForIngestion(String cause) {
+            return new PairExecutionState(logDir, generation, parseFailures,
+                    ingestionFailures + 1, nextRetryAtNanos, true, cause);
         }
     }
 
@@ -158,6 +209,153 @@ public class LocalJobMonitor {
             return next;
         });
         return failures[0];
+    }
+
+    /**
+     * Records the terminal status of every stage before the one that finished the pair.
+     *
+     * <p>Writes through the stage-only routine, which touches {@code jobpair_stage_data}
+     * alone: no pair status, no completion, no end time. Pair completion stays exactly where
+     * it was, in the single precise update that follows this. Order matters --
+     * {@code UpdatePairStatusPrecise} rewrites the terminal stage and everything after it, so
+     * earlier stages have to be in place first.
+     *
+     * <p>Throws rather than returning a flag, so every failure reaches the outer lifecycle and
+     * is classified there. A snapshot this monitor cannot believe is an evidence problem; it
+     * must never become a solver status.
+     */
+    private void ingestEarlierStageStatuses(
+            int pairId,
+            PairExecutionState state,
+            Path outputDir,
+            int terminalStage) throws Exception {
+
+        Map<Integer, Integer> snapshots =
+                StageStatusSnapshots.read(outputDir, pairId);
+
+        Map<Integer, Integer> earlier = new java.util.TreeMap<>();
+        for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
+            // The terminal stage's own snapshot is not used -- its status comes from the
+            // runsolver artifacts -- and a pair killed mid-stage legitimately leaves it
+            // non-terminal.
+            if (snapshot.getKey() < terminalStage) {
+                earlier.put(snapshot.getKey(), snapshot.getValue());
+            }
+        }
+        if (earlier.isEmpty()) {
+            return;
+        }
+
+        // The mutation boundary. Everything above read files; a rerun that landed while it
+        // did has already superseded this result, and writing it would record run N's stage
+        // history against run N+1.
+        if (!isCurrent(pairId, state)) {
+            log.info("Monitor: pairId=" + pairId + " was rerun while its stage snapshots were"
+                    + " read; discarding the superseded run's stage history");
+            return;
+        }
+
+        StageStatusBatchResult result = JobPairs.setEarlierStageStatuses(pairId, earlier);
+        if (result == StageStatusBatchResult.APPLIED) {
+            return;
+        }
+        if (result == StageStatusBatchResult.REJECTED_UNKNOWN_STAGE) {
+            // The output names a stage this pair does not have. No retry changes that, so it
+            // is surfaced as a permanently invalid artifact rather than a transient failure.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "stage batch " + earlier + " names a stage pair " + pairId + " does not have");
+        }
+        // FAILED. StageStatusBatchResult already separated a missing routine from a transient
+        // fault at the point where the SQLState was still visible, and logged which it was.
+        throw new org.starexec.backend.exception.RetryableIngestionException(
+                "could not record earlier stage statuses " + earlier + " for pair " + pairId);
+    }
+
+    /**
+     * Records that a completed pair's results could not be ingested, and decides what next.
+     *
+     * <p>Generation-guarded throughout: if the pair has been rerun while this poll ran, the
+     * failure belongs to output that no longer matters, so the superseded record is retired
+     * and the new generation is left entirely alone -- no inherited failure count, no
+     * inherited deadline, no inherited blocked flag.
+     *
+     * <p>No number of failures ever produces a solver status. A retry ceiling that ended in
+     * {@code ERROR_RUNSCRIPT} would just be the original defect with extra steps.
+     */
+    private void recordIngestionFailure(int pairId, PairExecutionState state, Exception cause) {
+        if (!isCurrent(pairId, state)) {
+            log.warn("Monitor: ingestion failed for pairId=" + pairId
+                    + " but it has since been rerun; discarding the superseded run's failure");
+            retire(pairId, state);
+            return;
+        }
+
+        IngestionOutcome outcome = IngestionOutcome.classify(cause);
+        String summary = cause.getClass().getSimpleName() + ": " + cause.getMessage();
+
+        if (outcome == IngestionOutcome.BLOCKED) {
+            pairs.computeIfPresent(pairId, (key, current) ->
+                    current.generation == state.generation
+                            ? current.blockedForIngestion(summary)
+                            : current);
+            log.error("Monitor: INGESTION REQUIRES INTERVENTION for pairId=" + pairId
+                    + " in " + state.logDir + ". The results are retained and the pair is left"
+                    + " unresolved rather than given a status it did not earn. Cause: "
+                    + summary, cause);
+            return;
+        }
+
+        long delayMs = ingestionBackoffMillis(state.ingestionFailures + 1);
+        long dueAt = nanoTime.getAsLong() + delayMs * 1_000_000L;
+        pairs.computeIfPresent(pairId, (key, current) ->
+                current.generation == state.generation
+                        ? current.withIngestionRetry(dueAt, summary)
+                        : current);
+        log.warn("Monitor: could not record results for pairId=" + pairId + " (attempt "
+                + (state.ingestionFailures + 1) + "); results retained, retrying in "
+                + delayMs + "ms. Cause: " + summary, cause);
+    }
+
+    /**
+     * Bounded exponential backoff, derived from the poller's own cadence rather than invented.
+     *
+     * <p>Starts at the base poll interval, because retrying faster than the loop runs is
+     * pointless, and caps at ten times the maximum so a long outage settles into occasional
+     * checks instead of a hot loop.
+     */
+    private long ingestionBackoffMillis(int failures) {
+        long base = Math.max(1L, pollInterval.getBaseInterval());
+
+        // The cap is bounded by MAX_INGESTION_BACKOFF_MS rather than taken from the poller
+        // alone, and the reason is worth recording. getMaxInterval() is documented in
+        // AdaptivePollInterval's own javadoc as defaulting to 10000ms, but
+        // EnvironmentConfig.getAdaptivePollMaxInterval() actually defaults to 120000ms --
+        // the javadoc is stale. A "ten times the poll maximum" ceiling is therefore twenty
+        // minutes, not one hundred seconds, which is how the first version of this doubled
+        // past 512s without ever capping. Deriving from the cadence is still right; trusting
+        // it unbounded is not.
+        long cap = Math.max(base, Math.min(
+                pollInterval.getMaxInterval() * 10L, MAX_INGESTION_BACKOFF_MS));
+
+        // Clamped BEFORE the subtraction, which is the part that is easy to get wrong:
+        // clamping afterwards still evaluates failures - 1 first, and for
+        // Integer.MIN_VALUE that wraps to Integer.MAX_VALUE, so a nonsensical count came
+        // back as the maximum delay rather than the minimum. Java also masks a shift
+        // distance to (n & 63), so a negative shift would silently produce an enormous
+        // delay instead of an error.
+        int attempt = Math.max(1, Math.min(failures, 41));
+        int shift = attempt - 1;
+        long delay = base << shift;
+        return delay <= 0 || delay > cap ? cap : delay;
+    }
+
+    /** Resets the ingestion retry state after a successful pass, generation permitting. */
+    private void clearIngestionFailures(int pairId, PairExecutionState state) {
+        pairs.computeIfPresent(pairId, (key, current) ->
+                current.generation == state.generation && current.ingestionFailures != 0
+                        ? new PairExecutionState(current.logDir, current.generation,
+                                current.parseFailures)
+                        : current);
     }
 
     /** Resets the parse-failure count after a successful read, generation permitting. */
@@ -396,6 +594,21 @@ public class LocalJobMonitor {
                     continue;
                 }
 
+                // Held back by an earlier ingestion failure. Checked before the pair is
+                // counted as found, so a pair waiting out its backoff does not keep the
+                // adaptive poller pinned at its base interval.
+                if (state.ingestionBlocked) {
+                    log.debug("Monitor: pairId=" + pairId + " is held for intervention;"
+                            + " not reprocessing. Last cause: " + state.lastIngestionFailure);
+                    continue;
+                }
+                if (state.ingestionFailures > 0
+                        && nanoTime.getAsLong() - state.nextRetryAtNanos < 0) {
+                    // Subtraction rather than <, so the comparison is correct across a
+                    // nanoTime rollover.
+                    continue;
+                }
+
                 foundCount++;
                 // A pair present in the map is by definition not yet processed: a
                 // terminal result retires the entry. The separate processedPairIds set
@@ -406,6 +619,9 @@ public class LocalJobMonitor {
 
                 try {
                     boolean isTerminal = processCompletedJob(pairId, state);
+                    // A pass that got through clears any backoff this pair had accumulated:
+                    // a still-running pair must not inherit an earlier failure's deadline.
+                    clearIngestionFailures(pairId, state);
                     if (!isTerminal) {
                         log.debug("Monitor: Job still running for pairId=" + pairId + ", will re-check later.");
                     } else if (retire(pairId, state)) {
@@ -415,40 +631,18 @@ public class LocalJobMonitor {
                                 + " discarding the superseded run's result and leaving the new run tracked");
                     }
                 } catch (Exception e) {
-                    log.error(
-                            "Monitor: Error processing pairId=" +
-                                    pairId +
-                                    ", logDir=" +
-                                    logDir,
-                            e);
-                    try {
-                        // Only blame the run that actually failed. Recording
-                        // ERROR_RUNSCRIPT unconditionally would stamp this failure onto
-                        // a rerun that had already started and was fine.
-                        if (isCurrent(pairId, state)) {
-                            JobPairs.setStatusForPairAndStages(
-                                    pairId,
-                                    StatusCode.ERROR_RUNSCRIPT.getVal());
-                            log.warn(
-                                    "Monitor: Set ERROR_RUNSCRIPT for pairId=" +
-                                            pairId +
-                                            " due to processing error");
-                        } else {
-                            log.warn("Monitor: processing failed for pairId=" + pairId
-                                    + " but it has since been rerun; not recording the failure"
-                                    + " against the new run");
-                        }
-                        // Retire either way, and generation-guarded either way: left in
-                        // place a failed entry was counted as work on every later poll,
-                        // which held the adaptive interval at its base and never let the
-                        // poller back off, while the map grew with every failed job.
-                        retire(pairId, state);
-                    } catch (Exception ex) {
-                        log.error(
-                                "Monitor: CRITICAL - Cannot set error status for pairId=" +
-                                        pairId,
-                                ex);
-                    }
+                    // A failure to RECORD a result is not a result.
+                    //
+                    // This used to mark the pair -- and, through setStatusForPairAndStages,
+                    // every one of its stages -- ERROR_RUNSCRIPT and then retire it. A
+                    // database that was briefly unavailable therefore turned a good solver
+                    // run into a recorded scientific failure. When the database was the
+                    // thing that was down, the fabricated write failed too and the pair was
+                    // retired with no terminal status at all: stranded, with nothing left
+                    // tracking it and no later poll that would ever look again.
+                    //
+                    // Neither outcome describes the solver, so neither is recorded as one.
+                    recordIngestionFailure(pairId, state, e);
                 }
             }
 
@@ -544,7 +738,18 @@ public class LocalJobMonitor {
             return false;
         }
 
-        // 5. Update database, with runsolver's verdict allowed to correct the status
+        // 5. Earlier stages, from the per-stage snapshots the job script writes beside
+        //    status.json. That file is one slot the stages take turns truncating, so
+        //    without this the pair keeps only its last stage and every earlier one stays
+        //    at whatever it was enqueued with.
+        //
+        //    The pair comes from this monitor's own tracking, never from the files: a
+        //    snapshot's pairId is validation data, not routing authority. Ownership is
+        //    re-checked inside, immediately before the write, for the same reason step 4
+        //    re-checks it -- reading files takes real time and a rerun may have landed.
+        ingestEarlierStageStatuses(pairId, state, outputDir, ss.stageNumber);
+
+        // 6. Update database, with runsolver's verdict allowed to correct the status
         //    bash derived by grepping prose.
         updateDatabase(
             pairId,
@@ -912,9 +1117,12 @@ public class LocalJobMonitor {
                 StatusCode.STATUS_NOT_REACHED.getVal(),
                 false);
         if (statusResult == PairStatusResult.FAILED) {
-            // Not recorded. Throwing leaves the pair tracked so a later poll retries it;
-            // returning normally would mark it processed and the result would be lost.
-            throw new Exception(
+            // Not recorded. The only reasons UpdatePairStatusPrecise reports FAILED are
+            // infrastructure ones -- the SQLException behind it is logged and swallowed
+            // inside JobPairs, so it cannot be inspected here and the type carries the
+            // classification instead. Throwing leaves the pair tracked and scheduled for
+            // retry; it must never become a solver status.
+            throw new org.starexec.backend.exception.RetryableIngestionException(
                     "Could not record terminal status " + status + " for pair " + pairId
                             + " stage " + stageNumber);
         }
