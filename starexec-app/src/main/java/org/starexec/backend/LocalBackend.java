@@ -273,9 +273,19 @@ public class LocalBackend implements Backend {
      *
      * @param outputDir The directory containing job output
      */
-    private void cleanupPreviousRunArtifacts(File outputDir) {
+    /**
+     * Removes the previous attempt's results so this one cannot be judged on them.
+     *
+     * <p>Output directories are keyed by pair, not by attempt --
+     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} comes from
+     * {@code JobPairs.getStdout(pairId)} -- so a rerun writes into exactly the tree its
+     * predecessor left behind.
+     *
+     * @return true when nothing from a previous attempt can still be read
+     */
+    private boolean cleanupPreviousRunArtifacts(File outputDir) {
         if (outputDir == null || !outputDir.exists()) {
-            return;
+            return true;
         }
 
         String[] artifacts = {
@@ -298,6 +308,45 @@ public class LocalBackend implements Backend {
                 }
             }
         }
+
+        // The per-stage snapshots, which the list above predates. They were not read by
+        // anything until stage-history ingestion existed, so leaving them was harmless;
+        // now they are authoritative input, and a surviving directory would let this
+        // attempt be recorded with its predecessor's stage history.
+        //
+        // Reported rather than merely logged, unlike the files above: a stale status.json
+        // is overwritten by this run, whereas a stale stage-status/2.json for a run that
+        // only reaches stage 1 is never overwritten by anything.
+        File staleSnapshots = new File(outputDir, STAGE_STATUS_DIRECTORY);
+        deleteTree(staleSnapshots);
+        if (staleSnapshots.exists()) {
+            log.error(
+                    "Stale stage-status snapshots from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its stage history");
+            return false;
+        }
+        return true;
+    }
+
+    /** Fixed, application-defined name. Never derived from anything a job supplies. */
+    private static final String STAGE_STATUS_DIRECTORY = "stage-status";
+
+    /** Depth-first removal, so a directory is emptied before it is removed. */
+    private void deleteTree(File target) {
+        if (!target.exists()) {
+            return;
+        }
+        File[] children = target.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteTree(child);
+            }
+        }
+        if (!target.delete()) {
+            log.warn("Could not delete " + target.getAbsolutePath());
+        }
     }
 
     /**
@@ -314,7 +363,20 @@ public class LocalBackend implements Backend {
         // CLEANUP: Delete artifacts from previous runs BEFORE registering with monitor
         // This prevents the race condition where monitor sees old status.json
         File outputDir = new File(job.logPath).getParentFile();
-        cleanupPreviousRunArtifacts(outputDir);
+        if (!cleanupPreviousRunArtifacts(outputDir)) {
+            // Fail closed at the attempt boundary. Starting anyway would let this run be
+            // recorded with the previous attempt's stage history, which is a wrong
+            // measurement -- worse than a job that visibly did not start.
+            job.state = LocalJob.JobState.FAILED;
+            failedJobCount.incrementAndGet();
+            if (pairId > 0) {
+                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
+            }
+            log.error(
+                    "Refusing to execute pair " + pairId + " (execId " + job.execId +
+                            "): a previous attempt's stage snapshots could not be removed");
+            return;
+        }
 
         if (pairId > 0 && jobMonitor != null) {
             jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId);
