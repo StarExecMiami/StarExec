@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Measurement fidelity**: Timeout and memory-limit classification now uses runsolver's own `TIMEOUT=` and `MEMOUT=` verdicts rather than substring-matching its English output, all three runsolver output sources are read, and a run whose measurements cannot be read is no longer recorded as zero.
 - **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
 
+### Removed
+- **Dead stress-test endpoint**: Removed the `/secure/add/stressTest` mapping and the admin UI that reached it. The mapping pointed at a class in `src/test/java`, so it was never packaged into the WAR and every request returned HTTP 500. The stress-test capability itself is unchanged; it is driven by `TestManager` in the test harness.
+
 ### Fixed
 - **Disk accounting**: Recording runsolver statistics is now idempotent. Repeated calls previously added the reported figure to user and job totals each time while overwriting the stage row, leaving a surplus that no refund could reclaim.
 - **Space hierarchy**: Moving a space into itself or into one of its own descendants is now rejected, preventing a space from becoming its own ancestor.
@@ -32,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Servlet authorization**: Corrected authorization checks that reported a failure without returning, so the privileged work ran anyway. The most serious allowed any authenticated user to rewrite the queue-to-community access list.
 - **StarDev transfer**: A failed StarDev login now stops the transfer instead of continuing on a connection that never authenticated.
 - **Build provenance**: The runsolver binary is now compiled from the source vendored in this repository. It was previously downloaded from an external host at image build time with no checksum or pinned digest, so the instrument every recorded measurement comes from is now reproducible from the tree it was audited against.
+
 
 ## [2.5.1] - 2026-08-03
 
