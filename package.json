@@ -19,9 +19,12 @@
     "stylelint-scss": "^6.8.1"
   },
   "overrides": {
+    "colord": "2.9.7",
     "fast-uri": "3.1.7",
     "flatted": "3.4.2",
     "immutable": "4.3.9",
-    "picomatch": "2.3.2"
+    "js-yaml": "4.3.2",
+    "picomatch": "2.3.2",
+    "postcss-selector-parser": "7.1.6"
   }
 }
