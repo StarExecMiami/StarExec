@@ -2,7 +2,10 @@ package org.starexec.test.junit.util;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.starexec.constants.R;
 import org.starexec.util.Validator;
+
+import java.util.regex.Pattern;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -49,15 +52,44 @@ public class EmailValidationTest {
 		assertTrue(Validator.isValidEmail("researcher@example.engineering"));
 		assertTrue(Validator.isValidEmail("researcher@example.software"));
 		assertTrue(Validator.isValidEmail("researcher@example.international"));
+		assertTrue(Validator.isValidEmail("r@e.accountants"));
 	}
 
-	/** A DNS label stops at 63 octets (RFC 1035 2.3.4), and so does the pattern. */
+	/**
+	 * A DNS label stops at 63 octets (RFC 1035 2.3.4), and so does the pattern.
+	 *
+	 * <p>Asserted against the pattern rather than through {@link Validator#isValidEmail}, because
+	 * the two bounds cannot both be exercised there: the shortest address with a 64-character
+	 * TLD is {@code a@b.} plus 64, or 68 characters, and {@code users.email} is
+	 * {@code VARCHAR(64)}. In practice the column width always binds first. Testing the TLD
+	 * bound through the validator would therefore assert the column check and call it the TLD
+	 * check.
+	 */
 	@Test
 	public void theTopLevelDomainIsBoundedAtTheDnsLabelLimit() {
-		assertTrue(Validator.isValidEmail("user@example." + "a".repeat(63)));
+		Pattern pattern = Pattern.compile(R.EMAIL_PATTERN, Pattern.CASE_INSENSITIVE);
+
+		assertTrue(pattern.matcher("u@e." + "a".repeat(63)).matches());
 		assertFalse(
 				"64 exceeds the maximum length of a DNS label and must still be refused",
-				Validator.isValidEmail("user@example." + "a".repeat(64)));
+				pattern.matcher("u@e." + "a".repeat(64)).matches());
+	}
+
+	/**
+	 * The other bound, which the javadoc promised and the implementation did not apply.
+	 * {@code users.email} is {@code VARCHAR(64)}, so an address longer than that passed every
+	 * check and then failed at the INSERT as a 22001 rather than as a validation message.
+	 */
+	@Test
+	public void anAddressTooLongForItsColumnIsRefused() {
+		String at64 = "a".repeat(57) + "@e.com";                 // exactly 63
+		assertTrue("inside the column width", Validator.isValidEmail(at64));
+
+		String at65 = "a".repeat(59) + "@e.com";                 // 65
+		assertFalse("longer than users.email VARCHAR(64)", Validator.isValidEmail(at65));
+
+		// The shape the TLD change makes easy to reach: valid pattern, over the column.
+		assertFalse(Validator.isValidEmail("researcher@example." + "a".repeat(60)));
 	}
 
 	// ---------------------------------------------- what must not have changed with it

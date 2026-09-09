@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
 
 ### Fixed
+- **Email length validation**: `isValidEmail` now applies the length bound its contract already promised. `users.email` is `VARCHAR(64)`, so an over-long address previously passed every client- and server-side check and then failed at the INSERT.
 - **Email validation**: Addresses on top-level domains longer than four characters — `.technology`, `.university`, `.education`, `.engineering` — are now accepted. The bound is the 63-octet DNS label limit rather than an arbitrary smaller number. The client already accepted these, so the address was refused only after the form was submitted.
 - **Disk accounting**: Recording runsolver statistics is now idempotent. Repeated calls previously added the reported figure to user and job totals each time while overwriting the stage row, leaving a surplus that no refund could reclaim.
 - **Space hierarchy**: Moving a space into itself or into one of its own descendants is now rejected, preventing a space from becoming its own ancestor.
