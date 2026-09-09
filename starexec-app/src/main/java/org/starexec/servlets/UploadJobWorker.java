@@ -49,7 +49,27 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     private static final int SHUTDOWN_TIMEOUT_SECONDS = 30;
     private static final int MAX_CONCURRENT_JOBS = 3; // Allow up to 3 concurrent job processing
     private static final int EXTRACTION_PROGRESS_UPDATE_FILE_INTERVAL = 100;
+
+    /**
+     * Smallest gap between two heartbeat writes during extraction.
+     *
+     * <p>Matches MIN_UPDATE_INTERVAL_MS in the traversal callback below: the processing
+     * phase has always throttled its progress writes by time, and extraction is the only
+     * phase that did not.
+     *
+     * <p>The bound that actually matters is much looser. The sole reader of heartbeat
+     * freshness is {@link org.starexec.data.to.UploadJob#isStuck()}, which reports a job as
+     * stuck after five minutes without one, and only to colour an indicator in the upload
+     * status page. A one-second floor stays three hundred times inside that.
+     */
+    private static final long EXTRACTION_HEARTBEAT_MIN_INTERVAL_MS = 1000L;
     private static final long ORPHAN_RETENTION_HOURS = 24;
+
+    /**
+     * Monotonic clock for heartbeat throttling. Package-private and replaceable so tests can
+     * advance time explicitly rather than sleeping.
+     */
+    java.util.function.LongSupplier nanoTime = System::nanoTime;
     static final String TEMP_EXTRACTION_SUFFIX = ".extracting";
     
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -632,8 +652,8 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                         lastCommittedPath,
                         filesProcessed > 0 ? filesProcessed - 1 : null
                     );
-                    // Also touch the job to update last_heartbeat
-                    UploadJobQueue.touchJob(job.getId());
+                    // No touchJob here: update_upload_job_progress already sets
+                    // last_heartbeat, so a second call would repeat the write it just did.
                 }
             }
             
@@ -766,22 +786,49 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         }
     }
 
+    /**
+     * Progress reporting for archive extraction.
+     *
+     * <p>ArchiveExtractor runs this once per archive entry, so whatever it does is multiplied
+     * by the entry count -- 26,990 times for the TPTP Problems distribution. It used to write
+     * to the database on every one of those: a row update for each hundredth entry, and a
+     * heartbeat for all the rest. Each heartbeat borrowed a pooled connection (validated on
+     * borrow, so an extra round trip), ran an UPDATE and committed it. On a deployment whose
+     * database storage commits over NFS that came to roughly seventy milliseconds an entry,
+     * against about three milliseconds of actual extraction, and the archive stopped being
+     * unpackable inside the extraction timeout.
+     *
+     * <p>The row update still fires every hundred entries, unchanged -- that is what drives
+     * the progress bar. Only the heartbeat is now throttled by time, which is what the
+     * traversal callback below has always done. Nothing reads the heartbeat often enough to
+     * notice: {@code last_heartbeat} appears in no query predicate anywhere, and its only
+     * reader is a five-minute staleness indicator in the UI.
+     */
     private Runnable createExtractionProgressCallback(long jobId, AtomicInteger extractedCount) {
+        final long minIntervalNanos =
+            java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(EXTRACTION_HEARTBEAT_MIN_INTERVAL_MS);
         return new Runnable() {
             private int lastPersistedCount = 0;
+            private long lastWriteNanos = nanoTime.getAsLong();
 
             @Override
             public void run() {
                 int currentCount = extractedCount.get();
-                if (currentCount <= 0) {
-                    UploadJobQueue.touchJob(jobId);
-                    return;
-                }
-                if (currentCount - lastPersistedCount >= EXTRACTION_PROGRESS_UPDATE_FILE_INTERVAL) {
+
+                // The progress row also stamps last_heartbeat (update_upload_job_progress
+                // sets it), so a write here is a heartbeat too and restarts the interval.
+                if (currentCount > 0
+                        && currentCount - lastPersistedCount >= EXTRACTION_PROGRESS_UPDATE_FILE_INTERVAL) {
                     UploadJobQueue.updateProgress(jobId, currentCount, null, null, null, null);
                     lastPersistedCount = currentCount;
-                } else {
+                    lastWriteNanos = nanoTime.getAsLong();
+                    return;
+                }
+
+                long now = nanoTime.getAsLong();
+                if (now - lastWriteNanos >= minIntervalNanos) {
                     UploadJobQueue.touchJob(jobId);
+                    lastWriteNanos = now;
                 }
             }
         };
