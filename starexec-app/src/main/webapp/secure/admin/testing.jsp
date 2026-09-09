@@ -16,7 +16,6 @@
 			<ul class="actionList">
 				<li><a id="runAll">Run All Tests</a></li>
 				<li><a id="runSelected">Run Selected Tests</a></li>
-				<li><a id="runStress">Create Stress Test</a></li>
 			</ul>
 		</c:if>
 		<table id="tableTests" class="shaded contentTbl">
