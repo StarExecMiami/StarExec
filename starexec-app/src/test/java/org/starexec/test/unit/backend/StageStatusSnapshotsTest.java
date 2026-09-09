@@ -215,20 +215,26 @@ public class StageStatusSnapshotsTest {
 	}
 
 	/**
-	 * The counterpart, and the reason the bound is safe: a running stage is skipped before any of
-	 * its content is read, so nothing it contains can decide the pair's fate. Without this a
-	 * half-written or garbage snapshot for the stage in flight would still wedge the pair.
+	 * The bound relaxes terminality and nothing else. A snapshot naming another pair is
+	 * cross-pair contamination whether or not that stage has finished, so it is still refused --
+	 * losing that signal to the bound would be a poor trade, and unlike terminality it does not
+	 * depend on when the file is read.
 	 */
 	@Test
-	public void nothingInTheRunningStagesRecordCanBlockThePair() throws Exception {
-		Path out = folder.newFolder("in-flight-garbage").toPath();
-		Path dir = out.resolve("stage-status");
-		Files.createDirectories(dir);
-		Files.writeString(dir.resolve("1.json"), "{ this is not json");
+	public void theRunningStagesRecordIsStillCheckedAgainstItsPair() throws Exception {
+		Path out = folder.newFolder("in-flight-wrong-pair").toPath();
+		write(out, 1, PAIR + 99, 1, StatusCode.STATUS_RUNNING.getVal());
 
-		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 1);
+		assertRefused(out, 1, "claims pair");
+	}
 
-		assertTrue(read.isEmpty());
+	/** Same reasoning for a name that disagrees with the record it holds. */
+	@Test
+	public void theRunningStagesRecordIsStillCheckedAgainstItsName() throws Exception {
+		Path out = folder.newFolder("in-flight-wrong-name").toPath();
+		write(out, 1, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
+
+		assertRefused(out, 1, "is named for stage");
 	}
 
 	/**
@@ -291,6 +297,39 @@ public class StageStatusSnapshotsTest {
 
 		assertRefused(out, Integer.MAX_VALUE, "carries status 22");
 		assertRefused(out, "carries status 22");
+	}
+
+	// ------------------------------------------- a stage number that names no stage
+	//
+	// Stage numbers start at 1. Below that is not "nothing is in flight" -- read that way it
+	// skips the entire directory, which is the opposite -- it is "the producer did not say".
+	//
+	// It arrives here routinely. sendStatus defaults its stage argument to 0, and every
+	// pair-level error path takes that default: exitJobscript's fail-closed ERROR_BENCHMARK,
+	// limitExceeded, and both processor failures. status.json then carries stageNumber 0 and
+	// that is what the caller passes.
+
+	@Test
+	public void aStageNumberBelowOneIsNotABound() throws Exception {
+		Path out = folder.newFolder("no-stage-named").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
+
+		// Skipping everything would return empty and let the caller record a result for a pair
+		// whose stage history it had just declined to read.
+		assertRefused(out, 0, "carries status 4");
+		assertRefused(out, -1, "carries status 4");
+	}
+
+	@Test
+	public void aStageNumberBelowOneStillReturnsEveryValidStage() throws Exception {
+		Path out = folder.newFolder("no-stage-named-ok").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		write(out, 2, PAIR, 2, StatusCode.EXCEED_CPU.getVal());
+
+		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 0);
+
+		assertEquals("0 must behave as the unbounded read did", "[1, 2]",
+				read.keySet().toString());
 	}
 
 	// ------------------------------------------------------------------------- harness

@@ -561,24 +561,39 @@ public class LocalJobMonitorTests {
 
     @Test
     public void aStageStillRunningDoesNotBlockIngestion() throws Exception {
-        // 4 is STATUS_RUNNING: what sendNode writes when the stage starts.
+        // 4 is STATUS_RUNNING, which the stage's snapshot holds from the moment it starts.
+        // status.json names that same stage: sendNode's sendStatus defaults to stage 0, but the
+        // sendStageStatus on the next line rewrites status.json with the real stage number.
         Path dir = dirWithStageSnapshot(46, 1, 4);
         monitor.registerJob(dir.toString(), 46);
 
-        // 0 is the stage number status.json carries while the pair runs, because sendNode calls
-        // sendStatus with no stage argument. Nothing is behind the pair yet.
-        ingestEarlierStageStatuses(46, stateFor(46), dir, 0);
+        // Single-stage pair, currently in stage 1. Nothing is behind it, and its own snapshot
+        // must not be judged. Before the bound this threw, and the throw was permanent.
+        ingestEarlierStageStatuses(46, stateFor(46), dir, 1);
     }
 
+    /**
+     * A stage number below 1 names no stage. It arrives here routinely -- every pair-level error
+     * path takes {@code sendStatus}'s default of 0 -- and must not be read as "no stage is in
+     * flight", which would skip the whole directory and let the caller record a result for a
+     * pair whose history it had just declined to read.
+     *
+     * <p>The pre-bound behaviour is the conservative one, so 0 keeps it: validate everything, and
+     * refuse a stage that is not holding a result.
+     */
     @Test
-    public void aPairThatFinishedIngestsTheStagesBehindIt() throws Exception {
-        Path dir = dirWithStageSnapshot(47, 1, 4);
-        monitor.registerJob(dir.toString(), 47);
+    public void aStageNumberBelowOneIsNotTreatedAsABound() throws Exception {
+        Path dir = dirWithStageSnapshot(49, 1, 4);
+        monitor.registerJob(dir.toString(), 49);
 
-        // Single-stage pair reporting stage 1: stage 1 is the terminal stage, so there is nothing
-        // earlier to record and the runsolver artifacts supply its status. This must not throw
-        // even though the snapshot beside it still reads STATUS_RUNNING.
-        ingestEarlierStageStatuses(47, stateFor(47), dir, 1);
+        try {
+            ingestEarlierStageStatuses(49, stateFor(49), dir, 0);
+            fail("stageNumber 0 must not silently skip every snapshot");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            assertTrue(
+                "wrong refusal: " + expected.getMessage(),
+                expected.getMessage().contains("carries status 4"));
+        }
     }
 
     /**
