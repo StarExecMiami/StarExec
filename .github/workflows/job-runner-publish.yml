@@ -68,6 +68,18 @@ jobs:
   build:
     name: Build & Publish Job Runner
     runs-on: ubuntu-latest
+    # The job-runner image is versioned independently of the StarExec
+    # application. This workflow also triggers on `release: published`, so
+    # without this guard publishing the application release v2.6.0 would
+    # stamp starexec-job-runner:2.6.0 / :2.6 / :2 from the *application*
+    # tag (see the event_name == 'release' semver rules below).
+    #
+    # The guard sits on the job, not on individual steps, so an application
+    # release event does not build, tag, push, sign, or publish anything.
+    # Branch pushes, pull requests, and workflow_dispatch are unaffected.
+    if: >-
+      github.event_name != 'release' ||
+      startsWith(github.event.release.tag_name, 'job-runner-v')
     
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}

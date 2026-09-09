@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-20
+
 ### Added
 - **Kubernetes health endpoints**: Added `/starexec/public/health/liveness` and `/starexec/public/health/readiness` so orchestrators can distinguish a live process from one able to serve, and pointed the chart's probes at them.
 - **SMT-aware CPU partitioning**: Added sibling-aware CPU partitioning that keeps SMT siblings within a single partition and rejects explicit partition layouts that split them.
@@ -22,18 +24,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
 
 ### Fixed
+- **Configuration details page**: Solver configuration details now render in container deployments. Deciding whether a configuration is binary shells out to the `file` utility, which the image had never installed, so the call threw on every request and the handler returned HTTP 400.
+- **Unschedulable CPU requests**: Dispatch now compares a queue's configured CPU request against the largest allocatable CPU among the nodes it can use, and defers while the request cannot fit. The allocatable figure was consulted nowhere, so an impossible configuration livelocked instead of holding visibly: pods stayed Pending, the monitor failed each pair at its timeout, and the rerun asked for the same impossible size.
+- **Kubernetes CPU headroom**: The shipped profiles request one CPU less than a node's full count, leaving room for the agents charged against the same allocatable total. Requesting the full count could never be scheduled — the calico-node DaemonSet alone holds 250m — so every solver pod stayed Pending and the queue never moved.
 - **Disk accounting**: Recording runsolver statistics is now idempotent. Repeated calls previously added the reported figure to user and job totals each time while overwriting the stage row, leaving a surplus that no refund could reclaim.
 - **Space hierarchy**: Moving a space into itself or into one of its own descendants is now rejected, preventing a space from becoming its own ancestor.
 - **Benchmark uploads**: The asynchronous upload path now satisfies the same invariants as the synchronous one, creating the space association and charging disk usage. Uploaded benchmarks were previously invisible in their space, and deleting them could drive recorded disk usage negative.
 - **Result recording**: A write refused because another writer already recorded a result is now distinguished from a write that failed, so a finished pair releases its container and an unfinished one stays discoverable.
 - **Job pair locking**: Normalized job pair lock ordering and repaired stored procedures that returned only the first matching row.
+- **Benchmark upload quota reporting**: A user who has merely run out of disk quota is no longer told their archive is a zip bomb. The remaining quota was passed in as the anti-zip-bomb uncompressed-size cap, so the refusal was reported as "Archive exceeds safety limits" with the user's own remaining quota as the limit. The quota is now enforced as a limit of its own alongside that cap, and reported without the security wording and with the remedy named.
+- **Kubernetes execution identity**: Execution callbacks are now fenced by concrete Job identity, including the Kubernetes Job UID. The legacy execution id is allocated from an in-memory counter that restarts at 1 in every application lifetime while durable `sge_id` values survive, so one integer could name two different Jobs; stale cancellation and monitor state keyed on that integer discarded a live Job's running and completion callbacks, and the pair's result was never ingested. Cancellation and monitor state no longer alias on the execution id alone, Pod observations distinguish different Job UIDs rather than merging on the `exec-id` label, and a stale or superseded callback can no longer publish against a newer execution's pair or read its artifacts.
 
 ### Security
 - **Servlet authorization**: Corrected authorization checks that reported a failure without returning, so the privileged work ran anyway. The most serious allowed any authenticated user to rewrite the queue-to-community access list.
 - **StarDev transfer**: A failed StarDev login now stops the transfer instead of continuing on a connection that never authenticated.
+- **Upload path disclosure**: The user-facing upload failure, timeout and cancellation messages named the archive's absolute server path. They now name only the file, and the path is logged for administrators.
+- **Container package freshness**: Container builds now invalidate the Alpine package-refresh layer per build, so Docker/GHA layer caching cannot indefinitely replay stale OS packages despite `apk upgrade --no-cache` — `--no-cache` is apk's index cache, not Docker's layer cache, and the layer's key does not change when Alpine publishes a security update. Under the existing scan policy the baseline moved from `util-linux 2.42.1-r0` with 203 HIGH findings to the patched `2.42.3-r1` with zero HIGH or CRITICAL findings. The scan configuration itself is unchanged.
 - **Build provenance**: The runsolver binary is now compiled from the source vendored in this repository. It was previously downloaded from an external host at image build time with no checksum or pinned digest, so the instrument every recorded measurement comes from is now reproducible from the tree it was audited against.
 
 ## [2.5.1] - 2026-08-03
+
+> **Never published.** This version was prepared and versioned in source and an
+> annotated tag existed only in a local clone; it was never pushed to `origin` and no
+> GitHub Release was ever created for it. Its changes ship publicly for the first time
+> as part of [2.6.0].
 
 ### Fixed
 - **Description validation**: Primitive descriptions now consistently accept `+` and `-` across server, client, XML schema, and import paths, including URL-like scientific metadata.
@@ -43,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Description hardening**: Added pre-write import validation, contextual output encoding, bounded no-follow filesystem reads, and raw-description log redaction while retaining the legacy safety blacklist.
 
 ## [2.5.0] - 2026-07-29
+
+> **Never published.** This version was prepared and versioned in source and an
+> annotated tag existed only in a local clone; it was never pushed to `origin` and no
+> GitHub Release was ever created for it. Its changes ship publicly for the first time
+> as part of [2.6.0].
 
 ### Added
 - **Upload extraction controls**: Added `STAREXEC_UPLOAD_EXTRACTION_TIMEOUT_SECONDS` and `STAREXEC_UPLOAD_EXTRACTION_MAX_UNCOMPRESSED_BYTES` for resumable benchmark upload extraction tuning and safety enforcement.
@@ -414,9 +433,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Cluster MachineSpecs and overrides configuration for reproducible builds.
 - Initial implementation of the user Trash Bin/Recycle logic.
 
-[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.5.1...HEAD
-[2.5.1]: https://github.com/StarExecMiami/StarExec/compare/v2.5.0...v2.5.1
-[2.5.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.5.0
+[Unreleased]: https://github.com/StarExecMiami/StarExec/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/StarExecMiami/StarExec/compare/v2.4.0...v2.6.0
+[2.5.1]: https://github.com/StarExecMiami/StarExec/commit/443f935565501ea350488f4ef79ddcdd56cacfa3
+[2.5.0]: https://github.com/StarExecMiami/StarExec/commit/467c5558afb770c8022521363f0b8b40b4890437
 [2.4.0]: https://github.com/StarExecMiami/StarExec/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/StarExecMiami/StarExec/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/StarExecMiami/StarExec/compare/v2.1.0...v2.2.0

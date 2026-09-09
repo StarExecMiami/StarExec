@@ -327,7 +327,7 @@ build-fresh:
 build-prod:
 	@echo "Building production image"
 	@IMAGE_REGISTRY=$${IMAGE_REGISTRY:-ghcr.io/starExecmiami}; \
-	IMAGE_VERSION=$${IMAGE_VERSION:-2.5.1}; \
+	IMAGE_VERSION=$${IMAGE_VERSION:-2.6.0}; \
 	$(PODMAN_CMD) build $(PODMAN_CGROUP_FLAG) --pull=missing -t $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION -t $$IMAGE_REGISTRY/starexec:latest .
 	@echo "${GREEN}✓ Production image built successfully ${RESET}"
 	@echo "  Image: $$IMAGE_REGISTRY/starexec:$$IMAGE_VERSION"

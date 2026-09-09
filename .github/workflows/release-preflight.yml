@@ -1,0 +1,211 @@
+# =============================================================================
+# GitHub Actions Workflow: Release Preflight
+# =============================================================================
+#
+# Every guard that protects a release runs only ON THE TAG, which is the one
+# moment when finding a defect is most expensive: the tag exists, it is public,
+# and the fix is a new version rather than another commit on the branch.
+#
+# This workflow runs those same guards on the pull request instead, against a
+# synthetic v2.6.0, so a broken version bump, missing release note, malformed
+# image-tag rule, or dropped chart version is caught while it is still just a
+# diff.
+#
+# It is READ-ONLY BY CONSTRUCTION:
+#   * permissions: contents: read, and no job overrides it;
+#   * no publishing action appears anywhere in the file;
+#   * the Helm work happens in scratch space and is never deployed.
+# scripts/check-workflow-security.py asserts all three, and also asserts that
+# every guard listed below is still invoked -- deleting a step from this file
+# fails that check rather than quietly shrinking the preflight.
+#
+# Each guard is its own named step. One aggregate "run all checks" step would
+# report a single red X and force whoever is on the PR to read raw logs to find
+# out which property broke.
+# =============================================================================
+
+name: Release Preflight
+
+on:
+  pull_request:
+    branches:
+      - containerised
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-preflight.yml"
+      - ".github/workflows/container-publish.yml"
+      - ".github/workflows/job-runner-publish.yml"
+      - ".github/workflows/helm-repo.yml"
+      - "scripts/check-release-*.sh"
+      - "scripts/check-helm-*"
+      - "scripts/check-image-metadata.py"
+      - "scripts/check-job-runner-isolation.py"
+      - "scripts/check-workflow-security.py"
+      - "scripts/check-chart-image-reference.py"
+      - "scripts/validate-release-tag.sh"
+      - "scripts/helm-repo-prepare.sh"
+      - "scripts/test-helm-repo-fetch.py"
+      - "docs/release-notes/**"
+      - "charts/starexec/Chart.yaml"
+      - "CHANGELOG.md"
+      - "pom.xml"
+      - "starexec-app/pom.xml"
+      - "Makefile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The version this branch is preparing. Used as a synthetic tag so the
+  # tag-only guards can run without a tag existing.
+  PREFLIGHT_TAG: v2.6.0
+
+jobs:
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.1
+
+      - name: Install Python dependencies
+        run: python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+
+      # ---- 1. Workflow structure: refs-as-data, permissions, coverage ----
+      - name: Workflow security and preflight coverage
+        run: ./scripts/check-workflow-security.py
+
+      # ---- 2. Tag handling -----------------------------------------------
+      - name: Strict tag validation accepts the release tag
+        env:
+          RELEASE_TAG: ${{ env.PREFLIGHT_TAG }}
+        run: ./scripts/validate-release-tag.sh
+
+      - name: Hostile refs are rejected and never executed
+        run: ./scripts/check-release-tag-safety.sh
+
+      # ---- 3. Version alignment ------------------------------------------
+      - name: Tag, POM, module, parent, Makefile and chart versions agree
+        env:
+          RELEASE_TAG: ${{ env.PREFLIGHT_TAG }}
+        run: |
+          ./scripts/check-release-version.sh "$RELEASE_TAG"
+
+          version="${RELEASE_TAG#v}"
+          echo "--- Makefile ---"
+          # The recipe escapes the shell expansion for Make, so the file really
+          # contains $${IMAGE_VERSION:-...}. Informational only: `|| true` keeps
+          # a non-matching grep from aborting the step under `bash -e` and
+          # masking the assertion that follows.
+          grep -n "IMAGE_VERSION:-" Makefile || true
+          grep -q "IMAGE_VERSION:-${version}}" Makefile \
+            || { echo "Makefile IMAGE_VERSION default is not ${version}" >&2; exit 1; }
+          echo "Makefile default image version is ${version}"
+
+          echo "--- chart ---"
+          chart_app="$(python3 -c "import yaml;print(yaml.safe_load(open('charts/starexec/Chart.yaml'))['appVersion'])")"
+          chart_ver="$(python3 -c "import yaml;print(yaml.safe_load(open('charts/starexec/Chart.yaml'))['version'])")"
+          echo "chart version=${chart_ver} appVersion=${chart_app}"
+          [ "$chart_app" = "$version" ] \
+            || { echo "chart appVersion ${chart_app} != ${version}" >&2; exit 1; }
+
+          echo "--- credential handler is excluded on purpose ---"
+          grep -n "<version>" tomcat-credential-handler/pom.xml | head -3 || true
+          echo "tomcat-credential-handler is independently versioned and not in the reactor"
+
+      # ---- 4. Release notes ----------------------------------------------
+      - name: Release notes are cumulative and prospective about images
+        env:
+          RELEASE_TAG: ${{ env.PREFLIGHT_TAG }}
+        run: ./scripts/check-release-notes.sh "docs/release-notes/${RELEASE_TAG}.md"
+
+      # ---- 5. Artifacts ---------------------------------------------------
+      - name: Build release artifacts
+        run: mvn -B -DskipTests package -pl starexec-app
+
+      - name: Artifacts exist, are non-empty, and hash deterministically
+        run: ./scripts/check-release-assets.sh starexec-app/target
+
+      - name: CLI distribution contains StarexecCommand.jar
+        run: |
+          unzip -l starexec-app/target/starexeccommand.zip | tee /tmp/zip.txt
+          grep -q "StarexecCommand.jar" /tmp/zip.txt \
+            || { echo "starexeccommand.zip does not contain StarexecCommand.jar" >&2; exit 1; }
+          echo "StarexecCommand.jar present"
+
+      # ---- 6. Image publication rules -------------------------------------
+      - name: Application-image tags for branch, PR and version events
+        run: ./scripts/check-image-metadata.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: An application release cannot publish job-runner images
+        run: ./scripts/check-job-runner-isolation.py
+
+      # ---- 7. Helm ---------------------------------------------------------
+      - name: Chart lints and every CI profile renders
+        run: |
+          helm lint charts/starexec
+          for v in values.yaml values-kubernetes.yaml values-microk8s.yaml values-auto-detected.yaml; do
+            echo "--- rendering charts/starexec/$v ---"
+            helm template starexec charts/starexec -n starexec \
+              -f "charts/starexec/$v" \
+              --set postgres.allowInsecureDevCredentials=true \
+              --set postgres.password=preflight \
+              --set postgres.rootPassword=preflight > /dev/null
+            echo "ok: $v"
+          done
+
+      - name: Every container declares quota-satisfying resources
+        run: ./scripts/check-chart-quota-resources.py
+
+      - name: appVersion does not force the container image tag
+        run: ./scripts/check-chart-image-reference.py
+
+      # Deterministic failure modes, driven against a local HTTP fixture. This is
+      # separate from the live proof below on purpose: this one must be able to
+      # fail the PR without depending on the public repository being reachable,
+      # and it exercises the paths a healthy network never produces.
+      - name: Test Helm repository fetch failure handling
+        run: ./scripts/test-helm-repo-fetch.py
+
+      - name: Publishing the chart retains every published version
+        run: |
+          # Read-only against the published repository, prepared in scratch
+          # space. Nothing here deploys: no gh-pages action appears in this file.
+          SCRATCH="$(mktemp -d)"
+          ./scripts/helm-repo-prepare.sh \
+            "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" \
+            "$SCRATCH/helm-repo" \
+            "$SCRATCH/published-index.yaml"
+          ./scripts/check-helm-retention.py \
+            --repo-dir "$SCRATCH/helm-repo" \
+            --chart charts/starexec/Chart.yaml \
+            --old-index "$SCRATCH/published-index.yaml"
+
+      - name: Preflight summary
+        if: always()
+        run: |
+          {
+            echo "## Release preflight"
+            echo ""
+            echo "Synthetic tag: \`$PREFLIGHT_TAG\`"
+            echo ""
+            echo "This workflow is read-only. It publishes no release, image, or chart."
+          } >> "$GITHUB_STEP_SUMMARY"

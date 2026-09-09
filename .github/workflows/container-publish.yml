@@ -25,6 +25,9 @@ name: Container Publish
 on:
   push:
     branches: [UMprod, containerised]
+    tags:
+      # Application release tags publish versioned images (2.6.0, 2.6).
+      - "v*"
   pull_request:
     branches: [UMprod, containerised]
     paths:
@@ -73,21 +76,29 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # {{branch}} is empty on pull_request, where the ref is
-          # refs/pull/<N>/merge and there is no branch context. The two
-          # {{branch}}-prefixed sha rules therefore rendered a bare "-" prefix
-          # and produced ghcr.io/.../starexec:-<sha>, which buildx rejects as an
-          # invalid reference before the build starts. They were also duplicates
-          # of each other: format=short is the default. One rule survives, gated
-          # to non-PR events; PRs get their own ref-derived tags below.
+          # {{branch}} is empty on any ref that is not a branch -- both
+          # pull_request (refs/pull/<N>/merge) and tag pushes (refs/tags/<t>).
+          # It then renders a bare "-" prefix, producing
+          # ghcr.io/.../starexec:-<sha>, which buildx rejects as an invalid
+          # reference before the build starts. The guard is therefore
+          # startsWith(github.ref, 'refs/heads/'), not "not a pull request":
+          # the latter still breaks on a tag push.
+          #
+          # flavor latest=false is required. metadata-action defaults to
+          # latest=auto, which silently adds :latest to any semver tag; the
+          # policy here is that :latest tracks the containerised branch head and
+          # is NOT moved by a release tag. Pin 2.6.0 or a digest for
+          # reproducible deployments.
+          flavor: |
+            latest=false
           tags: |
             type=sha,prefix=sha-,format=long
-            type=sha,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' }}
+            type=sha,prefix={{branch}}-,enable=${{ startsWith(github.ref, 'refs/heads/') }}
             type=ref,event=branch
             type=ref,event=pr
             type=ref,event=pr,suffix=-{{sha}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/containerised' }}
 
       - name: Capture build timestamp
