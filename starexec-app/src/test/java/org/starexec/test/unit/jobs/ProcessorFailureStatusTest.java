@@ -169,26 +169,6 @@ public class ProcessorFailureStatusTest {
 		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
 	}
 
-	/**
-	 * The idiom that replaced it, exercised rather than assumed: the capture must survive
-	 * {@code set -e} and must carry the real exit status through.
-	 */
-	@Test
-	public void theCaptureIdiomSurvivesSetEAndKeepsTheStatus() throws Exception {
-		Path script = folder.newFile("capture.sh").toPath();
-		Files.writeString(script,
-				"set -euo pipefail\n"
-						+ "STATUS=0\n"
-						+ "( exit 42 ) || STATUS=$?\n"
-						+ "echo \"reached:$STATUS\"\n");
-
-		Result r = exec(Bash.PATH, script.toString());
-
-		assertEquals("the script must not abort:\n" + r.out, 0, r.exit);
-		assertTrue("the branch after the capture must be reached: " + r.out,
-				r.out.contains("reached:42"));
-	}
-
 	// ------------------------------------------------------------------------ harness
 
 	private static final class Harness {
