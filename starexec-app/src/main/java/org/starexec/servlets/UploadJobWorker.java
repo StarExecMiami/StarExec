@@ -652,8 +652,8 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
                         lastCommittedPath,
                         filesProcessed > 0 ? filesProcessed - 1 : null
                     );
-                    // Also touch the job to update last_heartbeat
-                    UploadJobQueue.touchJob(job.getId());
+                    // No touchJob here: update_upload_job_progress already sets
+                    // last_heartbeat, so a second call would repeat the write it just did.
                 }
             }
             
