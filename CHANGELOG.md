@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
 
 ### Fixed
+- **Result ingestion**: Reading a pair's per-stage snapshots no longer validates the stage still running. The stage a pair is currently executing legitimately reads `STATUS_RUNNING`, and rejecting it marked the pair permanently un-ingestible, so whether a completed run was recorded at all depended on whether a poll arrived before or after the stage finished. Stages the pair has already passed are still validated unchanged, and the running stage's record is now excluded from the result rather than returned unchecked, so it cannot be ingested.
 - **Disk accounting**: Recording runsolver statistics is now idempotent. Repeated calls previously added the reported figure to user and job totals each time while overwriting the stage row, leaving a surplus that no refund could reclaim.
 - **Space hierarchy**: Moving a space into itself or into one of its own descendants is now rejected, preventing a space from becoming its own ancestor.
 - **Benchmark uploads**: The asynchronous upload path now satisfies the same invariants as the synchronous one, creating the space association and charging disk usage. Uploaded benchmarks were previously invisible in their space, and deleting them could drive recorded disk usage negative.

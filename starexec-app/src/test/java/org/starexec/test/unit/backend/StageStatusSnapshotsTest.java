@@ -195,6 +195,104 @@ public class StageStatusSnapshotsTest {
 		assertRefused(out, "claims pair");
 	}
 
+	// ------------------------------------------------ the stage that has not finished yet
+	//
+	// The producer writes a stage's snapshot when the stage STARTS, with STATUS_RUNNING, and
+	// again when it ends. Validating the running stage made ingestion depend on whether a poll
+	// landed before or after the second write -- and because the refusal is classified as a
+	// permanent artifact defect, a pair that went on to finish cleanly was never re-read.
+	//
+	// The bound is what separates "a property of the bytes" from "a property of the moment".
+
+	@Test
+	public void theStageStillRunningIsNeitherReturnedNorRefused() throws Exception {
+		Path out = folder.newFolder("in-flight").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
+
+		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 1);
+
+		assertTrue("the running stage must not be returned", read.isEmpty());
+	}
+
+	/**
+	 * The counterpart, and the reason the bound is safe: a running stage is skipped before any of
+	 * its content is read, so nothing it contains can decide the pair's fate. Without this a
+	 * half-written or garbage snapshot for the stage in flight would still wedge the pair.
+	 */
+	@Test
+	public void nothingInTheRunningStagesRecordCanBlockThePair() throws Exception {
+		Path out = folder.newFolder("in-flight-garbage").toPath();
+		Path dir = out.resolve("stage-status");
+		Files.createDirectories(dir);
+		Files.writeString(dir.resolve("1.json"), "{ this is not json");
+
+		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 1);
+
+		assertTrue(read.isEmpty());
+	}
+
+	/**
+	 * Excluding rather than returning-unchecked is what keeps the laundering guarantee. 22 is
+	 * never handed to a caller, so a caller that forgets to filter still cannot ingest it.
+	 */
+	@Test
+	public void theRunningStageCannotLaunderItsOwnStatus() throws Exception {
+		Path out = folder.newFolder("in-flight-launder").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
+
+		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 1);
+
+		assertTrue("STATUS_PROCESSING must never reach a caller", read.isEmpty());
+	}
+
+	// --------------------------------------- and the protection that must NOT be weakened
+
+	/** An earlier stage is one the pair has moved past, so its status is final and is checked. */
+	@Test
+	public void anEarlierStagesNonTerminalStatusIsStillRefused() throws Exception {
+		Path out = folder.newFolder("earlier-owed").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
+
+		// Stage 2 is the one in flight and is skipped; stage 1 is behind the pair and is not.
+		assertRefused(out, 2, "carries status 22");
+	}
+
+	/** Structural defects in an earlier stage are still deterministic, and still refused. */
+	@Test
+	public void anEarlierStagesMalformedRecordIsStillRefused() throws Exception {
+		Path out = folder.newFolder("earlier-malformed").toPath();
+		Path dir = out.resolve("stage-status");
+		Files.createDirectories(dir);
+		Files.writeString(dir.resolve("1.json"), "{ this is not json");
+
+		assertRefused(out, 2, "malformed stage snapshot");
+	}
+
+	@Test
+	public void everyStageBeforeTheBoundIsStillReturned() throws Exception {
+		Path out = folder.newFolder("bounded-happy").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		write(out, 2, PAIR, 2, StatusCode.EXCEED_CPU.getVal());
+		write(out, 3, PAIR, 3, StatusCode.STATUS_RUNNING.getVal());
+
+		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 3);
+
+		assertEquals("[1, 2]", read.keySet().toString());
+		assertEquals(Integer.valueOf(StatusCode.STATUS_COMPLETE.getVal()), read.get(1));
+		assertEquals(Integer.valueOf(StatusCode.EXCEED_CPU.getVal()), read.get(2));
+	}
+
+	/** The two-argument overload is the bounded read with no stage in flight. */
+	@Test
+	public void theUnboundedOverloadValidatesEveryStage() throws Exception {
+		Path out = folder.newFolder("equivalence").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_PROCESSING.getVal());
+
+		assertRefused(out, Integer.MAX_VALUE, "carries status 22");
+		assertRefused(out, "carries status 22");
+	}
+
 	// ------------------------------------------------------------------------- harness
 
 	private static void write(Path outputDir, int fileStage, int pairId, int recordStage, int status)
@@ -209,6 +307,17 @@ public class StageStatusSnapshotsTest {
 	private static void assertRefused(Path outputDir, String expectedReason) throws Exception {
 		try {
 			StageStatusSnapshots.read(outputDir, PAIR);
+			fail("expected refusal mentioning: " + expectedReason);
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			assertTrue("wrong refusal: " + expected.getMessage(),
+					expected.getMessage().contains(expectedReason));
+		}
+	}
+
+	private static void assertRefused(Path outputDir, int terminalStage, String expectedReason)
+			throws Exception {
+		try {
+			StageStatusSnapshots.read(outputDir, PAIR, terminalStage);
 			fail("expected refusal mentioning: " + expectedReason);
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
 			assertTrue("wrong refusal: " + expected.getMessage(),

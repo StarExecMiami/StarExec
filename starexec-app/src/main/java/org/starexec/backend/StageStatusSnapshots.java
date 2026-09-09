@@ -107,6 +107,65 @@ public final class StageStatusSnapshots {
     public static Map<Integer, Integer> read(Path outputDir, int expectedPairId)
         throws InvalidSnapshotException, IOException {
 
+        return read(outputDir, expectedPairId, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Reads and validates the per-stage records for one pair, up to but excluding the stage the
+     * caller is currently resolving.
+     *
+     * <h2>Why a stage bound is part of the read</h2>
+     *
+     * <p>The producer writes a stage's snapshot twice: {@code STATUS_RUNNING} when the stage
+     * starts ({@code functions.bash} {@code sendNode}) and its real outcome when the stage ends.
+     * Between those two writes the file legitimately holds a non-terminal status, and a pair
+     * killed mid-stage legitimately leaves it that way for good.
+     *
+     * <p>The two-argument overload validates every snapshot it finds, which is correct only once
+     * no stage is still in flight. Applied to a running pair it rejects the pair's own current
+     * stage, and because an {@link InvalidSnapshotException} is classified as a deterministic
+     * artifact defect -- the same bytes failing the same check forever -- the caller holds the
+     * pair for intervention and never looks again. The pair then finishes cleanly, its evidence
+     * becomes consistent, and nothing re-reads it. That is a completed run lost to a poll that
+     * arrived a second early.
+     *
+     * <p>So the bound is what makes the deterministic classification honest. Every check this
+     * class applies to a returned record is a property of the bytes: a malformed record, an
+     * oversized one, a name disagreeing with its contents, a record naming another pair. Those
+     * never become valid by waiting. Terminality is the one rule that depends on when the file is
+     * read, and it is applied only where it cannot depend on timing -- to stages the caller has
+     * already moved past.
+     *
+     * <h2>Why excluding rather than merely not checking</h2>
+     *
+     * <p>Stages at or after {@code terminalStage} are left out of the result entirely rather than
+     * returned unchecked. The directory is writable by solver code, and the status-laundering this
+     * class exists to prevent needs only for an unvalidated status to reach a caller that ingests
+     * it. A value that is never returned cannot be ingested by a caller that forgets to filter,
+     * so the guarantee holds here instead of resting on every caller repeating it.
+     *
+     * <p>The terminal stage's own status is not this class's to supply in any case: it comes from
+     * {@code status.json} and the runsolver artifacts, which is why both callers already discard
+     * it.
+     *
+     * @param outputDir      as above
+     * @param expectedPairId as above
+     * @param terminalStage  the stage the caller is resolving from other evidence. Records for
+     *                       this stage and later are neither returned nor checked for terminality.
+     *                       Pass {@link Integer#MAX_VALUE} to validate every stage, which is what
+     *                       the two-argument overload does.
+     * @return stage number to status code, in stage order, for stages before {@code terminalStage}
+     * @throws InvalidSnapshotException when a returned record is malformed, oversized,
+     *         inconsistent with its own file name, names a different pair, or carries a status
+     *         that is not a terminal execution result
+     * @throws IOException when the directory cannot be read
+     */
+    public static Map<Integer, Integer> read(
+        Path outputDir,
+        int expectedPairId,
+        int terminalStage
+    ) throws InvalidSnapshotException, IOException {
+
         if (outputDir == null) {
             return Collections.emptyMap();
         }
@@ -148,6 +207,15 @@ public final class StageStatusSnapshots {
                         entry + " is named for a stage number that is not a usable integer",
                         impossible
                     );
+                }
+
+                if (stageFromName >= terminalStage) {
+                    // The stage the caller is still resolving, or one after it. Skipped before any
+                    // content is read, not merely left unvalidated: while a stage runs, its
+                    // snapshot is rewritten, so every property of the bytes -- shape, size, the
+                    // status inside -- is provisional. Reading them here would let the timing of a
+                    // poll decide whether the pair is refused, and a refusal is permanent.
+                    continue;
                 }
 
                 long size = Files.size(entry);

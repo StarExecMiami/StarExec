@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -16,6 +17,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.starexec.backend.LocalJobMonitor;
+import org.starexec.backend.StageStatusSnapshots;
 
 /**
  * Tests for the ways LocalJobMonitor could strand or misreport a job pair.
@@ -513,5 +515,90 @@ public class LocalJobMonitorTests {
             -1,
             recordParseFailure(45, runN)
         );
+    }
+
+    // ------------------------------------------------------------------
+    // A stage that is still running must not strand the pair.
+    //
+    // status.json exists from the first moment of a run -- sendNode writes STATUS_RUNNING into
+    // it -- so the poll loop calls into ingestion against a pair that has not finished. The
+    // stage's own snapshot legitimately reads STATUS_RUNNING at that point. Validating it threw
+    // InvalidSnapshotException, which IngestionOutcome classifies as BLOCKED, and BLOCKED is
+    // permanent: the pair was never re-read, even though it went on to finish cleanly a second
+    // later and its evidence became consistent.
+    //
+    // These assert on the throw rather than on a flag because the throw IS the mechanism: it is
+    // the only thing that reaches recordIngestionFailure and sets ingestionBlocked.
+    // ------------------------------------------------------------------
+
+    private void ingestEarlierStageStatuses(
+        int pairId, Object state, Path outputDir, int terminalStage) throws Exception {
+        for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
+            if (m.getName().equals("ingestEarlierStageStatuses")) {
+                m.setAccessible(true);
+                try {
+                    m.invoke(monitor, pairId, state, outputDir, terminalStage);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw (Exception) e.getCause();
+                }
+                return;
+            }
+        }
+        throw new AssertionError("no such method: ingestEarlierStageStatuses");
+    }
+
+    private Path dirWithStageSnapshot(int pairId, int stage, int status) throws Exception {
+        Path dir = Files.createTempDirectory("ljm-stage");
+        dir.toFile().deleteOnExit();
+        Path snapshots = dir.resolve("stage-status");
+        Files.createDirectories(snapshots);
+        Files.writeString(
+            snapshots.resolve(stage + ".json"),
+            "{\"pairId\":" + pairId + ",\"status\":" + status
+                + ",\"stageNumber\":" + stage + ",\"timestamp\":1788988692}\n");
+        return dir;
+    }
+
+    @Test
+    public void aStageStillRunningDoesNotBlockIngestion() throws Exception {
+        // 4 is STATUS_RUNNING: what sendNode writes when the stage starts.
+        Path dir = dirWithStageSnapshot(46, 1, 4);
+        monitor.registerJob(dir.toString(), 46);
+
+        // 0 is the stage number status.json carries while the pair runs, because sendNode calls
+        // sendStatus with no stage argument. Nothing is behind the pair yet.
+        ingestEarlierStageStatuses(46, stateFor(46), dir, 0);
+    }
+
+    @Test
+    public void aPairThatFinishedIngestsTheStagesBehindIt() throws Exception {
+        Path dir = dirWithStageSnapshot(47, 1, 4);
+        monitor.registerJob(dir.toString(), 47);
+
+        // Single-stage pair reporting stage 1: stage 1 is the terminal stage, so there is nothing
+        // earlier to record and the runsolver artifacts supply its status. This must not throw
+        // even though the snapshot beside it still reads STATUS_RUNNING.
+        ingestEarlierStageStatuses(47, stateFor(47), dir, 1);
+    }
+
+    /**
+     * The control. Once the pair has moved past a stage, that stage's status is final, and a
+     * non-terminal one is still a refusal -- otherwise the fix would have opened the
+     * status-laundering path the snapshot rules exist to close.
+     */
+    @Test
+    public void aStageThePairMovedPastIsStillValidated() throws Exception {
+        // 22 is STATUS_PROCESSING, the value the periodic post-processor promotes to COMPLETE.
+        Path dir = dirWithStageSnapshot(48, 1, 22);
+        monitor.registerJob(dir.toString(), 48);
+
+        try {
+            ingestEarlierStageStatuses(48, stateFor(48), dir, 2);
+            fail("a non-terminal status on a stage the pair has passed must be refused");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            assertTrue(
+                "wrong refusal: " + expected.getMessage(),
+                expected.getMessage().contains("carries status 22"));
+        }
     }
 }
