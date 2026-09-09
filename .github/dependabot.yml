@@ -1,0 +1,143 @@
+# Dependency updates for StarExec.
+#
+# target-branch is set on every entry because this repository's default branch is UMprod,
+# while active development happens on containerised. Without it Dependabot would open its
+# pull requests against a branch nobody merges into.
+#
+# Schedules are staggered across the week and off the hour so the updates do not all land
+# at once, and so they miss the Monday 06:00 UTC run of security-scan.yml.
+#
+# Note on what this file does and does not cover: these are scheduled *version* updates.
+# Dependabot *security* updates -- the ones that would have caught GHSA-2883-xcg3-v3hh in
+# js-yaml before it turned CI red -- additionally require Dependabot alerts to be enabled
+# in the repository settings, which is not a change this file can make.
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions. Every workflow pins actions by commit SHA with a version
+  # comment; Dependabot understands that form and keeps both in step.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:13"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # ---------------------------------------------------------------------------
+  # Maven. Three poms, and they are not one reactor: the root builds only
+  # starexec-app, while tomcat-credential-handler is built from its own directory
+  # and copied into the image. Each therefore needs its own entry.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: maven
+    directory: /
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "06:17"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      maven-root:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: maven
+    directory: /starexec-app
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "06:23"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      starexec-app:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: maven
+    directory: /tomcat-credential-handler
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "06:29"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+
+  # ---------------------------------------------------------------------------
+  # npm. Build-only tooling for the web assets; nothing here ships in the WAR.
+  # Vulnerable transitives in this tree have historically been pinned through the
+  # "overrides" block in package.json rather than by bumping the direct dependency.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: thursday
+      time: "06:19"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      build-tooling:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # ---------------------------------------------------------------------------
+  # Container base images.
+  #
+  # Read the job-runner one carefully before merging. The six compute workers are
+  # isolated from the public registry and hold the job-runner image by digest, so
+  # rebuilding it produces a digest they do not have. Merging a base-image bump
+  # here means the new image must be side-loaded onto every worker and the pin in
+  # charts/starexec/values-prod.yaml updated to match, or solver pods will fail to
+  # start. These pull requests are worth having -- base images carry real CVEs --
+  # but they are not routine merges.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: thursday
+      time: "06:31"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+
+  - package-ecosystem: docker
+    directory: /docker
+    target-branch: containerised
+    schedule:
+      interval: weekly
+      day: thursday
+      time: "06:37"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    labels:
+      - dependencies
+      - needs-worker-reprovision
