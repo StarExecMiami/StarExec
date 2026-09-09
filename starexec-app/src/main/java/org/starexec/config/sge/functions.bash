@@ -890,6 +890,10 @@ function sendNode {
 
 function limitExceeded {
 	log "job error: $1 limit exceeded, job terminated"
+	# Claimed before exiting so the EXIT trap leaves this status alone. Without it the
+	# trap's fail-closed ERROR_BENCHMARK overwrote the limit that was actually breached,
+	# reporting a file-write limit as a missing benchmark.
+	STATUS_SENT=true
 	sendStatus $2
 	exit 1
 }
@@ -1126,12 +1130,26 @@ function copyOutput {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "post processor error: no recognized script found"
+			STATUS_SENT=true
 			sendStatus "$ERROR_POST_PROCESSOR"
 			exit 1
 		fi
-		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt
-		if (( $? != 0 )); then
-			log "post processor timeout"
+		# `|| POST_PROC_STATUS=$?` rather than testing $? on the next line: this runs under
+		# `set -e`, so a failing post processor aborted the script here and the check below
+		# was never reached. The EXIT trap then filed the run as ERROR_BENCHMARK, naming the
+		# benchmark for a post-processor fault.
+		local POST_PROC_STATUS=0
+		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt || POST_PROC_STATUS=$?
+		if [ "$POST_PROC_STATUS" -ne 0 ]; then
+			# 124 is what `timeout` reports when it had to kill the command; any other
+			# non-zero status is the post processor's own. They were both logged as a
+			# timeout, which sent whoever read the log looking for the wrong fault.
+			if [ "$POST_PROC_STATUS" -eq 124 ]; then
+				log "post processor exceeded its time limit of $POST_PROCESSOR_TIME_LIMIT minutes"
+			else
+				log "post processor failed with exit status $POST_PROC_STATUS"
+			fi
+			STATUS_SENT=true
 			sendStatus "$ERROR_POST_PROCESSOR"
 			sendStatusToLaterStages "$ERROR_POST_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
@@ -1387,12 +1405,22 @@ function copyDependencies {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "pre processor error: no recognized script found"
+			STATUS_SENT=true
 			sendStatus "$ERROR_PRE_PROCESSOR"
 			exit 1
 		fi
-		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH"
-		if (( $? != 0 )); then
-			log "pre processor timeout"
+		# See the matching note in the post-processor path: under `set -e` a failing pre
+		# processor aborted before the check below could run, and the EXIT trap reported
+		# ERROR_BENCHMARK instead.
+		local PRE_PROC_STATUS=0
+		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH" || PRE_PROC_STATUS=$?
+		if [ "$PRE_PROC_STATUS" -ne 0 ]; then
+			if [ "$PRE_PROC_STATUS" -eq 124 ]; then
+				log "pre processor exceeded its time limit of $PRE_PROCESSOR_TIME_LIMIT minutes"
+			else
+				log "pre processor failed with exit status $PRE_PROC_STATUS"
+			fi
+			STATUS_SENT=true
 			sendStatus "$ERROR_PRE_PROCESSOR"
 			sendStatusToLaterStages "$ERROR_PRE_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
