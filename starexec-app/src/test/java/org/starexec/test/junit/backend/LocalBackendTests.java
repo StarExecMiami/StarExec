@@ -228,6 +228,17 @@ public class LocalBackendTests {
      */
     @Test
     public void aPartiallyWrittenStatusFileIsNotAResult() throws Exception {
+        // The case that discriminates: the status field is complete, so a regex matches it and
+        // reads 7 as a finished run -- but the document is not, so the write is still in
+        // progress. The old implementation returned true here and killed a live process.
+        Assert.assertFalse(
+            reportedComplete("{\"pairId\":1,\"status\":7,\"stageNum"),
+            "a complete status field in an incomplete document is not a result");
+        Assert.assertFalse(
+            reportedComplete("{\"pairId\":1,\"status\":14,\"stageNumber\":1,\"timesta"),
+            "truncated in a later field is still an incomplete document");
+
+        // These were already refused before the change; kept so the whole shape is covered.
         Assert.assertFalse(reportedComplete("{\"pairId\":1,\"stat"), "truncated before the field");
         Assert.assertFalse(reportedComplete("{\"pairId\":1,\"status\":1"), "truncated mid-number");
         Assert.assertFalse(reportedComplete("{ this is not json"), "malformed");
