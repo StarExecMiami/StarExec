@@ -810,25 +810,45 @@ public class LocalBackend implements Backend {
         return builder.start();
     }
 
+    /**
+     * Has the job script already reported a result the pair may be left holding?
+     *
+     * <p>A true answer kills the process on the caller's next statement, so a false positive is
+     * a live solver truncated mid-run, not a tidy-up. Both halves of the test are therefore the
+     * shared ones rather than local approximations of them.
+     *
+     * <p>Parsed with Gson because {@code status.json} is: it is written in place by the job
+     * script and a read can land mid-write, so the failure that matters is a partial document,
+     * and a regex answers that by matching whatever prefix happens to be there. Gson refuses it
+     * instead, and a refusal here means "not terminal yet", which is the safe direction.
+     *
+     * <p>Terminality is {@link StatusCode#isTerminalExecutionResult()} rather than a numeric
+     * {@code >= 7}. The two disagree on {@code STATUS_PROCESSING_RESULTS(19)},
+     * {@code STATUS_PAUSED(20)}, {@code STATUS_PROCESSING(22)} and every code above the highest
+     * defined one -- all of which mean work is still owed. The job script does not currently
+     * emit any of them, so this changes no behaviour today; it stops the safety of this path
+     * depending on that remaining true, which nothing tests and no comment recorded. An
+     * unrecognised code resolves to {@code STATUS_UNKNOWN(0)}, which is not terminal, so the
+     * process is left alone and the existing timeout path handles it.
+     */
     private boolean isJobReportedComplete(LocalJob job) {
         try {
             File logDir = new File(job.logPath).getParentFile();
             File statusFile = new File(logDir, "status.json");
             if (statusFile.exists()) {
-                // Read file content - limited size so safe to read fully
-                String content = new String(java.nio.file.Files.readAllBytes(statusFile.toPath()));
-                // Simple regex to find status value
-                // Looks for "status": 7 or "status":7 etc.
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"status\"\\s*:\\s*(\\d+)")
-                        .matcher(content);
-                if (m.find()) {
-                    int status = Integer.parseInt(m.group(1));
-                    // Check if status is terminal (COMPLETE=7, ERROR>=8)
-                    // See org.starexec.data.to.Status.StatusCode
-                    return status >= 7;
+                // Bounded by the producer: one short JSON object, rewritten per stage.
+                String content = java.nio.file.Files.readString(statusFile.toPath());
+                com.google.gson.JsonObject record =
+                        com.google.gson.JsonParser.parseString(content).getAsJsonObject();
+                if (record.has("status") && !record.get("status").isJsonNull()) {
+                    int status = record.get("status").getAsInt();
+                    return StatusCode.toStatusCode(status).isTerminalExecutionResult();
                 }
             }
         } catch (Exception e) {
+            // Includes JsonSyntaxException and IllegalStateException from a document that is
+            // still being written. Kept broad, and kept answering false: this method's only
+            // caller reads a false as "keep waiting", which is what a half-written file means.
             log.debug("Error checking status file for zombie detection: " + e.getMessage());
         }
         return false;
