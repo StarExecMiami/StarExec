@@ -157,4 +157,92 @@ public class LocalBackendTests {
         Assert.assertEquals(queues.length, 1);
         Assert.assertEquals(queues[0], R.DEFAULT_QUEUE_NAME);
     }
+
+    // ------------------------------------------------------------------
+    // isJobReportedComplete decides whether a still-running process is a zombie, and a true
+    // answer kills it on the caller's next statement. So the question it answers must be the
+    // shared one -- StatusCode.isTerminalExecutionResult(), which the database enforces too --
+    // and not a numeric >= 7, which is also true of the three states that mean work is still
+    // owed.
+    // ------------------------------------------------------------------
+
+    /** The private nested LocalJob, built through its declared constructor. */
+    private Object localJob(Path logPath) throws Exception {
+        Class<?> type = Class.forName("org.starexec.backend.LocalBackend$LocalJob");
+        var ctor = type.getDeclaredConstructor(
+            int.class, int.class, String.class, String.class, String.class);
+        ctor.setAccessible(true);
+        return ctor.newInstance(1, 1, "script.sh", tempDir.toString(), logPath.toString());
+    }
+
+    /** Writes status.json beside a log file and asks the predicate about it. */
+    private boolean reportedComplete(String statusJson) throws Exception {
+        Path dir = Files.createTempDirectory("zombie_test");
+        dir.toFile().deleteOnExit();
+        if (statusJson != null) {
+            Files.writeString(dir.resolve("status.json"), statusJson);
+        }
+        var method = LocalBackend.class.getDeclaredMethod(
+            "isJobReportedComplete", Class.forName("org.starexec.backend.LocalBackend$LocalJob"));
+        method.setAccessible(true);
+        return (Boolean) method.invoke(backend, localJob(dir.resolve("job.log")));
+    }
+
+    private static String status(int code) {
+        return "{\"pairId\":1,\"status\":" + code + ",\"stageNumber\":1,\"timestamp\":1788988692}";
+    }
+
+    /** Everything the job script can actually emit, both directions. */
+    @Test
+    public void everyStatusTheJobScriptEmitsIsClassifiedCorrectly() throws Exception {
+        // STATUS_RUNNING: the pair is alive and must not be killed.
+        Assert.assertFalse(reportedComplete(status(4)), "STATUS_RUNNING is not a result");
+
+        // The results a pair may be left holding.
+        for (int terminal : new int[]{7, 11, 12, 13, 14, 15, 16, 17, 18, 24, 25, 26}) {
+            Assert.assertTrue(reportedComplete(status(terminal)), terminal + " is a result");
+        }
+    }
+
+    /**
+     * The boundary. A numeric {@code >= 7} calls all three of these complete, and each means
+     * work is still owed -- so the process would be killed while it was still doing that work.
+     */
+    @Test
+    public void theStatesThatMeanWorkIsStillOwedAreNotResults() throws Exception {
+        Assert.assertFalse(reportedComplete(status(19)), "STATUS_PROCESSING_RESULTS");
+        Assert.assertFalse(reportedComplete(status(20)), "STATUS_PAUSED");
+        Assert.assertFalse(reportedComplete(status(22)), "STATUS_PROCESSING");
+    }
+
+    /** An unrecognised code resolves to STATUS_UNKNOWN, which is not a result. */
+    @Test
+    public void anUnrecognisedStatusIsNotAResult() throws Exception {
+        Assert.assertFalse(reportedComplete(status(99)), "99 is not a defined status");
+        Assert.assertFalse(reportedComplete(status(27)), "27 is past the highest defined status");
+    }
+
+    /**
+     * status.json is written in place, so a read can land mid-write. A partial document must
+     * read as "not finished yet" rather than matching whatever prefix is present.
+     */
+    @Test
+    public void aPartiallyWrittenStatusFileIsNotAResult() throws Exception {
+        // The case that discriminates: the status field is complete, so a regex matches it and
+        // reads 7 as a finished run -- but the document is not, so the write is still in
+        // progress. The old implementation returned true here and killed a live process.
+        Assert.assertFalse(
+            reportedComplete("{\"pairId\":1,\"status\":7,\"stageNum"),
+            "a complete status field in an incomplete document is not a result");
+        Assert.assertFalse(
+            reportedComplete("{\"pairId\":1,\"status\":14,\"stageNumber\":1,\"timesta"),
+            "truncated in a later field is still an incomplete document");
+
+        // These were already refused before the change; kept so the whole shape is covered.
+        Assert.assertFalse(reportedComplete("{\"pairId\":1,\"stat"), "truncated before the field");
+        Assert.assertFalse(reportedComplete("{\"pairId\":1,\"status\":1"), "truncated mid-number");
+        Assert.assertFalse(reportedComplete("{ this is not json"), "malformed");
+        Assert.assertFalse(reportedComplete("{\"pairId\":1}"), "no status field");
+        Assert.assertFalse(reportedComplete(null), "no status.json at all");
+    }
 }
