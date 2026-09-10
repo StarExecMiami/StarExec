@@ -540,10 +540,71 @@ function initSandbox {
 			CORES="0"
 			log "Container mode: cannot determine allowed CPUs; falling back to $CORES"
 		fi
-		WORKING_DIR=$WORKING_DIR_BASE'/sandbox'
+		# One workspace per execution attempt.
+		#
+		# initWorkspaceVariables derives every execution path from WORKING_DIR -- solver,
+		# benchmark, tmp, preprocessor, savedoutput, and the whole of OUT_DIR: stdout.txt,
+		# var.out, watcher.out, procBenchmark, output_files, attributes.txt. So this one
+		# name decides whether two concurrent pairs share a workspace, and it used to be
+		# the same directory for all of them.
+		#
+		# The comment above is right about containers and was wrong about `local`. Podman
+		# and Kubernetes run one pair per container and mount only the data volume, so
+		# /app/work really is private there. LocalBackend runs every pair as a process
+		# inside ONE container, so they shared /app/work/sandbox: they overwrote each
+		# other's stdout while running, and copyOutput then copied whatever was in the
+		# shared output directory into each pair's own results.
+		#
+		# solvercache lives beside sandbox rather than inside it, so it stays shared and no
+		# pair re-extracts a solver another pair had already cached. Staying shared is the
+		# intent; it is not a claim that the cache is safe from cross-pair damage, which it
+		# is not -- verifyWorkspace can evict an entry another pair is copying from.
+		#
+		# STAREXEC_JOB_ID is the backend execution id. LocalBackend allocates it so that no
+		# two RUNNING jobs hold the same one, which is the property concurrency needs.
+		# It is not unique for all time: the counter restarts with the JVM and an id is
+		# reusable once its job leaves activeJobs, which is why the directory is emptied
+		# below rather than merely created. Backends that do not set it are
+		# one-pair-per-container already, where the fallback is unique by construction.
+		if [ -z "${WORKING_DIR_BASE:-}" ]; then
+			# Guarded because a workspace path is removed below: an empty base would make
+			# that a removal at the filesystem root.
+			log "job error: WORKING_DIR_BASE is empty, so no private workspace can be located"
+			STATUS_SENT=true
+			sendStatus $ERROR_RUNSCRIPT
+			# 0, not 1, and for the same reason as the "unable to secure any sandbox" branch
+			# below: the pair's status has already been reported, and LocalBackend replaces
+			# the status of any pair whose script exits non-zero with ERROR_GENERAL. Exiting
+			# 1 here would race the monitor for which of the two the pair ends up with.
+			exit 0
+		fi
+		WORKING_DIR="$WORKING_DIR_BASE/sandbox/pair_${PAIR_ID}_exec_${STAREXEC_JOB_ID:-0}"
 
-		# Ensure working directory exists
-		mkdir -p "$WORKING_DIR"
+		# A directory of this name can only be the residue of an attempt that is no longer
+		# running: a pair does not execute twice at once, and a rerun requires the previous
+		# execution to be confirmed stopped. Removing it keeps a recycled execution id from
+		# handing a new attempt the last one's solver, benchmark or output.
+		rm -rf "$WORKING_DIR" 2>/dev/null || true
+		if ! mkdir -p "$WORKING_DIR"; then
+			# Fail closed. Continuing without a private workspace would put this pair back
+			# in a shared one, which is the condition being removed.
+			log "job error: could not create the private execution workspace '$WORKING_DIR'"
+			STATUS_SENT=true
+			sendStatus $ERROR_RUNSCRIPT
+			exit 0
+		fi
+		# The removal above is deliberately tolerant -- it must not abort the script under
+		# set -e -- so whether it actually worked is checked here rather than assumed. A
+		# workspace that still holds a previous attempt's files is exactly the contamination
+		# this directory exists to prevent, and reporting a runscript error is better than
+		# attributing a dead attempt's solver, benchmark or output to this run.
+		if [ -n "$(ls -A "$WORKING_DIR" 2>/dev/null)" ]; then
+			log "job error: the private execution workspace '$WORKING_DIR' is not empty; a previous attempt's files could not be removed"
+			STATUS_SENT=true
+			sendStatus $ERROR_RUNSCRIPT
+			exit 0
+		fi
+		log "Container mode: private execution workspace $WORKING_DIR"
 
 		sendNode "$HOSTNAME" "$SANDBOX"
 		return
@@ -890,6 +951,10 @@ function sendNode {
 
 function limitExceeded {
 	log "job error: $1 limit exceeded, job terminated"
+	# Claimed before exiting so the EXIT trap leaves this status alone. Without it the
+	# trap's fail-closed ERROR_BENCHMARK overwrote the limit that was actually breached,
+	# reporting a file-write limit as a missing benchmark.
+	STATUS_SENT=true
 	sendStatus $2
 	exit 1
 }
@@ -1126,13 +1191,32 @@ function copyOutput {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "post processor error: no recognized script found"
-			sendStatus "$ERROR_POST_PROCESSOR"
+			# The stage number, so this names the stage that actually failed. Without it
+			# sendStatus defaults to 0, and a precise write keyed on "= 0" gives the status
+			# to no stage and NOT_REACHED to every stage the pair has (#152). "$1" is
+			# copyOutput's own first argument, which every caller passes as
+			# CURRENT_STAGE_NUMBER (jobscript:539, :557).
+			STATUS_SENT=true
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
 			exit 1
 		fi
-		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt
-		if (( $? != 0 )); then
-			log "post processor timeout"
-			sendStatus "$ERROR_POST_PROCESSOR"
+		# `|| POST_PROC_STATUS=$?` rather than testing $? on the next line: this runs under
+		# `set -e`, so a failing post processor aborted the script here and the check below
+		# was never reached. The EXIT trap then filed the run as ERROR_BENCHMARK, naming the
+		# benchmark for a post-processor fault.
+		local POST_PROC_STATUS=0
+		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt || POST_PROC_STATUS=$?
+		if [ "$POST_PROC_STATUS" -ne 0 ]; then
+			# 124 is what `timeout` reports when it had to kill the command; any other
+			# non-zero status is the post processor's own. They were both logged as a
+			# timeout, which sent whoever read the log looking for the wrong fault.
+			if [ "$POST_PROC_STATUS" -eq 124 ]; then
+				log "post processor exceeded its time limit of $POST_PROCESSOR_TIME_LIMIT minutes"
+			else
+				log "post processor failed with exit status $POST_PROC_STATUS"
+			fi
+			STATUS_SENT=true
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
 			sendStatusToLaterStages "$ERROR_POST_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
 			setEndTime
@@ -1387,13 +1471,29 @@ function copyDependencies {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "pre processor error: no recognized script found"
-			sendStatus "$ERROR_PRE_PROCESSOR"
+			# The stage number, so this names the stage that actually failed. Without it
+			# sendStatus defaults to 0, and a precise write keyed on "= 0" gives the status
+			# to no stage and NOT_REACHED to every stage the pair has (#152). Taken from
+			# STAGE_NUMBERS[STAGE_INDEX] and not CURRENT_STAGE_NUMBER: copyDependencies runs
+			# at jobscript:307, before CURRENT_STAGE_NUMBER is assigned at :314, so that
+			# variable is still the previous iteration's value here, or unset on the first.
+			STATUS_SENT=true
+			sendStatus "$ERROR_PRE_PROCESSOR" "${STAGE_NUMBERS[STAGE_INDEX]}"
 			exit 1
 		fi
-		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH"
-		if (( $? != 0 )); then
-			log "pre processor timeout"
-			sendStatus "$ERROR_PRE_PROCESSOR"
+		# See the matching note in the post-processor path: under `set -e` a failing pre
+		# processor aborted before the check below could run, and the EXIT trap reported
+		# ERROR_BENCHMARK instead.
+		local PRE_PROC_STATUS=0
+		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH" || PRE_PROC_STATUS=$?
+		if [ "$PRE_PROC_STATUS" -ne 0 ]; then
+			if [ "$PRE_PROC_STATUS" -eq 124 ]; then
+				log "pre processor exceeded its time limit of $PRE_PROCESSOR_TIME_LIMIT minutes"
+			else
+				log "pre processor failed with exit status $PRE_PROC_STATUS"
+			fi
+			STATUS_SENT=true
+			sendStatus "$ERROR_PRE_PROCESSOR" "${STAGE_NUMBERS[STAGE_INDEX]}"
 			sendStatusToLaterStages "$ERROR_PRE_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
 			setEndTime
@@ -1572,11 +1672,21 @@ function verifyWorkspace {
 # Marks this pair as having had a runscript error
 # $1 The current stage number
 function markRunscriptError {
-	local STAGE=$(($1-1))
+	# $1 is the stage that failed, 1-based. The two branches below want different numbers
+	# from it, which is why the subtraction is here and not shared.
+	local STAGE=$(($1))
 	if isContainerMode; then
-		containerWriteStatus $ERROR_RUNSCRIPT $STAGE
+		# An IDENTITY: the monitor reads this number out of status.json and hands it to
+		# UpdatePairStatusPrecise as "the stage that took this result". Subtracting one made a
+		# stage-1 failure arrive as stage 0, which that routine applies to no stage at all
+		# while marking every stage of the pair not reached (#152).
+		containerWriteStatus $ERROR_RUNSCRIPT "$STAGE"
 	else
-		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $STAGE)"
+		# A THRESHOLD: RunscriptError passes its stage argument to UpdateLaterStageStatuses
+		# and SetRunStatsForLaterStagesToZero, both of which act on stages strictly greater
+		# than it. "This stage and everything after it" is therefore one less, and this is the
+		# arithmetic the -1 was always for.
+		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $((STAGE - 1)))"
 	fi
 }
 
@@ -1623,6 +1733,46 @@ function exitJobscript {
 		STATUS_SENT=true
 		sendStatus $ERROR_BENCHMARK || true
 	fi
+	removePrivateWorkspace
 	echo "Jobscript ending."
 	exit "$EXIT_CODE"
+}
+
+# Removes this attempt's private execution workspace.
+#
+# Here, in the EXIT trap, rather than in cleanWorkspace, for two reasons.
+#
+# It runs on EVERY exit. cleanWorkspace 0 is reached only when the stage loop finishes or
+# breaks; a pair that exits early -- a missing benchmark dependency, an unreadable watchfile,
+# a processor failure, a limit breach -- never reaches it. Cleaning only there would have left
+# one workspace behind per failed execution, for the life of the deployment, with nothing to
+# reclaim it: before this directory was per-attempt the NEXT pair cleared the shared sandbox,
+# and that is no longer true.
+#
+# And it runs after the status is settled. cleanWorkspace 0 is called from the jobscript AFTER
+# the pair has already reported STATUS_COMPLETE, and sendStatus does not set STATUS_SENT, so a
+# failure anywhere in that window is turned into ERROR_BENCHMARK by the branch above -- a
+# completed pair recorded as a benchmark error. `rm -rf` returns non-zero for ordinary reasons
+# here, an orphaned solver descendant still writing into the tree being the obvious one, so
+# putting a bare `rm -rf` in that window would have made a wrong recorded result reachable
+# through nothing worse than untidy solver shutdown.
+#
+# Every command is therefore failure-tolerant: losing a directory is an operational problem,
+# and misreporting a pair is a scientific one.
+function removePrivateWorkspace {
+	if ! isContainerMode || [ "${STAREXEC_FORCE_SANDBOX:-false}" = "true" ]; then
+		# The non-container sandboxes are a fixed pair of directories governed by the lock
+		# protocol and are meant to persist.
+		return 0
+	fi
+	if [ -z "${WORKING_DIR:-}" ] || [ -z "${WORKING_DIR_BASE:-}" ]; then
+		# Exited before initSandbox chose one; there is nothing of ours to remove.
+		return 0
+	fi
+	# The shell's working directory is inside the tree about to go.
+	cd "$WORKING_DIR_BASE" 2>/dev/null || cd / || true
+	log "removing the private execution workspace $WORKING_DIR"
+	rm -rf "$WORKING_DIR" 2>/dev/null ||
+		log "could not remove $WORKING_DIR; leaving it rather than failing a finished pair"
+	return 0
 }
