@@ -2443,6 +2443,29 @@ public class JobPairs {
         int notReachedStatus,
         boolean forceOverride
     ) {
+        // A stage argument can fail to identify a stage in two ways, and both are refused.
+        //
+        // Out of range, here: stage numbers start at 1, and the routine's two updates are
+        // keyed on "= this stage" and "> this stage", so 0 gives the status to nothing and
+        // NOT_REACHED to every stage the pair has, then writes end_time and the completion
+        // row on top. A pair whose first stage genuinely finished ends up reading "stage not
+        // reached", terminal, with no way back through the rerun path.
+        //
+        // Not a stage OF THIS PAIR, below: a positive number the pair does not have matches
+        // no row in either update, while the pair still goes terminal with an end_time and a
+        // completion row -- finished, with no stage carrying the result. That one needs the
+        // pair's own rows to detect, so the routine raises it and the catch maps it back.
+        //
+        // The range case is refused here, before a connection is even taken, so there is no
+        // transaction to leave half-applied. The routine guards both anyway -- it is reachable
+        // from psql, from an administrative session and from tests.
+        if (stageNumber < 1) {
+            log.error("Refusing a precise status write for pair " + pairId + ": stage number "
+                    + stageNumber + " does not identify a stage. Status " + terminalStatus
+                    + " was not recorded and no stage history was touched.");
+            return PairStatusResult.REJECTED_INVALID_STAGE;
+        }
+
         Connection con = null;
         PreparedStatement ps = null;
         Integer attemptNoForFinalize = null;
@@ -2461,6 +2484,19 @@ public class JobPairs {
             boolean applied;
             try (ResultSet rs = ps.executeQuery()) {
                 applied = rs.next() && rs.getBoolean(1);
+            } catch (SQLException e) {
+                // Scoped to the call itself rather than to the whole method. The outer catch
+                // also spans getConnection, the commit and the manifest write, and a 22023
+                // from any of those would not be this routine speaking.
+                if (namesNoStage(e)) {
+                    log.error("Refusing a precise status write for pair " + pairId
+                            + ": stage number " + stageNumber + " does not identify a stage of"
+                            + " that pair. Status " + terminalStatus + " was not recorded and"
+                            + " no stage history was touched.", e);
+                    Common.doRollback(con);
+                    return PairStatusResult.REJECTED_INVALID_STAGE;
+                }
+                throw e;
             }
             if (!applied) {
                 // Another writer recorded a different terminal result first. Nothing was
@@ -2492,6 +2528,44 @@ public class JobPairs {
             Common.safeClose(con);
         }
         return PairStatusResult.FAILED;
+    }
+
+    /**
+     * SQLSTATE 22023, invalid_parameter_value, as raised by {@code UpdatePairStatusPrecise}
+     * when its stage argument does not identify a stage -- either out of range or not a stage
+     * of that pair.
+     *
+     * <p>No other <em>server-side</em> 22023 can reach this call. The only other one in the
+     * repeatable migration belongs to {@code AddAndAssociateBenchmarks}, and the routine calls
+     * nothing but {@code IsTerminalPairStatus}, which raises nothing.
+     *
+     * <p>The PostgreSQL driver also uses this SQLSTATE for some of its own client-side checks,
+     * so the test is applied only to the statement execution and not to connection
+     * acquisition, the commit, or the manifest write. A driver-side 22023 raised by the
+     * execution itself would still be misread as a refusal; that would hold the pair for an
+     * operator instead of retrying it, which is the safe direction to be wrong in.
+     */
+    private static final String INVALID_STAGE_SQLSTATE = "22023";
+
+    /**
+     * Whether a failure is the routine refusing the stage identity.
+     *
+     * <p>Read from the SQLSTATE rather than the message. The message is a human-readable
+     * {@code format()} string that any edit could reword, and PostgreSQL localises server
+     * messages; the SQLSTATE is part of the routine's contract.
+     *
+     * <p>Walks the cause chain because the driver's exception is wrapped by the time it
+     * reaches here, and is bounded so a self-referencing chain cannot spin.
+     */
+    private static boolean namesNoStage(Throwable failure) {
+        Throwable t = failure;
+        for (int depth = 0; t != null && depth < 16; t = t.getCause(), depth++) {
+            if (t instanceof SQLException
+                    && INVALID_STAGE_SQLSTATE.equals(((SQLException) t).getSQLState())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

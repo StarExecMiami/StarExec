@@ -246,21 +246,56 @@ public class ContainerJobMonitor {
      *
      * @param info Completed container info from reconciliation
      */
-    void processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
+    boolean processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
         try {
             processCompletedJob(info);
+            return true;
+        } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+            // The emergency marking below writes ERROR_RUNSCRIPT against a hardcoded stage 1.
+            // For a pair whose results name no stage that would invent exactly the two things
+            // this refusal exists to prevent -- a stage and a solver outcome -- and would do
+            // it on the reconciliation path, where nobody is watching a poll loop.
+            //
+            // Left unresolved with its output intact instead, which is what the normal
+            // ingestion path does with the same condition.
+            log.error(
+                "INGESTION INTERVENTION REQUIRED: reconciled pair " + info.pairId +
+                    " produced results that name no stage. The pair is left unresolved and" +
+                    " its output is retained at " + info.outputDir + ". No solver status has" +
+                    " been invented for this.",
+                e
+            );
+            // False, so the caller keeps the container. Saying the output is retained and
+            // then letting it be deleted would be worse than not claiming it at all.
+            return false;
         } catch (Exception e) {
             log.error("Error processing reconciled job " + info.pairId, e);
-            // Emergency error marking so the pair doesn't stay stuck
+            // Emergency error marking so the pair doesn't stay stuck.
+            //
+            // Still a hardcoded stage 1, which is a fabrication this change does not fix --
+            // but the result is now consumed. A refused write means the pair kept whatever
+            // status it had, so the container must not be deleted on the way out; without
+            // that the only record of the run would go with it.
             try {
-                JobPairs.setPairStatusPrecise(
+                PairStatusResult emergency = JobPairs.setPairStatusPreciseResult(
                     info.pairId, 1,
                     StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal());
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false);
+                if (emergency == PairStatusResult.REJECTED_INVALID_STAGE) {
+                    log.error(
+                        "INGESTION INTERVENTION REQUIRED: reconciled pair " + info.pairId +
+                            " could not be marked failed because stage 1 is not a stage of" +
+                            " that pair. Its output is retained at " + info.outputDir + "."
+                    );
+                    return false;
+                }
             } catch (Exception ex) {
                 log.error("Failed to set error status for pair " + info.pairId, ex);
+                return false;
             }
         }
+        return true;
     }
 
     /**
@@ -319,6 +354,28 @@ public class ContainerJobMonitor {
                     // back immediately -- retrying must not cost capacity.
                     backend.releaseSlotForCompletedContainer(info.containerId);
                     recordIngestionFailure(info, e);
+                } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+                    // The container produced something that names no stage, so there is no
+                    // stage to record a result against and no retry that would change that.
+                    //
+                    // Held on the first attempt rather than after MAX_INGESTION_ATTEMPTS of
+                    // backoff: the bounded retry below exists for a platform that might
+                    // recover, and this cannot. The container and its output are kept, the
+                    // execution slot is handed back, and no status is invented -- the pair
+                    // stays unresolved and visible instead of being recorded as a solver
+                    // failure it never had.
+                    backend.releaseSlotForCompletedContainer(info.containerId);
+                    ingestionQuarantine.add(info.containerId);
+                    ingestionAttempts.remove(info.containerId);
+                    log.error(
+                        "INGESTION INTERVENTION REQUIRED: pair " + info.pairId + " produced" +
+                            " results that name no stage, so they cannot be recorded and" +
+                            " retrying cannot help. The pair is left unresolved and its" +
+                            " output is retained at " + info.outputDir + " (container " +
+                            info.containerId + "). No solver status has been invented for" +
+                            " this.",
+                        e
+                    );
                 } catch (Exception e) {
                     // The results themselves are unusable and will be on every retry:
                     // output that names another pair, a stage the pair does not have, a
@@ -1168,6 +1225,27 @@ public class ContainerJobMonitor {
             StatusCode.STATUS_NOT_REACHED.getVal(),
             false
         );
+        if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
+            // status.json named no stage, and 0 cannot become a precise stage identity
+            // without giving NOT_REACHED to every stage the pair has.
+            //
+            // InvalidSnapshotException because this is content the container produced and it
+            // will read the same way forever. Not RetryableIngestionException, whose own
+            // contract names "an unknown stage" as a case it must not be used for, and not a
+            // plain Exception, whose catch in the poll loop records ERROR_RUNSCRIPT against a
+            // hardcoded stage 1 -- inventing both a stage and a solver outcome for a pair
+            // whose actual problem is that nobody said which stage ran.
+            //
+            // The poll loop catches this specifically and holds the container on the first
+            // attempt: no retry is spent on input that cannot change, and the output survives
+            // for an operator. Same type LocalJobMonitor throws for the same condition, so
+            // both monitors classify it the same way.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                "status.json for pair " + pairId + " reports status " + status
+                    + " with stage number " + stageNumber + ", which names no stage;"
+                    + " refusing to record it as that pair's precise stage result"
+            );
+        }
         if (statusResult == PairStatusResult.FAILED) {
             // The status never landed, and the only reasons it can fail are infrastructure
             // ones. Retryable, so the caller keeps the container and its output rather than
