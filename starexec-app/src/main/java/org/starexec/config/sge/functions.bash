@@ -540,10 +540,52 @@ function initSandbox {
 			CORES="0"
 			log "Container mode: cannot determine allowed CPUs; falling back to $CORES"
 		fi
-		WORKING_DIR=$WORKING_DIR_BASE'/sandbox'
+		# One workspace per execution attempt.
+		#
+		# initWorkspaceVariables derives every execution path from WORKING_DIR -- solver,
+		# benchmark, tmp, preprocessor, savedoutput, and the whole of OUT_DIR: stdout.txt,
+		# var.out, watcher.out, procBenchmark, output_files, attributes.txt. So this one
+		# name decides whether two concurrent pairs share a workspace, and it used to be
+		# the same directory for all of them.
+		#
+		# The comment above is right about containers and was wrong about `local`. Podman
+		# and Kubernetes run one pair per container and mount only the data volume, so
+		# /app/work really is private there. LocalBackend runs every pair as a process
+		# inside ONE container, so they shared /app/work/sandbox: they overwrote each
+		# other's stdout while running, and copyOutput then copied whatever was in the
+		# shared output directory into each pair's own results.
+		#
+		# solvercache lives beside sandbox rather than inside it, so it stays shared and
+		# no pair re-extracts a solver another pair had already cached.
+		#
+		# STAREXEC_JOB_ID is the backend execution id. LocalBackend allocates it so that no
+		# two RUNNING jobs hold the same one, which is exactly the property needed here.
+		# Backends that do not set it are one-pair-per-container already, where the
+		# fallback is unique by construction.
+		if [ -z "${WORKING_DIR_BASE:-}" ]; then
+			# Guarded because a workspace path is removed below: an empty base would make
+			# that a removal at the filesystem root.
+			log "job error: WORKING_DIR_BASE is empty, so no private workspace can be located"
+			STATUS_SENT=true
+			sendStatus $ERROR_RUNSCRIPT
+			exit 1
+		fi
+		WORKING_DIR="$WORKING_DIR_BASE/sandbox/pair_${PAIR_ID}_exec_${STAREXEC_JOB_ID:-0}"
 
-		# Ensure working directory exists
-		mkdir -p "$WORKING_DIR"
+		# A directory of this name can only be the residue of an attempt that is no longer
+		# running: a pair does not execute twice at once, and a rerun requires the previous
+		# execution to be confirmed stopped. Removing it keeps a recycled execution id from
+		# handing a new attempt the last one's solver, benchmark or output.
+		rm -rf "$WORKING_DIR"
+		if ! mkdir -p "$WORKING_DIR"; then
+			# Fail closed. Continuing without a private workspace would put this pair back
+			# in a shared one, which is the condition being removed.
+			log "job error: could not create the private execution workspace '$WORKING_DIR'"
+			STATUS_SENT=true
+			sendStatus $ERROR_RUNSCRIPT
+			exit 1
+		fi
+		log "Container mode: private execution workspace $WORKING_DIR"
 
 		sendNode "$HOSTNAME" "$SANDBOX"
 		return
@@ -756,6 +798,20 @@ function cleanWorkspace {
 			safeRmLock "$SANDBOX_LOCK_DIR"
 		elif ((SANDBOX == 2)); then
 			safeRmLock "$SANDBOX2_LOCK_DIR"
+		fi
+
+		# The attempt's workspace belongs to this execution alone, so nothing else can be
+		# reading it and there is no reason to leave the emptied shell of it behind. One
+		# directory per execution would otherwise accumulate for the life of a deployment.
+		#
+		# Only in container mode: the non-container sandboxes are a fixed pair of
+		# directories governed by the lock protocol above, and are meant to persist.
+		#
+		# cd out first -- the shell's working directory is inside the tree being removed.
+		if isContainerMode && [ "${STAREXEC_FORCE_SANDBOX:-false}" != "true" ]; then
+			cd "$WORKING_DIR_BASE"
+			log "removing the private execution workspace $WORKING_DIR"
+			rm -rf "$WORKING_DIR"
 		fi
 	fi
 	log "execution host $HOSTNAME cleaned"
