@@ -1611,11 +1611,21 @@ function verifyWorkspace {
 # Marks this pair as having had a runscript error
 # $1 The current stage number
 function markRunscriptError {
-	local STAGE=$(($1-1))
+	# $1 is the stage that failed, 1-based. The two branches below want different numbers
+	# from it, which is why the subtraction is here and not shared.
+	local STAGE=$(($1))
 	if isContainerMode; then
-		containerWriteStatus $ERROR_RUNSCRIPT $STAGE
+		# An IDENTITY: the monitor reads this number out of status.json and hands it to
+		# UpdatePairStatusPrecise as "the stage that took this result". Subtracting one made a
+		# stage-1 failure arrive as stage 0, which that routine applies to no stage at all
+		# while marking every stage of the pair not reached (#152).
+		containerWriteStatus $ERROR_RUNSCRIPT "$STAGE"
 	else
-		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $STAGE)"
+		# A THRESHOLD: RunscriptError passes its stage argument to UpdateLaterStageStatuses
+		# and SetRunStatsForLaterStagesToZero, both of which act on stages strictly greater
+		# than it. "This stage and everything after it" is therefore one less, and this is the
+		# arithmetic the -1 was always for.
+		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $((STAGE - 1)))"
 	fi
 }
 

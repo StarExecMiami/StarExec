@@ -40,6 +40,7 @@ public class ProcessorFailureStatusTest {
 	/** From status_codes.bash, restated so a silent renumbering fails here too. */
 	private static final int ERROR_BENCHMARK = 12;
 	private static final int EXCEED_FILE_WRITE = 16;
+	private static final int ERROR_RUNSCRIPT = 11;
 	private static final int ERROR_PRE_PROCESSOR = 25;
 	private static final int ERROR_POST_PROCESSOR = 26;
 
@@ -265,6 +266,51 @@ public class ProcessorFailureStatusTest {
 		}
 
 		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
+	}
+
+	// ------------------------------------------------------ the runscript error path
+
+	/**
+	 * {@code markRunscriptError} took a 1-based stage and wrote {@code stage - 1}, so the
+	 * failure of the first stage reached the monitor as stage 0 — the pair-level channel — and
+	 * a precise write keyed on {@code = 0} then applied it to no stage while marking every
+	 * stage of the pair not reached (#152).
+	 *
+	 * <p>The subtraction was not a typo. It is correct for the other branch: the SGE path calls
+	 * {@code RunscriptError}, which feeds its stage argument to {@code UpdateLaterStageStatuses}
+	 * and {@code SetRunStatsForLaterStagesToZero}, and both act on stages strictly greater than
+	 * it. One number was serving as a threshold in one branch and an identity in the other.
+	 */
+	@Test
+	public void aRunscriptErrorNamesTheStageThatFailedNotTheOneBeforeIt() throws Exception {
+		Harness h = new Harness(folder);
+		h.line("STATUS_SENT=true");
+		h.line("markRunscriptError 1");
+		h.line("exit 0");
+
+		h.run(0);
+
+		assertEquals(ERROR_RUNSCRIPT, h.status());
+		assertEquals("the first stage's failure must name stage 1, not stage 0",
+				1, h.stage());
+		assertTrue("and must leave the per-stage snapshot that stage 0 cannot have",
+				h.hasSnapshot(1));
+	}
+
+	/** The same for a later stage, so the fix is not an off-by-one in the other direction. */
+	@Test
+	public void aRunscriptErrorInALaterStageNamesThatStage() throws Exception {
+		Harness h = new Harness(folder);
+		h.line("STATUS_SENT=true");
+		h.line("markRunscriptError 3");
+		h.line("exit 0");
+
+		h.run(0);
+
+		assertEquals(3, h.stage());
+		assertTrue(h.hasSnapshot(3));
+		assertFalse("no snapshot may be written for a stage that did not fail",
+				h.hasSnapshot(2));
 	}
 
 	// ------------------------------------------------------------------------ harness
