@@ -4155,6 +4155,24 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
+                // The status about to be made this pair's result must be one a pair may be left
+                // holding. readTerminalStatus takes it from status.json, which the job wrote,
+                // and STATUS_PROCESSING(22) in particular is picked up by the periodic
+                // post-processing task and promoted to STATUS_COMPLETE -- so accepting it here
+                // would let a job launder its own timeout into a clean completion.
+                //
+                // The same guard ContainerJobMonitor applies to its pair-level write. Unlike the
+                // Local path this one runs after the Job has completed, so STATUS_RUNNING is not
+                // legitimate here either and the strict predicate is the right one.
+                if (!StatusCode.toStatusCode(terminalStatus).isTerminalExecutionResult()) {
+                    log.error(
+                        "Refusing to record non-terminal status " + terminalStatus +
+                        " as the result of pair " + pairId + " (" + execution +
+                        "); the output is retained for diagnosis"
+                    );
+                    return false;
+                }
+
                 PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
@@ -4757,9 +4775,12 @@ public class KubernetesNativeBackend implements Backend {
                 return true;
             }
 
-            Map<Integer, Integer> snapshots;
+            // The terminal stage's own status comes from the runsolver artifacts, and a pair
+            // killed mid-stage legitimately leaves that snapshot non-terminal. Both are expressed
+            // by the bound, so the read never returns a record this method would have to discard.
+            Map<Integer, Integer> earlier;
             try {
-                snapshots = StageStatusSnapshots.read(outputDir, pairId);
+                earlier = StageStatusSnapshots.read(outputDir, pairId, terminalStage);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
@@ -4776,14 +4797,6 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            Map<Integer, Integer> earlier = new TreeMap<>();
-            for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
-                // The terminal stage's own status comes from the runsolver artifacts, and a
-                // pair killed mid-stage legitimately leaves that snapshot non-terminal.
-                if (snapshot.getKey() < terminalStage) {
-                    earlier.put(snapshot.getKey(), snapshot.getValue());
-                }
-            }
             if (earlier.isEmpty()) {
                 return true;
             }

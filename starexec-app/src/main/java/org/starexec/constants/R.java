@@ -189,7 +189,14 @@ public class R {
     public static final String LONG_PATTERN = "^\\-?\\d+$";
     public static final String USER_NAME_PATTERN = "^[A-Za-z\\-\\s']{2," + DB.USER_FIRST_LEN + "}$";
     public static final String INSTITUTION_PATTERN = "^[\\w\\-\\s']{2," + DB.INSTITUTION_LEN + "}$";
-    public static final String EMAIL_PATTERN = "^[\\w.%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,4}$";
+    /**
+     * The top-level domain is bounded at 63 because that is the maximum length of a DNS
+     * label (RFC 1035 section 2.3.4), not at an arbitrary smaller number. It was 4, which
+     * rejected every address on a long TLD -- .technology, .university, .education,
+     * .engineering -- and those are ordinary in academic use. Nothing else about the
+     * expression changed.
+     */
+    public static final String EMAIL_PATTERN = "^[\\w.%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}$";
     public static final String URL_PATTERN = "https?://.\\S+{2," + DB.URL_LEN + "}";
     public static final String PRIMITIVE_NAME_PATTERN = "^[\\w\\-\\. \\+\\^=,!?:$%#@]+$";
     public static final String SPACE_NAME_PATTERN = "^[\\w\\-\\. \\+\\^=,!?:$%#@]{1," + DB.SPACE_NAME_LEN + "}$";
