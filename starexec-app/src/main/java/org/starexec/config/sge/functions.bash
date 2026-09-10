@@ -951,6 +951,10 @@ function sendNode {
 
 function limitExceeded {
 	log "job error: $1 limit exceeded, job terminated"
+	# Claimed before exiting so the EXIT trap leaves this status alone. Without it the
+	# trap's fail-closed ERROR_BENCHMARK overwrote the limit that was actually breached,
+	# reporting a file-write limit as a missing benchmark.
+	STATUS_SENT=true
 	sendStatus $2
 	exit 1
 }
@@ -1187,13 +1191,32 @@ function copyOutput {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "post processor error: no recognized script found"
-			sendStatus "$ERROR_POST_PROCESSOR"
+			# The stage number, so this names the stage that actually failed. Without it
+			# sendStatus defaults to 0, and a precise write keyed on "= 0" gives the status
+			# to no stage and NOT_REACHED to every stage the pair has (#152). "$1" is
+			# copyOutput's own first argument, which every caller passes as
+			# CURRENT_STAGE_NUMBER (jobscript:539, :557).
+			STATUS_SENT=true
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
 			exit 1
 		fi
-		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt
-		if (( $? != 0 )); then
-			log "post processor timeout"
-			sendStatus "$ERROR_POST_PROCESSOR"
+		# `|| POST_PROC_STATUS=$?` rather than testing $? on the next line: this runs under
+		# `set -e`, so a failing post processor aborted the script here and the check below
+		# was never reached. The EXIT trap then filed the run as ERROR_BENCHMARK, naming the
+		# benchmark for a post-processor fault.
+		local POST_PROC_STATUS=0
+		timeout --signal=SIGKILL $((POST_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$STDOUT_FILE" $LOCAL_BENCH_PATH "$OUT_DIR/output_files" > "$OUT_DIR"/attributes.txt || POST_PROC_STATUS=$?
+		if [ "$POST_PROC_STATUS" -ne 0 ]; then
+			# 124 is what `timeout` reports when it had to kill the command; any other
+			# non-zero status is the post processor's own. They were both logged as a
+			# timeout, which sent whoever read the log looking for the wrong fault.
+			if [ "$POST_PROC_STATUS" -eq 124 ]; then
+				log "post processor exceeded its time limit of $POST_PROCESSOR_TIME_LIMIT minutes"
+			else
+				log "post processor failed with exit status $POST_PROC_STATUS"
+			fi
+			STATUS_SENT=true
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
 			sendStatusToLaterStages "$ERROR_POST_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
 			setEndTime
@@ -1448,13 +1471,29 @@ function copyDependencies {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "pre processor error: no recognized script found"
-			sendStatus "$ERROR_PRE_PROCESSOR"
+			# The stage number, so this names the stage that actually failed. Without it
+			# sendStatus defaults to 0, and a precise write keyed on "= 0" gives the status
+			# to no stage and NOT_REACHED to every stage the pair has (#152). Taken from
+			# STAGE_NUMBERS[STAGE_INDEX] and not CURRENT_STAGE_NUMBER: copyDependencies runs
+			# at jobscript:307, before CURRENT_STAGE_NUMBER is assigned at :314, so that
+			# variable is still the previous iteration's value here, or unset on the first.
+			STATUS_SENT=true
+			sendStatus "$ERROR_PRE_PROCESSOR" "${STAGE_NUMBERS[STAGE_INDEX]}"
 			exit 1
 		fi
-		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH"
-		if (( $? != 0 )); then
-			log "pre processor timeout"
-			sendStatus "$ERROR_PRE_PROCESSOR"
+		# See the matching note in the post-processor path: under `set -e` a failing pre
+		# processor aborted before the check below could run, and the EXIT trap reported
+		# ERROR_BENCHMARK instead.
+		local PRE_PROC_STATUS=0
+		timeout --signal=SIGKILL $((PRE_PROCESSOR_TIME_LIMIT))m "$PROC_SCRIPT" "$LOCAL_BENCH_PATH" $RAND_SEED > "$PROCESSED_BENCH_PATH" || PRE_PROC_STATUS=$?
+		if [ "$PRE_PROC_STATUS" -ne 0 ]; then
+			if [ "$PRE_PROC_STATUS" -eq 124 ]; then
+				log "pre processor exceeded its time limit of $PRE_PROCESSOR_TIME_LIMIT minutes"
+			else
+				log "pre processor failed with exit status $PRE_PROC_STATUS"
+			fi
+			STATUS_SENT=true
+			sendStatus "$ERROR_PRE_PROCESSOR" "${STAGE_NUMBERS[STAGE_INDEX]}"
 			sendStatusToLaterStages "$ERROR_PRE_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
 			setEndTime
@@ -1633,11 +1672,21 @@ function verifyWorkspace {
 # Marks this pair as having had a runscript error
 # $1 The current stage number
 function markRunscriptError {
-	local STAGE=$(($1-1))
+	# $1 is the stage that failed, 1-based. The two branches below want different numbers
+	# from it, which is why the subtraction is here and not shared.
+	local STAGE=$(($1))
 	if isContainerMode; then
-		containerWriteStatus $ERROR_RUNSCRIPT $STAGE
+		# An IDENTITY: the monitor reads this number out of status.json and hands it to
+		# UpdatePairStatusPrecise as "the stage that took this result". Subtracting one made a
+		# stage-1 failure arrive as stage 0, which that routine applies to no stage at all
+		# while marking every stage of the pair not reached (#152).
+		containerWriteStatus $ERROR_RUNSCRIPT "$STAGE"
 	else
-		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $STAGE)"
+		# A THRESHOLD: RunscriptError passes its stage argument to UpdateLaterStageStatuses
+		# and SetRunStatsForLaterStagesToZero, both of which act on stages strictly greater
+		# than it. "This stage and everything after it" is therefore one less, and this is the
+		# arithmetic the -1 was always for.
+		dbExec "CALL RunscriptError('$HOSTNAME', $PAIR_ID, $((STAGE - 1)))"
 	fi
 }
 
