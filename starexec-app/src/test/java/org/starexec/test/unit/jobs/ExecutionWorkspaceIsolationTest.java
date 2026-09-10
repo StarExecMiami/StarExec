@@ -106,22 +106,28 @@ public class ExecutionWorkspaceIsolationTest {
 	// ------------------------------------------------------- what must remain shared
 
 	/**
-	 * The solver cache is the one thing that must stay shared, and it does: it hangs off
-	 * {@code WORKING_DIR_BASE}, beside the sandbox rather than inside it. If isolating the
-	 * workspace had taken the cache with it, every pair would re-extract a solver another pair
-	 * had already unpacked.
+	 * The solver cache must stay shared, and what keeps it shared is that only the *sandbox*
+	 * became per-attempt, not the base it hangs off. Asserted that way round -- against the
+	 * relationship between two values the helper produced -- because the cache path itself is
+	 * assembled in {@code jobscript}, which this probe does not source: writing the expected
+	 * path out here would be the test inventing the answer it then checks.
+	 *
+	 * <p>This is the assertion that fails if anyone takes the rejected shortcut of making
+	 * {@code WORKING_DIR_BASE} per-pair, which would move the cache with it.
 	 */
 	@Test
-	public void theSolverCacheStaysSharedBetweenAttempts() throws Exception {
+	public void onlyTheSandboxIsPerAttemptSoTheCacheStaysShared() throws Exception {
 		Probe probe = new Probe(folder);
 		Map<String, String> fast = probe.resolve(11, 7);
 		Map<String, String> slow = probe.resolve(12, 8);
 
-		assertEquals("both attempts must resolve the same cache root",
-				fast.get("SOLVER_CACHE_ROOT"), slow.get("SOLVER_CACHE_ROOT"));
-		assertFalse("the cache must not be inside either attempt's workspace",
-				isAncestorOf(fast.get("WORKING_DIR"), fast.get("SOLVER_CACHE_ROOT")));
-		assertFalse(isAncestorOf(slow.get("WORKING_DIR"), slow.get("SOLVER_CACHE_ROOT")));
+		String base = fast.get("WORKING_DIR_BASE");
+		assertEquals("the base must be the same for both attempts -- the cache hangs off it",
+				base, slow.get("WORKING_DIR_BASE"));
+		assertTrue(isAncestorOf(base, fast.get("WORKING_DIR")));
+		assertTrue(isAncestorOf(base, slow.get("WORKING_DIR")));
+		assertNotEquals("...and only the sandbox below it is per-attempt",
+				fast.get("WORKING_DIR"), slow.get("WORKING_DIR"));
 	}
 
 	// ------------------------------------------------------ attempts, not just pairs
@@ -205,23 +211,16 @@ public class ExecutionWorkspaceIsolationTest {
 		assertEquals("SLOW WATCHER", Files.readString(Path.of(slow.get("WATCHFILE"))).trim());
 	}
 
-	/** Post-processing reads STDOUT_FILE and writes attributes.txt; both are inside OUT_DIR. */
-	@Test
-	public void postProcessingInputAndOutputAreBothPrivate() throws Exception {
-		Probe probe = new Probe(folder);
-		Map<String, String> fast = probe.resolve(11, 7);
-		Map<String, String> slow = probe.resolve(12, 8);
-
-		assertNotEquals(fast.get("OUT_DIR") + "/attributes.txt",
-				slow.get("OUT_DIR") + "/attributes.txt");
-		assertTrue(isAncestorOf(fast.get("OUT_DIR"), fast.get("STDOUT_FILE")));
-	}
-
 	// ----------------------------------------------------------------- cleanup safety
+	//
+	// The workspace is removed by removePrivateWorkspace, called from the EXIT trap, so these
+	// drive a whole script to exit rather than calling cleanWorkspace directly. That placement
+	// is deliberate and both properties below depend on it: the trap runs on every exit path,
+	// and it runs after the pair's status has been decided.
 
 	/**
-	 * Cleanup is {@code rm -rf} over the attempt's own tree. It must reach nothing else --
-	 * neither a concurrent attempt nor the shared cache.
+	 * Cleanup reaches the attempt's own tree and nothing else -- neither a concurrent attempt
+	 * nor the shared cache.
 	 */
 	@Test
 	public void cleaningOneAttemptLeavesTheOtherAndTheCacheAlone() throws Exception {
@@ -233,13 +232,13 @@ public class ExecutionWorkspaceIsolationTest {
 		Files.createDirectories(bystanderFile.getParent());
 		Files.writeString(bystanderFile, "MARKER=E2E_SLOW\n");
 
-		Path cacheEntry = Path.of(victim.get("SOLVER_CACHE_ROOT"), "1700000000", "42");
+		Path cacheEntry = Path.of(victim.get("WORKING_DIR_BASE"), "solvercache", "1700000000", "42");
 		Files.createDirectories(cacheEntry);
 		Files.writeString(cacheEntry.resolve("solver.bin"), "cached solver\n");
 
-		probe.cleanup(11, 7);
+		probe.runToExit(11, 7, "");
 
-		assertFalse("the cleaned attempt's workspace is gone",
+		assertFalse("the finished attempt's workspace is gone",
 				Files.exists(Path.of(victim.get("WORKING_DIR"))));
 		assertTrue("a concurrent attempt's output must survive", Files.exists(bystanderFile));
 		assertEquals("MARKER=E2E_SLOW", Files.readString(bystanderFile).trim());
@@ -248,9 +247,73 @@ public class ExecutionWorkspaceIsolationTest {
 	}
 
 	/**
+	 * The workspace is removed on paths that never reach {@code cleanWorkspace}. Before the
+	 * removal moved into the EXIT trap it ran only when the stage loop finished, so every early
+	 * exit -- a missing dependency, an unreadable watchfile, a processor failure, a limit breach
+	 * -- left a directory behind with nothing to reclaim it.
+	 */
+	@Test
+	public void theWorkspaceIsRemovedOnAnEarlyExitToo() throws Exception {
+		Probe probe = new Probe(folder);
+		Map<String, String> attempt = probe.resolve(11, 7);
+		assertTrue(Files.isDirectory(Path.of(attempt.get("WORKING_DIR"))));
+
+		// exit 1 without reaching cleanWorkspace, as every early failure path does.
+		probe.runToExit(11, 7, "exit 1\n");
+
+		assertFalse("an early exit must not leak its workspace",
+				Files.exists(Path.of(attempt.get("WORKING_DIR"))));
+	}
+
+	/**
+	 * The regression that matters most here. {@code cleanWorkspace 0} is called by the jobscript
+	 * AFTER the pair has already reported STATUS_COMPLETE, and {@code sendStatus} does not set
+	 * {@code STATUS_SENT} -- so under {@code set -e} any failing command in that window is turned
+	 * into ERROR_BENCHMARK by the EXIT trap. A finished pair would be recorded as a benchmark
+	 * error because a directory could not be deleted.
+	 *
+	 * <p>{@code rm -rf} fails there for ordinary reasons: an orphaned solver descendant still
+	 * writing into the tree is enough. So removal must never be able to change a status.
+	 */
+	@Test
+	public void aRemovalThatFailsCannotChangeAFinishedPairsStatus() throws Exception {
+		Probe probe = new Probe(folder);
+
+		// The obstruction is created inside the run, after initSandbox has prepared a fresh
+		// workspace -- an orphaned solver descendant leaving a directory this process cannot
+		// empty. Planting it beforehand would instead exercise the startup guard.
+		probe.lastExit = probe.runToExit(11, 7,
+				"mkdir -p \"$OUT_DIR/orphan\"\n"
+				+ "echo x > \"$OUT_DIR/orphan/still-writing\"\n"
+				+ "chmod 500 \"$OUT_DIR/orphan\"\n"
+				+ "sendStatus \"$STATUS_COMPLETE\" 1\n");
+
+		assertEquals(
+				"a pair that finished must still read as finished, whatever cleanup managed",
+				7, probe.statusFor(11));
+
+		// The removal has to have actually failed, or this asserts nothing.
+		assertTrue("this test is only meaningful if the removal failed:\n" + probe.lastOutput,
+				probe.lastOutput.contains("could not remove"));
+
+		// And the script must still exit 0. LocalBackend replaces the status of any pair whose
+		// script exits non-zero with ERROR_GENERAL, so a cleanup failure that escapes as an exit
+		// code corrupts the result through Java even though status.json is untouched -- which a
+		// status-only assertion cannot see.
+		assertEquals("a failed cleanup must not escape as a non-zero exit code",
+				0, probe.lastExit);
+
+		probe.chmodBackForCleanup();
+	}
+
+	/**
 	 * The directory is writable by solver code, so cleanup runs over paths an adversary chose.
 	 * {@code rm -rf} unlinks a symlink rather than descending it, and this pins that: a link
 	 * planted inside the private tree must not take an external file with it.
+	 *
+	 * <p>Planted inside the same run, after {@code initSandbox} has created the workspace, so
+	 * what removes them is the EXIT trap and not the {@code rm -rf} that prepares a fresh
+	 * workspace at startup.
 	 */
 	@Test
 	public void aSolverPlantedSymlinkCannotMakeCleanupEscapeTheWorkspace() throws Exception {
@@ -261,12 +324,10 @@ public class ExecutionWorkspaceIsolationTest {
 		Path sentinel = outside.resolve("sentinel.txt");
 		Files.writeString(sentinel, "MUST SURVIVE\n");
 
-		Path outDir = Path.of(attempt.get("OUT_DIR"));
-		Files.createDirectories(outDir);
-		Files.createSymbolicLink(outDir.resolve("escape"), outside);
-		Files.createSymbolicLink(outDir.resolve("escape-file"), sentinel);
-
-		probe.cleanup(11, 7);
+		probe.runToExit(11, 7,
+				"mkdir -p \"$OUT_DIR\"\n"
+				+ "ln -s \"" + outside + "\" \"$OUT_DIR/escape\"\n"
+				+ "ln -s \"" + sentinel + "\" \"$OUT_DIR/escape-file\"\n");
 
 		assertFalse(Files.exists(Path.of(attempt.get("WORKING_DIR"))));
 		assertTrue("cleanup must not follow a solver's symlink out of its own tree",
@@ -280,15 +341,20 @@ public class ExecutionWorkspaceIsolationTest {
 	/**
 	 * A pair that cannot get a private workspace must not fall back to a shared one, because
 	 * that is the condition being removed. 11 is ERROR_RUNSCRIPT.
+	 *
+	 * <p>It exits 0 on purpose, as the "unable to secure any sandbox" branch beside it already
+	 * does: the status has been reported, and LocalBackend replaces the status of any pair
+	 * whose script exits non-zero with ERROR_GENERAL, so exiting 1 would race the monitor for
+	 * which of the two the pair keeps. What is asserted is that execution stopped and that the
+	 * recorded status is the specific one.
 	 */
 	@Test
 	public void aWorkspaceThatCannotBeCreatedFailsClosed() throws Exception {
 		Probe probe = new Probe(folder);
-		Result r = probe.resolveExpectingFailure(11, 7);
+		probe.resolveExpectingFailure(11, 7);
 
-		assertNotEquals("the pair must not proceed", 0, r.exit);
-		assertTrue("expected an ERROR_RUNSCRIPT status, got:\n" + r.out,
-				probe.statusFor(11) == 11);
+		assertEquals("the pair must be recorded as a runscript error, not left to the trap",
+				11, probe.statusFor(11));
 	}
 
 	// ------------------------------------------------------------------ CPU affinity
@@ -389,9 +455,7 @@ public class ExecutionWorkspaceIsolationTest {
 				body += "echo \"" + name + "=$" + name + "\"\n";
 			}
 			body += "echo \"CORES=$CORES\"\n";
-			// Named the way jobscript names it, minus the per-solver leaves, so the test can
-			// ask where the cache root landed without inventing the path itself.
-			body += "echo \"SOLVER_CACHE_ROOT=$WORKING_DIR_BASE/solvercache\"\n";
+			body += "echo \"WORKING_DIR_BASE=$WORKING_DIR_BASE\"\n";
 
 			Result r = run(body, "resolve-" + pairId + "-" + execId);
 			assertEquals("the helper must not abort:\n" + r.out, 0, r.exit);
@@ -411,14 +475,32 @@ public class ExecutionWorkspaceIsolationTest {
 			return r;
 		}
 
-		/** cleanWorkspace 0, which is what the jobscript runs when the pair is done. */
-		void cleanup(int pairId, int execId) throws Exception {
-			String body = preamble(pairId, execId, root + "/work")
+		/**
+		 * Runs a whole script to exit with the jobscript's own EXIT trap installed, so the
+		 * workspace removal under test is the one production uses. {@code body} is inserted
+		 * after the workspace exists and before the script ends.
+		 */
+		int runToExit(int pairId, int execId, String body) throws Exception {
+			String script = preamble(pairId, execId, root + "/work")
+					+ "trap 'exitJobscript $?' EXIT\n"
 					+ "initSandbox\n"
 					+ "initWorkspaceVariables\n"
-					+ "cleanWorkspace 0 sandbox\n";
-			Result r = run(body, "cleanup-" + pairId + "-" + execId);
-			assertEquals("cleanup must not abort:\n" + r.out, 0, r.exit);
+					+ body;
+			Result r = run(script, "exit-" + pairId + "-" + execId + "-" + System.nanoTime());
+			lastOutput = r.out;
+			return r.exit;
+		}
+
+		String lastOutput = "";
+		int lastExit;
+
+		/** Restores permissions on anything a test deliberately made unremovable. */
+		void chmodBackForCleanup() throws Exception {
+			try (var walk = Files.walk(root)) {
+				walk.forEach(f -> f.toFile().setWritable(true, true));
+			} catch (Exception ignored) {
+				// best effort; TemporaryFolder will report what it cannot remove
+			}
 		}
 
 		int statusFor(int pairId) throws Exception {

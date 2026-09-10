@@ -555,20 +555,28 @@ function initSandbox {
 		# other's stdout while running, and copyOutput then copied whatever was in the
 		# shared output directory into each pair's own results.
 		#
-		# solvercache lives beside sandbox rather than inside it, so it stays shared and
-		# no pair re-extracts a solver another pair had already cached.
+		# solvercache lives beside sandbox rather than inside it, so it stays shared and no
+		# pair re-extracts a solver another pair had already cached. Staying shared is the
+		# intent; it is not a claim that the cache is safe from cross-pair damage, which it
+		# is not -- verifyWorkspace can evict an entry another pair is copying from.
 		#
 		# STAREXEC_JOB_ID is the backend execution id. LocalBackend allocates it so that no
-		# two RUNNING jobs hold the same one, which is exactly the property needed here.
-		# Backends that do not set it are one-pair-per-container already, where the
-		# fallback is unique by construction.
+		# two RUNNING jobs hold the same one, which is the property concurrency needs.
+		# It is not unique for all time: the counter restarts with the JVM and an id is
+		# reusable once its job leaves activeJobs, which is why the directory is emptied
+		# below rather than merely created. Backends that do not set it are
+		# one-pair-per-container already, where the fallback is unique by construction.
 		if [ -z "${WORKING_DIR_BASE:-}" ]; then
 			# Guarded because a workspace path is removed below: an empty base would make
 			# that a removal at the filesystem root.
 			log "job error: WORKING_DIR_BASE is empty, so no private workspace can be located"
 			STATUS_SENT=true
 			sendStatus $ERROR_RUNSCRIPT
-			exit 1
+			# 0, not 1, and for the same reason as the "unable to secure any sandbox" branch
+			# below: the pair's status has already been reported, and LocalBackend replaces
+			# the status of any pair whose script exits non-zero with ERROR_GENERAL. Exiting
+			# 1 here would race the monitor for which of the two the pair ends up with.
+			exit 0
 		fi
 		WORKING_DIR="$WORKING_DIR_BASE/sandbox/pair_${PAIR_ID}_exec_${STAREXEC_JOB_ID:-0}"
 
@@ -576,14 +584,25 @@ function initSandbox {
 		# running: a pair does not execute twice at once, and a rerun requires the previous
 		# execution to be confirmed stopped. Removing it keeps a recycled execution id from
 		# handing a new attempt the last one's solver, benchmark or output.
-		rm -rf "$WORKING_DIR"
+		rm -rf "$WORKING_DIR" 2>/dev/null || true
 		if ! mkdir -p "$WORKING_DIR"; then
 			# Fail closed. Continuing without a private workspace would put this pair back
 			# in a shared one, which is the condition being removed.
 			log "job error: could not create the private execution workspace '$WORKING_DIR'"
 			STATUS_SENT=true
 			sendStatus $ERROR_RUNSCRIPT
-			exit 1
+			exit 0
+		fi
+		# The removal above is deliberately tolerant -- it must not abort the script under
+		# set -e -- so whether it actually worked is checked here rather than assumed. A
+		# workspace that still holds a previous attempt's files is exactly the contamination
+		# this directory exists to prevent, and reporting a runscript error is better than
+		# attributing a dead attempt's solver, benchmark or output to this run.
+		if [ -n "$(ls -A "$WORKING_DIR" 2>/dev/null)" ]; then
+			log "job error: the private execution workspace '$WORKING_DIR' is not empty; a previous attempt's files could not be removed"
+			STATUS_SENT=true
+			sendStatus $ERROR_RUNSCRIPT
+			exit 0
 		fi
 		log "Container mode: private execution workspace $WORKING_DIR"
 
@@ -798,20 +817,6 @@ function cleanWorkspace {
 			safeRmLock "$SANDBOX_LOCK_DIR"
 		elif ((SANDBOX == 2)); then
 			safeRmLock "$SANDBOX2_LOCK_DIR"
-		fi
-
-		# The attempt's workspace belongs to this execution alone, so nothing else can be
-		# reading it and there is no reason to leave the emptied shell of it behind. One
-		# directory per execution would otherwise accumulate for the life of a deployment.
-		#
-		# Only in container mode: the non-container sandboxes are a fixed pair of
-		# directories governed by the lock protocol above, and are meant to persist.
-		#
-		# cd out first -- the shell's working directory is inside the tree being removed.
-		if isContainerMode && [ "${STAREXEC_FORCE_SANDBOX:-false}" != "true" ]; then
-			cd "$WORKING_DIR_BASE"
-			log "removing the private execution workspace $WORKING_DIR"
-			rm -rf "$WORKING_DIR"
 		fi
 	fi
 	log "execution host $HOSTNAME cleaned"
@@ -1679,6 +1684,46 @@ function exitJobscript {
 		STATUS_SENT=true
 		sendStatus $ERROR_BENCHMARK || true
 	fi
+	removePrivateWorkspace
 	echo "Jobscript ending."
 	exit "$EXIT_CODE"
+}
+
+# Removes this attempt's private execution workspace.
+#
+# Here, in the EXIT trap, rather than in cleanWorkspace, for two reasons.
+#
+# It runs on EVERY exit. cleanWorkspace 0 is reached only when the stage loop finishes or
+# breaks; a pair that exits early -- a missing benchmark dependency, an unreadable watchfile,
+# a processor failure, a limit breach -- never reaches it. Cleaning only there would have left
+# one workspace behind per failed execution, for the life of the deployment, with nothing to
+# reclaim it: before this directory was per-attempt the NEXT pair cleared the shared sandbox,
+# and that is no longer true.
+#
+# And it runs after the status is settled. cleanWorkspace 0 is called from the jobscript AFTER
+# the pair has already reported STATUS_COMPLETE, and sendStatus does not set STATUS_SENT, so a
+# failure anywhere in that window is turned into ERROR_BENCHMARK by the branch above -- a
+# completed pair recorded as a benchmark error. `rm -rf` returns non-zero for ordinary reasons
+# here, an orphaned solver descendant still writing into the tree being the obvious one, so
+# putting a bare `rm -rf` in that window would have made a wrong recorded result reachable
+# through nothing worse than untidy solver shutdown.
+#
+# Every command is therefore failure-tolerant: losing a directory is an operational problem,
+# and misreporting a pair is a scientific one.
+function removePrivateWorkspace {
+	if ! isContainerMode || [ "${STAREXEC_FORCE_SANDBOX:-false}" = "true" ]; then
+		# The non-container sandboxes are a fixed pair of directories governed by the lock
+		# protocol and are meant to persist.
+		return 0
+	fi
+	if [ -z "${WORKING_DIR:-}" ] || [ -z "${WORKING_DIR_BASE:-}" ]; then
+		# Exited before initSandbox chose one; there is nothing of ours to remove.
+		return 0
+	fi
+	# The shell's working directory is inside the tree about to go.
+	cd "$WORKING_DIR_BASE" 2>/dev/null || cd / || true
+	log "removing the private execution workspace $WORKING_DIR"
+	rm -rf "$WORKING_DIR" 2>/dev/null ||
+		log "could not remove $WORKING_DIR; leaving it rather than failing a finished pair"
+	return 0
 }
