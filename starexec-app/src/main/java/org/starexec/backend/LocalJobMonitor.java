@@ -1122,6 +1122,30 @@ public class LocalJobMonitor {
             int stageNumber,
             RunSolverStats stats,
             Properties attributes) throws Exception {
+        // status.json comes from the job script, in a directory the job itself can write. The
+        // protocol has it carry exactly two kinds of pair-level status: STATUS_RUNNING while a
+        // stage is in flight, and a terminal execution result once one finishes. Anything else
+        // did not come from the protocol, whatever produced it.
+        //
+        // The three that matter are STATUS_PROCESSING_RESULTS(19), STATUS_PAUSED(20) and
+        // STATUS_PROCESSING(22). They mean work is still owed, and a pair left at 22 is selected
+        // by the periodic post-processing task, which then sets it to STATUS_COMPLETE -- so a job
+        // able to write its own pair status could have a timeout laundered into a clean
+        // completion. ContainerJobMonitor guards its pair-level write for exactly this reason;
+        // this path did not, and StageStatusSnapshots guards only the per-stage channel.
+        //
+        // Not finishedRunning() and not a numeric range: the authority is the enumerated
+        // predicate the database also enforces, so the two cannot drift.
+        if (status != StatusCode.STATUS_RUNNING && !status.isTerminalExecutionResult()) {
+            // Deterministic: the same bytes fail the same check on every poll, so this is an
+            // artifact defect rather than a transient one. The outer lifecycle holds the pair
+            // and keeps its output instead of retrying in a loop or inventing a result.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "refusing to record status " + status + " for pair " + pairId
+                            + ": a pair-level status may only be STATUS_RUNNING or a terminal"
+                            + " execution result");
+        }
+
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);

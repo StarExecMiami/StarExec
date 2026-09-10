@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
 
 ### Fixed
+- **Pair-level status validation**: The Local and Kubernetes backends now check a pair's status against `isTerminalExecutionResult()` before recording it, as the container monitor already did. `status.json` is written by the job into a directory the job controls, and `STATUS_PROCESSING` in particular is promoted to `STATUS_COMPLETE` by the periodic post-processing task, so a job could otherwise record a status that turned its own timeout into a clean completion.
 - **Disk accounting**: Recording runsolver statistics is now idempotent. Repeated calls previously added the reported figure to user and job totals each time while overwriting the stage row, leaving a surplus that no refund could reclaim.
 - **Space hierarchy**: Moving a space into itself or into one of its own descendants is now rejected, preventing a space from becoming its own ancestor.
 - **Benchmark uploads**: The asynchronous upload path now satisfies the same invariants as the synchronous one, creating the space association and charging disk usage. Uploaded benchmarks were previously invisible in their space, and deleting them could drive recorded disk usage negative.
