@@ -877,11 +877,6 @@ public class LocalJobMonitor {
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
             return new StatusAndStage(resolved, stageNumber);
-        } catch (StageStatusSnapshots.InvalidSnapshotException e) {
-            // Deliberately not folded into the retry below. "Not readable yet" is for a file
-            // caught mid-write, which the next poll re-reads; this file was read completely
-            // and says something that cannot be acted on, and will say it again forever.
-            throw e;
         } catch (IOException | com.google.gson.JsonParseException | IllegalStateException e) {
             // JsonParser.parseString throws JsonSyntaxException -- a RuntimeException --
             // on a truncated file, and getAsJsonObject throws IllegalStateException when

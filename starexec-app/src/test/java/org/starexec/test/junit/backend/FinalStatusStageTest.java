@@ -250,6 +250,67 @@ public class FinalStatusStageTest {
 		}
 	}
 
+	/**
+	 * The absent-file case, which must keep working: a container that produced no status.json
+	 * has nothing to misattribute, and refusing it would block every such pair. This is the
+	 * case an earlier revision of this change got wrong -- it left the stage at 0, which is
+	 * not a refusal but the very identity {@code UpdatePairStatusPrecise} spreads NOT_REACHED
+	 * across every stage of the pair.
+	 */
+	@Test
+	public void containerStillIngestsWhenThereIsNoStatusFileAtAll() throws Throwable {
+		Path dir = folder.newFolder().toPath();
+		ContainerJobMonitor monitor = new ContainerJobMonitor(null);
+		PodmanBackend.CompletedContainerInfo info =
+				new PodmanBackend.CompletedContainerInfo("c2", PAIR, dir.toString(), 0);
+
+		Method m = ContainerJobMonitor.class.getDeclaredMethod(
+				"processCompletedJob", PodmanBackend.CompletedContainerInfo.class);
+		m.setAccessible(true);
+		try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+			try {
+				m.invoke(monitor, info);
+			} catch (java.lang.reflect.InvocationTargetException e) {
+				if (e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException) {
+					fail("no status.json is not a malformed status.json: " + e.getCause());
+				}
+				// any other failure is the absent database further down, which is fine here
+			}
+			jobPairsMock.verify(
+					() -> JobPairs.setPairStatusPreciseResult(
+							Mockito.anyInt(), Mockito.intThat(s -> s < 1), Mockito.anyInt(),
+							Mockito.anyInt(), Mockito.anyBoolean()),
+					Mockito.never());
+			jobPairsMock.verify(
+					() -> JobPairs.setPairStatusPrecise(
+							Mockito.anyInt(), Mockito.intThat(s -> s < 1), Mockito.anyInt(),
+							Mockito.anyInt()),
+					Mockito.never());
+		}
+	}
+
+	/** A file that exists and is not a status record is refused, not defaulted. */
+	@Test
+	public void containerRefusesAStatusFileItCannotParse() throws Throwable {
+		Path dir = statusDir("{ this is not json");
+		ContainerJobMonitor monitor = new ContainerJobMonitor(null);
+		PodmanBackend.CompletedContainerInfo info =
+				new PodmanBackend.CompletedContainerInfo("c3", PAIR, dir.toString(), 0);
+
+		Method m = ContainerJobMonitor.class.getDeclaredMethod(
+				"processCompletedJob", PodmanBackend.CompletedContainerInfo.class);
+		m.setAccessible(true);
+		try (MockedStatic<JobPairs> ignored = Mockito.mockStatic(JobPairs.class)) {
+			try {
+				m.invoke(monitor, info);
+				fail("an unparsable status.json must not be ingested");
+			} catch (java.lang.reflect.InvocationTargetException e) {
+				assertTrue("expected the invalid-snapshot refusal, got " + e.getCause(),
+						e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+			}
+		}
+	}
+
 	// ----------------------------------------------- D. KubernetesNativeBackend lifecycle
 
 	@SuppressWarnings("unchecked")
@@ -371,17 +432,40 @@ public class FinalStatusStageTest {
 
 	// --------------------------------------------------------------------------- shared
 
-	/** The producer writes this field on every path, so the strict rule costs it nothing. */
+	/**
+	 * The producer writes the field on every path, so the strict rule never rejects it for
+	 * being absent.
+	 *
+	 * <p>It does <em>not</em> follow that every value it writes is accepted:
+	 * {@code containerWriteStatus} defaults its stage argument to {@code 0}
+	 * ({@code local STAGE_NUMBER=${2:-0}}), which is the job script's deliberate pair-level
+	 * channel -- a status about the pair rather than about any stage. Those records are
+	 * refused by this parser, which is correct as far as a <em>precise stage</em> write goes
+	 * (0 identifies no stage) but means the pair is held rather than recorded through
+	 * {@code UpdatePairStatus}, the stageless routine that exists for exactly them.
+	 *
+	 * <p>Asserted rather than left implicit so the trade-off is visible in the suite instead
+	 * of being discovered in production. See the follow-up issue referenced in the PR.
+	 */
 	@Test
-	public void theShippedProducerAlwaysWritesTheField() throws Exception {
+	public void theShippedProducerAlwaysWritesTheFieldButDefaultsItToZero() throws Exception {
 		Path functions = Path.of("src/main/java/org/starexec/config/sge/functions.bash");
 		String body = Files.readString(functions);
 		int start = body.indexOf("function containerWriteStatus");
 		assertTrue("containerWriteStatus must exist to be checked", start >= 0);
 		String fn = body.substring(start, body.indexOf("\n}", start));
+
 		assertTrue("containerWriteStatus must always write stageNumber, or the strict parse"
-						+ " would reject its own producer: " + fn,
+						+ " would reject its own producer for omitting it: " + fn,
 				fn.contains("\\\"stageNumber\\\":"));
-		assertFalse("and it must not be conditional", fn.contains("if [ -z \"$STAGE_NUMBER\""));
+
+		// The real default, quoted exactly. The previous version of this test looked for a
+		// literal that has never existed in this file and so asserted nothing.
+		assertTrue("containerWriteStatus is expected to default its stage argument to 0 --"
+						+ " if that changes, the pair-level trade-off below changes with it: "
+						+ fn,
+				fn.contains("local STAGE_NUMBER=${2:-0}"));
+		assertRejected("{\"status\":7,\"stageNumber\":0}",
+				"and 0, the pair-level channel, identifies no stage");
 	}
 }

@@ -4867,7 +4867,7 @@ public class KubernetesNativeBackend implements Backend {
          *         not carry a usable stage identity
          */
         private int readStageNumber(ExecutionRef execution, int defaultStage)
-                throws StageStatusSnapshots.InvalidSnapshotException {
+                throws StageStatusSnapshots.InvalidSnapshotException, IOException {
             Path statusPath = resolveStatusPath(execution);
             if (statusPath == null || !Files.exists(statusPath)) {
                 return defaultStage;
@@ -4877,10 +4877,18 @@ public class KubernetesNativeBackend implements Backend {
             try {
                 String json = Files.readString(statusPath);
                 root = JsonParser.parseString(json).getAsJsonObject();
+            } catch (IOException e) {
+                // Deliberately not converted into a refusal. The output directory is on a
+                // shared volume and a read that fails now is the storage, not the contents --
+                // IngestionOutcome.classify says the same of an IOException, and
+                // StageStatusSnapshots.read rethrows it unwrapped for this reason. Wrapping it
+                // would retire the execution and strand the pair over a transient blip.
+                throw e;
             } catch (Exception e) {
+                // It parsed as something that is not a status record, and will again.
                 throw new StageStatusSnapshots.InvalidSnapshotException(
-                    "status.json for " + execution + " exists but could not be read as a status"
-                        + " record, so the stage that produced this result is unknown", e);
+                    "status.json for " + execution + " exists but is not a status record, so"
+                        + " the stage that produced this result is unknown", e);
             }
             return FinalStatusStage.require(root, String.valueOf(execution));
         }

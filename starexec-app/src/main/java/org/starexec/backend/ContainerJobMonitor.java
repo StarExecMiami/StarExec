@@ -519,12 +519,16 @@ public class ContainerJobMonitor {
         // pairId at -1 for pre-v2.3.1 containers whose label cannot be trusted, and expects
         // the monitor to fall back to status.json for those.
         final boolean pairIdFromLabel = info.pairId > 0;
-        // No default. A stage number substituted here is handed to UpdatePairStatusPrecise as
-        // an authoritative identity: the terminal status goes to that stage and NOT_REACHED to
-        // every stage above it, so guessing 1 attributes the result to a stage that may not
-        // have run and marks the rest of the pair not reached. Absent a usable one, this pair
-        // is not ingested at all.
-        int stageNumber = 0;
+        // The default applies to one case only: no status.json at all. A container that
+        // produced nothing has nothing to misattribute, and this has always recorded it
+        // against stage 1 -- unchanged here, as in the other two monitors.
+        //
+        // A file that EXISTS must say which stage it is about. It used to fall back to the
+        // same 1 whenever the field was missing, unusable, or a shape gson would coerce, and
+        // that number went on to UpdatePairStatusPrecise as an authoritative identity: the
+        // terminal status onto that stage, NOT_REACHED onto every stage above it. A malformed
+        // file therefore produced a confident write against an invented stage.
+        int stageNumber = 1;
         Integer declaredPairId = null;
         Path statusJson = outputPath.resolve("status.json");
         if (Files.exists(statusJson)) {
@@ -532,25 +536,24 @@ public class ContainerJobMonitor {
             try {
                 String json = Files.readString(statusJson);
                 obj = JsonParser.parseString(json).getAsJsonObject();
+            } catch (IOException e) {
+                // The file is there and could not be read. That is the filesystem, not the
+                // contents, so it stays retryable rather than becoming a permanent refusal.
+                throw e;
             } catch (Exception e) {
-                // Unchanged: an unreadable or unparsable file falls back to the label, as it
-                // always has. What follows applies only to a file that parsed.
-                log.warn(
-                    "Failed to read status.json, using label values: pairId=" +
-                        info.pairId,
-                    e
-                );
-                obj = null;
+                // It parsed as something, and that something is not a status record. The same
+                // bytes will not parse next time either.
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + info.pairId + " exists but is not a status"
+                        + " record, so the stage that produced this result is unknown", e);
             }
-            if (obj != null) {
-                if (obj.has("pairId")) {
-                    declaredPairId = obj.get("pairId").getAsInt();
-                }
-                // Throws rather than defaulting. Caught in the poll loop by the branch that
-                // holds the container, so nothing is invented and nothing is retried.
-                stageNumber = FinalStatusStage.require(obj, "pair " + info.pairId);
-                log.debug("Extracted stageNumber from status.json: " + stageNumber);
+            if (obj.has("pairId")) {
+                declaredPairId = obj.get("pairId").getAsInt();
             }
+            // Throws rather than defaulting. Caught in the poll loop by the branch that
+            // holds the container, so nothing is invented and nothing is retried.
+            stageNumber = FinalStatusStage.require(obj, "pair " + info.pairId);
+            log.debug("Extracted stageNumber from status.json: " + stageNumber);
         }
         // Outside the catch above, so an ownership violation is not swallowed as a
         // parse warning.
