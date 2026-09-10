@@ -249,6 +249,17 @@ public class ContainerJobMonitor {
     void processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
         try {
             processCompletedJob(info);
+        } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+            // The emergency marking below writes ERROR_RUNSCRIPT against a hardcoded stage 1.
+            // For results that name no stage that would invent exactly what the refusal
+            // exists to prevent, on the path where no poll loop is watching.
+            log.error(
+                "INGESTION INTERVENTION REQUIRED: reconciled pair " + info.pairId +
+                    " produced results with no usable stage identity. The pair is left" +
+                    " unresolved and its output is retained at " + info.outputDir +
+                    ". No solver status has been invented for this.",
+                e
+            );
         } catch (Exception e) {
             log.error("Error processing reconciled job " + info.pairId, e);
             // Emergency error marking so the pair doesn't stay stuck
@@ -319,6 +330,32 @@ public class ContainerJobMonitor {
                     // back immediately -- retrying must not cost capacity.
                     backend.releaseSlotForCompletedContainer(info.containerId);
                     recordIngestionFailure(info, e);
+                } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+                    // The container's own output does not say which stage produced this
+                    // result, so there is no stage to record it against and no retry that
+                    // would change that.
+                    //
+                    // Not allowed to reach the handler below: that one records
+                    // ERROR_RUNSCRIPT against a hardcoded stage 1, which would invent both
+                    // the stage and the solver outcome for a pair whose actual problem is
+                    // that nobody said which stage ran -- and would then delete the
+                    // container, destroying the evidence.
+                    //
+                    // Held on the first attempt rather than after MAX_INGESTION_ATTEMPTS of
+                    // backoff: that budget exists for a platform that might recover, and
+                    // this cannot. The slot is handed back because the container has
+                    // definitively exited.
+                    backend.releaseSlotForCompletedContainer(info.containerId);
+                    ingestionQuarantine.add(info.containerId);
+                    ingestionAttempts.remove(info.containerId);
+                    log.error(
+                        "INGESTION INTERVENTION REQUIRED: pair " + info.pairId + " produced" +
+                            " results with no usable stage identity, so they cannot be" +
+                            " recorded and retrying cannot help. The pair is left unresolved" +
+                            " and its output is retained at " + info.outputDir + " (container " +
+                            info.containerId + "). No solver status has been invented for this.",
+                        e
+                    );
                 } catch (Exception e) {
                     // The results themselves are unusable and will be on every retry:
                     // output that names another pair, a stage the pair does not have, a
@@ -482,26 +519,37 @@ public class ContainerJobMonitor {
         // pairId at -1 for pre-v2.3.1 containers whose label cannot be trusted, and expects
         // the monitor to fall back to status.json for those.
         final boolean pairIdFromLabel = info.pairId > 0;
-        int stageNumber = 1; // safe default if status.json is absent or incomplete
+        // No default. A stage number substituted here is handed to UpdatePairStatusPrecise as
+        // an authoritative identity: the terminal status goes to that stage and NOT_REACHED to
+        // every stage above it, so guessing 1 attributes the result to a stage that may not
+        // have run and marks the rest of the pair not reached. Absent a usable one, this pair
+        // is not ingested at all.
+        int stageNumber = 0;
         Integer declaredPairId = null;
         Path statusJson = outputPath.resolve("status.json");
         if (Files.exists(statusJson)) {
+            JsonObject obj;
             try {
                 String json = Files.readString(statusJson);
-                JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-                if (obj.has("pairId")) {
-                    declaredPairId = obj.get("pairId").getAsInt();
-                }
-                if (obj.has("stageNumber")) {
-                    stageNumber = obj.get("stageNumber").getAsInt();
-                    log.debug("Extracted stageNumber from status.json: " + stageNumber);
-                }
+                obj = JsonParser.parseString(json).getAsJsonObject();
             } catch (Exception e) {
+                // Unchanged: an unreadable or unparsable file falls back to the label, as it
+                // always has. What follows applies only to a file that parsed.
                 log.warn(
                     "Failed to read status.json, using label values: pairId=" +
                         info.pairId,
                     e
                 );
+                obj = null;
+            }
+            if (obj != null) {
+                if (obj.has("pairId")) {
+                    declaredPairId = obj.get("pairId").getAsInt();
+                }
+                // Throws rather than defaulting. Caught in the poll loop by the branch that
+                // holds the container, so nothing is invented and nothing is retried.
+                stageNumber = FinalStatusStage.require(obj, "pair " + info.pairId);
+                log.debug("Extracted stageNumber from status.json: " + stageNumber);
             }
         }
         // Outside the catch above, so an ownership violation is not swallowed as a
