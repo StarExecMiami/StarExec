@@ -834,11 +834,19 @@ public class LocalJobMonitor {
     /**
      * Reads status and stageNumber from status.json using Gson.
      *
-     * <p>Returns {@link StatusCode#ERROR_RUNSCRIPT} with stageNumber=1 if the
-     * file is missing, unreadable, or lacks the required fields — identical
-     * sentinel behaviour to the former regex-only readStatus().</p>
+     * <p>A missing file still returns the {@link StatusCode#ERROR_RUNSCRIPT} sentinel: a pair
+     * that produced no output at all is a different situation from one whose output cannot be
+     * believed, and it has always been reported this way.
+     *
+     * <p>A file that exists and carries a status must carry a usable stage identity. It used
+     * to substitute stage 1 for a missing or unusable {@code stageNumber}, which handed
+     * {@code UpdatePairStatusPrecise} an invented stage: the terminal status went to stage 1,
+     * whether or not stage 1 ran, and every stage above it was marked not reached. That is now
+     * refused, deterministically, so the pair is blocked with its output rather than given a
+     * result attributed to the wrong stage.</p>
      */
-    private StatusAndStage readStatusFile(Path outputDir, int pairId) {
+    private StatusAndStage readStatusFile(Path outputDir, int pairId)
+            throws StageStatusSnapshots.InvalidSnapshotException {
         Path statusFile = outputDir.resolve("status.json");
         if (!Files.exists(statusFile)) {
             log.warn("No status.json found for pairId=" + pairId);
@@ -860,7 +868,7 @@ public class LocalJobMonitor {
 
             int statusCode = obj.get("status").getAsInt();
             StatusCode resolved = StatusCode.toStatusCode(statusCode);
-            int stageNumber = obj.has("stageNumber") ? obj.get("stageNumber").getAsInt() : 1;
+            int stageNumber = FinalStatusStage.require(obj, "pair " + pairId);
 
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
