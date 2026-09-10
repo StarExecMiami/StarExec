@@ -169,6 +169,104 @@ public class ProcessorFailureStatusTest {
 		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
 	}
 
+	// ------------------------------------------------- which stage the fault is named against
+
+	/**
+	 * A processor fault belongs to the stage that was running, and saying so is what keeps it
+	 * out of {@code UpdatePairStatusPrecise}'s pair-level path.
+	 *
+	 * <p>That routine sets the terminal status {@code WHERE stage_number = _stageNumber} and
+	 * NOT_REACHED {@code WHERE stage_number > _stageNumber}. Stage numbers start at 1, so the
+	 * 0 that {@code sendStatus} defaults to gives the status to no row and NOT_REACHED to every
+	 * stage the pair has -- a stage that genuinely completed included (#152).
+	 *
+	 * <p>Behavioural, and paired with the structural test below on purpose. This one shows that
+	 * naming a stage changes what reaches the monitor; that one shows the four processor paths
+	 * actually name one. Neither is sufficient alone: the failure paths sit inside
+	 * {@code copyOutput} and {@code copyDependencies}, whose surrounding environment is most of
+	 * a running job pair, so the call sites themselves cannot be driven from here.
+	 */
+	@Test
+	public void aStatusThatNamesAStageReachesTheMonitorAsThatStage() throws Exception {
+		Harness h = new Harness(folder);
+		h.line("sendStatus \"$ERROR_POST_PROCESSOR\" 2");
+		h.line("exit 0");
+
+		h.run(0);
+
+		assertEquals(ERROR_POST_PROCESSOR, h.status());
+		assertEquals(2, h.stage());
+		assertTrue(
+				"a named stage must also leave the per-stage snapshot the monitor reads, or a"
+						+ " later stage's write erases this result",
+				h.hasSnapshot(2));
+	}
+
+	/**
+	 * The negative control, and the reason the argument has to be supplied at the call site
+	 * rather than defaulted. Nothing here is broken -- this is what the pair-level channel is
+	 * for -- but it is not a stage, and it leaves no snapshot to be read back.
+	 */
+	@Test
+	public void aStatusWithNoStageArgumentNamesNoStage() throws Exception {
+		Harness h = new Harness(folder);
+		h.line("sendStatus \"$ERROR_POST_PROCESSOR\"");
+		h.line("exit 0");
+
+		h.run(0);
+
+		assertEquals(ERROR_POST_PROCESSOR, h.status());
+		assertEquals("sendStatus's stage argument defaults to 0", 0, h.stage());
+		assertFalse("stage 0 owns no jobpair_stage_data row, so it gets no snapshot",
+				h.hasSnapshot(0));
+	}
+
+	/**
+	 * The four processor failure paths, checked in the source for the same reason the claim
+	 * test above is: they cannot be reached from this harness. It pins the stage argument and
+	 * would catch a fifth path added without one.
+	 *
+	 * <p>The argument is required to come from an authoritative source rather than merely to be
+	 * present, so a literal cannot satisfy it. {@code copyOutput} takes the stage as its own
+	 * first argument, which every caller passes as {@code CURRENT_STAGE_NUMBER}
+	 * (jobscript:539, :557). {@code copyDependencies} takes none and runs at jobscript:307,
+	 * before {@code CURRENT_STAGE_NUMBER} is assigned at :314, so it reads
+	 * {@code STAGE_NUMBERS[STAGE_INDEX]} -- the loop's own index -- instead of a variable that
+	 * still holds the previous iteration's value.
+	 */
+	@Test
+	public void everyProcessorFailurePathNamesItsStage() throws Exception {
+		String[] lines = Files.readString(SGE.resolve("functions.bash")).split("\n", -1);
+
+		int checked = 0;
+		for (String raw : lines) {
+			String line = raw.trim();
+			String call = null;
+			if (line.startsWith("sendStatus \"$ERROR_POST_PROCESSOR\"")) {
+				call = "sendStatus \"$ERROR_POST_PROCESSOR\"";
+			} else if (line.startsWith("sendStatus \"$ERROR_PRE_PROCESSOR\"")) {
+				call = "sendStatus \"$ERROR_PRE_PROCESSOR\"";
+			}
+			if (call == null) {
+				continue;
+			}
+			checked++;
+
+			String stage = line.substring(call.length()).trim();
+			assertFalse(
+					"a processor fault sent with no stage number defaults to 0, and a precise"
+							+ " write keyed on \"= 0\" gives the status to no stage and NOT_REACHED"
+							+ " to every stage the pair has (#152): " + line,
+					stage.isEmpty());
+			assertTrue(
+					"the stage must come from the stage the pair is actually running, not a"
+							+ " literal: " + line,
+					stage.contains("$1") || stage.contains("STAGE_NUMBERS[STAGE_INDEX]"));
+		}
+
+		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
+	}
+
 	// ------------------------------------------------------------------------ harness
 
 	private static final class Harness {
@@ -220,6 +318,15 @@ public class ProcessorFailureStatusTest {
 
 		int status() throws Exception {
 			return field(Files.readString(out.resolve("status.json")), "status");
+		}
+
+		int stage() throws Exception {
+			return field(Files.readString(out.resolve("status.json")), "stageNumber");
+		}
+
+		/** The per-stage record beside status.json, written only for a real stage number. */
+		boolean hasSnapshot(int stageNumber) {
+			return Files.exists(out.resolve("stage-status").resolve(stageNumber + ".json"));
 		}
 	}
 

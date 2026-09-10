@@ -1130,8 +1130,13 @@ function copyOutput {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "post processor error: no recognized script found"
+			# The stage number, so this names the stage that actually failed. Without it
+			# sendStatus defaults to 0, and a precise write keyed on "= 0" gives the status
+			# to no stage and NOT_REACHED to every stage the pair has (#152). "$1" is
+			# copyOutput's own first argument, which every caller passes as
+			# CURRENT_STAGE_NUMBER (jobscript:539, :557).
 			STATUS_SENT=true
-			sendStatus "$ERROR_POST_PROCESSOR"
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
 			exit 1
 		fi
 		# `|| POST_PROC_STATUS=$?` rather than testing $? on the next line: this runs under
@@ -1150,7 +1155,7 @@ function copyOutput {
 				log "post processor failed with exit status $POST_PROC_STATUS"
 			fi
 			STATUS_SENT=true
-			sendStatus "$ERROR_POST_PROCESSOR"
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
 			sendStatusToLaterStages "$ERROR_POST_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
 			setEndTime
@@ -1405,8 +1410,14 @@ function copyDependencies {
 		PROC_SCRIPT=$(getProcessorScript)
 		if [ -z "$PROC_SCRIPT" ]; then
 			log "pre processor error: no recognized script found"
+			# The stage number, so this names the stage that actually failed. Without it
+			# sendStatus defaults to 0, and a precise write keyed on "= 0" gives the status
+			# to no stage and NOT_REACHED to every stage the pair has (#152). Taken from
+			# STAGE_NUMBERS[STAGE_INDEX] and not CURRENT_STAGE_NUMBER: copyDependencies runs
+			# at jobscript:307, before CURRENT_STAGE_NUMBER is assigned at :314, so that
+			# variable is still the previous iteration's value here, or unset on the first.
 			STATUS_SENT=true
-			sendStatus "$ERROR_PRE_PROCESSOR"
+			sendStatus "$ERROR_PRE_PROCESSOR" "${STAGE_NUMBERS[STAGE_INDEX]}"
 			exit 1
 		fi
 		# See the matching note in the post-processor path: under `set -e` a failing pre
@@ -1421,7 +1432,7 @@ function copyDependencies {
 				log "pre processor failed with exit status $PRE_PROC_STATUS"
 			fi
 			STATUS_SENT=true
-			sendStatus "$ERROR_PRE_PROCESSOR"
+			sendStatus "$ERROR_PRE_PROCESSOR" "${STAGE_NUMBERS[STAGE_INDEX]}"
 			sendStatusToLaterStages "$ERROR_PRE_PROCESSOR" 0
 			setRunStatsToZeroForLaterStages 0
 			setEndTime
