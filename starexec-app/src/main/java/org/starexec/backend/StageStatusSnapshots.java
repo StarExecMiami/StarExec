@@ -107,6 +107,72 @@ public final class StageStatusSnapshots {
     public static Map<Integer, Integer> read(Path outputDir, int expectedPairId)
         throws InvalidSnapshotException, IOException {
 
+        return read(outputDir, expectedPairId, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Reads and validates the per-stage records for one pair, up to but excluding the stage the
+     * caller is currently resolving.
+     *
+     * <h2>Why a stage bound is part of the read</h2>
+     *
+     * <p>The producer writes a stage's snapshot twice: {@code STATUS_RUNNING} when the stage
+     * starts ({@code functions.bash} {@code sendNode}) and its real outcome when the stage ends.
+     * Between those two writes the file legitimately holds a non-terminal status, and a pair
+     * killed mid-stage legitimately leaves it that way for good.
+     *
+     * <p>The two-argument overload validates every snapshot it finds, which is correct only once
+     * no stage is still in flight. Applied to a running pair it rejects the pair's own current
+     * stage, and because an {@link InvalidSnapshotException} is classified as a deterministic
+     * artifact defect -- the same bytes failing the same check forever -- the caller holds the
+     * pair for intervention and never looks again. The pair then finishes cleanly, its evidence
+     * becomes consistent, and nothing re-reads it. That is a completed run lost to a poll that
+     * arrived a second early.
+     *
+     * <p>So the bound is what makes the deterministic classification honest. Every check this
+     * class applies to a returned record is a property of the bytes: a malformed record, an
+     * oversized one, a name disagreeing with its contents, a record naming another pair. Those
+     * never become valid by waiting. Terminality is the one rule that depends on when the file is
+     * read, and it is applied only where it cannot depend on timing -- to stages the caller has
+     * already moved past.
+     *
+     * <h2>What the bound does and does not relax</h2>
+     *
+     * <p>Only terminality. Every other rule still applies to every file found: the size cap, the
+     * parse, the stage in the name agreeing with the stage in the record, and the pair the record
+     * claims. Those are properties of the bytes, and a snapshot naming another pair is cross-pair
+     * contamination whether or not that stage has finished, so the bound must not cost the signal.
+     *
+     * <p>Stages at or after {@code terminalStage} are then left out of the result rather than
+     * returned unchecked. The directory is writable by solver code, and the status-laundering this
+     * class exists to prevent needs only for an unvalidated status to reach a caller that ingests
+     * it. A value that is never returned cannot be ingested by a caller that forgets to filter.
+     *
+     * <p>Note what this does <em>not</em> establish: the terminal stage's own status arrives
+     * through {@code status.json}, and neither {@code LocalJobMonitor} nor
+     * {@code KubernetesNativeBackend} currently checks that value against
+     * {@link StatusCode#isTerminalExecutionResult()} before recording it, the way
+     * {@code ContainerJobMonitor} does. That gap predates this bound and is not closed by it.
+     *
+     * @param outputDir      as above
+     * @param expectedPairId as above
+     * @param terminalStage  the stage the caller is resolving from other evidence. Records for
+     *                       this stage and later are still validated, but are neither checked for
+     *                       terminality nor returned. A value below 1 names no stage and is
+     *                       treated as no bound at all. Pass {@link Integer#MAX_VALUE} to validate
+     *                       every stage, which is what the two-argument overload does.
+     * @return stage number to status code, in stage order, for stages before {@code terminalStage}
+     * @throws InvalidSnapshotException when a returned record is malformed, oversized,
+     *         inconsistent with its own file name, names a different pair, or carries a status
+     *         that is not a terminal execution result
+     * @throws IOException when the directory cannot be read
+     */
+    public static Map<Integer, Integer> read(
+        Path outputDir,
+        int expectedPairId,
+        int terminalStage
+    ) throws InvalidSnapshotException, IOException {
+
         if (outputDir == null) {
             return Collections.emptyMap();
         }
@@ -114,6 +180,25 @@ public final class StageStatusSnapshots {
         if (!Files.isDirectory(dir)) {
             return Collections.emptyMap();
         }
+
+        // Stage numbers start at 1, so anything below it names no stage and is not a bound.
+        // It reaches here routinely: sendStatus defaults its stage argument to 0
+        // (functions.bash, `local STAGE_NUM=${2:-0}`), and every pair-level error path takes
+        // that default -- exitJobscript's fail-closed ERROR_BENCHMARK, limitExceeded, and the
+        // processor failures. status.json then says stageNumber 0, and that is what the caller
+        // passes.
+        //
+        // Treating 0 as a bound would skip every stage, which is not "nothing is in flight" but
+        // "everything is", and the caller would go on to write a result for a pair whose stage
+        // history it had just declined to read.
+        //
+        // So a stage number below 1 keeps the two halves of the old behaviour separately:
+        // everything is validated, as this class did before the bound existed, and nothing is
+        // returned, because the caller used to select `stage < terminalStage` and that selects
+        // nothing when there is no stage to be before. A producer that names no stage is then no
+        // worse off in either direction than it was.
+        final boolean namesAStage = terminalStage >= 1;
+        final int bound = namesAStage ? terminalStage : Integer.MAX_VALUE;
 
         Map<Integer, Integer> snapshots = new TreeMap<>();
         int seen = 0;
@@ -182,6 +267,20 @@ public final class StageStatusSnapshots {
                             + recordStage
                     );
                 }
+                if (stageFromName >= bound) {
+                    // The stage the caller is still resolving, or one after it. Everything above
+                    // is a property of the bytes and has already been checked, including the pair
+                    // this record claims -- a snapshot naming another pair is cross-pair
+                    // contamination whether or not the stage is in flight, and losing that signal
+                    // to the bound would be a poor trade.
+                    //
+                    // What is NOT checked is terminality, and the record is not returned. While a
+                    // stage runs its snapshot reads STATUS_RUNNING and is rewritten when the stage
+                    // ends, so judging it here would let the timing of a poll decide whether the
+                    // pair is refused -- and that refusal is permanent.
+                    continue;
+                }
+
                 if (!StatusCode.toStatusCode(recordStatus).isTerminalExecutionResult()) {
                     throw new InvalidSnapshotException(
                         entry + " carries status " + recordStatus
@@ -189,7 +288,9 @@ public final class StageStatusSnapshots {
                     );
                 }
 
-                snapshots.put(stageFromName, recordStatus);
+                if (namesAStage) {
+                    snapshots.put(stageFromName, recordStatus);
+                }
             }
         }
 

@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -16,6 +17,8 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.starexec.backend.LocalJobMonitor;
+import org.starexec.backend.StageStatusSnapshots;
+import org.starexec.data.to.Status.StatusCode;
 
 /**
  * Tests for the ways LocalJobMonitor could strand or misreport a job pair.
@@ -513,5 +516,223 @@ public class LocalJobMonitorTests {
             -1,
             recordParseFailure(45, runN)
         );
+    }
+
+    // ------------------------------------------------------------------
+    // What a pair-level status is allowed to be.
+    //
+    // status.json is written by the job script into a directory the job can write. The protocol
+    // has it carry STATUS_RUNNING while a stage is in flight and a terminal execution result
+    // once one finishes -- which is exactly the job script's emission set. Anything else did not
+    // come from the protocol.
+    //
+    // STATUS_PROCESSING(22) is the one with teeth: a pair left at 22 is selected by the periodic
+    // post-processing task, which sets it to STATUS_COMPLETE. ContainerJobMonitor already
+    // guarded its own pair-level write against this; this path did not.
+    //
+    // The guard runs before any database call, so a refusal is an InvalidSnapshotException and
+    // anything that gets past it fails later for want of a database. That difference is what
+    // these assert on -- no database is needed to tell "refused" from "accepted".
+    // ------------------------------------------------------------------
+
+    private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
+        for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
+            if (m.getName().equals("updateDatabase")) {
+                m.setAccessible(true);
+                try {
+                    m.invoke(monitor, pairId, status, stageNumber,
+                             newRunSolverStats(), new java.util.Properties());
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw e.getCause();
+                }
+                return;
+            }
+        }
+        throw new AssertionError("no such method: updateDatabase");
+    }
+
+    /** RunSolverStats is private; build one with all-zero fields. */
+    private Object newRunSolverStats() throws Exception {
+        Class<?> type = Class.forName("org.starexec.backend.LocalJobMonitor$RunSolverStats");
+        var ctor = type.getDeclaredConstructors()[0];
+        ctor.setAccessible(true);
+        Object[] args = new Object[ctor.getParameterCount()];
+        Class<?>[] types = ctor.getParameterTypes();
+        for (int i = 0; i < args.length; i++) {
+            if (types[i] == double.class) args[i] = 0.0d;
+            else if (types[i] == long.class) args[i] = 0L;
+            else if (types[i] == int.class) args[i] = 0;
+            else args[i] = null;
+        }
+        return ctor.newInstance(args);
+    }
+
+    private boolean isRefused(StatusCode status) throws Throwable {
+        try {
+            updateDatabase(50, status, 1);
+            return false;
+        } catch (StageStatusSnapshots.InvalidSnapshotException refused) {
+            assertTrue("the refusal must name the status: " + refused.getMessage(),
+                    refused.getMessage().contains(status.toString()));
+            return true;
+        } catch (Throwable anythingElse) {
+            // Got past the guard and failed further in, for want of a database.
+            return false;
+        }
+    }
+
+    /**
+     * The whole enum, so a status added later cannot quietly become recordable. Enumerated
+     * against the authoritative predicate rather than against a list written out here, which
+     * would only prove this test and the guard were written by the same hand.
+     */
+    @Test
+    public void onlyRunningOrATerminalResultCanBeRecordedAsAPairStatus() throws Throwable {
+        for (StatusCode code : StatusCode.values()) {
+            boolean allowed = code == StatusCode.STATUS_RUNNING || code.isTerminalExecutionResult();
+            assertEquals(code + " (" + code.getVal() + ")", !allowed, isRefused(code));
+        }
+    }
+
+    /** Named individually, so a regression says which state leaked rather than only that one did. */
+    @Test
+    public void theThreeStatesThatMeanWorkIsStillOwedAreRefusedAsAPairStatus() throws Throwable {
+        assertTrue("19 STATUS_PROCESSING_RESULTS",
+                isRefused(StatusCode.STATUS_PROCESSING_RESULTS));
+        assertTrue("20 STATUS_PAUSED", isRefused(StatusCode.STATUS_PAUSED));
+        assertTrue("22 STATUS_PROCESSING -- the one post-processing promotes to COMPLETE",
+                isRefused(StatusCode.STATUS_PROCESSING));
+    }
+
+    /** The terminal error statuses 23-26 are results a pair may legitimately be left holding. */
+    @Test
+    public void theTerminalErrorStatusesAreStillRecordable() throws Throwable {
+        for (StatusCode code : new StatusCode[]{
+                StatusCode.STATUS_NOT_REACHED,              // 23
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING,  // 24
+                StatusCode.ERROR_PRE_PROCESSOR,             // 25
+                StatusCode.ERROR_POST_PROCESSOR}) {         // 26
+            assertFalse(code + " is a result and must remain recordable", isRefused(code));
+        }
+    }
+
+    /** And the progress status, which is how a pair is marked running at all. */
+    @Test
+    public void runningIsStillRecordableBecauseThatIsHowAPairIsMarkedRunning() throws Throwable {
+        assertFalse(isRefused(StatusCode.STATUS_RUNNING));
+    }
+
+    /** A refusal must happen before anything is written, including stage history. */
+    @Test
+    public void aRefusedStatusReachesNoDatabaseCallAtAll() throws Throwable {
+        try {
+            updateDatabase(50, StatusCode.STATUS_PROCESSING, 1);
+            fail("STATUS_PROCESSING must be refused");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            for (StackTraceElement f : expected.getStackTrace()) {
+                assertFalse("the refusal must precede any JobPairs call, but the stack shows "
+                                + f, f.getClassName().contains("JobPairs"));
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // A stage that is still running must not strand the pair.
+    //
+    // status.json exists from the first moment of a run -- sendNode writes STATUS_RUNNING into
+    // it -- so the poll loop calls into ingestion against a pair that has not finished. The
+    // stage's own snapshot legitimately reads STATUS_RUNNING at that point. Validating it threw
+    // InvalidSnapshotException, which IngestionOutcome classifies as BLOCKED, and BLOCKED is
+    // permanent: the pair was never re-read, even though it went on to finish cleanly a second
+    // later and its evidence became consistent.
+    //
+    // These assert on the throw rather than on a flag because the throw IS the mechanism: it is
+    // the only thing that reaches recordIngestionFailure and sets ingestionBlocked.
+    // ------------------------------------------------------------------
+
+    private void ingestEarlierStageStatuses(
+        int pairId, Object state, Path outputDir, int terminalStage) throws Exception {
+        for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
+            if (m.getName().equals("ingestEarlierStageStatuses")) {
+                m.setAccessible(true);
+                try {
+                    m.invoke(monitor, pairId, state, outputDir, terminalStage);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw (Exception) e.getCause();
+                }
+                return;
+            }
+        }
+        throw new AssertionError("no such method: ingestEarlierStageStatuses");
+    }
+
+    private Path dirWithStageSnapshot(int pairId, int stage, int status) throws Exception {
+        Path dir = Files.createTempDirectory("ljm-stage");
+        dir.toFile().deleteOnExit();
+        Path snapshots = dir.resolve("stage-status");
+        Files.createDirectories(snapshots);
+        Files.writeString(
+            snapshots.resolve(stage + ".json"),
+            "{\"pairId\":" + pairId + ",\"status\":" + status
+                + ",\"stageNumber\":" + stage + ",\"timestamp\":1788988692}\n");
+        return dir;
+    }
+
+    @Test
+    public void aStageStillRunningDoesNotBlockIngestion() throws Exception {
+        // 4 is STATUS_RUNNING, which the stage's snapshot holds from the moment it starts.
+        // status.json names that same stage: sendNode's sendStatus defaults to stage 0, but the
+        // sendStageStatus on the next line rewrites status.json with the real stage number.
+        Path dir = dirWithStageSnapshot(46, 1, 4);
+        monitor.registerJob(dir.toString(), 46);
+
+        // Single-stage pair, currently in stage 1. Nothing is behind it, and its own snapshot
+        // must not be judged. Before the bound this threw, and the throw was permanent.
+        ingestEarlierStageStatuses(46, stateFor(46), dir, 1);
+    }
+
+    /**
+     * A stage number below 1 names no stage. It arrives here routinely -- every pair-level error
+     * path takes {@code sendStatus}'s default of 0 -- and must not be read as "no stage is in
+     * flight", which would skip the whole directory and let the caller record a result for a
+     * pair whose history it had just declined to read.
+     *
+     * <p>The pre-bound behaviour is the conservative one, so 0 keeps it: validate everything, and
+     * refuse a stage that is not holding a result.
+     */
+    @Test
+    public void aStageNumberBelowOneIsNotTreatedAsABound() throws Exception {
+        Path dir = dirWithStageSnapshot(49, 1, 4);
+        monitor.registerJob(dir.toString(), 49);
+
+        try {
+            ingestEarlierStageStatuses(49, stateFor(49), dir, 0);
+            fail("stageNumber 0 must not silently skip every snapshot");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            assertTrue(
+                "wrong refusal: " + expected.getMessage(),
+                expected.getMessage().contains("carries status 4"));
+        }
+    }
+
+    /**
+     * The control. Once the pair has moved past a stage, that stage's status is final, and a
+     * non-terminal one is still a refusal -- otherwise the fix would have opened the
+     * status-laundering path the snapshot rules exist to close.
+     */
+    @Test
+    public void aStageThePairMovedPastIsStillValidated() throws Exception {
+        // 22 is STATUS_PROCESSING, the value the periodic post-processor promotes to COMPLETE.
+        Path dir = dirWithStageSnapshot(48, 1, 22);
+        monitor.registerJob(dir.toString(), 48);
+
+        try {
+            ingestEarlierStageStatuses(48, stateFor(48), dir, 2);
+            fail("a non-terminal status on a stage the pair has passed must be refused");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            assertTrue(
+                "wrong refusal: " + expected.getMessage(),
+                expected.getMessage().contains("carries status 22"));
+        }
     }
 }

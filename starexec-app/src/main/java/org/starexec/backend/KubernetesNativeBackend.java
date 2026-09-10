@@ -4155,6 +4155,24 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
+                // The status about to be made this pair's result must be one a pair may be left
+                // holding. readTerminalStatus takes it from status.json, which the job wrote,
+                // and STATUS_PROCESSING(22) in particular is picked up by the periodic
+                // post-processing task and promoted to STATUS_COMPLETE -- so accepting it here
+                // would let a job launder its own timeout into a clean completion.
+                //
+                // The same guard ContainerJobMonitor applies to its pair-level write. Unlike the
+                // Local path this one runs after the Job has completed, so STATUS_RUNNING is not
+                // legitimate here either and the strict predicate is the right one.
+                if (!StatusCode.toStatusCode(terminalStatus).isTerminalExecutionResult()) {
+                    log.error(
+                        "Refusing to record non-terminal status " + terminalStatus +
+                        " as the result of pair " + pairId + " (" + execution +
+                        "); the output is retained for diagnosis"
+                    );
+                    return false;
+                }
+
                 PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
@@ -4162,6 +4180,32 @@ public class KubernetesNativeBackend implements Backend {
                     StatusCode.STATUS_NOT_REACHED.getVal(),
                     false
                 );
+                if (updated == PairStatusResult.REJECTED_INVALID_STAGE) {
+                    // status.json named no stage, and 0 cannot become a precise stage
+                    // identity without giving NOT_REACHED to every stage the pair has.
+                    //
+                    // Returning true rather than false, for the reason the SUPERSEDED branch
+                    // below records: false leaves the execution out of completedExecutions
+                    // and the next poll processes the same job again, forever. The input will
+                    // not change, so retrying is a loop against a condition that cannot heal.
+                    //
+                    // The pair keeps whatever non-terminal status it had and its output stays
+                    // on the PVC. Nothing is invented and the failure is logged at ERROR, so
+                    // this is held and visible rather than a silent retirement.
+                    log.error(
+                        "Refusing to record status " + terminalStatus + " for pair " + pairId +
+                        " (" + execution + "): stage number " + stageNumber + " names no" +
+                        " stage. The pair is left unresolved and its output is retained."
+                    );
+                    // Accounting is released on the way out, as it is on every other exit from
+                    // this callback. The execution has finished either way, and holding its
+                    // slot because its status could not be recorded would leak capacity once
+                    // per such pair -- a refusal that costs the cluster is not a safe refusal.
+                    releaseAccountingIfSafe(
+                        execution, "refused stage-zero status for " + execution
+                    );
+                    return true;
+                }
                 if (updated == PairStatusResult.FAILED) {
                     log.warn(
                         "Failed updating completed status for pair " +
@@ -4285,12 +4329,29 @@ public class KubernetesNativeBackend implements Backend {
 
                 int stageNumber = readStageNumber(execution, 1);
 
-                boolean updated = JobPairs.setPairStatusPrecise(
+                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
                     StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal()
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false
                 );
+                if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
+                    // status.json named no stage, so there is nothing to record this failure
+                    // against. Reported as handled rather than retried: the file will read the
+                    // same way on every poll, and returning false here would reprocess this
+                    // job forever.
+                    log.error(
+                        "Refusing to record the failure of pair " + pairId + " (" + execution +
+                        "): stage number " + stageNumber + " names no stage. Reason: " +
+                        reason + ". The pair is left unresolved and its output is retained."
+                    );
+                    releaseAccountingIfSafe(
+                        execution, "refused stage-zero failure status for " + execution
+                    );
+                    return true;
+                }
+                boolean updated = statusResult == PairStatusResult.APPLIED;
                 if (!updated) {
                     log.warn(
                         "Failed updating failed status for pair " +
@@ -4460,12 +4521,28 @@ public class KubernetesNativeBackend implements Backend {
 
                 int stageNumber = readStageNumber(execution, 1);
 
-                boolean updated = JobPairs.setPairStatusPrecise(
+                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
                     StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal()
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false
                 );
+                if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
+                    // As in the failure callback: nothing to record the escalation against,
+                    // and the same read on every retry. Reported as handled so the monitor
+                    // stops reprocessing it.
+                    log.error(
+                        "Refusing to record the stuck-pending escalation of pair " + pairId +
+                        " (" + execution + "): stage number " + stageNumber + " names no" +
+                        " stage. The pair is left unresolved and its output is retained."
+                    );
+                    releaseAccountingIfSafe(
+                        execution, "refused stage-zero stuck-pending status for " + execution
+                    );
+                    return true;
+                }
+                boolean updated = statusResult == PairStatusResult.APPLIED;
                 if (!updated) {
                     log.warn(
                         "Failed recording stuck-pending status for pair " +
@@ -4793,9 +4870,12 @@ public class KubernetesNativeBackend implements Backend {
                 return true;
             }
 
-            Map<Integer, Integer> snapshots;
+            // The terminal stage's own status comes from the runsolver artifacts, and a pair
+            // killed mid-stage legitimately leaves that snapshot non-terminal. Both are expressed
+            // by the bound, so the read never returns a record this method would have to discard.
+            Map<Integer, Integer> earlier;
             try {
-                snapshots = StageStatusSnapshots.read(outputDir, pairId);
+                earlier = StageStatusSnapshots.read(outputDir, pairId, terminalStage);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
@@ -4812,14 +4892,6 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            Map<Integer, Integer> earlier = new TreeMap<>();
-            for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
-                // The terminal stage's own status comes from the runsolver artifacts, and a
-                // pair killed mid-stage legitimately leaves that snapshot non-terminal.
-                if (snapshot.getKey() < terminalStage) {
-                    earlier.put(snapshot.getKey(), snapshot.getValue());
-                }
-            }
             if (earlier.isEmpty()) {
                 return true;
             }
