@@ -18,6 +18,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
+import org.starexec.data.to.Status.StatusCode;
 
 /**
  * Tests for the ways LocalJobMonitor could strand or misreport a job pair.
@@ -515,6 +516,124 @@ public class LocalJobMonitorTests {
             -1,
             recordParseFailure(45, runN)
         );
+    }
+
+    // ------------------------------------------------------------------
+    // What a pair-level status is allowed to be.
+    //
+    // status.json is written by the job script into a directory the job can write. The protocol
+    // has it carry STATUS_RUNNING while a stage is in flight and a terminal execution result
+    // once one finishes -- which is exactly the job script's emission set. Anything else did not
+    // come from the protocol.
+    //
+    // STATUS_PROCESSING(22) is the one with teeth: a pair left at 22 is selected by the periodic
+    // post-processing task, which sets it to STATUS_COMPLETE. ContainerJobMonitor already
+    // guarded its own pair-level write against this; this path did not.
+    //
+    // The guard runs before any database call, so a refusal is an InvalidSnapshotException and
+    // anything that gets past it fails later for want of a database. That difference is what
+    // these assert on -- no database is needed to tell "refused" from "accepted".
+    // ------------------------------------------------------------------
+
+    private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
+        for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
+            if (m.getName().equals("updateDatabase")) {
+                m.setAccessible(true);
+                try {
+                    m.invoke(monitor, pairId, status, stageNumber,
+                             newRunSolverStats(), new java.util.Properties());
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw e.getCause();
+                }
+                return;
+            }
+        }
+        throw new AssertionError("no such method: updateDatabase");
+    }
+
+    /** RunSolverStats is private; build one with all-zero fields. */
+    private Object newRunSolverStats() throws Exception {
+        Class<?> type = Class.forName("org.starexec.backend.LocalJobMonitor$RunSolverStats");
+        var ctor = type.getDeclaredConstructors()[0];
+        ctor.setAccessible(true);
+        Object[] args = new Object[ctor.getParameterCount()];
+        Class<?>[] types = ctor.getParameterTypes();
+        for (int i = 0; i < args.length; i++) {
+            if (types[i] == double.class) args[i] = 0.0d;
+            else if (types[i] == long.class) args[i] = 0L;
+            else if (types[i] == int.class) args[i] = 0;
+            else args[i] = null;
+        }
+        return ctor.newInstance(args);
+    }
+
+    private boolean isRefused(StatusCode status) throws Throwable {
+        try {
+            updateDatabase(50, status, 1);
+            return false;
+        } catch (StageStatusSnapshots.InvalidSnapshotException refused) {
+            assertTrue("the refusal must name the status: " + refused.getMessage(),
+                    refused.getMessage().contains(status.toString()));
+            return true;
+        } catch (Throwable anythingElse) {
+            // Got past the guard and failed further in, for want of a database.
+            return false;
+        }
+    }
+
+    /**
+     * The whole enum, so a status added later cannot quietly become recordable. Enumerated
+     * against the authoritative predicate rather than against a list written out here, which
+     * would only prove this test and the guard were written by the same hand.
+     */
+    @Test
+    public void onlyRunningOrATerminalResultCanBeRecordedAsAPairStatus() throws Throwable {
+        for (StatusCode code : StatusCode.values()) {
+            boolean allowed = code == StatusCode.STATUS_RUNNING || code.isTerminalExecutionResult();
+            assertEquals(code + " (" + code.getVal() + ")", !allowed, isRefused(code));
+        }
+    }
+
+    /** Named individually, so a regression says which state leaked rather than only that one did. */
+    @Test
+    public void theThreeStatesThatMeanWorkIsStillOwedAreRefusedAsAPairStatus() throws Throwable {
+        assertTrue("19 STATUS_PROCESSING_RESULTS",
+                isRefused(StatusCode.STATUS_PROCESSING_RESULTS));
+        assertTrue("20 STATUS_PAUSED", isRefused(StatusCode.STATUS_PAUSED));
+        assertTrue("22 STATUS_PROCESSING -- the one post-processing promotes to COMPLETE",
+                isRefused(StatusCode.STATUS_PROCESSING));
+    }
+
+    /** The terminal error statuses 23-26 are results a pair may legitimately be left holding. */
+    @Test
+    public void theTerminalErrorStatusesAreStillRecordable() throws Throwable {
+        for (StatusCode code : new StatusCode[]{
+                StatusCode.STATUS_NOT_REACHED,              // 23
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING,  // 24
+                StatusCode.ERROR_PRE_PROCESSOR,             // 25
+                StatusCode.ERROR_POST_PROCESSOR}) {         // 26
+            assertFalse(code + " is a result and must remain recordable", isRefused(code));
+        }
+    }
+
+    /** And the progress status, which is how a pair is marked running at all. */
+    @Test
+    public void runningIsStillRecordableBecauseThatIsHowAPairIsMarkedRunning() throws Throwable {
+        assertFalse(isRefused(StatusCode.STATUS_RUNNING));
+    }
+
+    /** A refusal must happen before anything is written, including stage history. */
+    @Test
+    public void aRefusedStatusReachesNoDatabaseCallAtAll() throws Throwable {
+        try {
+            updateDatabase(50, StatusCode.STATUS_PROCESSING, 1);
+            fail("STATUS_PROCESSING must be refused");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            for (StackTraceElement f : expected.getStackTrace()) {
+                assertFalse("the refusal must precede any JobPairs call, but the stack shows "
+                                + f, f.getClassName().contains("JobPairs"));
+            }
+        }
     }
 
     // ------------------------------------------------------------------

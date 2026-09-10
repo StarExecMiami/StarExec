@@ -4155,6 +4155,24 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
+                // The status about to be made this pair's result must be one a pair may be left
+                // holding. readTerminalStatus takes it from status.json, which the job wrote,
+                // and STATUS_PROCESSING(22) in particular is picked up by the periodic
+                // post-processing task and promoted to STATUS_COMPLETE -- so accepting it here
+                // would let a job launder its own timeout into a clean completion.
+                //
+                // The same guard ContainerJobMonitor applies to its pair-level write. Unlike the
+                // Local path this one runs after the Job has completed, so STATUS_RUNNING is not
+                // legitimate here either and the strict predicate is the right one.
+                if (!StatusCode.toStatusCode(terminalStatus).isTerminalExecutionResult()) {
+                    log.error(
+                        "Refusing to record non-terminal status " + terminalStatus +
+                        " as the result of pair " + pairId + " (" + execution +
+                        "); the output is retained for diagnosis"
+                    );
+                    return false;
+                }
+
                 PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
                     pairId,
                     stageNumber,
