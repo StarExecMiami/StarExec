@@ -320,16 +320,24 @@ public class StageStatusSnapshotsTest {
 		assertRefused(out, -1, "carries status 4");
 	}
 
+	/**
+	 * Validated, but not selected. The caller used to pick {@code stage < terminalStage}, which
+	 * selects nothing when there is no stage to be before, and it must keep selecting nothing:
+	 * the pair-level write that follows sets every stage after {@code terminalStage} to
+	 * NOT_REACHED, so anything recorded here would be overwritten a moment later anyway.
+	 */
 	@Test
-	public void aStageNumberBelowOneStillReturnsEveryValidStage() throws Exception {
+	public void aStageNumberBelowOneValidatesEveryStageAndReturnsNone() throws Exception {
 		Path out = folder.newFolder("no-stage-named-ok").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.EXCEED_CPU.getVal());
 
-		Map<Integer, Integer> read = StageStatusSnapshots.read(out, PAIR, 0);
+		assertTrue("no stage is 'earlier' when none is named",
+				StageStatusSnapshots.read(out, PAIR, 0).isEmpty());
 
-		assertEquals("0 must behave as the unbounded read did", "[1, 2]",
-				read.keySet().toString());
+		// ...and validation still happened: a bad record in the same directory is still refused.
+		write(out, 3, PAIR, 3, StatusCode.STATUS_PROCESSING.getVal());
+		assertRefused(out, 0, "carries status 22");
 	}
 
 	// ------------------------------------------------------------------------- harness

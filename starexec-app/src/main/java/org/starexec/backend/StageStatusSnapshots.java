@@ -190,10 +190,15 @@ public final class StageStatusSnapshots {
         //
         // Treating 0 as a bound would skip every stage, which is not "nothing is in flight" but
         // "everything is", and the caller would go on to write a result for a pair whose stage
-        // history it had just declined to read. Falling back to validating the lot is the
-        // conservative reading: it is exactly what this class did before the bound existed, so a
-        // producer that names no stage is no worse off than it was.
-        final int bound = terminalStage < 1 ? Integer.MAX_VALUE : terminalStage;
+        // history it had just declined to read.
+        //
+        // So a stage number below 1 keeps the two halves of the old behaviour separately:
+        // everything is validated, as this class did before the bound existed, and nothing is
+        // returned, because the caller used to select `stage < terminalStage` and that selects
+        // nothing when there is no stage to be before. A producer that names no stage is then no
+        // worse off in either direction than it was.
+        final boolean namesAStage = terminalStage >= 1;
+        final int bound = namesAStage ? terminalStage : Integer.MAX_VALUE;
 
         Map<Integer, Integer> snapshots = new TreeMap<>();
         int seen = 0;
@@ -283,7 +288,9 @@ public final class StageStatusSnapshots {
                     );
                 }
 
-                snapshots.put(stageFromName, recordStatus);
+                if (namesAStage) {
+                    snapshots.put(stageFromName, recordStatus);
+                }
             }
         }
 
