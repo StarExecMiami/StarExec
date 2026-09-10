@@ -230,18 +230,14 @@ public class LocalJobMonitor {
             Path outputDir,
             int terminalStage) throws Exception {
 
-        Map<Integer, Integer> snapshots =
-                StageStatusSnapshots.read(outputDir, pairId);
+        // The terminal stage's own snapshot is not used -- its status comes from the runsolver
+        // artifacts -- and while a stage is still running its snapshot legitimately reads
+        // STATUS_RUNNING. Both are expressed by the bound, so the read never returns a record
+        // this method would have to discard. Selecting here as well would put the rule in two
+        // places, which is how the running stage came to be validated at all.
+        Map<Integer, Integer> earlier =
+                StageStatusSnapshots.read(outputDir, pairId, terminalStage);
 
-        Map<Integer, Integer> earlier = new java.util.TreeMap<>();
-        for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
-            // The terminal stage's own snapshot is not used -- its status comes from the
-            // runsolver artifacts -- and a pair killed mid-stage legitimately leaves it
-            // non-terminal.
-            if (snapshot.getKey() < terminalStage) {
-                earlier.put(snapshot.getKey(), snapshot.getValue());
-            }
-        }
         if (earlier.isEmpty()) {
             return;
         }

@@ -4775,9 +4775,12 @@ public class KubernetesNativeBackend implements Backend {
                 return true;
             }
 
-            Map<Integer, Integer> snapshots;
+            // The terminal stage's own status comes from the runsolver artifacts, and a pair
+            // killed mid-stage legitimately leaves that snapshot non-terminal. Both are expressed
+            // by the bound, so the read never returns a record this method would have to discard.
+            Map<Integer, Integer> earlier;
             try {
-                snapshots = StageStatusSnapshots.read(outputDir, pairId);
+                earlier = StageStatusSnapshots.read(outputDir, pairId, terminalStage);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
@@ -4794,14 +4797,6 @@ public class KubernetesNativeBackend implements Backend {
                 return false;
             }
 
-            Map<Integer, Integer> earlier = new TreeMap<>();
-            for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
-                // The terminal stage's own status comes from the runsolver artifacts, and a
-                // pair killed mid-stage legitimately leaves that snapshot non-terminal.
-                if (snapshot.getKey() < terminalStage) {
-                    earlier.put(snapshot.getKey(), snapshot.getValue());
-                }
-            }
             if (earlier.isEmpty()) {
                 return true;
             }
