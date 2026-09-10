@@ -9991,6 +9991,30 @@ DECLARE
 	_count INT;
 	_duplicate BOOLEAN;
 BEGIN
+	-- A precise stage write has to name a stage, and stage numbers start at 1.
+	--
+	-- This is not a near miss that could be rounded up. The two updates below are keyed on
+	-- "= _stageNumber" and "> _stageNumber", so 0 gives the terminal status to no row at all
+	-- and NOT_REACHED to EVERY stage the pair has -- including stages that genuinely
+	-- completed and recorded their own result. The pair is then stamped with an end_time and
+	-- a completion row, which puts it beyond the reach of RERUN_FAILED_PAIRS. A finished
+	-- stage silently becomes "stage not reached", permanently.
+	--
+	-- Raised before the FOR UPDATE below, so an invalid call takes no row lock either.
+	--
+	-- The Java boundary refuses this first, and callers there can tell it apart from a
+	-- transient failure. This guard is for everything that does not go through it: psql, an
+	-- administrative session, the test suite, and any caller added later.
+	IF _stageNumber IS NULL OR _stageNumber < 1 THEN
+		RAISE EXCEPTION USING
+			ERRCODE = '22023',
+			MESSAGE = format(
+				'Stage number %s does not identify a stage for pair %s; a precise status write requires a stage number of 1 or greater',
+				COALESCE(_stageNumber::TEXT, 'NULL'),
+				_pairId
+			);
+	END IF;
+
 	-- FOR UPDATE, and on job_pairs before jobpair_stage_data: every routine touching
 	-- both tables takes them in that order, so none can deadlock against another.
 	-- Without this lock the read below is a check-then-act -- the caller in

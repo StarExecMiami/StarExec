@@ -4162,6 +4162,25 @@ public class KubernetesNativeBackend implements Backend {
                     StatusCode.STATUS_NOT_REACHED.getVal(),
                     false
                 );
+                if (updated == PairStatusResult.REJECTED_INVALID_STAGE) {
+                    // status.json named no stage, and 0 cannot become a precise stage
+                    // identity without giving NOT_REACHED to every stage the pair has.
+                    //
+                    // Returning true rather than false, for the reason the SUPERSEDED branch
+                    // below records: false leaves the execution out of completedExecutions
+                    // and the next poll processes the same job again, forever. The input will
+                    // not change, so retrying is a loop against a condition that cannot heal.
+                    //
+                    // The pair keeps whatever non-terminal status it had and its output stays
+                    // on the PVC. Nothing is invented and the failure is logged at ERROR, so
+                    // this is held and visible rather than a silent retirement.
+                    log.error(
+                        "Refusing to record status " + terminalStatus + " for pair " + pairId +
+                        " (" + execution + "): stage number " + stageNumber + " names no" +
+                        " stage. The pair is left unresolved and its output is retained."
+                    );
+                    return true;
+                }
                 if (updated == PairStatusResult.FAILED) {
                     log.warn(
                         "Failed updating completed status for pair " +

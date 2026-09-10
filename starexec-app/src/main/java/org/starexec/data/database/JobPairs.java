@@ -2443,6 +2443,23 @@ public class JobPairs {
         int notReachedStatus,
         boolean forceOverride
     ) {
+        // Stage numbers start at 1. Below that names no stage, and the routine's two updates
+        // are keyed on "= this stage" and "> this stage" -- so 0 gives the status to nothing
+        // and NOT_REACHED to every stage the pair has, then writes end_time and the completion
+        // row on top. A pair whose first stage genuinely finished ends up reading "stage not
+        // reached", terminal, with no way back through the rerun path.
+        //
+        // Refused here, before a connection is even taken, so there is no transaction to leave
+        // half-applied and nothing for the routine's own guard to have to undo. That guard
+        // exists too -- the routine is reachable from psql and from tests -- but this is the
+        // layer that can tell the caller *why*, which the swallowed SQLException below cannot.
+        if (stageNumber < 1) {
+            log.error("Refusing a precise status write for pair " + pairId + ": stage number "
+                    + stageNumber + " does not identify a stage. Status " + terminalStatus
+                    + " was not recorded and no stage history was touched.");
+            return PairStatusResult.REJECTED_INVALID_STAGE;
+        }
+
         Connection con = null;
         PreparedStatement ps = null;
         Integer attemptNoForFinalize = null;

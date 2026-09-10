@@ -1131,6 +1131,23 @@ public class LocalJobMonitor {
                 status.getVal(),
                 StatusCode.STATUS_NOT_REACHED.getVal(),
                 false);
+        if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
+            // status.json named no stage. The job script's pair-level channel defaults to 0
+            // -- exitJobscript, limitExceeded and the processor paths all take that default
+            // -- and 0 cannot be translated into a precise stage identity without giving
+            // NOT_REACHED to every stage the pair has.
+            //
+            // Thrown rather than logged, and thrown here rather than later, for two reasons.
+            // It is deterministic, so IngestionOutcome classifies it BLOCKED and the pair is
+            // held with its output instead of retried against bytes that will not change.
+            // And the attribute and statistics writes below are unconditional: returning or
+            // merely logging would record this pair's measurements against a status the
+            // database refused.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + pairId + " reports status " + status
+                            + " with stage number " + stageNumber + ", which names no stage;"
+                            + " refusing to record it as that pair's precise stage result");
+        }
         if (statusResult == PairStatusResult.FAILED) {
             // Not recorded. The only reasons UpdatePairStatusPrecise reports FAILED are
             // infrastructure ones -- the SQLException behind it is logged and swallowed

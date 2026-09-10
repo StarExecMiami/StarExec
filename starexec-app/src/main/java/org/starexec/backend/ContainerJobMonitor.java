@@ -1168,6 +1168,26 @@ public class ContainerJobMonitor {
             StatusCode.STATUS_NOT_REACHED.getVal(),
             false
         );
+        if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
+            // status.json named no stage, and 0 cannot become a precise stage identity
+            // without giving NOT_REACHED to every stage the pair has.
+            //
+            // Deliberately NOT a plain Exception. The catch for that in the poll loop treats
+            // the results as unusable and records ERROR_RUNSCRIPT against a hardcoded stage 1
+            // -- inventing both a stage and a solver outcome for a pair whose real problem is
+            // that nobody said which stage ran.
+            //
+            // RetryableIngestionException instead, whose handling is bounded:
+            // MAX_INGESTION_ATTEMPTS of backoff and then quarantine, which retains the
+            // container and its output, alerts an operator and invents no status. The retries
+            // are wasted -- the input will not change -- but the terminal state is the right
+            // one, and it is reached without a new lifecycle.
+            throw new RetryableIngestionException(
+                "status.json for pair " + pairId + " reports status " + status
+                    + " with stage number " + stageNumber + ", which names no stage;"
+                    + " refusing to record it as that pair's precise stage result"
+            );
+        }
         if (statusResult == PairStatusResult.FAILED) {
             // The status never landed, and the only reasons it can fail are infrastructure
             // ones. Retryable, so the caller keeps the container and its output rather than
