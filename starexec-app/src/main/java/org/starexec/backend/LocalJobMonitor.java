@@ -230,18 +230,14 @@ public class LocalJobMonitor {
             Path outputDir,
             int terminalStage) throws Exception {
 
-        Map<Integer, Integer> snapshots =
-                StageStatusSnapshots.read(outputDir, pairId);
+        // The terminal stage's own snapshot is not used -- its status comes from the runsolver
+        // artifacts -- and while a stage is still running its snapshot legitimately reads
+        // STATUS_RUNNING. Both are expressed by the bound, so the read never returns a record
+        // this method would have to discard. Selecting here as well would put the rule in two
+        // places, which is how the running stage came to be validated at all.
+        Map<Integer, Integer> earlier =
+                StageStatusSnapshots.read(outputDir, pairId, terminalStage);
 
-        Map<Integer, Integer> earlier = new java.util.TreeMap<>();
-        for (Map.Entry<Integer, Integer> snapshot : snapshots.entrySet()) {
-            // The terminal stage's own snapshot is not used -- its status comes from the
-            // runsolver artifacts -- and a pair killed mid-stage legitimately leaves it
-            // non-terminal.
-            if (snapshot.getKey() < terminalStage) {
-                earlier.put(snapshot.getKey(), snapshot.getValue());
-            }
-        }
         if (earlier.isEmpty()) {
             return;
         }
@@ -1130,6 +1126,30 @@ public class LocalJobMonitor {
             int stageNumber,
             RunSolverStats stats,
             Properties attributes) throws Exception {
+        // status.json comes from the job script, in a directory the job itself can write. The
+        // protocol has it carry exactly two kinds of pair-level status: STATUS_RUNNING while a
+        // stage is in flight, and a terminal execution result once one finishes. Anything else
+        // did not come from the protocol, whatever produced it.
+        //
+        // The three that matter are STATUS_PROCESSING_RESULTS(19), STATUS_PAUSED(20) and
+        // STATUS_PROCESSING(22). They mean work is still owed, and a pair left at 22 is selected
+        // by the periodic post-processing task, which then sets it to STATUS_COMPLETE -- so a job
+        // able to write its own pair status could have a timeout laundered into a clean
+        // completion. ContainerJobMonitor guards its pair-level write for exactly this reason;
+        // this path did not, and StageStatusSnapshots guards only the per-stage channel.
+        //
+        // Not finishedRunning() and not a numeric range: the authority is the enumerated
+        // predicate the database also enforces, so the two cannot drift.
+        if (status != StatusCode.STATUS_RUNNING && !status.isTerminalExecutionResult()) {
+            // Deterministic: the same bytes fail the same check on every poll, so this is an
+            // artifact defect rather than a transient one. The outer lifecycle holds the pair
+            // and keeps its output instead of retrying in a loop or inventing a result.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "refusing to record status " + status + " for pair " + pairId
+                            + ": a pair-level status may only be STATUS_RUNNING or a terminal"
+                            + " execution result");
+        }
+
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);
@@ -1139,6 +1159,23 @@ public class LocalJobMonitor {
                 status.getVal(),
                 StatusCode.STATUS_NOT_REACHED.getVal(),
                 false);
+        if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
+            // status.json named no stage. The job script's pair-level channel defaults to 0
+            // -- exitJobscript, limitExceeded and the processor paths all take that default
+            // -- and 0 cannot be translated into a precise stage identity without giving
+            // NOT_REACHED to every stage the pair has.
+            //
+            // Thrown rather than logged, and thrown here rather than later, for two reasons.
+            // It is deterministic, so IngestionOutcome classifies it BLOCKED and the pair is
+            // held with its output instead of retried against bytes that will not change.
+            // And the attribute and statistics writes below are unconditional: returning or
+            // merely logging would record this pair's measurements against a status the
+            // database refused.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + pairId + " reports status " + status
+                            + " with stage number " + stageNumber + ", which names no stage;"
+                            + " refusing to record it as that pair's precise stage result");
+        }
         if (statusResult == PairStatusResult.FAILED) {
             // Not recorded. The only reasons UpdatePairStatusPrecise reports FAILED are
             // infrastructure ones -- the SQLException behind it is logged and swallowed

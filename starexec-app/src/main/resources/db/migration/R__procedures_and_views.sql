@@ -9991,6 +9991,30 @@ DECLARE
 	_count INT;
 	_duplicate BOOLEAN;
 BEGIN
+	-- A precise stage write has to name a stage, and stage numbers start at 1.
+	--
+	-- This is not a near miss that could be rounded up. The two updates below are keyed on
+	-- "= _stageNumber" and "> _stageNumber", so 0 gives the terminal status to no row at all
+	-- and NOT_REACHED to EVERY stage the pair has -- including stages that genuinely
+	-- completed and recorded their own result. The pair is then stamped with an end_time and
+	-- a completion row, which puts it beyond the reach of RERUN_FAILED_PAIRS. A finished
+	-- stage silently becomes "stage not reached", permanently.
+	--
+	-- Raised before the FOR UPDATE below, so an invalid call takes no row lock either.
+	--
+	-- The Java boundary refuses this first, and callers there can tell it apart from a
+	-- transient failure. This guard is for everything that does not go through it: psql, an
+	-- administrative session, the test suite, and any caller added later.
+	IF _stageNumber IS NULL OR _stageNumber < 1 THEN
+		RAISE EXCEPTION USING
+			ERRCODE = '22023',
+			MESSAGE = format(
+				'Stage number %s does not identify a stage for pair %s; a precise status write requires a stage number of 1 or greater',
+				COALESCE(_stageNumber::TEXT, 'NULL'),
+				_pairId
+			);
+	END IF;
+
 	-- FOR UPDATE, and on job_pairs before jobpair_stage_data: every routine touching
 	-- both tables takes them in that order, so none can deadlock against another.
 	-- Without this lock the read below is a check-then-act -- the caller in
@@ -10003,6 +10027,42 @@ BEGIN
 		RAISE EXCEPTION USING
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
+	END IF;
+
+	-- And the stage has to be a stage OF THIS PAIR, not merely a positive number.
+	--
+	-- Both updates below are keyed on the pair and the stage, so a stage the pair does not
+	-- have matches no row in either -- while everything after them still runs: the pair
+	-- takes the terminal status, gets an end_time and a completion row, and can stamp
+	-- jobs.completed. The pair reads finished while not one of its stages carries the
+	-- result, and a terminal pair is past RERUN_FAILED_PAIRS, so nothing brings it back.
+	--
+	-- A range test cannot express this. Stage numbers are not dense: addJobPairStages skips
+	-- no-op stages, so jobpair_stage_data legitimately has gaps, and "between 1 and the
+	-- stage count" would admit a gap and reject a sparse tail. Row existence is the only
+	-- correct test, and (jobpair_id, stage_number) is the primary key, so it is a
+	-- primary-key lookup.
+	--
+	-- Placed after the FOR UPDATE above and before every mutation below: the pair is
+	-- already locked, so this cannot observe one membership and then write against
+	-- another, and nothing durable has happened yet when it raises. Membership itself is
+	-- fixed for the lifetime of a pair -- AddJobPairStage is the only writer and runs at
+	-- job creation, and the rows go only when the pair itself is deleted, which the
+	-- IF NOT FOUND above already catches.
+	--
+	-- Same SQLSTATE as the range guard: both mean "this argument does not identify a
+	-- stage", and the Java boundary maps that one code to a refusal.
+	IF NOT EXISTS (
+		SELECT 1 FROM starexec.jobpair_stage_data
+		WHERE jobpair_id = _pairId AND stage_number = _stageNumber
+	) THEN
+		RAISE EXCEPTION USING
+			ERRCODE = '22023',
+			MESSAGE = format(
+				'Stage number %s does not identify a stage of pair %s; a precise status write requires a stage that belongs to the pair',
+				_stageNumber,
+				_pairId
+			);
 	END IF;
 
 	-- Terminal pairs must not be moved back into an earlier non-terminal state. This

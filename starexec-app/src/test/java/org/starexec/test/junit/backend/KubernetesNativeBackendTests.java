@@ -468,14 +468,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             222,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(false, true);
+                .thenReturn(PairStatusResult.FAILED, PairStatusResult.APPLIED);
 
             assertFalse(callback.onJobFailed(execution(12, "job-12"), "BackoffLimitExceeded"));
             assertEquals("job-12", execToJob.get(12));
@@ -566,15 +567,16 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             414,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
                 .thenThrow(new RuntimeException("db down"))
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
 
             assertFalse(callback.onJobFailed(execution(14, "job-14"), "BackoffLimitExceeded"));
             assertEquals("job-14", execToJob.get(14));
@@ -1615,11 +1617,12 @@ public class KubernetesNativeBackendTests {
 
             jobPairsMock.verify(
                 () ->
-                    JobPairs.setPairStatusPrecise(
+                    JobPairs.setPairStatusPreciseResult(
                         Mockito.anyInt(),
                         Mockito.anyInt(),
                         Mockito.anyInt(),
-                        Mockito.anyInt()
+                        Mockito.anyInt(),
+                        Mockito.anyBoolean()
                     ),
                 Mockito.never()
             );
@@ -1668,14 +1671,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             431,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
             jobPairsMock.when(() -> JobPairs.setEndTime(431)).thenReturn(true);
 
             assertTrue(
@@ -1687,11 +1691,12 @@ public class KubernetesNativeBackendTests {
 
             jobPairsMock.verify(
                 () ->
-                    JobPairs.setPairStatusPrecise(
+                    JobPairs.setPairStatusPreciseResult(
                         431,
                         1,
                         StatusCode.ERROR_RUNSCRIPT.getVal(),
-                        StatusCode.STATUS_NOT_REACHED.getVal()
+                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        false
                     )
             );
             jobPairsMock.verify(() -> JobPairs.setEndTime(431));
@@ -1736,14 +1741,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             432,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
             jobPairsMock.when(() -> JobPairs.setEndTime(432)).thenReturn(true);
 
             assertTrue(callback.onJobStuckPending(execution(32, "job-32"), "Unschedulable"));
@@ -1786,14 +1792,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             433,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(false, true);
+                .thenReturn(PairStatusResult.FAILED, PairStatusResult.APPLIED);
 
             assertFalse(callback.onJobStuckPending(execution(33, "job-33"), "Unschedulable"));
             assertEquals("job-33", execToJob.get(33));
@@ -1843,14 +1850,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             434,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
             jobPairsMock.when(() -> JobPairs.setEndTime(434)).thenReturn(false);
 
             assertFalse(callback.onJobStuckPending(execution(34, "job-34"), "Unschedulable"));
@@ -1904,14 +1912,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             435,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
             jobPairsMock.when(() -> JobPairs.setEndTime(435)).thenReturn(true);
 
             assertFalse(callback.onJobStuckPending(execution(35, "job-35"), "Unschedulable"));
@@ -1920,11 +1929,12 @@ public class KubernetesNativeBackendTests {
             // pair eligible for an automatic rerun, and the old pod is still out there.
             jobPairsMock.verify(
                 () ->
-                    JobPairs.setPairStatusPrecise(
+                    JobPairs.setPairStatusPreciseResult(
                         435,
                         1,
                         StatusCode.ERROR_RUNSCRIPT.getVal(),
-                        StatusCode.STATUS_NOT_REACHED.getVal()
+                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        false
                     ),
                 Mockito.never()
             );
@@ -1969,14 +1979,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(
                     () ->
-                        JobPairs.setPairStatusPrecise(
+                        JobPairs.setPairStatusPreciseResult(
                             436,
                             1,
                             StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal()
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
                         )
                 )
-                .thenReturn(true);
+                .thenReturn(PairStatusResult.APPLIED);
             jobPairsMock.when(() -> JobPairs.setEndTime(436)).thenReturn(true);
 
             assertTrue(callback.onJobStuckPending(execution(36, "job-36"), "Unschedulable"));

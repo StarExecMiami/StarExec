@@ -36,6 +36,7 @@ import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.Queues;
 import org.starexec.data.to.Status;
 import org.starexec.data.to.Status.StatusCode;
@@ -2585,6 +2586,33 @@ public class PodmanBackend implements Backend {
      * same logic as the normal completion monitor so that a solver that
      * completed successfully before a crash is recorded correctly.</p>
      */
+    /**
+     * Marks a reconciled pair failed, and says whether that actually landed.
+     *
+     * <p>Stage 1 is a fabrication -- the reconciliation paths have no stage in hand -- and it
+     * is left as it was. What changes is that the answer is no longer discarded: a pair whose
+     * stage 1 is not a stage it has (a no-op first stage leaves no row) now refuses the write,
+     * and the caller must not delete the container after a refusal.
+     *
+     * @return true when the pair carries the failure and its container may be released
+     */
+    private boolean markReconciledPairFailed(int pairId) {
+        PairStatusResult result = JobPairs.setPairStatusPreciseResult(
+            pairId, 1,
+            StatusCode.ERROR_RUNSCRIPT.getVal(),
+            StatusCode.STATUS_NOT_REACHED.getVal(),
+            false);
+        if (result == PairStatusResult.REJECTED_INVALID_STAGE) {
+            log.error(
+                "INGESTION INTERVENTION REQUIRED: reconciled pair " + pairId + " could not be" +
+                " marked failed because stage 1 is not a stage of that pair. Its container and" +
+                " output are retained for inspection."
+            );
+            return false;
+        }
+        return true;
+    }
+
     private void processReconciledContainerThroughMonitor(
         int pairId, String containerId) {
         if (pairId <= 0 || containerId == null) return;
@@ -2598,10 +2626,9 @@ public class PodmanBackend implements Backend {
             if (completed.isEmpty()) {
                 log.warn("Reconciliation: cannot inspect container " + containerId +
                          " for pair " + pairId + "; marking as failed");
-                JobPairs.setPairStatusPrecise(pairId, 1,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal());
-                removeCompletedContainer(containerId);
+                if (markReconciledPairFailed(pairId)) {
+                    removeCompletedContainer(containerId);
+                }
                 return;
             }
 
@@ -2619,28 +2646,34 @@ public class PodmanBackend implements Backend {
             // Delegate to ContainerJobMonitor for full processing
             // (reads status.json, stats, attributes, updates DB)
             if (jobMonitor != null) {
-                jobMonitor.processReconciledJob(info);
-                removeCompletedContainer(containerId);
-                log.info("Reconciliation: processed container for pair " + pairId +
-                         " through normal completion path");
+                // The container is removed only if the pair was actually handled. The monitor
+                // refuses results it cannot attribute to a stage, and deleting the container
+                // after such a refusal would destroy the only copy of the run it just declined
+                // to record.
+                if (jobMonitor.processReconciledJob(info)) {
+                    removeCompletedContainer(containerId);
+                    log.info("Reconciliation: processed container for pair " + pairId +
+                             " through normal completion path");
+                } else {
+                    log.error("Reconciliation: pair " + pairId + " was not recorded; its" +
+                              " container and output are retained for inspection");
+                }
             } else {
                 // Monitor not yet created — use emergency path
                 log.warn("Reconciliation: monitor not available for pair " + pairId +
                          "; using emergency error marking");
-                JobPairs.setPairStatusPrecise(pairId, 1,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal());
-                removeCompletedContainer(containerId);
+                if (markReconciledPairFailed(pairId)) {
+                    removeCompletedContainer(containerId);
+                }
             }
         } catch (Exception e) {
             log.warn("Reconciliation: failed to process container " +
                      containerId + " for pair " + pairId, e);
             // Emergency: mark as error so the pair doesn't stay stuck forever
             try {
-                JobPairs.setPairStatusPrecise(pairId, 1,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal());
-                removeCompletedContainer(containerId);
+                if (markReconciledPairFailed(pairId)) {
+                    removeCompletedContainer(containerId);
+                }
             } catch (Exception ignored) { }
         }
     }
