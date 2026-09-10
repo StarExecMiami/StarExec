@@ -10029,6 +10029,42 @@ BEGIN
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
 
+	-- And the stage has to be a stage OF THIS PAIR, not merely a positive number.
+	--
+	-- Both updates below are keyed on the pair and the stage, so a stage the pair does not
+	-- have matches no row in either -- while everything after them still runs: the pair
+	-- takes the terminal status, gets an end_time and a completion row, and can stamp
+	-- jobs.completed. The pair reads finished while not one of its stages carries the
+	-- result, and a terminal pair is past RERUN_FAILED_PAIRS, so nothing brings it back.
+	--
+	-- A range test cannot express this. Stage numbers are not dense: addJobPairStages skips
+	-- no-op stages, so jobpair_stage_data legitimately has gaps, and "between 1 and the
+	-- stage count" would admit a gap and reject a sparse tail. Row existence is the only
+	-- correct test, and (jobpair_id, stage_number) is the primary key, so it is a
+	-- primary-key lookup.
+	--
+	-- Placed after the FOR UPDATE above and before every mutation below: the pair is
+	-- already locked, so this cannot observe one membership and then write against
+	-- another, and nothing durable has happened yet when it raises. Membership itself is
+	-- fixed for the lifetime of a pair -- AddJobPairStage is the only writer and runs at
+	-- job creation, and the rows go only when the pair itself is deleted, which the
+	-- IF NOT FOUND above already catches.
+	--
+	-- Same SQLSTATE as the range guard: both mean "this argument does not identify a
+	-- stage", and the Java boundary maps that one code to a refusal.
+	IF NOT EXISTS (
+		SELECT 1 FROM starexec.jobpair_stage_data
+		WHERE jobpair_id = _pairId AND stage_number = _stageNumber
+	) THEN
+		RAISE EXCEPTION USING
+			ERRCODE = '22023',
+			MESSAGE = format(
+				'Stage number %s does not identify a stage of pair %s; a precise status write requires a stage that belongs to the pair',
+				_stageNumber,
+				_pairId
+			);
+	END IF;
+
 	-- Terminal pairs must not be moved back into an earlier non-terminal state. This
 	-- stays an exception rather than a FALSE return: no caller does it legitimately, so
 	-- it is a programming error, and reporting it as a lost race would hide that.
