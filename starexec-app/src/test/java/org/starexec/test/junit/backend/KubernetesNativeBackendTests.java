@@ -2658,11 +2658,18 @@ public class KubernetesNativeBackendTests {
         ctor.setAccessible(true);
         Object callback = ctor.newInstance(backend);
 
+        // Mirrors onJobComplete: the status file is parsed once and handed to the reader,
+        // so these tests exercise the same path production takes rather than a second one.
+        ExecutionRef ref = execution(execId, "job-" + execId);
+        Method read = callbackClass.getDeclaredMethod("readStatusRecord", ExecutionRef.class);
+        read.setAccessible(true);
+        Object record = read.invoke(callback, ref);
+
         Method m = callbackClass.getDeclaredMethod(
-            "readTerminalStatus", ExecutionRef.class, int.class
+            "readTerminalStatus", ExecutionRef.class, com.google.gson.JsonObject.class, int.class
         );
         m.setAccessible(true);
-        return (Integer) m.invoke(callback, execution(execId, "job-" + execId), fallback);
+        return (Integer) m.invoke(callback, ref, record, fallback);
     }
 
     /**
