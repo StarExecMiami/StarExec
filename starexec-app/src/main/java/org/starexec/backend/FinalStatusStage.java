@@ -3,6 +3,7 @@ package org.starexec.backend;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import org.starexec.data.to.Status.StatusCode;
 
 import java.math.BigDecimal;
 
@@ -45,8 +46,10 @@ final class FinalStatusStage {
 	private FinalStatusStage() {
 	}
 
-	/** Field name in the status record, so the readers cannot drift on the spelling either. */
+	/** Field names in the status record, so the readers cannot drift on the spelling either. */
 	static final String FIELD = "stageNumber";
+
+	static final String STATUS_FIELD = "status";
 
 	/**
 	 * The stage this final status belongs to.
@@ -59,46 +62,81 @@ final class FinalStatusStage {
 	 */
 	static int require(JsonObject status, String source)
 			throws StageStatusSnapshots.InvalidSnapshotException {
-		if (status == null || !status.has(FIELD)) {
-			throw invalid(source, "carries no " + FIELD
-					+ ", so the stage that produced this result is unknown");
+		int stage = requireInt(status, FIELD, source,
+				"the stage that produced this result is unknown");
+		if (stage < 1) {
+			throw invalid(source, "has " + FIELD + " " + stage
+					+ ", and stage numbers start at 1, so it identifies no stage");
+		}
+		return stage;
+	}
+
+	/**
+	 * The status this final record reports.
+	 *
+	 * <p>Held to the same rules as the stage for the same reason: the readers used to
+	 * substitute a default whenever they could not use the field, and for
+	 * {@code KubernetesNativeBackend} that default was {@code STATUS_COMPLETE} -- so a
+	 * truncated or malformed file recorded the pair as a successful solver run. A wrong stage
+	 * misattributes a result; a wrong status invents one.
+	 *
+	 * <p>The value must also name a status the platform knows. An unrecognised code would
+	 * otherwise be stored verbatim and read back as {@code STATUS_UNKNOWN} by everything
+	 * downstream, which is the same fabrication one step later.
+	 *
+	 * @return the status code, guaranteed to resolve to a known {@link StatusCode}
+	 */
+	static int requireStatus(JsonObject status, String source)
+			throws StageStatusSnapshots.InvalidSnapshotException {
+		int code = requireInt(status, STATUS_FIELD, source,
+				"the result this pair produced is unknown");
+		if (StatusCode.toStatusCode(code) == StatusCode.STATUS_UNKNOWN
+				&& code != StatusCode.STATUS_UNKNOWN.getVal()) {
+			throw invalid(source, "has " + STATUS_FIELD + " " + code
+					+ ", which is not a status this platform defines");
+		}
+		return code;
+	}
+
+	/**
+	 * One field, read strictly: present, a JSON number, integral, and inside the {@code int}
+	 * range. Nothing is coerced and nothing is defaulted.
+	 */
+	private static int requireInt(JsonObject record, String field, String source, String why)
+			throws StageStatusSnapshots.InvalidSnapshotException {
+		if (record == null || !record.has(field)) {
+			throw invalid(source, "carries no " + field + ", so " + why);
 		}
 
-		JsonElement raw = status.get(FIELD);
+		JsonElement raw = record.get(field);
 		if (raw.isJsonNull()) {
-			throw invalid(source, "has a null " + FIELD);
+			throw invalid(source, "has a null " + field);
 		}
 		// An array or an object reaches getAsInt() through gson's single-element unwrapping
 		// or throws deep in the call; both are rejected here by shape instead.
 		if (!raw.isJsonPrimitive() || !((JsonPrimitive) raw).isNumber()) {
-			throw invalid(source, "has a non-numeric " + FIELD + " " + raw
-					+ "; a stage identity is a JSON number, and a quoted or boolean value is"
-					+ " not silently converted to one");
+			throw invalid(source, "has a non-numeric " + field + " " + raw
+					+ "; this is a JSON number, and a quoted or boolean value is not silently"
+					+ " converted to one");
 		}
 
 		BigDecimal value;
 		try {
 			value = raw.getAsBigDecimal();
 		} catch (NumberFormatException e) {
-			throw invalid(source, "has a " + FIELD + " that is not a number: " + raw);
+			throw invalid(source, "has a " + field + " that is not a number: " + raw);
 		}
 		if (value.stripTrailingZeros().scale() > 0) {
-			throw invalid(source, "has a fractional " + FIELD + " " + value
-					+ "; truncating it would invent a stage");
+			throw invalid(source, "has a fractional " + field + " " + value
+					+ "; truncating it would invent a value the producer did not write");
 		}
 		if (value.compareTo(BigDecimal.valueOf(Integer.MIN_VALUE)) < 0
 				|| value.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
-			throw invalid(source, "has a " + FIELD + " of " + value
-					+ ", which is outside the range a stage number can take; wrapping it would"
-					+ " name a different stage entirely");
+			throw invalid(source, "has a " + field + " of " + value
+					+ ", which is outside the range this field can take; wrapping it would name"
+					+ " something else entirely");
 		}
-
-		int stage = value.intValueExact();
-		if (stage < 1) {
-			throw invalid(source, "has " + FIELD + " " + stage
-					+ ", and stage numbers start at 1, so it identifies no stage");
-		}
-		return stage;
+		return value.intValueExact();
 	}
 
 	private static StageStatusSnapshots.InvalidSnapshotException invalid(

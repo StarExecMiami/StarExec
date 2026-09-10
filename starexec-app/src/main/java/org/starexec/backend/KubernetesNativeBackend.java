@@ -4144,8 +4144,12 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                int terminalStatus = readTerminalStatus(execution, StatusCode.STATUS_COMPLETE.getVal());
-                int stageNumber = readStageNumber(execution, 1);
+                // One parse feeds both fields, so they cannot come from two different
+                // writes of a file each stage truncates.
+                JsonObject statusRecord = readStatusRecord(execution);
+                int terminalStatus = readTerminalStatus(
+                    execution, statusRecord, StatusCode.STATUS_COMPLETE.getVal());
+                int stageNumber = readStageNumber(execution, statusRecord, 1);
 
                 // Earlier stages, from the per-stage snapshots the job script writes beside
                 // status.json. That file is a single slot every stage truncates, so without
@@ -4641,28 +4645,59 @@ public class KubernetesNativeBackend implements Backend {
          * {@code ContainerJobMonitor.determineStatus}: a limit verdict wins, and
          * status.json decides only when runsolver reports no breach.
          */
-        private int readTerminalStatus(ExecutionRef execution, int defaultStatus) {
+        /**
+         * The status this execution's result reports.
+         *
+         * <p>{@code defaultStatus} applies only when the pair produced no status file at all.
+         * A file that exists must say what happened.
+         *
+         * <p>It used to fall back to the same default whenever the field was missing, null,
+         * unparsable or a shape gson would coerce -- and {@code onJobComplete} passes
+         * {@code STATUS_COMPLETE} as that default. So a truncated or malformed status file
+         * recorded the pair as a **successful solver run**, stamped an {@code end_time} and a
+         * completion row, and became indistinguishable from a genuine result in every
+         * downstream query. A wrong stage misattributes a result; this invented one.
+         *
+         * @param record the parsed status file, or null when there is none
+         */
+        private int readTerminalStatus(ExecutionRef execution, JsonObject record,
+                int defaultStatus) throws StageStatusSnapshots.InvalidSnapshotException {
             StatusCode limit = readRunsolverVerdict(execution);
             if (limit != null) {
                 return limit.getVal();
             }
-
-            Path statusPath = resolveStatusPath(execution);
-            if (statusPath == null || !Files.exists(statusPath)) {
+            if (record == null) {
                 return defaultStatus;
             }
+            return FinalStatusStage.requireStatus(record, String.valueOf(execution));
+        }
 
-            try {
-                String json = Files.readString(statusPath);
-                JsonObject root = JsonParser.parseString(json).getAsJsonObject();
-                if (root.has("status") && !root.get("status").isJsonNull()) {
-                    return root.get("status").getAsInt();
-                }
-            } catch (Exception e) {
-                log.warn("Failed to parse status.json for " + execution, e);
+        /**
+         * The pair's final status file, parsed once.
+         *
+         * <p>Once, deliberately. The status and the stage were read by two separate calls that
+         * each opened and parsed the file, and {@code status.json} is a single slot every stage
+         * truncates and rewrites. Two reads could therefore straddle a write and pair one
+         * stage's status with another stage's number -- a torn read that produces a result
+         * belonging to no single stage.
+         *
+         * @return the parsed record, or null when the pair produced no status file
+         */
+        private JsonObject readStatusRecord(ExecutionRef execution)
+                throws StageStatusSnapshots.InvalidSnapshotException, IOException {
+            Path statusPath = resolveStatusPath(execution);
+            if (statusPath == null || !Files.exists(statusPath)) {
+                return null;
             }
-
-            return defaultStatus;
+            try {
+                return JsonParser.parseString(Files.readString(statusPath)).getAsJsonObject();
+            } catch (IOException e) {
+                // Storage, not contents. Stays retryable.
+                throw e;
+            } catch (Exception e) {
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for " + execution + " exists but is not a status record", e);
+            }
         }
 
         /**
@@ -4866,6 +4901,15 @@ public class KubernetesNativeBackend implements Backend {
          * @throws StageStatusSnapshots.InvalidSnapshotException if a status file exists but does
          *         not carry a usable stage identity
          */
+        /** As {@link #readStageNumber(ExecutionRef, int)}, but on an already-parsed record. */
+        private int readStageNumber(ExecutionRef execution, JsonObject record, int defaultStage)
+                throws StageStatusSnapshots.InvalidSnapshotException {
+            if (record == null) {
+                return defaultStage;
+            }
+            return FinalStatusStage.require(record, String.valueOf(execution));
+        }
+
         private int readStageNumber(ExecutionRef execution, int defaultStage)
                 throws StageStatusSnapshots.InvalidSnapshotException, IOException {
             Path statusPath = resolveStatusPath(execution);

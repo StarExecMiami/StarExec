@@ -430,6 +430,96 @@ public class FinalStatusStageTest {
 		}
 	}
 
+	// ------------------------------------------------- E. the status field, not the stage
+
+	/** The real parser for the result field, reached the way the readers reach it. */
+	private static int parseStatus(String body) throws Exception {
+		Class<?> c = Class.forName("org.starexec.backend.FinalStatusStage");
+		Method m = c.getDeclaredMethod("requireStatus", JsonObject.class, String.class);
+		m.setAccessible(true);
+		try {
+			return (int) m.invoke(null, json(body), "pair " + PAIR);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw (Exception) e.getCause();
+		}
+	}
+
+	private static void assertStatusRejected(String body, String why) throws Exception {
+		try {
+			int got = parseStatus(body);
+			fail(why + " -- but it parsed as status " + got + ": " + body);
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
+					expected.getMessage().contains("status"));
+		}
+	}
+
+	/**
+	 * Every shape that used to become the caller's default. In
+	 * {@code KubernetesNativeBackend.onJobComplete} that default is
+	 * {@code STATUS_COMPLETE}, so each of these recorded the pair as a successful solver run.
+	 */
+	@Test
+	public void everyShapeThatUsedToBecomeTheDefaultStatus() throws Exception {
+		assertStatusRejected("{\"stageNumber\":1}", "an absent status reports no result");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":null}", "a null status reports no result");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":\"7\"}", "a quoted status is a string");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":\"abc\"}", "a non-numeric string is not a status");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":true}", "a boolean is not a status");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":7.5}", "a fractional status is not a status");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":[7]}", "an array is not a status");
+		assertStatusRejected("{\"stageNumber\":1,\"status\":9999999999999}", "an overflowed status must not wrap");
+	}
+
+	/** A code the platform does not define would read back as UNKNOWN downstream. */
+	@Test
+	public void aStatusCodeThePlatformDoesNotDefineIsRefused() throws Exception {
+		assertStatusRejected("{\"stageNumber\":1,\"status\":999}",
+				"999 is not a status this platform defines");
+	}
+
+	/** The controls, so a parser that refused everything would not pass the above. */
+	@Test
+	public void realStatusCodesAreAccepted() throws Exception {
+		assertEquals(StatusCode.STATUS_COMPLETE.getVal(),
+				parseStatus("{\"stageNumber\":1,\"status\":7}"));
+		assertEquals(StatusCode.EXCEED_CPU.getVal(),
+				parseStatus("{\"stageNumber\":1,\"status\":15}"));
+		assertEquals(StatusCode.ERROR_RUNSCRIPT.getVal(),
+				parseStatus("{\"stageNumber\":1,\"status\":11}"));
+	}
+
+	/**
+	 * The lifecycle consequence, through the real callback: a status file that exists but
+	 * reports no usable result must not be ingested as anything -- least of all as the
+	 * success its caller passes as the default.
+	 */
+	@Test
+	public void kubernetesRefusesAStatusFileWithNoUsableResult() throws Exception {
+		Path dir = statusDir("{\"pairId\":4242,\"stageNumber\":2}");
+		KubernetesNativeBackend backend = new KubernetesNativeBackend();
+		Object callback = registerExecution(backend, 11, "job-11", PAIR, dir);
+		ExecutionRef execution = new ExecutionRef(11, "job-11", "uid-job-11");
+
+		try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+			jobPairsMock.when(() -> JobPairs.getPairStatusLookup(PAIR))
+					.thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+
+			Method onComplete = callback.getClass().getDeclaredMethod(
+					"onJobComplete", ExecutionRef.class);
+			onComplete.setAccessible(true);
+			boolean handled = (boolean) onComplete.invoke(callback, execution);
+
+			assertTrue("must not be re-polled against bytes that will not change", handled);
+			jobPairsMock.verify(
+					() -> JobPairs.setPairStatusPreciseResult(
+							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+							Mockito.anyInt(), Mockito.anyBoolean()),
+					Mockito.never());
+			jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
+		}
+	}
+
 	// --------------------------------------------------------------------------- shared
 
 	/**
