@@ -45,7 +45,7 @@ and the rules laid out above, then these expressions take precedence:
 <dt>institution name pattern</dt>
   <dd><code>"^[\\w\\-\\s']{2,64}$"</code></dd>
 <dt>email pattern</dt>
-  <dd><code>"^[\\w.%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,4}$"</code></dd>
+  <dd><code>"^[\\w.%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}$"</code></dd>
 <dt>url pattern</dt>
   <dd><code>"https?://.\\S+{2,128}"</code></dd>
 <dt>name pattern for all primitives</dt>

@@ -77,11 +77,17 @@ public class Validator {
 	 * Validates an email address and checks if it is in proper email address format
 	 *
 	 * @param email the email address to validate
-	 * @return true iff the email address is less than DB.EMAIL_LEN characters,
+	 * @return true iff the email address is at most DB.EMAIL_LEN characters,
 	 * not null or the empty string, and is in email address format
 	 */
 	public static boolean isValidEmail(String email) {
-		return email != null && patternEmail.matcher(email).matches();
+		// The length bound is what this method already promised and did not enforce. It
+		// matters because users.email is VARCHAR(64): an address that passes validation and
+		// then exceeds the column does not produce a validation message, it produces a
+		// 22001 at the INSERT, after the user has filled in the form.
+		return email != null
+				&& email.length() <= DB.EMAIL_LEN
+				&& patternEmail.matcher(email).matches();
 	}
 
 	/**
