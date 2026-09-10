@@ -64,14 +64,24 @@ public class StageZeroPreciseStatusTest {
 	}
 
 	/**
-	 * The control that gives the two above their meaning. A stage number that does name a
-	 * stage is not refused here: it goes on to the database, which is absent, so it comes back
-	 * FAILED. If the guard were swallowing everything, this would read REJECTED too.
+	 * The control that gives the two above their meaning: a stage number in range is not
+	 * refused here, it goes on to the database, which is absent, so it comes back FAILED. If
+	 * the guard were swallowing everything, this would read REJECTED too.
+	 *
+	 * <p>In range is all this asserts. 99 and {@code MAX_VALUE} are here because they are on
+	 * the far side of the boundary, not because they identify a stage of this pair -- they
+	 * almost certainly do not. A positive stage number that no {@code jobpair_stage_data} row
+	 * carries is a real and separate defect: the terminal status lands on no row, NOT_REACHED
+	 * lands on nothing above it, and the pair still goes terminal with an end_time, so it
+	 * reads finished while no stage holds its result. Closing that needs an existence check
+	 * against the pair's own stages, which is a different question from "is this a stage
+	 * number at all", so it is tracked separately rather than folded in here.
 	 */
 	@Test
-	public void aStageThatNamesAStageIsNotRefusedByTheGuard() {
+	public void aStageNumberInRangeIsNotRefusedByTheGuard() {
 		for (int stage : new int[]{1, 2, 3, 99, Integer.MAX_VALUE}) {
-			assertNotEquals("stage " + stage + " names a stage and must reach the database",
+			assertNotEquals("stage " + stage + " is in range and must reach the database,"
+							+ " whether or not the pair actually has such a stage",
 					PairStatusResult.REJECTED_INVALID_STAGE, write(stage));
 		}
 	}

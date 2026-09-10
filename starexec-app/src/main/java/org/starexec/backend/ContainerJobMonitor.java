@@ -249,6 +249,21 @@ public class ContainerJobMonitor {
     void processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
         try {
             processCompletedJob(info);
+        } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+            // The emergency marking below writes ERROR_RUNSCRIPT against a hardcoded stage 1.
+            // For a pair whose results name no stage that would invent exactly the two things
+            // this refusal exists to prevent -- a stage and a solver outcome -- and would do
+            // it on the reconciliation path, where nobody is watching a poll loop.
+            //
+            // Left unresolved with its output intact instead, which is what the normal
+            // ingestion path does with the same condition.
+            log.error(
+                "INGESTION INTERVENTION REQUIRED: reconciled pair " + info.pairId +
+                    " produced results that name no stage. The pair is left unresolved and" +
+                    " its output is retained at " + info.outputDir + ". No solver status has" +
+                    " been invented for this.",
+                e
+            );
         } catch (Exception e) {
             log.error("Error processing reconciled job " + info.pairId, e);
             // Emergency error marking so the pair doesn't stay stuck
@@ -319,6 +334,28 @@ public class ContainerJobMonitor {
                     // back immediately -- retrying must not cost capacity.
                     backend.releaseSlotForCompletedContainer(info.containerId);
                     recordIngestionFailure(info, e);
+                } catch (StageStatusSnapshots.InvalidSnapshotException e) {
+                    // The container produced something that names no stage, so there is no
+                    // stage to record a result against and no retry that would change that.
+                    //
+                    // Held on the first attempt rather than after MAX_INGESTION_ATTEMPTS of
+                    // backoff: the bounded retry below exists for a platform that might
+                    // recover, and this cannot. The container and its output are kept, the
+                    // execution slot is handed back, and no status is invented -- the pair
+                    // stays unresolved and visible instead of being recorded as a solver
+                    // failure it never had.
+                    backend.releaseSlotForCompletedContainer(info.containerId);
+                    ingestionQuarantine.add(info.containerId);
+                    ingestionAttempts.remove(info.containerId);
+                    log.error(
+                        "INGESTION INTERVENTION REQUIRED: pair " + info.pairId + " produced" +
+                            " results that name no stage, so they cannot be recorded and" +
+                            " retrying cannot help. The pair is left unresolved and its" +
+                            " output is retained at " + info.outputDir + " (container " +
+                            info.containerId + "). No solver status has been invented for" +
+                            " this.",
+                        e
+                    );
                 } catch (Exception e) {
                     // The results themselves are unusable and will be on every retry:
                     // output that names another pair, a stage the pair does not have, a
@@ -1172,17 +1209,18 @@ public class ContainerJobMonitor {
             // status.json named no stage, and 0 cannot become a precise stage identity
             // without giving NOT_REACHED to every stage the pair has.
             //
-            // Deliberately NOT a plain Exception. The catch for that in the poll loop treats
-            // the results as unusable and records ERROR_RUNSCRIPT against a hardcoded stage 1
-            // -- inventing both a stage and a solver outcome for a pair whose real problem is
-            // that nobody said which stage ran.
+            // InvalidSnapshotException because this is content the container produced and it
+            // will read the same way forever. Not RetryableIngestionException, whose own
+            // contract names "an unknown stage" as a case it must not be used for, and not a
+            // plain Exception, whose catch in the poll loop records ERROR_RUNSCRIPT against a
+            // hardcoded stage 1 -- inventing both a stage and a solver outcome for a pair
+            // whose actual problem is that nobody said which stage ran.
             //
-            // RetryableIngestionException instead, whose handling is bounded:
-            // MAX_INGESTION_ATTEMPTS of backoff and then quarantine, which retains the
-            // container and its output, alerts an operator and invents no status. The retries
-            // are wasted -- the input will not change -- but the terminal state is the right
-            // one, and it is reached without a new lifecycle.
-            throw new RetryableIngestionException(
+            // The poll loop catches this specifically and holds the container on the first
+            // attempt: no retry is spent on input that cannot change, and the output survives
+            // for an operator. Same type LocalJobMonitor throws for the same condition, so
+            // both monitors classify it the same way.
+            throw new StageStatusSnapshots.InvalidSnapshotException(
                 "status.json for pair " + pairId + " reports status " + status
                     + " with stage number " + stageNumber + ", which names no stage;"
                     + " refusing to record it as that pair's precise stage result"

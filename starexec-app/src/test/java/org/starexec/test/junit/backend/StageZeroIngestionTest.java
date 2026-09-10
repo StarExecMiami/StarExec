@@ -3,6 +3,7 @@ package org.starexec.test.junit.backend;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.backend.exception.RetryableIngestionException;
@@ -144,6 +145,72 @@ public class StageZeroIngestionTest {
 						where.contains("updateRunSolverStats"));
 			}
 		}
+	}
+
+	// ------------------------------------------------------- the container monitor
+
+	/**
+	 * {@code ContainerJobMonitor} has only two lanes, and the choice between them is the whole
+	 * decision. {@code RetryableIngestionException} is bounded retry then quarantine; anything
+	 * else is caught by a handler that records {@code ERROR_RUNSCRIPT} against a hardcoded
+	 * stage 1, inventing both a stage and a solver outcome.
+	 *
+	 * <p>Neither is right here, so the monitor throws {@link
+	 * StageStatusSnapshots.InvalidSnapshotException} and catches it explicitly. This test pins
+	 * the type, because it is the type that selects the lane.
+	 *
+	 * <p>It must not be {@code RetryableIngestionException} in particular: that class's own
+	 * javadoc names "an unknown stage" among the cases it must not be used for, since retrying
+	 * container-produced content "reaches the same conclusion forever".
+	 */
+	@Test
+	public void theContainerMonitorRefusesWithoutClaimingTheFailureIsTransient() throws Throwable {
+		try {
+			containerUpdateDatabase(50, StatusCode.STATUS_COMPLETE, 0);
+			fail("a status with stage number 0 must not be recorded");
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			assertTrue("the refusal must say which stage number was refused: "
+							+ expected.getMessage(),
+					expected.getMessage().contains("stage number 0"));
+		} catch (RetryableIngestionException wrong) {
+			fail("stage 0 will not become valid on a retry, and RetryableIngestionException"
+					+ " documents that it must not be used for an unknown stage");
+		}
+	}
+
+	/**
+	 * The container monitor's positive control, matching the local monitor's below: a stage
+	 * that names a stage still reaches the database, so with none configured it comes back as
+	 * a transient failure rather than a refusal.
+	 */
+	@Test
+	public void theContainerMonitorStillReachesTheDatabaseForARealStage() throws Throwable {
+		try {
+			containerUpdateDatabase(50, StatusCode.STATUS_COMPLETE, 1);
+			fail("expected the absent database to be reported");
+		} catch (StageStatusSnapshots.InvalidSnapshotException wrong) {
+			fail("stage 1 names a stage and must not be refused as invalid");
+		} catch (RetryableIngestionException expected) {
+			// as intended
+		}
+	}
+
+	private void containerUpdateDatabase(int pairId, StatusCode status, int stageNumber)
+			throws Throwable {
+		ContainerJobMonitor container = new ContainerJobMonitor(null);
+		for (Method m : ContainerJobMonitor.class.getDeclaredMethods()) {
+			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 7) {
+				m.setAccessible(true);
+				try {
+					m.invoke(container, pairId, stageNumber, null, status, new Properties(),
+							0, new java.util.HashMap<Integer, Integer>());
+				} catch (java.lang.reflect.InvocationTargetException e) {
+					throw e.getCause();
+				}
+				return;
+			}
+		}
+		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/7");
 	}
 
 	/**
