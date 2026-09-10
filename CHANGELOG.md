@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Measurement fidelity**: Timeout and memory-limit classification now uses runsolver's own `TIMEOUT=` and `MEMOUT=` verdicts rather than substring-matching its English output, all three runsolver output sources are read, and a run whose measurements cannot be read is no longer recorded as zero.
 - **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
 
+### Removed
+- **Dead stress-test endpoint**: Removed the `/secure/add/stressTest` mapping and the admin UI that reached it. The mapping pointed at a class in `src/test/java`, so it was never packaged into the WAR and every request returned HTTP 500. The stress-test capability itself is unchanged; it is driven by `TestManager` in the test harness.
+
 ### Fixed
 - **Processor failure attribution**: A failing pre- or post-processor is now recorded as `ERROR_PRE_PROCESSOR` or `ERROR_POST_PROCESSOR` instead of `ERROR_BENCHMARK`. Two faults combined to hide it: the branch that sent the specific status tested `$?` on the line after the command, which `set -e` never reaches, and the paths that did run sent their status without claiming it, so the fail-closed EXIT trap overwrote it. A file-write limit breach was misreported the same way. The status now also names the stage that was running instead of taking the pair-level default of 0, which a precise stage write applies to no stage at all while marking every stage of the pair as not reached. A runscript error was misattributed the same way in the opposite direction: the stage number was decremented before being written, so the first stage's failure was recorded against stage 0.
 - **Pair-level status validation**: The Local and Kubernetes backends now check a pair's status against `isTerminalExecutionResult()` before recording it, as the container monitor already did. `status.json` is written by the job into a directory the job controls, and `STATUS_PROCESSING` in particular is promoted to `STATUS_COMPLETE` by the periodic post-processing task, so a job could otherwise record a status that turned its own timeout into a clean completion.
@@ -39,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Servlet authorization**: Corrected authorization checks that reported a failure without returning, so the privileged work ran anyway. The most serious allowed any authenticated user to rewrite the queue-to-community access list.
 - **StarDev transfer**: A failed StarDev login now stops the transfer instead of continuing on a connection that never authenticated.
 - **Build provenance**: The runsolver binary is now compiled from the source vendored in this repository. It was previously downloaded from an external host at image build time with no checksum or pinned digest, so the instrument every recorded measurement comes from is now reproducible from the tree it was audited against.
+
 
 ## [2.5.1] - 2026-08-03
 
