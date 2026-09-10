@@ -2484,6 +2484,19 @@ public class JobPairs {
             boolean applied;
             try (ResultSet rs = ps.executeQuery()) {
                 applied = rs.next() && rs.getBoolean(1);
+            } catch (SQLException e) {
+                // Scoped to the call itself rather than to the whole method. The outer catch
+                // also spans getConnection, the commit and the manifest write, and a 22023
+                // from any of those would not be this routine speaking.
+                if (namesNoStage(e)) {
+                    log.error("Refusing a precise status write for pair " + pairId
+                            + ": stage number " + stageNumber + " does not identify a stage of"
+                            + " that pair. Status " + terminalStatus + " was not recorded and"
+                            + " no stage history was touched.", e);
+                    Common.doRollback(con);
+                    return PairStatusResult.REJECTED_INVALID_STAGE;
+                }
+                throw e;
             }
             if (!applied) {
                 // Another writer recorded a different terminal result first. Nothing was
@@ -2508,18 +2521,6 @@ public class JobPairs {
             }
             return PairStatusResult.APPLIED;
         } catch (Exception e) {
-            if (namesNoStage(e)) {
-                // The routine refused the stage identity itself. Reported as a refusal and
-                // not as FAILED, because FAILED asks the caller to retry and this argument
-                // will be refused identically every time. Nothing was written: the routine
-                // raises before its first UPDATE, and the rollback below covers the rest.
-                log.error("Refusing a precise status write for pair " + pairId
-                        + ": stage number " + stageNumber + " does not identify a stage of"
-                        + " that pair. Status " + terminalStatus + " was not recorded and no"
-                        + " stage history was touched.", e);
-                Common.doRollback(con);
-                return PairStatusResult.REJECTED_INVALID_STAGE;
-            }
             log.error(e.getMessage(), e);
             Common.doRollback(con);
         } finally {
@@ -2531,11 +2532,18 @@ public class JobPairs {
 
     /**
      * SQLSTATE 22023, invalid_parameter_value, as raised by {@code UpdatePairStatusPrecise}
-     * when its stage argument does not identify a stage.
+     * when its stage argument does not identify a stage -- either out of range or not a stage
+     * of that pair.
      *
-     * <p>The routine uses it for exactly that, and for nothing else. The only other 22023 in
-     * the repeatable migration belongs to {@code AddAndAssociateBenchmarks}, which this
-     * routine does not call, so no unrelated failure can arrive here wearing this code.
+     * <p>No other <em>server-side</em> 22023 can reach this call. The only other one in the
+     * repeatable migration belongs to {@code AddAndAssociateBenchmarks}, and the routine calls
+     * nothing but {@code IsTerminalPairStatus}, which raises nothing.
+     *
+     * <p>The PostgreSQL driver also uses this SQLSTATE for some of its own client-side checks,
+     * so the test is applied only to the statement execution and not to connection
+     * acquisition, the commit, or the manifest write. A driver-side 22023 raised by the
+     * execution itself would still be misread as a refusal; that would hold the pair for an
+     * operator instead of retrying it, which is the safe direction to be wrong in.
      */
     private static final String INVALID_STAGE_SQLSTATE = "22023";
 

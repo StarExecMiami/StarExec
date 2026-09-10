@@ -246,9 +246,10 @@ public class ContainerJobMonitor {
      *
      * @param info Completed container info from reconciliation
      */
-    void processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
+    boolean processReconciledJob(PodmanBackend.CompletedContainerInfo info) {
         try {
             processCompletedJob(info);
+            return true;
         } catch (StageStatusSnapshots.InvalidSnapshotException e) {
             // The emergency marking below writes ERROR_RUNSCRIPT against a hardcoded stage 1.
             // For a pair whose results name no stage that would invent exactly the two things
@@ -264,18 +265,37 @@ public class ContainerJobMonitor {
                     " been invented for this.",
                 e
             );
+            // False, so the caller keeps the container. Saying the output is retained and
+            // then letting it be deleted would be worse than not claiming it at all.
+            return false;
         } catch (Exception e) {
             log.error("Error processing reconciled job " + info.pairId, e);
-            // Emergency error marking so the pair doesn't stay stuck
+            // Emergency error marking so the pair doesn't stay stuck.
+            //
+            // Still a hardcoded stage 1, which is a fabrication this change does not fix --
+            // but the result is now consumed. A refused write means the pair kept whatever
+            // status it had, so the container must not be deleted on the way out; without
+            // that the only record of the run would go with it.
             try {
-                JobPairs.setPairStatusPrecise(
+                PairStatusResult emergency = JobPairs.setPairStatusPreciseResult(
                     info.pairId, 1,
                     StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal());
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false);
+                if (emergency == PairStatusResult.REJECTED_INVALID_STAGE) {
+                    log.error(
+                        "INGESTION INTERVENTION REQUIRED: reconciled pair " + info.pairId +
+                            " could not be marked failed because stage 1 is not a stage of" +
+                            " that pair. Its output is retained at " + info.outputDir + "."
+                    );
+                    return false;
+                }
             } catch (Exception ex) {
                 log.error("Failed to set error status for pair " + info.pairId, ex);
+                return false;
             }
         }
+        return true;
     }
 
     /**
