@@ -4744,6 +4744,24 @@ public class KubernetesNativeBackend implements Backend {
                 return limit.getVal();
             }
             if (record == null) {
+                // No status.json. The caller's default is STATUS_COMPLETE, so returning it
+                // here recorded a successful solver run for an execution that may have
+                // produced nothing -- status.json is written by sendNode from initSandbox,
+                // before the stage loop, so its absence means the job script never got there.
+                //
+                // ERROR_RUNSCRIPT rather than a hold: it is StarExec's bounded-retry channel
+                // (RERUN_FAILED_PAIRS selects exactly that code, once), it is what
+                // JobPairs.tryMarkRunningAsFailed already records for a pair with no results,
+                // and onJobStuckPending documents the same deliberate overload a few hundred
+                // lines below. Nothing ran, so a retry cannot contaminate a measurement.
+                if (!FinalStatusStage.hasRunEvidence(ownedOutputDir(execution))) {
+                    log.warn(
+                        "No status.json and no run artifacts for " + execution +
+                        "; recording ERROR_RUNSCRIPT rather than the caller's default so the" +
+                        " pair is retried once instead of being recorded as a completed run."
+                    );
+                    return StatusCode.ERROR_RUNSCRIPT.getVal();
+                }
                 return defaultStatus;
             }
             return FinalStatusStage.requireStatus(record, String.valueOf(execution));

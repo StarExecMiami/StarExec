@@ -6,6 +6,8 @@ import com.google.gson.JsonPrimitive;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * The stage identity carried by a pair's final {@code status.json}.
@@ -138,6 +140,49 @@ final class FinalStatusStage {
 		}
 		return value.intValueExact();
 	}
+
+	/**
+	 * Whether this output directory shows that a run actually happened.
+	 *
+	 * <p>The question exists because {@code STATUS_COMPLETE} was a bare fallback: a container
+	 * that exited 0 having produced nothing was recorded as a successful solver run, stamped
+	 * with an {@code end_time} and a completion row, and became indistinguishable from a
+	 * genuine result in every downstream query, ranking and export.
+	 *
+	 * <p>Evidence is an artifact only a run can leave:
+	 *
+	 * <ul>
+	 *   <li>{@code var.out} / {@code watcher.out} — runsolver's own output, copied out by
+	 *       {@code copyOutput};</li>
+	 *   <li>{@code stats.json} — written by {@code updateStats} after the solver returns, and
+	 *       written for <em>both</em> benchmarking frameworks, so it does not mistake a
+	 *       BenchExec run for an empty one;</li>
+	 *   <li>{@code attributes.txt} — a post-processor ran, which requires a solver to have.</li>
+	 * </ul>
+	 *
+	 * <p>The pair's log file is deliberately <em>not</em> evidence. {@code log()} appends to it
+	 * on every call from the first line of the job script, long before {@code initSandbox}, so
+	 * it shows only that the script started -- which is exactly the case this has to catch.
+	 *
+	 * <p>Shared rather than written twice because the two backends that need it have drifted
+	 * apart on this file before.
+	 */
+	static boolean hasRunEvidence(Path outputDir) {
+		if (outputDir == null) {
+			return false;
+		}
+		for (String artifact : RUN_ARTIFACTS) {
+			if (Files.exists(outputDir.resolve(artifact))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Artifacts only a completed run leaves behind. Order is irrelevant; any one suffices. */
+	private static final String[] RUN_ARTIFACTS = {
+		"var.out", "watcher.out", "stats.json", "attributes.txt"
+	};
 
 	private static StageStatusSnapshots.InvalidSnapshotException invalid(
 			String source, String problem) {

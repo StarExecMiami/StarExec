@@ -1121,11 +1121,21 @@ public class ContainerJobMonitor {
             return limit;
         }
 
-        if (stats.exitCode != 0) {
-            // Check if var.out exists - if not, likely runscript error
-            if (!Files.exists(outputDir.resolve("var.out"))) {
-                return StatusCode.ERROR_RUNSCRIPT;
-            }
+        // STATUS_COMPLETE is never reached without evidence that a run happened.
+        //
+        // This used to be a bare fallback: anything that was not a limit breach and had not
+        // exited non-zero without a var.out was recorded COMPLETE. A container that exited 0
+        // having produced nothing at all therefore became a successful solver run, with an
+        // end_time and a completion row, indistinguishable downstream from a real result.
+        //
+        // The absent-status.json case lands here exactly: status.json is written by sendNode
+        // from initSandbox, before the stage loop, so if it is missing the job script never
+        // got that far and nothing ran. ERROR_RUNSCRIPT rather than a hold, because that is
+        // StarExec's bounded-retry channel -- RERUN_FAILED_PAIRS selects exactly that code,
+        // once, and JobPairs.tryMarkRunningAsFailed already records a pair with no results
+        // the same way. Nothing ran, so a retry cannot contaminate a measurement.
+        if (!FinalStatusStage.hasRunEvidence(outputDir)) {
+            return StatusCode.ERROR_RUNSCRIPT;
         }
         return StatusCode.STATUS_COMPLETE;
     }
