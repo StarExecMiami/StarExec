@@ -4144,11 +4144,47 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
+                // Whether this execution's output can be identified at all, decided before
+                // anything is read, because every read below depends on it.
+                //
+                // ownedOutputDir returns null in two situations that reach here: no tracking
+                // exists for this execution id (drainTerminalJobs reaches terminal Jobs by
+                // label without rebuilding tracking, and releaseAccountingIfSafe clears the
+                // maps), or the id is tracked but no output directory was registered. The
+                // third situation, a DIFFERENT execution owning the id, does not arrive: the
+                // isSuperseded guard above returns first, leaving that execution's own
+                // callback to write the pair.
+                //
+                // Not held. An untracked execution must still be published -- the drain and
+                // startup reconciliation both reach terminal Jobs with nothing tracked, and
+                // refusing them would lose results this backend exists to collect.
+                //
+                // But it must not be published as a SUCCESS. The caller's default is
+                // STATUS_COMPLETE, and recording that asserts a successful solver run on the
+                // strength of having been unable to look -- a false success is
+                // indistinguishable downstream from a real result, while a false failure is
+                // visible and, at this code, recoverable: ERROR_RUNSCRIPT is the bounded
+                // retry channel, so RERUN_FAILED_PAIRS gives the pair exactly one more
+                // attempt, which is the honest response to "we do not know".
+                int unidentifiedOutput = -1;
+                if (ownedOutputDir(execution) == null) {
+                    log.error(
+                        "Cannot identify the output directory for pair " + pairId + " (" +
+                        execution + "), so whether it produced results is unknown. Recording" +
+                        " ERROR_RUNSCRIPT for one bounded retry rather than recording a" +
+                        " completed run that was never observed."
+                    );
+                    unidentifiedOutput = StatusCode.ERROR_RUNSCRIPT.getVal();
+                }
+
                 // One parse feeds both fields, so they cannot come from two different
                 // writes of a file each stage truncates.
-                JsonObject statusRecord = readStatusRecord(execution);
-                int terminalStatus = readTerminalStatus(
-                    execution, statusRecord, StatusCode.STATUS_COMPLETE.getVal());
+                JsonObject statusRecord =
+                    unidentifiedOutput != -1 ? null : readStatusRecord(execution);
+                int terminalStatus = unidentifiedOutput != -1
+                    ? unidentifiedOutput
+                    : readTerminalStatus(
+                        execution, statusRecord, StatusCode.STATUS_COMPLETE.getVal());
                 int stageNumber = readStageNumber(execution, statusRecord, 1);
 
                 // Earlier stages, from the per-stage snapshots the job script writes beside
@@ -4758,12 +4794,13 @@ public class KubernetesNativeBackend implements Backend {
                 // failure on those would be an assertion this code never checked.
                 Path owned = ownedOutputDir(execution);
                 if (owned == null) {
-                    log.warn(
-                        "No status.json for " + execution + " and its output directory is not"
-                        + " readable under this execution's tracking, so whether it produced"
-                        + " results is unknown; falling back to the caller's default."
-                    );
-                    return defaultStatus;
+                    // onJobComplete refuses this before calling, so this is unreachable from
+                    // the production path. It throws rather than returning the caller's
+                    // default so that a caller added later cannot quietly reintroduce a
+                    // fabricated success: the catch this lands in holds the pair.
+                    throw new StageStatusSnapshots.InvalidSnapshotException(
+                        "the output directory for " + execution + " cannot be identified, so"
+                            + " whether it produced results is unknown");
                 }
                 if (!FinalStatusStage.hasRunEvidence(owned)) {
                     log.warn(
