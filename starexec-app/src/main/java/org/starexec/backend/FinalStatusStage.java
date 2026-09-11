@@ -6,6 +6,11 @@ import com.google.gson.JsonPrimitive;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.math.BigDecimal;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 
 /**
  * The stage identity carried by a pair's final {@code status.json}.
@@ -138,6 +143,58 @@ final class FinalStatusStage {
 		}
 		return value.intValueExact();
 	}
+
+	/**
+	 * Whether this output directory shows that a run actually happened.
+	 *
+	 * <p>The question exists because {@code STATUS_COMPLETE} was a bare fallback: a container
+	 * that exited 0 having produced nothing was recorded as a successful solver run, stamped
+	 * with an {@code end_time} and a completion row, and became indistinguishable from a
+	 * genuine result in every downstream query, ranking and export.
+	 *
+	 * <p>Evidence is an artifact only a run can leave:
+	 *
+	 * <ul>
+	 *   <li>{@code var.out} / {@code watcher.out} — runsolver's own output, copied out by
+	 *       {@code copyOutput};</li>
+	 *   <li>{@code stats.json} — written by {@code updateStats} after the solver returns, and
+	 *       written for <em>both</em> benchmarking frameworks, so it does not mistake a
+	 *       BenchExec run for an empty one.</li>
+	 * </ul>
+	 *
+	 * <p>{@code attributes.txt} is deliberately <em>not</em> in the list even though a
+	 * post-processor cannot run without a solver. It is the one artifact
+	 * {@code clearStaleAttemptArtifacts} does not remove, so a previous attempt's copy would
+	 * survive into a rerun and make an empty attempt look like a completed one. It also adds
+	 * nothing: {@code copyOutput} calls {@code updateStats} before the post-processor branch,
+	 * so an {@code attributes.txt} always has a {@code stats.json} beside it.
+	 *
+	 * <p>The pair's log file is not evidence either. {@code log()} appends to it on every call
+	 * from the first line of the job script, long before {@code initSandbox}, so it shows only
+	 * that the script started -- which is exactly the case this has to catch.
+	 *
+	 * <p>An {@code IOException} is propagated rather than read as "no evidence". A directory
+	 * that cannot be read is not a directory that is empty, and turning a storage fault into a
+	 * verdict about a solver is the mistake this whole method exists to stop. Only
+	 * {@link NoSuchFileException} means the artifact is genuinely absent.
+	 *
+	 * @param outputDir the directory to inspect; never null -- a caller that has no directory
+	 *        has not looked, and must not claim it found nothing
+	 */
+	static boolean hasRunEvidence(Path outputDir) throws IOException {
+		for (String artifact : RUN_ARTIFACTS) {
+			try {
+				Files.readAttributes(outputDir.resolve(artifact), BasicFileAttributes.class);
+				return true;
+			} catch (NoSuchFileException absent) {
+				// Genuinely not there. Keep looking.
+			}
+		}
+		return false;
+	}
+
+	/** Artifacts only a completed run leaves behind. Any one suffices. */
+	private static final String[] RUN_ARTIFACTS = {"var.out", "watcher.out", "stats.json"};
 
 	private static StageStatusSnapshots.InvalidSnapshotException invalid(
 			String source, String problem) {

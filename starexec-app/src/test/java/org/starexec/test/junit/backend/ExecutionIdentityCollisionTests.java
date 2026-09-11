@@ -497,8 +497,15 @@ public class ExecutionIdentityCollisionTests {
      * result.
      *
      * <p>Here execution A owns nothing, while a directory holding a status.json is
-     * registered under the shared execution id. A's completion must record the caller's
-     * default, not the status sitting in that directory.
+     * registered under the shared execution id. A's completion must not read that directory
+     * -- and must not record a success it never observed either.
+     *
+     * <p>This used to assert the caller's default, {@code STATUS_COMPLETE}, so an execution
+     * that had deliberately declined to look at any artifact recorded a successful solver
+     * run. A false success is indistinguishable downstream from a real result. The pair is
+     * still published -- an untracked execution must be, or the drain would lose results --
+     * but as {@code ERROR_RUNSCRIPT}, the bounded-retry channel, which gives it one more
+     * attempt instead of a fabricated outcome.
      */
     @Test
     @SuppressWarnings("unchecked")
@@ -539,17 +546,33 @@ public class ExecutionIdentityCollisionTests {
                     .thenReturn(PairStatusResult.APPLIED);
                 jobPairs.when(() -> JobPairs.setEndTime(PAIR_B)).thenReturn(true);
 
-                callback.onJobComplete(executionA());
+                // Handled, not retried: false would leave the execution out of
+                // completedExecutions and reprocess the same job on every poll forever.
+                assertTrue(
+                    "the execution must be reported handled so it is not re-polled",
+                    callback.onJobComplete(executionA())
+                );
 
-                // The caller's default, and stage 1 — neither read from that directory.
+                // Published, because an untracked execution must be -- but as the
+                // bounded-retry status, never as a completed run.
                 jobPairs.verify(() ->
                     JobPairs.setPairStatusPreciseResult(
                         Mockito.eq(PAIR_B),
-                        Mockito.eq(1),
-                        Mockito.eq(StatusCode.STATUS_COMPLETE.getVal()),
+                        Mockito.anyInt(),
+                        Mockito.eq(StatusCode.ERROR_RUNSCRIPT.getVal()),
                         Mockito.anyInt(),
                         Mockito.anyBoolean()
                     )
+                );
+                jobPairs.verify(() ->
+                    JobPairs.setPairStatusPreciseResult(
+                        Mockito.anyInt(),
+                        Mockito.anyInt(),
+                        Mockito.eq(StatusCode.STATUS_COMPLETE.getVal()),
+                        Mockito.anyInt(),
+                        Mockito.anyBoolean()
+                    ),
+                    Mockito.never()
                 );
                 jobPairs.verify(() ->
                     JobPairs.setPairStatusPreciseResult(
