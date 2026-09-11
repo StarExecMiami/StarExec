@@ -542,17 +542,11 @@ public class ExecutionIdentityCollisionTests {
                 callback.onJobComplete(executionA());
 
                 // Stage 1 and the fallback status — neither read from that directory.
-                //
-                // The status is ERROR_RUNSCRIPT rather than COMPLETE because this execution
-                // owns no tracking, so no artifact is readable, and a run that cannot be
-                // shown to have happened is no longer recorded as a completed one. The
-                // property under test is unchanged: nothing was read from the other
-                // execution's directory.
                 jobPairs.verify(() ->
                     JobPairs.setPairStatusPreciseResult(
                         Mockito.eq(PAIR_B),
                         Mockito.eq(1),
-                        Mockito.eq(StatusCode.ERROR_RUNSCRIPT.getVal()),
+                        Mockito.eq(StatusCode.STATUS_COMPLETE.getVal()),
                         Mockito.anyInt(),
                         Mockito.anyBoolean()
                     )

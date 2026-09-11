@@ -4738,27 +4738,38 @@ public class KubernetesNativeBackend implements Backend {
          * @param record the parsed status file, or null when there is none
          */
         private int readTerminalStatus(ExecutionRef execution, JsonObject record,
-                int defaultStatus) throws StageStatusSnapshots.InvalidSnapshotException {
+                int defaultStatus)
+                throws StageStatusSnapshots.InvalidSnapshotException, IOException {
             StatusCode limit = readRunsolverVerdict(execution);
             if (limit != null) {
                 return limit.getVal();
             }
             if (record == null) {
                 // No status.json. The caller's default is STATUS_COMPLETE, so returning it
-                // here recorded a successful solver run for an execution that may have
-                // produced nothing -- status.json is written by sendNode from initSandbox,
-                // before the stage loop, so its absence means the job script never got there.
+                // unconditionally recorded a successful solver run for an execution that may
+                // have produced nothing -- status.json is written by sendNode from
+                // initSandbox, before the stage loop, so its absence means the job script
+                // never got there.
                 //
-                // ERROR_RUNSCRIPT rather than a hold: it is StarExec's bounded-retry channel
-                // (RERUN_FAILED_PAIRS selects exactly that code, once), it is what
-                // JobPairs.tryMarkRunningAsFailed already records for a pair with no results,
-                // and onJobStuckPending documents the same deliberate overload a few hundred
-                // lines below. Nothing ran, so a retry cannot contaminate a measurement.
-                if (!FinalStatusStage.hasRunEvidence(ownedOutputDir(execution))) {
+                // Only when this execution owns its tracking, though. ownedOutputDir returns
+                // null when it does not, and that means we declined to look, not that we
+                // looked and found nothing -- the artifacts may be sitting on the PVC. The
+                // drain path reaches terminal Jobs with no tracking rebuilt, and stamping a
+                // failure on those would be an assertion this code never checked.
+                Path owned = ownedOutputDir(execution);
+                if (owned == null) {
                     log.warn(
-                        "No status.json and no run artifacts for " + execution +
-                        "; recording ERROR_RUNSCRIPT rather than the caller's default so the" +
-                        " pair is retried once instead of being recorded as a completed run."
+                        "No status.json for " + execution + " and its output directory is not"
+                        + " readable under this execution's tracking, so whether it produced"
+                        + " results is unknown; falling back to the caller's default."
+                    );
+                    return defaultStatus;
+                }
+                if (!FinalStatusStage.hasRunEvidence(owned)) {
+                    log.warn(
+                        "No status.json and no run artifacts in " + owned + " for " + execution
+                        + "; recording ERROR_RUNSCRIPT rather than the caller's default so the"
+                        + " pair is retried once instead of being recorded as a completed run."
                     );
                     return StatusCode.ERROR_RUNSCRIPT.getVal();
                 }
