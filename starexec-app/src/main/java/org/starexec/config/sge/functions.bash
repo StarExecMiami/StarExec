@@ -44,7 +44,6 @@ STATUS_SENT=false
 CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
 CONTAINER_STAGE_STATUS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-status"
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
-CONTAINER_ATTRS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/attributes.txt"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
 
 # Write status update for container mode
@@ -121,7 +120,10 @@ function containerWriteStats {
 	# hostname to the worker node name deliberately, and on SGE the hostname is the host.
 	local NODE_NAME="${STAREXEC_NODE_NAME:-$(hostname)}"
 	mkdir -p "$(dirname "$CONTAINER_STATS_FILE")"
-	cat > "$CONTAINER_STATS_FILE" <<EOF
+	# Written beside the target and renamed, as the stage-status snapshots are. A Local
+	# monitor polls this file while the pair runs, and `cat >` truncates it before writing:
+	# a poll inside that window read an empty stats.json.
+	cat > "$CONTAINER_STATS_FILE.tmp" <<EOF
 {
   "pairId": $PAIR_ID,
   "stageNumber": $STAGE,
@@ -135,15 +137,8 @@ function containerWriteStats {
   "hostname": "$NODE_NAME"
 }
 EOF
+	mv -f "$CONTAINER_STATS_FILE.tmp" "$CONTAINER_STATS_FILE"
 	log "Container mode: wrote stats for stage $STAGE"
-}
-
-# Write attributes for container mode
-function containerWriteAttribute {
-	local KEY=$1
-	local VALUE=$2
-	mkdir -p "$(dirname "$CONTAINER_ATTRS_FILE")"
-	echo "${KEY}=${VALUE}" >> "$CONTAINER_ATTRS_FILE"
 }
 
 # Check if running in container mode
@@ -1001,7 +996,11 @@ function processAttributes {
 			# value=$(dbEscape $value)
 			log "processing attribute $a (pair=$PAIR_ID, key='$key', value='$value' stage='$STAGE')"
 			if isContainerMode; then
-				containerWriteAttribute "$key" "$value"
+				# Nothing to write here. copyOutput publishes the post-processor's file whole,
+				# by rename, once this loop is done. This used to append each line to that same
+				# published file first, so a polling monitor could read the previous stage's
+				# attributes with this stage's keys mixed in; the copy then replaced every byte.
+				:
 			else
 				QUERY+="CALL AddJobAttr($PAIR_ID, '$key', '$value', $STAGE);"
 			fi
@@ -1248,7 +1247,10 @@ function copyOutput {
 		if [ "$CONTAINER_MODE" = "true" ] && [ -n "${STAREXEC_OUTPUT_DIR:-}" ]; then
 			if [ -f "$OUT_DIR/attributes.txt" ]; then
 				mkdir -p "$STAREXEC_OUTPUT_DIR"
-				cp "$OUT_DIR/attributes.txt" "$STAREXEC_OUTPUT_DIR/attributes.txt"
+				# Copied beside the target and renamed. cp truncates its destination before
+				# writing, so a monitor polling mid-copy read an empty attributes.txt.
+				cp "$OUT_DIR/attributes.txt" "$STAREXEC_OUTPUT_DIR/attributes.txt.tmp"
+				mv -f "$STAREXEC_OUTPUT_DIR/attributes.txt.tmp" "$STAREXEC_OUTPUT_DIR/attributes.txt"
 				log "Copied attributes.txt to STAREXEC_OUTPUT_DIR: $STAREXEC_OUTPUT_DIR/attributes.txt"
 			fi
 		fi
