@@ -60,10 +60,6 @@ jQuery(function($) {
 		$tableTests.find("tr").removeClass("row_selected");
 	});
 
-	$("#runStress").button(buttonStyle).click(function() {
-		window.open(starexecRoot + "secure/admin/stressTest.jsp");
-	});
-
 	$tableTests.dataTable(tableConfig).on("click", "tr", function() {
 		$(this).toggleClass("row_selected");
 	});
