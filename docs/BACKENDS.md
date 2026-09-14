@@ -265,11 +265,31 @@ Jobs write results to mounted volumes:
 | `attributes.txt` | Post-processor output |
 | `var.out`        | Solver stdout         |
 | `watcher.out`    | Runsolver output      |
+| `stage-status/<n>.json`   | Stage `n`'s latest status    |
+| `stage-attributes/<n>.txt` | Stage `n`'s post-processor output |
 
 `stats.json` and `attributes.txt` hold one stage at a time: each stage of a multi-stage
 pair replaces them. The job script writes them to a temporary file and renames it, so a
 monitor that polls while a pair runs reads one stage's complete file, never an empty or
 half-replaced one.
+
+Because `attributes.txt` does not say which stage wrote it, each stage's post-processor
+output is also published as `stage-attributes/<n>.txt`. The job script creates the
+`stage-attributes/` directory when the pair starts, before any stage runs, and the monitors
+treat that directory as the protocol marker:
+
+- **Present:** attributes are recorded per stage from `stage-attributes/<n>.txt` only, and
+  `attributes.txt` is never read. A stage is recorded once it has finished (its
+  `stage-status/<n>.json` is terminal, or it produced the pair's final status) and only if the
+  pair has that stage. A finished stage with no file, because it ran no post-processor or its
+  post-processor failed, gets no attributes.
+- **Absent** (a job script from before this protocol): `attributes.txt` is recorded only for
+  a single-stage pair, under its only stage. A multi-stage pair's `attributes.txt` is not
+  recorded, because the stage that wrote it cannot be known.
+
+LocalBackend and KubernetesNativeBackend delete `stage-attributes/` before a rerun, as they
+delete `stage-status/`, and refuse to start the attempt if it survives. PodmanBackend clears
+neither directory.
 
 These writes live in `functions.bash`. `docker/entrypoint.sh` copies that helper into
 `/app/data/sge_scripts/` only when no copy exists yet, so upgrading the image does not

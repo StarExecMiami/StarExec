@@ -541,7 +541,7 @@ public class LocalJobMonitorTests {
                 m.setAccessible(true);
                 try {
                     m.invoke(monitor, pairId, status, stageNumber,
-                             newRunSolverStats(), new java.util.Properties());
+                             newRunSolverStats());
                 } catch (java.lang.reflect.InvocationTargetException e) {
                     throw e.getCause();
                 }

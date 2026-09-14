@@ -676,7 +676,8 @@ public class ContainerJobMonitor {
         // 2. Determine job status from stats
         StatusCode status = determineStatus(stats, outputPath);
 
-        // 3. Parse attributes if post-processor ran
+        // 3. The legacy attributes.txt, which names no stage. Whether it is used at all is
+        //    decided with the per-stage files in step 5.
         Properties attributes = parseAttributes(outputPath);
 
         // 4. Update database
@@ -685,10 +686,16 @@ public class ContainerJobMonitor {
             stageNumber,
             stats,
             status,
-            attributes,
             info.partitionIndex,
             stageSnapshots
         );
+
+        // 5. Attributes, each against the stage that produced it. Only after updateDatabase
+        //    returned: a refused status throws out of it, and no attribute may be recorded
+        //    against a result the database declined. The stages eligible are the ones already
+        //    known to have finished -- earlier stages, whose snapshots the loop above required to
+        //    be terminal, and the terminal stage itself.
+        recordAttributes(pairId, outputPath, stageNumber, stageSnapshots, attributes);
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
@@ -1187,7 +1194,6 @@ public class ContainerJobMonitor {
         int stageNumber,
         RunsolverStats stats,
         StatusCode status,
-        Properties attributes,
         int partitionIndex,
         Map<Integer, Integer> stageSnapshots
     ) throws Exception {
@@ -1342,22 +1348,41 @@ public class ContainerJobMonitor {
             log.warn("Exception persisting run stats for pair " + pairId, e);
         }
 
-        // Persist attributes. parseAttributes() normalizes starexec-result=
-        // to starexec-unknown so timeout/unknown outcomes are classified
-        // consistently downstream.
-        if (!attributes.isEmpty()) {
-            // Stage 1 for now — multi-stage pipelines would need enhancement
-            JobPairs.addJobPairAttributes(pairId, 1, attributes);
+        log.debug("Updated database for pair " + pairId + ": status=" + status);
+    }
+
+    /**
+     * Records post-processor attributes against the stages that produced them.
+     * {@link StageAttributeFiles} decides which files may be believed.
+     */
+    private void recordAttributes(
+        int pairId,
+        Path outputPath,
+        int stageNumber,
+        Map<Integer, Integer> stageSnapshots,
+        Properties legacy
+    ) throws Exception {
+        Set<Integer> finishedEarlier = new TreeSet<>();
+        for (Integer stage : stageSnapshots.keySet()) {
+            if (stage < stageNumber) {
+                finishedEarlier.add(stage);
+            }
         }
 
-        log.debug(
-            "Updated database for pair " +
-                pairId +
-                ": status=" +
-                status +
-                ", attrs=" +
-                attributes.size()
+        Map<Integer, Properties> byStage = StageAttributeFiles.select(
+            outputPath,
+            pairId,
+            finishedEarlier,
+            stageNumber,
+            legacy,
+            () -> JobPairs.getStageNumbers(pairId)
         );
+
+        for (Map.Entry<Integer, Properties> entry : byStage.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     /**
