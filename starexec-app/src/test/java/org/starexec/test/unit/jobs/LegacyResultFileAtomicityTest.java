@@ -43,8 +43,13 @@ import static org.junit.Assert.assertTrue;
  *       single command is otherwise opaque to the trap.</li>
  * </ul>
  *
- * <p>{@code mv} is not wrapped: a rename within one directory replaces the name atomically, and
- * that is the property the job script is expected to rely on.
+ * <p>{@code mv} is only recorded, not interleaved: a rename within one directory replaces the
+ * name atomically, and that is the property the job script is expected to rely on -- so the
+ * test also pins that each temporary file sits in its target's own directory. Across
+ * directories, which may be different volumes, {@code mv} degrades to a non-atomic copy.
+ *
+ * <p>Known blind spot: a truncation by a builtin redirection or by an external command that is
+ * not wrapped here happens inside one command, where the {@code DEBUG} trap cannot see it.
  */
 public class LegacyResultFileAtomicityTest {
 
@@ -64,9 +69,19 @@ public class LegacyResultFileAtomicityTest {
 
 	private static synchronized Run run() throws Exception {
 		if (run == null) {
-			run = runTwoStages();
+			run = runTwoStages(STAGE_2_ATTRIBUTES);
 		}
 		return run;
+	}
+
+	/** The same pair, with a final-stage post-processor that prints nothing. */
+	private static Run emptyRun;
+
+	private static synchronized Run emptyRun() throws Exception {
+		if (emptyRun == null) {
+			emptyRun = runTwoStages("");
+		}
+		return emptyRun;
 	}
 
 	@Test
@@ -130,6 +145,58 @@ public class LegacyResultFileAtomicityTest {
 				stats.trim().endsWith("}"));
 	}
 
+	/**
+	 * Each temporary file is renamed within the directory the monitor reads. OUT_DIR is the
+	 * sandbox and can be another volume (on the qualification deployment it is /app/work
+	 * against /app/data), where a rename becomes a copy that a reader can observe mid-way --
+	 * which a single-filesystem test like this one would otherwise never notice.
+	 */
+	@Test
+	public void temporariesAreRenamedWithinTheTargetsDirectory() throws Exception {
+		Run run = run();
+		int published = 0;
+		for (String[] rename : run.renames()) {
+			Path source = Path.of(rename[0]);
+			Path target = Path.of(rename[1]);
+			String name = target.getFileName().toString();
+			if (!name.equals("attributes.txt") && !name.equals("stats.json")) {
+				continue;
+			}
+			published++;
+			assertEquals(name + " must be renamed from its own directory, not from " + source,
+					target.getParent(), source.getParent());
+		}
+		assertEquals("one rename per stage for each of the two files: " + run.renames().size(),
+				4, published);
+	}
+
+	/**
+	 * A post-processor that prints nothing still publishes a file: an empty attributes.txt,
+	 * replacing the previous stage's whole, and never absent once it has appeared.
+	 */
+	@Test
+	public void emptyPostProcessorOutputIsPublishedWholeAndNeverAbsent() throws Exception {
+		Run run = emptyRun();
+		Set<String> wrong = new LinkedHashSet<>();
+		for (String state : run.observed("attributes.txt")) {
+			if (!state.isEmpty() && !state.equals(STAGE_1_ATTRIBUTES)) {
+				wrong.add(quote(state));
+			}
+		}
+		assertTrue("only stage 1's file or the empty one may be observed: " + wrong,
+				wrong.isEmpty());
+
+		List<Boolean> present = run.presence("attributes.txt");
+		int first = present.indexOf(Boolean.TRUE);
+		assertTrue("attributes.txt must have been published at all", first >= 0);
+		assertFalse("attributes.txt disappeared after it was published",
+				present.subList(first, present.size()).contains(Boolean.FALSE));
+
+		Path published = run.out.resolve("attributes.txt");
+		assertTrue("an empty result is still published", Files.isRegularFile(published));
+		assertEquals("and it is empty, not stage 1's leftovers", 0, Files.size(published));
+	}
+
 	/** A rename leaves nothing behind for a cleanup list or a monitor to trip over. */
 	@Test
 	public void noTemporaryFileIsLeftBehind() throws Exception {
@@ -141,6 +208,9 @@ public class LegacyResultFileAtomicityTest {
 	}
 
 	// ------------------------------------------------------------------------- harness
+
+	/** Recorded for an observation that found no file; not valid base64, so never content. */
+	private static final String ABSENT = "!";
 
 	private static final class Run {
 		final Path out;
@@ -161,11 +231,36 @@ public class LegacyResultFileAtomicityTest {
 			return new LinkedHashSet<>(decode("S", name));
 		}
 
+		/** Whether {@code name} existed at each observation, in order. */
+		List<Boolean> presence(String name) {
+			List<Boolean> present = new ArrayList<>();
+			for (String line : lines) {
+				String[] f = line.split("\t", -1);
+				if (f.length == 3 && f[0].equals("O") && f[1].equals(name)) {
+					present.add(!f[2].equals(ABSENT));
+				}
+			}
+			return present;
+		}
+
+		/** Every rename the helper performed, as {source, target}. */
+		List<String[]> renames() {
+			List<String[]> renames = new ArrayList<>();
+			for (String line : lines) {
+				String[] f = line.split("\t", -1);
+				if (f.length == 3 && f[0].equals("M")) {
+					renames.add(new String[]{f[1], f[2]});
+				}
+			}
+			return renames;
+		}
+
 		private List<String> decode(String kind, String name) {
 			List<String> states = new ArrayList<>();
 			for (String line : lines) {
 				String[] f = line.split("\t", -1);
-				if (f.length == 3 && f[0].equals(kind) && f[1].equals(name)) {
+				if (f.length == 3 && f[0].equals(kind) && f[1].equals(name)
+						&& !f[2].equals(ABSENT)) {
 					states.add(new String(Base64.getDecoder().decode(f[2]),
 							StandardCharsets.UTF_8));
 				}
@@ -174,7 +269,7 @@ public class LegacyResultFileAtomicityTest {
 		}
 	}
 
-	private static Run runTwoStages() throws Exception {
+	private static Run runTwoStages(String stage2Attributes) throws Exception {
 		Path dir = folder.newFolder("pair-" + System.nanoTime()).toPath();
 		Path out = dir.resolve("out");
 		Files.createDirectories(out);
@@ -188,7 +283,7 @@ public class LegacyResultFileAtomicityTest {
 		Files.writeString(pp.resolve("process"), "#!/bin/bash\n"
 				+ "case \"$(cat \"$1\")\" in\n"
 				+ "  *Theorem*) printf 'starexec-result=Theorem\\nSZSStatus=THM\\n' ;;\n"
-				+ "  *) printf 'starexec-result=Unknown\\nSZSStatus=UNK\\n' ;;\n"
+				+ "  *) printf '" + stage2Attributes.replace("\n", "\\n") + "' ;;\n"
 				+ "esac\n");
 		Files.writeString(dir.resolve("bench.p"), "fof(a, conjecture, $true).\n");
 		Path log = dir.resolve("observed.tsv");
@@ -219,6 +314,8 @@ public class LegacyResultFileAtomicityTest {
 		b.append("    if [[ -f \"$STAREXEC_OUTPUT_DIR/$name\" ]]; then\n");
 		b.append("      printf '%s\\t%s\\t%s\\n' \"$kind\" \"$name\" "
 				+ "\"$(base64 -w0 < \"$STAREXEC_OUTPUT_DIR/$name\")\" >> \"$OBSERVED\"\n");
+		b.append("    else\n");
+		b.append("      printf '%s\\t%s\\t" + ABSENT + "\\n' \"$kind\" \"$name\" >> \"$OBSERVED\"\n");
 		b.append("    fi\n");
 		b.append("  done\n");
 		b.append("}\n");
@@ -229,6 +326,9 @@ public class LegacyResultFileAtomicityTest {
 		b.append("  observe O\n");
 		b.append("  command cp \"$@\"\n");
 		b.append("}\n");
+		// mv: recorded, source and target, then performed.
+		b.append("function mv { printf 'M\\t%s\\t%s\\n' \"${@: -2:1}\" \"${!#}\" >> \"$OBSERVED\";"
+				+ " command mv \"$@\"; }\n");
 		// cat: its output redirection has already truncated the target.
 		b.append("function cat { observe O; command cat \"$@\"; }\n");
 		b.append("set -o functrace\n");
