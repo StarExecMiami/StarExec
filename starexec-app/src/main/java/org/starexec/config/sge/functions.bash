@@ -51,16 +51,19 @@ CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
 function containerWriteStatus {
 	local STATUS=$1
 	local STAGE_NUMBER=${2:-0}
+	local WRITE_PAIR_STATUS=${3:-true}
 	local TIMESTAMP=$(date +%s)
 	local RECORD="{\"pairId\":$PAIR_ID,\"status\":$STATUS,\"stageNumber\":$STAGE_NUMBER,\"timestamp\":$TIMESTAMP}"
 	mkdir -p "$(dirname "$CONTAINER_STATUS_FILE")"
-	echo "$RECORD" > "$CONTAINER_STATUS_FILE"
+	if [[ "$WRITE_PAIR_STATUS" == true ]]; then
+		echo "$RECORD" > "$CONTAINER_STATUS_FILE"
+	fi
 
 	# status.json is one slot for the whole pair and this write truncates it, so in a
 	# multi-stage pair each stage erased the previous stage's result and only the last
-	# one ever reached the database. Keep writing it -- the monitor still reads the
-	# stage number from it, and an older monitor reads nothing else -- and record the
-	# same bytes once per stage beside it, so earlier stages survive.
+	# one ever reached the database. Pair notifications still write it, including the
+	# stage number needed by older monitors. Stage-only success notifications suppress
+	# that write; their snapshot must not announce completion of the entire pair.
 	#
 	# Stage 0 is the pair-level channel: it owns no jobpair_stage_data row, so it gets
 	# no snapshot. The pattern also rejects anything that is not a plain positive
@@ -854,7 +857,16 @@ function sendStageStatus {
 	local STATUS=$(($1))
 	log "sending status for stage number $STAGE_NUMBER"
 	if isContainerMode; then
-		containerWriteStatus $STATUS $STAGE_NUMBER
+		# A successful intermediate stage is not a completed pair. The jobscript
+		# explicitly calls sendStatus after its final stage; publishing COMPLETE
+		# here lets a live monitor retire the pair before later stages execute.
+		# Keep failure publication so error helpers still attach the precise stage
+		# to their preceding pair-level (stage 0) failure notification.
+		local WRITE_PAIR_STATUS=true
+		if [[ "$STATUS" == "$STATUS_COMPLETE" ]]; then
+			WRITE_PAIR_STATUS=false
+		fi
+		containerWriteStatus "$STATUS" "$STAGE_NUMBER" "$WRITE_PAIR_STATUS"
 	else
 		dbExec "CALL UpdatePairStageStatus($PAIR_ID, $STAGE_NUMBER, $STATUS)"
 	fi
