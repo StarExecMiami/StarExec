@@ -160,6 +160,35 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 
 	// ------------------------------------------------------------------ the defect itself
 
+	@Test
+	public void runningStageDoesNotMarkLaterStagesUnreachable() throws Exception {
+		assertTrue(JobPairs.setPairStatusPrecise(PAIR_ID, 1, RUNNING, NOT_REACHED));
+		assertEquals(RUNNING, pairStatus());
+		assertEquals(RUNNING, stageStatus(1));
+		assertEquals("stage 2 is still eligible to run", ENQUEUED, stageStatus(2));
+		assertEquals("stage 3 is still eligible to run", ENQUEUED, stageStatus(3));
+		assertEquals(0, completions());
+	}
+
+	@Test
+	public void runningLaterStagePreservesCompletedHistoryAndPendingTail() throws Exception {
+		assertEquals(StageStatusBatchResult.APPLIED,
+				JobPairs.setEarlierStageStatuses(PAIR_ID, one(1, COMPLETE)));
+		assertTrue(JobPairs.setPairStatusPrecise(PAIR_ID, 2, RUNNING, NOT_REACHED));
+
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals(RUNNING, stageStatus(2));
+		assertEquals("a running predecessor cannot rule out stage 3", ENQUEUED, stageStatus(3));
+		assertEquals(0, completions());
+
+		assertTrue(JobPairs.setPairStatusPrecise(PAIR_ID, 2, EXCEED_CPU, NOT_REACHED));
+		assertEquals(COMPLETE, stageStatus(1));
+		assertEquals(EXCEED_CPU, stageStatus(2));
+		assertEquals("a terminal failure prevents stage 3", NOT_REACHED, stageStatus(3));
+		assertEquals(EXCEED_CPU, pairStatus());
+		assertEquals(1, completions());
+	}
+
 	/**
 	 * The three-stage failure. Every row is required, and pair completion is required to
 	 * fire exactly once even though three stages were written.
