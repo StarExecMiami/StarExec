@@ -88,7 +88,10 @@ function containerWriteStatus {
 				&& mv -f "$SNAPSHOT.tmp" "$SNAPSHOT"; }; then
 			log "job error: could not record the status of stage $STAGE_NUMBER at $SNAPSHOT"
 			STATUS_SENT=true
-			sendStatus "$ERROR_GENERAL" "$STAGE_NUMBER"
+			# Do not call sendStatus here: it re-enters this same failed snapshot
+			# write. Report the pair failure directly, retaining its precise stage.
+			printf '{"pairId":%s,"status":%s,"stageNumber":%s,"timestamp":%s}\n' \
+				"$PAIR_ID" "$ERROR_GENERAL" "$STAGE_NUMBER" "$TIMESTAMP" > "$CONTAINER_STATUS_FILE"
 			exit 1
 		fi
 	fi
