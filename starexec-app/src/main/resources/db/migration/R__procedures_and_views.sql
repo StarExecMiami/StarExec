@@ -10098,9 +10098,12 @@ BEGIN
 		UPDATE starexec.jobpair_stage_data SET status_code = _terminalStatus
 		WHERE jobpair_id = _pairId AND stage_number = _stageNumber;
 
-		-- Set all stages after the terminal stage to notReachedStatus
-		UPDATE starexec.jobpair_stage_data SET status_code = _notReachedStatus
-		WHERE jobpair_id = _pairId AND stage_number > _stageNumber;
+		-- A running stage leaves later stages eligible to execute. Only a terminal
+		-- result can establish that the remaining stages will not be reached.
+		IF starexec.IsTerminalPairStatus(_terminalStatus) THEN
+			UPDATE starexec.jobpair_stage_data SET status_code = _notReachedStatus
+			WHERE jobpair_id = _pairId AND stage_number > _stageNumber;
+		END IF;
 	END IF;
 
 	-- Fire job_pair_completion side-effects if terminalStatus is a terminal status code.
