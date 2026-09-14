@@ -371,7 +371,10 @@ public class KubernetesNativeBackendTests {
                         JobPairs.setPairStatusPreciseResult(
                             111,
                             1,
-                            StatusCode.STATUS_COMPLETE.getVal(),
+                            // ERROR_RUNSCRIPT, not COMPLETE: these fixtures give the
+                            // execution an empty output directory, and a run that left
+                            // no artifacts is no longer recorded as a completed one.
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
                             StatusCode.STATUS_NOT_REACHED.getVal(),
                             false
                         )
@@ -520,7 +523,10 @@ public class KubernetesNativeBackendTests {
                         JobPairs.setPairStatusPreciseResult(
                             313,
                             1,
-                            StatusCode.STATUS_COMPLETE.getVal(),
+                            // ERROR_RUNSCRIPT, not COMPLETE: these fixtures give the
+                            // execution an empty output directory, and a run that left
+                            // no artifacts is no longer recorded as a completed one.
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
                             StatusCode.STATUS_NOT_REACHED.getVal(),
                             false
                         )
@@ -2808,12 +2814,16 @@ public class KubernetesNativeBackendTests {
             );
         }
 
-        // With the directory cleared the verdict abstains rather than inventing one, so
-        // the caller's own default stands.
+        // With the directory cleared the verdict abstains rather than inventing one. The
+        // caller's default no longer stands on its own, though: an execution that left no
+        // artifacts at all is not evidence of a completed run, so the status falls to
+        // ERROR_RUNSCRIPT -- StarExec's bounded-retry channel -- rather than to COMPLETE.
+        // The property this test exists for is unchanged: nothing of the previous attempt
+        // survived, which the four assertions above check.
         KubernetesNativeBackend fresh = backendWithOutputDir(4242, dir);
         assertEquals(
-            "with no runsolver output the verdict must abstain, not guess",
-            org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal(),
+            "with no runsolver output and no artifacts this is not a completed run",
+            org.starexec.data.to.Status.StatusCode.ERROR_RUNSCRIPT.getVal(),
             readTerminalStatus(
                 fresh, 4242,
                 org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()

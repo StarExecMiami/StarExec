@@ -1101,7 +1101,8 @@ public class ContainerJobMonitor {
     /**
      * Determines the job status based on runsolver stats and output files.
      */
-    private StatusCode determineStatus(RunsolverStats stats, Path outputDir) {
+    private StatusCode determineStatus(RunsolverStats stats, Path outputDir)
+        throws IOException {
         // Detection is runsolver's TIMEOUT=/MEMOUT=; the prose only picks between
         // EXCEED_CPU and EXCEED_RUNTIME. See RunsolverVerdict for why round that way.
         //
@@ -1121,11 +1122,27 @@ public class ContainerJobMonitor {
             return limit;
         }
 
-        if (stats.exitCode != 0) {
-            // Check if var.out exists - if not, likely runscript error
-            if (!Files.exists(outputDir.resolve("var.out"))) {
-                return StatusCode.ERROR_RUNSCRIPT;
-            }
+        // Two independent reasons to refuse STATUS_COMPLETE. Both are kept: the evidence gate
+        // is added to the exit-code test, not substituted for it.
+        //
+        // No evidence at all. This used to fall through to COMPLETE, so a container that
+        // exited 0 having produced nothing was recorded as a successful solver run, with an
+        // end_time and a completion row, indistinguishable downstream from a real result.
+        //
+        // ERROR_RUNSCRIPT rather than a hold, because that is StarExec's bounded-retry
+        // channel -- RERUN_FAILED_PAIRS selects exactly that code, once, and
+        // JobPairs.tryMarkRunningAsFailed already records a pair with no results the same way.
+        if (!FinalStatusStage.hasRunEvidence(outputDir)) {
+            return StatusCode.ERROR_RUNSCRIPT;
+        }
+
+        // A non-zero exit with no runsolver varfile. Unchanged from before, and deliberately
+        // still here: dropping it let a container that exited non-zero -- OOM-killed, or a
+        // failed copy of var.out under `set -e` -- be recorded COMPLETE on the strength of a
+        // stats.json that copyOutput had already written. That is the same fabrication in a
+        // different disguise.
+        if (stats.exitCode != 0 && !Files.exists(outputDir.resolve("var.out"))) {
+            return StatusCode.ERROR_RUNSCRIPT;
         }
         return StatusCode.STATUS_COMPLETE;
     }
