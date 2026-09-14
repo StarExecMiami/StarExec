@@ -132,6 +132,45 @@ public class ContainerStageStatusTest {
 
 	// ------------------------------------------------------------------------- harness
 
+	@Test
+	public void completingAnIntermediateStageDoesNotCompleteThePair() throws Exception {
+		Harness h = new Harness(folder);
+		h.body.append("sendStatus \"$STATUS_RUNNING\" 1\n");
+		h.body.append("sendStageStatus \"$STATUS_COMPLETE\" 1\n");
+		h.run();
+
+		assertEquals("the pair must remain running until explicitly completed", 4, h.legacyStatus());
+		assertEquals("the completed stage must still be recorded", 7, h.snapshotStatus(1));
+	}
+
+	@Test
+	public void explicitPairCompletionPublishesTheFinalStage() throws Exception {
+		Harness h = new Harness(folder);
+		h.body.append("sendStatus \"$STATUS_RUNNING\" 1\n");
+		h.body.append("sendStageStatus \"$STATUS_COMPLETE\" 1\n");
+		h.body.append("sendStageStatus \"$STATUS_RUNNING\" 2\n");
+		h.body.append("sendStageStatus \"$STATUS_COMPLETE\" 2\n");
+		h.body.append("sendStatus \"$STATUS_COMPLETE\" 2\n");
+		h.run();
+
+		assertEquals(7, h.legacyStatus());
+		assertEquals(2, h.legacyStage());
+		assertEquals(7, h.snapshotStatus(1));
+		assertEquals(7, h.snapshotStatus(2));
+	}
+
+	@Test
+	public void failedStageStillSuppliesThePairFailureStage() throws Exception {
+		Harness h = new Harness(folder);
+		h.body.append("sendStatus \"$EXCEED_CPU\"\n");
+		h.body.append("sendStageStatus \"$EXCEED_CPU\" 2\n");
+		h.run();
+
+		assertEquals(h.snapshotStatus(2), h.legacyStatus());
+		assertEquals(2, h.legacyStage());
+		assertTrue("a limit must remain a failure", h.legacyStatus() != 7);
+	}
+
 	/** A generated script that sources the shipped helper and drives one function. */
 	private static final class Harness {
 
