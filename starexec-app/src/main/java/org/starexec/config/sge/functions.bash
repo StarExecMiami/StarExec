@@ -1415,10 +1415,9 @@ function cleanUpAfterKilledBuildJob {
 			CALL RemoveBenchmarkFromDatabase($((BENCH_ID)));
 		"
 
-		BENCH_PATH_DIR=$(dirname $BENCH_PATH)
+		BENCH_PATH_DIR=$(dirname "$BENCH_PATH")
 		log "Deleting benchmark directory: $BENCH_PATH_DIR"
-		safeRm $BENCH_PATH_DIR
-		rm $BENCH_PATH
+		safeRm benchmark-directory "$BENCH_PATH_DIR"
 	fi
 }
 
@@ -1583,7 +1582,7 @@ function setDiskQuotaExceeded {
 	if ((DISK_SIZE > REMAINING_DISK_QUOTA)); then
 		DISK_QUOTA_EXCEEDED=1
 		# we may have already copied some data, so we want to delete that
-		safeRm $PAIR_OUTPUT_DIRECTORY
+		safeRm pair-output-directory "$PAIR_OUTPUT_DIRECTORY"
 	fi
 }
 
