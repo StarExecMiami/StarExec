@@ -266,6 +266,16 @@ Jobs write results to mounted volumes:
 | `var.out`        | Solver stdout         |
 | `watcher.out`    | Runsolver output      |
 
+`stats.json` and `attributes.txt` hold one stage at a time: each stage of a multi-stage
+pair replaces them. The job script writes them to a temporary file and renames it, so a
+monitor that polls while a pair runs reads one stage's complete file, never an empty or
+half-replaced one.
+
+These writes live in `functions.bash`. `docker/entrypoint.sh` copies that helper into
+`/app/data/sge_scripts/` only when no copy exists yet, so upgrading the image does not
+replace an already persisted helper. Refresh `/app/data/sge_scripts/functions.bash` from
+`/config/sge/` when deploying a change to it, or the running pairs keep the old behaviour.
+
 ### Tuning for Performance
 
 ```bash
