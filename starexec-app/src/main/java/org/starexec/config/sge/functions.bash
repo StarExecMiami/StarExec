@@ -838,8 +838,10 @@ function dbExec {
 		sleep 20
 		# Using $((  )) not (( --ATTEMPT )) to avoid set -e aborting when ATTEMPT reaches 0
 		ATTEMPT=$(( ATTEMPT - 1 ))
-		false # set $? to fail on last iteration
 	done
+	# Report exhaustion after the loop; a bare failure in its body aborts the
+	# jobscript under set -e before the next database attempt can run.
+	return $(( ATTEMPT == 0 ))
 }
 
 # Will strip quotes from arguments passed
