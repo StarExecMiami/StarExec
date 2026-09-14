@@ -1650,8 +1650,8 @@ function verifyWorkspace {
 	# Make sure the configuration exists before we execute it
 	if ! [ -x "$LOCAL_CONFIG_PATH" ]; then
 		log "job error: could not locate the configuration script '$CONFIG_NAME' on the execution host"
-		#get rid of the cache, as if we're here then something is probably wrong with it
-		rm -rf "$SOLVER_CACHE_PATH" || true
+		# This failure is local to the attempt. Other attempts may be copying from
+		# the shared cache, so a missing configuration must not evict their source.
 		STATUS_SENT=true
 		sendStatus $ERROR_RUNSCRIPT
 		exit 1
