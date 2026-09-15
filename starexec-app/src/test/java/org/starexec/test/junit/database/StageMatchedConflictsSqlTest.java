@@ -52,6 +52,19 @@ import static org.junit.Assert.assertEquals;
  * P's stage 1 is unknown, so c1p has no conflict there -- its pair's stage 2 result must not
  * count for it.
  *
+ * <p>Conflicts are also judged within one job (#189). The outer query of both conflict functions
+ * matched a configuration's pairs in every job, so a result it produced on the same benchmark in
+ * another job was counted as a conflict here. Those tests add a second job on the same benchmark
+ * and configurations:
+ *
+ * <pre>
+ *            stage 1                        stage 2
+ *   pair X   c1p  Theorem                   c2p  Satisfiable
+ *   pair Y   c1q  CounterSatisfiable        c2q  Satisfiable
+ * </pre>
+ *
+ * The benchmark conflicts on stage 1 of that job too; c1r never ran there.
+ *
  * <p>Skips unless a PostgreSQL instance is configured. Point the {@code STAREXEC_DB_*} variables
  * at a <strong>disposable</strong> database: these tests insert and delete rows.
  */
@@ -68,6 +81,8 @@ public class StageMatchedConflictsSqlTest extends Common {
 	private int c2p;
 	private int c2q;
 	private int c2r;
+	private int otherJobId;
+	private int otherSpaceId;
 
 	@BeforeClass
 	public static void requireDatabase() {
@@ -115,6 +130,11 @@ public class StageMatchedConflictsSqlTest extends Common {
 		try (Connection con = Common.getConnection()) {
 			// job_attributes and jobpair_stage_data cascade from job_pairs; configurations from
 			// solvers.
+			if (otherJobId != 0) {
+				update(con, "DELETE FROM starexec.job_pairs WHERE job_id = ?", otherJobId);
+				update(con, "DELETE FROM starexec.job_spaces WHERE id = ?", otherSpaceId);
+				update(con, "DELETE FROM starexec.jobs WHERE id = ?", otherJobId);
+			}
 			update(con, "DELETE FROM starexec.job_pairs WHERE job_id = ?", jobId);
 			update(con, "DELETE FROM starexec.job_spaces WHERE id = ?", spaceId);
 			update(con, "DELETE FROM starexec.solvers WHERE id = ?", solverId);
@@ -161,6 +181,43 @@ public class StageMatchedConflictsSqlTest extends Common {
 				List.of(), conflictingBenchmarks(c2q, 1));
 	}
 
+	// ------------------------------------------------------------------- another job
+
+	/**
+	 * c1p's result in this job is unknown; its Theorem in the other job is not a conflict here.
+	 * And c1r's CounterSatisfiable here is not a conflict in the other job, where it never ran.
+	 */
+	@Test
+	public void anotherJobsResultIsNotThisJobsConflict() throws SQLException {
+		seedOtherJob();
+
+		assertEquals("c1p's Theorem is in the other job", 0, conflicts(jobId, c1p, 1));
+		assertEquals(List.of(), conflictingBenchmarks(jobId, c1p, 1));
+
+		assertEquals("c1r ran only in this job", 0, conflicts(otherJobId, c1r, 1));
+		assertEquals(List.of(), conflictingBenchmarks(otherJobId, c1r, 1));
+	}
+
+	/** The other job's pairs leave every count that was already right where it was. */
+	@Test
+	public void anotherJobsPairsDoNotChangeThisJobsCounts() throws SQLException {
+		seedOtherJob();
+
+		assertEquals(1, conflicts(jobId, c1q, 1));
+		assertEquals(1, conflicts(jobId, c1r, 1));
+		assertEquals(0, conflicts(jobId, c2p, 2));
+		assertEquals(0, conflicts(jobId, c2q, 2));
+		assertEquals(0, conflicts(jobId, c2r, 2));
+		assertEquals(List.of(benchId), conflictingBenchmarks(jobId, c1q, 1));
+		assertEquals(List.of(benchId), conflictingBenchmarks(jobId, c1r, 1));
+		assertEquals(List.of(), conflictingBenchmarks(jobId, c2q, 2));
+		assertEquals(List.of("c1q=Theorem", "c1r=CounterSatisfiable"), results(1));
+
+		assertEquals("the other job conflicts on its own results", 1, conflicts(otherJobId, c1p, 1));
+		assertEquals(1, conflicts(otherJobId, c1q, 1));
+		assertEquals(0, conflicts(otherJobId, c2p, 2));
+	}
+
 	// ------------------------------------------------------------------ solver results
 
 	/**
@@ -178,12 +235,21 @@ public class StageMatchedConflictsSqlTest extends Common {
 	// ------------------------------------------------------------------------- helpers
 
 	private int conflicts(int configId, int stage) throws SQLException {
-		return Solvers.getConflictsForConfigInJobWithStage(jobId, configId, stage);
+		return conflicts(jobId, configId, stage);
+	}
+
+	private static int conflicts(int job, int configId, int stage) throws SQLException {
+		return Solvers.getConflictsForConfigInJobWithStage(job, configId, stage);
 	}
 
 	private List<Integer> conflictingBenchmarks(int configId, int stage) throws SQLException {
+		return conflictingBenchmarks(jobId, configId, stage);
+	}
+
+	private static List<Integer> conflictingBenchmarks(int job, int configId, int stage)
+			throws SQLException {
 		List<Integer> ids = new ArrayList<>();
-		for (Benchmark b : Solvers.getConflictingBenchmarksInJobForStage(jobId, configId, stage)) {
+		for (Benchmark b : Solvers.getConflictingBenchmarksInJobForStage(job, configId, stage)) {
 			ids.add(b.getId());
 		}
 		Collections.sort(ids);
@@ -199,6 +265,22 @@ public class StageMatchedConflictsSqlTest extends Common {
 		}
 		Collections.sort(rows);
 		return rows;
+	}
+
+	/** The second job of the class comment, on the same benchmark and configurations. */
+	private void seedOtherJob() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			otherJobId = insertReturningId(con,
+					"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size)"
+							+ " VALUES (?, 'stage-conflicts-other-job', 2, 0) RETURNING id",
+					userId);
+			otherSpaceId = insertReturningId(con,
+					"INSERT INTO starexec.job_spaces (job_id, name) VALUES (?, 'root') RETURNING id",
+					otherJobId);
+			insertTwoStagePair(con, otherJobId, otherSpaceId, c1p, "Theorem", c2p, "Satisfiable");
+			insertTwoStagePair(con, otherJobId, otherSpaceId, c1q, "CounterSatisfiable", c2q,
+					"Satisfiable");
+		}
 	}
 
 	private int insertConfig(Connection con, String name) throws SQLException {
@@ -217,15 +299,23 @@ public class StageMatchedConflictsSqlTest extends Common {
 	private void insertTwoStagePair(
 			Connection con, int stage1Config, String stage1Result, int stage2Config,
 			String stage2Result) throws SQLException {
+		insertTwoStagePair(con, jobId, spaceId, stage1Config, stage1Result, stage2Config,
+				stage2Result);
+	}
+
+	private void insertTwoStagePair(
+			Connection con, int job, int space, int stage1Config, String stage1Result,
+			int stage2Config, String stage2Result) throws SQLException {
 		int pairId = insertReturningId(con,
 				"INSERT INTO starexec.job_pairs (job_id, job_space_id, bench_id, status_code,"
 						+ " primary_jobpair_data) VALUES (?, ?, ?, ?, 1) RETURNING id",
-				jobId, spaceId, benchId, StatusCode.STATUS_COMPLETE.getVal());
-		insertStage(con, pairId, 1, stage1Config, stage1Result);
-		insertStage(con, pairId, 2, stage2Config, stage2Result);
+				job, space, benchId, StatusCode.STATUS_COMPLETE.getVal());
+		insertStage(con, job, pairId, 1, stage1Config, stage1Result);
+		insertStage(con, job, pairId, 2, stage2Config, stage2Result);
 	}
 
-	private void insertStage(Connection con, int pairId, int stage, int configId, String result)
+	private void insertStage(
+			Connection con, int job, int pairId, int stage, int configId, String result)
 			throws SQLException {
 		try (PreparedStatement ps = con.prepareStatement(
 				"INSERT INTO starexec.jobpair_stage_data (jobpair_id, stage_number, status_code,"
@@ -244,7 +334,7 @@ public class StageMatchedConflictsSqlTest extends Common {
 						+ " VALUES (?, 'starexec-result', ?, ?, ?)")) {
 			ps.setInt(1, pairId);
 			ps.setString(2, result);
-			ps.setInt(3, jobId);
+			ps.setInt(3, job);
 			ps.setInt(4, stage);
 			assertEquals(1, ps.executeUpdate());
 		}
