@@ -2,9 +2,11 @@ package org.starexec.test.junit.database;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.starexec.constants.PaginationQueries;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Spaces;
 import org.starexec.data.to.Benchmark;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.JobPair;
@@ -13,6 +15,7 @@ import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 import org.starexec.util.DataTablesQuery;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -29,9 +32,13 @@ import static org.junit.Assert.assertTrue;
 
 public class JobsSqlRegressionTest extends Common {
 	@BeforeClass
-	public static void requireDatabase() {
+	public static void requireDatabase() throws IOException {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobsSqlRegressionTest");
 		Common.initialize();
+		// The pair table's query is read from a file at startup (Starexec.java). Without this,
+		// GET_PAIRS_IN_SPACE_HIERARCHY_QUERY is still "", and getJobPairsForTableInJobSpaceHierarchy
+		// logs "Parameter not found: query" and returns null.
+		PaginationQueries.loadPaginationQueries();
 	}
 
 	@Test
@@ -135,12 +142,18 @@ public class JobsSqlRegressionTest extends Common {
 	}
 
 	private void withFixture(SqlFixtureConsumer consumer) throws Exception {
+		// runTransactional hands the connection back in autocommit mode. Closing it with
+		// autocommit off returns it to the pool that way (Common.runTransactional's javadoc),
+		// and the next borrower's failed statement then leaves it in an aborted transaction.
 		Fixture fixture;
 		try (Connection con = Common.getConnection()) {
-			con.setAutoCommit(false);
-			fixture = createFixture(con);
-			con.commit();
+			fixture = Common.runTransactional(con, this::createFixture);
 		}
+		// Both classification queries select pairs through job_space_closure, and neither fills
+		// it. The application does that only when it compiles a job space's solver stats
+		// (Jobs.getJobPairsInJobSpaceHierarchy), which the job page does before it shows the
+		// per-type links to these queries. Without closure rows every count here is 0.
+		Spaces.updateJobSpaceClosureTable(fixture.jobSpaceId);
 
 		try {
 			consumer.accept(fixture);
@@ -405,22 +418,18 @@ public class JobsSqlRegressionTest extends Common {
 
 	private static void cleanupFixture(Fixture fixture) throws SQLException {
 		try (Connection con = Common.getConnection()) {
-			con.setAutoCommit(false);
-			try {
-				deleteById(con, "DELETE FROM job_pair_completion WHERE pair_id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM jobpair_stage_data WHERE jobpair_id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM job_pairs WHERE id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM job_spaces WHERE id = ?", fixture.jobSpaceId);
-				deleteById(con, "DELETE FROM jobs WHERE id = ?", fixture.jobId);
-				deleteById(con, "DELETE FROM configurations WHERE id = ?", fixture.configId);
-				deleteById(con, "DELETE FROM solvers WHERE id = ?", fixture.solverId);
-				deleteById(con, "DELETE FROM benchmarks WHERE id = ?", fixture.benchmarkId);
-				deleteById(con, "DELETE FROM nodes WHERE id = ?", fixture.nodeId);
-				con.commit();
-			} catch (SQLException e) {
-				con.rollback();
-				throw e;
-			}
+			Common.runTransactional(con, c -> {
+				deleteById(c, "DELETE FROM job_pair_completion WHERE pair_id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM jobpair_stage_data WHERE jobpair_id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM job_pairs WHERE id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM job_spaces WHERE id = ?", fixture.jobSpaceId);
+				deleteById(c, "DELETE FROM jobs WHERE id = ?", fixture.jobId);
+				deleteById(c, "DELETE FROM configurations WHERE id = ?", fixture.configId);
+				deleteById(c, "DELETE FROM solvers WHERE id = ?", fixture.solverId);
+				deleteById(c, "DELETE FROM benchmarks WHERE id = ?", fixture.benchmarkId);
+				deleteById(c, "DELETE FROM nodes WHERE id = ?", fixture.nodeId);
+				return null;
+			});
 		}
 	}
 
