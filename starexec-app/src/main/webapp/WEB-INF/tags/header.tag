@@ -27,7 +27,6 @@
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/job.jsp">Jobs</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/jobpairErrors.jsp">JobPair Errors</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/community.jsp">Communities</a></li>
-								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/testing.jsp">Testing</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/analytics.jsp">Analytics</a></li>
 								<li role="none"><a role="menuitem" href="${starexecRoot}/secure/admin/starexec.jsp">StarExec</a></li>
 							</ul>
