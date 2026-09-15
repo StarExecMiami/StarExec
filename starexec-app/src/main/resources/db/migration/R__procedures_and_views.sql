@@ -4445,6 +4445,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- The time sums are DOUBLE PRECISION, the type of the stage times they add up. They were cast
+-- to BIGINT, which rounded every total to a whole second before the page printed it to four
+-- decimals (#190). Changing a function's return type needs the DROP above; CREATE OR REPLACE
+-- alone refuses it.
 DROP FUNCTION IF EXISTS starexec.GetJobAttributesTable CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobAttributesTable(_jobSpaceId INT)
 RETURNS TABLE(
@@ -4454,15 +4458,15 @@ RETURNS TABLE(
     config_name VARCHAR(255),
     attr_value TEXT,
     attr_count BIGINT,
-    wallclock_sum BIGINT,
-    cpu_sum BIGINT
+    wallclock_sum DOUBLE PRECISION,
+    cpu_sum DOUBLE PRECISION
 ) AS $$
 BEGIN
     RETURN QUERY
     SELECT jsd.solver_id, jsd.solver_name, jsd.config_id, jsd.config_name, ja.attr_value::TEXT,
            COUNT(ja.attr_value)::BIGINT AS attr_count,
-           SUM(jsd.wallclock)::BIGINT AS wallclock_sum,
-           SUM(jsd.cpu)::BIGINT AS cpu_sum
+           SUM(jsd.wallclock) AS wallclock_sum,
+           SUM(jsd.cpu) AS cpu_sum
     FROM starexec.job_attributes ja
     JOIN job_pairs jp ON ja.pair_id = jp.id
     JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id AND ja.stage_number = jsd.stage_number
@@ -4471,23 +4475,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- DOUBLE PRECISION time sums, as in GetJobAttributesTable (#190).
 DROP FUNCTION IF EXISTS starexec.GetSumOfJobAttributes CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSumOfJobAttributes(_jobSpaceId INT)
 RETURNS TABLE(
     attr_value TEXT,
     attr_count BIGINT,
-    wallclock BIGINT,
-    cpu BIGINT
+    wallclock DOUBLE PRECISION,
+    cpu DOUBLE PRECISION
 ) AS $$
 BEGIN
     RETURN QUERY
     SELECT ja.attr_value::TEXT,
            COUNT(ja.attr_value)::BIGINT AS attr_count,
-           SUM(jsd.wallclock)::BIGINT AS wallclock,
-           SUM(jsd.cpu)::BIGINT AS cpu
+           SUM(jsd.wallclock) AS wallclock,
+           SUM(jsd.cpu) AS cpu
     FROM starexec.job_attributes ja
     JOIN job_pairs jp ON ja.pair_id = jp.id
-    JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id
+    -- The stage the attribute belongs to, as in GetJobAttributesTable. Without the stage match a
+    -- result on one stage of a multi-stage pair was counted once per stage, with every
+    -- stage's wallclock and cpu (#186).
+    JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id AND ja.stage_number = jsd.stage_number
     WHERE ja.attr_key = 'starexec-result' AND jp.job_space_id = _jobSpaceId
     GROUP BY ja.attr_value
     ORDER BY ja.attr_value;
@@ -6688,7 +6696,9 @@ BEGIN
     SELECT COUNT(DISTINCT jp_o.bench_id) AS conflicting_benchmarks
     FROM starexec.jobs j_o JOIN job_pairs jp_o ON j_o.id = jp_o.job_id
         JOIN jobpair_stage_data jpsd_o ON jpsd_o.jobpair_id = jp_o.id
-        JOIN job_attributes ja_o ON ja_o.pair_id = jp_o.id
+        -- The configuration's result on the stage asked about, not on any stage of its pair
+        -- (#187). The subquery below already judges conflict within that stage.
+        JOIN job_attributes ja_o ON ja_o.pair_id = jp_o.id AND ja_o.stage_number = jpsd_o.stage_number
         JOIN
             (SELECT jp.bench_id
             FROM starexec.jobs j join job_pairs jp ON j.id = jp.job_id
@@ -6701,7 +6711,11 @@ BEGIN
             GROUP BY jp.bench_id
             HAVING COUNT(DISTINCT ja.attr_value) > 1) AS conflicting
         ON jp_o.bench_id = conflicting.bench_id
-    WHERE jpsd_o.config_id = _configId
+    -- This job's pairs only (#189): the subquery judges conflict within the job, and the
+    -- configuration's pairs on the same benchmark in another job are not its conflicts here.
+    WHERE j_o.id = _jobId
+        AND jpsd_o.config_id = _configId
+        AND jpsd_o.stage_number = _stageNumber
         AND ja_o.attr_key = 'starexec-result'
         AND ja_o.attr_value != 'starexec-unknown';
 END;
@@ -6717,7 +6731,9 @@ BEGIN
     SELECT b_o.id, b_o.user_id, b_o.name, b_o.uploaded, b_o.path, b_o.description, b_o.downloadable, b_o.disk_size, b_o.deleted, b_o.recycled, b_o.recycled_original_name
     FROM starexec.jobs j_o JOIN job_pairs jp_o ON j_o.id = jp_o.job_id
         JOIN jobpair_stage_data jpsd_o ON jpsd_o.jobpair_id = jp_o.id
-        JOIN job_attributes ja_o ON ja_o.pair_id = jp_o.id
+        -- The configuration's result on the stage asked about, not on any stage of its pair
+        -- (#187). The subquery below already judges conflict within that stage.
+        JOIN job_attributes ja_o ON ja_o.pair_id = jp_o.id AND ja_o.stage_number = jpsd_o.stage_number
         JOIN benchmarks b_o ON b_o.id = jp_o.bench_id
         JOIN
         (SELECT jp.bench_id
@@ -6731,7 +6747,10 @@ BEGIN
          GROUP BY jp.bench_id
          HAVING COUNT(DISTINCT ja.attr_value) > 1) AS conflicting
             ON jp_o.bench_id = conflicting.bench_id
-    WHERE jpsd_o.config_id = _configId
+    -- This job's pairs only (#189), as in GetConflictsForConfigInJob.
+    WHERE j_o.id = _jobId
+                AND jpsd_o.config_id = _configId
+                AND jpsd_o.stage_number = _stageNumber
                 AND ja_o.attr_key = 'starexec-result'
                 AND ja_o.attr_value != 'starexec-unknown'
     GROUP BY b_o.id, b_o.user_id, b_o.name, b_o.uploaded, b_o.path, b_o.description, b_o.downloadable, b_o.disk_size, b_o.deleted, b_o.recycled, b_o.recycled_original_name;
@@ -6772,7 +6791,8 @@ BEGIN
             JOIN jobpair_stage_data jpsd ON jpsd.jobpair_id = jp.id
             JOIN solvers s ON jpsd.solver_id = s.id
             JOIN configurations c ON jpsd.config_id = c.id
-            JOIN job_attributes ja ON ja.pair_id = jp.id
+            -- The result of the stage row reported, not of every stage of the pair (#187).
+            JOIN job_attributes ja ON ja.pair_id = jp.id AND ja.stage_number = jpsd.stage_number
     WHERE j.id = _jobId
             AND jp.bench_id = _benchId
             AND ja.attr_key = 'starexec-result'
