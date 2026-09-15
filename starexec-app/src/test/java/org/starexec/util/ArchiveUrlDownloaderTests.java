@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -27,7 +28,8 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * Archive URL downloads connect only to public destinations, follow a bounded number of
- * redirects, and re-check every hop.
+ * redirects, re-check every hop, and stop at a size cap and an overall deadline without leaving
+ * a partial file.
  *
  * <p>The servers here listen on loopback, which the standard policy refuses, so each test names
  * the one loopback address it permits.
@@ -174,6 +176,85 @@ public class ArchiveUrlDownloaderTests {
 		assertFalse("nothing is written", destination.exists());
 	}
 
+	/** The size cap matches the benchmark upload form's; the deadline bounds a slow server. */
+	@Test
+	public void theStandardPolicyBoundsSizeAndDuration() {
+		Policy standard = Policy.standard();
+
+		assertEquals(5L * 1024 * 1024 * 1024, standard.maxBytes);
+		assertEquals(30L * 60 * 1000, standard.deadlineMillis);
+		assertEquals(60_000, standard.readTimeoutMillis);
+	}
+
+	@Test
+	public void aDeclaredLengthOverTheCapIsRefused() throws Exception {
+		HttpServer server = start(LOOPBACK);
+		server.createContext("/large.zip", exchange -> {
+			exchange.sendResponseHeaders(200, 1000);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(new byte[1000]);
+			}
+		});
+
+		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/large.zip"), destination, limited(100, 60_000)));
+		assertNothingLeft();
+	}
+
+	@Test
+	public void anUndeclaredBodyOverTheCapIsAbandoned() throws Exception {
+		HttpServer server = start(LOOPBACK);
+		server.createContext("/large.zip", exchange -> {
+			exchange.sendResponseHeaders(200, 0);
+			try (OutputStream body = exchange.getResponseBody()) {
+				for (int i = 0; i < 100; i++) {
+					body.write(new byte[100]);
+				}
+			}
+		});
+
+		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/large.zip"), destination, limited(1000, 60_000)));
+		assertNothingLeft();
+	}
+
+	@Test
+	public void aBodyOfExactlyTheCapIsDownloaded() throws Exception {
+		HttpServer server = start(LOOPBACK);
+		server.createContext("/solver.zip", exchange -> {
+			exchange.sendResponseHeaders(200, 0);
+			try (OutputStream body = exchange.getResponseBody()) {
+				body.write(ARCHIVE);
+			}
+		});
+
+		assertTrue(ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), destination,
+				limited(ARCHIVE.length, 60_000)));
+		assertArrayEquals(ARCHIVE, Files.readAllBytes(destination.toPath()));
+	}
+
+	/** Each byte arrives well within the read timeout, so only the overall deadline stops it. */
+	@Test
+	public void aSlowDownloadIsAbandonedAtTheDeadline() throws Exception {
+		HttpServer server = start(LOOPBACK);
+		server.createContext("/slow.zip", exchange -> {
+			exchange.sendResponseHeaders(200, 0);
+			try (OutputStream body = exchange.getResponseBody()) {
+				for (int i = 0; i < 100; i++) {
+					body.write('x');
+					body.flush();
+					Thread.sleep(50);
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+
+		long started = System.nanoTime();
+		assertFalse(ArchiveUrlDownloader.download(urlOf(server, "/slow.zip"), destination, limited(Long.MAX_VALUE, 500)));
+		long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
+		assertTrue("abandoned near the deadline, after " + elapsedMillis + " ms", elapsedMillis < 3000);
+		assertNothingLeft();
+	}
+
 	private static final InetAddress LOOPBACK = loopback(1);
 	private static final InetAddress SECOND_LOOPBACK = loopback(2);
 
@@ -194,6 +275,17 @@ public class ArchiveUrlDownloaderTests {
 
 	private static Policy permitting(InetAddress loopback) {
 		return new Policy(false, Set.of(loopback), 5, Long.MAX_VALUE, 60_000, 5_000, 5_000);
+	}
+
+	private static Policy limited(long maxBytes, long deadlineMillis) {
+		return new Policy(false, Set.of(LOOPBACK), 5, maxBytes, deadlineMillis, 5_000, 2_000);
+	}
+
+	/** Neither the destination nor a partial file remains in its directory. */
+	private void assertNothingLeft() throws Exception {
+		try (Stream<Path> files = Files.list(dir)) {
+			assertEquals(List.of(), files.toList());
+		}
 	}
 
 	private HttpServer serveArchive(InetAddress address, String path) throws Exception {
