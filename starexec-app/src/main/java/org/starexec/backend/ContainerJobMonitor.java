@@ -568,7 +568,15 @@ public class ContainerJobMonitor {
                         + " record, so the stage that produced this result is unknown", e);
             }
             if (obj.has("pairId")) {
-                declaredPairId = obj.get("pairId").getAsInt();
+                // An ownership claim, so not getAsInt: "4242", 4242.5, [4242] and 2^32 + 4242
+                // would all pass the label check below, or become the pair (#196).
+                try {
+                    declaredPairId = StrictJsonInt.parse("pairId", obj.get("pairId"));
+                } catch (StrictJsonInt.NotAnInt e) {
+                    throw new StageStatusSnapshots.InvalidSnapshotException(
+                        "status.json for pair " + info.pairId + " has a non-integer pairId: it "
+                            + e.getMessage());
+                }
             }
             // Throws rather than defaulting. Caught in the poll loop by the branch that
             // holds the container, so nothing is invented and nothing is retried.
