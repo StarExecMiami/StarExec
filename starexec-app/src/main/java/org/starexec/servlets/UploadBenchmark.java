@@ -751,7 +751,7 @@ public class UploadBenchmark extends HttpServlet {
 			// Check file location selection
 			String fileLoc = (String) form.get(FILE_LOC);
 			if (fileLoc == null || fileLoc.isEmpty()) {
-				return new ValidatorStatusCode(false, "Please select a file source (local, URL, or Git)");
+				return new ValidatorStatusCode(false, "Please select a file source (a local .zip, .tar or .tgz archive)");
 			}
 
 			// Only an archive the user sends. Fetching a URL or cloning a repository server-side is
