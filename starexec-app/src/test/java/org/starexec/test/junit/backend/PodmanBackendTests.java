@@ -1200,4 +1200,132 @@ public class PodmanBackendTests {
             quota != null && quota <= 100000L
         );
     }
+
+    // ============ Java client create failures: the cause, and no second container (#208) ============
+    //
+    // doSubmitScript falls back to curl when the Java client's create fails with a transient
+    // connection error. The warning named only the exception's class, so the failure could not be
+    // diagnosed; and if the engine had already created the container before the client call
+    // failed, curl's create was a second request for the same name.
+
+    private static final String REUSED_CONTAINER_ID = "reused0000container";
+
+    /**
+     * The client call fails after the engine created the container: the existing container,
+     * found by its exact name and this execution's label, is started and tracked; nothing else is
+     * created.
+     */
+    @Test
+    public void aContainerCreatedBeforeTheClientFailedIsReusedNotCreatedAgain() throws Exception {
+        configureBackendForSubmitScript();
+        setBackendField("containerSocketPath", "unix:///nonexistent/starexec-test.sock");
+        String[] created = configureCreateFailsAfterTheEngineCreated(
+            new RuntimeException("create failed", new IOException("Broken pipe"))
+        );
+
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(42))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+
+            int execId = backend.submitScript(
+                42, "/app/data/jobin/job_1/run.sh", "/app/data/jobin/job_1",
+                tempDir.resolve("out").resolve("job.log").toString());
+
+            assertTrue("the submission succeeds on the container that exists", execId > 0);
+            assertEquals(REUSED_CONTAINER_ID, getExecIdMap().get(execId));
+            verify(mockDockerClient, times(1)).startContainerCmd(REUSED_CONTAINER_ID);
+            verify(mockDockerClient, times(1)).createContainerCmd(anyString());
+            assertNotNull("the create was attempted under a name", created[0]);
+        }
+    }
+
+    /**
+     * The warning carries the exception's message and its cause chain, with the container's
+     * environment values redacted.
+     */
+    @Test
+    public void aClientCreateFailureLogsItsCauseChainWithoutEnvironmentValues() throws Exception {
+        configureBackendForSubmitScript();
+        setBackendField("containerSocketPath", "unix:///nonexistent/starexec-test.sock");
+        configureCreateFailsAfterTheEngineCreated(new RuntimeException(
+            "create failed",
+            new IOException("Broken pipe while sending STAREXEC_OUTPUT_DIR=/private/out CONTAINER_MODE=true")
+        ));
+
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        ch.qos.logback.classic.Logger podmanLog = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(PodmanBackend.class);
+        podmanLog.addAppender(appender);
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.trySetPairRunning(43))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+
+            backend.submitScript(
+                43, "/app/data/jobin/job_2/run.sh", "/app/data/jobin/job_2",
+                tempDir.resolve("out").resolve("job2.log").toString());
+        } finally {
+            podmanLog.detachAppender(appender);
+        }
+
+        String warnings = "";
+        for (ch.qos.logback.classic.spi.ILoggingEvent event : appender.list) {
+            if (event.getLevel() == ch.qos.logback.classic.Level.WARN) {
+                warnings += event.getFormattedMessage() + "\n";
+            }
+        }
+        assertTrue("the outer message is logged: " + warnings,
+            warnings.contains("java.lang.RuntimeException: create failed"));
+        assertTrue("the cause is logged: " + warnings,
+            warnings.contains("java.io.IOException: Broken pipe while sending"));
+        assertTrue("a STAREXEC_ value is redacted: " + warnings,
+            warnings.contains("STAREXEC_OUTPUT_DIR=<redacted>"));
+        assertTrue("a value of the container's environment is redacted: " + warnings,
+            warnings.contains("CONTAINER_MODE=<redacted>"));
+        assertFalse("no environment value survives: " + warnings,
+            warnings.contains("/private/out"));
+    }
+
+    /**
+     * The client's create throws, but the engine made the container: a name lookup returns it,
+     * with the name and labels the create was given. Returns the name the create used.
+     */
+    private String[] configureCreateFailsAfterTheEngineCreated(RuntimeException failure) {
+        final String[] name = new String[1];
+        final Map<?, ?>[] labels = new Map<?, ?>[1];
+        when(mockDockerClient.createContainerCmd(anyString())).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withName(anyString())).thenAnswer(call -> {
+            name[0] = call.getArgument(0);
+            return mockCreateContainerCmd;
+        });
+        when(mockCreateContainerCmd.withHostName(anyString())).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withHostConfig(any(HostConfig.class))).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withEnv(anyList())).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withLabels(anyMap())).thenAnswer(call -> {
+            labels[0] = call.getArgument(0);
+            return mockCreateContainerCmd;
+        });
+        when(mockCreateContainerCmd.withEntrypoint(any(String[].class))).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withCmd(anyString())).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.withWorkingDir(anyString())).thenReturn(mockCreateContainerCmd);
+        when(mockCreateContainerCmd.exec()).thenThrow(failure);
+
+        when(mockListContainersCmd.withNameFilter(anyCollection())).thenReturn(mockListContainersCmd);
+        when(mockListContainersCmd.exec()).thenAnswer(call -> {
+            if (name[0] == null || labels[0] == null) {
+                return Collections.emptyList();
+            }
+            Container existing = mock(Container.class);
+            when(existing.getId()).thenReturn(REUSED_CONTAINER_ID);
+            when(existing.getNames()).thenReturn(new String[] {"/" + name[0]});
+            @SuppressWarnings("unchecked")
+            Map<String, String> existingLabels = (Map<String, String>) labels[0];
+            when(existing.getLabels()).thenReturn(existingLabels);
+            return Collections.singletonList(existing);
+        });
+        return name;
+    }
 }
