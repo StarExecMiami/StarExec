@@ -281,7 +281,7 @@ public class UploadSolver extends HttpServlet {
 			} else {
 				archiveFile = new File(uniqueDir, name);
 				new File(archiveFile.getParent()).mkdir();
-				log.info(methodName, "downloading solver from url " + url);
+				log.info(methodName, "downloading solver from " + url.getProtocol() + "://" + url.getHost());
 				if (!Util.copyFileFromURLUsingProxy(url, archiveFile, MAX_ARCHIVE_BYTES)) {
 					throw new Exception("Unable to copy file from URL");
 				}
