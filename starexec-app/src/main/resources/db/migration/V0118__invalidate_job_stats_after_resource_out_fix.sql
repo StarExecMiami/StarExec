@@ -1,0 +1,24 @@
+-- V0118: discard cached per-solver job statistics computed without resource-outs in "complete".
+--
+-- WHY THIS EXISTS
+--
+-- job_stats is a cache (V0012): Jobs.getAllJobStatsInJobSpaceHierarchyIncludeDeletedConfigs
+-- returns its rows when present, and otherwise recompiles the stats from the job's pairs and
+-- saves them again once the job is complete. A cached row is served unchanged until an event
+-- such as a rerun or a deletion removes it; nothing recomputes it in place.
+--
+-- From 6c2c8b858 until the fix for #198, Jobs.addStageToSolverStats counted a resource-out
+-- (EXCEED_RUNTIME, EXCEED_CPU, EXCEED_FILE_WRITE, EXCEED_MEM) only in resource_out and not in
+-- complete. Every row cached in that window carries a complete count short by its resource-outs,
+-- which the job page turns into an unknown count lowered by the same amount (negative when
+-- resource-outs outnumber unknown results) and a smaller denominator in the solved column.
+-- Fixing the Java does not correct those rows, because a cached row is served as-is.
+--
+-- Which rows were computed in that window is not recorded, so all are removed. Nothing but the
+-- cache is lost: the next view of each job recompiles its stats from job_pairs and
+-- jobpair_stage_data with the corrected classification and caches them again.
+--
+-- A plain DELETE rather than starexec.RemoveAllJobStats(): on a fresh install the repeatable
+-- migration that defines that function runs after every versioned one.
+
+DELETE FROM starexec.job_stats;
