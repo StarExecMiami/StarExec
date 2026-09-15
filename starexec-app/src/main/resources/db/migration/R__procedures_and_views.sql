@@ -10211,8 +10211,10 @@ $$ LANGUAGE plpgsql;
 -- must carry steps 3 and 3b, or this file must be changed in the same release.
 --
 -- Internal. Callers must already hold the row locks and have revalidated eligibility; this
--- function deliberately makes no decisions of its own. The lock order it relies on is
--- job_pairs (callers), then jobpair_stage_data, then job_attributes; AddJobAttr's insert takes
+-- function deliberately makes no decisions of its own. Its lock order is job_pairs (callers),
+-- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats takes users
+-- before jobs, so a concurrent stats write for another pair of the same job and user can
+-- deadlock with a rerun; that predates this definition and is #188. AddJobAttr's insert takes
 -- only a key-share lock on job_pairs, so it waits behind a rerun rather than deadlocking.
 CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
 RETURNS VOID AS $$
