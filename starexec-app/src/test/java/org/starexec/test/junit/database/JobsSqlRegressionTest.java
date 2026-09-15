@@ -2,9 +2,11 @@ package org.starexec.test.junit.database;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.starexec.constants.PaginationQueries;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Spaces;
 import org.starexec.data.to.Benchmark;
 import org.starexec.data.to.Job;
 import org.starexec.data.to.JobPair;
@@ -13,6 +15,7 @@ import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 import org.starexec.util.DataTablesQuery;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -29,9 +32,13 @@ import static org.junit.Assert.assertTrue;
 
 public class JobsSqlRegressionTest extends Common {
 	@BeforeClass
-	public static void requireDatabase() {
+	public static void requireDatabase() throws IOException {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobsSqlRegressionTest");
 		Common.initialize();
+		// The pair table's query is read from a file at startup (Starexec.java). Without this,
+		// GET_PAIRS_IN_SPACE_HIERARCHY_QUERY is still "", and getJobPairsForTableInJobSpaceHierarchy
+		// logs "Parameter not found: query" and returns null.
+		PaginationQueries.loadPaginationQueries();
 	}
 
 	@Test
@@ -141,6 +148,11 @@ public class JobsSqlRegressionTest extends Common {
 			fixture = createFixture(con);
 			con.commit();
 		}
+		// Both classification queries select pairs through job_space_closure, and neither fills
+		// it. The application does that only when it compiles a job space's solver stats
+		// (Jobs.getJobPairsInJobSpaceHierarchy), which the job page does before it shows the
+		// per-type links to these queries. Without closure rows every count here is 0.
+		Spaces.updateJobSpaceClosureTable(fixture.jobSpaceId);
 
 		try {
 			consumer.accept(fixture);
