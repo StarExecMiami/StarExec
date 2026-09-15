@@ -294,8 +294,8 @@ public class EnvironmentConfig {
 
     /**
      * Whether archive URL downloads may connect to private addresses (RFC 1918,
-     * 100.64.0.0/10, IPv6 unique-local), for an on-premises mirror. Loopback,
-     * link-local, unspecified and multicast addresses stay refused.
+     * 100.64.0.0/10, IPv6 unique-local), for an on-premises mirror. It never
+     * admits loopback, link-local or unspecified addresses.
      */
     public static boolean isUrlDownloadPrivateNetworksAllowed() {
         return Boolean.parseBoolean(

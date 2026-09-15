@@ -1928,7 +1928,9 @@ public class Util {
      * The JVM's default proxy selector still applies, so an operator who needs
      * one sets {@code -Dhttp.proxyHost} / {@code -Dhttps.proxyHost}. Only public
      * destinations are contacted, on the named URL and on each redirect; see
-     * {@code ArchiveUrlDownloader} for the policy. Only a 2xx response is copied.
+     * {@code ArchiveUrlDownloader} for the policy. A configured outbound proxy
+     * must enforce the same destination policy, and the target host is still
+     * resolved locally. Only a 2xx response is copied.
      *
      * @param url         the URL to download
      * @param archiveFile the file to write

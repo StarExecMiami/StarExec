@@ -133,9 +133,8 @@ final class ArchiveUrlDownloader {
 	 * still running at {@code policy.deadlineMillis}, whether in its headers or its body, is
 	 * disconnected and abandoned the same way.
 	 *
-	 * <p>The host is resolved for the check and again by the connection, so a name whose DNS
-	 * answer changes between the two can still reach an address the check did not see. Pinning
-	 * the connection to the checked address is not done here.
+	 * <p>The connection performs its own name resolution; network egress controls complement this
+	 * check.
 	 *
 	 * @param url         the URL to download
 	 * @param destination the file to write
