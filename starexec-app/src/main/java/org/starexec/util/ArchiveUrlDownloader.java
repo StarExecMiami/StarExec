@@ -19,6 +19,11 @@ import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Downloads an archive a user names by URL, under a {@link Policy}.
@@ -45,10 +50,18 @@ final class ArchiveUrlDownloader {
 	static final long DEADLINE_MILLIS = 30L * 60 * 1000;
 
 	/**
-	 * Longest wait for any single read. A server silent for a minute is treated as gone; the
-	 * deadline is checked between reads, so it can be overrun by at most this much.
+	 * Longest wait for any single read. A server silent for a minute is treated as gone. A server
+	 * that keeps sending slowly is stopped by the deadline instead.
 	 */
 	static final int READ_TIMEOUT_MILLIS = 60_000;
+
+	/** Disconnects connections still open at their download's deadline. */
+	private static final ScheduledExecutorService DEADLINE_WATCHDOG = Executors.newSingleThreadScheduledExecutor(
+			task -> {
+				Thread thread = new Thread(task, "archive-download-deadline");
+				thread.setDaemon(true);
+				return thread;
+			});
 
 	/** The IPv6 instance metadata address, inside the unique-local range. */
 	private static final InetAddress IPV6_METADATA = address("fd00:ec2::254");
@@ -99,8 +112,9 @@ final class ArchiveUrlDownloader {
 	 *
 	 * <p>The body is written to a temporary file beside the destination and moved into place only
 	 * once it is complete. A declared length over {@code policy.maxBytes} is refused before
-	 * reading; a body that grows past it, or a download still running at
-	 * {@code policy.deadlineMillis}, is abandoned and its temporary file deleted.
+	 * reading; a body that grows past it is abandoned and its temporary file deleted. A download
+	 * still running at {@code policy.deadlineMillis}, whether in its headers or its body, is
+	 * disconnected and abandoned the same way.
 	 *
 	 * <p>The host is resolved for the check and again by the connection, so a name whose DNS
 	 * answer changes between the two can still reach an address the check did not see. Pinning
@@ -119,6 +133,11 @@ final class ArchiveUrlDownloader {
 			for (int redirects = 0; ; redirects++) {
 				checkDestination(current, policy);
 				HttpURLConnection connection = (HttpURLConnection) current.openConnection();
+				AtomicBoolean pastDeadline = new AtomicBoolean();
+				ScheduledFuture<?> watchdog = DEADLINE_WATCHDOG.schedule(() -> {
+					pastDeadline.set(true);
+					connection.disconnect();
+				}, remainingMillis(started, policy), TimeUnit.MILLISECONDS);
 				try {
 					connection.setInstanceFollowRedirects(false);
 					connection.setConnectTimeout(timeout(policy.connectTimeoutMillis, started, policy));
@@ -145,7 +164,13 @@ final class ArchiveUrlDownloader {
 					}
 					copyBounded(connection, destination, policy, started);
 					return true;
+				} catch (IOException e) {
+					if (pastDeadline.get()) {
+						throw new Refused("download did not finish within " + policy.deadlineMillis + " ms");
+					}
+					throw e;
 				} finally {
+					watchdog.cancel(false);
 					connection.disconnect();
 				}
 			}
@@ -282,11 +307,16 @@ final class ArchiveUrlDownloader {
 
 	/** A connection timeout no longer than the time left before the deadline. */
 	private static int timeout(int configuredMillis, long started, Policy policy) throws Refused {
+		return (int) Math.min(configuredMillis, remainingMillis(started, policy));
+	}
+
+	/** Time left before the deadline; refuses the download once none is left. */
+	private static long remainingMillis(long started, Policy policy) throws Refused {
 		long remaining = policy.deadlineMillis - elapsedMillis(started);
 		if (remaining <= 0) {
 			throw new Refused("download did not finish within " + policy.deadlineMillis + " ms");
 		}
-		return (int) Math.min(configuredMillis, remaining);
+		return remaining;
 	}
 
 	private static long elapsedMillis(long started) {
