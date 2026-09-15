@@ -4445,6 +4445,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- The time sums are DOUBLE PRECISION, the type of the stage times they add up. They were cast
+-- to BIGINT, which rounded every total to a whole second before the page printed it to four
+-- decimals (#190). Changing a function's return type needs the DROP above; CREATE OR REPLACE
+-- alone refuses it.
 DROP FUNCTION IF EXISTS starexec.GetJobAttributesTable CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobAttributesTable(_jobSpaceId INT)
 RETURNS TABLE(
@@ -4454,15 +4458,15 @@ RETURNS TABLE(
     config_name VARCHAR(255),
     attr_value TEXT,
     attr_count BIGINT,
-    wallclock_sum BIGINT,
-    cpu_sum BIGINT
+    wallclock_sum DOUBLE PRECISION,
+    cpu_sum DOUBLE PRECISION
 ) AS $$
 BEGIN
     RETURN QUERY
     SELECT jsd.solver_id, jsd.solver_name, jsd.config_id, jsd.config_name, ja.attr_value::TEXT,
            COUNT(ja.attr_value)::BIGINT AS attr_count,
-           SUM(jsd.wallclock)::BIGINT AS wallclock_sum,
-           SUM(jsd.cpu)::BIGINT AS cpu_sum
+           SUM(jsd.wallclock) AS wallclock_sum,
+           SUM(jsd.cpu) AS cpu_sum
     FROM starexec.job_attributes ja
     JOIN job_pairs jp ON ja.pair_id = jp.id
     JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id AND ja.stage_number = jsd.stage_number
@@ -4471,20 +4475,21 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- DOUBLE PRECISION time sums, as in GetJobAttributesTable (#190).
 DROP FUNCTION IF EXISTS starexec.GetSumOfJobAttributes CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetSumOfJobAttributes(_jobSpaceId INT)
 RETURNS TABLE(
     attr_value TEXT,
     attr_count BIGINT,
-    wallclock BIGINT,
-    cpu BIGINT
+    wallclock DOUBLE PRECISION,
+    cpu DOUBLE PRECISION
 ) AS $$
 BEGIN
     RETURN QUERY
     SELECT ja.attr_value::TEXT,
            COUNT(ja.attr_value)::BIGINT AS attr_count,
-           SUM(jsd.wallclock)::BIGINT AS wallclock,
-           SUM(jsd.cpu)::BIGINT AS cpu
+           SUM(jsd.wallclock) AS wallclock,
+           SUM(jsd.cpu) AS cpu
     FROM starexec.job_attributes ja
     JOIN job_pairs jp ON ja.pair_id = jp.id
     -- The stage the attribute belongs to, as in GetJobAttributesTable. Without the stage match a
