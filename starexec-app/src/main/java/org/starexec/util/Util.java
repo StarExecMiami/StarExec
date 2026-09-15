@@ -1957,6 +1957,28 @@ public class Util {
         return false;
     }
 
+    /** Why a user-supplied archive URL is refused; shown to the user. */
+    public static final String DOWNLOADABLE_URL_REQUIRED =
+        "Archive URLs must be valid http or https URLs";
+
+    /**
+     * Whether a URL string a user supplied parses and may be downloaded.
+     *
+     * @param url the URL as submitted, may be null
+     * @return true when it parses and its scheme is http or https
+     * @see #isDownloadableUrl(URL)
+     */
+    public static boolean isDownloadableUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        try {
+            return isDownloadableUrl(URI.create(url).toURL());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /**
      * Whether a URL a user supplied may be downloaded: only http and https.
      *

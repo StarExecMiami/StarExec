@@ -339,6 +339,9 @@ public class ProcessorManager extends HttpServlet {
 				fileName = ((PartWrapper) form.get(PROCESSOR_FILE)).getName();
 			} else {
 				fileName = (String) form.get(PROCESSOR_URL);
+				if (!Util.isDownloadableUrl(fileName)) {
+					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
 			}
 
 			log.debug(method + " - Name of processor file=" + fileName);

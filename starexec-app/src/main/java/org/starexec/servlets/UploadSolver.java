@@ -497,6 +497,9 @@ public class UploadSolver extends HttpServlet {
 				fileName = FilenameUtils.getName(((PartWrapper) form.get(UploadSolver.UPLOAD_FILE)).getName());
 			} else {
 				fileName = (String) form.get(UploadSolver.FILE_URL);
+				if (!Util.isDownloadableUrl(fileName)) {
+					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
 			}
 			if (!Validator.isValidArchiveType(fileName)) {
 				return new ValidatorStatusCode(false, "Archives need to have an extension of .zip, .tar, or .tgz");
