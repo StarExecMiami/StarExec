@@ -3059,11 +3059,6 @@ public class KubernetesNativeBackendTests {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
         setField(backend, "appNodeName", "");
 
-        Object stats = Class
-            .forName("org.starexec.backend.ContainerJobMonitor$RunsolverStats")
-            .getDeclaredConstructor()
-            .newInstance();
-
         Method resolve = null;
         for (Class<?> c : KubernetesNativeBackend.class.getDeclaredClasses()) {
             for (Method m : c.getDeclaredMethods()) {
@@ -3087,7 +3082,7 @@ public class KubernetesNativeBackendTests {
             "an unknown node must yield null, not a placeholder: a name that cannot"
                 + " resolve guarantees P0002 and discards the pair's measurements while"
                 + " hiding why",
-            resolve.invoke(owner, stats)
+            resolve.invoke(owner, (Object) null)
         );
     }
 

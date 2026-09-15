@@ -684,18 +684,24 @@ public class ContainerJobMonitor {
         updateDatabase(
             pairId,
             stageNumber,
-            stats,
             status,
-            info.partitionIndex,
             stageSnapshots
         );
 
-        // 5. Attributes, each against the stage that produced it. Only after updateDatabase
-        //    returned: a refused status throws out of it, and no attribute may be recorded
-        //    against a result the database declined. The stages eligible are the ones already
-        //    known to have finished -- earlier stages, whose snapshots the loop above required to
-        //    be terminal, and the terminal stage itself.
-        recordAttributes(pairId, outputPath, stageNumber, stageSnapshots, attributes);
+        // 5. Measurements and attributes, each against the stage that produced it. Only after
+        //    updateDatabase returned: a refused status throws out of it, and nothing may be
+        //    recorded against a result the database declined. The stages eligible are the ones
+        //    already known to have finished -- earlier stages, whose snapshots the loop above
+        //    required to be terminal, and the terminal stage itself. runsolver's var.out and
+        //    watcher.out, read in step 1, decide the terminal status only.
+        Set<Integer> finishedEarlier = new TreeSet<>();
+        for (Integer stage : stageSnapshots.keySet()) {
+            if (stage < stageNumber) {
+                finishedEarlier.add(stage);
+            }
+        }
+        recordMeasurements(pairId, outputPath, stageNumber, finishedEarlier, info.partitionIndex);
+        recordAttributes(pairId, outputPath, stageNumber, finishedEarlier, attributes);
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
@@ -704,27 +710,6 @@ public class ContainerJobMonitor {
      * Parses runsolver var.out and watcher.out files.
      * Also checks for stats.json as an alternative format.
      */
-    /**
-     * True if any source yielded a measurement, i.e. we learned something about this run.
-     *
-     * <p>Every field of {@link RunsolverStats} starts at zero, so an all-zero object is
-     * indistinguishable from "nothing was parsed" -- and that is precisely the case in
-     * which the values must not be written. A real run always reports a positive
-     * wallclock: runsolver measures wall time as a float and no process takes literally
-     * zero seconds. {@code exitCodeReported} is included because a solver that exited
-     * immediately with a status is a run we did observe.
-     */
-    private static boolean hasAnyMeasurement(RunsolverStats stats) {
-        return stats.wallclockTime > 0
-            || stats.cpuTime > 0
-            || stats.userTime > 0
-            || stats.systemTime > 0
-            || stats.maxVirtualMemory > 0
-            || stats.maxResidentSetSize > 0
-            || stats.diskSize > 0
-            || stats.exitCodeReported;
-    }
-
     private RunsolverStats parseRunsolverOutput(Path outputDir) {
         RunsolverStats stats = new RunsolverStats();
 
@@ -1192,9 +1177,7 @@ public class ContainerJobMonitor {
     private void updateDatabase(
         int pairId,
         int stageNumber,
-        RunsolverStats stats,
         StatusCode status,
-        int partitionIndex,
         Map<Integer, Integer> stageSnapshots
     ) throws Exception {
         // Earlier stages first. UpdatePairStatusPrecise below rewrites the terminal stage
@@ -1290,65 +1273,63 @@ public class ContainerJobMonitor {
         // retryable by design, so a replay is expected rather than exceptional, and a pair's
         // recorded finish time must not drift each time one happens.
 
-        // Persist run stats using JobPairs.updateRunSolverStats.
-        //
-        // Only when we actually parsed something. RunsolverStats initialises every
-        // measurement to 0, so if var.out, watcher.out and stats.json were all missing
-        // or unparseable, writing unconditionally pushed wallclock=0, cpu=0, max_vmem=0
-        // into jobpair_stage_data through UpdatePairRunSolverStats -- a solver that ran
-        // for an hour recorded as having taken no time. On a platform whose numbers
-        // decide published rankings that is a wrong result, not a missing one, and the
-        // only trace it left was a debug line.
-        //
-        // LocalJobMonitor has always guarded this; the container path -- the one every
-        // current deployment uses -- did not.
-        if (!hasAnyMeasurement(stats)) {
-            // Deliberately warn rather than debug: a completed run that yielded no
-            // parseable output is a fault worth seeing, and staying silent about it is
-            // how this stayed invisible.
-            log.warn(
-                "No parseable runsolver output for pair " + pairId +
-                " (no var.out, watcher.out or stats.json field was read); leaving the" +
-                " recorded measurements untouched rather than overwriting them with zeros"
-            );
-            return;
-        }
-        try {
-            String nodeName = (stats.hostname != null &&
-                    !stats.hostname.isEmpty())
-                ? stats.hostname
-                : backend.getWorkerNodeNameForPartition(partitionIndex);
-            boolean ok = JobPairs.updateRunSolverStats(
-                pairId,
-                nodeName,
-                stats.wallclockTime,
-                stats.cpuTime,
-                stats.userTime,
-                stats.systemTime,
-                stats.maxVirtualMemory,
-                stats.maxResidentSetSize,
-                // The caller's stageNumber, not stats.stageNumber. Both originate from
-                // CURRENT_STAGE_NUMBER in functions.bash and normally agree, but
-                // stats.stageNumber falls back to 1 when stats.json is absent, while
-                // this parameter is the stage read from status.json and already used
-                // for the status write above. Using it keeps the stats and the status
-                // on the same row by construction, instead of landing the stats on
-                // stage 1 or raising "Stage not found" into a swallowed exception.
-                stageNumber,
-                stats.diskSize
-            );
-            if (ok) {
-                log.debug(
-                    "Persisted run stats for pair " + pairId + ": " + stats
-                );
-            } else {
-                log.warn("Failed to persist run stats for pair " + pairId);
-            }
-        } catch (Exception e) {
-            log.warn("Exception persisting run stats for pair " + pairId, e);
-        }
-
         log.debug("Updated database for pair " + pairId + ": status=" + status);
+    }
+
+    /**
+     * Records runsolver measurements against the stages that produced them.
+     * {@link StageStatsFiles} decides which files may be believed.
+     *
+     * <p>This used to record the pair-wide stats.json, merged with var.out and watcher.out,
+     * against the terminal stage: every earlier stage's measurements were lost, and a final stage
+     * that never reached copyOutput was given the previous stage's. A stage without a believable
+     * file now keeps whatever it was enqueued with rather than any other stage's numbers.
+     */
+    private void recordMeasurements(
+        int pairId,
+        Path outputPath,
+        int stageNumber,
+        Set<Integer> finishedEarlier,
+        int partitionIndex
+    ) throws Exception {
+        Map<Integer, StageStatsFiles.Stats> byStage = StageStatsFiles.select(
+            outputPath,
+            pairId,
+            finishedEarlier,
+            stageNumber,
+            () -> JobPairs.getStageNumbers(pairId)
+        );
+
+        for (Map.Entry<Integer, StageStatsFiles.Stats> entry : byStage.entrySet()) {
+            StageStatsFiles.Stats stats = entry.getValue();
+            try {
+                String nodeName = stats.hostname != null
+                    ? stats.hostname
+                    : backend.getWorkerNodeNameForPartition(partitionIndex);
+                boolean ok = JobPairs.updateRunSolverStats(
+                    pairId,
+                    nodeName,
+                    stats.wallclockTime,
+                    stats.cpuTime,
+                    stats.userTime,
+                    stats.systemTime,
+                    stats.maxVirtualMemory,
+                    stats.maxResidentSetSize,
+                    entry.getKey(),
+                    stats.diskSize
+                );
+                if (ok) {
+                    log.debug("Persisted run stats for pair " + pairId + " stage "
+                        + entry.getKey() + ": " + stats);
+                } else {
+                    log.warn("Failed to persist run stats for pair " + pairId + " stage "
+                        + entry.getKey());
+                }
+            } catch (Exception e) {
+                log.warn("Exception persisting run stats for pair " + pairId + " stage "
+                    + entry.getKey(), e);
+            }
+        }
     }
 
     /**
@@ -1359,16 +1340,9 @@ public class ContainerJobMonitor {
         int pairId,
         Path outputPath,
         int stageNumber,
-        Map<Integer, Integer> stageSnapshots,
+        Set<Integer> finishedEarlier,
         Properties legacy
     ) throws Exception {
-        Set<Integer> finishedEarlier = new TreeSet<>();
-        for (Integer stage : stageSnapshots.keySet()) {
-            if (stage < stageNumber) {
-                finishedEarlier.add(stage);
-            }
-        }
-
         Map<Integer, Properties> byStage = StageAttributeFiles.select(
             outputPath,
             pairId,
