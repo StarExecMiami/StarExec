@@ -2443,6 +2443,9 @@ public class Jobs {
         PreparedStatement stmt = null;
         ResultSet results = null;
         try {
+            // The count joins job_space_closure, which is filled on demand (#207).
+            Spaces.updateJobSpaceClosureTable(jobSpaceId);
+
             con = Common.getConnection();
             stmt = con.prepareStatement(
                 "SELECT CountJobPairsInJobSpaceHierarchyByType(?,?,?,?,?)"
@@ -3452,6 +3455,9 @@ public class Jobs {
         }
         int jobId = Spaces.getJobSpace(jobSpaceId).getJobId();
         try {
+            // The listing joins job_space_closure, which is filled on demand (#207).
+            Spaces.updateJobSpaceClosureTable(jobSpaceId);
+
             con = Common.getConnection();
 
             if (query.getSortColumn() == 7) {
