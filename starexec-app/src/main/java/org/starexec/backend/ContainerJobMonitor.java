@@ -989,6 +989,21 @@ public class ContainerJobMonitor {
     );
 
     /**
+     * One integer field of a stage snapshot, read without coercion (#196). Refused as the
+     * malformed record it is, the same way this reader refuses one it cannot parse.
+     */
+    private static int snapshotInt(JsonObject obj, String field, Path entry) throws Exception {
+        try {
+            return StrictJsonInt.parse(field, obj.get(field));
+        } catch (StrictJsonInt.NotAnInt e) {
+            throw new Exception(
+                "Stage snapshot " + entry + " has a non-integer " + field + ": it " +
+                    e.getMessage()
+            );
+        }
+    }
+
+    /**
      * Reads the per-stage status snapshots a finished container left behind.
      *
      * <p>status.json is a single slot and every stage truncates it, so before these
@@ -1062,9 +1077,9 @@ public class ContainerJobMonitor {
                     throw new Exception("Incomplete stage snapshot " + entry);
                 }
 
-                int recordPairId = obj.get("pairId").getAsInt();
-                int recordStage = obj.get("stageNumber").getAsInt();
-                int recordStatus = obj.get("status").getAsInt();
+                int recordPairId = snapshotInt(obj, "pairId", entry);
+                int recordStage = snapshotInt(obj, "stageNumber", entry);
+                int recordStatus = snapshotInt(obj, "status", entry);
 
                 if (recordPairId != pairId) {
                     throw new Exception(
