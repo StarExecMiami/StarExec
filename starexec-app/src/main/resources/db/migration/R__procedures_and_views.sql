@@ -6706,7 +6706,10 @@ BEGIN
             GROUP BY jp.bench_id
             HAVING COUNT(DISTINCT ja.attr_value) > 1) AS conflicting
         ON jp_o.bench_id = conflicting.bench_id
-    WHERE jpsd_o.config_id = _configId
+    -- This job's pairs only (#189): the subquery judges conflict within the job, and the
+    -- configuration's pairs on the same benchmark in another job are not its conflicts here.
+    WHERE j_o.id = _jobId
+        AND jpsd_o.config_id = _configId
         AND jpsd_o.stage_number = _stageNumber
         AND ja_o.attr_key = 'starexec-result'
         AND ja_o.attr_value != 'starexec-unknown';
@@ -6739,7 +6742,9 @@ BEGIN
          GROUP BY jp.bench_id
          HAVING COUNT(DISTINCT ja.attr_value) > 1) AS conflicting
             ON jp_o.bench_id = conflicting.bench_id
-    WHERE jpsd_o.config_id = _configId
+    -- This job's pairs only (#189), as in GetConflictsForConfigInJob.
+    WHERE j_o.id = _jobId
+                AND jpsd_o.config_id = _configId
                 AND jpsd_o.stage_number = _stageNumber
                 AND ja_o.attr_key = 'starexec-result'
                 AND ja_o.attr_value != 'starexec-unknown'
