@@ -275,6 +275,56 @@ public class FinalStatusStageTest {
 	}
 
 	/**
+	 * status.json's pairId is an ownership claim: checked against the container label, and
+	 * adopted as the pair when the container has no usable label. gson's getAsInt made "4242",
+	 * 4242.5, [4242] and 4294971538 (2^32 + 4242) all equal 4242, so a malformed claim passed the
+	 * check, or named the pair outright (#196). Each is refused before anything is written,
+	 * with and without a label.
+	 */
+	@Test
+	public void containerRefusesADeclaredPairIdThatIsNotAStrictInteger() throws Throwable {
+		String[] shapes = {"\"4242\"", "4242.5", "[4242]", "4294971538"};
+		for (int label : new int[] {PAIR, -1}) {
+			for (String pairId : shapes) {
+				Path dir = statusDir(
+						"{\"pairId\":" + pairId + ",\"status\":7,\"stageNumber\":1}");
+				ContainerJobMonitor monitor = new ContainerJobMonitor(null);
+				PodmanBackend.CompletedContainerInfo info =
+						new PodmanBackend.CompletedContainerInfo("c-" + label, label,
+								dir.toString(), 0);
+
+				Method m = ContainerJobMonitor.class.getDeclaredMethod(
+						"processCompletedJob", PodmanBackend.CompletedContainerInfo.class);
+				m.setAccessible(true);
+				String shape = "label " + label + ", pairId " + pairId;
+				try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+					try {
+						m.invoke(monitor, info);
+						fail(shape + " must be refused");
+					} catch (java.lang.reflect.InvocationTargetException e) {
+						assertTrue(shape + ": expected the invalid-snapshot refusal, got "
+										+ e.getCause(),
+								e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+						assertTrue(shape + ": the refusal must name the field it refused: "
+										+ e.getCause().getMessage(),
+								e.getCause().getMessage().contains("non-integer pairId"));
+					}
+					jobPairsMock.verify(
+							() -> JobPairs.setPairStatusPreciseResult(
+									Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+									Mockito.anyInt(), Mockito.anyBoolean()),
+							Mockito.never());
+					jobPairsMock.verify(
+							() -> JobPairs.setPairStatusPrecise(
+									Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+									Mockito.anyInt()),
+							Mockito.never());
+				}
+			}
+		}
+	}
+
+	/**
 	 * The absent-file case, which must keep working: a container that produced no status.json
 	 * has nothing to misattribute, and refusing it would block every such pair. This is the
 	 * case an earlier revision of this change got wrong -- it left the stage at 0, which is
