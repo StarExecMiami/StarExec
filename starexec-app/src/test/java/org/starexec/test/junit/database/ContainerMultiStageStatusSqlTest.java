@@ -352,7 +352,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 				record(PAIR_ID, COMPLETE, 2));
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out, "names stage");
+		assertRejectedWithoutWriting(out, "is named for stage 1 but records stage 2");
 	}
 
 	/**
@@ -457,7 +457,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out, "carries non-terminal status");
+		assertRejectedWithoutWriting(out, "carries status " + RUNNING
+				+ ", which is not a terminal execution result");
 	}
 
 	/**
@@ -475,7 +476,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out, "carries non-terminal status 22");
+		assertRejectedWithoutWriting(out,
+				"carries status 22, which is not a terminal execution result");
 
 		// The post-processing task selects on exactly this, so nothing may be left holding it.
 		try (Connection con = Common.getConnection()) {
