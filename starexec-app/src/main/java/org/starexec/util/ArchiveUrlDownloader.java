@@ -1,15 +1,21 @@
 package org.starexec.util;
 
-import org.apache.commons.io.FileUtils;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.logger.StarLogger;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URL;
 import java.net.UnknownHostException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
@@ -25,6 +31,24 @@ final class ArchiveUrlDownloader {
 
 	/** Redirects followed before a download is abandoned. */
 	static final int MAX_REDIRECTS = 5;
+
+	/**
+	 * Largest archive downloaded: the limit on a benchmark archive sent through the upload form,
+	 * {@code UploadBenchmark}'s {@code @MultipartConfig maxFileSize} of 5 GiB.
+	 */
+	static final long MAX_BYTES = 5L * 1024 * 1024 * 1024;
+
+	/**
+	 * Longest a download may take, redirects and body together. 30 minutes admits a 5 GiB archive
+	 * at about 3 MiB/s; past that, a slow server only holds the upload's thread.
+	 */
+	static final long DEADLINE_MILLIS = 30L * 60 * 1000;
+
+	/**
+	 * Longest wait for any single read. A server silent for a minute is treated as gone; the
+	 * deadline is checked between reads, so it can be overrun by at most this much.
+	 */
+	static final int READ_TIMEOUT_MILLIS = 60_000;
 
 	/** The IPv6 instance metadata address, inside the unique-local range. */
 	private static final InetAddress IPV6_METADATA = address("fd00:ec2::254");
@@ -61,7 +85,7 @@ final class ArchiveUrlDownloader {
 		/** The policy for downloads requested by users. */
 		static Policy standard() {
 			return new Policy(EnvironmentConfig.isUrlDownloadPrivateNetworksAllowed(), Set.of(), MAX_REDIRECTS,
-					Long.MAX_VALUE, Long.MAX_VALUE, Util.CONNECT_TIMEOUT_MS, Util.READ_TIMEOUT_MS);
+					MAX_BYTES, DEADLINE_MILLIS, Util.CONNECT_TIMEOUT_MS, READ_TIMEOUT_MILLIS);
 		}
 	}
 
@@ -72,6 +96,11 @@ final class ArchiveUrlDownloader {
 	 * address the host resolves to must be permitted by {@link #isPermittedAddress}. Redirects are
 	 * followed here rather than by the JVM, at most {@code policy.maxRedirects} of them, and only
 	 * as {@link #isPermittedRedirect} allows.
+	 *
+	 * <p>The body is written to a temporary file beside the destination and moved into place only
+	 * once it is complete. A declared length over {@code policy.maxBytes} is refused before
+	 * reading; a body that grows past it, or a download still running at
+	 * {@code policy.deadlineMillis}, is abandoned and its temporary file deleted.
 	 *
 	 * <p>The host is resolved for the check and again by the connection, so a name whose DNS
 	 * answer changes between the two can still reach an address the check did not see. Pinning
@@ -84,48 +113,43 @@ final class ArchiveUrlDownloader {
 	 */
 	static boolean download(URL url, File destination, Policy policy) {
 		final String methodName = "download";
+		long started = System.nanoTime();
 		try {
 			URL current = url;
 			for (int redirects = 0; ; redirects++) {
-				String refusal = refusal(current, policy);
-				if (refusal != null) {
-					log.warn(methodName, refusal);
-					return false;
-				}
+				checkDestination(current, policy);
 				HttpURLConnection connection = (HttpURLConnection) current.openConnection();
 				try {
 					connection.setInstanceFollowRedirects(false);
-					connection.setConnectTimeout(policy.connectTimeoutMillis);
-					connection.setReadTimeout(policy.readTimeoutMillis);
+					connection.setConnectTimeout(timeout(policy.connectTimeoutMillis, started, policy));
+					connection.setReadTimeout(timeout(policy.readTimeoutMillis, started, policy));
 					int status = connection.getResponseCode();
 					if (isRedirect(status)) {
 						URL next = redirectTarget(current, connection.getHeaderField("Location"));
 						if (next == null) {
-							log.warn(methodName, "download answered HTTP " + status + " without a usable Location");
-							return false;
+							throw new Refused("download answered HTTP " + status + " without a usable Location");
 						}
 						if (redirects >= policy.maxRedirects) {
-							log.warn(methodName, "download redirected more than " + policy.maxRedirects + " times");
-							return false;
+							throw new Refused("download redirected more than " + policy.maxRedirects + " times");
 						}
 						if (!isPermittedRedirect(current, next)) {
-							log.warn(methodName, "refusing a redirect from " + current.getProtocol() + " to "
+							throw new Refused("refusing a redirect from " + current.getProtocol() + " to "
 									+ next.getProtocol());
-							return false;
 						}
 						current = next;
 						continue;
 					}
 					if (status < 200 || status > 299) {
-						log.warn(methodName, "download answered HTTP " + status);
-						return false;
+						throw new Refused("download answered HTTP " + status);
 					}
-					FileUtils.copyInputStreamToFile(connection.getInputStream(), destination);
+					copyBounded(connection, destination, policy, started);
 					return true;
 				} finally {
 					connection.disconnect();
 				}
 			}
+		} catch (Refused e) {
+			log.warn(methodName, e.getMessage());
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 		}
@@ -187,27 +211,76 @@ final class ArchiveUrlDownloader {
 		return source.equals(target) || ("http".equals(source) && "https".equals(target));
 	}
 
-	/** Why a URL may not be contacted, or null when it may. */
-	private static String refusal(URL url, Policy policy) {
+	/** Refuses a URL whose scheme or resolved addresses the policy does not permit. */
+	private static void checkDestination(URL url, Policy policy) throws Refused {
 		if (!Util.isDownloadableUrl(url)) {
-			return "refusing to download a URL with scheme " + (url == null ? null : url.getProtocol());
+			throw new Refused("refusing to download a URL with scheme " + (url == null ? null : url.getProtocol()));
 		}
 		String host = url.getHost();
 		if (host == null || host.isEmpty()) {
-			return "refusing to download a URL without a host";
+			throw new Refused("refusing to download a URL without a host");
 		}
 		InetAddress[] addresses;
 		try {
 			addresses = InetAddress.getAllByName(host);
 		} catch (UnknownHostException e) {
-			return "could not resolve download host " + host;
+			throw new Refused("could not resolve download host " + host);
 		}
 		for (InetAddress address : addresses) {
 			if (!isPermittedAddress(address, policy)) {
-				return "refusing to download from " + host + ", which resolves to a non-public address";
+				throw new Refused("refusing to download from " + host + ", which resolves to a non-public address");
 			}
 		}
-		return null;
+	}
+
+	/** Copies the response body to the destination within the policy's size and time limits. */
+	private static void copyBounded(HttpURLConnection connection, File destination, Policy policy, long started)
+			throws IOException, Refused {
+		long declared = connection.getContentLengthLong();
+		if (declared > policy.maxBytes) {
+			throw new Refused("download declares " + declared + " bytes, over the limit of " + policy.maxBytes);
+		}
+		Path target = destination.getAbsoluteFile().toPath();
+		Path directory = target.getParent();
+		Files.createDirectories(directory);
+		Path partial = Files.createTempFile(directory, "." + target.getFileName() + ".", ".part");
+		try {
+			try (InputStream in = connection.getInputStream(); OutputStream out = Files.newOutputStream(partial)) {
+				byte[] buffer = new byte[64 * 1024];
+				long total = 0;
+				int read;
+				while ((read = in.read(buffer)) != -1) {
+					total += read;
+					if (total > policy.maxBytes) {
+						throw new Refused("download passed the limit of " + policy.maxBytes + " bytes");
+					}
+					if (elapsedMillis(started) > policy.deadlineMillis) {
+						throw new Refused("download did not finish within " + policy.deadlineMillis + " ms");
+					}
+					out.write(buffer, 0, read);
+				}
+			}
+			try {
+				Files.move(partial, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+			} catch (AtomicMoveNotSupportedException e) {
+				Files.move(partial, target, StandardCopyOption.REPLACE_EXISTING);
+			}
+		} finally {
+			Files.deleteIfExists(partial);
+		}
+	}
+
+	/** A connection timeout no longer than the time left before the deadline. */
+	private static int timeout(int configuredMillis, long started, Policy policy) throws Refused {
+		long remaining = policy.deadlineMillis - elapsedMillis(started);
+		if (remaining <= 0) {
+			throw new Refused("download did not finish within " + policy.deadlineMillis + " ms");
+		}
+		return (int) Math.min(configuredMillis, remaining);
+	}
+
+	private static long elapsedMillis(long started) {
+		return (System.nanoTime() - started) / 1_000_000;
 	}
 
 	private static boolean isRedirect(int status) {
@@ -251,6 +324,13 @@ final class ArchiveUrlDownloader {
 			}
 		}
 		return true;
+	}
+
+	/** A download the policy does not permit, or that broke one of its limits. */
+	private static final class Refused extends Exception {
+		Refused(String message) {
+			super(message);
+		}
 	}
 
 	private static InetAddress address(String literal) {
