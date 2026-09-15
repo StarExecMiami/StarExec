@@ -210,6 +210,30 @@ public class FinalStatusStageTest {
 		assertEquals(2, stage.getInt(ss));
 	}
 
+	/**
+	 * Local's status field is read as strictly as its stage (#196). gson's getAsInt accepted a
+	 * quoted "7", truncated 7.5, unwrapped [7] and wrapped 4294967303 (2^32 + 7) to 7, so each of
+	 * these recorded STATUS_COMPLETE for a pair that never wrote it.
+	 *
+	 * <p>Only the integer shape is at issue here. What Local does with an integer that names no
+	 * known status is a separate contract and is not asserted.
+	 */
+	@Test
+	public void localRefusesAStatusThatIsNotAStrictInteger() throws Throwable {
+		for (String status : new String[] {"\"7\"", "7.5", "[7]", "true", "4294967303"}) {
+			String body = "{\"pairId\":4242,\"status\":" + status + ",\"stageNumber\":1}";
+			try {
+				Object result = readStatusFile(statusDir(body));
+				fail("status " + status + " must be refused, not read as " + result);
+			} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+				assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
+						expected.getMessage().contains("non-integer status"));
+				assertEquals("must be classified BLOCKED, not retried",
+						"BLOCKED", classify(expected));
+			}
+		}
+	}
+
 	// --------------------------------------------------- C. ContainerJobMonitor lifecycle
 
 	/**
