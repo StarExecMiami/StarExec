@@ -7,9 +7,12 @@ import org.junit.Test;
 import org.starexec.util.ArchiveUrlDownloader.Policy;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -229,6 +232,43 @@ public class ArchiveUrlDownloaderTests {
 		assertTrue(ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), destination,
 				limited(ARCHIVE.length, 60_000)));
 		assertArrayEquals(ARCHIVE, Files.readAllBytes(destination.toPath()));
+	}
+
+	/**
+	 * A server that trickles its response headers, each byte within the read timeout, is cut off at
+	 * the deadline too, not only one that trickles its body.
+	 */
+	@Test
+	public void slowResponseHeadersAreAbandonedAtTheDeadline() throws Exception {
+		try (ServerSocket listener = new ServerSocket(0, 1, LOOPBACK)) {
+			Thread server = new Thread(() -> trickleHeaders(listener), "slow-headers");
+			server.setDaemon(true);
+			server.start();
+			URL url = url("http://" + LOOPBACK.getHostAddress() + ":" + listener.getLocalPort() + "/slow.zip");
+
+			long started = System.nanoTime();
+			assertFalse(ArchiveUrlDownloader.download(url, destination, limited(Long.MAX_VALUE, 500)));
+			long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
+			assertTrue("abandoned near the deadline, after " + elapsedMillis + " ms", elapsedMillis < 3000);
+			assertNothingLeft();
+		}
+	}
+
+	/** Sends a status line, then one header byte every 50 ms for ten seconds, never ending the headers. */
+	private static void trickleHeaders(ServerSocket listener) {
+		try (Socket socket = listener.accept(); OutputStream out = socket.getOutputStream()) {
+			out.write("HTTP/1.1 200 OK\r\nX-Slow: ".getBytes(StandardCharsets.US_ASCII));
+			out.flush();
+			for (int i = 0; i < 200; i++) {
+				out.write('x');
+				out.flush();
+				Thread.sleep(50);
+			}
+		} catch (IOException e) {
+			// The client hung up.
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	/** Each byte arrives well within the read timeout, so only the overall deadline stops it. */
