@@ -57,28 +57,12 @@ public class StageZeroIngestionTest {
 		}
 	}
 
-	/** RunSolverStats is private; an all-zero instance is enough to reach the status write. */
-	private Object zeroStats() throws Exception {
-		Class<?> type = Class.forName("org.starexec.backend.LocalJobMonitor$RunSolverStats");
-		var ctor = type.getDeclaredConstructors()[0];
-		ctor.setAccessible(true);
-		Object[] args = new Object[ctor.getParameterCount()];
-		Class<?>[] types = ctor.getParameterTypes();
-		for (int i = 0; i < args.length; i++) {
-			if (types[i] == double.class) args[i] = 0.0d;
-			else if (types[i] == long.class) args[i] = 0L;
-			else if (types[i] == int.class) args[i] = 0;
-			else args[i] = null;
-		}
-		return ctor.newInstance(args);
-	}
-
 	private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
 		for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
 			if (m.getName().equals("updateDatabase")) {
 				m.setAccessible(true);
 				try {
-					m.invoke(monitor, pairId, status, stageNumber, zeroStats());
+					m.invoke(monitor, pairId, status, stageNumber);
 				} catch (java.lang.reflect.InvocationTargetException e) {
 					throw e.getCause();
 				}
@@ -198,18 +182,18 @@ public class StageZeroIngestionTest {
 			throws Throwable {
 		ContainerJobMonitor container = new ContainerJobMonitor(null);
 		for (Method m : ContainerJobMonitor.class.getDeclaredMethods()) {
-			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 6) {
+			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 4) {
 				m.setAccessible(true);
 				try {
-					m.invoke(container, pairId, stageNumber, null, status,
-							0, new java.util.HashMap<Integer, Integer>());
+					m.invoke(container, pairId, stageNumber, status,
+							new java.util.HashMap<Integer, Integer>());
 				} catch (java.lang.reflect.InvocationTargetException e) {
 					throw e.getCause();
 				}
 				return;
 			}
 		}
-		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/6");
+		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/4");
 	}
 
 	/**

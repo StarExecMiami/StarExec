@@ -1,11 +1,7 @@
 package org.starexec.backend;
 
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
 import org.starexec.data.to.Status.StatusCode;
-
-import java.math.BigDecimal;
 
 /**
  * The stage identity carried by a pair's final {@code status.json}.
@@ -100,43 +96,18 @@ final class FinalStatusStage {
 
 	/**
 	 * One field, read strictly: present, a JSON number, integral, and inside the {@code int}
-	 * range. Nothing is coerced and nothing is defaulted.
+	 * range. Nothing is coerced and nothing is defaulted ({@link StrictJsonInt}).
 	 */
 	private static int requireInt(JsonObject record, String field, String source, String why)
 			throws StageStatusSnapshots.InvalidSnapshotException {
 		if (record == null || !record.has(field)) {
 			throw invalid(source, "carries no " + field + ", so " + why);
 		}
-
-		JsonElement raw = record.get(field);
-		if (raw.isJsonNull()) {
-			throw invalid(source, "has a null " + field);
-		}
-		// An array or an object reaches getAsInt() through gson's single-element unwrapping
-		// or throws deep in the call; both are rejected here by shape instead.
-		if (!raw.isJsonPrimitive() || !((JsonPrimitive) raw).isNumber()) {
-			throw invalid(source, "has a non-numeric " + field + " " + raw
-					+ "; this is a JSON number, and a quoted or boolean value is not silently"
-					+ " converted to one");
-		}
-
-		BigDecimal value;
 		try {
-			value = raw.getAsBigDecimal();
-		} catch (NumberFormatException e) {
-			throw invalid(source, "has a " + field + " that is not a number: " + raw);
+			return StrictJsonInt.parse(field, record.get(field));
+		} catch (StrictJsonInt.NotAnInt e) {
+			throw invalid(source, e.getMessage());
 		}
-		if (value.stripTrailingZeros().scale() > 0) {
-			throw invalid(source, "has a fractional " + field + " " + value
-					+ "; truncating it would invent a value the producer did not write");
-		}
-		if (value.compareTo(BigDecimal.valueOf(Integer.MIN_VALUE)) < 0
-				|| value.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
-			throw invalid(source, "has a " + field + " of " + value
-					+ ", which is outside the range this field can take; wrapping it would name"
-					+ " something else entirely");
-		}
-		return value.intValueExact();
 	}
 
 	private static StageStatusSnapshots.InvalidSnapshotException invalid(
