@@ -299,17 +299,17 @@ public final class StageStatusSnapshots {
 
     private static int requiredInt(JsonObject record, String field, Path entry)
         throws InvalidSnapshotException {
+        if (!record.has(field) || record.get(field).isJsonNull()) {
+            throw new InvalidSnapshotException(entry + " has no " + field);
+        }
         try {
-            if (!record.has(field) || record.get(field).isJsonNull()) {
-                throw new InvalidSnapshotException(entry + " has no " + field);
-            }
-            return record.get(field).getAsInt();
-        } catch (InvalidSnapshotException e) {
-            throw e;
-        } catch (Exception e) {
-            // getAsInt throws for an object, an array, or a non-numeric string. Reported with
-            // the path, because the path is the useful half of the message.
-            throw new InvalidSnapshotException(entry + " has a non-integer " + field, e);
+            // Not getAsInt: it accepts "1", truncates 1.5, unwraps [1] and wraps values outside
+            // the int range, each of which names a pair, stage or status nobody wrote (#196).
+            return StrictJsonInt.parse(field, record.get(field));
+        } catch (StrictJsonInt.NotAnInt e) {
+            // Reported with the path, because the path is the useful half of the message.
+            throw new InvalidSnapshotException(
+                entry + " has a non-integer " + field + ": it " + e.getMessage());
         }
     }
 

@@ -10214,6 +10214,103 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- The shared rerun reset. AUTHORITATIVE DEFINITION: this one, not V0117's.
+--
+-- V0117__automatic_rerun_is_atomic.sql introduced RerunJobPairsBatchCore; its body is repeated
+-- here verbatim except for steps 3 and 3b, which clear the previous attempt's stage results
+-- (#183). A rerun reset status, timestamps, disk and the attempt number but kept every
+-- stage's job_attributes rows and measurements, so a stage the new attempt never recorded
+-- showed the old attempt's result, cpu, wallclock and memory. Every rerun entry point reaches
+-- this function under its callers' row locks -- RerunJobPairsBatch, RerunJobPairsBatchChecked
+-- (the manual paths) and RerunJobPairAutomatic -- so the results are cleared in the same
+-- transaction as the status reset and the attempt increment.
+--
+-- What it does not close: a monitor already ingesting the previous attempt can still write
+-- its status and results after this commits; result writes carry no attempt (#185).
+--
+-- Flyway: repeatable migrations run after all pending versioned ones, so this replaces
+-- V0117's body on any database this file is applied to. A LATER V__ migration that redefines
+-- RerunJobPairsBatchCore wins until this file's checksum next changes -- so any such migration
+-- must carry steps 3 and 3b, or this file must be changed in the same release.
+--
+-- Internal. Callers must already hold the row locks and have revalidated eligibility; this
+-- function deliberately makes no decisions of its own. Its lock order is job_pairs (callers),
+-- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats takes users
+-- before jobs, so a concurrent stats write for another pair of the same job and user can
+-- deadlock with a rerun; that predates this definition and is #188. AddJobAttr's insert takes
+-- only a key-share lock on job_pairs, so it waits behind a rerun rather than deadlocking.
+CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
+RETURNS VOID AS $$
+BEGIN
+    -- 1. Identify pairs and reclaim disk size from jobs
+    UPDATE starexec.jobs j
+    SET disk_size = GREATEST(j.disk_size - sub.reclaim, 0)
+    FROM (
+        SELECT jp.job_id, COALESCE(SUM(jsd.disk_size), 0) as reclaim
+        FROM starexec.job_pairs jp
+        JOIN starexec.jobpair_stage_data jsd ON jsd.jobpair_id = jp.id
+        WHERE jp.id = ANY(_pairIds)
+        GROUP BY jp.job_id
+    ) sub
+    WHERE j.id = sub.job_id AND sub.reclaim > 0;
+
+    -- 2. Reclaim disk size from users
+    UPDATE starexec.users u
+    SET disk_size = GREATEST(u.disk_size - sub.reclaim, 0)
+    FROM (
+        SELECT j.user_id, COALESCE(SUM(jsd.disk_size), 0) as reclaim
+        FROM starexec.job_pairs jp
+        JOIN starexec.jobs j ON j.id = jp.job_id
+        JOIN starexec.jobpair_stage_data jsd ON jsd.jobpair_id = jp.id
+        WHERE jp.id = ANY(_pairIds)
+        GROUP BY j.user_id
+    ) sub
+    WHERE u.id = sub.user_id AND sub.reclaim > 0;
+
+    -- 3. Zero out disk size and reset stage statuses to PENDING_SUBMIT (1), and clear the
+    --    previous attempt's measurements (#183). NULL, not 0: it is what a stage that has
+    --    never run holds (AddJobPairStage writes none of these columns), and 0 is a real
+    --    measurement -- runsolver reports MAXVM=0 for a run under 0.1 s.
+    UPDATE starexec.jobpair_stage_data
+    SET disk_size = 0,
+        status_code = 1,
+        cpu = NULL,
+        wallclock = NULL,
+        max_vmem = NULL,
+        max_res_set = NULL,
+        user_time = NULL,
+        system_time = NULL
+    WHERE jobpair_id = ANY(_pairIds);
+
+    -- 3b. Remove the previous attempt's post-processor attributes (#183). AddJobAttr only
+    --     upserts, so without this a stage the new attempt does not reach -- or a key its
+    --     post-processor no longer prints -- keeps the old attempt's value, and the job's
+    --     attribute summaries count it.
+    DELETE FROM starexec.job_attributes WHERE pair_id = ANY(_pairIds);
+
+    -- 4. Remove completion records
+    DELETE FROM starexec.job_pair_completion WHERE pair_id = ANY(_pairIds);
+
+    -- 5. Reset pair status to PENDING_SUBMIT (1) and clear the previous attempt's
+    --    execution timestamps. A pair that has not run has neither a start nor an end.
+    UPDATE starexec.job_pairs
+    SET status_code = 1,
+        start_time  = NULL,
+        end_time    = NULL
+    WHERE id = ANY(_pairIds);
+
+    -- 6. Ensure attempt rows exist and increment attempt atomically.
+    INSERT INTO starexec.job_pair_attempts (pair_id, current_attempt_no, updated_at)
+    SELECT unnest(_pairIds), 1, NOW()
+    ON CONFLICT (pair_id) DO NOTHING;
+
+    UPDATE starexec.job_pair_attempts
+    SET current_attempt_no = current_attempt_no + 1,
+        updated_at = NOW()
+    WHERE pair_id = ANY(_pairIds);
+END;
+$$ LANGUAGE plpgsql;
+
 -- Manual batch reset that revalidates execution IDENTITY, not just status, under the lock.
 --
 -- RerunJobPairsBatch re-reads only `status_code <> 1`. That drops a pair a concurrent actor

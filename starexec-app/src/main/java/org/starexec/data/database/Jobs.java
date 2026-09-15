@@ -6974,10 +6974,17 @@ public class Jobs {
         // Mutually exclusive classification prevents double-counting:
         // pre/post-processor errors (25/26) are counted only as "failed",
         // not also as "incomplete" and "complete".
+        //
+        // A resource-out is the one deliberate overlap: it is also complete
+        // (StatCompleteness.COMPLETE), because SolverStats.getUnknown()
+        // subtracts resource-outs from complete and the solved column divides
+        // by complete. Counting it only as a resource-out made unknown
+        // negative (#198).
         if (statusCode.failed()) {
             stats.incrementFailedJobPairs();
         } else if (statusCode.resource()) {
             stats.incrementResourceOutPairs();
+            stats.incrementCompleteJobPairs();
         } else if (statusCode.incomplete()) {
             stats.incrementIncompleteJobPairs();
         } else if (statusCode.statComplete()) {

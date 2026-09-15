@@ -7,7 +7,6 @@ import org.starexec.logger.StarLogger;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.StringReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -16,7 +15,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 /**
  * Decides which post-processor attributes a pair's output records, and against which stage.
@@ -59,13 +57,6 @@ public final class StageAttributeFiles {
 
     /** The directory the producer writes, relative to the pair's output directory. */
     static final String DIRECTORY = "stage-attributes";
-
-    /**
-     * Post-processor output is a handful of key=value lines. Reading whatever size a job chose
-     * to write would let it exhaust the heap, and an {@link OutOfMemoryError} escapes the
-     * monitors' {@code catch (Exception)}.
-     */
-    private static final long MAX_BYTES = 1024L * 1024L;
 
     /** The stages a pair has, from the database. */
     @FunctionalInterface
@@ -121,7 +112,7 @@ public final class StageAttributeFiles {
             if (!atCompletion || legacy.isEmpty()) {
                 return selected;
             }
-            Set<Integer> stages = stagesOf(pairId, pairStages);
+            Set<Integer> stages = StageResultFiles.stagesOf(pairId, pairStages, "attributes");
             if (stages.size() == 1) {
                 selected.put(stages.iterator().next(), legacy);
             } else {
@@ -134,71 +125,16 @@ public final class StageAttributeFiles {
             return selected;
         }
 
-        Set<Integer> finished = new TreeSet<>(finishedEarlier);
-        if (atCompletion) {
-            finished.add(terminalStage);
-        }
-        if (finished.isEmpty()) {
-            return selected;
-        }
-
-        Set<Integer> stages = stagesOf(pairId, pairStages);
-        Path dir = outputDir.resolve(DIRECTORY);
-        for (int stage : finished) {
-            if (!stages.contains(stage)) {
-                log.warn(
-                    "Pair " + pairId + " has no stage " + stage + " (its stages are " + stages
-                        + "); not recording attributes for it"
-                );
-                continue;
-            }
-            Path file = dir.resolve(stage + ".txt");
-            if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-                // Only said once the pair is complete: a Local monitor sees this state on every
-                // poll between a stage finishing and the pair finishing.
-                if (atCompletion) {
-                    log.warn(
-                        "Pair " + pairId + " stage " + stage + " finished without a per-stage"
-                            + " attributes file; recording no attributes for it"
-                    );
-                }
-                continue;
-            }
-            Properties attributes = read(file, pairId, stage);
-            if (attributes != null) {
-                selected.put(stage, attributes);
-            }
-        }
-        return Collections.unmodifiableMap(selected);
-    }
-
-    private static Set<Integer> stagesOf(int pairId, PairStages pairStages)
-        throws RetryableIngestionException {
-        Set<Integer> stages = pairStages.get();
-        if (stages == null) {
-            throw new RetryableIngestionException(
-                "Could not read the stages of pair " + pairId + " to attribute its attributes");
-        }
-        return stages;
-    }
-
-    /** One stage's file, or {@code null} when it is too large to be believed. */
-    private static Properties read(Path file, int pairId, int stage)
-        throws RetryableIngestionException {
-        try {
-            long size = Files.size(file);
-            if (size > MAX_BYTES) {
-                log.warn(
-                    file + " is " + size + " bytes, over the " + MAX_BYTES + " a stage's attributes"
-                        + " may take; not recording attributes for pair " + pairId + " stage " + stage
-                );
-                return null;
-            }
-            return parse(Files.readString(file, StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            throw new RetryableIngestionException(
-                "Could not read " + file + " for pair " + pairId, e);
-        }
+        return Collections.unmodifiableMap(StageResultFiles.select(
+            outputDir.resolve(DIRECTORY),
+            ".txt",
+            "attributes",
+            pairId,
+            finishedEarlier,
+            terminalStage,
+            pairStages,
+            (content, stage) -> parse(content)
+        ));
     }
 
     /**

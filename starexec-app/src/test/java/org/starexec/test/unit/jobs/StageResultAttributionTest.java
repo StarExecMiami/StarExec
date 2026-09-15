@@ -45,8 +45,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Which stage a multi-stage pair's post-processor attributes are recorded against, from the real
- * {@code functions.bash} through each container-mode monitor's real ingestion (#179).
+ * Which stage a multi-stage pair's post-processor attributes (#179) and runsolver measurements
+ * (#180) are recorded against, from the real {@code functions.bash} through each container-mode
+ * monitor's real ingestion.
  *
  * <p>Reproduces the qualification finding on integrated jobs 2-4 (two E stages): stage 1's output
  * said Theorem, yet the database held the final stage's SZS UNK under stage 1 and nothing under
@@ -508,6 +509,323 @@ public class StageResultAttributionTest {
 		assertEquals(UNKNOWN, Files.readString(pair.out.resolve("attributes.txt")));
 	}
 
+	// ------------------------------------------------------------- measurements (#180)
+
+	/**
+	 * Each stage's cpu, wallclock, memory and disk are recorded against that stage, exactly. The
+	 * qualification finding: only the final stage's measurements survived (#180).
+	 */
+	@Test
+	public void everyStageKeepsItsOwnMeasurements() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(1, measured(0, 1), 2, measured(0, 2)));
+	}
+
+	@Test
+	public void nonContiguousStagesKeepTheirOwnMeasurements() throws Exception {
+		Pair pair = new Pair(1, 3);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(3, UNKNOWN).complete(3);
+		pair.run(0);
+
+		assertMeasured(ingest(pair, 1, 3), Map.of(1, measured(0, 1), 3, measured(0, 3)));
+	}
+
+	/**
+	 * A final stage whose var file was missing goes through copyOutputNoStats and
+	 * markRunscriptError (jobscript:530-534), so it publishes no measurements -- and stats.json
+	 * still holds stage 1's. Stage 2 must get nothing rather than stage 1's numbers.
+	 */
+	@Test
+	public void aStageThatNeverReachedCopyOutputIsNotGivenThePreviousStagesMeasurements()
+			throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stageWithoutCopyOutput(2);
+		pair.run(0);
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(1, measured(0, 1)));
+	}
+
+	/**
+	 * Zero is a measurement. runsolver samples virtual memory only after 0.1 s, so a short stage
+	 * reports MAXVM=0, and it is recorded as exactly that.
+	 */
+	@Test
+	public void aZeroMeasurementIsRecordedExactly() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.varFile(1, "WCTIME=0.05\nCPUTIME=0.04\nUSERTIME=0.03\nSYSTEMTIME=0\nMAXVM=0\n"
+				+ "TIMEOUT=false\nMEMOUT=false\n");
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(
+				1, List.of("node-7", 0.05, 0.04, 0.03, 0.0, 0.0, 10L, 100L),
+				2, measured(0, 2)));
+	}
+
+	/**
+	 * Every stage is charged its own disk, as the grid-engine path always charged it: stage 1's
+	 * saved output against stage 1, stage 2's against stage 2. Before, only the final stage's
+	 * output was charged at all.
+	 */
+	@Test
+	public void everyStageIsChargedItsOwnDisk() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		assertIngested(ingest(pair, 1, 2));
+		assertEquals("each stage's recorded disk", Map.of(1, 100L, 2, 200L), ledger.stageDisk);
+		assertEquals("the user's charge is the sum of the stages'", 300L, ledger.charged);
+	}
+
+	/**
+	 * Local polls a finished stage again and again. Each poll records the same measurements, and
+	 * the user is still charged each stage's disk once.
+	 */
+	@Test
+	public void repeatedLocalPollsChargeEachStageOnce() throws Exception {
+		Assume.assumeTrue(backend == Backend.LOCAL);
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		Local local = new Local(pair);
+		try {
+			assertMeasured(local.poll(1, 2), Map.of(1, measured(0, 1), 2, measured(0, 2)));
+			assertMeasured(local.poll(1, 2), Map.of(1, measured(0, 1), 2, measured(0, 2)));
+		} finally {
+			local.close();
+		}
+		assertEquals(Map.of(1, 100L, 2, 200L), ledger.stageDisk);
+		assertEquals("a second poll must not charge again", 300L, ledger.charged);
+	}
+
+	/**
+	 * Local polls mid-stage-2, after stage 2's copyOutput published but before the stage
+	 * finished: nothing is recorded yet, not stage 2's numbers under whatever stats.json names.
+	 */
+	@Test
+	public void aLocalPollDuringStageTwoRecordsNoMeasurementsUntilThePairCompletes()
+			throws Exception {
+		Assume.assumeTrue(backend == Backend.LOCAL);
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN);
+		pair.run(0);
+
+		Local local = new Local(pair);
+		try {
+			Ingested midStage = local.poll(1, 2);
+			assertFalse("the pair is still running", midStage.terminal);
+			assertMeasured(midStage, Map.of());
+
+			pair.append("sendStageStatus \"$STATUS_COMPLETE\" 2\n");
+			pair.append("sendStatus \"$STATUS_COMPLETE\" 2\n");
+			pair.run(0);
+			assertMeasured(local.poll(1, 2), Map.of(1, measured(0, 1), 2, measured(0, 2)));
+		} finally {
+			local.close();
+		}
+	}
+
+	/** As for attributes: a rerun registered at the status write has started over. */
+	@Test
+	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoMeasurements() throws Exception {
+		Assume.assumeTrue(backend == Backend.LOCAL);
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		Local local = new Local(pair);
+		try {
+			boolean[] rerunLanded = { false };
+			Ingested result = local.poll(() -> {
+				local.monitor.registerJob(pair.out.toString(), PAIR);
+				rerunLanded[0] = true;
+			}, 1, 2);
+			assertTrue("the rerun must land at the status write", rerunLanded[0]);
+			assertMeasured(result, Map.of());
+		} finally {
+			local.close();
+		}
+	}
+
+	/**
+	 * A rerun in the same output directory with no backend cleanup, as on Podman, whose stage 2
+	 * never reaches copyOutput: stage 2 gets neither the previous attempt's stage-2 file nor this
+	 * attempt's stage 1.
+	 */
+	@Test
+	public void aRerunWithoutCleanupGetsNoMeasurementsFromThePreviousAttempt() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+		assertTrue(Files.exists(pair.out.resolve("stage-stats").resolve("2.json")));
+
+		Pair rerun = pair.rerun();
+		rerun.start();
+		rerun.stage(1, SATISFIABLE).complete(1);
+		rerun.stageWithoutCopyOutput(2);
+		rerun.run(0);
+
+		assertMeasured(ingest(rerun, 1, 2), Map.of(1, measured(1, 1)));
+	}
+
+	/** Fail closed, as for attributes: a stale stats file that survives stops the pair. */
+	@Test
+	public void aPreviousAttemptsStatsThatCannotBeClearedFailThePairBeforeAnyStage()
+			throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		Path marker = pair.out.resolve("stage-stats");
+		String before = Files.readString(marker.resolve("1.json"));
+		Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("r-xr-xr-x"));
+		Ingested result;
+		try {
+			Pair rerun = pair.rerun();
+			rerun.start();
+			rerun.stage(1, SATISFIABLE).complete(1);
+			rerun.run(0);
+
+			assertEquals("no stage may have run", before, Files.readString(marker.resolve("1.json")));
+			String status = Files.readString(pair.out.resolve("status.json"));
+			assertTrue("a pair-level runscript error: " + status,
+					status.contains("\"status\":11,") && status.contains("\"stageNumber\":0,"));
+			result = ingest(rerun, 1, 2);
+		} finally {
+			Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("rwxr-xr-x"));
+		}
+		assertTrue("a refusal, if any, is the invalid-stage one: " + result.failure,
+				result.failure == null
+						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException);
+		assertEquals("no measurement may be written", List.of(), result.measured);
+	}
+
+	/**
+	 * A stage whose measurements cannot be published fails at that stage: with the marker present
+	 * nothing else is read, so carrying on would lose them silently.
+	 */
+	@Test
+	public void aStageWhoseMeasurementsCannotBePublishedFails() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.append("chmod a-w \"$STAREXEC_OUTPUT_DIR/stage-stats\"\n");
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		Path marker = pair.out.resolve("stage-stats");
+		Ingested result;
+		try {
+			pair.run(1);
+			String status = Files.readString(pair.out.resolve("status.json"));
+			assertTrue("a general error at stage 1: " + status,
+					status.contains("\"status\":18,") && status.contains("\"stageNumber\":1,"));
+			assertTrue("the legacy file is still written first",
+					Files.exists(pair.out.resolve("stats.json")));
+			result = ingest(pair, 1, 2);
+		} finally {
+			Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("rwxr-xr-x"));
+		}
+		assertMeasured(result, Map.of());
+	}
+
+	/** The helper declares the protocol when the pair starts, before any stage publishes. */
+	@Test
+	public void theMeasurementsMarkerIsCreatedWhenThePairStarts() throws Exception {
+		Assume.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.run(0);
+
+		Path marker = pair.out.resolve("stage-stats");
+		assertTrue(Files.isDirectory(marker, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+		try (var entries = Files.list(marker)) {
+			assertEquals(0, entries.count());
+		}
+	}
+
+	// ---------------------------------------------------- measurements from an older helper
+
+	/**
+	 * Without the marker, stats.json is recorded under the stage it names -- here the final one,
+	 * which is the only one it still holds.
+	 */
+	@Test
+	public void anOlderHelpersStatsAreRecordedUnderTheStageTheyName() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+		pair.asOlderStatsHelper();
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(2, measured(0, 2)));
+	}
+
+	/** ... not under the terminal stage when stats.json still holds the stage before it. */
+	@Test
+	public void anOlderHelpersStatsFromAnEarlierStageStayWithThatStage() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stageWithoutCopyOutput(2);
+		pair.run(0);
+		pair.asOlderStatsHelper();
+
+		assertMeasured(ingest(pair, 1, 2), Map.of(1, measured(0, 1)));
+	}
+
+	/** A stats.json that does not say which stage it is from is not given one (C1). */
+	@Test
+	public void anOlderHelpersStatsWithoutAStageNumberRecordNothing() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+		pair.asOlderStatsHelper();
+		pair.dropStatsField("stageNumber");
+
+		assertMeasured(ingest(pair, 1, 2), Map.of());
+	}
+
+	/** ... nor one that does not say which pair it is from. */
+	@Test
+	public void anOlderHelpersStatsWithoutAPairIdRecordNothing() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+		pair.asOlderStatsHelper();
+		pair.dropStatsField("pairId");
+
+		assertMeasured(ingest(pair, 1, 2), Map.of());
+	}
+
 	// --------------------------------------------------------------------- assertions
 
 	private static void assertRecorded(Ingested result, Map<Integer, String> expected) {
@@ -530,6 +848,28 @@ public class StageResultAttributionTest {
 		}
 		assertEquals("attributes by stage (ingestion outcome: "
 				+ (result.failure == null ? "ok" : result.failure) + ")", want, got);
+	}
+
+	/**
+	 * The measurements written in one ingestion, by stage, exactly: node, wallclock, cpu, user,
+	 * system, max virtual memory, max resident set size, disk.
+	 */
+	private static void assertMeasured(Ingested result, Map<Integer, List<Object>> expected) {
+		assertIngested(result);
+		Map<Integer, List<Object>> got = new TreeMap<>();
+		for (Measured m : result.measured) {
+			assertFalse("stage " + m.stage + " was measured more than once: " + result.measured,
+					got.containsKey(m.stage));
+			got.put(m.stage, m.values);
+		}
+		assertEquals("measurements by stage", new TreeMap<>(expected), got);
+	}
+
+	/** What the harness's default var file, watch file and stdout give a stage. */
+	private static List<Object> measured(int generation, int stage) {
+		int v = stage + 10 * generation;
+		return List.of("node-7", v + 0.5, v + 0.25, (double) v, 0.0, v * 1000.0,
+				(long) v * 10, (long) v * 100);
 	}
 
 	/** "Nothing was recorded" means something only if the ingestion itself went through. */
@@ -574,14 +914,42 @@ public class StageResultAttributionTest {
 		}
 	}
 
+	private static final class Measured {
+		final int stage;
+		final List<Object> values;
+
+		Measured(int stage, List<Object> values) {
+			this.stage = stage;
+			this.values = values;
+		}
+
+		@Override
+		public String toString() {
+			return stage + "=" + values;
+		}
+	}
+
+	/**
+	 * The disk accounting of UpdatePairRunSolverStats: a stage's row takes the new size, and the
+	 * user is charged the difference from what the row held.
+	 */
+	private static final class DiskLedger {
+		final Map<Integer, Long> stageDisk = new TreeMap<>();
+		long charged;
+	}
+
+	/** One per test, shared by every ingestion in it, as the database would be. */
+	private final DiskLedger ledger = new DiskLedger();
+
 	private static final class Ingested {
 		final List<Write> writes = new ArrayList<>();
+		final List<Measured> measured = new ArrayList<>();
 		boolean terminal;
 		Exception failure;
 	}
 
 	/** A database for one pair that has exactly {@code stages}, refusing what the real one does. */
-	private static Ingested stubDatabase(MockedStatic<JobPairs> db, Set<Integer> stages)
+	private Ingested stubDatabase(MockedStatic<JobPairs> db, Set<Integer> stages)
 			throws Exception {
 		Ingested result = new Ingested();
 		db.when(() -> JobPairs.getStageNumbers(PAIR)).thenReturn(new TreeSet<>(stages));
@@ -612,7 +980,20 @@ public class StageResultAttributionTest {
 						Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(),
 						Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
 						Mockito.anyInt(), Mockito.anyLong()))
-				.thenReturn(true);
+				.thenAnswer(inv -> {
+					int stage = inv.getArgument(8);
+					if (!stages.contains(stage)) {
+						return false; // P0002, logged and reported as false by JobPairs
+					}
+					long disk = inv.getArgument(9);
+					ledger.charged += disk - ledger.stageDisk.getOrDefault(stage, 0L);
+					ledger.stageDisk.put(stage, disk);
+					result.measured.add(new Measured(stage, List.of(
+							inv.getArgument(1), inv.getArgument(2), inv.getArgument(3),
+							inv.getArgument(4), inv.getArgument(5), inv.getArgument(6),
+							inv.getArgument(7), inv.getArgument(9))));
+					return true;
+				});
 		Constructor<JobPairs.PairStatusLookupResult> lookup =
 				JobPairs.PairStatusLookupResult.class.getDeclaredConstructor(
 						PairStatusLookupState.class, int.class);
@@ -652,7 +1033,7 @@ public class StageResultAttributionTest {
 	}
 
 	/** One registered Local monitor, polled as many times as a test needs. */
-	private static final class Local {
+	private final class Local {
 		final LocalJobMonitor monitor = new LocalJobMonitor();
 		final Object state;
 		final Method process;
@@ -787,6 +1168,7 @@ public class StageResultAttributionTest {
 		final Path out;
 		final int[] stageNumbers;
 		private final StringBuilder body = new StringBuilder();
+		private final Map<Integer, String> varFiles = new java.util.HashMap<>();
 		private int generation;
 
 		Pair(int... stageNumbers) throws Exception {
@@ -818,6 +1200,7 @@ public class StageResultAttributionTest {
 			b.append("export STAREXEC_OUTPUT_DIR='").append(out).append("'\n");
 			b.append("export CONTAINER_MODE=true\n");
 			b.append("export PAIR_ID=").append(PAIR).append('\n');
+			b.append("export STAREXEC_NODE_NAME=node-7\n");
 			b.append("export SHARED_DIR='").append(dir).append("/shared'\n");
 			b.append("export WORKING_DIR_BASE='").append(dir).append("/work'\n");
 			b.append("export BENCH_PATH=\"$(printf '/bench/primary.p' | base64 -w0)\"\n");
@@ -856,17 +1239,31 @@ public class StageResultAttributionTest {
 			body.append("POST_PROCESSOR_PATH='")
 					.append(postProcessorOutput == null ? "" : postProcessor(number, postProcessorOutput, 0))
 					.append("'\n");
-			// jobscript:557.
-			body.append("copyOutput ").append(number).append(" 1 1 \"$RUNSOLVER\"\n");
+			// jobscript:557. Stdout is saved (2), so it is what the stage is charged for.
+			body.append("copyOutput ").append(number).append(" 2 1 \"$RUNSOLVER\"\n");
 			body.append("cd \"$WORKING_DIR\"\n");
 			return this;
+		}
+
+		/** A stage whose var file came back empty: jobscript:530-534. */
+		void stageWithoutCopyOutput(int number) throws Exception {
+			beginStage(number);
+			body.append(": > \"$VARFILE\"\n");
+			body.append("copyOutputNoStats ").append(number).append(" 2 1 \"$RUNSOLVER\"\n");
+			body.append("markRunscriptError ").append(number).append('\n');
+			body.append("exit 0\n");
+		}
+
+		/** Replaces the default var file runsolver leaves for {@code stage}. */
+		void varFile(int stage, String content) {
+			varFiles.put(stage, content);
 		}
 
 		/** A stage whose post-processor prints {@code partial} and then fails. */
 		void failingStage(int number, String partial) throws Exception {
 			beginStage(number);
 			body.append("POST_PROCESSOR_PATH='").append(postProcessor(number, partial, 3)).append("'\n");
-			body.append("copyOutput ").append(number).append(" 1 1 \"$RUNSOLVER\"\n");
+			body.append("copyOutput ").append(number).append(" 2 1 \"$RUNSOLVER\"\n");
 		}
 
 		/** The success branch at jobscript:620-626, then the cleanForNextStage at :647. */
@@ -889,16 +1286,39 @@ public class StageResultAttributionTest {
 			deleteTree(out.resolve("stage-attributes"));
 		}
 
+		/** Leaves only what a helper predating per-stage measurements would have written. */
+		void asOlderStatsHelper() throws Exception {
+			deleteTree(out.resolve("stage-stats"));
+		}
+
+		/** Removes one field from stats.json, as a helper that never wrote it would leave it. */
+		void dropStatsField(String field) throws Exception {
+			Path stats = out.resolve("stats.json");
+			StringBuilder kept = new StringBuilder();
+			for (String line : Files.readAllLines(stats)) {
+				if (!line.contains("\"" + field + "\"")) {
+					kept.append(line).append('\n');
+				}
+			}
+			Files.writeString(stats, kept.toString());
+		}
+
 		private void beginStage(int number) throws Exception {
 			int index = Arrays.stream(stageNumbers).boxed().toList().indexOf(number);
 			body.append("STAGE_INDEX=").append(index).append('\n');
 			body.append("CURRENT_STAGE_NUMBER=").append(number).append('\n');
 			body.append("mkdir -p \"$OUT_DIR/output_files\" \"$(dirname \"$LOCAL_BENCH_PATH\")\"\n");
 			body.append("printf 'fof(a, conjecture, $true).\\n' > \"$LOCAL_BENCH_PATH\"\n");
-			body.append("printf '# SZS status Done\\n' > \"$STDOUT_FILE\"\n");
-			body.append("printf 'WCTIME=1.5\\nCPUTIME=1.25\\nUSERTIME=1\\nSYSTEMTIME=0\\nMAXVM=1\\n"
-					+ "TIMEOUT=false\\nMEMOUT=false\\n' > \"$VARFILE\"\n");
-			body.append("printf 'Child status: 0\\n' > \"$WATCHFILE\"\n");
+			// Distinct per stage and per attempt, so a measurement filed under the wrong stage
+			// cannot pass for the right one; see measured(). Stdout is v*100 bytes: the disk.
+			int v = number + 10 * generation;
+			body.append("printf '%0*d' ").append(v * 100).append(" 0 > \"$STDOUT_FILE\"\n");
+			String var = varFiles.getOrDefault(number, "WCTIME=" + v + ".5\nCPUTIME=" + v + ".25\n"
+					+ "USERTIME=" + v + "\nSYSTEMTIME=0\nMAXVM=" + (v * 1000) + "\n"
+					+ "TIMEOUT=false\nMEMOUT=false\n");
+			body.append("cat > \"$VARFILE\" <<'VAR'\n").append(var).append("VAR\n");
+			body.append("printf 'Child status: 0\\nmaximum resident set size= ").append(v * 10)
+					.append("\\n' > \"$WATCHFILE\"\n");
 			body.append("POST_PROCESSOR_TIME_LIMIT=1\n");
 		}
 

@@ -267,6 +267,7 @@ Jobs write results to mounted volumes:
 | `watcher.out`    | Runsolver output      |
 | `stage-status/<n>.json`   | Stage `n`'s latest status    |
 | `stage-attributes/<n>.txt` | Stage `n`'s post-processor output |
+| `stage-stats/<n>.json`    | Stage `n`'s runtime statistics    |
 
 `stats.json` and `attributes.txt` hold one stage at a time: each stage of a multi-stage
 pair replaces them. The job script writes them to a temporary file and renames it, so a
@@ -293,6 +294,29 @@ neither directory, so the job script itself removes any `*.txt` and `*.txt.tmp` 
 `stage-attributes/` when the pair starts, keeping the directory as the marker. If one cannot
 be removed, the pair fails with a pair-level `ERROR_RUNSCRIPT` before any stage runs.
 `stage-status/` is still not cleared on Podman.
+
+Runtime statistics follow the same protocol. Each stage's `stats.json` is also published as
+`stage-stats/<n>.json`, and `stage-stats/` is created when the pair starts. It is a separate
+marker, because a job script can publish per-stage attributes without per-stage statistics.
+
+- **Present:** statistics are recorded per stage from `stage-stats/<n>.json` only, under the
+  same finished-stage and membership rules. A file is used only if it names this pair and this
+  stage and carries every measurement as a non-negative number. Zero is a valid measurement:
+  runsolver reports `MAXVM=0` for a run shorter than its first 0.1 s sample. A finished stage
+  with no usable file, for example one whose var file was missing, gets no statistics, never
+  another stage's.
+- **Absent:** `stats.json` is recorded only if it explicitly names this pair and a finished
+  stage the pair has, and it is recorded under that stage. Earlier stages are lost, as they
+  were before this protocol.
+
+Each stage is charged its own saved output against the user's disk quota, as on Grid Engine.
+Container backends used to charge only the final stage's output, so multi-stage jobs now
+count more against the quota. Recording the same stage again charges only the difference.
+
+The job script clears `stage-stats/` at pair start the same way it clears
+`stage-attributes/`, and LocalBackend and KubernetesNativeBackend delete it before a rerun. A
+stage whose statistics cannot be published fails with `ERROR_GENERAL`, as one whose attributes
+cannot be published does.
 
 These writes live in `functions.bash`. `docker/entrypoint.sh` copies that helper into
 `/app/data/sge_scripts/` only when no copy exists yet, so upgrading the image does not

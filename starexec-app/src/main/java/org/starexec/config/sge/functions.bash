@@ -45,6 +45,7 @@ CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
 CONTAINER_STAGE_STATUS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-status"
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
 CONTAINER_STAGE_ATTRS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-attributes"
+CONTAINER_STAGE_STATS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-stats"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
 
 # Write status update for container mode
@@ -139,62 +140,78 @@ function containerWriteStats {
 }
 EOF
 	mv -f "$CONTAINER_STATS_FILE.tmp" "$CONTAINER_STATS_FILE"
+	containerWriteStageStats "$STAGE" "$CONTAINER_STATS_FILE"
 	log "Container mode: wrote stats for stage $STAGE"
 }
 
 # Declares that this pair publishes its attributes per stage (see containerWriteStageAttributes).
+function containerDeclareStageAttributes {
+	containerDeclareStageDirectory "$CONTAINER_STAGE_ATTRS_DIR" txt
+}
+
+# Declares that this pair publishes its measurements per stage (see containerWriteStageStats).
+# A marker of its own, not stage-attributes/: a helper can speak one protocol and not the other.
+function containerDeclareStageStats {
+	containerDeclareStageDirectory "$CONTAINER_STAGE_STATS_DIR" json
+}
+
+# Creates a per-stage directory, empty of any previous attempt's files.
 #
 # Called once, when the pair starts and before any stage runs, because the monitors read the
 # directory's existence as the protocol marker: present, they use only the per-stage files and
-# never the pair-wide attributes.txt; absent, the pair came from a helper that predates them.
-# A marker created only when the first stage published would leave a window in which a pair
-# polled mid-stage-1 looked like the old protocol. Created here, in the same file as the writer,
-# so a deployment can never ship one without the other.
+# never the pair-wide file; absent, the pair came from a helper that predates them. A marker
+# created only when the first stage published would leave a window in which a pair polled
+# mid-stage-1 looked like the old protocol. Created here, in the same file as the writer, so a
+# deployment can never ship one without the other.
 #
 # Also where a previous attempt's files are removed. A rerun runs in the same output directory,
 # and PodmanBackend clears nothing there first, so a rerun whose stage N ended without publishing
-# (its post-processor failed, say) left the monitor to read the replaced attempt's N.txt and file
-# it against a stage that failed. LocalBackend and KubernetesNativeBackend already remove the
-# directory before submitting, so on those this finds nothing to do. The directory itself stays:
-# it is the marker.
+# (its post-processor failed, say) left the monitor to read the replaced attempt's file for N and
+# record it against a stage that failed. LocalBackend and KubernetesNativeBackend already remove
+# the directory before submitting, so on those this finds nothing to do. The directory itself
+# stays: it is the marker.
 #
 # Creating the marker is not fatal: without it the monitor falls back to the legacy rules, which
-# never attribute a multi-stage pair's file to a guessed stage, and containerWriteStageAttributes
-# creates the directory again -- failing the pair if it still cannot. Failing to clear is: a
-# surviving file is the wrong attribution being removed, and LocalBackend and
-# KubernetesNativeBackend refuse to start an attempt over one for the same reason. It is reported
-# the way initSandbox reports a workspace it could not empty, at the pair level: no stage has run,
-# and a stage-level failure would have the monitor read that stage's surviving file.
-function containerDeclareStageAttributes {
+# never record a pair-wide file against a guessed stage, and the stage writer creates the
+# directory again -- failing the pair if it still cannot. Failing to clear is: a surviving file is
+# the wrong attribution being removed, and LocalBackend and KubernetesNativeBackend refuse to start
+# an attempt over one for the same reason. It is reported the way initSandbox reports a workspace
+# it could not empty, at the pair level: no stage has run, and a stage-level failure would have
+# the monitor read that stage's surviving file.
+# $1 the directory
+# $2 the extension of the files it holds
+function containerDeclareStageDirectory {
+	local DIR=$1
+	local EXTENSION=$2
 	# A link where the marker belongs is removed, never followed: clearing through it would
 	# delete files outside this pair's output.
-	if [ -L "$CONTAINER_STAGE_ATTRS_DIR" ]; then
-		if ! rm -f "$CONTAINER_STAGE_ATTRS_DIR"; then
-			containerFailStageAttributesClear "could not remove the link at $CONTAINER_STAGE_ATTRS_DIR"
+	if [ -L "$DIR" ]; then
+		if ! rm -f "$DIR"; then
+			containerFailStageClear "could not remove the link at $DIR"
 		fi
 	fi
-	if ! mkdir -p "$CONTAINER_STAGE_ATTRS_DIR"; then
-		log "warning: could not create $CONTAINER_STAGE_ATTRS_DIR when the pair started"
+	if ! mkdir -p "$DIR"; then
+		log "warning: could not create $DIR when the pair started"
 		return 0
 	fi
 	local STALE
-	for STALE in "$CONTAINER_STAGE_ATTRS_DIR"/*.txt "$CONTAINER_STAGE_ATTRS_DIR"/*.txt.tmp; do
+	for STALE in "$DIR"/*."$EXTENSION" "$DIR"/*."$EXTENSION".tmp; do
 		# An unmatched pattern stays literal; -L also catches a dangling link, which -e does not.
 		if [ -e "$STALE" ] || [ -L "$STALE" ]; then
 			# The result is not trusted: whether anything survived is checked next.
 			rm -rf -- "$STALE" || true
 		fi
 	done
-	for STALE in "$CONTAINER_STAGE_ATTRS_DIR"/*.txt "$CONTAINER_STAGE_ATTRS_DIR"/*.txt.tmp; do
+	for STALE in "$DIR"/*."$EXTENSION" "$DIR"/*."$EXTENSION".tmp; do
 		if [ -e "$STALE" ] || [ -L "$STALE" ]; then
-			containerFailStageAttributesClear "a previous attempt's $STALE could not be removed"
+			containerFailStageClear "a previous attempt's $STALE could not be removed"
 		fi
 	done
 }
 
-# Fails the pair when the start of an attempt cannot be made clean of a previous one's attributes.
+# Fails the pair when the start of an attempt cannot be made clean of a previous one's files.
 # $1 what could not be done
-function containerFailStageAttributesClear {
+function containerFailStageClear {
 	log "job error: $1"
 	STATUS_SENT=true
 	sendStatus $ERROR_RUNSCRIPT
@@ -228,6 +245,35 @@ function containerWriteStageAttributes {
 			&& cp "$SOURCE" "$TARGET.tmp" \
 			&& mv -f "$TARGET.tmp" "$TARGET"; }; then
 		log "job error: could not record the attributes of stage $STAGE_NUMBER at $TARGET"
+		STATUS_SENT=true
+		sendStatus "$ERROR_GENERAL" "$STAGE_NUMBER"
+		exit 1
+	fi
+}
+
+# Publishes one stage's measurements as stage-stats/<n>.json.
+#
+# stats.json beside it holds only the latest stage, so the monitors kept a multi-stage pair's final
+# stage alone, and gave a final stage that never reached copyOutput the previous stage's numbers.
+# This copy is the same bytes, named for the stage that produced them.
+#
+# Written beside the target and renamed, and tested as a condition, as containerWriteStageAttributes
+# is. Fatal for the same reason: with the marker present the monitors read nothing else, so a
+# failure that only warned would be the silent loss of the stage's measurements.
+# $1 the stage number
+# $2 the stats file to publish
+function containerWriteStageStats {
+	local STAGE_NUMBER=$1
+	local SOURCE=$2
+	if [[ ! "$STAGE_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]; then
+		log "job error: not recording measurements for invalid stage number '$STAGE_NUMBER'"
+		return 0
+	fi
+	local TARGET="$CONTAINER_STAGE_STATS_DIR/$STAGE_NUMBER.json"
+	if ! { mkdir -p "$CONTAINER_STAGE_STATS_DIR" \
+			&& cp "$SOURCE" "$TARGET.tmp" \
+			&& mv -f "$TARGET.tmp" "$TARGET"; }; then
+		log "job error: could not record the measurements of stage $STAGE_NUMBER at $TARGET"
 		STATUS_SENT=true
 		sendStatus "$ERROR_GENERAL" "$STAGE_NUMBER"
 		exit 1
@@ -1047,6 +1093,7 @@ function sendNode {
 	log "sending Node Id $NODE to $REPORT_HOST in sandbox $SANDBOX"
 	if isContainerMode; then
 		containerDeclareStageAttributes
+		containerDeclareStageStats
 	fi
 	sendStatus $STATUS_RUNNING
 	sendStageStatus $STATUS_RUNNING ${STAGE_NUMBERS[STAGE_INDEX]}
