@@ -110,7 +110,7 @@ public class CreateJob extends HttpServlet {
 		Solver s = Solvers.get(solverId);
 		DefaultSettings settings = Settings.getProfileById(settingsId);
 		int preProcessorId = ((settings.getPreProcessorId() == null) ? -1 : settings.getPreProcessorId());
-		int postProcessorId = ((settings.getPostProcessorId() == null) ? -1 : settings.getPreProcessorId());
+		int postProcessorId = ((settings.getPostProcessorId() == null) ? -1 : settings.getPostProcessorId());
 		Job j = JobManager
 				.setupJob(userId, s.getName(), "test job for new solver " + s.getName() + " " + "(" + s.getId() + ")",
 						  preProcessorId, postProcessorId, Queues.getTestQueue(), 0, settings.getCpuTimeout(),
