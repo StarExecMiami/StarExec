@@ -110,7 +110,7 @@ public class CreateJob extends HttpServlet {
 		Solver s = Solvers.get(solverId);
 		DefaultSettings settings = Settings.getProfileById(settingsId);
 		int preProcessorId = ((settings.getPreProcessorId() == null) ? -1 : settings.getPreProcessorId());
-		int postProcessorId = ((settings.getPostProcessorId() == null) ? -1 : settings.getPreProcessorId());
+		int postProcessorId = ((settings.getPostProcessorId() == null) ? -1 : settings.getPostProcessorId());
 		// A queue that is scheduled, or no job at all: one on an inactive queue never runs (#204).
 		int queueId = Queues.getQueueForSystemJob(userId);
 		if (queueId < 0) {
