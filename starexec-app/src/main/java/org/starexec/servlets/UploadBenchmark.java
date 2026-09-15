@@ -524,10 +524,9 @@ public class UploadBenchmark extends HttpServlet {
 		PartWrapper tempFileToUpload = null;
 		if (localOrUrlOrGit.equals("URL")) {
 			tempURL = new URI((String) form.get(FILE_URL)).toURL();
-			try {
-				tempName = tempURL.toString().substring(tempURL.toString().lastIndexOf('/'));
-			} catch (Exception e) {
-				tempName = tempURL.toString().replace('/', '-');
+			tempName = Util.archiveNameFromUrl(tempURL);
+			if (tempName == null) {
+				throw new IllegalArgumentException(Util.ARCHIVE_NAME_REQUIRED);
 			}
 		} else {
 			tempFileToUpload = ((PartWrapper) form.get(BENCHMARK_FILE));

@@ -245,10 +245,9 @@ public class UploadSolver extends HttpServlet {
 					return new UploadSolverResult(UploadSolverStatus.CANNOT_ACCESS_FILE, -1, false, false);
 				}
 
-				try {
-					name = url.toString().substring(url.toString().lastIndexOf('/'));
-				} catch (Exception e) {
-					name = url.toString().replace('/', '-');
+				name = Util.archiveNameFromUrl(url);
+				if (name == null) {
+					return new UploadSolverResult(UploadSolverStatus.CANNOT_ACCESS_FILE, -1, false, false);
 				}
 			}
 
@@ -502,6 +501,10 @@ public class UploadSolver extends HttpServlet {
 				fileName = (String) form.get(UploadSolver.FILE_URL);
 				if (!Util.isDownloadableUrl(fileName)) {
 					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
+				fileName = Util.archiveNameFromUrl(fileName);
+				if (fileName == null) {
+					return new ValidatorStatusCode(false, Util.ARCHIVE_NAME_REQUIRED);
 				}
 			}
 			if (!Validator.isValidArchiveType(fileName)) {

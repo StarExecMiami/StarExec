@@ -146,6 +146,7 @@ final class ArchiveUrlDownloader {
 		final String methodName = "download";
 		long started = System.nanoTime();
 		try {
+			Path target = fileInItsDirectory(destination);
 			URL current = url;
 			for (int redirects = 0; ; redirects++) {
 				checkDestination(current, policy);
@@ -179,7 +180,7 @@ final class ArchiveUrlDownloader {
 						closeErrorStream(connection);
 						throw new Refused("download answered HTTP " + status);
 					}
-					copyBounded(connection, destination, policy, started);
+					copyBounded(connection, target, policy, started);
 					return true;
 				} catch (IOException e) {
 					if (pastDeadline.get()) {
@@ -276,14 +277,31 @@ final class ArchiveUrlDownloader {
 		}
 	}
 
-	/** Copies the response body to the destination within the policy's size and time limits. */
-	private static void copyBounded(HttpURLConnection connection, File destination, Policy policy, long started)
+	/**
+	 * The destination as a normalized path, refused unless it names a file directly inside its
+	 * directory: not ".", "..", or anything that normalizes elsewhere.
+	 */
+	private static Path fileInItsDirectory(File destination) throws Refused {
+		File parent = destination.getAbsoluteFile().getParentFile();
+		String name = destination.getName();
+		if (parent == null || name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+			throw new Refused("the download destination is not a file name");
+		}
+		Path directory = parent.toPath().normalize();
+		Path target = directory.resolve(name).normalize();
+		if (!target.startsWith(directory) || !directory.equals(target.getParent())) {
+			throw new Refused("the download destination is not a file in its directory");
+		}
+		return target;
+	}
+
+	/** Copies the response body to the target within the policy's size and time limits. */
+	private static void copyBounded(HttpURLConnection connection, Path target, Policy policy, long started)
 			throws IOException, Refused {
 		long declared = connection.getContentLengthLong();
 		if (declared > policy.maxBytes) {
 			throw new Refused("download declares " + declared + " bytes, over the limit of " + policy.maxBytes);
 		}
-		Path target = destination.getAbsoluteFile().toPath();
 		Path directory = target.getParent();
 		Files.createDirectories(directory);
 		Path partial = Files.createTempFile(directory, "." + target.getFileName() + ".", ".part");

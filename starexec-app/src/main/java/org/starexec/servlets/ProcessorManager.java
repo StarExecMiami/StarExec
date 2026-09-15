@@ -230,12 +230,9 @@ public class ProcessorManager extends HttpServlet {
 				processorFile.write(archiveFile);
 			} else {
 				processorUrl = URI.create((String) form.get(PROCESSOR_URL)).toURL();
-				String name;
-				try {
-					name = processorUrl.toString().substring(processorUrl.toString().lastIndexOf('/'));
-				} catch (Exception e) {
-					// if something goes wrong just make the name directory-friendly and continue.
-					name = processorUrl.toString().replace('/', '-');
+				String name = Util.archiveNameFromUrl(processorUrl);
+				if (name == null) {
+					throw new StarExecException(Util.ARCHIVE_NAME_REQUIRED);
 				}
 				archiveFile = new File(uniqueDir, name);
 				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile, MAX_ARCHIVE_BYTES)) {
@@ -344,6 +341,10 @@ public class ProcessorManager extends HttpServlet {
 				fileName = (String) form.get(PROCESSOR_URL);
 				if (!Util.isDownloadableUrl(fileName)) {
 					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
+				fileName = Util.archiveNameFromUrl(fileName);
+				if (fileName == null) {
+					return new ValidatorStatusCode(false, Util.ARCHIVE_NAME_REQUIRED);
 				}
 			}
 

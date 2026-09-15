@@ -36,6 +36,7 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.Part;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.LineIterator;
 import org.apache.commons.io.filefilter.FileFilterUtils;
 import org.apache.commons.io.filefilter.IOFileFilter;
@@ -1960,6 +1961,53 @@ public class Util {
             archiveFile,
             ArchiveUrlDownloader.Policy.standard(maxBytes)
         );
+    }
+
+    /** Why an archive URL that names no archive file is refused; shown to the user. */
+    public static final String ARCHIVE_NAME_REQUIRED =
+        "Archive URLs must end in an archive file name, such as solver.zip";
+
+    /**
+     * The file name an archive fetched from a URL is saved under: the last
+     * segment of the URL's path, as written, so percent-escapes stay literal.
+     * The query and fragment are never part of it.
+     *
+     * @param url the archive URL, may be null
+     * @return the name, or null when the path ends in a directory, "." or "..",
+     *     or the segment is not a plain file name
+     */
+    public static String archiveNameFromUrl(URL url) {
+        if (url == null) {
+            return null;
+        }
+        String path = url.getPath();
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+            return null;
+        }
+        try {
+            return name.equals(FilenameUtils.getName(name)) ? name : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * The file name for an archive URL a user submitted.
+     *
+     * @param url the URL as submitted, may be null
+     * @return the name, or null when the URL does not parse or names no archive
+     * @see #archiveNameFromUrl(URL)
+     */
+    public static String archiveNameFromUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        try {
+            return archiveNameFromUrl(URI.create(url).toURL());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Why a user-supplied archive URL is refused; shown to the user. */
