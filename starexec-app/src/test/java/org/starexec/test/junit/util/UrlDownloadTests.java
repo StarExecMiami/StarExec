@@ -4,7 +4,6 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.starexec.constants.R;
 import org.starexec.util.Util;
 
 import java.io.File;
@@ -16,17 +15,17 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
 /**
  * {@code Util.copyFileFromURLUsingProxy} downloads an archive a user names by URL for a solver or
- * processor upload. Only http and https URLs are downloaded, over a direct connection: StarExec's
- * own public address is not an outbound proxy.
+ * processor upload. Only http and https URLs to public destinations are downloaded; the policy
+ * itself is exercised against loopback servers in {@code org.starexec.util.ArchiveUrlDownloaderTests}.
  */
 public class UrlDownloadTests {
 
@@ -73,50 +72,43 @@ public class UrlDownloadTests {
 	}
 
 	@Test
-	public void anHttpUrlIsDownloadedDirectly() throws Exception {
+	public void anFtpUrlIsNotCopied() throws Exception {
+		URL url = URI.create("ftp://127.0.0.1:9/solver.zip").toURL();
+
+		assertFalse("an ftp: URL is refused", Util.copyFileFromURLUsingProxy(url, destination));
+		assertFalse("nothing is written", destination.exists());
+	}
+
+	/** Local destinations are refused whether they are named or written as an address. */
+	@Test
+	public void aServerOnLoopbackIsNotContacted() throws Exception {
+		AtomicInteger requests = new AtomicInteger();
 		byte[] served = Files.readAllBytes(archive);
-		startServer();
+		server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
 		server.createContext("/solver.zip", exchange -> {
+			requests.incrementAndGet();
 			exchange.sendResponseHeaders(200, served.length);
 			try (OutputStream body = exchange.getResponseBody()) {
 				body.write(served);
 			}
 		});
+		server.start();
+		int port = server.getAddress().getPort();
 
-		assertTrue("downloaded directly, not through " + R.PROXY_ADDRESS + ":" + R.PROXY_PORT,
-				Util.copyFileFromURLUsingProxy(serverUrl("/solver.zip"), destination));
-		assertArrayEquals(served, Files.readAllBytes(destination.toPath()));
-	}
-
-	/** A redirect to a scheme other than http(s) is not followed, and its body is not kept. */
-	@Test
-	public void aRedirectToAnotherSchemeIsNotCopied() throws Exception {
-		startServer();
-		server.createContext("/moved.zip", exchange -> {
-			exchange.getResponseHeaders().add("Location", archive.toUri().toString());
-			exchange.sendResponseHeaders(302, -1);
-			exchange.close();
-		});
-
-		assertFalse("the redirect is not a download",
-				Util.copyFileFromURLUsingProxy(serverUrl("/moved.zip"), destination));
+		for (String host : new String[] {"localhost", "127.0.0.1", "[::ffff:127.0.0.1]"}) {
+			URL url = URI.create("http://" + host + ":" + port + "/solver.zip").toURL();
+			assertFalse(host + " is refused", Util.copyFileFromURLUsingProxy(url, destination));
+		}
+		assertEquals("the server is never contacted", 0, requests.get());
 		assertFalse("nothing is written", destination.exists());
 	}
 
-	private void startServer() throws Exception {
-		server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
-		server.start();
-	}
-
-	private URL serverUrl(String path) throws Exception {
-		return URI.create("http://127.0.0.1:" + server.getAddress().getPort() + path).toURL();
-	}
-
+	@SuppressWarnings("deprecation")
 	@Test
-	public void anFtpUrlIsNotCopied() throws Exception {
-		URL url = URI.create("ftp://127.0.0.1:9/solver.zip").toURL();
+	public void aUrlWithoutAHostIsNotCopied() throws Exception {
+		URL url = new URL("http:///solver.zip");
 
-		assertFalse("an ftp: URL is refused", Util.copyFileFromURLUsingProxy(url, destination));
+		assertFalse("a URL without a host is refused", Util.copyFileFromURLUsingProxy(url, destination));
 		assertFalse("nothing is written", destination.exists());
 	}
 }
