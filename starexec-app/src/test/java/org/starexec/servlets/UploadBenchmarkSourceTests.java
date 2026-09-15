@@ -41,6 +41,9 @@ public class UploadBenchmarkSourceTests {
 			"Uploading benchmarks from a URL or a Git repository is not supported;"
 					+ " upload a .zip, .tar or .tgz archive";
 
+	private static final String NO_SOURCE =
+			"Please select a file source (a local .zip, .tar or .tgz archive)";
+
 	/** The request validator's patterns are compiled at application startup. */
 	@BeforeClass
 	public static void compileValidatorPatterns() {
@@ -69,6 +72,14 @@ public class UploadBenchmarkSourceTests {
 		assertRefused(form);
 	}
 
+	/** A form without a source is pointed at the one source accepted, not at URL or Git. */
+	@Test
+	public void aMissingSourceAsksForALocalArchiveOnly() throws Exception {
+		HashMap<String, Object> form = form("local");
+		form.remove("localOrURLOrGit");
+		assertRefused(form, NO_SOURCE);
+	}
+
 	private static HashMap<String, Object> form(String source) {
 		HashMap<String, Object> form = new HashMap<>();
 		form.put("benchType", "1");
@@ -80,6 +91,10 @@ public class UploadBenchmarkSourceTests {
 	}
 
 	private static void assertRefused(HashMap<String, Object> form) throws Exception {
+		assertRefused(form, REFUSAL);
+	}
+
+	private static void assertRefused(HashMap<String, Object> form, String message) throws Exception {
 		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
 		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
 
@@ -95,7 +110,7 @@ public class UploadBenchmarkSourceTests {
 
 			new UploadBenchmark().doPost(request, response);
 
-			Mockito.verify(response).sendError(HttpServletResponse.SC_BAD_REQUEST, REFUSAL);
+			Mockito.verify(response).sendError(HttpServletResponse.SC_BAD_REQUEST, message);
 			Mockito.verify(response, Mockito.never())
 					.sendError(Mockito.eq(HttpServletResponse.SC_INTERNAL_SERVER_ERROR), Mockito.anyString());
 			ArgumentCaptor<Cookie> cookie = ArgumentCaptor.forClass(Cookie.class);
