@@ -1167,6 +1167,37 @@ public class Queues {
 	}
 
 	/**
+	 * The queue for a job StarExec creates on a user's behalf: a new solver's test job, or the job
+	 * that builds it.
+	 *
+	 * <p>The configured test queue when that user can use it, otherwise the lowest-numbered queue
+	 * they can use. "Can use" is {@link #getUserQueues(int)}: ACTIVE, and global or given to a
+	 * community the user leads (every ACTIVE queue for an admin). {@code JobManager.checkPendingJobs}
+	 * schedules only ACTIVE queues, so a job placed anywhere else stays pending forever (#204). This
+	 * neither activates a queue nor changes the configured test queue.
+	 *
+	 * @param userId the user who will own the job
+	 * @return the queue's id, or -1 when the user can use no queue
+	 */
+	public static int getQueueForSystemJob(int userId) {
+		List<Queue> usable = getUserQueues(userId);
+		if (usable == null || usable.isEmpty()) {
+			return -1;
+		}
+		int testQueue = getTestQueue();
+		int lowest = -1;
+		for (Queue q : usable) {
+			if (q.getId() == testQueue) {
+				return testQueue;
+			}
+			if (lowest < 0 || q.getId() < lowest) {
+				lowest = q.getId();
+			}
+		}
+		return lowest;
+	}
+
+	/**
 	 * Gives one or more communities access to a queue
 	 *
 	 * @param community_ids The IDs of the communities to give access to
