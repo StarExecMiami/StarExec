@@ -1501,14 +1501,27 @@ public class PodmanBackend implements Backend {
         } catch (Exception e) {
             // Check for transient errors in exception chain (message or cause)
             boolean isTransient = isTransientConnectionError(e);
+            // The message and cause chain, not just the class: a bare "RuntimeException" cannot
+            // be diagnosed (#208). No stack trace, and the container's environment values are
+            // redacted from the messages.
             log.warn(
-                "Container creation failed. Transient error: " +
-                    isTransient +
-                    ", Exception: " +
-                    e.getClass().getName()
+                "Java client failed to create container " + jobName +
+                    " (transient: " + isTransient + "): " +
+                    describeCauseChain(e, envVars)
             );
 
             if (isTransient) {
+                // The client call can fail after the engine has created the container. A second
+                // create under the same name would then be refused, or duplicate it, so look for
+                // the one this call made before falling back (#208).
+                containerId = findCreatedContainer(jobName, execId);
+            }
+            if (isTransient && containerId != null) {
+                log.warn(
+                    "Reusing container " + containerId + " (" + jobName +
+                        "), which the engine created before the Java client call failed"
+                );
+            } else if (isTransient) {
                 log.warn(
                     "Java client failed with transient error, falling back to curl..."
                 );
@@ -1900,6 +1913,95 @@ public class PodmanBackend implements Backend {
             .replace("\n", "\\n")
             .replace("\r", "\\r")
             .replace("\t", "\\t");
+    }
+
+    /**
+     * The container this submission's create made, if the engine made it: named exactly
+     * {@code jobName} and labelled with this execution. The engine's name filter matches
+     * substrings, so both are checked here.
+     *
+     * @return its id, or null when there is none or the lookup itself failed, in which case the
+     *         caller creates it as before and the engine refuses a duplicate name
+     */
+    private String findCreatedContainer(String jobName, int execId) {
+        try {
+            List<Container> matches = dockerClient
+                .listContainersCmd()
+                .withShowAll(true)
+                .withNameFilter(Collections.singletonList(jobName))
+                .exec();
+            for (Container candidate : matches) {
+                String[] names = candidate.getNames();
+                Map<String, String> candidateLabels = candidate.getLabels();
+                boolean exactName = names != null && Arrays.asList(names).contains("/" + jobName);
+                boolean thisExecution = candidateLabels != null
+                    && String.valueOf(execId).equals(candidateLabels.get(LABEL_EXEC_ID));
+                if (exactName && thisExecution) {
+                    return candidate.getId();
+                }
+            }
+        } catch (Exception lookupFailure) {
+            log.warn(
+                "Could not check whether container " + jobName + " was created: " +
+                    describeCauseChain(lookupFailure, Collections.emptyList())
+            );
+        }
+        return null;
+    }
+
+    /** How many links of a cause chain are logged. */
+    private static final int MAX_CAUSE_LINKS = 10;
+
+    /** How much of each exception message is logged. */
+    private static final int MAX_CAUSE_MESSAGE_CHARS = 500;
+
+    /**
+     * "Class: message <- Class: message ...", outermost first, for a log line.
+     *
+     * <p>Values of environment variables are redacted from the messages: any {@code KEY=VALUE}
+     * whose key starts with {@code STAREXEC_} or is set in {@code env}. The chain stops at a cycle
+     * or after {@link #MAX_CAUSE_LINKS} links.
+     */
+    static String describeCauseChain(Throwable failure, List<String> env) {
+        java.util.Set<String> keys = new java.util.LinkedHashSet<>();
+        for (String entry : env) {
+            int eq = entry.indexOf('=');
+            if (eq > 0) {
+                keys.add(entry.substring(0, eq));
+            }
+        }
+        StringBuilder alternatives = new StringBuilder("STAREXEC_[A-Za-z0-9_]*");
+        for (String key : keys) {
+            alternatives.append('|').append(java.util.regex.Pattern.quote(key));
+        }
+        java.util.regex.Pattern assignment = java.util.regex.Pattern.compile(
+            "\\b(" + alternatives + ")=[^\\s,;\"'\\]\\)}]*"
+        );
+
+        StringBuilder chain = new StringBuilder();
+        java.util.Set<Throwable> seen =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Throwable current = failure;
+        int links = 0;
+        while (current != null && seen.add(current) && links < MAX_CAUSE_LINKS) {
+            if (links > 0) {
+                chain.append(" <- ");
+            }
+            chain.append(current.getClass().getName());
+            String message = current.getMessage();
+            if (message != null) {
+                if (message.length() > MAX_CAUSE_MESSAGE_CHARS) {
+                    message = message.substring(0, MAX_CAUSE_MESSAGE_CHARS) + "...";
+                }
+                chain.append(": ").append(assignment.matcher(message).replaceAll("$1=<redacted>"));
+            }
+            current = current.getCause();
+            links++;
+        }
+        if (current != null && links >= MAX_CAUSE_LINKS) {
+            chain.append(" <- ...");
+        }
+        return chain.toString();
     }
 
     /**
