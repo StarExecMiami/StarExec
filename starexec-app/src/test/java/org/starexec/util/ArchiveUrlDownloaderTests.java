@@ -5,6 +5,8 @@ import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.util.ArchiveUrlDownloader.Policy;
 
 import java.io.File;
@@ -202,6 +204,35 @@ public class ArchiveUrlDownloaderTests {
 		assertEquals(5L * 1024 * 1024 * 1024, standard.maxBytes);
 		assertEquals(30L * 60 * 1000, standard.deadlineMillis);
 		assertEquals(60_000, standard.readTimeoutMillis);
+	}
+
+	/** A caller with a smaller upload limit passes it; everything else stays the standard policy. */
+	@Test
+	public void aCallerMayLowerTheSizeCap() {
+		Policy standard = Policy.standard();
+		Policy capped = Policy.standard(1024);
+
+		assertEquals(1024, capped.maxBytes);
+		assertEquals(standard.allowPrivateNetworks, capped.allowPrivateNetworks);
+		assertEquals(standard.allowedLoopbackAddresses, capped.allowedLoopbackAddresses);
+		assertEquals(standard.maxRedirects, capped.maxRedirects);
+		assertEquals(standard.deadlineMillis, capped.deadlineMillis);
+		assertEquals(standard.connectTimeoutMillis, capped.connectTimeoutMillis);
+		assertEquals(standard.readTimeoutMillis, capped.readTimeoutMillis);
+	}
+
+	@Test
+	public void theUtilOverloadsPassTheirSizeCap() throws Exception {
+		URL url = url("https://archives.example.org/solver.zip");
+		try (MockedStatic<ArchiveUrlDownloader> downloader = Mockito.mockStatic(ArchiveUrlDownloader.class)) {
+			Util.copyFileFromURLUsingProxy(url, destination, 1234);
+			Util.copyFileFromURLUsingProxy(url, destination);
+
+			downloader.verify(() -> ArchiveUrlDownloader.download(Mockito.eq(url), Mockito.eq(destination),
+					Mockito.argThat(policy -> policy.maxBytes == 1234)));
+			downloader.verify(() -> ArchiveUrlDownloader.download(Mockito.eq(url), Mockito.eq(destination),
+					Mockito.argThat(policy -> policy.maxBytes == ArchiveUrlDownloader.MAX_BYTES)));
+		}
 	}
 
 	@Test
