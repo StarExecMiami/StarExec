@@ -11,6 +11,9 @@ import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Jobs;
 import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.data.to.tuples.AttributesTableData;
+import org.starexec.data.to.tuples.TimePair;
+import org.apache.commons.lang3.tuple.Triple;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.sql.Connection;
@@ -18,7 +21,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -96,6 +101,8 @@ public class JobsRerunProtocolSqlTest extends Common {
 	private int visibilityBenchId;
 	private int visibilitySolverId;
 	private int visibilityConfigId;
+	/** The node attempt 2's measurements are recorded against; 0 when unused. */
+	private int resultsNodeId;
 
 	@Before
 	public void createFixture() throws SQLException {
@@ -157,6 +164,13 @@ public class JobsRerunProtocolSqlTest extends Common {
 				// Only makeTheFixturePairVisibleToGetPairsSimple creates these, and until now
 				// nothing removed them; each run leaked one space, benchmark, solver and
 				// configuration. Order is child-first and each delete is a no-op when unused.
+				if (resultsNodeId != 0) {
+					try (PreparedStatement ps = con.prepareStatement(
+							"DELETE FROM starexec.nodes WHERE id = ?")) {
+						ps.setInt(1, resultsNodeId);
+						ps.executeUpdate();
+					}
+				}
 				if (visibilityConfigId != 0) {
 					exec(con, "DELETE FROM starexec.configurations WHERE id = " + visibilityConfigId);
 				}
@@ -724,6 +738,326 @@ public class JobsRerunProtocolSqlTest extends Common {
 				"rerunSinglePairViaBatchFunction", JobPair.class, int.class);
 		m.setAccessible(true);
 		return (Boolean) m.invoke(null, pair, jobId);
+	}
+
+	// ------------------------------------------------------------------
+	// #183: a rerun must not keep the previous attempt's stage results
+	// ------------------------------------------------------------------
+
+	/** Attempt 1's measurements: cpu, wallclock, max_vmem, max_res_set, user, system. */
+	private static final List<Double> STAGE_1_MEASUREMENTS =
+			Arrays.asList(90.0, 100.0, 1000.0, 11.0, 80.0, 10.0);
+	private static final List<Double> STAGE_2_MEASUREMENTS =
+			Arrays.asList(40.0, 50.0, 500.0, 7.0, 30.0, 5.0);
+
+	@Test
+	public void aManualRerunClearsEveryStagesResults() throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		int attempt = attemptOf(pairId);
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+
+		assertTrue(Jobs.rerunPair(pairId));
+
+		assertResultsCleared(pairId, attempt);
+	}
+
+	@Test
+	public void anAutomaticRerunClearsEveryStagesResults() throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		int attempt = attemptOf(pairId);
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+
+		assertEquals(Jobs.RerunOutcome.COMPLETED, Jobs.rerunPairAutomatic(pairId));
+
+		assertResultsCleared(pairId, attempt);
+	}
+
+	@Test
+	public void aRerunByStatusClearsEveryStagesResults() throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		int attempt = attemptOf(pairId);
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+
+		assertTrue(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+
+		assertResultsCleared(pairId, attempt);
+	}
+
+	/**
+	 * The user-visible defect. The second attempt stops in stage 1, so it records nothing for
+	 * stage 2 -- and stage 2 must then show nothing, not the first attempt's result and
+	 * measurements. The job's attribute summaries count attempt 2 alone.
+	 */
+	@Test
+	public void aSecondAttemptThatStopsInStageOneShowsNothingOfTheFirstAttemptsStageTwo()
+			throws SQLException {
+		recordAFirstAttemptOnTwoStages(pairId);
+		makeTheFixturePairVisibleToGetPairsSimple();
+		R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+		assertTrue(Jobs.rerunPair(pairId));
+
+		// Attempt 2, through the writers the monitors use: stage 1's result and measurements,
+		// then a terminal status at stage 1 that leaves stage 2 not reached.
+		Properties stageOne = new Properties();
+		stageOne.setProperty("starexec-result", "Satisfiable");
+		assertTrue(JobPairs.addJobPairAttributes(pairId, 1, stageOne));
+		assertTrue(JobPairs.updateRunSolverStats(
+				pairId, resultsNodeName(), 300.0, 200.0, 150.0, 50.0, 4000.0, 30L, 1, 1024L));
+		assertEquals(org.starexec.data.database.PairStatusResult.APPLIED,
+				JobPairs.setPairStatusPreciseResult(pairId, 1, StatusCode.EXCEED_RUNTIME.getVal(),
+						StatusCode.STATUS_NOT_REACHED.getVal(), false));
+
+		assertEquals("stage 1 holds attempt 2's result alone",
+				"Satisfiable", attributeOf(pairId, 1, "starexec-result"));
+		assertEquals(1, attributeCount(pairId, 1));
+		assertEquals(Arrays.asList(200.0, 300.0, 4000.0, 30.0, 150.0, 50.0),
+				measurementsOf(pairId, 1));
+		assertEquals("stage 2 was not reached, so it has no attributes",
+				0, attributeCount(pairId, 2));
+		assertEquals("and no measurements",
+				Arrays.asList(null, null, null, null, null, null), measurementsOf(pairId, 2));
+
+		List<AttributesTableData> table = Jobs.getJobAttributesTable(visibilitySpaceId);
+		assertNotNull(table);
+		assertEquals("the attributes table has attempt 2's one result: " + describe(table),
+				1, table.size());
+		assertEquals("Satisfiable", table.get(0).attrValue);
+		assertEquals(Integer.valueOf(1), table.get(0).attrCount);
+		assertEquals(300.0, table.get(0).wallclockSum, 0.0);
+		assertEquals(200.0, table.get(0).cpuSum, 0.0);
+
+		List<Triple<String, Integer, TimePair>> totals =
+				Jobs.getJobAttributeTotals(visibilitySpaceId);
+		assertEquals("the attribute totals count attempt 2 alone: " + describeTotals(totals),
+				1, totals.size());
+		assertEquals("Satisfiable", totals.get(0).getLeft());
+		assertEquals(Integer.valueOf(1), totals.get(0).getMiddle());
+		assertEquals("300.0000", totals.get(0).getRight().getWallclock());
+		assertEquals("200.0000", totals.get(0).getRight().getCpu());
+	}
+
+	/**
+	 * The control. A pair the checked reset drops under the lock -- re-dispatched while the
+	 * gate ran -- keeps its results, while the pair reset in the same call is reset. Without
+	 * it, a reset that cleared every pair of the batch would pass the tests above.
+	 */
+	@Test
+	public void aPairTheResetDropsKeepsItsResults() throws SQLException {
+		final int safeExecId = 333333;
+		int safePairId = insertPair(safeExecId, StatusCode.ERROR_RUNSCRIPT.getVal());
+		recordAFirstAttemptOnTwoStages(pairId);
+		recordAFirstAttemptOnTwoStages(safePairId);
+
+		Backend backend = org.mockito.Mockito.mock(Backend.class);
+		org.mockito.Mockito
+				.when(backend.killPairConfirmed(987654))
+				.thenAnswer(invocation -> {
+					redispatch(pairId, 424242);
+					return Backend.KillOutcome.CONFIRMED_SAFE;
+				});
+		org.mockito.Mockito
+				.when(backend.killPairConfirmed(safeExecId))
+				.thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		R.BACKEND = backend;
+
+		assertFalse(Jobs.setPairsToPending(jobId, StatusCode.ERROR_RUNSCRIPT.getVal()));
+
+		assertEquals("precondition: the same call did reset the other pair",
+				StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(safePairId));
+		assertEquals("the dropped pair keeps its execution",
+				StatusCode.STATUS_RUNNING.getVal(), statusOf(pairId));
+		assertEquals("and its attributes", 2, attributeCount(pairId, 1));
+		assertEquals(2, attributeCount(pairId, 2));
+		assertEquals("and its measurements", STAGE_1_MEASUREMENTS, measurementsOf(pairId, 1));
+		assertEquals(STAGE_2_MEASUREMENTS, measurementsOf(pairId, 2));
+	}
+
+	/**
+	 * What a finished first attempt left behind on a two-stage pair: stage 2's row, both
+	 * stages' measurements and two attributes per stage.
+	 */
+	private void recordAFirstAttemptOnTwoStages(int id) throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			try (PreparedStatement ps = con.prepareStatement(
+					"INSERT INTO starexec.jobpair_stage_data" +
+							" (jobpair_id, stage_number, status_code, disk_size) VALUES (?, 2, ?, 2048)")) {
+				ps.setInt(1, id);
+				ps.setInt(2, StatusCode.STATUS_NOT_REACHED.getVal());
+				ps.executeUpdate();
+			}
+			setMeasurements(con, id, 1, STAGE_1_MEASUREMENTS);
+			setMeasurements(con, id, 2, STAGE_2_MEASUREMENTS);
+			addAttribute(con, id, 1, "starexec-result", "Theorem");
+			addAttribute(con, id, 1, "SZSStatus", "THM");
+			addAttribute(con, id, 2, "starexec-result", "Unknown");
+			addAttribute(con, id, 2, "SZSOutput", "None");
+		}
+		assertEquals("precondition: attempt 1's attributes are there", 4, attributeCount(id, 1)
+				+ attributeCount(id, 2));
+		assertEquals("precondition: and its measurements", STAGE_2_MEASUREMENTS,
+				measurementsOf(id, 2));
+	}
+
+	/** A concurrent actor re-dispatching the pair onto a new execution. */
+	private static void redispatch(int id, int execId) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.job_pairs SET sge_id = ?, status_code = ? WHERE id = ?")) {
+			ps.setInt(1, execId);
+			ps.setInt(2, StatusCode.STATUS_RUNNING.getVal());
+			ps.setInt(3, id);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	private static void setMeasurements(Connection con, int id, int stage, List<Double> m)
+			throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"UPDATE starexec.jobpair_stage_data SET cpu = ?, wallclock = ?, max_vmem = ?," +
+						" max_res_set = ?, user_time = ?, system_time = ?" +
+						" WHERE jobpair_id = ? AND stage_number = ?")) {
+			for (int i = 0; i < 6; i++) {
+				ps.setDouble(i + 1, m.get(i));
+			}
+			ps.setInt(7, id);
+			ps.setInt(8, stage);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	private static void addAttribute(Connection con, int id, int stage, String key, String value)
+			throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"INSERT INTO starexec.job_attributes (pair_id, attr_key, attr_value, job_id, stage_number)" +
+						" SELECT ?, ?, ?, job_id, ? FROM starexec.job_pairs WHERE id = ?")) {
+			ps.setInt(1, id);
+			ps.setString(2, key);
+			ps.setString(3, value);
+			ps.setInt(4, stage);
+			ps.setInt(5, id);
+			assertEquals(1, ps.executeUpdate());
+		}
+	}
+
+	/** Everything the first attempt recorded is gone, and the pair is a fresh attempt. */
+	private void assertResultsCleared(int id, int attemptBefore) throws SQLException {
+		assertEquals("the pair is back at PENDING_SUBMIT",
+				StatusCode.STATUS_PENDING_SUBMIT.getVal(), statusOf(id));
+		assertEquals("as its next attempt", attemptBefore + 1, attemptOf(id));
+		for (int stage = 1; stage <= 2; stage++) {
+			assertEquals("stage " + stage + " keeps no attribute of the previous attempt",
+					0, attributeCount(id, stage));
+			assertEquals("stage " + stage + " keeps no measurement of the previous attempt",
+					Arrays.asList(null, null, null, null, null, null), measurementsOf(id, stage));
+			try (Connection con = Common.getConnection();
+					PreparedStatement ps = con.prepareStatement(
+							"SELECT disk_size, status_code FROM starexec.jobpair_stage_data" +
+									" WHERE jobpair_id = ? AND stage_number = ?")) {
+				ps.setInt(1, id);
+				ps.setInt(2, stage);
+				try (ResultSet rs = ps.executeQuery()) {
+					assertTrue(rs.next());
+					assertEquals("stage " + stage + " disk", 0L, rs.getLong(1));
+					assertEquals("stage " + stage + " status",
+							StatusCode.STATUS_PENDING_SUBMIT.getVal(), rs.getInt(2));
+				}
+			}
+		}
+	}
+
+	/** cpu, wallclock, max_vmem, max_res_set, user_time, system_time; null where NULL. */
+	private static List<Double> measurementsOf(int id, int stage) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT cpu, wallclock, max_vmem, max_res_set, user_time, system_time" +
+								" FROM starexec.jobpair_stage_data WHERE jobpair_id = ? AND stage_number = ?")) {
+			ps.setInt(1, id);
+			ps.setInt(2, stage);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue("pair " + id + " has a stage " + stage, rs.next());
+				List<Double> values = new ArrayList<>();
+				for (int i = 1; i <= 6; i++) {
+					double v = rs.getDouble(i);
+					values.add(rs.wasNull() ? null : v);
+				}
+				return values;
+			}
+		}
+	}
+
+	private static int attributeCount(int id, int stage) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT count(*) FROM starexec.job_attributes WHERE pair_id = ? AND stage_number = ?")) {
+			ps.setInt(1, id);
+			ps.setInt(2, stage);
+			try (ResultSet rs = ps.executeQuery()) {
+				rs.next();
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	private static String attributeOf(int id, int stage, String key) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT attr_value FROM starexec.job_attributes" +
+								" WHERE pair_id = ? AND stage_number = ? AND attr_key = ?")) {
+			ps.setInt(1, id);
+			ps.setInt(2, stage);
+			ps.setString(3, key);
+			try (ResultSet rs = ps.executeQuery()) {
+				return rs.next() ? rs.getString(1) : null;
+			}
+		}
+	}
+
+	private static int attemptOf(int id) throws SQLException {
+		try (Connection con = Common.getConnection();
+				PreparedStatement ps = con.prepareStatement(
+						"SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id = ?")) {
+			ps.setInt(1, id);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue("pair " + id + " has an attempt row", rs.next());
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	/** A node UpdatePairRunSolverStats can resolve, created once per test and removed after. */
+	private String resultsNodeName() throws SQLException {
+		String name = "rerun-results-" + pairId;
+		if (resultsNodeId == 0) {
+			try (Connection con = Common.getConnection();
+					PreparedStatement ps = con.prepareStatement(
+							"INSERT INTO starexec.nodes (name, status) VALUES (?, 'ACTIVE') RETURNING id")) {
+				ps.setString(1, name);
+				try (ResultSet rs = ps.executeQuery()) {
+					rs.next();
+					resultsNodeId = rs.getInt(1);
+				}
+			}
+		}
+		return name;
+	}
+
+	private static String describe(List<AttributesTableData> table) {
+		StringBuilder b = new StringBuilder();
+		for (AttributesTableData row : table) {
+			b.append('[').append(row.attrValue).append(", ").append(row.attrCount).append(", ")
+					.append(row.wallclockSum).append(", ").append(row.cpuSum).append(']');
+		}
+		return b.toString();
+	}
+
+	private static String describeTotals(List<Triple<String, Integer, TimePair>> totals) {
+		StringBuilder b = new StringBuilder();
+		for (Triple<String, Integer, TimePair> row : totals) {
+			b.append('[').append(row.getLeft()).append(", ").append(row.getMiddle()).append(", ")
+					.append(row.getRight().getWallclock()).append(", ")
+					.append(row.getRight().getCpu()).append(']');
+		}
+		return b.toString();
 	}
 
 	// ------------------------------------------------------------------
