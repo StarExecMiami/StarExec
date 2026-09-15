@@ -876,7 +876,16 @@ public class LocalJobMonitor {
                 return null;
             }
 
-            int statusCode = obj.get("status").getAsInt();
+            // Not getAsInt, which reads "7", 7.5, [7] and 2^32 + 7 all as 7 (#196). Only the
+            // shape is checked; an integer naming no known status resolves as it always has.
+            int statusCode;
+            try {
+                statusCode = StrictJsonInt.parse("status", obj.get("status"));
+            } catch (StrictJsonInt.NotAnInt e) {
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                        "status.json for pair " + pairId + " has a non-integer status: it "
+                                + e.getMessage());
+            }
             StatusCode resolved = StatusCode.toStatusCode(statusCode);
             int stageNumber = FinalStatusStage.require(obj, "pair " + pairId);
 
