@@ -105,8 +105,17 @@ final class ArchiveUrlDownloader {
 
 		/** The policy for downloads requested by users. */
 		static Policy standard() {
+			return standard(MAX_BYTES);
+		}
+
+		/**
+		 * The policy for downloads requested by users, with a caller's own size cap.
+		 *
+		 * @param maxBytes the largest archive the caller accepts
+		 */
+		static Policy standard(long maxBytes) {
 			return new Policy(EnvironmentConfig.isUrlDownloadPrivateNetworksAllowed(), Set.of(), MAX_REDIRECTS,
-					MAX_BYTES, DEADLINE_MILLIS, Util.CONNECT_TIMEOUT_MS, READ_TIMEOUT_MILLIS);
+					maxBytes, DEADLINE_MILLIS, Util.CONNECT_TIMEOUT_MS, READ_TIMEOUT_MILLIS);
 		}
 	}
 

@@ -32,9 +32,12 @@ import java.util.HashMap;
  *
  * @author Tyler Jensen
  */
-@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = 512L * 1024L * 1024L, maxRequestSize = 512L * 1024L * 1024L)
+@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = ProcessorManager.MAX_ARCHIVE_BYTES, maxRequestSize = ProcessorManager.MAX_ARCHIVE_BYTES)
 public class ProcessorManager extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(ProcessorManager.class);
+
+	/** Largest processor archive, whether sent through the form or fetched from a URL. */
+	static final long MAX_ARCHIVE_BYTES = 512L * 1024L * 1024L;
 
 	// The unique date stamped file name format (for saving processor files)
 	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
@@ -235,7 +238,7 @@ public class ProcessorManager extends HttpServlet {
 					name = processorUrl.toString().replace('/', '-');
 				}
 				archiveFile = new File(uniqueDir, name);
-				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile)) {
+				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile, MAX_ARCHIVE_BYTES)) {
 					throw new StarExecException("Unable to copy file from URL");
 				}
 			}

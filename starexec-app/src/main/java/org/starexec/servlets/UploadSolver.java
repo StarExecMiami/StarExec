@@ -53,10 +53,13 @@ import javax.xml.parsers.ParserConfigurationException;
  * @author Skylar Stark
  */
 // Explicit multipart limits to surface if large request is stuck before parsing (1GB caps temporary for debugging)
-@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = 1024L * 1024L * 1024L, maxRequestSize = 1024L * 1024L * 1024L)
+@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = UploadSolver.MAX_ARCHIVE_BYTES, maxRequestSize = UploadSolver.MAX_ARCHIVE_BYTES)
 public class UploadSolver extends HttpServlet {
 
 	private static final StarLogger log = StarLogger.getLogger(UploadSolver.class);
+
+	/** Largest solver archive, whether sent through the form or fetched from a URL. */
+	static final long MAX_ARCHIVE_BYTES = 1024L * 1024L * 1024L;
 	// Some param constants to process the form
 	private static final String SOLVER_DESC = "desc";
 	private static final String SOLVER_DESC_FILE = "d";
@@ -280,7 +283,7 @@ public class UploadSolver extends HttpServlet {
 				archiveFile = new File(uniqueDir, name);
 				new File(archiveFile.getParent()).mkdir();
 				log.info(methodName, "downloading solver from url " + url);
-				if (!Util.copyFileFromURLUsingProxy(url, archiveFile)) {
+				if (!Util.copyFileFromURLUsingProxy(url, archiveFile, MAX_ARCHIVE_BYTES)) {
 					throw new Exception("Unable to copy file from URL");
 				}
 			}

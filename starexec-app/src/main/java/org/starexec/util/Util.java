@@ -1941,6 +1941,27 @@ public class Util {
         );
     }
 
+    /**
+     * Like {@link #copyFileFromURLUsingProxy(URL, File)}, refusing an archive
+     * larger than the caller accepts.
+     *
+     * @param url         the URL to download
+     * @param archiveFile the file to write
+     * @param maxBytes    the largest archive the caller accepts
+     * @return True on success and false otherwise
+     */
+    public static boolean copyFileFromURLUsingProxy(
+        URL url,
+        File archiveFile,
+        long maxBytes
+    ) {
+        return ArchiveUrlDownloader.download(
+            url,
+            archiveFile,
+            ArchiveUrlDownloader.Policy.standard(maxBytes)
+        );
+    }
+
     /** Why a user-supplied archive URL is refused; shown to the user. */
     public static final String DOWNLOADABLE_URL_REQUIRED =
         "Archive URLs must be valid http or https URLs";
