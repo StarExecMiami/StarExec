@@ -6,8 +6,7 @@ import static java.util.Objects.nonNull;
 import java.awt.*;
 import java.io.*;
 import java.lang.reflect.Field;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -1921,11 +1920,18 @@ public class Util {
     }
 
     /**
-     * Attempts to copy the file at the end of the given URL to the given file,
-     * using a proxy
+     * Attempts to copy the file at the end of the given http or https URL to the
+     * given file. Any other scheme is refused before a connection is opened.
      *
-     * @param url
-     * @param archiveFile
+     * <p>The connection is direct: StarExec's own public address and port
+     * ({@code R.PROXY_ADDRESS}, {@code R.PROXY_PORT}) are not an outbound proxy.
+     * The JVM's default proxy selector still applies, so an operator who needs
+     * one sets {@code -Dhttp.proxyHost} / {@code -Dhttps.proxyHost}. Only a 2xx
+     * response is copied; a redirect the JVM does not follow, such as one to
+     * another scheme, is a failure.
+     *
+     * @param url         the URL to download
+     * @param archiveFile the file to write
      * @return True on success and false otherwise
      */
     public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
@@ -1939,13 +1945,14 @@ public class Util {
             return false;
         }
         try {
-            Proxy proxy = new Proxy(
-                Proxy.Type.HTTP,
-                new InetSocketAddress(R.PROXY_ADDRESS, R.PROXY_PORT)
-            );
-            URLConnection connection = url.openConnection(proxy);
+            URLConnection connection = url.openConnection();
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(READ_TIMEOUT_MS);
+            int status = ((HttpURLConnection) connection).getResponseCode();
+            if (status < 200 || status > 299) {
+                log.warn(methodName, "download answered HTTP " + status);
+                return false;
+            }
             FileUtils.copyInputStreamToFile(
                 connection.getInputStream(),
                 archiveFile
