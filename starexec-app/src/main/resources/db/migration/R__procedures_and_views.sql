@@ -4487,7 +4487,10 @@ BEGIN
            SUM(jsd.cpu)::BIGINT AS cpu
     FROM starexec.job_attributes ja
     JOIN job_pairs jp ON ja.pair_id = jp.id
-    JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id
+    -- The stage the attribute belongs to, as in GetJobAttributesTable. Without the stage match a
+    -- result on one stage of a multi-stage pair was counted once per stage, with every
+    -- stage's wallclock and cpu (#186).
+    JOIN jobpair_stage_data jsd ON jp.id = jsd.jobpair_id AND ja.stage_number = jsd.stage_number
     WHERE ja.attr_key = 'starexec-result' AND jp.job_space_id = _jobSpaceId
     GROUP BY ja.attr_value
     ORDER BY ja.attr_value;
