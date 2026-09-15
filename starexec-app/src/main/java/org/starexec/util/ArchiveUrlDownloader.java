@@ -140,6 +140,7 @@ final class ArchiveUrlDownloader {
 						continue;
 					}
 					if (status < 200 || status > 299) {
+						closeErrorStream(connection);
 						throw new Refused("download answered HTTP " + status);
 					}
 					copyBounded(connection, destination, policy, started);
@@ -267,6 +268,15 @@ final class ArchiveUrlDownloader {
 			}
 		} finally {
 			Files.deleteIfExists(partial);
+		}
+	}
+
+	/** Releases an error response's body; the connection is disconnected in any case. */
+	private static void closeErrorStream(HttpURLConnection connection) {
+		try (InputStream body = connection.getErrorStream()) {
+			// Only closing it.
+		} catch (IOException e) {
+			log.debug("closeErrorStream", "could not close an error response: " + e.getMessage());
 		}
 	}
 
