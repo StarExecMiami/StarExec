@@ -1925,9 +1925,9 @@ public class Util {
      * <p>The connection is direct: StarExec's own public address and port
      * ({@code R.PROXY_ADDRESS}, {@code R.PROXY_PORT}) are not an outbound proxy.
      * The JVM's default proxy selector still applies, so an operator who needs
-     * one sets {@code -Dhttp.proxyHost} / {@code -Dhttps.proxyHost}. Only a 2xx
-     * response is copied; a redirect the JVM does not follow, such as one to
-     * another scheme, is a failure.
+     * one sets {@code -Dhttp.proxyHost} / {@code -Dhttps.proxyHost}. Only public
+     * destinations are contacted, on the named URL and on each redirect; see
+     * {@code ArchiveUrlDownloader} for the policy. Only a 2xx response is copied.
      *
      * @param url         the URL to download
      * @param archiveFile the file to write
