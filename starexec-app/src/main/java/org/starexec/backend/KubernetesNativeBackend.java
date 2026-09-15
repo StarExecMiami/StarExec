@@ -2856,6 +2856,19 @@ public class KubernetesNativeBackend implements Backend {
             );
         }
 
+        // The per-stage measurements, for the same reason: a surviving stage-stats/2.json would be
+        // recorded as the measurements of an attempt that never reached stage 2.
+        Path staleStats = outputDir.resolve(StageStatsFiles.DIRECTORY);
+        clearStaleDirectory(staleStats, pairId);
+        if (!confirmedAbsent(staleStats)) {
+            allAbsent = false;
+            log.error(
+                "Stale stage-stats from a previous attempt may survive in " +
+                outputDir + " for pair " + pairId + "; refusing to submit, because they would" +
+                " be read as this attempt's measurements"
+            );
+        }
+
         return allAbsent;
     }
 
@@ -5038,9 +5051,15 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         /**
-         * Persists run-solver statistics (wallclock, cpu, memory, disk) from
-         * the shared data volume so that K8s-native jobs produce the same
-         * resource-usage data as container-mode jobs.
+         * Persists run-solver statistics (wallclock, cpu, memory, disk), each against the stage
+         * that produced them.
+         *
+         * <p>Called once the pair's terminal status has been recorded, so every stage before
+         * {@code stageNumber} whose snapshot is terminal has finished, and so has
+         * {@code stageNumber} itself. {@link StageStatsFiles} decides which files may be believed.
+         * This used to record the pair-wide stats.json against the terminal stage: every earlier
+         * stage's measurements were lost, and a final stage that never reached copyOutput was
+         * given the previous stage's.
          */
         private void persistRunSolverStats(ExecutionRef execution, int pairId, int stageNumber) {
             Path outputDir = ownedOutputDir(execution);
@@ -5048,56 +5067,67 @@ public class KubernetesNativeBackend implements Backend {
                 return;
             }
 
-            Path statsPath = outputDir.resolve("stats.json");
-            if (!Files.exists(statsPath)) {
-                return;
-            }
-
-            ContainerJobMonitor.RunsolverStats stats = new ContainerJobMonitor.RunsolverStats();
+            Map<Integer, StageStatsFiles.Stats> byStage;
             try {
-                String json = Files.readString(statsPath);
-                parseStatsJsonInto(json, stats);
-            } catch (Exception e) {
-                log.warn("Could not read stats.json for pair " + pairId, e);
-                return;
-            }
-
-            try {
-                String nodeName = resolveStatsNodeName(stats);
-                if (nodeName == null) {
-                    // Skipping is the lesser loss. UpdatePairRunSolverStats resolves the
-                    // node by name and raises P0002 if it is absent, which aborts the
-                    // whole write anyway -- so guessing a name does not save the
-                    // measurements, it only hides why they vanished.
-                    log.error(
-                        "No node name for pair " + pairId + ", so its runsolver statistics" +
-                        " cannot be recorded: the database resolves stats by node name and" +
-                        " would reject an invented one. stats.json reported hostname='" +
-                        stats.hostname + "'. If this is a Kubernetes pair, check that the" +
-                        " job pod carries STAREXEC_NODE_NAME from the downward API and that" +
-                        " the node is registered in the nodes table."
-                    );
-                    return;
-                }
-                boolean ok = JobPairs.updateRunSolverStats(
+                // Already read and validated by ingestEarlierStageStatuses before the status
+                // write; read again rather than threaded through, as persistAttributes does.
+                Set<Integer> finishedEarlier =
+                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                byStage = StageStatsFiles.select(
+                    outputDir,
                     pairId,
-                    nodeName,
-                    stats.wallclockTime,
-                    stats.cpuTime,
-                    stats.userTime,
-                    stats.systemTime,
-                    stats.maxVirtualMemory,
-                    stats.maxResidentSetSize,
+                    finishedEarlier,
                     stageNumber,
-                    stats.diskSize
+                    () -> JobPairs.getStageNumbers(pairId)
                 );
-                if (ok) {
-                    log.debug("Persisted run stats for pair " + pairId + ": " + stats);
-                } else {
-                    log.warn("Failed to persist run stats for pair " + pairId);
-                }
             } catch (Exception e) {
-                log.warn("Exception persisting run stats for pair " + pairId, e);
+                log.warn("Failed to select the run stats to persist for pair " + pairId, e);
+                return;
+            }
+
+            for (Map.Entry<Integer, StageStatsFiles.Stats> entry : byStage.entrySet()) {
+                StageStatsFiles.Stats stats = entry.getValue();
+                try {
+                    String nodeName = resolveStatsNodeName(stats.hostname);
+                    if (nodeName == null) {
+                        // Skipping is the lesser loss. UpdatePairRunSolverStats resolves the
+                        // node by name and raises P0002 if it is absent, which aborts the
+                        // whole write anyway -- so guessing a name does not save the
+                        // measurements, it only hides why they vanished.
+                        log.error(
+                            "No node name for pair " + pairId + " stage " + entry.getKey() +
+                            ", so its runsolver statistics cannot be recorded: the database" +
+                            " resolves stats by node name and would reject an invented one." +
+                            " The stats file reported hostname='" + stats.hostname + "'. If" +
+                            " this is a Kubernetes pair, check that the job pod carries" +
+                            " STAREXEC_NODE_NAME from the downward API and that the node is" +
+                            " registered in the nodes table."
+                        );
+                        continue;
+                    }
+                    boolean ok = JobPairs.updateRunSolverStats(
+                        pairId,
+                        nodeName,
+                        stats.wallclockTime,
+                        stats.cpuTime,
+                        stats.userTime,
+                        stats.systemTime,
+                        stats.maxVirtualMemory,
+                        stats.maxResidentSetSize,
+                        entry.getKey(),
+                        stats.diskSize
+                    );
+                    if (ok) {
+                        log.debug("Persisted run stats for pair " + pairId + " stage " +
+                            entry.getKey() + ": " + stats);
+                    } else {
+                        log.warn("Failed to persist run stats for pair " + pairId + " stage " +
+                            entry.getKey());
+                    }
+                } catch (Exception e) {
+                    log.warn("Exception persisting run stats for pair " + pairId + " stage " +
+                        entry.getKey(), e);
+                }
             }
         }
 
@@ -5201,41 +5231,14 @@ public class KubernetesNativeBackend implements Backend {
          * records this pair's measurements against a machine that did not run it, which
          * is worse than recording nothing.
          */
-        private String resolveStatsNodeName(ContainerJobMonitor.RunsolverStats stats) {
-            if (stats.hostname != null && !stats.hostname.trim().isEmpty()) {
-                return stats.hostname.trim();
+        private String resolveStatsNodeName(String hostname) {
+            if (hostname != null && !hostname.trim().isEmpty()) {
+                return hostname.trim();
             }
             if (appNodeName != null && !appNodeName.trim().isEmpty()) {
                 return appNodeName.trim();
             }
             return null;
-        }
-
-        /**
-         * Parses the subset of stats.json fields needed for run-solver
-         * statistics. Missing or malformed fields gracefully leave the
-         * default zero values in place.
-         */
-        private void parseStatsJsonInto(
-            String json,
-            ContainerJobMonitor.RunsolverStats stats
-        ) {
-            JsonObject obj;
-            try {
-                obj = JsonParser.parseString(json).getAsJsonObject();
-            } catch (Exception e) {
-                log.warn("stats.json is not valid JSON; skipping stats parse", e);
-                return;
-            }
-
-            try { if (obj.has("wallclockTime")) stats.wallclockTime = obj.get("wallclockTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse wallclockTime", e); }
-            try { if (obj.has("cpuTime")) stats.cpuTime = obj.get("cpuTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse cpuTime", e); }
-            try { if (obj.has("userTime")) stats.userTime = obj.get("userTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse userTime", e); }
-            try { if (obj.has("systemTime")) stats.systemTime = obj.get("systemTime").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse systemTime", e); }
-            try { if (obj.has("maxVirtualMemory")) stats.maxVirtualMemory = obj.get("maxVirtualMemory").getAsDouble(); } catch (Exception e) { log.warn("stats.json: could not parse maxVirtualMemory", e); }
-            try { if (obj.has("maxResidentSetSize")) stats.maxResidentSetSize = obj.get("maxResidentSetSize").getAsLong(); } catch (Exception e) { log.warn("stats.json: could not parse maxResidentSetSize", e); }
-            try { if (obj.has("diskSize")) stats.diskSize = obj.get("diskSize").getAsLong(); } catch (Exception e) { log.warn("stats.json: could not parse diskSize", e); }
-            try { if (obj.has("hostname")) stats.hostname = obj.get("hostname").getAsString(); } catch (Exception e) { log.warn("stats.json: could not parse hostname", e); }
         }
     }
 }

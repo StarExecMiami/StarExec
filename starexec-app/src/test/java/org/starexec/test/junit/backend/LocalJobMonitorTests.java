@@ -540,8 +540,7 @@ public class LocalJobMonitorTests {
             if (m.getName().equals("updateDatabase")) {
                 m.setAccessible(true);
                 try {
-                    m.invoke(monitor, pairId, status, stageNumber,
-                             newRunSolverStats());
+                    m.invoke(monitor, pairId, status, stageNumber);
                 } catch (java.lang.reflect.InvocationTargetException e) {
                     throw e.getCause();
                 }
@@ -549,22 +548,6 @@ public class LocalJobMonitorTests {
             }
         }
         throw new AssertionError("no such method: updateDatabase");
-    }
-
-    /** RunSolverStats is private; build one with all-zero fields. */
-    private Object newRunSolverStats() throws Exception {
-        Class<?> type = Class.forName("org.starexec.backend.LocalJobMonitor$RunSolverStats");
-        var ctor = type.getDeclaredConstructors()[0];
-        ctor.setAccessible(true);
-        Object[] args = new Object[ctor.getParameterCount()];
-        Class<?>[] types = ctor.getParameterTypes();
-        for (int i = 0; i < args.length; i++) {
-            if (types[i] == double.class) args[i] = 0.0d;
-            else if (types[i] == long.class) args[i] = 0L;
-            else if (types[i] == int.class) args[i] = 0;
-            else args[i] = null;
-        }
-        return ctor.newInstance(args);
     }
 
     private boolean isRefused(StatusCode status) throws Throwable {

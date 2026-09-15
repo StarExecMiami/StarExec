@@ -761,15 +761,19 @@ public class LocalJobMonitor {
         updateDatabase(
             pairId,
             reconcileWithRunsolver(pairId, ss.status, stats),
-            ss.stageNumber,
-            stats
+            ss.stageNumber
         );
 
-        // 7. Attributes, each against the stage that produced it. Only after the status write
-        //    above has been accepted: a refused status throws out of updateDatabase, and no
-        //    attribute may be recorded against a result the database declined. Ownership is
-        //    re-checked inside, immediately before the write, as in step 5.
-        recordAttributes(pairId, state, outputDir, ss, attributes);
+        // 7. Measurements and attributes, each against the stage that produced it. Only after the
+        //    status write above has been accepted: a refused status throws out of
+        //    updateDatabase, and nothing may be recorded against a result the database declined.
+        //    Ownership is re-checked inside, immediately before each write, as in step 5. The
+        //    runsolver stats parsed in step 2 decide the status only.
+        Set<Integer> finishedEarlier =
+                StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
+        int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
+        recordMeasurements(pairId, state, outputDir, finishedEarlier, terminalStage);
+        recordAttributes(pairId, state, outputDir, finishedEarlier, terminalStage, attributes);
 
         // 8. Report whether this run reached a terminal status. Retiring the pair is the
         //    caller's job, so that the removal is generation-guarded in one place.
@@ -1129,8 +1133,7 @@ public class LocalJobMonitor {
     private void updateDatabase(
             int pairId,
             StatusCode status,
-            int stageNumber,
-            RunSolverStats stats) throws Exception {
+            int stageNumber) throws Exception {
         // status.json comes from the job script, in a directory the job itself can write. The
         // protocol has it carry exactly two kinds of pair-level status: STATUS_RUNNING while a
         // stage is in flight, and a terminal execution result once one finishes. Anything else
@@ -1196,14 +1199,50 @@ public class LocalJobMonitor {
                     + " keeping the recorded result");
         }
 
-        // Persist run stats to DB using stored procedure wrapper
-        if (stats.wallclockTime > 0 || stats.cpuTime > 0 || stats.diskSize > 0) {
+        log.info(
+                "Database updated for pairId=" +
+                        pairId +
+                        ": status=" +
+                        status);
+    }
+
+    /**
+     * Records runsolver measurements against the stages that produced them.
+     *
+     * <p>Eligibility is the same as for attributes: a stage is written once it has finished, and
+     * {@link StageStatsFiles} decides which files may be believed. This used to write stats.json
+     * on every poll, running or not, against whatever stage it named; a pair kept an earlier
+     * stage's measurements only if a poll happened to land between that stage and the next.
+     *
+     * <p>A finished stage is written again on every later poll. That is safe:
+     * {@code UpdatePairRunSolverStats} overwrites the stage's measurements and charges the user
+     * only the difference from the disk size the stage already accounts for.
+     */
+    private void recordMeasurements(
+            int pairId,
+            PairExecutionState state,
+            Path outputDir,
+            Set<Integer> finishedEarlier,
+            int terminalStage) throws Exception {
+        Map<Integer, StageStatsFiles.Stats> byStage = StageStatsFiles.select(
+                outputDir,
+                pairId,
+                finishedEarlier,
+                terminalStage,
+                () -> JobPairs.getStageNumbers(pairId));
+
+        for (Map.Entry<Integer, StageStatsFiles.Stats> entry : byStage.entrySet()) {
+            // The mutation boundary, as in recordAttributes.
+            if (!isCurrent(pairId, state)) {
+                log.info("Monitor: pairId=" + pairId + " was rerun while its measurements were"
+                        + " read; discarding the superseded run's measurements");
+                return;
+            }
+            StageStatsFiles.Stats stats = entry.getValue();
+            String nodeName = stats.hostname != null ? stats.hostname : "unknown";
             try {
-                String nodeName = (stats.hostname != null &&
-                        !stats.hostname.isEmpty())
-                                ? stats.hostname
-                                : "unknown";
-                boolean ok = JobPairs.updateRunSolverStats(
+                // The result is logged rather than retried, as it always was here.
+                if (JobPairs.updateRunSolverStats(
                         pairId,
                         nodeName,
                         stats.wallclockTime,
@@ -1212,29 +1251,19 @@ public class LocalJobMonitor {
                         stats.systemTime,
                         stats.maxVirtualMemory,
                         stats.maxResidentSetSize,
-                        stats.stageNumber,
-                        stats.diskSize);
-                if (ok) {
-                    log.debug(
-                            "Persisted run stats for pair " + pairId + ": " + stats);
+                        entry.getKey(),
+                        stats.diskSize)) {
+                    log.debug("Persisted run stats for pair " + pairId + " stage "
+                            + entry.getKey() + ": " + stats);
                 } else {
-                    log.warn("Failed to persist run stats for pair " + pairId);
+                    log.warn("Failed to persist run stats for pair " + pairId + " stage "
+                            + entry.getKey());
                 }
             } catch (Exception e) {
-                log.warn(
-                        "Exception persisting run stats for pair " + pairId,
-                        e);
+                log.warn("Exception persisting run stats for pair " + pairId + " stage "
+                        + entry.getKey(), e);
             }
-        } else {
-            log.debug(
-                    "No run stats to persist for pairId=" + pairId + ": " + stats);
         }
-
-        log.info(
-                "Database updated for pairId=" +
-                        pairId +
-                        ": status=" +
-                        status);
     }
 
     /**
@@ -1250,12 +1279,9 @@ public class LocalJobMonitor {
             int pairId,
             PairExecutionState state,
             Path outputDir,
-            StatusAndStage ss,
+            Set<Integer> finishedEarlier,
+            int terminalStage,
             Properties legacy) throws Exception {
-        int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
-        Set<Integer> finishedEarlier =
-                StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
-
         Map<Integer, Properties> byStage = StageAttributeFiles.select(
                 outputDir,
                 pairId,
