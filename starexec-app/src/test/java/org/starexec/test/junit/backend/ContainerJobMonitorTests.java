@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anySet;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,11 +15,14 @@ import java.lang.reflect.Method;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 import org.starexec.backend.AdaptivePollInterval;
 import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 
 public class ContainerJobMonitorTests {
@@ -395,80 +400,164 @@ public class ContainerJobMonitorTests {
         );
     }
 
-    // ------------------------------------------ per-stage snapshots: integers, not coercions
+    // ------------------------------------ per-stage snapshots, refused through the poll loop
+    //
+    // #200. What a refusal does is decided by the catch it lands in, so these drive the real
+    // checkCompletedJobs rather than the reader. Podman read snapshots through a private copy
+    // that threw plain Exceptions; the poll loop's catch-all recorded ERROR_RUNSCRIPT against an
+    // invented stage 1 and removed the container. Local and Kubernetes, reading the same bytes
+    // through StageStatusSnapshots, hold the pair and write nothing. Each case here requires the
+    // Local outcome: the slot handed back once, the container kept and held on the next poll,
+    // no status written, and the output still on disk.
 
-    private static final int SNAPSHOT_PAIR = 4242;
+    private static final int HELD_PAIR = 4242;
+
+    @Test
+    public void aMalformedSnapshotIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("malformed");
+        writeSnapshotFile(out, "1.json", "{not json");
+        assertHeld(out, "malformed");
+    }
+
+    @Test
+    public void aSnapshotMissingAFieldIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("missing");
+        writeSnapshotFile(out, "1.json", "{\"pairId\":" + HELD_PAIR + ",\"stageNumber\":1}\n");
+        assertHeld(out, "missing");
+    }
+
+    @Test
+    public void aSnapshotClaimingAnotherPairIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("foreign");
+        writeSnapshotFile(out, "1.json", snapshotRecord(HELD_PAIR + 1, 1, complete()));
+        assertHeld(out, "foreign");
+    }
+
+    @Test
+    public void aSnapshotNamedForAnotherStageIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("mismatch");
+        writeSnapshotFile(out, "1.json", snapshotRecord(HELD_PAIR, 2, complete()));
+        assertHeld(out, "mismatch");
+    }
+
+    @Test
+    public void anEarlierStageStillRunningIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("running");
+        writeSnapshotFile(out, "1.json",
+            snapshotRecord(HELD_PAIR, 1, StatusCode.STATUS_RUNNING.getVal()));
+        assertHeld(out, "running");
+    }
+
+    @Test
+    public void anEarlierStageClaimingProcessingIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("processing");
+        writeSnapshotFile(out, "1.json",
+            snapshotRecord(HELD_PAIR, 1, StatusCode.STATUS_PROCESSING.getVal()));
+        assertHeld(out, "processing");
+    }
+
+    /** More entries than any real pair has stages, whatever their names. */
+    @Test
+    public void aSnapshotDirectoryOverTheEntryCapIsHeldWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("crowded");
+        writeSnapshotFile(out, "1.json", snapshotRecord(HELD_PAIR, 1, complete()));
+        for (int i = 0; i < 1024; i++) {
+            writeSnapshotFile(out, "extra-" + i + ".tmp", "");
+        }
+        assertHeld(out, "crowded");
+    }
 
     /**
-     * Podman's own stage-status reader takes pairId, stageNumber and status from a file the
-     * solver can write. gson's getAsInt accepted "1", truncated 1.5, unwrapped [1] and wrapped
-     * values outside the int range into other numbers (#196). Each shape is written into one
-     * field at a time, the others valid, and must be refused as that field.
+     * A directory that cannot be read is the filesystem, not the contents. It is retried with
+     * backoff, as Local and Kubernetes classify an IOException, rather than recorded as a
+     * solver failure or held as a bad artifact.
      */
     @Test
-    public void aStageSnapshotRefusesEveryIntegerShapeThatIsNotAnInteger() throws Exception {
-        String[] shapes = {"\"%d\"", "%d.5", "[%d]", "true", "2147483648", "-2147483649"};
-        int status = StatusCode.STATUS_COMPLETE.getVal();
-        for (String shape : shapes) {
-            assertSnapshotRefused(
-                String.format(shape, SNAPSHOT_PAIR), "1", String.valueOf(status), "pairId");
-            assertSnapshotRefused(
-                String.valueOf(SNAPSHOT_PAIR), String.format(shape, 1), String.valueOf(status),
-                "stageNumber");
-            assertSnapshotRefused(
-                String.valueOf(SNAPSHOT_PAIR), "1", String.format(shape, status), "status");
+    public void anUnreadableSnapshotDirectoryIsRetriedWithItsContainer() throws Exception {
+        java.nio.file.Path out = finishedAtStageTwo("unreadable");
+        writeSnapshotFile(out, "1.json", snapshotRecord(HELD_PAIR, 1, complete()));
+        java.io.File dir = out.resolve("stage-status").toFile();
+        org.junit.Assume.assumeTrue("needs a filesystem that honours permissions",
+            dir.setReadable(false, false) && !dir.canRead());
+        String container = "container-unreadable";
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            pollTwice(out, container);
+
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend, times(1)).releaseSlotForCompletedContainer(container);
+            jobPairs.verifyNoInteractions();
+        } finally {
+            dir.setReadable(true, false);
         }
+        assertFalse("an unreadable directory is not a bad artifact",
+            quarantine().contains(container));
+        assertTrue("it is due another attempt", attempts().containsKey(container));
+        assertTrue(java.nio.file.Files.exists(out.resolve("stage-status/1.json")));
     }
 
-    /** The positive control: integral values, including one spelled 1.0, are still read. */
-    @Test
-    public void aStageSnapshotWithIntegralValuesIsStillRead() throws Exception {
-        int status = StatusCode.STATUS_COMPLETE.getVal();
-        java.nio.file.Path out = snapshotDir(SNAPSHOT_PAIR + ".0", "1.0", status + ".0");
-        assertEquals(java.util.Map.of(1, status), readStageSnapshots(out));
-    }
+    private void assertHeld(java.nio.file.Path out, String label) throws Exception {
+        String container = "container-" + label;
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            pollTwice(out, container);
 
-    private void assertSnapshotRefused(
-        String pairId, String stageNumber, String status, String field) throws Exception {
-        java.nio.file.Path out = snapshotDir(pairId, stageNumber, status);
-        String record = "pairId " + pairId + ", stageNumber " + stageNumber + ", status " + status;
-        try {
-            Object read = readStageSnapshots(out);
-            org.junit.Assert.fail(record + " must be refused, not read as " + read);
-        } catch (Exception expected) {
-            assertTrue(
-                record + ": the refusal must name " + field + ": " + expected,
-                String.valueOf(expected.getMessage()).contains("non-integer " + field)
-            );
+            verify(backend, never()).removeCompletedContainer(container);
+            verify(backend, times(1)).releaseSlotForCompletedContainer(container);
+            jobPairs.verifyNoInteractions();
         }
+        assertTrue("held on the first refusal, and skipped by the next poll",
+            quarantine().contains(container));
+        assertTrue("the output survives the refusal",
+            java.nio.file.Files.exists(out.resolve("status.json")));
     }
 
-    private static java.nio.file.Path snapshotDir(String pairId, String stageNumber, String status)
-        throws IOException {
-        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-snapshot");
+    /** Two polls over the same exited container, as the scheduler would make them. */
+    private void pollTwice(java.nio.file.Path out, String container) throws Exception {
+        PodmanBackend.CompletedContainerInfo info =
+            new PodmanBackend.CompletedContainerInfo(container, HELD_PAIR, out.toString(), 0);
+        when(backend.getCompletedContainers())
+            .thenReturn(java.util.Collections.singletonList(info));
+        invokeCheckCompletedJobs();
+        invokeCheckCompletedJobs();
+    }
+
+    /** A labelled pair whose status.json says stage 2 finished cleanly. */
+    private static java.nio.file.Path finishedAtStageTwo(String label) throws IOException {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-held-" + label);
         out.toFile().deleteOnExit();
-        java.nio.file.Path dir = java.nio.file.Files.createDirectories(out.resolve("stage-status"));
-        java.nio.file.Files.writeString(
-            dir.resolve("1.json"),
-            "{\"pairId\":" + pairId + ",\"status\":" + status + ",\"stageNumber\":"
-                + stageNumber + ",\"timestamp\":1788818872}\n"
-        );
-        dir.resolve("1.json").toFile().deleteOnExit();
-        dir.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(out.resolve("status.json"),
+            snapshotRecord(HELD_PAIR, 2, complete()));
+        java.nio.file.Files.writeString(out.resolve("var.out"),
+            "WCTIME=0.10\nCPUTIME=0.09\nTIMEOUT=false\nMEMOUT=false\n");
+        java.nio.file.Files.writeString(out.resolve("watcher.out"), "Child status: 0\n");
         return out;
     }
 
-    private Object readStageSnapshots(java.nio.file.Path outputDir) throws Exception {
-        Method m = ContainerJobMonitor.class.getDeclaredMethod(
-            "readStageSnapshots", java.nio.file.Path.class, int.class);
-        m.setAccessible(true);
-        try {
-            return m.invoke(monitor, outputDir, SNAPSHOT_PAIR);
-        } catch (java.lang.reflect.InvocationTargetException e) {
-            if (e.getCause() instanceof Exception) {
-                throw (Exception) e.getCause();
-            }
-            throw e;
-        }
+    private static void writeSnapshotFile(java.nio.file.Path out, String name, String content)
+        throws IOException {
+        java.nio.file.Path dir = java.nio.file.Files.createDirectories(out.resolve("stage-status"));
+        java.nio.file.Files.writeString(dir.resolve(name), content);
+    }
+
+    private static String snapshotRecord(int pairId, int stage, int status) {
+        return "{\"pairId\":" + pairId + ",\"status\":" + status + ",\"stageNumber\":" + stage
+            + ",\"timestamp\":1788818872}\n";
+    }
+
+    private static int complete() {
+        return StatusCode.STATUS_COMPLETE.getVal();
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Set<String> quarantine() throws Exception {
+        Field f = ContainerJobMonitor.class.getDeclaredField("ingestionQuarantine");
+        f.setAccessible(true);
+        return (java.util.Set<String>) f.get(monitor);
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, ?> attempts() throws Exception {
+        Field f = ContainerJobMonitor.class.getDeclaredField("ingestionAttempts");
+        f.setAccessible(true);
+        return (java.util.Map<String, ?>) f.get(monitor);
     }
 }
