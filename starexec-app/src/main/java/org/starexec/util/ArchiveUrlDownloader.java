@@ -16,6 +16,8 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Set;
@@ -54,6 +56,12 @@ final class ArchiveUrlDownloader {
 	 * that keeps sending slowly is stopped by the deadline instead.
 	 */
 	static final int READ_TIMEOUT_MILLIS = 60_000;
+
+	/**
+	 * Permissions of a downloaded archive: readable by its group, as under the application's
+	 * usual umask, so an extraction run as another member of the group can read it.
+	 */
+	private static final Set<PosixFilePermission> ARCHIVE_PERMISSIONS = PosixFilePermissions.fromString("rw-r-----");
 
 	/** Disconnects connections still open at their download's deadline. */
 	private static final ScheduledExecutorService DEADLINE_WATCHDOG = Executors.newSingleThreadScheduledExecutor(
@@ -285,6 +293,9 @@ final class ArchiveUrlDownloader {
 					}
 					out.write(buffer, 0, read);
 				}
+			}
+			if (Files.getFileStore(partial).supportsFileAttributeView("posix")) {
+				Files.setPosixFilePermissions(partial, ARCHIVE_PERMISSIONS);
 			}
 			try {
 				Files.move(partial, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
