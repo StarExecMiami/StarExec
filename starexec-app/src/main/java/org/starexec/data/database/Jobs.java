@@ -7120,8 +7120,11 @@ public class Jobs {
                             stats.put(key, newSolver);
                         }
 
-                        // update stats info for entry that current job-pair belongs to
+                        // update stats info for entry that current job-pair belongs to. The primary
+                        // row counts its stage too: 5254caa34 did, and 8e017c292 lost the call,
+                        // leaving every Primary row at zero (#206).
                         curSolver = stats.get(key);
+                        addStageToSolverStats(curSolver, stage, includeUnknown);
                     }
                 }
             }
@@ -7286,9 +7289,12 @@ public class Jobs {
                 }
                 jp.setBench(bench);
 
-                jp.setCompletionId(
-                    ResultSetUtils.getInt(results, "completion_id")
-                );
+                // NULL for a pair that has not finished: only finished pairs have a completion.
+                // Unboxing it threw and emptied the whole space's summary (#206).
+                Integer completionId = ResultSetUtils.getInt(results, "completion_id");
+                if (completionId != null) {
+                    jp.setCompletionId(completionId);
+                }
 
                 if (includeSingleStage) {
                     // If we are here, we are populating exactly 1 stage for purposes of filling up
