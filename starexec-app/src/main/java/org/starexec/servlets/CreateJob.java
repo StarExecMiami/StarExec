@@ -111,9 +111,15 @@ public class CreateJob extends HttpServlet {
 		DefaultSettings settings = Settings.getProfileById(settingsId);
 		int preProcessorId = ((settings.getPreProcessorId() == null) ? -1 : settings.getPreProcessorId());
 		int postProcessorId = ((settings.getPostProcessorId() == null) ? -1 : settings.getPreProcessorId());
+		// A queue that is scheduled, or no job at all: one on an inactive queue never runs (#204).
+		int queueId = Queues.getQueueForSystemJob(userId);
+		if (queueId < 0) {
+			log.error("No active queue is available to user " + userId + " for the test job of solver " + solverId);
+			return -1;
+		}
 		Job j = JobManager
 				.setupJob(userId, s.getName(), "test job for new solver " + s.getName() + " " + "(" + s.getId() + ")",
-						  preProcessorId, postProcessorId, Queues.getTestQueue(), 0, settings.getCpuTimeout(),
+						  preProcessorId, postProcessorId, queueId, 0, settings.getCpuTimeout(),
 						  settings.getWallclockTimeout(), settings.getMaxMemory(), false, 0, SaveResultsOption.SAVE,
 						  R.DEFAULT_BENCHMARKING_FRAMEWORK
 				);

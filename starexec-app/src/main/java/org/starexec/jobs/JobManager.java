@@ -1466,11 +1466,18 @@ public abstract class JobManager {
 	public static int addBuildJob(Integer solverId, Integer spaceId) {
 		Solver s = Solvers.get(solverId);
 		log.info("Adding build job for solver " + s.getName() + " in space: " + spaceId);
-		Queue q = Queues.getAllQ();
+		// A queue the solver's owner can use and that is scheduled, rather than all.q whatever its
+		// state; the build job's limits are that queue's (#204).
+		int queueId = Queues.getQueueForSystemJob(s.getUserId());
+		if (queueId < 0) {
+			log.error("No active queue is available to user " + s.getUserId() + " for the build job of solver "
+					+ solverId);
+			return -1;
+		}
+		Queue q = Queues.get(queueId);
 		Job j = JobManager.setupJob(s.getUserId(),
 				s.getName() + " Build",
-				s.getName() + " Build Job", -1, -1, R.DEFAULT_QUEUE_ID, // This is the same queue referenced
-				// by variable q
+				s.getName() + " Build Job", -1, -1, queueId,
 				0, q.getCpuTimeout(), q
 						.getWallTimeout(),
 				R.DEFAULT_PAIR_VMEM, false, 15, SaveResultsOption.SAVE, R.DEFAULT_BENCHMARKING_FRAMEWORK);
