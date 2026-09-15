@@ -29,6 +29,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -407,6 +408,93 @@ public class StageResultAttributionTest {
 		assertRecorded(ingest(rerun, 1, 2), Map.of(1, SATISFIABLE));
 	}
 
+	/**
+	 * A rerun in the same output directory with no backend cleanup, as on Podman, whose stage 2
+	 * post-processor fails: stage 2 is terminal but published nothing, so the previous attempt's
+	 * 2.txt must be gone rather than filed against the stage that failed. The helper clears it
+	 * when the pair starts.
+	 */
+	@Test
+	public void aRerunWithoutCleanupGetsNothingFromThePreviousAttempt() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+		assertTrue(Files.exists(pair.out.resolve("stage-attributes").resolve("2.txt")));
+
+		Pair rerun = pair.rerun();
+		rerun.start();
+		rerun.stage(1, SATISFIABLE).complete(1);
+		rerun.failingStage(2, "starexec-result=Partial\n");
+		rerun.run(1);
+
+		assertTrue("the directory stays: it is the marker",
+				Files.isDirectory(pair.out.resolve("stage-attributes")));
+		Ingested result = ingest(rerun, 1, 2);
+		assertNoValue(result, "Unknown");
+		assertRecorded(result, Map.of(1, SATISFIABLE));
+	}
+
+	/**
+	 * Fail closed: a previous attempt's file the helper cannot remove stops the pair before any
+	 * stage runs, reported at the pair level so no stage's surviving file is read.
+	 */
+	@Test
+	public void aPreviousAttemptThatCannotBeClearedFailsThePairBeforeAnyStage() throws Exception {
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		Path marker = pair.out.resolve("stage-attributes");
+		Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("r-xr-xr-x"));
+		Ingested result;
+		try {
+			Pair rerun = pair.rerun();
+			rerun.start();
+			rerun.stage(1, SATISFIABLE).complete(1);
+			rerun.stage(2, SATISFIABLE).complete(2);
+			rerun.run(0);
+
+			assertEquals("no stage may have run", THEOREM,
+					Files.readString(marker.resolve("1.txt")));
+			String status = Files.readString(pair.out.resolve("status.json"));
+			assertTrue("a pair-level runscript error: " + status,
+					status.contains("\"status\":11,") && status.contains("\"stageNumber\":0,"));
+			result = ingest(rerun, 1, 2);
+		} finally {
+			Files.setPosixFilePermissions(marker, PosixFilePermissions.fromString("rwxr-xr-x"));
+		}
+		assertTrue("a refusal, if any, is the invalid-stage one: " + result.failure,
+				result.failure == null
+						|| result.failure instanceof StageStatusSnapshots.InvalidSnapshotException);
+		assertWritten(result, Map.of());
+	}
+
+	/** Clearing never follows a link planted where the marker belongs. */
+	@Test
+	public void aLinkedMarkerIsReplacedRatherThanClearedThrough() throws Exception {
+		Assume.assumeTrue(backend == Backend.LOCAL); // a property of the helper alone
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.run(0);
+
+		Path outside = folder.newFolder("outside").toPath();
+		Files.writeString(outside.resolve("2.txt"), "keep\n");
+		Path marker = pair.out.resolve("stage-attributes");
+		deleteTree(marker);
+		Files.createSymbolicLink(marker, outside);
+
+		Pair rerun = pair.rerun();
+		rerun.start();
+		rerun.run(0);
+
+		assertTrue("a file outside the output was deleted", Files.exists(outside.resolve("2.txt")));
+		assertTrue(Files.isDirectory(marker, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+	}
+
 	/** Rollback: an older monitor reads attributes.txt, which the new helper still publishes. */
 	@Test
 	public void theLegacyFileIsStillPublishedForAnOlderMonitor() throws Exception {
@@ -684,8 +772,7 @@ public class StageResultAttributionTest {
 			}
 			default:
 				// PodmanBackend clears nothing before a rerun -- not status.json, not
-				// stage-status -- so neither is this directory cleared. The gate is what keeps
-				// the previous attempt's later stages out here.
+				// stage-status. The helper clears this directory's files when the pair starts.
 				return;
 		}
 		assertFalse("the per-stage attributes must be cleared before the attempt",

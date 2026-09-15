@@ -289,7 +289,10 @@ treat that directory as the protocol marker:
 
 LocalBackend and KubernetesNativeBackend delete `stage-attributes/` before a rerun, as they
 delete `stage-status/`, and refuse to start the attempt if it survives. PodmanBackend clears
-neither directory.
+neither directory, so the job script itself removes any `*.txt` and `*.txt.tmp` left in
+`stage-attributes/` when the pair starts, keeping the directory as the marker. If one cannot
+be removed, the pair fails with a pair-level `ERROR_RUNSCRIPT` before any stage runs.
+`stage-status/` is still not cleared on Podman.
 
 These writes live in `functions.bash`. `docker/entrypoint.sh` copies that helper into
 `/app/data/sge_scripts/` only when no copy exists yet, so upgrading the image does not

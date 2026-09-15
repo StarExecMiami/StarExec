@@ -151,13 +151,56 @@ EOF
 # polled mid-stage-1 looked like the old protocol. Created here, in the same file as the writer,
 # so a deployment can never ship one without the other.
 #
-# Not fatal on failure: without the marker the monitor falls back to the legacy rules, which never
-# attribute a multi-stage pair's file to a guessed stage, and containerWriteStageAttributes
-# creates the directory again -- failing the pair if it still cannot.
+# Also where a previous attempt's files are removed. A rerun runs in the same output directory,
+# and PodmanBackend clears nothing there first, so a rerun whose stage N ended without publishing
+# (its post-processor failed, say) left the monitor to read the replaced attempt's N.txt and file
+# it against a stage that failed. LocalBackend and KubernetesNativeBackend already remove the
+# directory before submitting, so on those this finds nothing to do. The directory itself stays:
+# it is the marker.
+#
+# Creating the marker is not fatal: without it the monitor falls back to the legacy rules, which
+# never attribute a multi-stage pair's file to a guessed stage, and containerWriteStageAttributes
+# creates the directory again -- failing the pair if it still cannot. Failing to clear is: a
+# surviving file is the wrong attribution being removed, and LocalBackend and
+# KubernetesNativeBackend refuse to start an attempt over one for the same reason. It is reported
+# the way initSandbox reports a workspace it could not empty, at the pair level: no stage has run,
+# and a stage-level failure would have the monitor read that stage's surviving file.
 function containerDeclareStageAttributes {
+	# A link where the marker belongs is removed, never followed: clearing through it would
+	# delete files outside this pair's output.
+	if [ -L "$CONTAINER_STAGE_ATTRS_DIR" ]; then
+		if ! rm -f "$CONTAINER_STAGE_ATTRS_DIR"; then
+			containerFailStageAttributesClear "could not remove the link at $CONTAINER_STAGE_ATTRS_DIR"
+		fi
+	fi
 	if ! mkdir -p "$CONTAINER_STAGE_ATTRS_DIR"; then
 		log "warning: could not create $CONTAINER_STAGE_ATTRS_DIR when the pair started"
+		return 0
 	fi
+	local STALE
+	for STALE in "$CONTAINER_STAGE_ATTRS_DIR"/*.txt "$CONTAINER_STAGE_ATTRS_DIR"/*.txt.tmp; do
+		# An unmatched pattern stays literal; -L also catches a dangling link, which -e does not.
+		if [ -e "$STALE" ] || [ -L "$STALE" ]; then
+			# The result is not trusted: whether anything survived is checked next.
+			rm -rf -- "$STALE" || true
+		fi
+	done
+	for STALE in "$CONTAINER_STAGE_ATTRS_DIR"/*.txt "$CONTAINER_STAGE_ATTRS_DIR"/*.txt.tmp; do
+		if [ -e "$STALE" ] || [ -L "$STALE" ]; then
+			containerFailStageAttributesClear "a previous attempt's $STALE could not be removed"
+		fi
+	done
+}
+
+# Fails the pair when the start of an attempt cannot be made clean of a previous one's attributes.
+# $1 what could not be done
+function containerFailStageAttributesClear {
+	log "job error: $1"
+	STATUS_SENT=true
+	sendStatus $ERROR_RUNSCRIPT
+	# 0, as in initSandbox: the status has been reported, and LocalBackend replaces the status of
+	# a script that exits non-zero with ERROR_GENERAL.
+	exit 0
 }
 
 # Publishes one stage's post-processor output as stage-attributes/<n>.txt.
