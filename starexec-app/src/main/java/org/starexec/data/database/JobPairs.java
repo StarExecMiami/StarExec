@@ -3083,6 +3083,41 @@ public class JobPairs {
     }
 
     /**
+     * The stage numbers a pair has, as recorded in {@code jobpair_stage_data}.
+     *
+     * <p>No-op pipeline stages own no row, so the numbers need not be contiguous.
+     *
+     * @param pairId The pair to look up
+     * @return the pair's stage numbers, empty when it has none, or {@code null} when the
+     *         database could not be read
+     */
+    public static Set<Integer> getStageNumbers(int pairId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet results = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT stage_number FROM starexec.jobpair_stage_data WHERE jobpair_id = ?"
+            );
+            ps.setInt(1, pairId);
+            results = ps.executeQuery();
+            Set<Integer> stages = new TreeSet<>();
+            while (results.next()) {
+                stages.add(results.getInt("stage_number"));
+            }
+            return stages;
+        } catch (Exception e) {
+            log.error("getStageNumbers pairId=" + pairId, e);
+        } finally {
+            Common.safeClose(results);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return null;
+    }
+
+    /**
      * Updates a job pair's node assignment only while the pair is still actively
      * running or waiting to run.
      *

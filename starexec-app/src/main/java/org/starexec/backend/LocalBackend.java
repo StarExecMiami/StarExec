@@ -343,11 +343,30 @@ public class LocalBackend implements Backend {
                             " as its stage history");
             return false;
         }
+
+        // The per-stage attributes, for the same reason and with the same consequence. The
+        // directory is also the marker that this attempt's helper speaks the per-stage
+        // protocol, so a survivor would both supply a previous attempt's attributes -- a
+        // stage 2 file for an attempt that dies in stage 1 -- and hide an older helper's
+        // legacy attributes.txt.
+        File staleAttributes = new File(outputDir, STAGE_ATTRIBUTES_DIRECTORY);
+        boolean attributesRemoved = deleteTree(staleAttributes);
+        if (!attributesRemoved || pathStillPresent(staleAttributes)) {
+            log.error(
+                    "Stale stage-attributes from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its attributes");
+            return false;
+        }
         return allRemoved;
     }
 
     /** Fixed, application-defined name. Never derived from anything a job supplies. */
     private static final String STAGE_STATUS_DIRECTORY = "stage-status";
+
+    /** Fixed, application-defined name; see {@link StageAttributeFiles}. */
+    private static final String STAGE_ATTRIBUTES_DIRECTORY = StageAttributeFiles.DIRECTORY;
 
     /**
      * Artifacts a later attempt would READ as its own result, so a stale one is a wrong

@@ -10,7 +10,6 @@ import org.starexec.backend.exception.RetryableIngestionException;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.lang.reflect.Method;
-import java.util.Properties;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -79,7 +78,7 @@ public class StageZeroIngestionTest {
 			if (m.getName().equals("updateDatabase")) {
 				m.setAccessible(true);
 				try {
-					m.invoke(monitor, pairId, status, stageNumber, zeroStats(), new Properties());
+					m.invoke(monitor, pairId, status, stageNumber, zeroStats());
 				} catch (java.lang.reflect.InvocationTargetException e) {
 					throw e.getCause();
 				}
@@ -199,10 +198,10 @@ public class StageZeroIngestionTest {
 			throws Throwable {
 		ContainerJobMonitor container = new ContainerJobMonitor(null);
 		for (Method m : ContainerJobMonitor.class.getDeclaredMethods()) {
-			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 7) {
+			if (m.getName().equals("updateDatabase") && m.getParameterCount() == 6) {
 				m.setAccessible(true);
 				try {
-					m.invoke(container, pairId, stageNumber, null, status, new Properties(),
+					m.invoke(container, pairId, stageNumber, null, status,
 							0, new java.util.HashMap<Integer, Integer>());
 				} catch (java.lang.reflect.InvocationTargetException e) {
 					throw e.getCause();
@@ -210,7 +209,7 @@ public class StageZeroIngestionTest {
 				return;
 			}
 		}
-		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/7");
+		throw new AssertionError("no such method: ContainerJobMonitor.updateDatabase/6");
 	}
 
 	/**

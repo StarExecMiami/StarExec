@@ -44,6 +44,7 @@ STATUS_SENT=false
 CONTAINER_STATUS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/status.json"
 CONTAINER_STAGE_STATUS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-status"
 CONTAINER_STATS_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stats.json"
+CONTAINER_STAGE_ATTRS_DIR="${STAREXEC_OUTPUT_DIR:-/starexec/output}/stage-attributes"
 CONTAINER_LOG_FILE="${STAREXEC_OUTPUT_DIR:-/starexec/output}/${PAIR_ID}.txt"
 
 # Write status update for container mode
@@ -139,6 +140,98 @@ function containerWriteStats {
 EOF
 	mv -f "$CONTAINER_STATS_FILE.tmp" "$CONTAINER_STATS_FILE"
 	log "Container mode: wrote stats for stage $STAGE"
+}
+
+# Declares that this pair publishes its attributes per stage (see containerWriteStageAttributes).
+#
+# Called once, when the pair starts and before any stage runs, because the monitors read the
+# directory's existence as the protocol marker: present, they use only the per-stage files and
+# never the pair-wide attributes.txt; absent, the pair came from a helper that predates them.
+# A marker created only when the first stage published would leave a window in which a pair
+# polled mid-stage-1 looked like the old protocol. Created here, in the same file as the writer,
+# so a deployment can never ship one without the other.
+#
+# Also where a previous attempt's files are removed. A rerun runs in the same output directory,
+# and PodmanBackend clears nothing there first, so a rerun whose stage N ended without publishing
+# (its post-processor failed, say) left the monitor to read the replaced attempt's N.txt and file
+# it against a stage that failed. LocalBackend and KubernetesNativeBackend already remove the
+# directory before submitting, so on those this finds nothing to do. The directory itself stays:
+# it is the marker.
+#
+# Creating the marker is not fatal: without it the monitor falls back to the legacy rules, which
+# never attribute a multi-stage pair's file to a guessed stage, and containerWriteStageAttributes
+# creates the directory again -- failing the pair if it still cannot. Failing to clear is: a
+# surviving file is the wrong attribution being removed, and LocalBackend and
+# KubernetesNativeBackend refuse to start an attempt over one for the same reason. It is reported
+# the way initSandbox reports a workspace it could not empty, at the pair level: no stage has run,
+# and a stage-level failure would have the monitor read that stage's surviving file.
+function containerDeclareStageAttributes {
+	# A link where the marker belongs is removed, never followed: clearing through it would
+	# delete files outside this pair's output.
+	if [ -L "$CONTAINER_STAGE_ATTRS_DIR" ]; then
+		if ! rm -f "$CONTAINER_STAGE_ATTRS_DIR"; then
+			containerFailStageAttributesClear "could not remove the link at $CONTAINER_STAGE_ATTRS_DIR"
+		fi
+	fi
+	if ! mkdir -p "$CONTAINER_STAGE_ATTRS_DIR"; then
+		log "warning: could not create $CONTAINER_STAGE_ATTRS_DIR when the pair started"
+		return 0
+	fi
+	local STALE
+	for STALE in "$CONTAINER_STAGE_ATTRS_DIR"/*.txt "$CONTAINER_STAGE_ATTRS_DIR"/*.txt.tmp; do
+		# An unmatched pattern stays literal; -L also catches a dangling link, which -e does not.
+		if [ -e "$STALE" ] || [ -L "$STALE" ]; then
+			# The result is not trusted: whether anything survived is checked next.
+			rm -rf -- "$STALE" || true
+		fi
+	done
+	for STALE in "$CONTAINER_STAGE_ATTRS_DIR"/*.txt "$CONTAINER_STAGE_ATTRS_DIR"/*.txt.tmp; do
+		if [ -e "$STALE" ] || [ -L "$STALE" ]; then
+			containerFailStageAttributesClear "a previous attempt's $STALE could not be removed"
+		fi
+	done
+}
+
+# Fails the pair when the start of an attempt cannot be made clean of a previous one's attributes.
+# $1 what could not be done
+function containerFailStageAttributesClear {
+	log "job error: $1"
+	STATUS_SENT=true
+	sendStatus $ERROR_RUNSCRIPT
+	# 0, as in initSandbox: the status has been reported, and LocalBackend replaces the status of
+	# a script that exits non-zero with ERROR_GENERAL.
+	exit 0
+}
+
+# Publishes one stage's post-processor output as stage-attributes/<n>.txt.
+#
+# attributes.txt beside it holds only the latest stage and says nothing about which one, so the
+# monitors filed a two-stage pair's final result under stage 1 and lost stage 1's own. This copy is
+# the same bytes, named for the stage that produced them.
+#
+# Written beside the target and renamed, and tested as a condition for the reason
+# containerWriteStatus gives: a bare failure under `set -e` would be filed as ERROR_BENCHMARK.
+# The stage's attributes are part of its result, so failing to record them fails the stage.
+# $1 the stage number
+# $2 the post-processor output to publish
+function containerWriteStageAttributes {
+	local STAGE_NUMBER=$1
+	local SOURCE=$2
+	# The same bound the stage-status snapshot and the monitor use, and it keeps a caller from
+	# naming a file outside this directory.
+	if [[ ! "$STAGE_NUMBER" =~ ^[1-9][0-9]{0,8}$ ]]; then
+		log "job error: not recording attributes for invalid stage number '$STAGE_NUMBER'"
+		return 0
+	fi
+	local TARGET="$CONTAINER_STAGE_ATTRS_DIR/$STAGE_NUMBER.txt"
+	if ! { mkdir -p "$CONTAINER_STAGE_ATTRS_DIR" \
+			&& cp "$SOURCE" "$TARGET.tmp" \
+			&& mv -f "$TARGET.tmp" "$TARGET"; }; then
+		log "job error: could not record the attributes of stage $STAGE_NUMBER at $TARGET"
+		STATUS_SENT=true
+		sendStatus "$ERROR_GENERAL" "$STAGE_NUMBER"
+		exit 1
+	fi
 }
 
 # Check if running in container mode
@@ -952,6 +1045,9 @@ function sendNode {
 	local NODE=$(dbEscape $1)
 	local SANDBOX=$(($2))
 	log "sending Node Id $NODE to $REPORT_HOST in sandbox $SANDBOX"
+	if isContainerMode; then
+		containerDeclareStageAttributes
+	fi
 	sendStatus $STATUS_RUNNING
 	sendStageStatus $STATUS_RUNNING ${STAGE_NUMBERS[STAGE_INDEX]}
 	if ! isContainerMode; then
@@ -1253,6 +1349,10 @@ function copyOutput {
 				mv -f "$STAREXEC_OUTPUT_DIR/attributes.txt.tmp" "$STAREXEC_OUTPUT_DIR/attributes.txt"
 				log "Copied attributes.txt to STAREXEC_OUTPUT_DIR: $STAREXEC_OUTPUT_DIR/attributes.txt"
 			fi
+		fi
+
+		if isContainerMode; then
+			containerWriteStageAttributes "$1" "$OUT_DIR/attributes.txt"
 		fi
 	fi
 
