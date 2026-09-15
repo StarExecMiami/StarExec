@@ -1930,6 +1930,14 @@ public class Util {
      */
     public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
         final String methodName = "copyFileFromURLUsingProxy";
+        if (!isDownloadableUrl(url)) {
+            log.warn(
+                methodName,
+                "refusing to download a URL with scheme " +
+                    (url == null ? null : url.getProtocol())
+            );
+            return false;
+        }
         try {
             Proxy proxy = new Proxy(
                 Proxy.Type.HTTP,
@@ -1947,6 +1955,20 @@ public class Util {
             log.error(methodName, e.getMessage(), e);
         }
         return false;
+    }
+
+    /**
+     * Whether a URL a user supplied may be downloaded: only http and https.
+     *
+     * @param url the URL to check, may be null
+     * @return true when the scheme is http or https, case-insensitively
+     */
+    public static boolean isDownloadableUrl(URL url) {
+        if (url == null) {
+            return false;
+        }
+        String scheme = url.getProtocol();
+        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
     }
 
     /**
