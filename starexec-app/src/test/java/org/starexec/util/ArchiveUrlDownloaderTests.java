@@ -2,6 +2,7 @@ package org.starexec.util;
 
 import com.sun.net.httpserver.HttpServer;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.starexec.util.ArchiveUrlDownloader.Policy;
@@ -18,6 +19,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -122,6 +124,19 @@ public class ArchiveUrlDownloaderTests {
 
 		assertTrue(ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), destination, permitting(LOOPBACK)));
 		assertArrayEquals(ARCHIVE, Files.readAllBytes(destination.toPath()));
+	}
+
+	/**
+	 * The archive is group-readable, as it was before downloads went through a temporary file, so an
+	 * extraction run as another user of the group can read it.
+	 */
+	@Test
+	public void aDownloadedArchiveIsReadableByItsGroup() throws Exception {
+		Assume.assumeTrue("POSIX file permissions", Files.getFileStore(dir).supportsFileAttributeView("posix"));
+		HttpServer server = serveArchive(LOOPBACK, "/solver.zip");
+
+		assertTrue(ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), destination, permitting(LOOPBACK)));
+		assertEquals(PosixFilePermissions.fromString("rw-r-----"), Files.getPosixFilePermissions(destination.toPath()));
 	}
 
 	/** A redirect to a scheme other than http(s) is not followed, and its body is not kept. */
