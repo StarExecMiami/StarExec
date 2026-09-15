@@ -1290,6 +1290,31 @@ public class PodmanBackendTests {
     }
 
     /**
+     * Only the container this call named, carrying this execution's label, is taken: the name
+     * filter matches substrings, and a leftover "-retryN" container or another execution's must
+     * not be adopted.
+     */
+    @Test
+    public void onlyTheExactNameWithThisExecutionsLabelIsReused() throws Exception {
+        when(mockListContainersCmd.withNameFilter(anyCollection())).thenReturn(mockListContainersCmd);
+        Method find = PodmanBackend.class.getDeclaredMethod(
+            "findCreatedContainer", String.class, int.class);
+        find.setAccessible(true);
+
+        // Built before stubbing the list: each stubs its own mock.
+        Container retry = listed("retry", "/starexec-job-1-retry2", "7");
+        Container otherExecution = listed("other", "/starexec-job-1", "8");
+        Container mine = listed("mine", "/starexec-job-1", "7");
+
+        when(mockListContainersCmd.exec()).thenReturn(Arrays.asList(retry, otherExecution));
+        assertNull(find.invoke(backend, "starexec-job-1", 7));
+
+        when(mockListContainersCmd.exec()).thenReturn(Arrays.asList(retry, mine));
+        assertEquals("mine", find.invoke(backend, "starexec-job-1", 7));
+    }
+
+
+    /**
      * The client's create throws, but the engine made the container: a name lookup returns it,
      * with the name and labels the create was given. Returns the name the create used.
      */
@@ -1327,5 +1352,13 @@ public class PodmanBackendTests {
             return Collections.singletonList(existing);
         });
         return name;
+    }
+
+    private Container listed(String id, String name, String execId) {
+        Container c = mock(Container.class);
+        when(c.getId()).thenReturn(id);
+        when(c.getNames()).thenReturn(new String[] {name});
+        when(c.getLabels()).thenReturn(Collections.singletonMap("starexec.exec.id", execId));
+        return c;
     }
 }
