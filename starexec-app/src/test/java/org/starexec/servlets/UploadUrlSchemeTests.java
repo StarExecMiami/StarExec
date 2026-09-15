@@ -26,6 +26,10 @@ import java.util.HashMap;
 public class UploadUrlSchemeTests {
 
 	private static final String URL_REQUIRED = "Archive URLs must be valid http or https URLs";
+	private static final String NAME_REQUIRED = "Archive URLs must end in an archive file name, such as solver.zip";
+	private static final String SOLVER_TYPE_REQUIRED = "Archives need to have an extension of .zip, .tar, or .tgz";
+	private static final String PROCESSOR_TYPE_REQUIRED = "Uploaded archives must be a .zip, .tar, or .tgz";
+	private static final String NOT_AUTHORIZED = "You are not authorized to add solvers to this space";
 
 	/** The request validator's patterns are compiled at application startup. */
 	@BeforeClass
@@ -52,7 +56,52 @@ public class UploadUrlSchemeTests {
 	public void aSolverHttpsUrlPassesValidation() throws Exception {
 		postSolver("HTTPS://example.org/solver.zip");
 
-		verifyBadRequest("You are not authorized to add solvers to this space");
+		verifyBadRequest(NOT_AUTHORIZED);
+	}
+
+	/** The archive is named by the last segment of the URL's path. */
+	@Test
+	public void aSolverUrlEndingInADirectoryIsRefused() throws Exception {
+		postSolver("https://example.org/solvers/");
+
+		verifyBadRequest(NAME_REQUIRED);
+	}
+
+	@Test
+	public void aSolverUrlEndingInAParentSegmentIsRefused() throws Exception {
+		postSolver("https://example.org/solvers/..");
+
+		verifyBadRequest(NAME_REQUIRED);
+	}
+
+	/** Guard: a query string is not part of the archive name. */
+	@Test
+	public void aSolverUrlWithAQueryIsNamedByItsPath() throws Exception {
+		postSolver("https://example.org/solver.zip?version=2");
+
+		verifyBadRequest(NOT_AUTHORIZED);
+	}
+
+	/** An archive extension in the query does not make the path an archive. */
+	@Test
+	public void aSolverUrlWithTheArchiveOnlyInItsQueryIsRefused() throws Exception {
+		postSolver("https://example.org/download?file=solver.zip");
+
+		verifyBadRequest(SOLVER_TYPE_REQUIRED);
+	}
+
+	@Test
+	public void aProcessorUrlEndingInADirectoryIsRefused() throws Exception {
+		postProcessor("http://example.org/processors/");
+
+		verifyBadRequest(NAME_REQUIRED);
+	}
+
+	@Test
+	public void aProcessorUrlWithTheArchiveOnlyInItsQueryIsRefused() throws Exception {
+		postProcessor("http://example.org/download?file=processor.zip");
+
+		verifyBadRequest(PROCESSOR_TYPE_REQUIRED);
 	}
 
 	@Test
@@ -122,6 +171,8 @@ public class UploadUrlSchemeTests {
 			post.run();
 
 			util.verify(() -> Util.copyFileFromURLUsingProxy(Mockito.any(), Mockito.any()), Mockito.never());
+			util.verify(() -> Util.copyFileFromURLUsingProxy(Mockito.any(), Mockito.any(), Mockito.anyLong()),
+					Mockito.never());
 		}
 	}
 

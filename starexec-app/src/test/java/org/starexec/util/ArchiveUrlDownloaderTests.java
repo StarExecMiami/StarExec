@@ -141,6 +141,20 @@ public class ArchiveUrlDownloaderTests {
 		assertEquals(PosixFilePermissions.fromString("rw-r-----"), Files.getPosixFilePermissions(destination.toPath()));
 	}
 
+	/** A destination that does not name a file inside its directory is refused before connecting. */
+	@Test
+	public void aDestinationThatIsNotAFileInItsDirectoryIsRefused() throws Exception {
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer server = serveArchive(LOOPBACK, "/solver.zip", requests);
+
+		for (String name : List.of("..", ".")) {
+			File outside = new File(dir.toFile(), name);
+			assertFalse(name, ArchiveUrlDownloader.download(urlOf(server, "/solver.zip"), outside, permitting(LOOPBACK)));
+		}
+		assertEquals("the server is never contacted", 0, requests.get());
+		assertNothingLeft();
+	}
+
 	/** A redirect to a scheme other than http(s) is not followed, and its body is not kept. */
 	@Test
 	public void aRedirectToAnotherSchemeIsNotFollowed() throws Exception {
