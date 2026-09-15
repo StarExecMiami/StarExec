@@ -9,7 +9,7 @@ at least one run script (aka <em>configuration</em>).
 
 <p>A solver can be built on starexec. To do this write a script that compiles your solver,
 name it starexec_build, and place it in the top level directory of your compressed solver file.
-For more information please refer to the <a href="https://wiki.uiowa.edu/display/stardev/User+Guide#UserGuide-Solvers">User Guide</a>.</p>
+For more information please refer to the <a href="${starexecRoot}/public/StarExecUserGuide.pdf#page=4">User Guide</a>.</p>
 
 <h2>Solver info</h2>
 
@@ -52,7 +52,7 @@ if you have two configuration files <code>starexec_run_default</code> and
 in StarExec named respectively <code>default</code> and <code>OtherConfig</code>.
 </p>
 
-<p>See the <a href="https://wiki.uiowa.edu/display/stardev/User+Guide#UserGuide-Configurations">User Guide</a> for more details on how to write configuration scripts.
+<p>See the <a href="${starexecRoot}/public/StarExecUserGuide.pdf#page=5">User Guide</a> for more details on how to write configuration scripts.
 </p>
 
 <iframe width="640" height="360" src="https://www.youtube-nocookie.com/embed/St-XKdMI8dc?rel=0&amp;showinfo=0?ecver=1" frameborder="0" allowfullscreen></iframe>
