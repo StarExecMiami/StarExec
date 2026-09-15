@@ -3088,7 +3088,10 @@ BEGIN
 	anonymous_primitive_names.anonymous_name,
 	job_pairs.path,
 	job_pair_completion.completion_id,
-	job_pair_completion.primary_jobpair_data
+	-- The pair's own primary stage. job_pair_completion.primary_jobpair_data exists (V0017) but no
+	-- insert writes it, so reading it made every pair's primary stage 0 and left the job page's
+	-- Primary summary empty (#206).
+	job_pairs.primary_jobpair_data
 	FROM starexec.job_pairs
 	JOIN job_spaces ON job_spaces.id = job_pairs.job_space_id
 	LEFT JOIN anonymous_primitive_names ON
