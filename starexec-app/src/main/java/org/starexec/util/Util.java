@@ -6,7 +6,6 @@ import static java.util.Objects.nonNull;
 import java.awt.*;
 import java.io.*;
 import java.lang.reflect.Field;
-import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -1935,33 +1934,11 @@ public class Util {
      * @return True on success and false otherwise
      */
     public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
-        final String methodName = "copyFileFromURLUsingProxy";
-        if (!isDownloadableUrl(url)) {
-            log.warn(
-                methodName,
-                "refusing to download a URL with scheme " +
-                    (url == null ? null : url.getProtocol())
-            );
-            return false;
-        }
-        try {
-            URLConnection connection = url.openConnection();
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            int status = ((HttpURLConnection) connection).getResponseCode();
-            if (status < 200 || status > 299) {
-                log.warn(methodName, "download answered HTTP " + status);
-                return false;
-            }
-            FileUtils.copyInputStreamToFile(
-                connection.getInputStream(),
-                archiveFile
-            );
-            return true;
-        } catch (Exception e) {
-            log.error(methodName, e.getMessage(), e);
-        }
-        return false;
+        return ArchiveUrlDownloader.download(
+            url,
+            archiveFile,
+            ArchiveUrlDownloader.Policy.standard()
+        );
     }
 
     /** Why a user-supplied archive URL is refused; shown to the user. */
