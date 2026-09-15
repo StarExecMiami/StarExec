@@ -767,8 +767,9 @@ public class LocalJobMonitor {
 
         // 7. Attributes, each against the stage that produced it. Only after the status write
         //    above has been accepted: a refused status throws out of updateDatabase, and no
-        //    attribute may be recorded against a result the database declined.
-        recordAttributes(pairId, outputDir, ss, attributes);
+        //    attribute may be recorded against a result the database declined. Ownership is
+        //    re-checked inside, immediately before the write, as in step 5.
+        recordAttributes(pairId, state, outputDir, ss, attributes);
 
         // 8. Report whether this run reached a terminal status. Retiring the pair is the
         //    caller's job, so that the removal is generation-guarded in one place.
@@ -1247,6 +1248,7 @@ public class LocalJobMonitor {
      */
     private void recordAttributes(
             int pairId,
+            PairExecutionState state,
             Path outputDir,
             StatusAndStage ss,
             Properties legacy) throws Exception {
@@ -1265,6 +1267,15 @@ public class LocalJobMonitor {
         for (Map.Entry<Integer, Properties> entry : byStage.entrySet()) {
             if (entry.getValue().isEmpty()) {
                 continue;
+            }
+            // The mutation boundary, as in ingestEarlierStageStatuses. Everything above read
+            // files and the database; a rerun that landed meanwhile has started over, and these
+            // files -- read before its cleanup removed them -- belong to the attempt it replaced.
+            // Checked before every write, so a rerun landing mid-loop stops the rest as well.
+            if (!isCurrent(pairId, state)) {
+                log.info("Monitor: pairId=" + pairId + " was rerun while its attributes were"
+                        + " read; discarding the superseded run's attributes");
+                return;
             }
             // The result is logged rather than retried, as it always was here: a retry replays
             // the whole ingestion, and that trade-off is not this change's to make.

@@ -294,6 +294,34 @@ public class StageResultAttributionTest {
 		}
 	}
 
+	/**
+	 * A rerun registered after the poll wrote the pair's status, but before it wrote the
+	 * attributes, has started over: the files this poll already read belong to the attempt the
+	 * rerun replaced, so none of them may be written against the pair.
+	 */
+	@Test
+	public void aLocalPollSupersededAfterTheStatusWriteRecordsNoAttributes() throws Exception {
+		Assume.assumeTrue(backend == Backend.LOCAL);
+		Pair pair = new Pair(1, 2);
+		pair.start();
+		pair.stage(1, THEOREM).complete(1);
+		pair.stage(2, UNKNOWN).complete(2);
+		pair.run(0);
+
+		Local local = new Local(pair);
+		try {
+			boolean[] rerunLanded = { false };
+			Ingested result = local.poll(() -> {
+				local.monitor.registerJob(pair.out.toString(), PAIR);
+				rerunLanded[0] = true;
+			}, 1, 2);
+			assertTrue("the rerun must land at the status write", rerunLanded[0]);
+			assertRecorded(result, Map.of());
+		} finally {
+			local.close();
+		}
+	}
+
 	// ------------------------------------------------------------------ edge cases
 
 	/**
@@ -553,8 +581,23 @@ public class StageResultAttributionTest {
 		}
 
 		Ingested poll(Integer... stages) throws Exception {
+			return poll(() -> { }, stages);
+		}
+
+		/** A poll in which {@code afterStatusWrite} runs once the database accepts the status. */
+		Ingested poll(Runnable afterStatusWrite, Integer... stages) throws Exception {
 			try (MockedStatic<JobPairs> db = Mockito.mockStatic(JobPairs.class)) {
 				Ingested result = stubDatabase(db, Set.of(stages));
+				db.when(() -> JobPairs.setPairStatusPreciseResult(Mockito.anyInt(),
+								Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+								Mockito.anyBoolean()))
+						.thenAnswer(inv -> {
+							if (!Set.of(stages).contains((Integer) inv.getArgument(1))) {
+								return PairStatusResult.REJECTED_INVALID_STAGE;
+							}
+							afterStatusWrite.run();
+							return PairStatusResult.APPLIED;
+						});
 				try {
 					result.terminal = (boolean) process.invoke(monitor, PAIR, state);
 				} catch (InvocationTargetException e) {
