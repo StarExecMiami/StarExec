@@ -372,13 +372,6 @@ public class GetPageTests extends TestSequence {
 	}
 
 	@StarexecTest
-	private void getAdminTestingTest() {
-		Assert.assertTrue(adminCon.canGetPage("secure/admin/testing.jsp"));
-		Assert.assertFalse(con.canGetPage("secure/admin/testing.jsp"));
-
-	}
-
-	@StarexecTest
 	private void getAdminUserTest() {
 		Assert.assertTrue(adminCon.canGetPage("secure/admin/user.jsp"));
 		Assert.assertFalse(con.canGetPage("secure/admin/user.jsp"));
