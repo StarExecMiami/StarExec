@@ -352,7 +352,7 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 				record(PAIR_ID, COMPLETE, 2));
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out, "names stage");
+		assertRejectedWithoutWriting(out, "is named for stage 1 but records stage 2");
 	}
 
 	/**
@@ -457,7 +457,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out, "carries non-terminal status");
+		assertRejectedWithoutWriting(out, "carries status " + RUNNING
+				+ ", which is not a terminal execution result");
 	}
 
 	/**
@@ -475,7 +476,8 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 		writeSnapshot(out, PAIR_ID, COMPLETE, 2);
 		writeCleanRun(out);
 
-		assertRejectedWithoutWriting(out, "carries non-terminal status 22");
+		assertRejectedWithoutWriting(out,
+				"carries status 22, which is not a terminal execution result");
 
 		// The post-processing task selects on exactly this, so nothing may be left holding it.
 		try (Connection con = Common.getConnection()) {
@@ -552,12 +554,22 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 	}
 
 	/**
-	 * Content that will never be valid still resolves, so a genuinely broken container cannot
-	 * occupy the queue forever. This is the other half of the classification: the pair is
-	 * failed and the container released, which is correct here and wrong for the case above.
+	 * Content that will never be valid is held, not resolved (#200).
+	 *
+	 * <p>This used to assert the opposite: the pair recorded {@code ERROR_RUNSCRIPT} and the
+	 * container removed, so that a broken container could not occupy the queue forever. That
+	 * concern no longer needs a fabricated result. The refusal is an
+	 * {@code InvalidSnapshotException}, which the poll loop answers by handing the execution slot
+	 * back and holding the container, and Local and Kubernetes hold the same bytes the same way.
+	 * The old outcome also invented the stage it wrote to -- 1, with every later stage marked not
+	 * reached -- for a pair whose own output never said which stage ran, and removed the container
+	 * an operator would need to see why.
+	 *
+	 * <p>So: the slot is released once, the container is kept and skipped by the next poll, no
+	 * row changes, and the output is still on disk.
 	 */
 	@Test
-	public void unusableContentIsStillResolvedAndReleased() throws Exception {
+	public void unusableContentIsHeldWithItsContainer() throws Exception {
 		Path out = outputDir("unusable");
 		writeLegacyStatus(out, PAIR_ID, COMPLETE, 2);
 		writeSnapshot(out, OTHER_PAIR_ID, COMPLETE, 1);
@@ -569,11 +581,19 @@ public class ContainerMultiStageStatusSqlTest extends Common {
 				.thenReturn(Collections.singletonList(info));
 
 		pollOnce();
+		pollOnce();
 
-		Mockito.verify(backend, Mockito.times(1))
+		Mockito.verify(backend, Mockito.never())
 				.removeCompletedContainer("unusable-container");
-		assertEquals("the pair is resolved rather than left hanging",
-				11, pairStatus());
+		Mockito.verify(backend, Mockito.times(1))
+				.releaseSlotForCompletedContainer("unusable-container");
+		assertEquals("the pair is left unresolved, not failed", ENQUEUED, pairStatus());
+		assertEquals("stage 1 must be untouched", ENQUEUED, stageStatus(1));
+		assertEquals("stage 2 must be untouched", ENQUEUED, stageStatus(2));
+		assertEquals("nothing completed the pair", 0, completions());
+		assertEquals("the pair it named must be untouched",
+				ENQUEUED, stageStatus(OTHER_PAIR_ID, 1));
+		assertTrue("the output survives", Files.exists(out.resolve("stage-status/1.json")));
 	}
 
 	/**

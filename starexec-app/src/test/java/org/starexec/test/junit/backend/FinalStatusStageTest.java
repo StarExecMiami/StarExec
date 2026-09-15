@@ -210,6 +210,30 @@ public class FinalStatusStageTest {
 		assertEquals(2, stage.getInt(ss));
 	}
 
+	/**
+	 * Local's status field is read as strictly as its stage (#196). gson's getAsInt accepted a
+	 * quoted "7", truncated 7.5, unwrapped [7] and wrapped 4294967303 (2^32 + 7) to 7, so each of
+	 * these recorded STATUS_COMPLETE for a pair that never wrote it.
+	 *
+	 * <p>Only the integer shape is at issue here. What Local does with an integer that names no
+	 * known status is a separate contract and is not asserted.
+	 */
+	@Test
+	public void localRefusesAStatusThatIsNotAStrictInteger() throws Throwable {
+		for (String status : new String[] {"\"7\"", "7.5", "[7]", "true", "4294967303"}) {
+			String body = "{\"pairId\":4242,\"status\":" + status + ",\"stageNumber\":1}";
+			try {
+				Object result = readStatusFile(statusDir(body));
+				fail("status " + status + " must be refused, not read as " + result);
+			} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+				assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
+						expected.getMessage().contains("non-integer status"));
+				assertEquals("must be classified BLOCKED, not retried",
+						"BLOCKED", classify(expected));
+			}
+		}
+	}
+
 	// --------------------------------------------------- C. ContainerJobMonitor lifecycle
 
 	/**
@@ -247,6 +271,56 @@ public class FinalStatusStageTest {
 							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
 							Mockito.anyInt()),
 					Mockito.never());
+		}
+	}
+
+	/**
+	 * status.json's pairId is an ownership claim: checked against the container label, and
+	 * adopted as the pair when the container has no usable label. gson's getAsInt made "4242",
+	 * 4242.5, [4242] and 4294971538 (2^32 + 4242) all equal 4242, so a malformed claim passed the
+	 * check, or named the pair outright (#196). Each is refused before anything is written,
+	 * with and without a label.
+	 */
+	@Test
+	public void containerRefusesADeclaredPairIdThatIsNotAStrictInteger() throws Throwable {
+		String[] shapes = {"\"4242\"", "4242.5", "[4242]", "4294971538"};
+		for (int label : new int[] {PAIR, -1}) {
+			for (String pairId : shapes) {
+				Path dir = statusDir(
+						"{\"pairId\":" + pairId + ",\"status\":7,\"stageNumber\":1}");
+				ContainerJobMonitor monitor = new ContainerJobMonitor(null);
+				PodmanBackend.CompletedContainerInfo info =
+						new PodmanBackend.CompletedContainerInfo("c-" + label, label,
+								dir.toString(), 0);
+
+				Method m = ContainerJobMonitor.class.getDeclaredMethod(
+						"processCompletedJob", PodmanBackend.CompletedContainerInfo.class);
+				m.setAccessible(true);
+				String shape = "label " + label + ", pairId " + pairId;
+				try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+					try {
+						m.invoke(monitor, info);
+						fail(shape + " must be refused");
+					} catch (java.lang.reflect.InvocationTargetException e) {
+						assertTrue(shape + ": expected the invalid-snapshot refusal, got "
+										+ e.getCause(),
+								e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+						assertTrue(shape + ": the refusal must name the field it refused: "
+										+ e.getCause().getMessage(),
+								e.getCause().getMessage().contains("non-integer pairId"));
+					}
+					jobPairsMock.verify(
+							() -> JobPairs.setPairStatusPreciseResult(
+									Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+									Mockito.anyInt(), Mockito.anyBoolean()),
+							Mockito.never());
+					jobPairsMock.verify(
+							() -> JobPairs.setPairStatusPrecise(
+									Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+									Mockito.anyInt()),
+							Mockito.never());
+				}
+			}
 		}
 	}
 

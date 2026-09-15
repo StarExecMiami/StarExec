@@ -568,7 +568,15 @@ public class ContainerJobMonitor {
                         + " record, so the stage that produced this result is unknown", e);
             }
             if (obj.has("pairId")) {
-                declaredPairId = obj.get("pairId").getAsInt();
+                // An ownership claim, so not getAsInt: "4242", 4242.5, [4242] and 2^32 + 4242
+                // would all pass the label check below, or become the pair (#196).
+                try {
+                    declaredPairId = StrictJsonInt.parse("pairId", obj.get("pairId"));
+                } catch (StrictJsonInt.NotAnInt e) {
+                    throw new StageStatusSnapshots.InvalidSnapshotException(
+                        "status.json for pair " + info.pairId + " has a non-integer pairId: it "
+                            + e.getMessage());
+                }
             }
             // Throws rather than defaulting. Caught in the poll loop by the branch that
             // holds the container, so nothing is invented and nothing is retried.
@@ -602,47 +610,29 @@ public class ContainerJobMonitor {
         // untrusted file supplies both the claim and the thing it is checked against. Those
         // containers keep the old status.json-only behaviour, which is what they were built
         // for, and gain no ability to write another pair's stage rows.
+        //
+        // Read through StageStatusSnapshots, the reader Local and Kubernetes use, so the same bytes
+        // are refused the same way on every backend (#200). Bounded by the stage status.json
+        // reported: every record is checked for what its bytes say, earlier stages must also hold
+        // a terminal execution result, and only those earlier stages are returned. A refusal is
+        // an InvalidSnapshotException, which the poll loop holds with the container rather than
+        // recording as a solver failure.
         Map<Integer, Integer> stageSnapshots;
         if (pairIdFromLabel) {
-            stageSnapshots = readStageSnapshots(outputPath, pairId);
+            try {
+                stageSnapshots = StageStatusSnapshots.read(outputPath, pairId, stageNumber);
+            } catch (IOException e) {
+                // The filesystem, not the contents: retried, as the other monitors classify it.
+                throw new RetryableIngestionException(
+                    "Could not read the stage snapshots for pair " + pairId, e
+                );
+            }
         } else {
             stageSnapshots = Collections.emptyMap();
             if (Files.isDirectory(outputPath.resolve("stage-status"))) {
                 log.warn(
                     "Container " + info.containerId + " has no authoritative pair label;" +
                         " ignoring its per-stage snapshots and processing status.json only"
-                );
-            }
-        }
-
-        // Every earlier stage must carry a status that is actually a result.
-        //
-        // Two things are being refused here. One is lost history: a stage still showing
-        // RUNNING while a later stage finished cannot be reconstructed, because sequential
-        // completion is not a safe inference -- a no-op pipeline stage consumes a stage
-        // number without owning a jobpair_stage_data row, so the numbers are not contiguous
-        // and "stage 3 finished" implies nothing about stage 2.
-        //
-        // The other is laundering. STATUS_PROCESSING_RESULTS, STATUS_PAUSED and
-        // STATUS_PROCESSING all mean work is still owed, and a stage parked at
-        // STATUS_PROCESSING is selected by the periodic post-processing task, which then
-        // sets the whole PAIR to STATUS_COMPLETE. Accepting them here would let a container
-        // turn its own timeout into a clean completion. isTerminalExecutionResult is the
-        // set the database itself enforces; a numeric ">= 7" test is not.
-        //
-        // Only stages before the terminal one are checked. The terminal stage's own snapshot
-        // is not used -- its status comes from the runsolver artifacts -- and a pair killed
-        // mid-stage legitimately leaves that one at RUNNING.
-        for (Map.Entry<Integer, Integer> snapshot : stageSnapshots.entrySet()) {
-            if (
-                snapshot.getKey() < stageNumber &&
-                !StatusCode.toStatusCode(snapshot.getValue()).isTerminalExecutionResult()
-            ) {
-                throw new Exception(
-                    "Pair " + pairId + " reports stage " + stageNumber +
-                        " finished, but stage " + snapshot.getKey() +
-                        " carries non-terminal status " + snapshot.getValue() +
-                        "; refusing to record it as a result"
                 );
             }
         }
@@ -684,18 +674,24 @@ public class ContainerJobMonitor {
         updateDatabase(
             pairId,
             stageNumber,
-            stats,
             status,
-            info.partitionIndex,
             stageSnapshots
         );
 
-        // 5. Attributes, each against the stage that produced it. Only after updateDatabase
-        //    returned: a refused status throws out of it, and no attribute may be recorded
-        //    against a result the database declined. The stages eligible are the ones already
-        //    known to have finished -- earlier stages, whose snapshots the loop above required to
-        //    be terminal, and the terminal stage itself.
-        recordAttributes(pairId, outputPath, stageNumber, stageSnapshots, attributes);
+        // 5. Measurements and attributes, each against the stage that produced it. Only after
+        //    updateDatabase returned: a refused status throws out of it, and nothing may be
+        //    recorded against a result the database declined. The stages eligible are the ones
+        //    already known to have finished -- earlier stages, whose snapshots StageStatusSnapshots
+        //    required to be terminal, and the terminal stage itself. runsolver's var.out and
+        //    watcher.out, read in step 1, decide the terminal status only.
+        Set<Integer> finishedEarlier = new TreeSet<>();
+        for (Integer stage : stageSnapshots.keySet()) {
+            if (stage < stageNumber) {
+                finishedEarlier.add(stage);
+            }
+        }
+        recordMeasurements(pairId, outputPath, stageNumber, finishedEarlier, info.partitionIndex);
+        recordAttributes(pairId, outputPath, stageNumber, finishedEarlier, attributes);
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
@@ -704,27 +700,6 @@ public class ContainerJobMonitor {
      * Parses runsolver var.out and watcher.out files.
      * Also checks for stats.json as an alternative format.
      */
-    /**
-     * True if any source yielded a measurement, i.e. we learned something about this run.
-     *
-     * <p>Every field of {@link RunsolverStats} starts at zero, so an all-zero object is
-     * indistinguishable from "nothing was parsed" -- and that is precisely the case in
-     * which the values must not be written. A real run always reports a positive
-     * wallclock: runsolver measures wall time as a float and no process takes literally
-     * zero seconds. {@code exitCodeReported} is included because a solver that exited
-     * immediately with a status is a run we did observe.
-     */
-    private static boolean hasAnyMeasurement(RunsolverStats stats) {
-        return stats.wallclockTime > 0
-            || stats.cpuTime > 0
-            || stats.userTime > 0
-            || stats.systemTime > 0
-            || stats.maxVirtualMemory > 0
-            || stats.maxResidentSetSize > 0
-            || stats.diskSize > 0
-            || stats.exitCodeReported;
-    }
-
     private RunsolverStats parseRunsolverOutput(Path outputDir) {
         RunsolverStats stats = new RunsolverStats();
 
@@ -979,133 +954,6 @@ public class ContainerJobMonitor {
     }
 
     /**
-     * Snapshot files the job script writes under {@code stage-status/}, one per stage.
-     *
-     * <p>The digit count is bounded so the stage number always fits in an {@code int}. An
-     * unbounded {@code [0-9]*} would match a twenty-digit name, and parsing that throws
-     * {@link NumberFormatException} out of the whole completion -- which does not reject
-     * the pair, it wedges it, because the container is kept and every later poll hits the
-     * same file again. Nine digits is past any real stage count, and a longer name simply
-     * is not a snapshot.
-     */
-    /** A per-stage snapshot is a single short JSON object; anything larger is not one. */
-    private static final long MAX_SNAPSHOT_BYTES = 8L * 1024L;
-
-    private static final Pattern STAGE_SNAPSHOT_NAME = Pattern.compile(
-        "^([1-9][0-9]{0,8})\\.json$"
-    );
-
-    /**
-     * Reads the per-stage status snapshots a finished container left behind.
-     *
-     * <p>status.json is a single slot and every stage truncates it, so before these
-     * existed only the last stage's status survived a multi-stage pair -- every earlier
-     * stage kept the status it was enqueued with, however far it actually got. The job
-     * script now writes the same record once per stage into {@code stage-status/<n>.json}
-     * beside it.
-     *
-     * <p>Each record is checked against something the solver does not control before it
-     * is believed. The pair comes from the container label, not from the file, and the
-     * file name has to agree with the stage the record names. That matters because the
-     * job container runs the solver as root in the same namespace as the job script, so
-     * this directory is writable by solver code; the label is not.
-     *
-     * <p>A record that fails a check aborts the whole read rather than being skipped. A
-     * pair whose output cannot be trusted must not be half recorded, and throwing here
-     * leaves the container in place for the next poll to retry.
-     *
-     * @param outputDir the container's output directory
-     * @param pairId    the pair the container is labelled with
-     * @return stage number to status code, empty when the directory is absent
-     * @throws Exception when a record is malformed or does not belong to this pair
-     */
-    private Map<Integer, Integer> readStageSnapshots(Path outputDir, int pairId)
-        throws Exception {
-        Map<Integer, Integer> snapshots = new TreeMap<>();
-        Path dir = outputDir.resolve("stage-status");
-        if (!Files.isDirectory(dir)) {
-            // An older job script, or a pair that recorded nothing. Handled exactly as
-            // before, from status.json alone.
-            return snapshots;
-        }
-
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
-            for (Path entry : entries) {
-                String name = entry.getFileName().toString();
-                Matcher named = STAGE_SNAPSHOT_NAME.matcher(name);
-                if (!named.matches()) {
-                    // The writer's own temporary file, or something that is not a
-                    // snapshot at all. Ignored rather than guessed at.
-                    log.debug("Ignoring non-snapshot file in stage-status: " + name);
-                    continue;
-                }
-                int stageFromName = Integer.parseInt(named.group(1));
-
-                // A snapshot is one short JSON object. Reading whatever size the container
-                // chose to write would let it exhaust the heap, and OutOfMemoryError is an
-                // Error rather than an Exception -- it would escape every catch in the poll
-                // loop and stall completion for every pair queued behind this one.
-                long size = Files.size(entry);
-                if (size > MAX_SNAPSHOT_BYTES) {
-                    throw new Exception(
-                        "Stage snapshot " + entry + " is " + size +
-                            " bytes; refusing to read more than " + MAX_SNAPSHOT_BYTES
-                    );
-                }
-
-                JsonObject obj;
-                try {
-                    obj = JsonParser
-                        .parseString(Files.readString(entry))
-                        .getAsJsonObject();
-                } catch (Exception e) {
-                    throw new Exception("Malformed stage snapshot " + entry, e);
-                }
-                if (
-                    !obj.has("pairId") ||
-                    !obj.has("stageNumber") ||
-                    !obj.has("status")
-                ) {
-                    throw new Exception("Incomplete stage snapshot " + entry);
-                }
-
-                int recordPairId = obj.get("pairId").getAsInt();
-                int recordStage = obj.get("stageNumber").getAsInt();
-                int recordStatus = obj.get("status").getAsInt();
-
-                if (recordPairId != pairId) {
-                    throw new Exception(
-                        "Stage snapshot " + entry + " claims pair " + recordPairId +
-                            " but the container is labelled pair " + pairId
-                    );
-                }
-                if (recordStage != stageFromName) {
-                    throw new Exception(
-                        "Stage snapshot " + entry + " names stage " + recordStage
-                    );
-                }
-                if (
-                    StatusCode.toStatusCode(recordStatus) ==
-                        StatusCode.STATUS_UNKNOWN &&
-                    recordStatus != StatusCode.STATUS_UNKNOWN.getVal()
-                ) {
-                    throw new Exception(
-                        "Stage snapshot " + entry + " carries unknown status " +
-                            recordStatus
-                    );
-                }
-
-                snapshots.put(stageFromName, recordStatus);
-            }
-        }
-
-        log.debug(
-            "Pair " + pairId + ": read " + snapshots.size() + " stage snapshots"
-        );
-        return snapshots;
-    }
-
-    /**
      * Determines the job status based on runsolver stats and output files.
      */
     private StatusCode determineStatus(RunsolverStats stats, Path outputDir) {
@@ -1192,9 +1040,7 @@ public class ContainerJobMonitor {
     private void updateDatabase(
         int pairId,
         int stageNumber,
-        RunsolverStats stats,
         StatusCode status,
-        int partitionIndex,
         Map<Integer, Integer> stageSnapshots
     ) throws Exception {
         // Earlier stages first. UpdatePairStatusPrecise below rewrites the terminal stage
@@ -1290,65 +1136,63 @@ public class ContainerJobMonitor {
         // retryable by design, so a replay is expected rather than exceptional, and a pair's
         // recorded finish time must not drift each time one happens.
 
-        // Persist run stats using JobPairs.updateRunSolverStats.
-        //
-        // Only when we actually parsed something. RunsolverStats initialises every
-        // measurement to 0, so if var.out, watcher.out and stats.json were all missing
-        // or unparseable, writing unconditionally pushed wallclock=0, cpu=0, max_vmem=0
-        // into jobpair_stage_data through UpdatePairRunSolverStats -- a solver that ran
-        // for an hour recorded as having taken no time. On a platform whose numbers
-        // decide published rankings that is a wrong result, not a missing one, and the
-        // only trace it left was a debug line.
-        //
-        // LocalJobMonitor has always guarded this; the container path -- the one every
-        // current deployment uses -- did not.
-        if (!hasAnyMeasurement(stats)) {
-            // Deliberately warn rather than debug: a completed run that yielded no
-            // parseable output is a fault worth seeing, and staying silent about it is
-            // how this stayed invisible.
-            log.warn(
-                "No parseable runsolver output for pair " + pairId +
-                " (no var.out, watcher.out or stats.json field was read); leaving the" +
-                " recorded measurements untouched rather than overwriting them with zeros"
-            );
-            return;
-        }
-        try {
-            String nodeName = (stats.hostname != null &&
-                    !stats.hostname.isEmpty())
-                ? stats.hostname
-                : backend.getWorkerNodeNameForPartition(partitionIndex);
-            boolean ok = JobPairs.updateRunSolverStats(
-                pairId,
-                nodeName,
-                stats.wallclockTime,
-                stats.cpuTime,
-                stats.userTime,
-                stats.systemTime,
-                stats.maxVirtualMemory,
-                stats.maxResidentSetSize,
-                // The caller's stageNumber, not stats.stageNumber. Both originate from
-                // CURRENT_STAGE_NUMBER in functions.bash and normally agree, but
-                // stats.stageNumber falls back to 1 when stats.json is absent, while
-                // this parameter is the stage read from status.json and already used
-                // for the status write above. Using it keeps the stats and the status
-                // on the same row by construction, instead of landing the stats on
-                // stage 1 or raising "Stage not found" into a swallowed exception.
-                stageNumber,
-                stats.diskSize
-            );
-            if (ok) {
-                log.debug(
-                    "Persisted run stats for pair " + pairId + ": " + stats
-                );
-            } else {
-                log.warn("Failed to persist run stats for pair " + pairId);
-            }
-        } catch (Exception e) {
-            log.warn("Exception persisting run stats for pair " + pairId, e);
-        }
-
         log.debug("Updated database for pair " + pairId + ": status=" + status);
+    }
+
+    /**
+     * Records runsolver measurements against the stages that produced them.
+     * {@link StageStatsFiles} decides which files may be believed.
+     *
+     * <p>This used to record the pair-wide stats.json, merged with var.out and watcher.out,
+     * against the terminal stage: every earlier stage's measurements were lost, and a final stage
+     * that never reached copyOutput was given the previous stage's. A stage without a believable
+     * file now keeps whatever it was enqueued with rather than any other stage's numbers.
+     */
+    private void recordMeasurements(
+        int pairId,
+        Path outputPath,
+        int stageNumber,
+        Set<Integer> finishedEarlier,
+        int partitionIndex
+    ) throws Exception {
+        Map<Integer, StageStatsFiles.Stats> byStage = StageStatsFiles.select(
+            outputPath,
+            pairId,
+            finishedEarlier,
+            stageNumber,
+            () -> JobPairs.getStageNumbers(pairId)
+        );
+
+        for (Map.Entry<Integer, StageStatsFiles.Stats> entry : byStage.entrySet()) {
+            StageStatsFiles.Stats stats = entry.getValue();
+            try {
+                String nodeName = stats.hostname != null
+                    ? stats.hostname
+                    : backend.getWorkerNodeNameForPartition(partitionIndex);
+                boolean ok = JobPairs.updateRunSolverStats(
+                    pairId,
+                    nodeName,
+                    stats.wallclockTime,
+                    stats.cpuTime,
+                    stats.userTime,
+                    stats.systemTime,
+                    stats.maxVirtualMemory,
+                    stats.maxResidentSetSize,
+                    entry.getKey(),
+                    stats.diskSize
+                );
+                if (ok) {
+                    log.debug("Persisted run stats for pair " + pairId + " stage "
+                        + entry.getKey() + ": " + stats);
+                } else {
+                    log.warn("Failed to persist run stats for pair " + pairId + " stage "
+                        + entry.getKey());
+                }
+            } catch (Exception e) {
+                log.warn("Exception persisting run stats for pair " + pairId + " stage "
+                    + entry.getKey(), e);
+            }
+        }
     }
 
     /**
@@ -1359,16 +1203,9 @@ public class ContainerJobMonitor {
         int pairId,
         Path outputPath,
         int stageNumber,
-        Map<Integer, Integer> stageSnapshots,
+        Set<Integer> finishedEarlier,
         Properties legacy
     ) throws Exception {
-        Set<Integer> finishedEarlier = new TreeSet<>();
-        for (Integer stage : stageSnapshots.keySet()) {
-            if (stage < stageNumber) {
-                finishedEarlier.add(stage);
-            }
-        }
-
         Map<Integer, Properties> byStage = StageAttributeFiles.select(
             outputPath,
             pairId,

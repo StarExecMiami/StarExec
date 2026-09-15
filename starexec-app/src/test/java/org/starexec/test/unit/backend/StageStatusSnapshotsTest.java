@@ -131,6 +131,52 @@ public class StageStatusSnapshotsTest {
 		assertRefused(out, "non-integer status");
 	}
 
+	// --------------------------------------------------- integers are read, not coerced (#196)
+	//
+	// Each shape is written into one field at a time, the other two holding valid values, so a
+	// refusal can only come from that field. Before #196 gson's getAsInt accepted "1", truncated
+	// 1.5, unwrapped [1] and wrapped 2147483648 into another number entirely; the last is then
+	// refused, but for naming another pair or stage rather than for not being an integer.
+
+	@Test
+	public void aQuotedIntegerIsRefused() throws Exception {
+		assertEachFieldRefuses("quoted", "\"%d\"");
+	}
+
+	@Test
+	public void aFractionIsRefusedRatherThanTruncated() throws Exception {
+		assertEachFieldRefuses("fraction", "%d.5");
+	}
+
+	@Test
+	public void aOneElementArrayIsRefusedRatherThanUnwrapped() throws Exception {
+		assertEachFieldRefuses("array", "[%d]");
+	}
+
+	@Test
+	public void aBooleanIsRefused() throws Exception {
+		assertEachFieldRefuses("boolean", "true");
+	}
+
+	@Test
+	public void aValueAboveTheIntRangeIsRefusedRatherThanWrapped() throws Exception {
+		assertEachFieldRefuses("above", "2147483648");
+	}
+
+	@Test
+	public void aValueBelowTheIntRangeIsRefusedRatherThanWrapped() throws Exception {
+		assertEachFieldRefuses("below", "-2147483649");
+	}
+
+	/** An integral value is what the field means, however the number is spelled. */
+	@Test
+	public void anIntegralValueWrittenWithAZeroFractionIsAccepted() throws Exception {
+		Path out = folder.newFolder("integral").toPath();
+		writeRaw(out, PAIR + ".0", "1.0", StatusCode.STATUS_COMPLETE.getVal() + ".0");
+		assertEquals(Map.of(1, StatusCode.STATUS_COMPLETE.getVal()),
+				StageStatusSnapshots.read(out, PAIR));
+	}
+
 	@Test
 	public void anOversizedRecordIsRefusedWithoutBeingRead() throws Exception {
 		Path out = folder.newFolder("huge").toPath();
@@ -349,6 +395,39 @@ public class StageStatusSnapshotsTest {
 		Files.writeString(dir.resolve(fileStage + ".json"),
 				"{\"pairId\":" + pairId + ",\"status\":" + status
 						+ ",\"stageNumber\":" + recordStage + ",\"timestamp\":1788818872}\n");
+	}
+
+	/**
+	 * Writes {@code shape} -- a format taking the field's valid value, or a literal -- into each
+	 * field in turn, and requires the read to refuse that field as not an integer.
+	 */
+	private void assertEachFieldRefuses(String label, String shape) throws Exception {
+		int status = StatusCode.STATUS_COMPLETE.getVal();
+		String pair = String.valueOf(PAIR);
+		String stage = "1";
+		String code = String.valueOf(status);
+
+		Path pairOut = folder.newFolder(label + "-pairId").toPath();
+		writeRaw(pairOut, String.format(shape, PAIR), stage, code);
+		assertRefused(pairOut, "non-integer pairId");
+
+		Path stageOut = folder.newFolder(label + "-stageNumber").toPath();
+		writeRaw(stageOut, pair, String.format(shape, 1), code);
+		assertRefused(stageOut, "non-integer stageNumber");
+
+		Path statusOut = folder.newFolder(label + "-status").toPath();
+		writeRaw(statusOut, pair, stage, String.format(shape, status));
+		assertRefused(statusOut, "non-integer status");
+	}
+
+	/** stage-status/1.json with each field's JSON written verbatim. */
+	private static void writeRaw(Path outputDir, String pairId, String stageNumber, String status)
+			throws Exception {
+		Path dir = outputDir.resolve("stage-status");
+		Files.createDirectories(dir);
+		Files.writeString(dir.resolve("1.json"),
+				"{\"pairId\":" + pairId + ",\"status\":" + status
+						+ ",\"stageNumber\":" + stageNumber + ",\"timestamp\":1788818872}\n");
 	}
 
 	private static void assertRefused(Path outputDir, String expectedReason) throws Exception {

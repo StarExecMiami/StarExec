@@ -251,9 +251,7 @@ fi
 # TOMCAT CONTEXT.XML PROPERTY SUBSTITUTION
 # ============================================================================
 # Tomcat 9.0.x does not natively interpolate ${PROPERTY} in context.xml
-# Resource definitions (unlike server.xml or web.xml). While setenv.sh passes
-# DB config as JVM system properties (-DSTAREXEC_DB_HOST, etc.), Tomcat's
-# Digester doesn't substitute them in context.xml without explicitly enabling
+# Resource definitions (unlike server.xml or web.xml) without explicitly enabling
 # PropertySource or using a custom Context listener.
 #
 # To avoid adding custom Java code, we perform a simple one-time substitution

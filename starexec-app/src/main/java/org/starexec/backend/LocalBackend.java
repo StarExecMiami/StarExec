@@ -359,6 +359,19 @@ public class LocalBackend implements Backend {
                             " as its attributes");
             return false;
         }
+
+        // The per-stage measurements, likewise: a stage-stats/2.json from an attempt that reached
+        // stage 2 would be recorded as the measurements of one that did not.
+        File staleStats = new File(outputDir, STAGE_STATS_DIRECTORY);
+        boolean statsRemoved = deleteTree(staleStats);
+        if (!statsRemoved || pathStillPresent(staleStats)) {
+            log.error(
+                    "Stale stage-stats from a previous attempt survive in " +
+                            outputDir.getAbsolutePath() +
+                            "; refusing to start this attempt, because they would be read" +
+                            " as its measurements");
+            return false;
+        }
         return allRemoved;
     }
 
@@ -367,6 +380,9 @@ public class LocalBackend implements Backend {
 
     /** Fixed, application-defined name; see {@link StageAttributeFiles}. */
     private static final String STAGE_ATTRIBUTES_DIRECTORY = StageAttributeFiles.DIRECTORY;
+
+    /** Fixed, application-defined name; see {@link StageStatsFiles}. */
+    private static final String STAGE_STATS_DIRECTORY = StageStatsFiles.DIRECTORY;
 
     /**
      * Artifacts a later attempt would READ as its own result, so a stale one is a wrong
