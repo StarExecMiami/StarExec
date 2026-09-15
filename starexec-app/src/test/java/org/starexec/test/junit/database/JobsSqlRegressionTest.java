@@ -142,11 +142,12 @@ public class JobsSqlRegressionTest extends Common {
 	}
 
 	private void withFixture(SqlFixtureConsumer consumer) throws Exception {
+		// runTransactional hands the connection back in autocommit mode. Closing it with
+		// autocommit off returns it to the pool that way (Common.runTransactional's javadoc),
+		// and the next borrower's failed statement then leaves it in an aborted transaction.
 		Fixture fixture;
 		try (Connection con = Common.getConnection()) {
-			con.setAutoCommit(false);
-			fixture = createFixture(con);
-			con.commit();
+			fixture = Common.runTransactional(con, this::createFixture);
 		}
 		// Both classification queries select pairs through job_space_closure, and neither fills
 		// it. The application does that only when it compiles a job space's solver stats
@@ -417,22 +418,18 @@ public class JobsSqlRegressionTest extends Common {
 
 	private static void cleanupFixture(Fixture fixture) throws SQLException {
 		try (Connection con = Common.getConnection()) {
-			con.setAutoCommit(false);
-			try {
-				deleteById(con, "DELETE FROM job_pair_completion WHERE pair_id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM jobpair_stage_data WHERE jobpair_id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM job_pairs WHERE id = ?", fixture.pairId);
-				deleteById(con, "DELETE FROM job_spaces WHERE id = ?", fixture.jobSpaceId);
-				deleteById(con, "DELETE FROM jobs WHERE id = ?", fixture.jobId);
-				deleteById(con, "DELETE FROM configurations WHERE id = ?", fixture.configId);
-				deleteById(con, "DELETE FROM solvers WHERE id = ?", fixture.solverId);
-				deleteById(con, "DELETE FROM benchmarks WHERE id = ?", fixture.benchmarkId);
-				deleteById(con, "DELETE FROM nodes WHERE id = ?", fixture.nodeId);
-				con.commit();
-			} catch (SQLException e) {
-				con.rollback();
-				throw e;
-			}
+			Common.runTransactional(con, c -> {
+				deleteById(c, "DELETE FROM job_pair_completion WHERE pair_id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM jobpair_stage_data WHERE jobpair_id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM job_pairs WHERE id = ?", fixture.pairId);
+				deleteById(c, "DELETE FROM job_spaces WHERE id = ?", fixture.jobSpaceId);
+				deleteById(c, "DELETE FROM jobs WHERE id = ?", fixture.jobId);
+				deleteById(c, "DELETE FROM configurations WHERE id = ?", fixture.configId);
+				deleteById(c, "DELETE FROM solvers WHERE id = ?", fixture.solverId);
+				deleteById(c, "DELETE FROM benchmarks WHERE id = ?", fixture.benchmarkId);
+				deleteById(c, "DELETE FROM nodes WHERE id = ?", fixture.nodeId);
+				return null;
+			});
 		}
 	}
 
