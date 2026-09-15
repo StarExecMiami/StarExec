@@ -1532,28 +1532,13 @@ public class Jobs {
         final int spaceId = space.getId();
         Collection<SolverStats> stats;
 
-        stats = getCachedJobStatsInJobSpaceHierarchyIncludeDeletedConfigs(
-            spaceId,
-            stageNumber,
-            primitivesToAnonymize,
-            includeUnknown
-        );
-        if (stats != null && !stats.isEmpty()) {
-            StringBuilder sb = new StringBuilder();
-            for (SolverStats s : stats) {
-                sb.append(s.toString() + "\n");
-            }
-            log.debug("stats already cached in database:\n" + sb.toString());
-            return stats;
-        }
-
+        // Compiled from the pairs on every call; job_stats is neither read nor written (#202).
+        // The cache never held a row -- AddJobStats' ON CONFLICT target has matched no constraint
+        // since V0012 -- and making it work would serve stale counts: the expected result comes
+        // live from bench_attributes, and nothing invalidates job_stats when a benchmark is
+        // reprocessed, edited, cleared or deleted.
         int jobId = space.getJobId();
 
-        // we will cache the stats only if the job is complete
-        boolean isJobComplete = Jobs.isJobComplete(jobId);
-
-        // otherwise, we need to compile the stats
-        log.debug("stats not present in database -- compiling stats now");
         List<JobPair> pairs = getJobPairsInJobSpaceHierarchy(
             spaceId,
             primitivesToAnonymize
@@ -1566,10 +1551,6 @@ public class Jobs {
         stats = processPairsToSolverStats(jobId, pairs, includeUnknown);
         for (SolverStats s : stats) {
             s.setJobSpaceId(spaceId);
-        }
-
-        if (isJobComplete) {
-            saveStats(jobId, stats, includeUnknown);
         }
 
         // next, we simply filter down the stats to the ones for the given stage
