@@ -103,11 +103,17 @@ public class BenchmarksSqlRegressionTest extends Common {
 	private void withFixture(SqlFixtureConsumer consumer) throws Exception {
 		try (Connection con = Common.getConnection()) {
 			con.setAutoCommit(false);
-			Fixture fixture = createFixture(con);
 			try {
-				consumer.accept(fixture);
+				consumer.accept(createFixture(con));
 			} finally {
-				con.rollback();
+				// The fixture is never committed. Closing does not reset the connection: the pool
+				// would hand it to the next borrower with autocommit still off (see
+				// Common.runTransactional), so restore it after the rollback.
+				try {
+					con.rollback();
+				} finally {
+					con.setAutoCommit(true);
+				}
 			}
 		}
 	}
