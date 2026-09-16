@@ -45,10 +45,31 @@ public class ProcessorTimeLimitRangeTests {
 	}
 
 	@Test
-	public void aNonPositiveValueIsRefused() {
-		assertFalse("zero is not a time limit", Processors.isStorableTimeLimit(0));
+	public void aNegativeValueIsRefused() {
+		// Nothing produces a negative limit except the truncation this guard exists to stop,
+		// and the job script would run `timeout -1m`, which is not a command.
 		assertFalse(Processors.isStorableTimeLimit(-1));
+		assertFalse(Processors.isStorableTimeLimit(Short.MIN_VALUE));
 		assertFalse(Processors.isStorableTimeLimit(Integer.MIN_VALUE));
+	}
+
+	/**
+	 * Zero must stay storable: the system already produces it for itself.
+	 *
+	 * <p>{@code processors.time_limit} is nullable and the row mapper reads NULL as 0
+	 * (Processors.java:76), so a processor can hold 0 without anyone having typed it. The job
+	 * script then runs the processor under {@code timeout --signal=SIGKILL $((LIMIT))m}
+	 * (functions.bash:1367, 1653), and a duration of 0 disables the timeout -- 0 means "no
+	 * limit", not "no time".
+	 *
+	 * <p>An earlier revision of this guard refused 0 on the grounds that it is not a sensible
+	 * limit. That conflated "the column can store this" with "a human should pick this", and it
+	 * made a value already present in the database unsettable.
+	 */
+	@Test
+	public void zeroIsStorableBecauseTheSchemaAlreadyYieldsIt() {
+		assertTrue("a NULL time_limit reads back as 0; it must be storable",
+				Processors.isStorableTimeLimit(0));
 	}
 
 	/**

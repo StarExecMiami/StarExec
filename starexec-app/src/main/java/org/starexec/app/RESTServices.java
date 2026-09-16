@@ -4395,6 +4395,20 @@ public class RESTServices {
 			return gson.toJson(status);
 		}
 
+		// Validated before the first write, not beside its own update. Each field below commits
+		// on its own, so a rejection raised further down returns after the name, description and
+		// syntax have already been stored -- the user is told the edit failed while part of it
+		// has landed. Refusing the whole request up front is the only point at which "nothing
+		// was changed" is still true.
+		Integer requestedTimeLimit = null;
+		if (Util.paramExists("timelimit", request)) {
+			requestedTimeLimit = Integer.parseInt(request.getParameter("timelimit"));
+			if (!Processors.isStorableTimeLimit(requestedTimeLimit)) {
+				return gson.toJson(new ValidatorStatusCode(false,
+						"The time limit must be between 0 and " + Short.MAX_VALUE + "."));
+			}
+		}
+
 		if (!p.getName().equals(name)) {
 			boolean success = Processors.updateName(pid, name);
 			if (!success) {
@@ -4419,20 +4433,10 @@ public class RESTServices {
 			}
 		}
 
-		if (Util.paramExists("timelimit", request)) {
-			int timeLimit = Integer.parseInt(request.getParameter("timelimit"));
-			if (!Processors.isStorableTimeLimit(timeLimit)) {
-				// Rejected here as well as in the database layer so the user is told what was
-				// wrong with their input, rather than being shown a database error for a value
-				// the database was never asked to store.
-				return gson.toJson(new ValidatorStatusCode(false,
-						"The time limit must be between 1 and " + Short.MAX_VALUE + "."));
-			}
-			if (p.getTimeLimit() != timeLimit) {
-				boolean success = Processors.updateTimeLimit(pid, timeLimit);
-				if (!success) {
-					return gson.toJson(ERROR_DATABASE);
-				}
+		if (requestedTimeLimit != null && p.getTimeLimit() != requestedTimeLimit) {
+			boolean success = Processors.updateTimeLimit(pid, requestedTimeLimit);
+			if (!success) {
+				return gson.toJson(ERROR_DATABASE);
 			}
 		}
 
