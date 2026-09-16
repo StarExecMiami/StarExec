@@ -3,6 +3,7 @@ package org.starexec.test.junit.backend;
 import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.starexec.backend.ContainerJobMonitor;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
@@ -10,6 +11,8 @@ import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.TreeMap;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
@@ -124,6 +127,83 @@ public class PairLevelStatusIngestionTest {
 				assertEquals("must be classified RETRYABLE, not blocked",
 						"RETRYABLE", classify(expected));
 			}
+		}
+	}
+
+	// ----------------------------------------------------------- the container monitor
+
+	/**
+	 * The container monitor makes the same choice from the same record. It is a separate
+	 * implementation of the same ingestion, so the semantics have to be pinned separately:
+	 * a pair whose container reports no stage must retire, not hang, on Podman as on local.
+	 */
+	@Test
+	public void theContainerMonitorRecordsAPairLevelStatusAgainstThePair() throws Throwable {
+		try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+			pairs.when(() -> JobPairs.setPairLevelStatusResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()))
+					.thenReturn(PairStatusResult.APPLIED);
+
+			containerUpdateDatabase(DEPENDENCY_MISSING, PAIR_LEVEL, new TreeMap<>());
+
+			pairs.verify(() -> JobPairs.setPairLevelStatusResult(
+					PAIR, DEPENDENCY_MISSING.getVal(), NOT_REACHED));
+			pairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+					Mockito.anyBoolean()), Mockito.never());
+		}
+	}
+
+	/**
+	 * The consequence that makes the pair-level write worth having: a stage that finished and
+	 * was snapshotted keeps its own result. Every stage is earlier than a result that names no
+	 * stage, so the batch must carry stage 1 -- bounding it by the reported stage number would
+	 * bound it by 0 and silently discard the one result the run actually produced.
+	 */
+	@Test
+	public void aStageThatFinishedKeepsItsResultUnderAPairLevelFailure() throws Throwable {
+		Map<Integer, Integer> snapshots = new TreeMap<>();
+		snapshots.put(1, StatusCode.STATUS_COMPLETE.getVal());
+
+		try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+			pairs.when(() -> JobPairs.setPairLevelStatusResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()))
+					.thenReturn(PairStatusResult.APPLIED);
+
+			containerUpdateDatabase(DEPENDENCY_MISSING, PAIR_LEVEL, snapshots);
+
+			pairs.verify(() -> JobPairs.setEarlierStageStatuses(PAIR, snapshots));
+		}
+	}
+
+	/** The container monitor's control: a stage-numbered result still takes the precise write. */
+	@Test
+	public void theContainerMonitorStillTakesThePreciseWriteForAStage() throws Throwable {
+		try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+			pairs.when(() -> JobPairs.setPairStatusPreciseResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+					Mockito.anyBoolean()))
+					.thenReturn(PairStatusResult.APPLIED);
+
+			containerUpdateDatabase(StatusCode.STATUS_COMPLETE, 2, new TreeMap<>());
+
+			pairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+					PAIR, 2, StatusCode.STATUS_COMPLETE.getVal(), NOT_REACHED, false));
+			pairs.verify(() -> JobPairs.setPairLevelStatusResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+		}
+	}
+
+	private static void containerUpdateDatabase(
+			StatusCode status, int stageNumber, Map<Integer, Integer> snapshots) throws Throwable {
+		ContainerJobMonitor container = new ContainerJobMonitor(null);
+		Method m = ContainerJobMonitor.class.getDeclaredMethod(
+				"updateDatabase", int.class, int.class, StatusCode.class, Map.class);
+		m.setAccessible(true);
+		try {
+			m.invoke(container, PAIR, stageNumber, status, snapshots);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw e.getCause();
 		}
 	}
 
