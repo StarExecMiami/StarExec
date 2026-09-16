@@ -1188,8 +1188,46 @@ public class Util {
 		return cookieStringBuilder.toString();
 	}
 
+	/** Why a user-supplied archive URL is refused; shown to the user. */
+	public static final String DOWNLOADABLE_URL_REQUIRED =
+			"Archive URLs must be valid http or https URLs";
+
 	/**
-	 * Attempts to copy the file at the end of the given URL to the given file, using a proxy
+	 * Whether a URL string a user supplied parses and may be downloaded.
+	 *
+	 * @param url the URL as submitted, may be null
+	 * @return true when it parses and its scheme is http or https
+	 * @see #isDownloadableUrl(URL)
+	 */
+	public static boolean isDownloadableUrl(String url) {
+		if (url == null) {
+			return false;
+		}
+		try {
+			return isDownloadableUrl(new URL(url));
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	/**
+	 * Whether a URL a user supplied may be downloaded: only http and https.
+	 *
+	 * @param url the URL to check, may be null
+	 * @return true when the scheme is http or https, case-insensitively
+	 */
+	public static boolean isDownloadableUrl(URL url) {
+		if (url == null) {
+			return false;
+		}
+		String scheme = url.getProtocol();
+		return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+	}
+
+	/**
+	 * Attempts to copy the file at the end of the given http or https URL to the
+	 * given file, using a proxy. Any other scheme is refused before a connection
+	 * is opened.
 	 *
 	 * @param url
 	 * @param archiveFile
@@ -1197,6 +1235,11 @@ public class Util {
 	 */
 	public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
 		final String methodName = "copyFileFromURLUsingProxy";
+		if (!isDownloadableUrl(url)) {
+			log.warn(methodName, "refusing to download a URL with scheme "
+					+ (url == null ? null : url.getProtocol()));
+			return false;
+		}
 		try {
 			Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(R.PROXY_ADDRESS, R.PROXY_PORT));
 			URLConnection connection = url.openConnection(proxy);
