@@ -754,7 +754,12 @@ public class LocalJobMonitor {
         //    snapshot's pairId is validation data, not routing authority. Ownership is
         //    re-checked inside, immediately before the write, for the same reason step 4
         //    re-checks it -- reading files takes real time and a rerun may have landed.
-        ingestEarlierStageStatuses(pairId, state, outputDir, ss.stageNumber);
+        // A pair-level result names no stage, so every stage that finished is "earlier" than
+        // it: the bound is all stages rather than the one that produced the result (#165).
+        int snapshotBound = ss.stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? Integer.MAX_VALUE
+                : ss.stageNumber;
+        ingestEarlierStageStatuses(pairId, state, outputDir, snapshotBound);
 
         // 6. Update database, with runsolver's verdict allowed to correct the status
         //    bash derived by grepping prose.
@@ -770,7 +775,7 @@ public class LocalJobMonitor {
         //    Ownership is re-checked inside, immediately before each write, as in step 5. The
         //    runsolver stats parsed in step 2 decide the status only.
         Set<Integer> finishedEarlier =
-                StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
+                StageStatusSnapshots.read(outputDir, pairId, snapshotBound).keySet();
         int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
         recordMeasurements(pairId, state, outputDir, finishedEarlier, terminalStage);
         recordAttributes(pairId, state, outputDir, finishedEarlier, terminalStage, attributes);
@@ -887,7 +892,7 @@ public class LocalJobMonitor {
                                 + e.getMessage());
             }
             StatusCode resolved = StatusCode.toStatusCode(statusCode);
-            int stageNumber = FinalStatusStage.require(obj, "pair " + pairId);
+            int stageNumber = FinalStatusStage.requireStageOrPairLevel(obj, "pair " + pairId);
 
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
@@ -1170,12 +1175,27 @@ public class LocalJobMonitor {
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);
-        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                pairId,
-                stageNumber,
-                status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal(),
-                false);
+
+        // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
+        // stage to carry the result (#165). A RUNNING record on that channel is the transient
+        // one the job script writes before it knows the stage, and writing it would say nothing
+        // the pair's own status does not already say.
+        if (stageNumber == FinalStatusStage.PAIR_LEVEL
+                && status == StatusCode.STATUS_RUNNING) {
+            log.debug("Pair " + pairId + " reports RUNNING with no stage; nothing to record");
+            return;
+        }
+        PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? JobPairs.setPairLevelStatusResult(
+                        pairId,
+                        status.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal())
+                : JobPairs.setPairStatusPreciseResult(
+                        pairId,
+                        stageNumber,
+                        status.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        false);
         if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
             // status.json named no stage. The job script's pair-level channel defaults to 0
             // -- exitJobscript, limitExceeded and the processor paths all take that default
@@ -1201,7 +1221,8 @@ public class LocalJobMonitor {
             // retry; it must never become a solver status.
             throw new org.starexec.backend.exception.RetryableIngestionException(
                     "Could not record terminal status " + status + " for pair " + pairId
-                            + " stage " + stageNumber);
+                            + (stageNumber == FinalStatusStage.PAIR_LEVEL
+                                    ? " at pair level" : " stage " + stageNumber));
         }
         if (statusResult == PairStatusResult.SUPERSEDED) {
             log.info("Pair " + pairId + " already had a different terminal status;"

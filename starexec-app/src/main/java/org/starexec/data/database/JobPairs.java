@@ -2449,15 +2449,57 @@ public class JobPairs {
      * @param notReachedStatus what unfinished stages become, normally STATUS_NOT_REACHED
      * @return APPLIED, SUPERSEDED when the pair already held a different terminal status, or
      *         FAILED when the write could not be performed
+     * @implNote the routine {@code starexec.UpdatePairStatusPairLevel} this calls lands in its
+     *     own change; until then this method reports FAILED, which is retryable, rather than
+     *     recording anything.
      */
     public static PairStatusResult setPairLevelStatusResult(
         int pairId,
         int terminalStatus,
         int notReachedStatus
     ) {
-        throw new UnsupportedOperationException(
-            "setPairLevelStatusResult is not implemented yet"
-        );
+        Connection con = null;
+        PreparedStatement ps = null;
+        Integer attemptNoForFinalize = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+            ps = con.prepareStatement(
+                "SELECT starexec.UpdatePairStatusPairLevel(?, ?, ?)"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, terminalStatus);
+            ps.setInt(3, notReachedStatus);
+
+            boolean applied;
+            try (ResultSet rs = ps.executeQuery()) {
+                applied = rs.next() && rs.getBoolean(1);
+            }
+            if (!applied) {
+                // Another writer recorded a different terminal result first, exactly as in the
+                // precise path: nothing was written, so roll back and report the loss rather
+                // than finalizing a manifest for a status the database refused.
+                Common.doRollback(con);
+                return PairStatusResult.SUPERSEDED;
+            }
+
+            if (isTerminalStatusCode(terminalStatus)) {
+                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+            }
+            con.commit();
+            Common.enableAutoCommit(con);
+            if (isTerminalStatusCode(terminalStatus) && attemptNoForFinalize != null) {
+                finalizePairManifest(pairId, attemptNoForFinalize, terminalStatus);
+            }
+            return PairStatusResult.APPLIED;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return PairStatusResult.FAILED;
     }
 
     public static PairStatusResult setPairStatusPreciseResult(

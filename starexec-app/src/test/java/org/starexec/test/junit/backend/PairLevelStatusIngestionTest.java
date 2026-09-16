@@ -121,8 +121,8 @@ public class PairLevelStatusIngestionTest {
 				updateDatabase(DEPENDENCY_MISSING, PAIR_LEVEL);
 				fail("a failed write must not be treated as recorded");
 			} catch (Throwable expected) {
-				assertEquals("must be classified RETRY, not blocked",
-						"RETRY", classify(expected));
+				assertEquals("must be classified RETRYABLE, not blocked",
+						"RETRYABLE", classify(expected));
 			}
 		}
 	}

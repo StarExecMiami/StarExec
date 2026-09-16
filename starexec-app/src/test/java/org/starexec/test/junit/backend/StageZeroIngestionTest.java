@@ -80,16 +80,18 @@ public class StageZeroIngestionTest {
 	 * a permanent loop, because a stage number that names no stage will not name one later.
 	 */
 	@Test
-	public void aTerminalStatusWithNoStageIsBlockedRatherThanRetried() throws Throwable {
+	public void aTerminalStatusWithNoStageIsRecordedAgainstThePair() throws Throwable {
+		// Stage 0 is the pair-level channel now (#165): the pair failed outside any stage, so
+		// the status belongs to the pair. Without a database the write cannot be performed, so
+		// what is asserted here is that the monitor no longer refuses the record as an artifact
+		// defect; PairLevelStatusIngestionTest asserts which write it chooses.
 		try {
 			updateDatabase(50, StatusCode.STATUS_COMPLETE, 0);
-			fail("a status with stage number 0 must not be recorded");
-		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("the refusal must say which stage number was refused: "
-							+ expected.getMessage(),
-					expected.getMessage().contains("stage number 0"));
-		} catch (RetryableIngestionException wrong) {
-			fail("stage 0 will not become valid on a retry; this must not be retryable");
+		} catch (StageStatusSnapshots.InvalidSnapshotException refused) {
+			fail("a pair-level status must not be refused as a content defect: "
+					+ refused.getMessage());
+		} catch (RetryableIngestionException expected) {
+			// The write failed because there is no database in this test, which is retryable.
 		}
 	}
 
@@ -115,7 +117,7 @@ public class StageZeroIngestionTest {
 	@Test
 	public void nothingIsWrittenOnTheWayOutOfARefusal() throws Throwable {
 		try {
-			updateDatabase(50, StatusCode.STATUS_COMPLETE, 0);
+			updateDatabase(50, StatusCode.STATUS_COMPLETE, -1);
 			fail("expected a refusal");
 		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
 			for (StackTraceElement frame : expected.getStackTrace()) {
