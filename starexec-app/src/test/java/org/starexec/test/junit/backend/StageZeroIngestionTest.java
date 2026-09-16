@@ -12,7 +12,6 @@ import org.starexec.data.to.Status.StatusCode;
 import java.lang.reflect.Method;
 
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
@@ -135,31 +134,21 @@ public class StageZeroIngestionTest {
 	// ------------------------------------------------------- the container monitor
 
 	/**
-	 * {@code ContainerJobMonitor} has only two lanes, and the choice between them is the whole
-	 * decision. {@code RetryableIngestionException} is bounded retry then quarantine; anything
-	 * else is caught by a handler that records {@code ERROR_RUNSCRIPT} against a hardcoded
-	 * stage 1, inventing both a stage and a solver outcome.
-	 *
-	 * <p>Neither is right here, so the monitor throws {@link
-	 * StageStatusSnapshots.InvalidSnapshotException} and catches it explicitly. This test pins
-	 * the type, because it is the type that selects the lane.
-	 *
-	 * <p>It must not be {@code RetryableIngestionException} in particular: that class's own
-	 * javadoc names "an unknown stage" among the cases it must not be used for, since retrying
-	 * container-produced content "reaches the same conclusion forever".
+	 * Stage 0 is the pair-level channel in the container monitor too (#165): the pair failed
+	 * outside any stage, so the status belongs to the pair and must not be refused as a content
+	 * defect. Without a database the write cannot be performed, so what is asserted here is only
+	 * that the record is no longer rejected; {@code PairLevelStatusIngestionTest} asserts which
+	 * write the monitor chooses and with what arguments.
 	 */
 	@Test
-	public void theContainerMonitorRefusesWithoutClaimingTheFailureIsTransient() throws Throwable {
+	public void theContainerMonitorRecordsAPairLevelStatusAgainstThePair() throws Throwable {
 		try {
 			containerUpdateDatabase(50, StatusCode.STATUS_COMPLETE, 0);
-			fail("a status with stage number 0 must not be recorded");
-		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-			assertTrue("the refusal must say which stage number was refused: "
-							+ expected.getMessage(),
-					expected.getMessage().contains("stage number 0"));
-		} catch (RetryableIngestionException wrong) {
-			fail("stage 0 will not become valid on a retry, and RetryableIngestionException"
-					+ " documents that it must not be used for an unknown stage");
+		} catch (StageStatusSnapshots.InvalidSnapshotException refused) {
+			fail("a pair-level status must not be refused as a content defect: "
+					+ refused.getMessage());
+		} catch (RetryableIngestionException expected) {
+			// The write failed because there is no database in this test, which is retryable.
 		}
 	}
 
