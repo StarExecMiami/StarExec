@@ -4213,8 +4213,8 @@ public class KubernetesNativeBackend implements Backend {
                 PairStatusResult updated =
                     recordTerminalResult(pairId, stageNumber, terminalStatus);
                 if (updated == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // status.json named no stage, and 0 cannot become a precise stage
-                    // identity without giving NOT_REACHED to every stage the pair has.
+                    // The stage named is not a stage this pair has, so there is nothing to
+                    // record this result against.
                     //
                     // Returning true rather than false, for the reason the SUPERSEDED branch
                     // below records: false leaves the execution out of completedExecutions
@@ -4227,14 +4227,15 @@ public class KubernetesNativeBackend implements Backend {
                     log.error(
                         "Refusing to record status " + terminalStatus + " for pair " + pairId +
                         " (" + execution + "): stage number " + stageNumber + " names no" +
-                        " stage. The pair is left unresolved and its output is retained."
+                        " stage of that pair. The pair is left unresolved and its output is" +
+                        " retained."
                     );
                     // Accounting is released on the way out, as it is on every other exit from
                     // this callback. The execution has finished either way, and holding its
                     // slot because its status could not be recorded would leak capacity once
                     // per such pair -- a refusal that costs the cluster is not a safe refusal.
                     releaseAccountingIfSafe(
-                        execution, "refused stage-zero status for " + execution
+                        execution, "refused unknown-stage status for " + execution
                     );
                     return true;
                 }
@@ -4364,17 +4365,19 @@ public class KubernetesNativeBackend implements Backend {
                 PairStatusResult statusResult = recordTerminalResult(
                     pairId, stageNumber, StatusCode.ERROR_RUNSCRIPT.getVal());
                 if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // status.json named no stage, so there is nothing to record this failure
+                    // status.json named a stage this pair does not have, so there is nothing
+                    // to record this failure
                     // against. Reported as handled rather than retried: the file will read the
                     // same way on every poll, and returning false here would reprocess this
                     // job forever.
                     log.error(
                         "Refusing to record the failure of pair " + pairId + " (" + execution +
-                        "): stage number " + stageNumber + " names no stage. Reason: " +
+                        "): stage number " + stageNumber + " names no stage of that pair." +
+                        " Reason: " +
                         reason + ". The pair is left unresolved and its output is retained."
                     );
                     releaseAccountingIfSafe(
-                        execution, "refused stage-zero failure status for " + execution
+                        execution, "refused unknown-stage failure status for " + execution
                     );
                     return true;
                 }
@@ -4557,10 +4560,12 @@ public class KubernetesNativeBackend implements Backend {
                     log.error(
                         "Refusing to record the stuck-pending escalation of pair " + pairId +
                         " (" + execution + "): stage number " + stageNumber + " names no" +
-                        " stage. The pair is left unresolved and its output is retained."
+                        " stage of that pair. The pair is left unresolved and its output is" +
+                        " retained."
                     );
                     releaseAccountingIfSafe(
-                        execution, "refused stage-zero stuck-pending status for " + execution
+                        execution,
+                        "refused unknown-stage stuck-pending status for " + execution
                     );
                     return true;
                 }
@@ -4928,7 +4933,7 @@ public class KubernetesNativeBackend implements Backend {
             // by the bound, so the read never returns a record this method would have to discard.
             Map<Integer, Integer> earlier;
             try {
-                earlier = StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+                earlier = StageStatusSnapshots.read(outputDir, pairId, snapshotBound(terminalStage));
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
@@ -4975,6 +4980,19 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         /**
+         * How far back the per-stage snapshots are read.
+         *
+         * <p>A pair-level result names no stage, so every stage that finished is earlier than
+         * it and the bound is all stages rather than the 0 the record carries -- otherwise a
+         * stage that did finish would lose its own result (#165).
+         */
+        private int snapshotBound(int stageNumber) {
+            return stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? Integer.MAX_VALUE
+                : stageNumber;
+        }
+
+        /**
          * Records this execution's terminal result against whatever the status names.
          *
          * <p>One place, because all three callbacks -- completion, failure and the
@@ -4986,6 +5004,15 @@ public class KubernetesNativeBackend implements Backend {
             int stageNumber,
             int terminalStatus
         ) {
+            // Stage 0 is the pair-level channel: the pair failed outside any stage, so there
+            // is no stage to carry the result and it is recorded against the pair (#165).
+            if (stageNumber == FinalStatusStage.PAIR_LEVEL) {
+                return JobPairs.setPairLevelStatusResult(
+                    pairId,
+                    terminalStatus,
+                    StatusCode.STATUS_NOT_REACHED.getVal()
+                );
+            }
             return JobPairs.setPairStatusPreciseResult(
                 pairId,
                 stageNumber,
@@ -5018,7 +5045,7 @@ public class KubernetesNativeBackend implements Backend {
             if (record == null) {
                 return defaultStage;
             }
-            return FinalStatusStage.require(record, String.valueOf(execution));
+            return FinalStatusStage.requireStageOrPairLevel(record, String.valueOf(execution));
         }
 
         private int readStageNumber(ExecutionRef execution, int defaultStage)
@@ -5045,7 +5072,7 @@ public class KubernetesNativeBackend implements Backend {
                     "status.json for " + execution + " exists but is not a status record, so"
                         + " the stage that produced this result is unknown", e);
             }
-            return FinalStatusStage.require(root, String.valueOf(execution));
+            return FinalStatusStage.requireStageOrPairLevel(root, String.valueOf(execution));
         }
 
         private Path resolveStatusPath(ExecutionRef execution) {
@@ -5078,7 +5105,8 @@ public class KubernetesNativeBackend implements Backend {
                 // Already read and validated by ingestEarlierStageStatuses before the status
                 // write; read again rather than threaded through, as persistAttributes does.
                 Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                    StageStatusSnapshots.read(outputDir, pairId, snapshotBound(stageNumber))
+                        .keySet();
                 byStage = StageStatsFiles.select(
                     outputDir,
                     pairId,
@@ -5160,7 +5188,8 @@ public class KubernetesNativeBackend implements Backend {
                 // Already read and validated by ingestEarlierStageStatuses before the status
                 // write; read again rather than threaded through, as the stats path does.
                 Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                    StageStatusSnapshots.read(outputDir, pairId, snapshotBound(stageNumber))
+                        .keySet();
                 byStage = StageAttributeFiles.select(
                     outputDir,
                     pairId,
