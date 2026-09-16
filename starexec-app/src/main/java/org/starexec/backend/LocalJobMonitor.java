@@ -844,9 +844,9 @@ public class LocalJobMonitor {
     /**
      * Reads status and stageNumber from status.json using Gson.
      *
-     * <p>A missing file still returns the {@link StatusCode#ERROR_RUNSCRIPT} sentinel: a pair
-     * that produced no output at all is a different situation from one whose output cannot be
-     * believed, and it has always been reported this way.
+     * <p>The poll loop normally waits until the file exists. If it disappears between that
+     * check and this read, however, there is no solver result or stage identity to record. That
+     * race is refused as missing evidence rather than manufactured as ERROR_RUNSCRIPT/stage 1.
      *
      * <p>A file that exists and carries a status must carry a usable stage identity. It used
      * to substitute stage 1 for a missing or unusable {@code stageNumber}, which handed
@@ -859,8 +859,9 @@ public class LocalJobMonitor {
             throws StageStatusSnapshots.InvalidSnapshotException {
         Path statusFile = outputDir.resolve("status.json");
         if (!Files.exists(statusFile)) {
-            log.warn("No status.json found for pairId=" + pairId);
-            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + pairId + " disappeared before it could be read;"
+                            + " neither its result nor stage is known");
         }
 
         try {

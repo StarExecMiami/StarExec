@@ -8,7 +8,6 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -502,12 +501,13 @@ public class LocalBackend implements Backend {
             // measurement -- worse than a job that visibly did not start.
             job.state = LocalJob.JobState.FAILED;
             failedJobCount.incrementAndGet();
-            if (pairId > 0) {
-                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
-            }
             log.error(
                     "Refusing to execute pair " + pairId + " (execId " + job.execId +
-                            "): a previous attempt's stage snapshots could not be removed");
+                            "): a previous attempt's stage snapshots could not be removed." +
+                            " The pair remains unresolved; no solver result or stage was" +
+                            " invented from this cleanup failure.");
+            job.completedAt = System.currentTimeMillis();
+            activeJobs.remove(job.execId, job);
             return;
         }
 
@@ -617,11 +617,9 @@ public class LocalBackend implements Backend {
                                     pairId +
                                     ") completed successfully with exit code " +
                                     exitCode);
-                    // Safety net: if the wrapper (runsolver) exits 0 but no status.json
-                    // was written (e.g. the job script aborted before its EXIT trap was
-                    // registered), mark the pair as ERROR_RUNSCRIPT so it doesn't stay
-                    // stuck in ENQUEUED forever. The monitor will not find status.json
-                    // in this case, so we must act here.
+                    // Process exit is lifecycle information, not terminal solver evidence.
+                    // Keep the monitor registration so late evidence can still be ingested;
+                    // without status.json the scientific result remains unresolved.
                     if (pairId > 0 && jobMonitor != null) {
                         File statusFile = new File(new File(job.logPath).getParent(), "status.json");
                         if (!statusFile.exists()) {
@@ -629,15 +627,8 @@ public class LocalBackend implements Backend {
                                     "Job " + job.execId + " (pairId=" + pairId +
                                     ") exited 0 but produced no status.json at " +
                                     statusFile.getAbsolutePath() +
-                                    ". This typically means the job script aborted before" +
-                                    " the EXIT trap was registered (e.g. arithmetic with" +
-                                    " set -e). Marking pair as ERROR_RUNSCRIPT.");
-                            try {
-                                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_RUNSCRIPT.getVal());
-                            } catch (Exception e) {
-                                log.error("Failed to set error status for pairId=" + pairId, e);
-                            }
-                            jobMonitor.clearPairTracking(pairId);
+                                    ". The pair remains unresolved and tracked; no solver" +
+                                    " result or stage was invented from the process exit.");
                         }
                     }
                 } else {
@@ -653,16 +644,10 @@ public class LocalBackend implements Backend {
                                     ". Check " +
                                     job.logPath +
                                     " for details");
-                    // Explicitly fail the pair in the DB
                     if (pairId > 0) {
-                        try {
-                            JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
-                        } catch (Exception e) {
-                            log.error("Failed to set error status for pairId=" + pairId, e);
-                        }
-                        if (jobMonitor != null) {
-                            jobMonitor.clearPairTracking(pairId);
-                        }
+                        log.error(
+                                "Pair " + pairId + " remains unresolved and tracked: process" +
+                                " exit code " + exitCode + " is not terminal solver evidence.");
                     }
                 }
             }
@@ -696,13 +681,10 @@ public class LocalBackend implements Backend {
                     e);
             job.state = LocalJob.JobState.FAILED;
             failedJobCount.incrementAndGet();
-            // Explicitly fail the pair in the DB so it doesn't get stuck in Enqueued
             if (pairId > 0) {
-                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_RUNSCRIPT.getVal());
-                // Also ensure monitor stops tracking it if it was registered
-                if (jobMonitor != null) {
-                    jobMonitor.clearPairTracking(pairId);
-                }
+                log.error(
+                        "Pair " + pairId + " remains unresolved and tracked: failure to" +
+                        " start its process is not terminal solver evidence.");
             }
         } catch (Exception e) {
             // Other unexpected errors
@@ -719,12 +701,10 @@ public class LocalBackend implements Backend {
             if (job.process != null) {
                 killProcess(job.process);
             }
-            // Explicitly fail the pair in the DB
             if (pairId > 0) {
-                JobPairs.setStatusForPairAndStages(pairId, StatusCode.ERROR_GENERAL.getVal());
-                if (jobMonitor != null) {
-                    jobMonitor.clearPairTracking(pairId);
-                }
+                log.error(
+                        "Pair " + pairId + " remains unresolved and tracked: an unexpected" +
+                        " backend failure is not terminal solver evidence.");
             }
         } finally {
             if (job.coreId != null) {

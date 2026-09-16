@@ -211,10 +211,162 @@ public class PodmanBackendTests {
         method.invoke(backend);
     }
 
+    private void invokeProcessReconciledContainer(int pairId, String containerId)
+        throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "processReconciledContainerThroughMonitor", int.class, String.class
+        );
+        method.setAccessible(true);
+        method.invoke(backend, pairId, containerId);
+    }
+
     private void setJobMonitor(ContainerJobMonitor monitor) throws Exception {
         Field monitorField = PodmanBackend.class.getDeclaredField("jobMonitor");
         monitorField.setAccessible(true);
         monitorField.set(backend, monitor);
+    }
+
+    @Test
+    public void reconciliationInspectionFailureRetainsContainerWithoutInventingResult()
+        throws Exception {
+        String containerId = "reconcile-uninspectable";
+
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+            invokeProcessReconciledContainer(4242, containerId);
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                    anyInt(), anyInt(), anyInt(), anyInt(), anyBoolean()),
+                never());
+        }
+        verify(mockDockerClient, never()).removeContainerCmd(containerId);
+    }
+
+    @Test
+    public void reconciliationMissingRunningContainerLeavesScientificResultUnresolved()
+        throws Exception {
+        int pairId = 4242;
+
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_ENQUEUED.getVal()))
+                .thenReturn(Collections.emptyList());
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_RUNNING.getVal()))
+                .thenReturn(Collections.singletonList(pairId));
+
+            invokeReconcileOrphanedPairs();
+
+            jobPairs.verify(() -> JobPairs.tryMarkRunningAsFailed(anyInt()), never());
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                    anyInt(), anyInt(), anyInt(), anyInt(), anyBoolean()),
+                never());
+        }
+        verify(mockDockerClient, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
+    public void startupReconciliationRetainsContainerAfterPostStatusIngestionFailure()
+        throws Exception {
+        int pairId = 4242;
+        int stalePairId = 5151;
+        String containerId = "reconcile-post-status-failure";
+        String staleContainerId = "reconcile-stale-terminal";
+        Path outputDir = Files.createDirectories(tempDir.resolve("reconcile-output"));
+        Files.writeString(
+            outputDir.resolve("status.json"),
+            "{\"pairId\":" + pairId +
+                ",\"status\":" + StatusCode.STATUS_COMPLETE.getVal() +
+                ",\"stageNumber\":2,\"timestamp\":1788818872}\n"
+        );
+        Files.writeString(outputDir.resolve("attributes.txt"), "answer=sat\n");
+
+        Container exitedContainer = mock(Container.class);
+        Map<String, String> labels = new HashMap<>();
+        labels.put("starexec.managed", "true");
+        labels.put("starexec.label.version", "2");
+        labels.put("starexec.kind", "job-pair");
+        labels.put("starexec.pair.id", Integer.toString(pairId));
+        when(exitedContainer.getId()).thenReturn(containerId);
+        when(exitedContainer.getLabels()).thenReturn(labels);
+
+        Container staleTerminalContainer = mock(Container.class);
+        Map<String, String> staleLabels = new HashMap<>(labels);
+        staleLabels.put("starexec.pair.id", Integer.toString(stalePairId));
+        when(staleTerminalContainer.getId()).thenReturn(staleContainerId);
+        when(staleTerminalContainer.getLabels()).thenReturn(staleLabels);
+        when(mockListContainersCmd.exec()).thenReturn(
+            Arrays.asList(exitedContainer, staleTerminalContainer)
+        );
+
+        ContainerConfig config = mock(ContainerConfig.class);
+        when(mockDockerClient.inspectContainerCmd(containerId))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockDockerClient.inspectContainerCmd(staleContainerId))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(false);
+        when(mockContainerState.getExitCodeLong()).thenReturn(0L);
+        when(mockInspectContainerResponse.getConfig()).thenReturn(config);
+        when(config.getEnv()).thenReturn(new String[]{
+            "STAREXEC_OUTPUT_DIR=" + outputDir
+        });
+
+        setJobMonitor(new ContainerJobMonitor(backend));
+
+        try (MockedStatic<JobPairs> jobPairs = mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_ENQUEUED.getVal()))
+                .thenReturn(Collections.emptyList());
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_RUNNING.getVal()))
+                .thenReturn(Collections.singletonList(pairId));
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    pairId, Collections.emptyMap()))
+                .thenReturn(org.starexec.data.database.StageStatusBatchResult.APPLIED);
+            jobPairs.when(() -> JobPairs.setPairStatusPreciseResult(
+                    pairId,
+                    2,
+                    StatusCode.STATUS_COMPLETE.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false))
+                .thenReturn(org.starexec.data.database.PairStatusResult.APPLIED);
+            jobPairs.when(() -> JobPairs.getStageNumbers(pairId))
+                .thenThrow(new IllegalStateException("metadata database unavailable"));
+
+            JobPairs.PairStatusLookupResult terminalLookup =
+                mock(JobPairs.PairStatusLookupResult.class);
+            when(terminalLookup.isMissing()).thenReturn(false);
+            when(terminalLookup.isError()).thenReturn(false);
+            when(terminalLookup.getStatusCode())
+                .thenReturn(StatusCode.STATUS_COMPLETE.getVal());
+            jobPairs.when(() -> JobPairs.getPairStatusLookup(pairId))
+                .thenReturn(terminalLookup);
+            jobPairs.when(() -> JobPairs.getPairStatusLookup(stalePairId))
+                .thenReturn(terminalLookup);
+
+            invokeReconcileOrphanedPairs();
+
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                pairId,
+                2,
+                StatusCode.STATUS_COMPLETE.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false));
+            jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                    anyInt(), anyInt(), anyInt(), anyInt()),
+                never());
+        }
+
+        verify(mockDockerClient, never()).removeContainerCmd(containerId);
+        verify(mockDockerClient).removeContainerCmd(staleContainerId);
+        assertTrue(
+            "valid terminal evidence must remain available for metadata retry",
+            Files.exists(outputDir.resolve("status.json"))
+        );
+        assertTrue("exited reconciliation must not reserve a submission slot",
+            getSlotHolderSet().isEmpty());
+        assertEquals(0, getActiveSubmissionSlots());
     }
 
     private void setBackendField(String fieldName, Object value) throws Exception {
