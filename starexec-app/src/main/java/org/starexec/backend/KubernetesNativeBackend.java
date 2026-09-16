@@ -4210,13 +4210,8 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                PairStatusResult updated = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    terminalStatus,
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
+                PairStatusResult updated =
+                    recordTerminalResult(pairId, stageNumber, terminalStatus);
                 if (updated == PairStatusResult.REJECTED_INVALID_STAGE) {
                     // status.json named no stage, and 0 cannot become a precise stage
                     // identity without giving NOT_REACHED to every stage the pair has.
@@ -4366,13 +4361,8 @@ public class KubernetesNativeBackend implements Backend {
 
                 int stageNumber = readStageNumber(execution, 1);
 
-                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
+                PairStatusResult statusResult = recordTerminalResult(
+                    pairId, stageNumber, StatusCode.ERROR_RUNSCRIPT.getVal());
                 if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
                     // status.json named no stage, so there is nothing to record this failure
                     // against. Reported as handled rather than retried: the file will read the
@@ -4558,13 +4548,8 @@ public class KubernetesNativeBackend implements Backend {
 
                 int stageNumber = readStageNumber(execution, 1);
 
-                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
+                PairStatusResult statusResult = recordTerminalResult(
+                    pairId, stageNumber, StatusCode.ERROR_RUNSCRIPT.getVal());
                 if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
                     // As in the failure callback: nothing to record the escalation against,
                     // and the same read on every retry. Reported as handled so the monitor
@@ -4987,6 +4972,27 @@ public class KubernetesNativeBackend implements Backend {
                 " (" + result + "); nothing was written and completion will be retried"
             );
             return false;
+        }
+
+        /**
+         * Records this execution's terminal result against whatever the status names.
+         *
+         * <p>One place, because all three callbacks -- completion, failure and the
+         * stuck-pending escalation -- have to make the same choice from the same field, and
+         * three copies of it would drift.
+         */
+        private PairStatusResult recordTerminalResult(
+            int pairId,
+            int stageNumber,
+            int terminalStatus
+        ) {
+            return JobPairs.setPairStatusPreciseResult(
+                pairId,
+                stageNumber,
+                terminalStatus,
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false
+            );
         }
 
         /**

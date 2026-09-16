@@ -4,6 +4,7 @@ import org.junit.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.backend.ContainerJobMonitor;
+import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
@@ -25,10 +26,11 @@ import static org.junit.Assert.fail;
  * pair kept its last status -- RUNNING -- for as long as the application ran, while the monitor
  * re-detected the same finished execution on every poll.
  *
- * <p>These drive {@code LocalJobMonitor.updateDatabase} directly, with the database replaced at
- * its static boundary, so what is asserted is which write the monitor chooses and with what
- * arguments. A stage-numbered result must still take the precise write, and a status the
- * protocol does not allow must still be refused.
+ * <p>StarExec has three implementations of this ingestion -- local, container and Kubernetes --
+ * so each is pinned here separately. Each test drives the deciding method directly, with the
+ * database replaced at its static boundary, so what is asserted is which write the backend
+ * chooses and with what arguments. A stage-numbered result must still take the precise write,
+ * and a status the protocol does not allow must still be refused.
  */
 public class PairLevelStatusIngestionTest {
 
@@ -191,6 +193,67 @@ public class PairLevelStatusIngestionTest {
 					PAIR, 2, StatusCode.STATUS_COMPLETE.getVal(), NOT_REACHED, false));
 			pairs.verify(() -> JobPairs.setPairLevelStatusResult(
 					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+		}
+	}
+
+	// --------------------------------------------------------- the Kubernetes backend
+
+	/**
+	 * The Kubernetes backend is the third implementation of the same ingestion, and the one
+	 * the production cluster uses. Its three callbacks -- completion, failure and the
+	 * stuck-pending escalation -- share one write, so pinning that write pins all three.
+	 */
+	@Test
+	public void theKubernetesBackendRecordsAPairLevelStatusAgainstThePair() throws Throwable {
+		try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+			pairs.when(() -> JobPairs.setPairLevelStatusResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()))
+					.thenReturn(PairStatusResult.APPLIED);
+
+			recordTerminalResult(PAIR_LEVEL, DEPENDENCY_MISSING.getVal());
+
+			pairs.verify(() -> JobPairs.setPairLevelStatusResult(
+					PAIR, DEPENDENCY_MISSING.getVal(), NOT_REACHED));
+			pairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+					Mockito.anyBoolean()), Mockito.never());
+		}
+	}
+
+	/** The Kubernetes control: a stage-numbered result still takes the precise write. */
+	@Test
+	public void theKubernetesBackendStillTakesThePreciseWriteForAStage() throws Throwable {
+		try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+			pairs.when(() -> JobPairs.setPairStatusPreciseResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+					Mockito.anyBoolean()))
+					.thenReturn(PairStatusResult.APPLIED);
+
+			recordTerminalResult(2, StatusCode.STATUS_COMPLETE.getVal());
+
+			pairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+					PAIR, 2, StatusCode.STATUS_COMPLETE.getVal(), NOT_REACHED, false));
+			pairs.verify(() -> JobPairs.setPairLevelStatusResult(
+					Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+		}
+	}
+
+	private static void recordTerminalResult(int stageNumber, int terminalStatus)
+			throws Throwable {
+		Class<?> callbackClass = Class.forName(
+				"org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback");
+		java.lang.reflect.Constructor<?> ctor =
+				callbackClass.getDeclaredConstructor(KubernetesNativeBackend.class);
+		ctor.setAccessible(true);
+		Object callback = ctor.newInstance(new KubernetesNativeBackend());
+
+		Method m = callbackClass.getDeclaredMethod(
+				"recordTerminalResult", int.class, int.class, int.class);
+		m.setAccessible(true);
+		try {
+			m.invoke(callback, PAIR, stageNumber, terminalStatus);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw e.getCause();
 		}
 	}
 
