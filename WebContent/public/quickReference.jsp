@@ -8,7 +8,7 @@
 		<p>This a quick reference to help you accomplish basic tasks in
 			StarExec.
 			For a more extensive guide, see the <a
-					href="http://wiki.uiowa.edu/display/stardev/User+Guide">User
+					href="${starexecRoot}/public/StarExecUserGuide.pdf">User
 				Guide</a>.
 			This guide is organized by the method one uses to accomplish tasks.
 		</p>

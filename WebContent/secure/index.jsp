@@ -58,9 +58,9 @@
 		<br/>
 		<br/>
 		<li><a
-				href="http://starexec.cs.uiowa.edu/starexec/public/quickReference.jsp">Quick
+				href="${starexecRoot}/public/quickReference.jsp">Quick
 			Reference</a></li>
-		<li><a href="http://wiki.uiowa.edu/display/stardev/User+Guide">User
+		<li><a href="${starexecRoot}/public/StarExecUserGuide.pdf">User
 			Guide</a></li>
 		<li><a href="http://wiki.uiowa.edu/display/stardev/Home">Public
 			dev wiki</a></li>
