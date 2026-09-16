@@ -242,6 +242,10 @@ fi
 log "the number of stages is $NUM_STAGES"
 
 for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
+	# The stage this iteration runs, named before anything that can fail. The setup below --
+	# checkCache, copyDependencies, verifyWorkspace, sandboxWorkspace -- prepares THIS stage, so
+	# a failure in it belongs to this stage and not to the pair (#145).
+	CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}
 	CURRENT_STAGE_MEMORY=$MAX_MEM   #start with the default max mem
 	CURRENT_STAGE_CPU=$STAREXEC_CPU_LIMIT
 	CURRENT_STAGE_WALLCLOCK=$STAREXEC_WALLCLOCK_LIMIT
@@ -310,8 +314,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	log "listing contents of sandbox..."
 	ls -lR "$WORKING_DIR"
-
-	CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}
 
 	#Give job pairs 2 extra minutes before we kill them.
 	JOB_PAIR_EXTRA_TIME=120
@@ -536,7 +538,10 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	if [[ "$BENCHMARKING_FRAMEWORK" == "$RUNSOLVER" ]] && [[ ! -s "$WATCHFILE" ]]; then
 		log "Runsolver watchfile could not be found. Terminating job pair."
-		copyOutput "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
+		# Without the watchfile there are no statistics to read from it, and copyOutput reads it:
+		# under set -e that ended the pair before markRunscriptError below, as it did for the
+		# missing varfile above (#145).
+		copyOutputNoStats "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
 		markRunscriptError "${STAGE_NUMBERS[STAGE_INDEX]}"
 		exit 0
 	fi
@@ -650,6 +655,14 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	# update the path to the input to the output of the last stage
 	BENCH_PATH="$SAVED_OUTPUT_DIR/$CURRENT_STAGE_NUMBER"
 	OTHER_INPUT_PATH=$SAVED_OUTPUT_DIR"/"$CURRENT_STAGE_NUMBER"_output"
+
+	# This stage is over and the next has not begun. A failure in between belongs to the pair,
+	# not to the stage that just finished, so nothing may keep naming it (#145).
+	#
+	# This must stay BELOW the two assignments above: they read CURRENT_STAGE_NUMBER to point
+	# the next stage at this stage's output. Moving it up sends the next stage to
+	# $SAVED_OUTPUT_DIR/ instead.
+	CURRENT_STAGE_NUMBER=
 done
 
 setEndTime
