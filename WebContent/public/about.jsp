@@ -64,14 +64,14 @@
 
 <p>StarExec was first supported by a US$2.11 million grant from the
     National Science Foundation, the details of which can be found
-    <a href="http://www.fastlane.nsf.gov/servlet/showaward?award=1058748">here (the Iowa part)</a>
+    <a href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1058748">here (the Iowa part)</a>
     and
-    <a href="http://www.fastlane.nsf.gov/servlet/showaward?award=1058925">here (the Miami part)</a>.
+    <a href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1058925">here (the Miami part)</a>.
         A further grant of US$1.00 million provided support for futher
         development, the details of which can be found 
-        <a href="http://www.fastlane.nsf.gov/servlet/showaward?award=1729603">here (the Iowa part)</a>
+        <a href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1729603">here (the Iowa part)</a>
         and
-        <a href="http://www.fastlane.nsf.gov/servlet/showaward?award=1730419">here (the Miami part)</a>.
+        <a href="https://www.nsf.gov/awardsearch/show-award/?AWD_ID=1730419">here (the Miami part)</a>.
   </p>
 
 	<p>Many people have contributed in various capacities to the StarExec
