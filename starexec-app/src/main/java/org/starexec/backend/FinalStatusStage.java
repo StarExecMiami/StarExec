@@ -82,7 +82,13 @@ final class FinalStatusStage {
 	 */
 	static int requireStageOrPairLevel(JsonObject status, String source)
 			throws StageStatusSnapshots.InvalidSnapshotException {
-		throw new UnsupportedOperationException("requireStageOrPairLevel is not implemented yet");
+		int stage = requireInt(status, FIELD, source,
+				"the stage that produced this result is unknown");
+		if (stage < PAIR_LEVEL) {
+			throw invalid(source, "has " + FIELD + " " + stage
+					+ ", and stage numbers start at 1, so it identifies neither a stage nor the pair");
+		}
+		return stage;
 	}
 
 	/**
