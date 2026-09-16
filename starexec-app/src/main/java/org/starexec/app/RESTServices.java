@@ -4402,7 +4402,11 @@ public class RESTServices {
 		// was changed" is still true.
 		Integer requestedTimeLimit = null;
 		if (Util.paramExists("timelimit", request)) {
-			requestedTimeLimit = Integer.parseInt(request.getParameter("timelimit"));
+			try {
+				requestedTimeLimit = Integer.parseInt(request.getParameter("timelimit"));
+			} catch (NumberFormatException e) {
+				return gson.toJson(ERROR_INVALID_PARAMS);
+			}
 			if (!Processors.isStorableTimeLimit(requestedTimeLimit)) {
 				return gson.toJson(new ValidatorStatusCode(false,
 						"The time limit must be between 0 and " + Short.MAX_VALUE + "."));
