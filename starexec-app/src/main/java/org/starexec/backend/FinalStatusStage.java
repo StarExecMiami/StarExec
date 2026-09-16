@@ -67,6 +67,24 @@ final class FinalStatusStage {
 		return stage;
 	}
 
+	/** The stage number that names the pair itself rather than one of its stages (#165). */
+	static final int PAIR_LEVEL = 0;
+
+	/**
+	 * The stage this final status belongs to, or {@link #PAIR_LEVEL} when it belongs to the pair
+	 * and to no stage.
+	 *
+	 * @param status the parsed status record
+	 * @param source what to name in the message
+	 * @return the stage number, or 0 for a pair-level result
+	 * @throws StageStatusSnapshots.InvalidSnapshotException if the field is missing or is neither
+	 *         a stage identity nor exactly 0
+	 */
+	static int requireStageOrPairLevel(JsonObject status, String source)
+			throws StageStatusSnapshots.InvalidSnapshotException {
+		throw new UnsupportedOperationException("requireStageOrPairLevel is not implemented yet");
+	}
+
 	/**
 	 * The status this final record reports.
 	 *

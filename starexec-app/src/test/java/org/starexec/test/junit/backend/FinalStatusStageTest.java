@@ -75,6 +75,28 @@ public class FinalStatusStageTest {
 		}
 	}
 
+	/** The pair-level parser, reached the way the monitors reach it. */
+	private static int parsePairLevel(String body) throws Exception {
+		Class<?> c = Class.forName("org.starexec.backend.FinalStatusStage");
+		Method m = c.getDeclaredMethod("requireStageOrPairLevel", JsonObject.class, String.class);
+		m.setAccessible(true);
+		try {
+			return (int) m.invoke(null, json(body), "pair " + PAIR);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw (Exception) e.getCause();
+		}
+	}
+
+	private static void assertRejectedAsPairLevel(String body, String why) throws Exception {
+		try {
+			int got = parsePairLevel(body);
+			fail(why + " -- but it parsed as stage " + got + ": " + body);
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
+					expected.getMessage().contains("stageNumber"));
+		}
+	}
+
 	private static void assertRejected(String body, String why) throws Exception {
 		try {
 			int got = parse(body);
@@ -134,6 +156,42 @@ public class FinalStatusStageTest {
 	public void zeroAndNegativesAreRefused() throws Exception {
 		assertRejected("{\"status\":7,\"stageNumber\":0}", "stage numbers start at 1");
 		assertRejected("{\"status\":7,\"stageNumber\":-1}", "a negative names no stage");
+	}
+
+	// ------------------------------------------------- A2. the pair-level parser (#165)
+
+	/**
+	 * A pair can fail outside any stage -- before the stage loop starts, or between two stages --
+	 * and those failures report stage 0. {@code requireStageOrPairLevel} is how a reader asks for
+	 * "a stage, or the pair itself"; {@code require} stays strict for readers that need a stage.
+	 */
+	@Test
+	public void thePairLevelParserAcceptsExactlyZero() throws Exception {
+		assertEquals("stage 0 names the pair, not a stage",
+				0, parsePairLevel("{\"status\":24,\"stageNumber\":0}"));
+	}
+
+	@Test
+	public void thePairLevelParserStillAcceptsRealStages() throws Exception {
+		assertEquals(1, parsePairLevel("{\"status\":7,\"stageNumber\":1}"));
+		assertEquals(99, parsePairLevel("{\"status\":7,\"stageNumber\":99}"));
+	}
+
+	/** Everything that named no stage before still names nothing now. Only exactly 0 gains meaning. */
+	@Test
+	public void thePairLevelParserRefusesEverythingElse() throws Exception {
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":-1}", "a negative names neither a stage nor the pair");
+		assertRejectedAsPairLevel("{\"status\":7}", "an absent stageNumber names nothing");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":null}", "a null stageNumber names nothing");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":\"0\"}", "a string is not a stage identity");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":0.5}", "a fraction is not a stage identity");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":2147483648}", "one past INT_MAX must not wrap");
+	}
+
+	/** And the strict parser is unchanged: a reader that needs a stage still refuses 0. */
+	@Test
+	public void theStrictParserStillRefusesZero() throws Exception {
+		assertRejected("{\"status\":7,\"stageNumber\":0}", "require() must keep refusing the pair-level channel");
 	}
 
 	/** The controls. Without these a parser that refused everything would pass the above. */
