@@ -892,16 +892,31 @@ public class Util {
         }
     }
 
+    /**
+     * Builds a process from an argv array. No shell is involved.
+     *
+     * <p>A one-element array is refused rather than run. It used to be rewritten as
+     * {@code /bin/sh -c <element>}, which quietly moved the call onto the shell path --
+     * reached through the overloads documented as tokenized, and bypassing the
+     * {@link #ensureShellCommandIsSafe(String)} check that guards the shell path's own
+     * entry points. A caller who chose {@code String[]} to avoid a shell got one anyway,
+     * unvalidated.
+     *
+     * <p>Refusing is preferred over routing it through that check: a one-element array
+     * means the caller has a command line as text, and any splitting this method invented
+     * would be guessing at their intent. They should use the tokenized form, or the
+     * deprecated {@code String} overload if a shell is genuinely wanted.
+     */
     private static ProcessBuilder buildProcess(String[] command) {
         if (command == null || command.length == 0) {
             throw new IllegalArgumentException("Command cannot be empty");
         }
         if (command.length == 1) {
-            String os = System.getProperty("os.name").toLowerCase();
-            if (os.contains("win")) {
-                return new ProcessBuilder("cmd.exe", "/c", command[0]);
-            }
-            return new ProcessBuilder("/bin/sh", "-c", command[0]);
+            throw new IllegalArgumentException(
+                "A single-element command array is not a shell command line. Pass the " +
+                    "program and each argument as separate elements, or use the " +
+                    "deprecated String overload if a shell is required."
+            );
         }
         return new ProcessBuilder(command);
     }
