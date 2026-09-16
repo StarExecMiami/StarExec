@@ -623,6 +623,9 @@ public class UploadBenchmark extends HttpServlet {
 			}
 			else if (form.get(FILE_LOC).equals("URL")) {
 				fileName = (String) form.get(FILE_URL);
+				if (!Util.isDownloadableUrl(fileName)) {
+					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
 				if (!Validator.isValidArchiveType(fileName)) {
 					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
 				}
