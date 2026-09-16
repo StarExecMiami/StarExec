@@ -32,9 +32,12 @@ import java.util.HashMap;
  *
  * @author Tyler Jensen
  */
-@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = 512L * 1024L * 1024L, maxRequestSize = 512L * 1024L * 1024L)
+@MultipartConfig(fileSizeThreshold = 1024 * 1024, maxFileSize = ProcessorManager.MAX_ARCHIVE_BYTES, maxRequestSize = ProcessorManager.MAX_ARCHIVE_BYTES)
 public class ProcessorManager extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(ProcessorManager.class);
+
+	/** Largest processor archive, whether sent through the form or fetched from a URL. */
+	static final long MAX_ARCHIVE_BYTES = 512L * 1024L * 1024L;
 
 	// The unique date stamped file name format (for saving processor files)
 	private static final DateFormat shortDate = new SimpleDateFormat(R.PATH_DATE_FORMAT);
@@ -227,15 +230,12 @@ public class ProcessorManager extends HttpServlet {
 				processorFile.write(archiveFile);
 			} else {
 				processorUrl = URI.create((String) form.get(PROCESSOR_URL)).toURL();
-				String name;
-				try {
-					name = processorUrl.toString().substring(processorUrl.toString().lastIndexOf('/'));
-				} catch (Exception e) {
-					// if something goes wrong just make the name directory-friendly and continue.
-					name = processorUrl.toString().replace('/', '-');
+				String name = Util.archiveNameFromUrl(processorUrl);
+				if (name == null) {
+					throw new StarExecException(Util.ARCHIVE_NAME_REQUIRED);
 				}
 				archiveFile = new File(uniqueDir, name);
-				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile)) {
+				if (!Util.copyFileFromURLUsingProxy(processorUrl, archiveFile, MAX_ARCHIVE_BYTES)) {
 					throw new StarExecException("Unable to copy file from URL");
 				}
 			}
@@ -339,6 +339,13 @@ public class ProcessorManager extends HttpServlet {
 				fileName = ((PartWrapper) form.get(PROCESSOR_FILE)).getName();
 			} else {
 				fileName = (String) form.get(PROCESSOR_URL);
+				if (!Util.isDownloadableUrl(fileName)) {
+					return new ValidatorStatusCode(false, Util.DOWNLOADABLE_URL_REQUIRED);
+				}
+				fileName = Util.archiveNameFromUrl(fileName);
+				if (fileName == null) {
+					return new ValidatorStatusCode(false, Util.ARCHIVE_NAME_REQUIRED);
+				}
 			}
 
 			log.debug(method + " - Name of processor file=" + fileName);
