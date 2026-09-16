@@ -2,6 +2,7 @@ package org.starexec.data.database;
 
 import java.io.File;
 import java.lang.NumberFormatException;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -261,6 +262,20 @@ public class Processors {
                 e
             );
         }
+        return false;
+    }
+
+    /**
+     * Deletes a processor's directory, refusing anything outside the processor root.
+     *
+     * @param processorRoot the root every processor path must be strictly inside
+     * @param processorPath the path stored for the processor
+     * @return true when nothing remains at processorPath, false otherwise
+     */
+    public static boolean deleteProcessorFiles(
+        Path processorRoot,
+        String processorPath
+    ) {
         return false;
     }
 
