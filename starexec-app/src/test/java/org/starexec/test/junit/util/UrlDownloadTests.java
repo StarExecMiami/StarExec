@@ -102,13 +102,4 @@ public class UrlDownloadTests {
 		assertEquals("the server is never contacted", 0, requests.get());
 		assertFalse("nothing is written", destination.exists());
 	}
-
-	@SuppressWarnings("deprecation")
-	@Test
-	public void aUrlWithoutAHostIsNotCopied() throws Exception {
-		URL url = new URL("http:///solver.zip");
-
-		assertFalse("a URL without a host is refused", Util.copyFileFromURLUsingProxy(url, destination));
-		assertFalse("nothing is written", destination.exists());
-	}
 }

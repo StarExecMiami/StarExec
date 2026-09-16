@@ -141,6 +141,24 @@ public class ArchiveUrlDownloaderTests {
 		assertEquals(PosixFilePermissions.fromString("rw-r-----"), Files.getPosixFilePermissions(destination.toPath()));
 	}
 
+	/**
+	 * A URL with no host is refused, and no connection is attempted to the port it names, where a
+	 * server is listening.
+	 *
+	 * <p>Removing the explicit check does not make this fail: the JVM cannot connect to an empty
+	 * host either, so the refusal is defence in depth rather than the only thing stopping it.
+	 */
+	@Test
+	public void aUrlWithoutAHostIsNotContacted() throws Exception {
+		AtomicInteger requests = new AtomicInteger();
+		HttpServer server = serveArchive(LOOPBACK, "/solver.zip", requests);
+		URL url = url("http://:" + server.getAddress().getPort() + "/solver.zip");
+
+		assertFalse(ArchiveUrlDownloader.download(url, destination, permitting(LOOPBACK)));
+		assertEquals("the server is never contacted", 0, requests.get());
+		assertNothingLeft();
+	}
+
 	/** A destination that does not name a file inside its directory is refused before connecting. */
 	@Test
 	public void aDestinationThatIsNotAFileInItsDirectoryIsRefused() throws Exception {
