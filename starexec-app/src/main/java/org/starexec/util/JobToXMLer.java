@@ -173,10 +173,7 @@ public class JobToXMLer {
 		log.info("Generating Jobs XML " + job.getId());
 		Element jobsElement=null;
 
-		jobsElement = doc.createElementNS(XMLUtil.JOB_SCHEMA_NAMESPACE, "tns:Jobs");
-		jobsElement.setAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance");
-		jobsElement.setAttribute(
-				"xsi:schemaLocation", XMLUtil.schemaLocationHint(XMLUtil.JOB_SCHEMA_NAMESPACE));
+		jobsElement = XMLUtil.createJobsRoot(doc);
 
 		List<SolverPipeline> neededPipes = Pipelines.getPipelinesByJob(job.getId());
 		log.debug("going to add this many pipelines to the xml document = "+ neededPipes.size());
