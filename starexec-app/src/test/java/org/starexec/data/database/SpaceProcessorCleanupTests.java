@@ -84,4 +84,46 @@ public class SpaceProcessorCleanupTests {
 		Spaces.cleanProcessorFiles(null, processorRoot.getRoot().toPath());
 		Spaces.cleanProcessorFiles(Collections.emptyList(), processorRoot.getRoot().toPath());
 	}
+
+	@Test
+	public void aDanglingSymlinkAtTheProcessorPathIsRemoved() throws Exception {
+		Path gone = outsideRoot.getRoot().toPath().resolve("never-existed");
+		Path link = processorRoot.getRoot().toPath().resolve("2/20260916-01.06.50.701/bench_v1");
+		Files.createDirectories(link.getParent());
+		try {
+			Files.createSymbolicLink(link, gone);
+		} catch (UnsupportedOperationException | java.io.IOException e) {
+			org.junit.Assume.assumeNoException("this file store cannot create symlinks", e);
+		}
+
+		Spaces.cleanProcessorFiles(
+				Collections.singletonList(link.toString()),
+				processorRoot.getRoot().toPath());
+
+		assertFalse("a dangling symlink must not be left behind",
+				Files.exists(link, java.nio.file.LinkOption.NOFOLLOW_LINKS));
+	}
+
+	@Test
+	public void aSymlinkInsideTheProcessorIsRemovedWithoutItsTarget() throws Exception {
+		Path processor = processorAt("2/20260916-01.06.50.701/bench_v1");
+		Path outsideDir = outsideRoot.getRoot().toPath().resolve("target");
+		Files.createDirectories(outsideDir);
+		Path outsideFile = outsideDir.resolve("outside.txt");
+		Files.writeString(outsideFile, "outside");
+		Path link = processor.resolve("escape");
+		try {
+			Files.createSymbolicLink(link, outsideDir);
+		} catch (UnsupportedOperationException | java.io.IOException e) {
+			org.junit.Assume.assumeNoException("this file store cannot create symlinks", e);
+		}
+
+		Spaces.cleanProcessorFiles(
+				Collections.singletonList(processor.toString()),
+				processorRoot.getRoot().toPath());
+
+		assertFalse("the processor directory must be gone", Files.exists(processor));
+		assertTrue("the symlink's target directory must survive", Files.exists(outsideDir));
+		assertTrue("the symlink's target file must survive", Files.exists(outsideFile));
+	}
 }

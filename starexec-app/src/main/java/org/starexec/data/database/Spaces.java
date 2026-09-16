@@ -2638,7 +2638,10 @@ public class Spaces {
 		for (String filePath : filePaths) {
 			try {
 				File f = new File(filePath);
-				if (f.exists()) {
+				// NOFOLLOW_LINKS, because File.exists() follows a link and so reports a
+				// processor path that is a dangling symlink as absent, leaving the link
+				// behind. Processors.delete has no such guard and removes it.
+				if (Files.exists(f.toPath(), LinkOption.NOFOLLOW_LINKS)) {
 					// A processor path names a directory, so its size is the size of its
 					// tree, and deleting it means deleting that tree. File.delete() refuses
 					// a non-empty directory, which is why this cleanup never freed anything.

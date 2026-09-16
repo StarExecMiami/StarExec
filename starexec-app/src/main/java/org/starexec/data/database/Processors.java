@@ -3,6 +3,7 @@ package org.starexec.data.database;
 import java.io.File;
 import java.io.IOException;
 import java.lang.NumberFormatException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.FileVisitResult;
@@ -449,6 +450,11 @@ public class Processors {
             Files.delete(parent);
         } catch (NoSuchFileException e) {
             // Another actor removed the parent after the emptiness check.
+        } catch (DirectoryNotEmptyException e) {
+            // Another actor put something in the parent after the emptiness check. The
+            // processor's own directory is already gone, which is what this call is for,
+            // so a parent that now has other contents is nothing left to tidy -- and must
+            // not be reported as a failure to clean up the processor.
         }
     }
 
