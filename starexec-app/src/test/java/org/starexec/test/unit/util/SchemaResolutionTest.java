@@ -52,8 +52,8 @@ import static org.junit.Assert.fail;
  */
 public class SchemaResolutionTest {
 
-	/** The namespace the packaged schemas actually declare -- {@code @Web.URL@} is never substituted. */
-	private static final String SHIPPED_NS_PREFIX = "@Web.URL@public/";
+	/** The namespace the packaged schemas declare; fixed, so it does not depend on the deployment. */
+	private static final String SHIPPED_NS_PREFIX = "https://www.starexec.org/starexec/public/";
 
 	private static final String SCHEMA_DIR = "/schemas/";
 
@@ -118,7 +118,7 @@ public class SchemaResolutionTest {
 		String location = m.group(1);
 
 		assertTrue("the import location changed shape; revisit this proof",
-				location.startsWith(SHIPPED_NS_PREFIX));
+				BUNDLED_SCHEMAS.contains(location));
 		assertFalse("the import location is now an absolute URI, so this proof no longer holds",
 				URI.create(location.replace("@", "%40")).isAbsolute());
 		try {
@@ -360,20 +360,20 @@ public class SchemaResolutionTest {
 		assertTrue("the bundled schemas should declare imports to resolve", imports > 0);
 	}
 
-	// ----------------------------------------------------------- documented gap
+	// ------------------------------------------------ documents from other instances
 
 	/**
-	 * <strong>Known limitation, not fixed here.</strong> The packaged schemas declare
-	 * {@code targetNamespace="@Web.URL@public/..."} because the build never substitutes that
-	 * token, while {@code JobToXMLer} stamps exports with the live deployment URL and
-	 * historical exports carry a per-instance URL. Those documents therefore sit in a
-	 * namespace no packaged schema declares, and re-import fails.
+	 * A document written in another instance's namespace is refused, locally.
 	 *
-	 * <p>Choosing a namespace would change document identity for every existing export, and
-	 * the evidence does not identify one historical namespace to preserve, so that decision
-	 * is deliberately left open. What this test pins is the part that <em>is</em> in scope:
-	 * the failure is a local schema-validation error, reached with no outbound request and
-	 * no dependence on the unreachable host in the reference.
+	 * <p>The packaged schemas and the producers now agree on one fixed namespace, so a
+	 * document this instance exports re-imports here and on any other instance. Documents
+	 * from before that — a deployment URL, or a per-instance stardev URL — sit in a
+	 * namespace no packaged schema declares, and they are still refused. Accepting them
+	 * would need a normalization step before validation, which is deliberately not done:
+	 * the schema is the contract.
+	 *
+	 * <p>What this test pins is that the refusal is a local schema-validation error, reached
+	 * with no outbound request and no dependence on the unreachable host in the reference.
 	 */
 	@Test
 	public void exportedNamespacesFailLocallyRatherThanOverTheNetwork() throws Exception {
