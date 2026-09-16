@@ -2436,6 +2436,30 @@ public class JobPairs {
      * must stay discoverable for a later attempt. Collapsing them into a boolean forces a
      * choice between leaking the resource and losing the result.
      */
+    /**
+     * Records a terminal status that belongs to the pair and to no stage (#165).
+     *
+     * <p>The job script reports a failure outside any stage on the pair-level channel, with
+     * stage number 0: before the stage loop starts, or between two stages. There is no stage to
+     * carry the result, so the status goes to the pair and every stage that had not finished is
+     * marked with {@code notReachedStatus}.
+     *
+     * @param pairId the pair
+     * @param terminalStatus the status to record; must be terminal
+     * @param notReachedStatus what unfinished stages become, normally STATUS_NOT_REACHED
+     * @return APPLIED, SUPERSEDED when the pair already held a different terminal status, or
+     *         FAILED when the write could not be performed
+     */
+    public static PairStatusResult setPairLevelStatusResult(
+        int pairId,
+        int terminalStatus,
+        int notReachedStatus
+    ) {
+        throw new UnsupportedOperationException(
+            "setPairLevelStatusResult is not implemented yet"
+        );
+    }
+
     public static PairStatusResult setPairStatusPreciseResult(
         int pairId,
         int stageNumber,
