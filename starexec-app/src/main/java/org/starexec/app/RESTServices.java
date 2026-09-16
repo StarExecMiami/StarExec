@@ -4421,6 +4421,13 @@ public class RESTServices {
 
 		if (Util.paramExists("timelimit", request)) {
 			int timeLimit = Integer.parseInt(request.getParameter("timelimit"));
+			if (!Processors.isStorableTimeLimit(timeLimit)) {
+				// Rejected here as well as in the database layer so the user is told what was
+				// wrong with their input, rather than being shown a database error for a value
+				// the database was never asked to store.
+				return gson.toJson(new ValidatorStatusCode(false,
+						"The time limit must be between 1 and " + Short.MAX_VALUE + " seconds."));
+			}
 			if (p.getTimeLimit() != timeLimit) {
 				boolean success = Processors.updateTimeLimit(pid, timeLimit);
 				if (!success) {

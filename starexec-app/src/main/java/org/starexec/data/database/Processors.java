@@ -517,7 +517,38 @@ public class Processors {
         return false;
     }
 
+    /**
+     * Whether a time limit can be stored as written.
+     *
+     * <p>{@code processors.time_limit} is {@code SMALLINT} and
+     * {@code starexec.UpdateProcessorTimeLimit} takes a {@code SMALLINT}, so anything above
+     * {@link Short#MAX_VALUE} cannot be represented. It used to be narrowed with a cast, which
+     * wraps: 40000 became -25536 and the processor was given a negative limit while the request
+     * reported success.
+     *
+     * @param timeLimit the requested limit, in seconds
+     * @return true if the column can hold this value
+     */
+    public static boolean isStorableTimeLimit(int timeLimit) {
+        return timeLimit >= 1 && timeLimit <= Short.MAX_VALUE;
+    }
+
     public static boolean updateTimeLimit(int processorId, int timeLimit) {
+        // Before the connection: a value the column cannot hold is not a database failure, and
+        // must not be silently narrowed into one that fits.
+        if (!isStorableTimeLimit(timeLimit)) {
+            log.warn(
+                "updateTimeLimit",
+                String.format(
+                    "Refusing to set processor [id=%d] time limit to [%d]: the column holds " +
+                        "1..%d seconds.",
+                    processorId,
+                    timeLimit,
+                    (int) Short.MAX_VALUE
+                )
+            );
+            return false;
+        }
         Connection con = null;
         PreparedStatement ps = null;
         try {
