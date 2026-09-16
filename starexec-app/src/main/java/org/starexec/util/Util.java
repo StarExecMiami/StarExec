@@ -6,8 +6,6 @@ import static java.util.Objects.nonNull;
 import java.awt.*;
 import java.io.*;
 import java.lang.reflect.Field;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -38,6 +36,7 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.Part;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.LineIterator;
 import org.apache.commons.io.filefilter.FileFilterUtils;
 import org.apache.commons.io.filefilter.IOFileFilter;
@@ -1921,32 +1920,132 @@ public class Util {
     }
 
     /**
-     * Attempts to copy the file at the end of the given URL to the given file,
-     * using a proxy
+     * Attempts to copy the file at the end of the given http or https URL to the
+     * given file. Any other scheme is refused before a connection is opened.
      *
-     * @param url
-     * @param archiveFile
+     * <p>The connection is direct: StarExec's own public address and port
+     * ({@code R.PROXY_ADDRESS}, {@code R.PROXY_PORT}) are not an outbound proxy.
+     * The JVM's default proxy selector still applies, so an operator who needs
+     * one sets {@code -Dhttp.proxyHost} / {@code -Dhttps.proxyHost}. Only public
+     * destinations are contacted, on the named URL and on each redirect; see
+     * {@code ArchiveUrlDownloader} for the policy. A configured outbound proxy
+     * must enforce the same destination policy, and the target host is still
+     * resolved locally. Only a 2xx response is copied.
+     *
+     * @param url         the URL to download
+     * @param archiveFile the file to write
      * @return True on success and false otherwise
      */
     public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
-        final String methodName = "copyFileFromURLUsingProxy";
-        try {
-            Proxy proxy = new Proxy(
-                Proxy.Type.HTTP,
-                new InetSocketAddress(R.PROXY_ADDRESS, R.PROXY_PORT)
-            );
-            URLConnection connection = url.openConnection(proxy);
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            FileUtils.copyInputStreamToFile(
-                connection.getInputStream(),
-                archiveFile
-            );
-            return true;
-        } catch (Exception e) {
-            log.error(methodName, e.getMessage(), e);
+        return ArchiveUrlDownloader.download(
+            url,
+            archiveFile,
+            ArchiveUrlDownloader.Policy.standard()
+        );
+    }
+
+    /**
+     * Like {@link #copyFileFromURLUsingProxy(URL, File)}, refusing an archive
+     * larger than the caller accepts.
+     *
+     * @param url         the URL to download
+     * @param archiveFile the file to write
+     * @param maxBytes    the largest archive the caller accepts
+     * @return True on success and false otherwise
+     */
+    public static boolean copyFileFromURLUsingProxy(
+        URL url,
+        File archiveFile,
+        long maxBytes
+    ) {
+        return ArchiveUrlDownloader.download(
+            url,
+            archiveFile,
+            ArchiveUrlDownloader.Policy.standard(maxBytes)
+        );
+    }
+
+    /** Why an archive URL that names no archive file is refused; shown to the user. */
+    public static final String ARCHIVE_NAME_REQUIRED =
+        "Archive URLs must end in an archive file name, such as solver.zip";
+
+    /**
+     * The file name an archive fetched from a URL is saved under: the last
+     * segment of the URL's path, as written, so percent-escapes stay literal.
+     * The query and fragment are never part of it.
+     *
+     * @param url the archive URL, may be null
+     * @return the name, or null when the path ends in a directory, "." or "..",
+     *     or the segment is not a plain file name
+     */
+    public static String archiveNameFromUrl(URL url) {
+        if (url == null) {
+            return null;
         }
-        return false;
+        String path = url.getPath();
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        if (name.isEmpty() || ".".equals(name) || "..".equals(name)) {
+            return null;
+        }
+        try {
+            return name.equals(FilenameUtils.getName(name)) ? name : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * The file name for an archive URL a user submitted.
+     *
+     * @param url the URL as submitted, may be null
+     * @return the name, or null when the URL does not parse or names no archive
+     * @see #archiveNameFromUrl(URL)
+     */
+    public static String archiveNameFromUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        try {
+            return archiveNameFromUrl(URI.create(url).toURL());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Why a user-supplied archive URL is refused; shown to the user. */
+    public static final String DOWNLOADABLE_URL_REQUIRED =
+        "Archive URLs must be valid http or https URLs";
+
+    /**
+     * Whether a URL string a user supplied parses and may be downloaded.
+     *
+     * @param url the URL as submitted, may be null
+     * @return true when it parses and its scheme is http or https
+     * @see #isDownloadableUrl(URL)
+     */
+    public static boolean isDownloadableUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        try {
+            return isDownloadableUrl(URI.create(url).toURL());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether a URL a user supplied may be downloaded: only http and https.
+     *
+     * @param url the URL to check, may be null
+     * @return true when the scheme is http or https, case-insensitively
+     */
+    public static boolean isDownloadableUrl(URL url) {
+        if (url == null) {
+            return false;
+        }
+        String scheme = url.getProtocol();
+        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
     }
 
     /**
