@@ -180,8 +180,10 @@ public class StageFailureAttributionTest {
 	@Test
 	public void aMissingWatchfileSavesOutputWithoutStatistics() throws Exception {
 		String jobscript = Files.readString(SGE.resolve("jobscript"));
+		// The whole branch, to its exit: a comment naming a function would end a shorter match
+		// before the body it is meant to read.
 		Matcher branch = Pattern.compile(
-				"Runsolver watchfile could not be found.*?markRunscriptError", Pattern.DOTALL)
+				"Runsolver watchfile could not be found.*?\\n\\s*exit 0", Pattern.DOTALL)
 				.matcher(jobscript);
 
 		assertTrue("the missing-watchfile branch must exist", branch.find());
