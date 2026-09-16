@@ -774,8 +774,13 @@ public class LocalJobMonitor {
         //    updateDatabase, and nothing may be recorded against a result the database declined.
         //    Ownership is re-checked inside, immediately before each write, as in step 5. The
         //    runsolver stats parsed in step 2 decide the status only.
+        // Bounded by the reported stage, not by snapshotBound: a pair-level result names no
+        // stage, so this is empty and nothing is published. Recording a stage's status from
+        // its own snapshot is what the snapshot is for; publishing its measurements and
+        // attributes off the back of a pair that then failed outside every stage is a
+        // separate decision, and the one already made is that nothing is published (#165).
         Set<Integer> finishedEarlier =
-                StageStatusSnapshots.read(outputDir, pairId, snapshotBound).keySet();
+                StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
         int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
         recordMeasurements(pairId, state, outputDir, finishedEarlier, terminalStage);
         recordAttributes(pairId, state, outputDir, finishedEarlier, terminalStage, attributes);

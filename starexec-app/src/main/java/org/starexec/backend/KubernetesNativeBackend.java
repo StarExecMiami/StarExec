@@ -5104,9 +5104,10 @@ public class KubernetesNativeBackend implements Backend {
             try {
                 // Already read and validated by ingestEarlierStageStatuses before the status
                 // write; read again rather than threaded through, as persistAttributes does.
+                // Bounded by the reported stage, not by that method's bound: a pair-level
+                // result names no stage, so nothing is published for any of them (#165).
                 Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, snapshotBound(stageNumber))
-                        .keySet();
+                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
                 byStage = StageStatsFiles.select(
                     outputDir,
                     pairId,
@@ -5187,9 +5188,10 @@ public class KubernetesNativeBackend implements Backend {
             try {
                 // Already read and validated by ingestEarlierStageStatuses before the status
                 // write; read again rather than threaded through, as the stats path does.
+                // Bounded by the reported stage, not by that method's bound: a pair-level
+                // result names no stage, so nothing is published for any of them (#165).
                 Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, snapshotBound(stageNumber))
-                        .keySet();
+                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
                 byStage = StageAttributeFiles.select(
                     outputDir,
                     pairId,
