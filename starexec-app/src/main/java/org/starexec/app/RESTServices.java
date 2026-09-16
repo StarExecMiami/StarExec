@@ -4426,7 +4426,7 @@ public class RESTServices {
 				// wrong with their input, rather than being shown a database error for a value
 				// the database was never asked to store.
 				return gson.toJson(new ValidatorStatusCode(false,
-						"The time limit must be between 1 and " + Short.MAX_VALUE + " seconds."));
+						"The time limit must be between 1 and " + Short.MAX_VALUE + "."));
 			}
 			if (p.getTimeLimit() != timeLimit) {
 				boolean success = Processors.updateTimeLimit(pid, timeLimit);

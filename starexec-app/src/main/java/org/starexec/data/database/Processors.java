@@ -526,7 +526,7 @@ public class Processors {
      * wraps: 40000 became -25536 and the processor was given a negative limit while the request
      * reported success.
      *
-     * @param timeLimit the requested limit, in seconds
+     * @param timeLimit the requested limit
      * @return true if the column can hold this value
      */
     public static boolean isStorableTimeLimit(int timeLimit) {
@@ -541,7 +541,7 @@ public class Processors {
                 "updateTimeLimit",
                 String.format(
                     "Refusing to set processor [id=%d] time limit to [%d]: the column holds " +
-                        "1..%d seconds.",
+                        "1..%d.",
                     processorId,
                     timeLimit,
                     (int) Short.MAX_VALUE

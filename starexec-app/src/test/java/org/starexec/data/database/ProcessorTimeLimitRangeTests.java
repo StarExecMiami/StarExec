@@ -27,7 +27,7 @@ public class ProcessorTimeLimitRangeTests {
 
 	@Test
 	public void theColumnsWholeRangeIsStorable() {
-		assertTrue("1 second is the smallest useful limit", Processors.isStorableTimeLimit(1));
+		assertTrue("1 is the smallest positive limit", Processors.isStorableTimeLimit(1));
 		assertTrue("the default must be storable",
 				Processors.isStorableTimeLimit(org.starexec.constants.R.PROCESSOR_TIME_LIMIT));
 		assertTrue("SMALLINT's maximum must be storable",
