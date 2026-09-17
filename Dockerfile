@@ -221,12 +221,14 @@ ENV CATALINA_HOME=/opt/tomcat \
     STAREXEC_LOG_DIR=/var/log/starexec \
     PATH="/home/starexec/bin:${PATH}"
 
-# Download and install Tomcat
+# Download, verify and install Tomcat
 RUN cd /tmp && \
-    curl -L https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz -o tomcat.tar.gz && \
+    curl -fsSL -o tomcat.tar.gz "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" && \
+    curl -fsSL -o tomcat.tar.gz.sha512 "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz.sha512" && \
+    echo "$(awk '{print $1}' tomcat.tar.gz.sha512)  tomcat.tar.gz" | sha512sum -c - && \
     tar xzf tomcat.tar.gz && \
     mv apache-tomcat-${TOMCAT_VERSION} ${CATALINA_HOME} && \
-    rm tomcat.tar.gz && \
+    rm tomcat.tar.gz tomcat.tar.gz.sha512 && \
     # Remove default webapps for security (keep ROOT for loading page)
     rm -rf ${CATALINA_HOME}/webapps/examples \
     ${CATALINA_HOME}/webapps/docs \
