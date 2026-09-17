@@ -559,7 +559,7 @@ public class ContainerJobMonitor {
         }
         // Throws rather than defaulting. Caught in the poll loop by the branch that
         // holds the container, so nothing is invented and nothing is retried.
-        stageNumber = FinalStatusStage.require(obj, "pair " + info.pairId);
+        stageNumber = FinalStatusStage.requireStageOrPairLevel(obj, "pair " + info.pairId);
         statusFromRecord = StatusCode.toStatusCode(
             FinalStatusStage.requireStatus(obj, "pair " + info.pairId)
         );
@@ -584,9 +584,15 @@ public class ContainerJobMonitor {
         // a terminal execution result, and only those earlier stages are returned. A refusal is
         // an InvalidSnapshotException, which the poll loop holds with the container rather than
         // recording as a solver failure.
+        //
+        // A pair-level result names no stage, so the bound is all stages rather than the one
+        // the record does not name: a stage that finished keeps its own result (#165).
+        int snapshotBound = stageNumber == FinalStatusStage.PAIR_LEVEL
+            ? Integer.MAX_VALUE
+            : stageNumber;
         Map<Integer, Integer> stageSnapshots;
         try {
-            stageSnapshots = StageStatusSnapshots.read(outputPath, pairId, stageNumber);
+            stageSnapshots = StageStatusSnapshots.read(outputPath, pairId, snapshotBound);
         } catch (IOException e) {
             // The filesystem, not the contents: retried, as the other monitors classify it.
             throw new RetryableIngestionException(
@@ -635,6 +641,8 @@ public class ContainerJobMonitor {
         //    already known to have finished -- earlier stages, whose snapshots StageStatusSnapshots
         //    required to be terminal, and the terminal stage itself. runsolver's var.out and
         //    watcher.out, read in step 1, decide the terminal status only.
+        // Bounded by the reported stage, not by snapshotBound: a pair-level result names no
+        // stage, so nothing is published. See the same bound in LocalJobMonitor (#165).
         Set<Integer> finishedEarlier = new TreeSet<>();
         for (Integer stage : stageSnapshots.keySet()) {
             if (stage < stageNumber) {
@@ -997,9 +1005,16 @@ public class ContainerJobMonitor {
         // the stage-only routine, which touches jobpair_stage_data alone -- no pair
         // status, no job_pair_completion, no end_time -- so pair completion still fires
         // exactly once, below.
+        //
+        // A pair-level result names no stage, so every stage that finished is earlier than it
+        // and belongs in this batch (#165). Bounding by the reported number would bound by 0
+        // and discard the results the run did produce.
+        int snapshotBound = stageNumber == FinalStatusStage.PAIR_LEVEL
+            ? Integer.MAX_VALUE
+            : stageNumber;
         Map<Integer, Integer> earlierStages = new TreeMap<>();
         for (Map.Entry<Integer, Integer> snapshot : stageSnapshots.entrySet()) {
-            if (snapshot.getKey() < stageNumber) {
+            if (snapshot.getKey() < snapshotBound) {
                 earlierStages.put(snapshot.getKey(), snapshot.getValue());
             }
         }
@@ -1032,16 +1047,22 @@ public class ContainerJobMonitor {
             );
         }
 
-        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-            pairId,
-            stageNumber,
-            status.getVal(),
-            StatusCode.STATUS_NOT_REACHED.getVal(),
-            false
-        );
+        // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
+        // stage to carry the result and it is recorded against the pair itself (#165).
+        PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
+            ? JobPairs.setPairLevelStatusResult(
+                pairId,
+                status.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal())
+            : JobPairs.setPairStatusPreciseResult(
+                pairId,
+                stageNumber,
+                status.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                false
+            );
         if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
-            // status.json named no stage, and 0 cannot become a precise stage identity
-            // without giving NOT_REACHED to every stage the pair has.
+            // The stage named is not a stage this pair has, so no retry changes it.
             //
             // InvalidSnapshotException because this is content the container produced and it
             // will read the same way forever. Not RetryableIngestionException, whose own
@@ -1055,8 +1076,8 @@ public class ContainerJobMonitor {
             // both monitors classify it the same way.
             throw new StageStatusSnapshots.InvalidSnapshotException(
                 "status.json for pair " + pairId + " reports status " + status
-                    + " with stage number " + stageNumber + ", which names no stage;"
-                    + " refusing to record it as that pair's precise stage result"
+                    + " with stage number " + stageNumber + ", which names no stage of that"
+                    + " pair; refusing to record it as that pair's precise stage result"
             );
         }
         if (statusResult == PairStatusResult.FAILED) {
@@ -1065,7 +1086,8 @@ public class ContainerJobMonitor {
             // recording a solver failure that did not happen.
             throw new RetryableIngestionException(
                 "Could not record terminal status " + status + " for pair " + pairId
-                    + " stage " + stageNumber);
+                    + (stageNumber == FinalStatusStage.PAIR_LEVEL
+                        ? " at pair level" : " stage " + stageNumber));
         }
         if (statusResult == PairStatusResult.SUPERSEDED) {
             // Someone else recorded a result first. The pair is finished; carry on and
