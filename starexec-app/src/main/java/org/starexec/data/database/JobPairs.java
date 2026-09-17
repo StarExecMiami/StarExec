@@ -2449,9 +2449,11 @@ public class JobPairs {
      * @param notReachedStatus what unfinished stages become, normally STATUS_NOT_REACHED
      * @return APPLIED, SUPERSEDED when the pair already held a different terminal status, or
      *         FAILED when the write could not be performed
-     * @implNote the routine {@code starexec.UpdatePairStatusPairLevel} this calls lands in its
-     *     own change; until then this method reports FAILED, which is retryable, rather than
-     *     recording anything.
+     * @implNote the routine {@code starexec.UpdatePairStatusPairLevel} is defined in
+     *     {@code R__procedures_and_views.sql}, next to {@code UpdatePairStatusPrecise}, and
+     *     Flyway re-applies that file on every startup, so this method never runs against a
+     *     database that lacks it. A database failure still reports FAILED, which is
+     *     retryable.
      */
     public static PairStatusResult setPairLevelStatusResult(
         int pairId,

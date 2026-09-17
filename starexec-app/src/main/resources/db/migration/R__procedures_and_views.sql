@@ -10177,6 +10177,140 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Records a terminal result that belongs to the pair and to no stage (#165).
+--
+-- The job script reports a failure outside any stage on the pair-level channel, with
+-- stage number 0: before the stage loop starts, or between two stages. There is no stage
+-- row to carry that result, so it goes to the pair itself. Without this routine the pair
+-- keeps its last status -- RUNNING -- for as long as the application runs, while every
+-- monitor re-detects the same finished execution on every poll. UpdatePairStatusPrecise
+-- cannot take the write: its first guard requires a stage number of 1 or greater, and its
+-- stage update is keyed on that number, so a pair-level result has no row to land on.
+--
+-- Stages that had not finished are marked _notReachedStatus; a stage that is already
+-- terminal keeps its own result. The monitor publishes the snapshots it read for finished
+-- stages through JobPairs.setEarlierStageStatuses BEFORE calling this routine, so those
+-- stages are terminal by the time this runs and the IS NOT TRUE test preserves them. That
+-- ordering is load-bearing: marking every stage indiscriminately -- what a precise write
+-- with stage 0 would do -- would overwrite the one result the run did produce and leave a
+-- finished stage reading "stage not reached", permanently.
+--
+-- Same lock order as every routine touching both tables: job_pairs FOR UPDATE first, then
+-- jobpair_stage_data, so none can deadlock against another.
+--
+-- Returns TRUE when the write was applied (or was an exact duplicate, whose side effects
+-- are re-run idempotently), and FALSE when the pair already held a different terminal
+-- status -- nothing is written then, and the caller reports SUPERSEDED. An absent pair is
+-- an exception, not FALSE: no caller writes a result for a pair it did not create.
+CREATE OR REPLACE FUNCTION starexec.UpdatePairStatusPairLevel(
+	_pairId INT,
+	_terminalStatus INT,
+	_notReachedStatus INT
+)
+RETURNS BOOLEAN AS $$
+DECLARE
+	_job_id INT;
+	_current_status INT;
+	_count INT;
+	_duplicate BOOLEAN;
+BEGIN
+	-- FOR UPDATE, and on job_pairs before jobpair_stage_data: every routine touching
+	-- both tables takes them in that order, so none can deadlock against another.
+	SELECT job_id, status_code INTO _job_id, _current_status
+	FROM starexec.job_pairs WHERE id = _pairId
+	FOR UPDATE;
+	IF NOT FOUND THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0002',
+			MESSAGE = format('Job pair %s not found', _pairId);
+	END IF;
+
+	-- Terminal pairs must not be moved back into an earlier non-terminal state. Same
+	-- contract as UpdatePairStatus and UpdatePairStatusPrecise: no caller does it
+	-- legitimately, so it is a programming error and not a lost race to report as FALSE.
+	IF starexec.IsTerminalPairStatus(_current_status) AND NOT starexec.IsTerminalPairStatus(_terminalStatus) THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'P0001',
+			MESSAGE = format(
+				'Illegal status transition for pair %s: terminal status %s cannot move to non-terminal status %s',
+				_pairId,
+				_current_status,
+				_terminalStatus
+			);
+	END IF;
+
+	_duplicate := starexec.IsTerminalPairStatus(_current_status) AND _current_status = _terminalStatus;
+
+	-- A different terminal status means someone already recorded a result for this pair.
+	-- Refuse, and let the caller decide; a pair-level result has no override path, because
+	-- only the run that produced it may replace it.
+	IF starexec.IsTerminalPairStatus(_current_status) AND NOT _duplicate THEN
+		RETURN FALSE;
+	END IF;
+
+	-- Skipped for a duplicate, whose statuses are already correct. The side effects below
+	-- still run: they are idempotent, and running them repairs a pair whose earlier attempt
+	-- set the status but died before completion was recorded.
+	IF NOT _duplicate THEN
+		-- The trigger job_pairs_terminal_end_time stamps end_time on this transition; the
+		-- explicit update further down covers a terminal pair whose end_time was lost
+		-- before the trigger existed.
+		UPDATE starexec.job_pairs SET status_code = _terminalStatus WHERE id = _pairId;
+
+		-- Only a terminal result can establish that the remaining stages will not be
+		-- reached. IS NOT TRUE rather than NOT: status_code is nullable, and NULL is a
+		-- stage that never recorded anything, which is exactly a stage that had not
+		-- finished. Terminal stages keep their results.
+		IF starexec.IsTerminalPairStatus(_terminalStatus) THEN
+			UPDATE starexec.jobpair_stage_data SET status_code = _notReachedStatus
+			WHERE jobpair_id = _pairId
+			  AND starexec.IsTerminalPairStatus(status_code) IS NOT TRUE;
+		END IF;
+	END IF;
+
+	-- Fire job_pair_completion side-effects if terminalStatus is a terminal status code.
+	-- Terminal codes: 7-18 (normal completion, resource limits, common errors), 21 (killed),
+	-- 23 (not reached), 24 (benchmark dependency missing), 25 (pre-processor error),
+	-- 26 (post-processor error).
+	IF starexec.IsTerminalPairStatus(_terminalStatus) THEN
+		-- A terminal pair must always carry an end_time, and it must be written in the
+		-- same transaction as the status. GetJobPairIdsWithStatusNotRerunAfterDate
+		-- selects on (end_time >= _earliestEndTime OR end_time < '1970-01-01'), and a
+		-- NULL end_time satisfies neither under three-valued logic -- so a terminal pair
+		-- without one is invisible to RERUN_FAILED_PAIRS, the only automatic retry path
+		-- in the system, and to every reconciliation query (which look at ENQUEUED and
+		-- RUNNING only). It is unrecoverable by any code path that exists.
+		--
+		-- Guarded on IS NULL so a genuine completion timestamp is never overwritten, and
+		-- deliberately outside the NOT _duplicate branch so that retrying a terminal
+		-- write repairs a pair whose earlier attempt set the status and then died.
+		UPDATE starexec.job_pairs
+		SET end_time = CURRENT_TIMESTAMP
+		WHERE id = _pairId AND end_time IS NULL;
+
+		INSERT INTO job_pair_completion (pair_id) VALUES (_pairId)
+		ON CONFLICT (pair_id) DO NOTHING;
+
+		-- Check if all pairs in the job are now complete; if so, stamp jobs.completed
+		SELECT COUNT(*) INTO _count FROM (
+			SELECT id FROM starexec.job_pairs
+			WHERE job_id = _job_id AND status_code IN (1, 2, 4, 19, 20, 22)
+			LIMIT 1
+		) AS subq;
+		IF _count = 0 THEN
+			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			IF NOT FOUND THEN
+				RAISE EXCEPTION USING
+					ERRCODE = 'P0002',
+					MESSAGE = format('Job %s for job pair %s not found', _job_id, _pairId);
+			END IF;
+		END IF;
+	END IF;
+
+	RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Determines if User is Leader of Space
 -- Author: Benton McCune
 DROP FUNCTION IF EXISTS starexec.IsLeader(INT, INT) CASCADE;
