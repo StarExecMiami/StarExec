@@ -391,6 +391,20 @@ public class LocalJobMonitorTests {
         assertEquals(2, stage.getInt(ss));
     }
 
+    @Test
+    public void aStatusFileThatDisappearsDoesNotBecomeStageOneRunscriptError() throws Exception {
+        Path empty = Files.createTempDirectory("ljm-absent-status");
+        empty.toFile().deleteOnExit();
+
+        try {
+            readStatusFile(empty, 5);
+            fail("an absent status file has no stage or solver result to record");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            assertTrue("expected an evidence refusal, got " + e.getCause(),
+                e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+        }
+    }
+
     // ------------------------------------------------------------------
     // rerun clearing
     // ------------------------------------------------------------------

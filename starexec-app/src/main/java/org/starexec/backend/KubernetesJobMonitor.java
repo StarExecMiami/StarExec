@@ -167,11 +167,10 @@ public class KubernetesJobMonitor {
      * Executions judged stuck whose transition did not complete, with the reason they
      * were judged stuck.
      *
-     * <p>The judgement is not revisited once made. By the time a transition can fail
-     * part-way the pair may already carry ERROR_RUNSCRIPT and an end_time, which makes it
-     * eligible for RERUN_FAILED_PAIRS; if its pod then started and the monitor let it be
-     * reclassified as an ordinary running pair, nothing would ever delete the Job and that
-     * pod could write results alongside the rerun.
+     * <p>The judgement is not revisited once made. The callback may already have deleted
+     * the Job or begun ingesting retained terminal evidence; if a late pod then started and
+     * the monitor reclassified it as an ordinary running pair, it could write results after
+     * cleanup had begun.
      */
     private final Map<ExecutionRef, String> cleanupPending =
         new ConcurrentHashMap<>();
@@ -404,11 +403,10 @@ public class KubernetesJobMonitor {
     /**
      * Finishes stuck-pending transitions whose Job is no longer listed.
      *
-     * <p>The Job is deleted before the pair's terminal status is written, so that a pair
-     * can never be rerun-eligible while a pod that might still start belongs to it. That
-     * ordering costs the Job as a retry trigger: if the database write then fails, no
-     * listing will ever bring the pair back. This is the replacement trigger, and it is
-     * the reason the deletion can safely go first.
+     * <p>The Job is deleted before retained terminal evidence is ingested. That ordering
+     * costs the Job as a retry trigger: if evidence ingestion then fails, no listing will
+     * ever bring the execution back. This is the replacement trigger, and it is the reason
+     * deletion can safely go first.
      *
      * <p>Executions still present in the listing are skipped — the main loop handles those,
      * and calling the transition twice in one poll would be pointless work.
@@ -485,9 +483,9 @@ public class KubernetesJobMonitor {
     /**
      * Runs the stuck-pending transition, remembering the pair if it did not finish.
      *
-     * <p>The callback reports false for any incomplete step — the status write, the end
-     * time, or the Job deletion. Recording the pair here is what makes the next poll
-     * resume the transition instead of re-deciding what the pair is.
+     * <p>The callback reports false for any incomplete step — evidence ingestion or Job
+     * deletion. Recording the execution here is what makes the next poll resume the
+     * transition instead of re-deciding what the pod is.
      */
     private void completeStuckPending(ExecutionRef execution, String reason) {
         if (callback.onJobStuckPending(execution, reason)) {

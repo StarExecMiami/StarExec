@@ -2536,8 +2536,8 @@ public class KubernetesNativeBackend implements Backend {
                 StatusCode.STATUS_RUNNING.getVal());
 
             int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
-            int runningFailed = 0, runningProcessed = 0, runningRebuilt = 0;
-            int enqueuedWithheld = 0, runningWithheld = 0;
+            int runningUnresolved = 0, runningProcessed = 0, runningRebuilt = 0;
+            int enqueuedWithheld = 0;
 
             for (int pairId : enqueuedIds) {
                 Job activeJob = pairIdToActiveJob.get(pairId);
@@ -2567,11 +2567,16 @@ public class KubernetesNativeBackend implements Backend {
                     if (processReconciledJobThroughCallback(terminalJob, pods)) {
                         runningProcessed++;
                     }
-                } else if (!reconciledPairIsSafe(pairId, "mark failed")) {
-                    runningWithheld++;
-                } else if (JobPairs.tryMarkRunningAsFailed(pairId)
-                        == JobPairs.ConditionalPairUpdateResult.UPDATED) {
-                    runningFailed++;
+                } else {
+                    // A missing Job is lifecycle evidence only. Even when a fresh pod census
+                    // proves that nothing can still run, it says neither which solver stage
+                    // executed nor how it ended. Keep the scientific result unresolved.
+                    runningUnresolved++;
+                    log.error(
+                        "RECONCILIATION INTERVENTION REQUIRED: RUNNING pair " + pairId +
+                            " has no attributable Kubernetes Job. It remains unresolved;" +
+                            " no solver result or stage was invented."
+                    );
                 }
             }
 
@@ -2592,14 +2597,12 @@ public class KubernetesNativeBackend implements Backend {
                     enqueuedRebuilt +
                     " withheld=" +
                     enqueuedWithheld +
-                    "; RUNNING failed=" +
-                    runningFailed +
+                    "; RUNNING unresolved=" +
+                    runningUnresolved +
                     " processed=" +
                     runningProcessed +
                     " rebuilt=" +
                     runningRebuilt +
-                    " withheld=" +
-                    runningWithheld +
                     "; malformedJobs=" +
                     malformedJobs +
                     "; orphanedKubernetesJobs=" +
@@ -2619,8 +2622,10 @@ public class KubernetesNativeBackend implements Backend {
      * exactly this state. Both reconciliation branches are replacement authorizations:
      * resetting an ENQUEUED pair makes it dispatchable again, and marking a RUNNING pair
      * failed gives it an {@code end_time} and so makes it eligible for an automatic rerun.
-     * Either one, performed while a Pod for that pair still runs, produces two executions
-     * writing results for one pair.
+     * Resetting an ENQUEUED pair while a Pod for that pair still runs produces two
+     * executions writing results for one pair. RUNNING pairs with no attributable Job are
+     * left unresolved regardless of this census because pod absence is not terminal solver
+     * evidence.
      *
      * <p>Identified by pair id rather than execution id because that is all a pair with no
      * Job offers. A pair id is stable across reruns, so this over-matches — pods of earlier
@@ -2978,10 +2983,13 @@ public class KubernetesNativeBackend implements Backend {
      * submission slot -- belongs to whichever execution holds the id now. An event from a
      * different Job must not read or write any of it, which is what this question gates.
      *
-     * <p>Tracking without a recorded UID matches on the Job name alone. That is the
-     * pre-existing state of an execution reconstructed from a Job the API returned without
-     * one, and refusing it outright would strand executions that predate this change; the
-     * name is a weaker discriminator, not a meaningless one.
+     * <p>The Job name must always match. When a UID is recorded it must match as well;
+     * otherwise the publication window in which a reused id has its new name but still its
+     * old UID would temporarily grant both executions ownership. Tracking without a recorded
+     * UID matches on the name alone. That is the pre-existing state of an execution
+     * reconstructed from a Job the API returned without one, and refusing it outright would
+     * strand executions that predate this change; the name is a weaker discriminator, not a
+     * meaningless one.
      */
     private boolean ownsTracking(ExecutionRef execution) {
         if (execution == null) {
@@ -2991,11 +2999,14 @@ public class KubernetesNativeBackend implements Backend {
         if (trackedName == null) {
             return false;
         }
+        if (!trackedName.equals(execution.jobName())) {
+            return false;
+        }
         String trackedUid = execIdToJobUid.get(execution.execId());
         if (trackedUid != null) {
             return trackedUid.equals(execution.jobUid());
         }
-        return trackedName.equals(execution.jobName());
+        return true;
     }
 
     /**
@@ -3020,11 +3031,14 @@ public class KubernetesNativeBackend implements Backend {
         if (trackedName == null) {
             return false;
         }
+        if (!trackedName.equals(execution.jobName())) {
+            return true;
+        }
         String trackedUid = execIdToJobUid.get(execution.execId());
         if (trackedUid != null) {
             return !trackedUid.equals(execution.jobUid());
         }
-        return !trackedName.equals(execution.jobName());
+        return false;
     }
 
     private Integer extractExecId(Job job) {
@@ -4180,15 +4194,32 @@ public class KubernetesNativeBackend implements Backend {
                 // One parse feeds both fields, so they cannot come from two different
                 // writes of a file each stage truncates.
                 JsonObject statusRecord = readStatusRecord(execution);
-                int terminalStatus = readTerminalStatus(
-                    execution, statusRecord, StatusCode.STATUS_COMPLETE.getVal());
-                int stageNumber = readStageNumber(execution, statusRecord, 1);
+                if (statusRecord == null) {
+                    throw new StageStatusSnapshots.InvalidSnapshotException(
+                        "completed " + execution + " has no status.json, so neither its"
+                            + " result nor stage is known"
+                    );
+                }
+                int terminalStatus = readTerminalStatus(execution, statusRecord);
+                int stageNumber = readStageNumber(execution, statusRecord);
 
                 // Earlier stages, from the per-stage snapshots the job script writes beside
                 // status.json. That file is a single slot every stage truncates, so without
                 // this the pair keeps only its final stage and every earlier one stays at
                 // whatever it was enqueued with.
                 if (!ingestEarlierStageStatuses(execution, pairId, stageNumber)) {
+                    return false;
+                }
+
+                // Reading and validating files takes real time. A rerun may take this
+                // execution id after that work, so authority must be checked at the terminal
+                // mutation boundary as well as at the artifact reads. The old execution's
+                // valid bytes are not authority to publish after its tracking is superseded.
+                if (!ownsTracking(execution)) {
+                    log.info(
+                        "Not recording terminal status for " + execution
+                            + ": it lost ownership while its evidence was being ingested"
+                    );
                     return false;
                 }
 
@@ -4272,9 +4303,8 @@ public class KubernetesNativeBackend implements Backend {
                 // but stage-status ingestion makes a retry an ordinary event, and a pair's
                 // recorded finish time must not move every time one happens.
                 //
-                // Only the completion path changes. onJobFailed and onJobStuckPending keep
-                // their own calls: those record statuses through routines that do not write
-                // end_time themselves.
+                // Failure and stuck-pending callbacks reuse this evidence-only path, so they
+                // receive the same atomic status/end-time behavior when evidence exists.
 
                 // Persist run-solver statistics (wallclock, cpu, memory, disk)
                 // so K8s-native jobs produce the same data as container jobs.
@@ -4309,134 +4339,25 @@ public class KubernetesNativeBackend implements Backend {
 
         @Override
         public boolean onJobFailed(ExecutionRef execution, String reason) {
-            // Skip processing if THIS execution was stopped — the kill path already removed
-            // its tracking maps and released its concurrency slot.
-            if (isStopped(execution)) {
-                log.debug("Skipping failure callback for stopped " + execution);
-                killedExecutions.remove(execution);
-                return true;
-            }
-
-            // A superseded execution publishes nothing. Its pair id can still be read from
-            // its own Job label, but everything else this path needs -- the output
-            // directory the status, stats and attributes are read from, the submission slot
-            // -- is keyed on the execution id, and the id now belongs to another execution.
-            // Applying a result from those artifacts would record one execution's run
-            // against the other's pair.
-            if (isSuperseded(execution)) {
-                log.warn(
-                    "Not applying the failure of " + execution + ": execution id " +
-                    execution.execId() + " is now held by " +
-                    execIdToJobName.get(execution.execId()) + ", whose artifacts and" +
-                    " accounting this event must not touch."
-                );
-                return true;
-            }
-
-            String jobName = execution.jobName();
-            Integer pairId = resolvePairId(execution);
-            if (pairId == null) {
-                log.warn("Unable to resolve pair ID for failed job: " + execution + ". Reason: " + reason);
-                return false;
-            }
-
-            try {
-                // Guard: skip DB update when the pair row has disappeared or the
-                // job is no longer submit-eligible.
-                JobPairs.PairStatusLookupResult lookup = JobPairs.getPairStatusLookup(pairId);
-                if (lookup.isMissing()) {
-                    log.debug(
-                        "Skipping failure update for stale pair " +
-                        pairId +
-                        " (K8s job " +
-                        jobName +
-                        ")"
-                    );
-                    releaseAccountingIfSafe(execution, "terminal callback for " + execution);
-                    return true;
-                }
-                if (lookup.isError()) {
-                    log.warn(
-                        "Could not determine whether pair " +
-                        pairId +
-                        " still exists after K8s job failure; retrying"
-                    );
-                    return false;
-                }
-
-                int stageNumber = readStageNumber(execution, 1);
-
-                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
-                if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // status.json named no stage, so there is nothing to record this failure
-                    // against. Reported as handled rather than retried: the file will read the
-                    // same way on every poll, and returning false here would reprocess this
-                    // job forever.
-                    log.error(
-                        "Refusing to record the failure of pair " + pairId + " (" + execution +
-                        "): stage number " + stageNumber + " names no stage. Reason: " +
-                        reason + ". The pair is left unresolved and its output is retained."
-                    );
-                    releaseAccountingIfSafe(
-                        execution, "refused stage-zero failure status for " + execution
-                    );
-                    return true;
-                }
-                boolean updated = statusResult == PairStatusResult.APPLIED;
-                if (!updated) {
-                    log.warn(
-                        "Failed updating failed status for pair " +
-                        pairId +
-                        ". Reason: " +
-                        reason +
-                        "; Kubernetes completion will be retried"
-                    );
-                    return false;
-                }
-
-                // Set end_time for the failed pair.
-                try {
-                    if (!JobPairs.setEndTime(pairId)) {
-                        log.warn("setEndTime found no row for failed pair " + pairId);
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to set end_time for failed pair " + pairId, e);
-                }
-            } catch (StageStatusSnapshots.InvalidSnapshotException e) {
-                // As in the completion callback: nothing to attribute the failure to, and the
-                // same bytes on every retry. Handled rather than re-polled.
-                log.error(
-                    "INGESTION INTERVENTION REQUIRED: the failure of pair " + pairId + " (" +
-                    execution + ") could not be recorded because status.json carries no usable" +
-                    " stage identity. Reason: " + reason + ". The pair is left unresolved and" +
-                    " its output is retained.", e);
-                releaseAccountingIfSafe(execution, "unusable stage identity for " + execution);
-                return true;
-            } catch (Exception e) {
-                log.error("Failed updating failed status for pair " + pairId + ". Reason: " + reason, e);
-                return false;
-            }
-
-            releaseAccountingIfSafe(execution, "terminal callback for " + execution);
-            return true;
+            // Kubernetes knows that its Job failed, but that lifecycle fact identifies
+            // neither a solver result nor the stage that produced one. Reuse the completion
+            // ingestion path so only retained terminal evidence can update the pair. With no
+            // status.json it leaves the pair unresolved; with one it preserves the result and
+            // stage the execution actually wrote, including an evidenced ERROR_RUNSCRIPT.
+            log.warn(
+                "Kubernetes reported " + execution + " failed (" + reason + "); terminal" +
+                " scientific status will be accepted only from its retained output"
+            );
+            return onJobComplete(execution);
         }
 
         /**
          * A pod that has waited past the timeout without starting.
          *
-         * <p>Recorded as ERROR_RUNSCRIPT because that is StarExec's existing bounded-retry
-         * channel, not because a run script was missing. RERUN_FAILED_PAIRS reruns pairs at
-         * exactly that code, and GetJobPairIdsWithStatusNotRerunAfterDate excludes anything
-         * already in pairs_rerun, so the retry happens exactly once, is recorded in the
-         * database, and survives a restart. Nothing ran, so retrying cannot contaminate a
-         * measurement; if the second attempt also cannot be scheduled it stays failed and
-         * visible.
+         * <p>This is lifecycle evidence that the pod did not start, not scientific evidence
+         * of a run-script result or stage. The Job is removed so it cannot start later, but
+         * the pair remains unresolved unless retained output independently supplies a valid
+         * terminal status and stage.
          *
          * <p>The Kubernetes Job is deleted first. Left alone it would keep the pod pending,
          * and if capacity later appeared the pod would run and write results for a pair
@@ -4499,26 +4420,13 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                // Order is load-bearing. The invariant: the Job is gone before anything
-                // that makes this pair eligible for an automatic rerun is written.
+                // Order is load-bearing. The Job must be gone before this lifecycle
+                // transition is considered handled: otherwise a pod could start later and
+                // write output after the monitor released its accounting.
                 //
-                // ERROR_RUNSCRIPT plus a non-null end_time is exactly what
-                // GetJobPairIdsWithStatusNotRerunAfterDate selects, and RERUN_FAILED_PAIRS
-                // dispatches a fresh execution for it. Both rerun paths now confirm the
-                // old execution stopped before resetting, but neither can confirm anything
-                // about a Job this callback has not yet deleted, so publishing that state
-                // while the old Job still
-                // exists leaves a pod that can start later and write a second set of
-                // results for the same pair. Deleting first removes that possibility
-                // rather than relying on the deletion retry winning a 90-minute race.
-                //
-                // The obvious objection to deleting first is that the Job is the monitor's
-                // retry trigger, so a later failure could never be retried. That is why
-                // KubernetesJobMonitor keeps its own cleanup-pending record and drains it
-                // independently of the Job listing -- see drainCleanupPending. Every step
-                // here is safe to repeat: ensureKubernetesJobGone reports an absent Job as
-                // success, UpdatePairStatusPrecise treats a duplicate terminal write as
-                // idempotent success by design, and setEndTime is an unconditional UPDATE.
+                // Deleting first costs the monitor its natural retry trigger. KubernetesJobMonitor
+                // therefore keeps a cleanup-pending record and drains it independently of the
+                // Job listing when deletion or evidence ingestion needs another attempt.
                 if (!ensureKubernetesJobGone(jobName)) {
                     log.warn(
                         "Kubernetes job " +
@@ -4531,13 +4439,10 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                // Deleting the NAMED Job is not the same as establishing that this execution
+                // Deleting the named Job is not the same as establishing that this execution
                 // is over. A retried submission can have left a second controller carrying
                 // the same exec-id label, and foreground propagation can return with the pod
-                // still terminating. The status about to be written is precisely the one
-                // that makes the pair rerun-eligible, so it must not be published while
-                // anything for this execution can still run or write: a late pod would
-                // otherwise overwrite the results of the replacement.
+                // still terminating. Do not ingest or release anything while it could write.
                 if (observeExecutionSafety(execId) != KillOutcome.CONFIRMED_SAFE) {
                     log.warn(
                         "Pair " + pairId + " (execId " + execId + ") looks stuck, but its" +
@@ -4556,93 +4461,21 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                int stageNumber = readStageNumber(execution, 1);
-
-                PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                    pairId,
-                    stageNumber,
-                    StatusCode.ERROR_RUNSCRIPT.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal(),
-                    false
-                );
-                if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
-                    // As in the failure callback: nothing to record the escalation against,
-                    // and the same read on every retry. Reported as handled so the monitor
-                    // stops reprocessing it.
-                    log.error(
-                        "Refusing to record the stuck-pending escalation of pair " + pairId +
-                        " (" + execution + "): stage number " + stageNumber + " names no" +
-                        " stage. The pair is left unresolved and its output is retained."
-                    );
-                    releaseAccountingIfSafe(
-                        execution, "refused stage-zero stuck-pending status for " + execution
-                    );
-                    return true;
-                }
-                boolean updated = statusResult == PairStatusResult.APPLIED;
-                if (!updated) {
-                    log.warn(
-                        "Failed recording stuck-pending status for pair " +
-                        pairId +
-                        "; the job is already gone, so the monitor's cleanup-pending" +
-                        " record is what brings this back"
-                    );
-                    return false;
-                }
-
-                // Mandatory, not tidiness: GetJobPairIdsWithStatusNotRerunAfterDate also
-                // requires (end_time >= cutoff OR end_time < epoch). With end_time NULL
-                // both comparisons are NULL, the row is excluded, and the rerun this
-                // status exists to trigger would silently never happen. That is why a
-                // failure here returns rather than being logged and stepped over.
-                boolean endTimeRecorded;
-                try {
-                    endTimeRecorded = JobPairs.setEndTime(pairId);
-                } catch (Exception e) {
-                    log.warn("Failed to set end_time for stuck pair " + pairId, e);
-                    endTimeRecorded = false;
-                }
-                if (!endTimeRecorded) {
-                    // The pair is ERROR_RUNSCRIPT with a null end_time, which the rerun
-                    // query excludes -- so it is not yet rerun-eligible and no duplicate
-                    // execution can be dispatched. The cleanup-pending record brings this
-                    // back to finish the job.
-                    log.warn(
-                        "Could not record end_time for stuck pair " +
-                        pairId +
-                        "; without it the pair stays failed and is never rerun, so this" +
-                        " is retried"
-                    );
-                    return false;
-                }
-
                 log.warn(
                     "Pair " +
                     pairId +
-                    " never started: its pod waited past the configured timeout and the" +
-                    " Kubernetes job has been removed so the pair can be rerun. " +
-                    reason
+                    " never started: its pod waited past the configured timeout and its" +
+                    " Kubernetes Job has been removed. The lifecycle failure is logged but" +
+                    " is not converted into a solver result or stage. " + reason
                 );
-            } catch (StageStatusSnapshots.InvalidSnapshotException e) {
-                // A pod that never started writes no status.json at all, and that case still
-                // takes the default above -- this is a file that exists and cannot be used.
-                log.error(
-                    "INGESTION INTERVENTION REQUIRED: the stuck-pending escalation of pair " +
-                    pairId + " (" + execution + ") could not be recorded because status.json" +
-                    " carries no usable stage identity. The pair is left unresolved and its" +
-                    " output is retained.", e);
-                releaseAccountingIfSafe(execution, "unusable stage identity for " + execution);
-                return true;
+                return onJobComplete(execution);
             } catch (Exception e) {
                 log.error(
-                    "Failed recording stuck-pending status for pair " + pairId,
+                    "Failed handling stuck-pending lifecycle for pair " + pairId,
                     e
                 );
                 return false;
             }
-
-            releaseAccountingIfSafe(execution, "terminal callback for " + execution);
-            return true;
         }
 
         /**
@@ -4734,8 +4567,9 @@ public class KubernetesNativeBackend implements Backend {
         }
 
         /**
-         * The terminal status for a finished pair, with runsolver's own limit verdict
-         * taking precedence over status.json.
+         * The terminal status for a finished pair. A valid non-complete status.json result
+         * is authoritative; runsolver's own limit verdict may only correct a claimed clean
+         * completion.
          *
          * <p>status.json's status field is not an independent measurement: functions.bash
          * writes it from {@code jobscript:581-589}, which greps runsolver's English prose
@@ -4752,34 +4586,39 @@ public class KubernetesNativeBackend implements Backend {
          * {@link ContainerJobMonitor} by reading runsolver's booleans directly. It did not
          * touch this backend, so the one path used in Kubernetes deployments kept the
          * defect the commit existed to remove. Ordering matches
-         * {@code ContainerJobMonitor.determineStatus}: a limit verdict wins, and
-         * status.json decides only when runsolver reports no breach.
+         * {@code ContainerJobMonitor.determineStatus}: status.json decides non-complete
+         * outcomes, while a runsolver limit verdict may correct STATUS_COMPLETE.
          */
         /**
          * The status this execution's result reports.
          *
-         * <p>{@code defaultStatus} applies only when the pair produced no status file at all.
-         * A file that exists must say what happened.
-         *
-         * <p>It used to fall back to the same default whenever the field was missing, null,
-         * unparsable or a shape gson would coerce -- and {@code onJobComplete} passes
-         * {@code STATUS_COMPLETE} as that default. So a truncated or malformed status file
+         * <p>It used to fall back to a caller default whenever the file or field was missing,
+         * null,
+         * unparsable or a shape gson would coerce. The completion caller used to pass
+         * {@code STATUS_COMPLETE} as that default, so a truncated or malformed status file
          * recorded the pair as a **successful solver run**, stamped an {@code end_time} and a
          * completion row, and became indistinguishable from a genuine result in every
          * downstream query. A wrong stage misattributes a result; this invented one.
          *
-         * @param record the parsed status file, or null when there is none
+         * @param record the parsed status file; null is refused as absent evidence
          */
-        private int readTerminalStatus(ExecutionRef execution, JsonObject record,
-                int defaultStatus) throws StageStatusSnapshots.InvalidSnapshotException {
+        private int readTerminalStatus(ExecutionRef execution, JsonObject record)
+                throws StageStatusSnapshots.InvalidSnapshotException {
+            if (record == null) {
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for " + execution + " is absent, so its result is unknown"
+                );
+            }
+            int statusFromRecord =
+                FinalStatusStage.requireStatus(record, String.valueOf(execution));
+            if (statusFromRecord != StatusCode.STATUS_COMPLETE.getVal()) {
+                return statusFromRecord;
+            }
             StatusCode limit = readRunsolverVerdict(execution);
             if (limit != null) {
                 return limit.getVal();
             }
-            if (record == null) {
-                return defaultStatus;
-            }
-            return FinalStatusStage.requireStatus(record, String.valueOf(execution));
+            return statusFromRecord;
         }
 
         /**
@@ -4933,9 +4772,9 @@ public class KubernetesNativeBackend implements Backend {
             if (outputDir == null) {
                 log.info(
                     "Not ingesting stage snapshots for " + execution +
-                    ": this execution no longer owns its tracking"
+                        ": this execution no longer owns its tracking"
                 );
-                return true;
+                return false;
             }
 
             // The terminal stage's own status comes from the runsolver artifacts, and a pair
@@ -4992,54 +4831,23 @@ public class KubernetesNativeBackend implements Backend {
         /**
          * The stage this execution's result belongs to.
          *
-         * <p>{@code defaultStage} applies only when the pair produced no status file at all,
-         * which is an ordinary outcome for a pod that never started: there is nothing to
-         * attribute, and the caller still has to record a platform verdict so the pair can be
-         * rerun.
-         *
-         * <p>A file that exists must say which stage it is about. It used to fall back to the
-         * same default whenever the field was missing, unparsable or a shape gson would coerce,
+         * <p>It used to fall back to a caller default when the file was absent or the field was
+         * missing, unparsable or a shape gson would coerce,
          * and that number was then handed to {@code UpdatePairStatusPrecise} as an authoritative
          * identity -- terminal status onto that stage, NOT_REACHED onto every stage above it.
          * A malformed file therefore produced a confident write against an invented stage.
          *
-         * @throws StageStatusSnapshots.InvalidSnapshotException if a status file exists but does
-         *         not carry a usable stage identity
+         * @throws StageStatusSnapshots.InvalidSnapshotException if terminal evidence is absent
+         *         or does not carry a usable stage identity
          */
-        /** As {@link #readStageNumber(ExecutionRef, int)}, but on an already-parsed record. */
-        private int readStageNumber(ExecutionRef execution, JsonObject record, int defaultStage)
+        private int readStageNumber(ExecutionRef execution, JsonObject record)
                 throws StageStatusSnapshots.InvalidSnapshotException {
             if (record == null) {
-                return defaultStage;
+                throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for " + execution + " is absent, so its stage is unknown"
+                );
             }
             return FinalStatusStage.require(record, String.valueOf(execution));
-        }
-
-        private int readStageNumber(ExecutionRef execution, int defaultStage)
-                throws StageStatusSnapshots.InvalidSnapshotException, IOException {
-            Path statusPath = resolveStatusPath(execution);
-            if (statusPath == null || !Files.exists(statusPath)) {
-                return defaultStage;
-            }
-
-            JsonObject root;
-            try {
-                String json = Files.readString(statusPath);
-                root = JsonParser.parseString(json).getAsJsonObject();
-            } catch (IOException e) {
-                // Deliberately not converted into a refusal. The output directory is on a
-                // shared volume and a read that fails now is the storage, not the contents --
-                // IngestionOutcome.classify says the same of an IOException, and
-                // StageStatusSnapshots.read rethrows it unwrapped for this reason. Wrapping it
-                // would retire the execution and strand the pair over a transient blip.
-                throw e;
-            } catch (Exception e) {
-                // It parsed as something that is not a status record, and will again.
-                throw new StageStatusSnapshots.InvalidSnapshotException(
-                    "status.json for " + execution + " exists but is not a status record, so"
-                        + " the stage that produced this result is unknown", e);
-            }
-            return FinalStatusStage.require(root, String.valueOf(execution));
         }
 
         private Path resolveStatusPath(ExecutionRef execution) {
