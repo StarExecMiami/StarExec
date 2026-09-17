@@ -20,7 +20,7 @@ This guide covers:
 
 | Parameter | Default | Tuning Goal |
 |-----------|---------|-------------|
-| `STAREXEC_LOCAL_CONCURRENCY` | 4 | Match CPU cores (up to 16) |
+| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU cores)` | Match physical cores; prefer `STAREXEC_LOCAL_CORE_LIST` |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Match solver requirements |
@@ -43,7 +43,7 @@ This guide covers:
 |--------|--------|----------|
 | CPU utilization | 70-90% | > 95% (overloaded) |
 | Memory utilization | 60-80% | > 90% (risk OOM) |
-| Queue depth | 50-100 | > 500 (backlog) |
+| Queue depth | 50-100 | 200-500 | > 500 |
 | Job timeout rate | < 1% | > 5% (timeout too low) |
 | Database response | < 50ms | > 200ms (bottleneck) |
 
@@ -86,9 +86,9 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | 4 | 4 | 24 | 576 |
 | 8 | 8 | 48 | 1,152 |
 | 16 | 16 | 96 | 2,304 |
-| 32 | 16 | 96 | 2,304 |
+| 32 | 32 | 192 | 4,608 |
 
-*Note: Local backend maxes out at 16 concurrent jobs*
+*Note: concurrency is whatever `STAREXEC_LOCAL_CONCURRENCY` or the `STAREXEC_LOCAL_CORE_LIST` yields; there is no built-in cap. For benchmark fidelity use one job pair per physical core.*
 
 #### Podman Backend
 
@@ -132,8 +132,9 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 # Check CPU cores
 nproc
 
-# Set concurrency (rule: cores - 2 for system overhead)
-export STAREXEC_LOCAL_CONCURRENCY=$(( $(nproc) - 2 ))
+# For benchmark fidelity, set the core list to one logical CPU per physical
+# core and let concurrency derive from it (see cpu-partition-scheduling.md)
+export STAREXEC_LOCAL_CORE_LIST="0,2,4,6"
 
 # For memory-bound solvers, reduce further
 export STAREXEC_LOCAL_CONCURRENCY=$(( $(nproc) / 2 ))
@@ -251,14 +252,10 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
 
 ### Connection Pool Tuning
 
-```yaml
-# Helm values
-datasource:
-  maximumPoolSize: 20      # Max connections
-  minimumIdle: 5           # Min idle connections
-  connectionTimeout: 30000 # Connection timeout (ms)
-  idleTimeout: 600000      # Idle connection timeout (ms)
-```
+The connection pool is the Tomcat JDBC pool configured in
+`starexec-app/src/main/webapp/META-INF/context.xml` (`maxActive=20`,
+`maxIdle=10` by default). It is not a Helm value; change it in that resource
+and redeploy.
 
 **Sizing guide:**
 
@@ -314,15 +311,10 @@ FROM pg_stat_user_tables
 WHERE seq_scan > 1000 AND seq_tup_read / seq_scan > 1000
 ORDER BY seq_tup_read DESC;
 
--- Add common indexes
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_job_pairs_status 
-ON job_pairs(status_code);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_job_pairs_job_id 
-ON job_pairs(job_id);
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_jobs_status_created 
-ON jobs(status_code, created);
+-- The hot-path indexes (including idx_job_pairs_status and
+-- idx_job_pairs_job_id) are created by Flyway migration V0026. Do not create
+-- them manually. Use the diagnostic query above to find candidates for new
+-- indexes and add them through a new migration.
 ```
 
 ### Query Optimization
@@ -453,7 +445,7 @@ blockdev --setra 4096 /dev/sda
 
 | Metric | Healthy | Warning | Critical |
 |--------|---------|---------|----------|
-| Queue depth | 50-100 | 200-500 | > 1000 |
+| Queue depth | 50-100 | 200-500 | > 500 |
 | Job completion rate | Stable | Declining | Zero |
 | Error rate | < 1% | 1-5% | > 10% |
 | Response time | < 500ms | 500ms-2s | > 5s |

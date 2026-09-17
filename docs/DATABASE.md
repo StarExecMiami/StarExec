@@ -104,7 +104,7 @@ psql -h localhost -p 5432 -U starexec -d starexec
 
 StarExec uses [Flyway](https://flywaydb.org/) for database schema management:
 
-1. SQL migration files are stored in `src/main/resources/db/migration/`
+1. SQL migration files are stored in `starexec-app/src/main/resources/db/migration/`
 2. Files are named: `V{version}__{description}.sql`
 3. Flyway tracks applied migrations in `flyway_schema_history`
 4. Migrations run automatically on application startup
@@ -112,10 +112,10 @@ StarExec uses [Flyway](https://flywaydb.org/) for database schema management:
 ### Migration File Naming
 
 ```
-V1__Initial_schema.sql          # Version 1
-V2__Add_users_table.sql         # Version 2
-V3.1__Add_email_column.sql      # Version 3.1
-V10__Performance_indexes.sql    # Version 10
+V0001__baseline_schema.sql      # Version 1
+V0002__seed_minimal_data.sql    # Version 2
+V0003__schema_change_1_1.sql    # Version 3
+V0117__automatic_rerun_is_atomic.sql  # Version 117
 ```
 
 ### Notable Migrations
@@ -125,7 +125,7 @@ V10__Performance_indexes.sql    # Version 10
 | `V0001__baseline_schema.sql` | Full schema baseline |
 | `V0021__bcrypt_only_passwords.sql` | BCrypt password migration |
 | `V0025__batch_rerun_and_indexes.sql` | PL/pgSQL function `RerunJobPairsBatch(int[])` for efficient batch job pair resets (replaces N+1 loop) |
-| `V0026__add_missing_indexes.sql` | 13 performance indexes on hot-path columns; runs non-transactionally (`-- flyway:executeInTransaction=false`) to allow `CREATE INDEX CONCURRENTLY` |
+| `V0026__add_missing_indexes.sql` | 13 performance indexes on hot-path columns; uses regular `CREATE INDEX` inside Flyway's transaction. `CONCURRENTLY` is deliberately avoided because it deadlocks against Flyway's advisory lock (see the migration header). |
 | `V0110__fix_fk_delete_actions.sql` | Rebuilds legacy foreign keys with explicit `ON DELETE` behavior (`SET DEFAULT`, `RESTRICT`, `CASCADE`, `SET NULL`) and documents intentionally unconstrained historical snapshot columns |
 | `V0111__pipeline_anon_fk_constraints.sql` | Adds `solver_pipelines.user_id → users.id ON DELETE CASCADE` and documents why `anonymous_links.primitive_id` remains polymorphic and intentionally unconstrained |
 
@@ -185,9 +185,9 @@ make stop && make start
 
 ### Creating New Migrations
 
-1. Create a new file in `src/main/resources/db/migration/`:
+1. Create a new file in `starexec-app/src/main/resources/db/migration/`:
    ```bash
-   touch src/main/resources/db/migration/V{next_version}__Description.sql
+   touch starexec-app/src/main/resources/db/migration/V{next_version}__Description.sql
    ```
 
 2. Add SQL statements:
@@ -197,12 +197,9 @@ make stop && make start
    CREATE INDEX idx_jobs_priority ON jobs(priority);
    ```
 
-   If the migration contains `CREATE INDEX CONCURRENTLY`, add the following annotation
-   at the top of the file so Flyway does not wrap it in a transaction (PostgreSQL forbids
-   `CONCURRENTLY` inside a transaction block):
-   ```sql
-   -- flyway:executeInTransaction=false
-   ```
+   Migrations must not use `CREATE INDEX CONCURRENTLY`: it deadlocks against
+   Flyway's advisory lock (see `V0026__add_missing_indexes.sql` for the full
+   explanation). Use regular `CREATE INDEX`, which runs inside Flyway's transaction.
 
 3. Test locally:
    ```bash
@@ -292,7 +289,9 @@ Create a cron job:
 
 ```sql
 -- List all users
-SELECT id, email, first_name, last_name, role FROM users;
+SELECT u.id, u.email, u.first_name, u.last_name, ur.role
+FROM starexec.users u
+LEFT JOIN starexec.user_roles ur ON ur.email = u.email;
 
 -- Reset user password (hash required from application)
 -- Use application UI or API instead
@@ -304,7 +303,10 @@ UPDATE users SET enabled = false WHERE email = 'user@example.com';
 UPDATE users SET enabled = true WHERE email = 'user@example.com';
 
 -- Check admin users
-SELECT id, email FROM users WHERE role = 'admin';
+SELECT u.id, u.email
+FROM starexec.users u
+JOIN starexec.user_roles ur ON ur.email = u.email
+WHERE ur.role = 'admin';
 ```
 
 ### Job Management
@@ -363,10 +365,10 @@ SELECT pg_size_pretty(pg_database_size('starexec'));
 -- Table sizes
 SELECT 
   tablename,
-  pg_size_pretty(pg_total_relation_size('public.' || tablename)) as size
+  pg_size_pretty(pg_total_relation_size('starexec.' || tablename)) as size
 FROM pg_tables 
-WHERE schemaname = 'public'
-ORDER BY pg_total_relation_size('public.' || tablename) DESC;
+WHERE schemaname = 'starexec'
+ORDER BY pg_total_relation_size('starexec.' || tablename) DESC;
 
 -- Row counts
 SELECT 
@@ -411,7 +413,7 @@ log_min_duration_statement = 1000 # Log queries > 1 second
 
 Performance-critical indexes on `job_pairs`, `jobs`, `solvers`, `configurations`,
 `benchmarks`, `logins`, `job_spaces`, and `jobpair_stage_data` are created automatically
-by Flyway migration **V0026** using `CREATE INDEX CONCURRENTLY`. Do not create them
+by Flyway migration **V0026** using regular `CREATE INDEX` (not `CONCURRENTLY`). Do not create them
 manually — Flyway will detect duplicate index names and fail.
 
 To diagnose missing indexes on other columns:
@@ -465,7 +467,7 @@ SELECT
   pg_size_pretty(pg_relation_size(schemaname||'.'||tablename)) as table_size,
   pg_size_pretty(pg_indexes_size(schemaname||'.'||tablename::regclass)) as index_size
 FROM pg_tables
-WHERE schemaname = 'public'
+WHERE schemaname = 'starexec'
 ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 ```
 
@@ -545,9 +547,9 @@ WHERE NOT l.granted;
 SELECT pg_size_pretty(pg_database_size('starexec'));
 
 -- Find largest tables
-SELECT tablename, pg_size_pretty(pg_total_relation_size('public.' || tablename))
-FROM pg_tables WHERE schemaname = 'public'
-ORDER BY pg_total_relation_size('public.' || tablename) DESC
+SELECT tablename, pg_size_pretty(pg_total_relation_size('starexec.' || tablename))
+FROM pg_tables WHERE schemaname = 'starexec'
+ORDER BY pg_total_relation_size('starexec.' || tablename) DESC
 LIMIT 10;
 
 -- Clean up old job data

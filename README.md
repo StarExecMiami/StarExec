@@ -73,7 +73,7 @@ The list below is the canonical public documentation set.
 
 ## Architecture
 
-**Stack:** Java 17 web application (Spring/Tomcat) → PostgreSQL database → Backend scheduler → Compute nodes
+**Stack:** Java 17 web application (Servlet/JSP on Tomcat 9) → PostgreSQL database → Backend scheduler → Compute nodes
 
 See [Architecture Overview](docs/ARCHITECTURE.md) for detailed system design.
 

@@ -709,8 +709,8 @@ podman ps | grep starexec-job
 make logs-app | grep ContainerJobMonitor
 
 # Check job output
-find /var/starexec -name "<JOB_ID>" -type d
-cat /var/starexec/output/<JOB_ID>/*/status.json
+podman exec starexec-app sh -c 'find "${STAREXEC_DATA_DIR:-/var/starexec/data}/output" -name "<JOB_ID>" -type d'
+podman exec starexec-app sh -c 'cat "${STAREXEC_DATA_DIR:-/var/starexec/data}/output/<JOB_ID>"/*/status.json'
 ```
 
 **Solution:**
@@ -853,7 +853,7 @@ kubectl exec -n starexec <pod-name> -- \
   http://localhost:8080/starexec/public/health/readiness
 
 # 3) 503 means the database is unreachable: check it
-kubectl get pods -n starexec -l app.kubernetes.io/component=postgres
+kubectl get pods -n starexec -l app.kubernetes.io/name=starexec
 kubectl logs -n starexec <pod-name> | grep -i "database probe failed"
 
 # 4) Verify credentials and service resolution
@@ -1032,14 +1032,14 @@ make start
 |---------|--------|-------|
 | `local` | ✅ Stable | Dev only, no isolation |
 | `podman` | ✅ Production | Recommended |
-| `kubernetes` | ⚠️ Limited | 50-job hardcoded limit |
+| `kubernetes` | ⚠️ Limited | Max concurrent jobs configurable via `STAREXEC_K8S_MAX_CONCURRENT_JOBS` (default 50) |
 | `sge` | ⚠️ Legacy | Tests disabled |
 | `oar` | ⚠️ Legacy | Tests disabled |
 
 ### Known Gaps
 
 1. **No horizontal scaling** - Single-instance monolith
-2. **No built-in metrics** - Manual Prometheus setup needed
+2. **No Prometheus endpoint** - Backend `getStats()` is internal only; manual Prometheus setup needed
 3. **Kubernetes backend incomplete** - Hybrid design has bottleneck
 4. **SGE/OAR tests disabled** - Use PowerMockito, not maintained
 
