@@ -602,7 +602,9 @@ public class Queues {
 				procedure = con.prepareCall("{CALL GetPendingDeveloperJobs(?)}");
 				procedure.setInt(1, queueId);
 				results = procedure.executeQuery();
-				return results.next();
+				if (results.next()) {
+					return true;
+				}
 			} catch (Exception e) {
 				log.error("developerJobsExist", e);
 			} finally {
