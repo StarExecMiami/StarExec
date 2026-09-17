@@ -48,7 +48,7 @@ CREATE PROCEDURE GetPendingDeveloperJobs(IN _queueId INT)
             ON u.email = ur.email
         INNER JOIN jobs
             ON jobs.user_id = u.id
-        WHERE ur.role = 'developer' OR ur.role = 'admin' AND queue_id = _queueId
+        WHERE (ur.role = 'developer' OR ur.role = 'admin') AND jobs.queue_id = _queueId
         AND EXISTS (select 1 from job_pairs FORCE INDEX (job_id_2) WHERE status_code=1 and job_id=jobs.id);
     END //
 
