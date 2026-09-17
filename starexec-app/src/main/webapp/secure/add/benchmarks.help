@@ -45,7 +45,7 @@ chosen destination space.)
 </li>
 <li>You set the default permissions for any spaces that are created as
 a result of the benchmark upload.
-See the <a href="https://wiki.uiowa.edu/display/stardev/User+Guide#UserGuide-Permissions">
+See the <a href="${starexecRoot}/public/StarExecUserGuide.pdf#page=3">
 User Guide</a> for more details on permissions.
 </li>
 <li>You specify the type of benchmarks you are uploading. Each benchmark will be
