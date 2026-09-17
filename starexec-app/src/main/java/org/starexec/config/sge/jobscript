@@ -83,7 +83,7 @@ fi
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
 # Include common functions and status codes
-. $SCRIPT_DIR/functions.bash
+. "$SCRIPT_DIR/functions.bash"
 
 
 # Array of secondary benchmarks starexec paths

@@ -13,7 +13,7 @@
 # /////////////////////////////////////////////
 
 # Include the predefined status codes and functions
-. $SCRIPT_DIR/status_codes.bash
+. "$SCRIPT_DIR/status_codes.bash"
 
 # Strict mode: exit on command failure, unset variable use, and pipe failures.
 # Ensures staging failures (e.g. cp) terminate the script and the EXIT trap can send status.
