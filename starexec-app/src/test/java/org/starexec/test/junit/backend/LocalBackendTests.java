@@ -3,15 +3,23 @@ package org.starexec.test.junit.backend;
 import static org.awaitility.Awaitility.await;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.Backend;
 import org.starexec.backend.LocalBackend;
+import org.starexec.backend.LocalJobMonitor;
 import org.starexec.constants.R;
+import org.starexec.data.database.JobPairs;
 import org.testng.Assert;
 
 /**
@@ -168,11 +176,75 @@ public class LocalBackendTests {
 
     /** The private nested LocalJob, built through its declared constructor. */
     private Object localJob(Path logPath) throws Exception {
+        return localJob(1, 1, Path.of("script.sh"), tempDir, logPath);
+    }
+
+    private Object localJob(
+        int execId,
+        int pairId,
+        Path scriptPath,
+        Path workDir,
+        Path logPath
+    ) throws Exception {
         Class<?> type = Class.forName("org.starexec.backend.LocalBackend$LocalJob");
         var ctor = type.getDeclaredConstructor(
             int.class, int.class, String.class, String.class, String.class);
         ctor.setAccessible(true);
-        return ctor.newInstance(1, 1, "script.sh", tempDir.toString(), logPath.toString());
+        return ctor.newInstance(
+            execId,
+            pairId,
+            scriptPath.toString(),
+            workDir.toString(),
+            logPath.toString()
+        );
+    }
+
+    private void executeJob(Object job) throws Exception {
+        Method method = LocalBackend.class.getDeclaredMethod(
+            "executeJob", Class.forName("org.starexec.backend.LocalBackend$LocalJob")
+        );
+        method.setAccessible(true);
+        method.invoke(backend, job);
+    }
+
+    private LocalJobMonitor jobMonitor() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("jobMonitor");
+        field.setAccessible(true);
+        return (LocalJobMonitor) field.get(backend);
+    }
+
+    private void waitForFixtureJob() {
+        await()
+            .atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+            .pollInterval(POLL_INTERVAL_MS, TimeUnit.MILLISECONDS)
+            .until(() -> !backend.getRunningJobsStatus().contains("fake_job.sh"));
+    }
+
+    private Path executableScript(String name, String body) throws IOException {
+        Path script = tempDir.resolve(name);
+        Files.writeString(script, "#!/bin/bash\n" + body + "\n");
+        script.toFile().setExecutable(true);
+        return script;
+    }
+
+    private void verifyNoScientificStatusWrites(MockedStatic<JobPairs> jobPairs) {
+        jobPairs.verify(() -> JobPairs.setStatusForPairAndStages(
+                Mockito.anyInt(), Mockito.anyInt()),
+            Mockito.never());
+        jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+            Mockito.never());
+        jobPairs.verify(() -> JobPairs.setPairStatusPrecise(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean()),
+            Mockito.never());
+        jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean()),
+            Mockito.never());
+        jobPairs.verify(() -> JobPairs.setEarlierStageStatuses(
+                Mockito.anyInt(), Mockito.anyMap()),
+            Mockito.never());
     }
 
     /** Writes status.json beside a log file and asks the predicate about it. */
@@ -190,6 +262,113 @@ public class LocalBackendTests {
 
     private static String status(int code) {
         return "{\"pairId\":1,\"status\":" + code + ",\"stageNumber\":1,\"timestamp\":1788988692}";
+    }
+
+    @Test
+    public void zeroExitWithoutTerminalEvidenceDoesNotInventScientificFailure()
+        throws Exception {
+        waitForFixtureJob();
+        Path output = Files.createDirectory(tempDir.resolve("zero-without-status"));
+        Object job = localJob(
+            101,
+            4101,
+            executableScript("exit-zero.sh", "exit 0"),
+            tempDir,
+            output.resolve("job.log")
+        );
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            executeJob(job);
+            verifyNoScientificStatusWrites(jobPairs);
+        }
+        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 1,
+            "the unresolved pair must remain tracked for late evidence");
+        Assert.assertFalse(Files.exists(output.resolve("status.json")));
+    }
+
+    @Test
+    public void nonzeroProcessExitWithoutTerminalEvidenceDoesNotInventScientificFailure()
+        throws Exception {
+        waitForFixtureJob();
+        Path output = Files.createDirectory(tempDir.resolve("nonzero-without-status"));
+        Object job = localJob(
+            102,
+            4102,
+            executableScript("exit-nine.sh", "exit 9"),
+            tempDir,
+            output.resolve("job.log")
+        );
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            executeJob(job);
+            verifyNoScientificStatusWrites(jobPairs);
+        }
+        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 1,
+            "process lifecycle failure alone must leave the pair unresolved");
+    }
+
+    @Test
+    public void unexpectedExecutionFailureDoesNotInventScientificFailure()
+        throws Exception {
+        waitForFixtureJob();
+        Path output = Files.createDirectory(tempDir.resolve("unexpected-without-status"));
+        Object job = localJob(
+            103,
+            4103,
+            executableScript("not-started.sh", "exit 0"),
+            tempDir,
+            output.resolve("job.log")
+        );
+
+        Field cores = LocalBackend.class.getDeclaredField("availableCores");
+        cores.setAccessible(true);
+        cores.set(backend, new LinkedBlockingQueue<Integer>() {
+            @Override
+            public Integer poll(long timeout, TimeUnit unit) {
+                throw new IllegalStateException("synthetic scheduler failure");
+            }
+        });
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            executeJob(job);
+            verifyNoScientificStatusWrites(jobPairs);
+        }
+        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 1,
+            "an implementation failure must leave the scientific result unresolved");
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public void cleanupFailureDoesNotInventResultOrLeakActiveExecution() throws Exception {
+        waitForFixtureJob();
+        Path outputEntry = tempDir.resolve("output-is-not-a-directory");
+        Files.writeString(outputEntry, "not a directory");
+        Object job = localJob(
+            104,
+            4104,
+            executableScript("cleanup-never-starts.sh", "exit 0"),
+            tempDir,
+            outputEntry.resolve("job.log")
+        );
+
+        Field activeField = LocalBackend.class.getDeclaredField("activeJobs");
+        activeField.setAccessible(true);
+        Map active = (Map) activeField.get(backend);
+        active.put(104, job);
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            executeJob(job);
+            verifyNoScientificStatusWrites(jobPairs);
+        }
+
+        Assert.assertFalse(active.containsKey(104),
+            "a refused attempt must not remain forever in activeJobs");
+        Field completedAt = job.getClass().getDeclaredField("completedAt");
+        completedAt.setAccessible(true);
+        Assert.assertTrue(completedAt.getLong(job) > 0,
+            "a refused attempt must still record operational completion");
+        Assert.assertEquals(jobMonitor().getTrackedPairCount(), 0,
+            "cleanup failed before monitor registration");
     }
 
     /** Everything the job script can actually emit, both directions. */

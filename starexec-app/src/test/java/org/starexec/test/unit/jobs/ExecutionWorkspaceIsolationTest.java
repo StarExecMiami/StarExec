@@ -269,8 +269,8 @@ public class ExecutionWorkspaceIsolationTest {
 	 * The regression that matters most here. {@code cleanWorkspace 0} is called by the jobscript
 	 * AFTER the pair has already reported STATUS_COMPLETE, and {@code sendStatus} does not set
 	 * {@code STATUS_SENT} -- so under {@code set -e} any failing command in that window is turned
-	 * into ERROR_BENCHMARK by the EXIT trap. A finished pair would be recorded as a benchmark
-	 * error because a directory could not be deleted.
+	 * into the trap's fail-closed error. A finished pair would be recorded as a failure because
+	 * a directory could not be deleted.
 	 *
 	 * <p>{@code rm -rf} fails there for ordinary reasons: an orphaned solver descendant still
 	 * writing into the tree is enough. So removal must never be able to change a status.

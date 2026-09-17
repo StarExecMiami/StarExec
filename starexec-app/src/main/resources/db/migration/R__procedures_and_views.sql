@@ -6177,7 +6177,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Redeems a given password reset code by deleting the corresponding entry
--- in pass_reset_request and returning the user_id of that deleted entry
+-- in pass_reset_request and returning the user_id of that deleted entry.
+-- Codes expire one hour after they are created; expired codes produce the
+-- same not-found error as unknown codes so the two cannot be distinguished.
 -- Author: Todd Elvers
 DROP FUNCTION IF EXISTS starexec.RedeemPassResetRequestByCode CASCADE;
 CREATE OR REPLACE FUNCTION starexec.RedeemPassResetRequestByCode(_code VARCHAR(36))
@@ -6187,7 +6189,8 @@ DECLARE
 BEGIN
     SELECT prr.user_id INTO _id
     FROM starexec.pass_reset_request prr
-    WHERE prr.code = _code;
+    WHERE prr.code = _code
+      AND prr.created > NOW() - INTERVAL '1 hour';
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',

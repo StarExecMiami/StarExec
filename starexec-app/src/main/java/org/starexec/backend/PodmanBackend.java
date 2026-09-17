@@ -36,7 +36,6 @@ import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
-import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.Queues;
 import org.starexec.data.to.Status;
 import org.starexec.data.to.Status.StatusCode;
@@ -306,13 +305,15 @@ public class PodmanBackend implements Backend {
             }
             cachedNodeId = getOrResolveCachedNodeId(0);
 
+            // Construct the monitor before reconciliation so exited containers use the same
+            // evidence-only ingestion path as normal polling. It is not started until after
+            // reconciliation, so no polling thread can race this startup pass.
+            this.jobMonitor = new ContainerJobMonitor(this);
+
             // Reconcile pairs left in ENQUEUED or RUNNING state from a previous crash.
-            // Must run before the monitor starts so exited containers are processed
-            // before the normal polling loop begins.
             reconcileOrphanedPairs();
 
             // Start the job completion monitor
-            this.jobMonitor = new ContainerJobMonitor(this);
             this.jobMonitor.start();
             log.info("ContainerJobMonitor started");
 
@@ -2412,7 +2413,8 @@ public class PodmanBackend implements Backend {
 
     /**
      * Startup reconciliation: finds pairs left in ENQUEUED or RUNNING state
-     * from a previous crash and either recovers them or marks them as failed.
+     * from a previous crash and recovers the executions whose runtime evidence is still
+     * attributable.
      *
      * <p>Called from {@link #initialize(String)} before the monitor starts.
      * Uses container labels ({@code starexec.pair.id}, {@code starexec.label.version})
@@ -2427,7 +2429,7 @@ public class PodmanBackend implements Backend {
      *   <tr><td>ENQUEUED</td><td>none / legacy label</td><td>reset pair + stages to PENDING_SUBMIT</td></tr>
      *   <tr><td>RUNNING</td><td>running</td><td>mark running, rebuild tracking, leave active</td></tr>
      *   <tr><td>RUNNING</td><td>exited + v2 label</td><td>process through normal completion</td></tr>
-     *   <tr><td>RUNNING</td><td>none / legacy label</td><td>mark terminal failure (unsafe to auto-rerun)</td></tr>
+     *   <tr><td>RUNNING</td><td>none / legacy label</td><td>leave unresolved for intervention</td></tr>
      * </table>
      */
     private void reconcileOrphanedPairs() {
@@ -2512,8 +2514,9 @@ public class PodmanBackend implements Backend {
                      " ENQUEUED pairs, " + runningIds.size() + " RUNNING pairs");
 
             int enqueuedReset = 0, enqueuedProcessed = 0, enqueuedRebuilt = 0;
-            int runningFailed = 0, runningProcessed = 0, runningRebuilt = 0;
+            int runningUnresolved = 0, runningProcessed = 0, runningRebuilt = 0;
             int maxRecoveredExecId = 0;
+            Set<String> retainedContainerIds = new HashSet<>();
 
             // ---- Step 3a: reconcile ENQUEUED pairs ----
             for (int pairId : enqueuedIds) {
@@ -2530,9 +2533,12 @@ public class PodmanBackend implements Backend {
                     }
                     enqueuedRebuilt++;
                 } else if (pairIdToExitedContainer.containsKey(pairId)) {
-                    processReconciledContainerThroughMonitor(
-                        pairId, pairIdToExitedContainer.get(pairId));
-                    enqueuedProcessed++;
+                    String containerId = pairIdToExitedContainer.get(pairId);
+                    if (processReconciledContainerThroughMonitor(pairId, containerId)) {
+                        enqueuedProcessed++;
+                    } else {
+                        retainedContainerIds.add(containerId);
+                    }
                 } else {
                     JobPairs.ConditionalPairUpdateResult result =
                         JobPairs.tryResetEnqueuedToPending(pairId);
@@ -2557,15 +2563,22 @@ public class PodmanBackend implements Backend {
                     }
                     runningRebuilt++;
                 } else if (pairIdToExitedContainer.containsKey(pairId)) {
-                    processReconciledContainerThroughMonitor(
-                        pairId, pairIdToExitedContainer.get(pairId));
-                    runningProcessed++;
-                } else {
-                    JobPairs.ConditionalPairUpdateResult result =
-                        JobPairs.tryMarkRunningAsFailed(pairId);
-                    if (result == JobPairs.ConditionalPairUpdateResult.UPDATED) {
-                        runningFailed++;
+                    String containerId = pairIdToExitedContainer.get(pairId);
+                    if (processReconciledContainerThroughMonitor(pairId, containerId)) {
+                        runningProcessed++;
+                    } else {
+                        retainedContainerIds.add(containerId);
                     }
+                } else {
+                    // The missing runtime artifact is an operational fact, not evidence of
+                    // which solver stage ran or how it ended. Keep the pair RUNNING and
+                    // unresolved rather than manufacturing ERROR_RUNSCRIPT at stage 1.
+                    runningUnresolved++;
+                    log.error(
+                        "RECONCILIATION INTERVENTION REQUIRED: RUNNING pair " + pairId +
+                            " has no attributable container. It remains unresolved; no" +
+                            " solver result or stage was invented."
+                    );
                 }
             }
 
@@ -2581,11 +2594,12 @@ public class PodmanBackend implements Backend {
 
             log.info("Reconciliation complete: ENQUEUED→reset=" + enqueuedReset +
                      " processed=" + enqueuedProcessed + " rebuilt=" + enqueuedRebuilt +
-                     "; RUNNING→failed=" + runningFailed +
-                     " processed=" + runningProcessed + " rebuilt=" + runningRebuilt);
+                     "; RUNNING unresolved=" + runningUnresolved +
+                     " processed=" + runningProcessed + " rebuilt=" + runningRebuilt +
+                     "; retained after ingestion refusal=" + retainedContainerIds.size());
 
             // ---- Step 4: remove stale terminal containers (V2 only) ----
-            cleanupStaleTerminalContainers(allContainers);
+            cleanupStaleTerminalContainers(allContainers, retainedContainerIds);
 
         } catch (Exception e) {
             log.error("Failed to reconcile orphaned pairs on startup", e);
@@ -2687,37 +2701,12 @@ public class PodmanBackend implements Backend {
      * <p>Unlike the previous blind ERROR_RUNSCRIPT approach, this reuses the
      * same logic as the normal completion monitor so that a solver that
      * completed successfully before a crash is recorded correctly.</p>
-     */
-    /**
-     * Marks a reconciled pair failed, and says whether that actually landed.
      *
-     * <p>Stage 1 is a fabrication -- the reconciliation paths have no stage in hand -- and it
-     * is left as it was. What changes is that the answer is no longer discarded: a pair whose
-     * stage 1 is not a stage it has (a no-op first stage leaves no row) now refuses the write,
-     * and the caller must not delete the container after a refusal.
-     *
-     * @return true when the pair carries the failure and its container may be released
+     * @return true only when ingestion completed and the container may be removed
      */
-    private boolean markReconciledPairFailed(int pairId) {
-        PairStatusResult result = JobPairs.setPairStatusPreciseResult(
-            pairId, 1,
-            StatusCode.ERROR_RUNSCRIPT.getVal(),
-            StatusCode.STATUS_NOT_REACHED.getVal(),
-            false);
-        if (result == PairStatusResult.REJECTED_INVALID_STAGE) {
-            log.error(
-                "INGESTION INTERVENTION REQUIRED: reconciled pair " + pairId + " could not be" +
-                " marked failed because stage 1 is not a stage of that pair. Its container and" +
-                " output are retained for inspection."
-            );
-            return false;
-        }
-        return true;
-    }
-
-    private void processReconciledContainerThroughMonitor(
+    private boolean processReconciledContainerThroughMonitor(
         int pairId, String containerId) {
-        if (pairId <= 0 || containerId == null) return;
+        if (pairId <= 0 || containerId == null) return false;
         try {
             // Put entry in cache so inspect can find the pairId
             containerIdToPairId.put(containerId, pairId);
@@ -2726,12 +2715,12 @@ public class PodmanBackend implements Backend {
             List<CompletedContainerInfo> completed =
                 getCompletedContainersForIds(Collections.singletonList(containerId));
             if (completed.isEmpty()) {
-                log.warn("Reconciliation: cannot inspect container " + containerId +
-                         " for pair " + pairId + "; marking as failed");
-                if (markReconciledPairFailed(pairId)) {
-                    removeCompletedContainer(containerId);
-                }
-                return;
+                log.error(
+                    "INGESTION INTERVENTION REQUIRED: reconciliation cannot inspect container " +
+                        containerId + " for pair " + pairId + ". The pair remains unresolved" +
+                        " and the container is retained; no solver result or stage was invented."
+                );
+                return false;
             }
 
             // Process through monitor's completion logic
@@ -2756,28 +2745,27 @@ public class PodmanBackend implements Backend {
                     removeCompletedContainer(containerId);
                     log.info("Reconciliation: processed container for pair " + pairId +
                              " through normal completion path");
+                    return true;
                 } else {
                     log.error("Reconciliation: pair " + pairId + " was not recorded; its" +
                               " container and output are retained for inspection");
                 }
             } else {
-                // Monitor not yet created — use emergency path
-                log.warn("Reconciliation: monitor not available for pair " + pairId +
-                         "; using emergency error marking");
-                if (markReconciledPairFailed(pairId)) {
-                    removeCompletedContainer(containerId);
-                }
+                log.error(
+                    "INGESTION INTERVENTION REQUIRED: reconciliation has no completion monitor" +
+                        " for pair " + pairId + ". Its container and output are retained; no" +
+                        " solver result or stage was invented."
+                );
             }
         } catch (Exception e) {
-            log.warn("Reconciliation: failed to process container " +
-                     containerId + " for pair " + pairId, e);
-            // Emergency: mark as error so the pair doesn't stay stuck forever
-            try {
-                if (markReconciledPairFailed(pairId)) {
-                    removeCompletedContainer(containerId);
-                }
-            } catch (Exception ignored) { }
+            log.error(
+                "INGESTION INTERVENTION REQUIRED: reconciliation failed to process container " +
+                    containerId + " for pair " + pairId + ". The pair remains unresolved and" +
+                    " its evidence is retained; no solver result or stage was invented.",
+                e
+            );
         }
+        return false;
     }
 
     /**
@@ -2859,11 +2847,22 @@ public class PodmanBackend implements Backend {
     /**
      * Removes managed containers whose DB pair is already in a terminal state.
      * Only processes V2-labeled containers; legacy containers are left alone.
+     * Containers refused by the ingestion pass immediately above are protected:
+     * a terminal pair row may have been written before later metadata ingestion
+     * failed, and that container remains the recoverable source for a retry.
      */
-    private void cleanupStaleTerminalContainers(List<Container> allContainers) {
+    private void cleanupStaleTerminalContainers(
+        List<Container> allContainers,
+        Set<String> protectedContainerIds
+    ) {
+        Set<String> excludedContainerIds = protectedContainerIds == null
+            ? Collections.emptySet()
+            : protectedContainerIds;
         int removed = 0;
         for (Container container : allContainers) {
             try {
+                if (excludedContainerIds.contains(container.getId())) continue;
+
                 String versionLabel = container.getLabels().get(LABEL_VERSION);
                 if (!CURRENT_LABEL_VERSION.equals(versionLabel)) continue;
 
@@ -3153,10 +3152,10 @@ public class PodmanBackend implements Backend {
 
         for (Container container : containers) {
             try {
-                // Only trust pairId labels from V2+ containers.
-                // Legacy containers (timestamp-based labels, pre-v2.3.1)
-                // must fall back to status.json and should not have their
-                // label used for direct DB updates.
+                // Only trust pairId labels from V2+ containers. Legacy containers
+                // (timestamp-based labels, pre-v2.3.1) do not carry trustworthy ownership;
+                // status.json cannot establish which pair owns its own output, so the
+                // monitor retains/quarantines them unresolved.
                 String versionLabel = container.getLabels().get(LABEL_VERSION);
                 boolean isV2Label = CURRENT_LABEL_VERSION.equals(versionLabel);
 
@@ -3173,10 +3172,9 @@ public class PodmanBackend implements Backend {
                         log.warn("Malformed V2 pair ID label: " + pairIdLabel);
                     }
                 } else {
-                    // Legacy label: DO NOT parse as pairId.
-                    // Let the monitor read status.json instead.
+                    // Legacy label: DO NOT parse as pairId or infer ownership from output.
                     log.debug("Legacy container " + container.getId() +
-                              " — will use status.json for pairId resolution");
+                              " — no authoritative pair ownership; retaining unresolved");
                 }
 
                 // Get output directory from container inspection

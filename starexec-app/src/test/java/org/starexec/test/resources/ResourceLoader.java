@@ -830,7 +830,10 @@ public class ResourceLoader implements AutoCloseable, IResourceLoader {
 			throw new IllegalStateException(
 					"Test XML files must contain the " + schemaLocParam + " template parameter.");
 		}
-		templateReplacements.put(schemaLocParam, testXml.type.schemaPath);
+		// The template parameter sits in the root element's xmlns, so it is a NAMESPACE, not a
+		// location. It used to be filled with the deployment URL, which no schema has ever
+		// declared, so these fixtures could not validate against the schema they name.
+		templateReplacements.put(schemaLocParam, testXml.type.namespace);
 		// Replace the key in templateReplacements with the corresponding value in the
 		// XML string.
 		for (Map.Entry<String, String> entry : templateReplacements.entrySet()) {

@@ -1110,7 +1110,8 @@ function limitExceeded {
 	# trap's fail-closed ERROR_BENCHMARK overwrote the limit that was actually breached,
 	# reporting a file-write limit as a missing benchmark.
 	STATUS_SENT=true
-	sendStatus $2
+	# limitExceeded fires while the solver runs, so the breach belongs to that stage (#145).
+	sendStatus $2 "${CURRENT_STAGE_NUMBER:-0}"
 	exit 1
 }
 
@@ -1819,7 +1820,7 @@ function verifyWorkspace {
 		# This failure is local to the attempt. Other attempts may be copying from
 		# the shared cache, so a missing configuration must not evict their source.
 		STATUS_SENT=true
-		sendStatus $ERROR_RUNSCRIPT
+		sendStatus $ERROR_RUNSCRIPT "${CURRENT_STAGE_NUMBER:-0}"
 		exit 1
 	fi
 	log "execution host solver configuration verified"
@@ -1828,7 +1829,7 @@ function verifyWorkspace {
 	if ! [ -r "$LOCAL_BENCH_PATH" ]; then
 		log "job error: could not locate the readable benchmark '$BENCH_NAME' on the execution host."
 		STATUS_SENT=true
-		sendStatus $ERROR_BENCHMARK
+		sendStatus $ERROR_BENCHMARK "${CURRENT_STAGE_NUMBER:-0}"
 		exit 1
 	fi
 	log "execution host benchmark verified"
@@ -1896,7 +1897,11 @@ function exitJobscript {
 	# Do not run commands that can fail and mask the original exit code.
 	if [ "$EXIT_CODE" -ne 0 ] && [ "$STATUS_SENT" != "true" ]; then
 		STATUS_SENT=true
-		sendStatus $ERROR_BENCHMARK || true
+		# The stage that was running, or 0 when none was: the monitor hands this number to
+		# UpdatePairStatusPrecise, and 0 names the pair rather than a stage. ERROR_RUNSCRIPT is
+		# what the other failures on this path report; ERROR_BENCHMARK named the benchmark for
+		# failures that had nothing to do with it (#145).
+		sendStatus $ERROR_RUNSCRIPT "${CURRENT_STAGE_NUMBER:-0}" || true
 	fi
 	removePrivateWorkspace
 	echo "Jobscript ending."

@@ -174,7 +174,7 @@ kubectl get pods -n starexec -o wide
 kubectl get jobs,pods -n starexec -o wide
 
 # Follow logs
-kubectl logs -n starexec -l app=starexec -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -f
 
 # Access application
 kubectl port-forward -n starexec svc/starexec 8080:8080
@@ -587,7 +587,7 @@ STAREXEC_K8S_CPU_LIMIT=1
 
 For issues or questions:
 
-1. Check logs: `kubectl logs -n starexec -l app=starexec`
+1. Check logs: `kubectl logs -n starexec -l app.kubernetes.io/name=starexec`
 2. Verify setup: `make k8s-detect`
 3. Debug deployment: `kubectl describe pod -n starexec <pod-name>`
 4. Review values: `cat charts/starexec/values-auto-detected.yaml`

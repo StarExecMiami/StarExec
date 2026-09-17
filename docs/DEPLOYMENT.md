@@ -31,7 +31,7 @@ StarExec supports three deployment methods:
 
 - Linux (Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 38+)
 - Podman 4.0+ (rootless recommended)
-- Required packages: `passt`, `catatonit`, `fuse-overlayfs`, `yq`
+- Required packages: `passt`, `catatonit`, `fuse-overlayfs`, `uidmap`; `yq` is optional (only needed by `make config-show`)
 - cgroups v2 enabled
 
 ### Kubernetes + Helm
@@ -208,12 +208,8 @@ For a single-node MicroK8s deployment that uses this machine as the only compute
 helm repo add starexec https://starexecmiami.github.io/StarExec
 helm repo update
 
-# Install with defaults (development only)
-helm install starexec starexec/starexec \
-  --create-namespace \
-  -n starexec
-
-# Install with secure configuration
+# Install with secure configuration (the chart refuses to render without
+# postgres.existingSecret or explicit dev credentials)
 helm install starexec starexec/starexec \
   --create-namespace \
   -n starexec \
@@ -235,7 +231,7 @@ helm install starexec ./charts/starexec \
   -f charts/starexec/values-dev.yaml
 ```
 
-For Helm-specific linting and credential-handling notes, see [charts/starexec/README.md](../charts/starexec/README.md).
+`values-dev.yaml` expects the pre-existing secret `starexec-postgres-credentials` in the release namespace. For Helm-specific linting and credential-handling notes, see [charts/starexec/README.md](../charts/starexec/README.md).
 
 ### Custom Values
 
@@ -270,7 +266,8 @@ resources:
 persistence:
   enabled: true
   storageClass: "standard"
-  size: 50Gi
+  appDataSize: 50Gi
+  postgresDataSize: 20Gi
 
 # Ingress (optional)
 ingress:
@@ -305,7 +302,7 @@ kubectl get pods -n starexec
 kubectl get svc -n starexec
 
 # View logs
-kubectl logs -n starexec -l app=starexec -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -f
 
 # Port forward for testing
 kubectl port-forward -n starexec svc/starexec 8080:8080
@@ -436,12 +433,13 @@ make start
 ### Kubernetes
 
 ```bash
-# Backup using kubectl
-kubectl exec -n starexec starexec-postgres-0 -- \
+# Backup using kubectl (embedded PostgreSQL runs as the `postgres` sidecar
+# container of the app Deployment when postgres.host=localhost)
+kubectl exec -n starexec deploy/starexec -c postgres -- \
   pg_dump -U starexec starexec > backup.sql
 
 # Restore
-kubectl exec -i -n starexec starexec-postgres-0 -- \
+kubectl exec -i -n starexec deploy/starexec -c postgres -- \
   psql -U starexec starexec < backup.sql
 ```
 
@@ -536,6 +534,8 @@ kubectl describe pod <pod-name> -n starexec
 
 Access health endpoints:
 
+- `/starexec/public/health/liveness` - Liveness probe
+- `/starexec/public/health/readiness` - Readiness probe
 - `/starexec/` - Main application
 - Database: `make db-shell` then `SELECT 1;`
 
@@ -546,7 +546,7 @@ Access health endpoints:
 make logs
 
 # Kubernetes logs
-kubectl logs -n starexec -l app=starexec --tail=100 -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec --tail=100 -f
 ```
 
 ---
@@ -607,7 +607,7 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md) for more solutions.
 | `STAREXEC_DB_NAME` | `starexec` | Database name |
 | `STAREXEC_DB_USER` | `starexec` | Database username |
 | `STAREXEC_DB_PASSWORD` | *(empty)* | Database password (**required**) |
-| `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes. Runtime fallback default is `local`, but `make start` deploys Podman by default. |
+| `STAREXEC_BACKEND_TYPE` | `local` | Backend: local, podman, kubernetes, k8s, kubernetes-native, sge, oar (legacy). Runtime fallback default is `local`, but `make start` deploys Podman by default. |
 | `ENV` | `dev` | Environment: dev, ci, prod |
 | `APP_PORT` | `7827` | Application port (Podman) |
 

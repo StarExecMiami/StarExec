@@ -45,8 +45,8 @@ StarExec is a web-based platform for running solver benchmarks and competitions.
 | Layer | Technology | Purpose |
 |-------|------------|---------|
 | **Runtime** | Java 17+ | Application runtime |
-| **Web Framework** | Spring MVC / Servlets | HTTP request handling |
-| **Application Server** | Embedded Tomcat | Web container |
+| **Web Framework** | Servlets / JSP | HTTP request handling |
+| **Application Server** | Tomcat 9 (WAR deployment) | Web container |
 | **Database** | PostgreSQL 15+ | Persistent storage |
 | **Migrations** | Flyway | Database schema management |
 | **Frontend** | JSP, jQuery, DataTables | User interface |
@@ -72,7 +72,7 @@ StarExec is a web-based platform for running solver benchmarks and competitions.
 ### Application Layer
 
 ```
-src/main/java/org/starexec/
+starexec-app/src/main/java/org/starexec/
 ├── app/                    # Application bootstrap
 │   └── StarExec.java       # Main application class
 ├── command/                # CLI (StarExecCommand)
@@ -107,7 +107,7 @@ src/main/java/org/starexec/
 ### Web Layer
 
 ```
-src/main/webapp/
+starexec-app/src/main/webapp/
 ├── WEB-INF/
 │   ├── web.xml             # Servlet configuration
 │   └── classes/
@@ -136,8 +136,8 @@ src/main/webapp/
 │ email            │   │   │ name             │
 │ first_name       │   │   │ parent_id        │───┐
 │ last_name        │   │   │ created          │   │
-│ password_hash    │   │   └──────────────────┘   │
-│ role             │   │            │             │
+│ password         │   │   └──────────────────┘   │
+│                  │   │            │             │
 └──────────────────┘   │            │ (self-ref)  │
          │             │            └─────────────┘
          │             │
@@ -386,7 +386,7 @@ public interface Backend {
 │   │   │  starexec-app   │   │starexec-postgres│        │   │
 │   │   │  (Java/Tomcat)  │   │ (PostgreSQL 15) │        │   │
 │   │   │                 │   │                 │        │   │
-│   │   │  Port: 7827     │   │  Port: 5432     │        │   │
+│   │   │ 8080 (host 7827)│   │  Port: 5432     │        │   │
 │   │   └────────┬────────┘   └────────┬────────┘        │   │
 │   │            │                     │                  │   │
 │   └────────────┼─────────────────────┼──────────────────┘   │
@@ -408,6 +408,10 @@ public interface Backend {
 │   └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+> Podman volume names are environment-specific: `starexec-{ENV}-data`,
+> `starexec-{ENV}-sandbox`, `starexec-{ENV}-backend`, `starexec-{ENV}-work`,
+> `starexec-{ENV}-postgres`.
 
 ### Kubernetes Cluster
 
@@ -461,6 +465,11 @@ public interface Backend {
 │   └─────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+> The chart has no StatefulSet: when `postgres.host=localhost`, PostgreSQL runs
+> as an embedded sidecar container named `postgres` inside the app Deployment.
+> PVC names follow the chart's `<volumePrefix>-<environment>-<type>` scheme
+> (e.g. `starexec-dev-data`); `kubernetes.dataPvc.name` can override the data claim.
 
 ---
 
@@ -577,6 +586,8 @@ public interface Backend {
 | Local (16 cores) | 96 | CPU cores |
 | Podman (single node) | 600 | Memory, I/O |
 | Kubernetes (10 nodes) | 6,000+ | Node count |
+
+*Kubernetes-native throughput is an estimate; it has not been benchmarked yet. See [BACKENDS.md](BACKENDS.md).*
 
 ---
 
