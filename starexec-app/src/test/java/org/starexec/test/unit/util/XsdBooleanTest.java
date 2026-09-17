@@ -24,7 +24,7 @@ import static org.junit.Assert.assertTrue;
  */
 public class XsdBooleanTest {
 
-	private static final String JOBS_NS = "@Web.URL@public/batchJobSchema.xsd";
+	private static final String JOBS_NS = "https://www.starexec.org/starexec/public/batchJobSchema.xsd";
 	private static final String JOB_SCHEMA_REF =
 			"https://starexec.example.org/starexec/public/batchJobSchema.xsd";
 
