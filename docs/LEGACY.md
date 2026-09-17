@@ -111,7 +111,7 @@ mvn clean package
 | Component | Legacy Version | Modern Version | Notes |
 |-----------|---------------|----------------|-------|
 | Java | 7, 8 | 17+ | Upgraded for security/features |
-| Tomcat | 7.0.64 | Embedded (Tomcat 9+) | Now embedded in application |
+| Tomcat | 7.0.64 | Tomcat 9.0.120 (WAR) | Deployed as a WAR on Tomcat 9 |
 | MySQL | 5.6, 5.7 | PostgreSQL 15+ | Database engine changed |
 | Sass | Ruby Sass | Dart Sass | Ruby Sass deprecated |
 | jQuery | 1.x, 2.x | 3.x | Upgraded with compatibility shim |
@@ -187,7 +187,7 @@ tomcat.manager.url=http://localhost:8080/manager
 | `db.user` | `STAREXEC_DB_USER` | Direct mapping |
 | `db.password` | `STAREXEC_DB_PASSWORD` | Now supports file reference |
 | `sge.queue` | `STAREXEC_BACKEND_TYPE` | Backend abstracted |
-| `tomcat.home` | N/A | Embedded Tomcat |
+| `tomcat.home` | N/A | Tomcat 9 (WAR deployment) |
 
 ---
 
@@ -369,7 +369,7 @@ The following analysis documents were created during the modernization effort. T
 **Key findings:**
 - LocalBackend: Good for development, 24-96 jobs/hour
 - PodmanBackend: Production-ready, 384-600 jobs/hour
-- Kubernetes: Limited by 50-job hardcoded cap in hybrid design
+- Kubernetes: the deprecated KubernetesBackend has a hardcoded 50-job cap; the active KubernetesNativeBackend is configurable via `STAREXEC_K8S_MAX_CONCURRENT_JOBS` (default 50)
 
 ### Security Analysis (2024)
 

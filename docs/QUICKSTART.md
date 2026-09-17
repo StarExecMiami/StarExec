@@ -183,11 +183,14 @@ See [Troubleshooting Guide](TROUBLESHOOTING.md#podman-issues) for more help.
    helm repo update
    ```
 
-2. Install StarExec:
+2. Install StarExec (the chart refuses to render without credentials — use an
+   existing secret or set the development credentials explicitly):
    ```bash
    helm install starexec starexec/starexec \
      --create-namespace \
-     -n starexec
+     -n starexec \
+     --set postgres.password="$(openssl rand -base64 32)" \
+     --set postgres.rootPassword="$(openssl rand -base64 32)"
    ```
 
 3. Wait for deployment:
@@ -208,7 +211,10 @@ Create a `values.yaml` file:
 
 ```yaml
 postgres:
+  # Development/testing only. Production must use existingSecret instead.
+  allowInsecureDevCredentials: true
   password: "your-secure-password"
+  rootPassword: "your-secure-root-password"
   
 resources:
   limits:
@@ -292,7 +298,7 @@ make reset                     # Complete cleanup
 helm list -n starexec                    # List releases
 helm upgrade starexec starexec/starexec  # Upgrade
 helm uninstall starexec -n starexec      # Remove
-kubectl logs -n starexec -l app=starexec # View logs
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec # View logs
 ```
 
 ## Getting Help

@@ -10,7 +10,7 @@ StarExec supports multiple backends for job execution, each with different chara
 | -------------- | ------------ | ------------------------ | ------------------------ |
 | **Local**      | ❌ None      | Single host, 4-16 jobs   | Development, testing     |
 | **Podman**     | ✅ Container | Single host, 64-100 jobs | Production (single-node) |
-| **Kubernetes** | ✅ Container | Multi-node, scalable     | Production (cluster)     |
+| **Kubernetes** | ✅ Container | Multi-node, scalable     | Controlled use (under validation) |
 | **SGE**        | ⚠️ Process   | Multi-node (HPC)         | Legacy HPC clusters      |
 | **OAR**        | ⚠️ Process   | Multi-node (HPC)         | Legacy HPC clusters      |
 
@@ -509,7 +509,7 @@ helm install starexec ./charts/starexec \
 
 ### Prerequisites
 
-- Kubernetes cluster (v1.19+) with worker nodes
+- Kubernetes cluster (tested baseline 1.24+; the chart declares `kubeVersion >=1.16.0`) with worker nodes
 - Shared PersistentVolumeClaim support matched to your topology:
   - ReadWriteOnce is acceptable for validated single-node same-namespace deployments
   - ReadWriteMany is required for validated multi-node shared-PVC scheduling
