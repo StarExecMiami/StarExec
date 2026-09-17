@@ -14,6 +14,8 @@ import io.fabric8.kubernetes.api.model.NodeSelectorRequirement;
 import io.fabric8.kubernetes.api.model.NodeSelectorTerm;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.PodSecurityContext;
+import io.fabric8.kubernetes.api.model.SecurityContext;
 import io.fabric8.kubernetes.api.model.StatusDetails;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
@@ -3384,5 +3386,40 @@ public class KubernetesNativeBackendTests {
 
         // No Job created, no pod listed, nothing submitted.
         Mockito.verifyNoInteractions(client);
+    }
+
+    /**
+     * Job pods run untrusted solvers on the shared data volume, so the pod and its
+     * container carry the restrictions #237 asks for: a non-root identity that matches
+     * the volume's owner, no privilege escalation, no capabilities, the runtime seccomp
+     * profile, and a read-only image filesystem.
+     */
+    @Test
+    public void jobPodsRunAsNonRootWithDroppedCapabilities() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Method podContextMethod =
+            KubernetesNativeBackend.class.getDeclaredMethod("jobPodSecurityContext");
+        podContextMethod.setAccessible(true);
+        PodSecurityContext pod =
+            (PodSecurityContext) podContextMethod.invoke(backend);
+
+        assertEquals(Boolean.TRUE, pod.getRunAsNonRoot());
+        assertEquals(Long.valueOf(1000), pod.getRunAsUser());
+        assertEquals(Long.valueOf(999), pod.getRunAsGroup());
+        assertEquals(Long.valueOf(999), pod.getFsGroup());
+        assertEquals("OnRootMismatch", pod.getFsGroupChangePolicy());
+        assertNotNull(pod.getSeccompProfile());
+        assertEquals("RuntimeDefault", pod.getSeccompProfile().getType());
+
+        Method containerContextMethod =
+            KubernetesNativeBackend.class.getDeclaredMethod("jobContainerSecurityContext");
+        containerContextMethod.setAccessible(true);
+        SecurityContext container =
+            (SecurityContext) containerContextMethod.invoke(backend);
+
+        assertEquals(Boolean.FALSE, container.getAllowPrivilegeEscalation());
+        assertEquals(Boolean.TRUE, container.getReadOnlyRootFilesystem());
+        assertEquals(List.of("ALL"), container.getCapabilities().getDrop());
     }
 }

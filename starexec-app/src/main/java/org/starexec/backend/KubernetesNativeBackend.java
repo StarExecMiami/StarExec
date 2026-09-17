@@ -95,8 +95,12 @@ import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.NodeCondition;
 import io.fabric8.kubernetes.api.model.NodeList;
 import io.fabric8.kubernetes.api.model.NodeSpec;
+import io.fabric8.kubernetes.api.model.PodSecurityContext;
+import io.fabric8.kubernetes.api.model.PodSecurityContextBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
+import io.fabric8.kubernetes.api.model.SecurityContext;
+import io.fabric8.kubernetes.api.model.SecurityContextBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
@@ -148,6 +152,10 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Label key used to identify StarExec queues on nodes */
     private static final String DEFAULT_QUEUE_LABEL = "starexec/queue";
+
+    /** Default identity of a job pod; see {@link #jobRunAsUser} (#237). */
+    private static final int DEFAULT_JOB_RUN_AS_USER = 1000;
+    private static final int DEFAULT_JOB_RUN_AS_GROUP = 999;
 
     /** Label prefix for StarExec-managed resources */
     private static final String LABEL_PREFIX = "starexec.org/";
@@ -596,6 +604,17 @@ public class KubernetesNativeBackend implements Backend {
     private String dataPvcName;
     private String dataPvcAccessMode;
     private String serviceAccountName;
+    /**
+     * UID and GID a job pod runs as, and the fsGroup of its volumes (#237).
+     *
+     * <p>Defaults match the chart's {@code security.app.runAsUser/runAsGroup}, which is
+     * also what the chart's init container chowns the shared volumes to. A job pod that
+     * ran as anyone else would either be unable to write the pair's output, or would
+     * write it with an owner the application cannot manage. Both are overridable so a
+     * deployment that changes the application identity does not silently break execution.
+     */
+    private int jobRunAsUser = DEFAULT_JOB_RUN_AS_USER;
+    private int jobRunAsGroup = DEFAULT_JOB_RUN_AS_GROUP;
     private String appNodeName;
     private String queueLabelKey;
     private String memoryLimit;
@@ -691,6 +710,23 @@ public class KubernetesNativeBackend implements Backend {
             "STAREXEC_K8S_SERVICE_ACCOUNT",
             "starexec-job"
         );
+        jobRunAsUser = getEnvInt("STAREXEC_K8S_JOB_RUN_AS_USER", DEFAULT_JOB_RUN_AS_USER);
+        jobRunAsGroup = getEnvInt("STAREXEC_K8S_JOB_RUN_AS_GROUP", DEFAULT_JOB_RUN_AS_GROUP);
+        if (jobRunAsUser <= 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_JOB_RUN_AS_USER value: " + jobRunAsUser +
+                ". A job pod must not run as root; falling back to " +
+                DEFAULT_JOB_RUN_AS_USER + "."
+            );
+            jobRunAsUser = DEFAULT_JOB_RUN_AS_USER;
+        }
+        if (jobRunAsGroup <= 0) {
+            log.warn(
+                "Invalid STAREXEC_K8S_JOB_RUN_AS_GROUP value: " + jobRunAsGroup +
+                ". Falling back to " + DEFAULT_JOB_RUN_AS_GROUP + "."
+            );
+            jobRunAsGroup = DEFAULT_JOB_RUN_AS_GROUP;
+        }
         appNodeName = getEnv("STAREXEC_K8S_APP_NODE_NAME", "");
         queueLabelKey = getEnv("STAREXEC_K8S_QUEUE_LABEL", DEFAULT_QUEUE_LABEL);
         memoryLimit = getEnv("STAREXEC_K8S_MEMORY_LIMIT", "2Gi");
@@ -810,6 +846,50 @@ public class KubernetesNativeBackend implements Backend {
         return (jobImagePullPolicy == null || jobImagePullPolicy.isEmpty())
             ? null
             : jobImagePullPolicy;
+    }
+
+    /**
+     * The pod-level security context for a job pod (#237).
+     *
+     * <p>Job pods run untrusted solvers, and they mount the shared data volume that holds
+     * every tenant's benchmarks, outputs and application data. They therefore run as the
+     * volume's owner, without root and without the ability to become it: {@code
+     * runAsNonRoot} refuses to start the container if the image or the runtime would give
+     * it UID 0, and {@code fsGroup} with {@code OnRootMismatch} keeps the volume writable
+     * for that identity without an ownership sweep on every pod start.
+     *
+     * <p>Seccomp defaults to the runtime's profile rather than {@code Unconfined}.
+     */
+    PodSecurityContext jobPodSecurityContext() {
+        return new PodSecurityContextBuilder()
+            .withRunAsNonRoot(true)
+            .withRunAsUser((long) jobRunAsUser)
+            .withRunAsGroup((long) jobRunAsGroup)
+            .withFsGroup((long) jobRunAsGroup)
+            .withFsGroupChangePolicy("OnRootMismatch")
+            .withNewSeccompProfile()
+                .withType("RuntimeDefault")
+            .endSeccompProfile()
+            .build();
+    }
+
+    /**
+     * The container-level security context for the job container (#237).
+     *
+     * <p>The container's writes are confined to the data volume and {@code /tmp}, which the
+     * job builder mounts as an emptyDir; the image's own filesystem is read-only, so a
+     * solver cannot modify the measurement instrument it runs under. No capability is
+     * granted: execution needs none, and {@code allowPrivilegeEscalation} is what would
+     * turn a setuid binary in a solver upload into a way back to root.
+     */
+    SecurityContext jobContainerSecurityContext() {
+        return new SecurityContextBuilder()
+            .withAllowPrivilegeEscalation(false)
+            .withReadOnlyRootFilesystem(true)
+            .withNewCapabilities()
+                .withDrop("ALL")
+            .endCapabilities()
+            .build();
     }
 
     private int getEnvInt(String key, int defaultValue) {
@@ -1941,6 +2021,7 @@ public class KubernetesNativeBackend implements Backend {
                     .endMetadata()
                     .withNewSpec()
                         .withServiceAccountName(serviceAccountName)
+                        .withSecurityContext(jobPodSecurityContext())
                         .withRestartPolicy("Never")
                         .withNodeName(pinnedNodeName)
                         .withNodeSelector(nodeSelector)
@@ -1999,6 +2080,13 @@ public class KubernetesNativeBackend implements Backend {
                                 .withName("starexec-data")
                                 .withMountPath("/app/data")
                             .endVolumeMount()
+                            // The job container's root filesystem is read-only; /tmp is the
+                            // one path outside the data volume that execution writes to.
+                            .addNewVolumeMount()
+                                .withName("tmp")
+                                .withMountPath("/tmp")
+                            .endVolumeMount()
+                            .withSecurityContext(jobContainerSecurityContext())
                             .withResources(resourcesBuilder.build())
                         .endContainer()
                         .addNewVolume()
@@ -2006,6 +2094,11 @@ public class KubernetesNativeBackend implements Backend {
                             .withNewPersistentVolumeClaim()
                                 .withClaimName(dataPvcName)
                             .endPersistentVolumeClaim()
+                        .endVolume()
+                        .addNewVolume()
+                            .withName("tmp")
+                            .withNewEmptyDir()
+                            .endEmptyDir()
                         .endVolume()
                     .endSpec()
                 .endTemplate()
