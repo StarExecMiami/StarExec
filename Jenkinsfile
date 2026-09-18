@@ -285,22 +285,60 @@ pipeline {
                             --dry-run=client -o yaml | microk8s kubectl apply -f -
 
                         # -----------------------------------------------------------------
-                        # 3. Pre-deploy backup (production only, best-effort)
+                        # 2b. Pre-flight: refuse to deploy over a wedged release.
+                        #     A pod stuck Terminating (kubelet FailedKillPod) holds its
+                        #     RWO volumes, so the rollout and its --atomic rollback both
+                        #     hang until the Helm timeout (build #137). A release left in
+                        #     'failed' state must be rolled back before the next attempt.
+                        # -----------------------------------------------------------------
+                        STUCK_PODS=\$(microk8s kubectl -n ${K8S_NAMESPACE} get pods -o json 2>/dev/null \\
+                            | jq -r '.items[] | select(.metadata.deletionTimestamp != null) | .metadata.name' || true)
+                        if [ -n "\${STUCK_PODS}" ]; then
+                            echo "ERROR: pod(s) stuck Terminating; a rollout cannot release their volumes:"
+                            echo "\${STUCK_PODS}"
+                            microk8s kubectl -n ${K8S_NAMESPACE} get pods -o wide || true
+                            exit 1
+                        fi
+                        NOT_READY_PODS=\$(microk8s kubectl -n ${K8S_NAMESPACE} get pods -o json 2>/dev/null \\
+                            | jq -r '.items[] | select(.status.phase == "Running") | select(any(.status.containerStatuses[]?; .ready == false)) | .metadata.name' || true)
+                        if [ -n "\${NOT_READY_PODS}" ]; then
+                            echo "ERROR: pod(s) running but not ready; refusing to deploy over an unhealthy release:"
+                            echo "\${NOT_READY_PODS}"
+                            exit 1
+                        fi
+                        RELEASE_STATUS=\$(microk8s helm3 status ${HELM_RELEASE} -n ${K8S_NAMESPACE} -o json 2>/dev/null \\
+                            | jq -r '.info.status // empty' || true)
+                        if [ "\${RELEASE_STATUS}" = "failed" ]; then
+                            echo "ERROR: Helm release ${HELM_RELEASE} is in 'failed' state."
+                            echo "Roll it back to the last deployed revision before retrying:"
+                            echo "  microk8s helm3 history ${HELM_RELEASE} -n ${K8S_NAMESPACE}"
+                            echo "  microk8s helm3 rollback ${HELM_RELEASE} <last-deployed-revision> -n ${K8S_NAMESPACE}"
+                            exit 1
+                        fi
+
+                        # -----------------------------------------------------------------
+                        # 3. Pre-deploy backup (production only, required)
                         # -----------------------------------------------------------------
                         if [ "${DEPLOY_ENV}" = "prod" ]; then
                             BACKUP_DIR="${env.JENKINS_HOME ?: env.WORKSPACE}/backups/starexec"
                             if mkdir -p "\${BACKUP_DIR}"; then
                                 BACKUP_FILE="\${BACKUP_DIR}/pre-deploy-\$(date +%Y%m%d-%H%M%S).sql"
                                 if microk8s kubectl get deploy/${HELM_RELEASE} -n ${K8S_NAMESPACE} >/dev/null 2>&1; then
-                                    microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
-                                        -- pg_dump -U starexec starexec > "\${BACKUP_FILE}" 2>&1 && \\
-                                        echo "✓ Backup: \${BACKUP_FILE} (\$(wc -c < "\${BACKUP_FILE}") bytes)" || \\
-                                        echo "⚠ Backup skipped (postgres not reachable)"
+                                    if microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
+                                        -- pg_dump -U starexec starexec > "\${BACKUP_FILE}" 2>&1; then
+                                        echo "✓ Backup: \${BACKUP_FILE} (\$(wc -c < "\${BACKUP_FILE}") bytes)"
+                                    else
+                                        rm -f "\${BACKUP_FILE}"
+                                        echo "ERROR: pre-deploy backup failed (postgres not reachable)."
+                                        echo "Refusing to deploy a schema-affecting revision without a backup."
+                                        exit 1
+                                    fi
                                 else
                                     echo "ℹ No existing deployment — backup skipped"
                                 fi
                             else
-                                echo "⚠ Backup skipped (backup directory not writable: \${BACKUP_DIR})"
+                                echo "ERROR: backup directory not writable: \${BACKUP_DIR}"
+                                exit 1
                             fi
                         fi
 
