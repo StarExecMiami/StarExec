@@ -857,7 +857,7 @@ function killDeadlockedJobPair {
 	EXTRA=$2
 	CURRENT_USER=$3
 
-	log "Wallclock timeout for current jobpair = $TIMEOUT"
+	log "Combined watchdog sleep budget for current jobpair (pre-processor + wallclock + post-processor, B7) = $TIMEOUT"
 	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA"
 	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER"
 
@@ -875,6 +875,30 @@ function killDeadlockedJobPair {
 
 	if [ $BUILD_JOB == "true" ]; then
 		cleanUpAfterKilledBuildJob
+	fi
+}
+
+# Stops the current stage's defensive killDeadlockedJobPair watchdog (B7), if one is
+# still running. Safe to call before the first watchdog of the script's life has
+# started (KILL_DEADLOCKED_JOB_PAIR_PID unset). The PID is cleared after it is
+# signaled, so the second call on a pair's last stage (explicit call after
+# copyOutput, then again from the EXIT trap via exitJobscript) is a no-op instead
+# of re-signaling a PID the OS may already have handed to an unrelated process.
+#
+# Deliberately does NOT verify the PID's identity before signaling it (e.g. by
+# matching `ps -o cmd=` the way isPairRunning above matches a sandbox PID): tested
+# directly against a real script-file invocation (not `bash -c`), a backgrounded
+# function's subshell reports its OWN script's invocation line as its `cmd`
+# ("bash /path/to/jobscript"), never the function's name, so a cmd-text match can
+# never succeed here and would silently turn this into a permanent no-op -- worse
+# than the PID-reuse window it would have tried to close, since a watchdog that is
+# never actually stopped survives to `killall` a later, unrelated, still-running
+# stage. The PID-reuse window this call is exposed to is unchanged from what
+# COPY_OUTPUT_INCREMENTALLY_PID (jobscript, unrelated to B7) already accepts.
+function stopDeadlockWatchdog {
+	if [ -n "${KILL_DEADLOCKED_JOB_PAIR_PID:-}" ]; then
+		kill "$KILL_DEADLOCKED_JOB_PAIR_PID" 2>/dev/null || true
+		KILL_DEADLOCKED_JOB_PAIR_PID=
 	fi
 }
 
@@ -1893,6 +1917,12 @@ function isOutputValid {
 
 function exitJobscript {
 	local EXIT_CODE=${1:-0}
+	# B7: safety net for the watchdog started before this stage's pre-processor --
+	# every early exit between there and the explicit stopDeadlockWatchdog call after
+	# copyOutput (a missing varfile/watchfile, invalid output, a pre/post-processor
+	# error) leaves it still sleeping otherwise. Idempotent with that later call and
+	# a no-op if no watchdog is currently running.
+	stopDeadlockWatchdog
 	# On non-zero exit, ensure orchestrator receives a terminal status (fail closed).
 	# Do not run commands that can fail and mask the original exit code.
 	if [ "$EXIT_CODE" -ne 0 ] && [ "$STATUS_SENT" != "true" ]; then
