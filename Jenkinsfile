@@ -286,12 +286,22 @@ pipeline {
 
                         # -----------------------------------------------------------------
                         # 2b. Pre-flight: refuse to deploy over a wedged release.
-                        #     A pod stuck Terminating (kubelet FailedKillPod) holds its
-                        #     RWO volumes, so the rollout and its --atomic rollback both
-                        #     hang until the Helm timeout (build #137). A release left in
-                        #     'failed' state must be rolled back before the next attempt.
+                        #     A failed nfs-server export makes every NFS-backed PVC
+                        #     unserviceable and blocks postgres I/O in D state, which no
+                        #     signal can kill (prod outage, 2026-09-17). A pod stuck
+                        #     Terminating (kubelet FailedKillPod) holds its RWO volumes,
+                        #     so the rollout and its --atomic rollback both hang until
+                        #     the Helm timeout (build #137). A release left in 'failed'
+                        #     state must be rolled back before the next attempt.
                         # -----------------------------------------------------------------
-                        STUCK_PODS=\$(microk8s kubectl -n ${K8S_NAMESPACE} get pods -o json 2>/dev/null \\
+                        if ! systemctl is-active --quiet nfs-server; then
+                            echo "ERROR: nfs-server.service is not active; NFS-backed PVCs cannot mount."
+                            echo "Recover first:  sudo systemctl restart nfs-server"
+                            echo "Then verify:    sudo exportfs -v"
+                            echo "See docs/TROUBLESHOOTING.md, section 'NFS server outage'."
+                            exit 1
+                        fi
+                        STUCK_PODS=\$(timeout 60 microk8s kubectl -n ${K8S_NAMESPACE} get pods -o json 2>/dev/null \\
                             | jq -r '.items[] | select(.metadata.deletionTimestamp != null) | .metadata.name' || true)
                         if [ -n "\${STUCK_PODS}" ]; then
                             echo "ERROR: pod(s) stuck Terminating; a rollout cannot release their volumes:"
@@ -299,14 +309,14 @@ pipeline {
                             microk8s kubectl -n ${K8S_NAMESPACE} get pods -o wide || true
                             exit 1
                         fi
-                        NOT_READY_PODS=\$(microk8s kubectl -n ${K8S_NAMESPACE} get pods -o json 2>/dev/null \\
+                        NOT_READY_PODS=\$(timeout 60 microk8s kubectl -n ${K8S_NAMESPACE} get pods -o json 2>/dev/null \\
                             | jq -r '.items[] | select(.status.phase == "Running") | select(any(.status.containerStatuses[]?; .ready == false)) | .metadata.name' || true)
                         if [ -n "\${NOT_READY_PODS}" ]; then
                             echo "ERROR: pod(s) running but not ready; refusing to deploy over an unhealthy release:"
                             echo "\${NOT_READY_PODS}"
                             exit 1
                         fi
-                        RELEASE_STATUS=\$(microk8s helm3 status ${HELM_RELEASE} -n ${K8S_NAMESPACE} -o json 2>/dev/null \\
+                        RELEASE_STATUS=\$(timeout 60 microk8s helm3 status ${HELM_RELEASE} -n ${K8S_NAMESPACE} -o json 2>/dev/null \\
                             | jq -r '.info.status // empty' || true)
                         if [ "\${RELEASE_STATUS}" = "failed" ]; then
                             echo "ERROR: Helm release ${HELM_RELEASE} is in 'failed' state."
@@ -324,7 +334,7 @@ pipeline {
                             if mkdir -p "\${BACKUP_DIR}"; then
                                 BACKUP_FILE="\${BACKUP_DIR}/pre-deploy-\$(date +%Y%m%d-%H%M%S).sql"
                                 if microk8s kubectl get deploy/${HELM_RELEASE} -n ${K8S_NAMESPACE} >/dev/null 2>&1; then
-                                    if microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
+                                    if timeout 300 microk8s kubectl exec -n ${K8S_NAMESPACE} deploy/${HELM_RELEASE} -c postgres \\
                                         -- pg_dump -U starexec starexec > "\${BACKUP_FILE}" 2>&1; then
                                         echo "✓ Backup: \${BACKUP_FILE} (\$(wc -c < "\${BACKUP_FILE}") bytes)"
                                     else
@@ -399,7 +409,7 @@ pipeline {
                     echo """
                     ╔══════════════════════════════════════════════════════════╗
                     ║  DEPLOYMENT FAILED                                      ║
-                    ║  Helm auto-rolled back to previous release.              ║
+                    ║  Deploy aborted or rolled back; see the log above.      ║
                     ║                                                         ║
                     ║  Debug with:                                            ║
                     ║    microk8s kubectl -n ${K8S_NAMESPACE} get pods        ║
