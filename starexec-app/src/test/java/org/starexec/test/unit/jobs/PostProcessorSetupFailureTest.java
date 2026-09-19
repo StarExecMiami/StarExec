@@ -141,7 +141,13 @@ public class PostProcessorSetupFailureTest {
 	private static int field(String json, String name) {
 		Matcher matcher = Pattern.compile("\\\"" + name + "\\\"\\s*:\\s*(-?\\d+)").matcher(json);
 		assertTrue(name + " must be present in " + json, matcher.find());
-		return Integer.parseInt(matcher.group(1));
+		try {
+			return Integer.parseInt(matcher.group(1));
+		} catch (NumberFormatException e) {
+			// The pattern admits only digits, so this is an out-of-range value: report it as
+			// a failed assertion on the evidence, not as an error in the test itself.
+			throw new AssertionError(name + " is not an int in " + json, e);
+		}
 	}
 
 	private static Result exec(String... command) throws Exception {
