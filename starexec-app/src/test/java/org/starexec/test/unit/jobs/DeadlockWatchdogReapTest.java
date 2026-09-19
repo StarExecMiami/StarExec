@@ -127,9 +127,10 @@ public class DeadlockWatchdogReapTest {
 	/**
 	 * The jobscript stops the watchdog with SIGTERM when the stage ends. If that lands after the
 	 * watchdog has frozen part of the tree but before it has killed it, the frozen processes stay
-	 * stopped for good. The hook sends that TERM, through the real stopDeadlockWatchdog, right
-	 * after the first SIGSTOP. The victim runs in the background so a regression fails here
-	 * instead of hanging on a stopped foreground child.
+	 * stopped for good. The hook sends the TERM stopDeadlockWatchdog sends, to the watchdog,
+	 * right after the first SIGSTOP; it sends it directly because stopDeadlockWatchdog now waits
+	 * for the watchdog, which the watchdog cannot do for itself. The victim runs in the
+	 * background so a regression fails here instead of hanging on a stopped foreground child.
 	 */
 	@Test
 	public void aStopMidFreezeLeavesNothingStopped() throws Exception {
@@ -138,8 +139,7 @@ public class DeadlockWatchdogReapTest {
 				+ "  builtin kill \"$@\"; local rc=$?\n"
 				+ "  if [[ ${1:-} == -STOP && ! -e \"$SCRIPT_DIR/termed\" ]]; then\n"
 				+ "    : > \"$SCRIPT_DIR/termed\"\n"
-				+ "    KILL_DEADLOCKED_JOB_PAIR_PID=$BASHPID\n"
-				+ "    stopDeadlockWatchdog\n"
+				+ "    builtin kill -TERM \"$BASHPID\"\n"
 				+ "  fi\n"
 				+ "  return $rc\n"
 				+ "}\n"
@@ -163,6 +163,94 @@ public class DeadlockWatchdogReapTest {
 		assertEquals(r.out, 0, r.exit);
 		assertTrue("the TERM must have landed mid-freeze:\n" + r.out, r.out.contains("T-TERM-DELIVERED"));
 		assertFalse("no process may be left stopped:\n" + r.out, r.out.contains("T-STOPPED-"));
+	}
+
+	/**
+	 * A watchdog stopped mid-reap ignores the TERM and keeps rescanning the script's descendants,
+	 * so stopDeadlockWatchdog must not return until it has exited: otherwise work the script
+	 * starts next is frozen and killed too. The hook holds the first reap round, for at most two
+	 * seconds, until a post-stop child exists; the child is only started once stop returns.
+	 */
+	@Test
+	public void workStartedAfterTheStopSurvivesAReapInProgress() throws Exception {
+		Result r = runWithHelper(
+				"kill() {\n"
+				+ "  builtin kill \"$@\"; local rc=$?\n"
+				+ "  if [[ ${1:-} == -STOP && ! -e \"$SCRIPT_DIR/armed\" ]]; then\n"
+				+ "    echo \"$BASHPID\" > \"$SCRIPT_DIR/armed\"\n"
+				+ "    for _ in $(seq 100); do [ -s \"$SCRIPT_DIR/newchild\" ] && break; sleep 0.02; done\n"
+				+ "  fi\n"
+				+ "  return $rc\n"
+				+ "}\n"
+				+ "sh -c 'exec sleep 99999' &\n"
+				+ "echo \"$!\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "killDeadlockedJobPair 0 0 starexec1 &\n"
+				+ "KILL_DEADLOCKED_JOB_PAIR_PID=$!\n"
+				+ "for _ in $(seq 200); do [ -s \"$SCRIPT_DIR/armed\" ] && break; sleep 0.02; done\n"
+				+ "stopDeadlockWatchdog\n"
+				+ "sleep 99999 &\n"
+				+ "NEW=$!\n"
+				+ "echo \"$NEW\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "echo \"$NEW\" > \"$SCRIPT_DIR/newchild\"\n"
+				+ "sleep 0.5\n"
+				+ "st=$(sed 's/.*) //' \"/proc/$NEW/stat\" 2>/dev/null | cut -d' ' -f1) || st=\n"
+				+ "if [ \"$st\" = S ]; then echo T-NEW-ALIVE; else echo \"T-NEW-GONE-$st\"; fi\n"
+				+ "builtin kill -9 \"$NEW\" 2>/dev/null || true\n");
+
+		assertEquals(r.out, 0, r.exit);
+		assertTrue("work started after the stop must survive:\n" + r.out, r.out.contains("T-NEW-ALIVE"));
+	}
+
+	/** A sleeping watchdog dies on the TERM itself, so stopping it costs about nothing. */
+	@Test
+	public void stoppingASleepingWatchdogReturnsAtOnce() throws Exception {
+		Result r = runWithHelper(
+				"killDeadlockedJobPair 3600 0 starexec1 &\n"
+				+ "KILL_DEADLOCKED_JOB_PAIR_PID=$!\n"
+				+ "sleep 0.3\n"
+				+ "for c in $(cat \"/proc/$KILL_DEADLOCKED_JOB_PAIR_PID/task/$KILL_DEADLOCKED_JOB_PAIR_PID/children\" 2>/dev/null); do echo \"$c\" >> \"$SCRIPT_DIR/pids\"; done\n"
+				+ "t0=$(date +%s%N)\n"
+				+ "stopDeadlockWatchdog\n"
+				+ "echo \"T-ELAPSED-MS=$(( ($(date +%s%N) - t0) / 1000000 ))\"\n");
+
+		assertEquals(r.out, 0, r.exit);
+		long ms = elapsedMs(r.out);
+		assertTrue("a sleeping watchdog must stop in under 2 s, took " + ms + " ms:\n" + r.out, ms < 2000);
+	}
+
+	/**
+	 * A watchdog that ignores the TERM and never exits (wedged, e.g. on a hung log append) must
+	 * not hold the pair: stop gives up at the cap, SIGKILLs it, and returns.
+	 */
+	@Test
+	public void aWedgedWatchdogIsKilledAtTheCap() throws Exception {
+		Result r = runWithHelper(
+				"sh -c 'trap \"\" TERM; exec sleep 99999' &\n"
+				+ "WEDGED=$!\n"
+				+ "echo \"$WEDGED\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "sleep 0.2\n"
+				+ "DEADLOCK_WATCHDOG_STOP_CAP_TENTHS=10\n"
+				+ "KILL_DEADLOCKED_JOB_PAIR_PID=$WEDGED\n"
+				+ "t0=$(date +%s%N)\n"
+				+ "stopDeadlockWatchdog\n"
+				+ "echo \"T-ELAPSED-MS=$(( ($(date +%s%N) - t0) / 1000000 ))\"\n"
+				+ "sleep 0.2\n"
+				+ "if isOwnLiveChild \"$WEDGED\"; then echo T-WEDGED-ALIVE; else echo T-WEDGED-GONE; fi\n");
+
+		assertEquals(r.out, 0, r.exit);
+		long ms = elapsedMs(r.out);
+		assertTrue("stop must wait out the 1 s cap, took " + ms + " ms:\n" + r.out, ms >= 1000);
+		assertTrue("stop must return soon after the 1 s cap, took " + ms + " ms:\n" + r.out, ms < 3000);
+		assertTrue("the wedged watchdog must be gone:\n" + r.out, r.out.contains("T-WEDGED-GONE"));
+	}
+
+	private static long elapsedMs(String out) {
+		for (String line : out.split("\n")) {
+			if (line.startsWith("T-ELAPSED-MS=")) {
+				return Long.parseLong(line.substring("T-ELAPSED-MS=".length()).trim());
+			}
+		}
+		throw new AssertionError("no elapsed time reported:\n" + out);
 	}
 
 	/** The jobscript's own arming line, so this test cannot drift from what production runs. */
