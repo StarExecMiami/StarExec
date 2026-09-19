@@ -10,6 +10,9 @@ import java.util.Map;
 import java.util.Set;
 import io.fabric8.kubernetes.api.model.Affinity;
 import io.fabric8.kubernetes.api.model.Container;
+import io.fabric8.kubernetes.api.model.PodSpec;
+import io.fabric8.kubernetes.api.model.Volume;
+import io.fabric8.kubernetes.api.model.VolumeMount;
 import io.fabric8.kubernetes.api.model.NodeSelectorRequirement;
 import io.fabric8.kubernetes.api.model.NodeSelectorTerm;
 import io.fabric8.kubernetes.api.model.Pod;
@@ -946,6 +949,62 @@ public class KubernetesNativeBackendTests {
             "and the record is cleared",
             ((Map<Integer, ?>) getField(backend, "unverifiedExecutions")).isEmpty()
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<Integer, ?> unverified(KubernetesNativeBackend backend) throws Exception {
+        return (Map<Integer, ?>) getField(backend, "unverifiedExecutions");
+    }
+
+    /**
+     * Foreground propagation keeps a Job present, behind its finalizer, until its pods are
+     * gone, so killing a pair whose pod is still running normally finds the Job still there.
+     * That hold needs an owner too. Without one the slot stayed reserved until the JVM
+     * restarted: reproduced on microk8s by pausing a job with a running pair, which left the
+     * pair RUNNING and, at maxConcurrentJobs=1, dispatch stopped.
+     */
+    @Test
+    public void aKillWhoseJobOutlivesTheDeleteIsRevisitedUntilItIsGone() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(40, "job-40");
+        givenJobDeletion(backend, "job-40", true, jobWithNoConditions(40), podInPhase(40, "Running"));
+        restore(backend, 40);
+
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 40));
+        assertTrue("the slot is held while the Job is still there", holdingSlot(backend).contains(40));
+        assertTrue("and the hold has an owner that will revisit it", unverified(backend).containsKey(40));
+
+        // The foreground deletion completes: neither the Job nor its pod remains.
+        KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
+        givenJobsFor(client);
+        givenPodsFor(client);
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertFalse("the hold is released", holdingSlot(backend).contains(40));
+        assertFalse("and the record is cleared", unverified(backend).containsKey(40));
+    }
+
+    /** The same for the admin pause-all path, which retains what it cannot confirm stopped. */
+    @Test
+    public void aKillAllThatRetainsAnExecutionHandsItToTheSweep() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(41, "job-41");
+        givenJobDeletion(backend, "job-41", true, jobWithNoConditions(41), podInPhase(41, "Running"));
+        restore(backend, 41);
+
+        assertFalse("killAll cannot report success while the Job is still there", backend.killAll());
+        assertTrue(holdingSlot(backend).contains(41));
+        assertTrue("the retained execution has an owner", unverified(backend).containsKey(41));
+
+        KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
+        givenJobsFor(client);
+        givenPodsFor(client);
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertFalse("the hold is released", holdingSlot(backend).contains(41));
+        assertFalse("and the record is cleared", unverified(backend).containsKey(41));
     }
 
     @Test
@@ -3421,5 +3480,104 @@ public class KubernetesNativeBackendTests {
         assertEquals(Boolean.FALSE, container.getAllowPrivilegeEscalation());
         assertEquals(Boolean.TRUE, container.getReadOnlyRootFilesystem());
         assertEquals(List.of("ALL"), container.getCapabilities().getDrop());
+    }
+
+    // ------------------------------------------------ writable paths under a read-only root
+
+    /** Builds the Job for a given backend working directory. */
+    private PodSpec podSpecFor(String workingDir) throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu("1");
+        Method build = KubernetesNativeBackend.class.getDeclaredMethod(
+            "buildKubernetesJob",
+            int.class, int.class, String.class, String.class, String.class, String.class);
+        build.setAccessible(true);
+        Job job = (Job) build.invoke(
+            backend, 42, 7, "starexec-job-7", "/script.sh", workingDir, "/app/data/logs/log.txt");
+        return job.getSpec().getTemplate().getSpec();
+    }
+
+    private static Map<String, String> mountsByPath(Container container) {
+        Map<String, String> mounts = new java.util.HashMap<>();
+        for (VolumeMount m : container.getVolumeMounts()) {
+            assertNull("a job mount must not collide with another: " + m.getMountPath(),
+                mounts.put(m.getMountPath(), m.getName()));
+        }
+        return mounts;
+    }
+
+    private static Volume volumeNamed(PodSpec pod, String name) {
+        return pod.getVolumes().stream().filter(v -> name.equals(v.getName())).findFirst().orElse(null);
+    }
+
+    /**
+     * The chart's default working directory is on the read-only root. The jobscript creates
+     * every pair's private workspace under it, so without a mount of its own each pair failed
+     * with ERROR_RUNSCRIPT ("mkdir: cannot create directory '/app/work/sandbox': Read-only
+     * file system"), reproduced on microk8s.
+     */
+    @Test
+    public void theDefaultWorkingDirectoryIsAWritableMount() throws Exception {
+        PodSpec pod = podSpecFor("/app/work");
+        Container container = pod.getContainers().get(0);
+
+        assertEquals("the container runs in the working directory", "/app/work", container.getWorkingDir());
+        assertEquals("the root filesystem stays read-only (#237)",
+            Boolean.TRUE, container.getSecurityContext().getReadOnlyRootFilesystem());
+        String volume = mountsByPath(container).get("/app/work");
+        assertNotNull("the working directory must be mounted", volume);
+        assertNotNull("as an emptyDir", volumeNamed(pod, volume).getEmptyDir());
+    }
+
+    /** A working directory on the data volume (as values-local-dev intends) is writable already. */
+    @Test
+    public void aWorkingDirectoryOnTheDataVolumeGetsNoSecondMount() throws Exception {
+        assertOnlyDataAndTmpMounted(podSpecFor("/app/data/work"));
+    }
+
+    /** One under /tmp (as values-ci intends) is on an emptyDir already. */
+    @Test
+    public void aWorkingDirectoryUnderTmpGetsNoSecondMount() throws Exception {
+        assertOnlyDataAndTmpMounted(podSpecFor("/tmp/work"));
+    }
+
+    /** Compared by path component: /app/database is not part of the data volume. */
+    @Test
+    public void aSiblingOfTheDataVolumeIsNotMistakenForIt() throws Exception {
+        PodSpec pod = podSpecFor("/app/database/work");
+
+        assertNotNull(mountsByPath(pod.getContainers().get(0)).get("/app/database/work"));
+    }
+
+    private static void assertOnlyDataAndTmpMounted(PodSpec pod) {
+        Map<String, String> mounts = mountsByPath(pod.getContainers().get(0));
+        assertEquals("a nested emptyDir would hide what is on the volume at that path",
+            Set.of("/app/data", "/tmp", "/app/home"), mounts.keySet());
+        assertEquals(3, pod.getVolumes().size());
+    }
+
+    /**
+     * HOME is the pod's own writable emptyDir, set explicitly so it does not depend on the
+     * configured runAsUser's passwd entry, whose home lies on the read-only root: solvers
+     * that keep state under ~ (~/.cache, ~/.elan, Java prefs) failed or degraded.
+     */
+    @Test
+    public void homeIsAWritableEmptyDirOfThePodsOwn() throws Exception {
+        PodSpec pod = podSpecFor("/app/work");
+        Container container = pod.getContainers().get(0);
+
+        String home = container.getEnv().stream()
+            .filter(e -> "HOME".equals(e.getName()))
+            .map(io.fabric8.kubernetes.api.model.EnvVar::getValue)
+            .findFirst().orElse(null);
+        assertEquals("HOME must be set explicitly, to the pod's own mount", "/app/home", home);
+        String volume = mountsByPath(container).get(home);
+        assertNotNull("HOME must be a mount", volume);
+        assertNotNull("an emptyDir, so it is per pod", volumeNamed(pod, volume).getEmptyDir());
+    }
+
+    /** A working directory configured at or under HOME must not become a second mount there. */
+    @Test
+    public void aWorkingDirectoryUnderHomeGetsNoSecondMount() throws Exception {
+        assertOnlyDataAndTmpMounted(podSpecFor("/app/home/work"));
     }
 }

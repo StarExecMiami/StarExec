@@ -101,6 +101,10 @@ import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
 import io.fabric8.kubernetes.api.model.SecurityContext;
 import io.fabric8.kubernetes.api.model.SecurityContextBuilder;
+import io.fabric8.kubernetes.api.model.Volume;
+import io.fabric8.kubernetes.api.model.VolumeBuilder;
+import io.fabric8.kubernetes.api.model.VolumeMount;
+import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
@@ -168,6 +172,24 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Label key for job pair ID */
     private static final String PAIR_ID_LABEL = LABEL_PREFIX + "pair-id";
+
+    /** Where the job container mounts the shared data volume. */
+    private static final String DATA_MOUNT_PATH = "/app/data";
+
+    /** Where the job container mounts its emptyDir for temporary files. */
+    private static final String TMP_MOUNT_PATH = "/tmp";
+
+    /** Name of the job pod's emptyDir for the backend working directory, when it needs one. */
+    private static final String WORK_VOLUME = "work";
+
+    /**
+     * The job container's HOME: an emptyDir of its own, per pod, whatever uid runs. Not under
+     * the working directory, which a deployment may put on the shared data volume.
+     */
+    private static final String HOME_MOUNT_PATH = "/app/home";
+
+    /** Name of the job pod's emptyDir for HOME. */
+    private static final String HOME_VOLUME = "home";
 
     /** Label key for StarExec label schema version */
     private static final String LABEL_VERSION = LABEL_PREFIX + "label-version";
@@ -874,13 +896,33 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
+     * Whether the backend working directory needs an emptyDir of its own in the job pod:
+     * true unless it is, or lies under, the data volume, {@code /tmp} or HOME, which are
+     * mounted already (a second mount at the same path would make Kubernetes reject the
+     * Job). Compared by path component, so {@code /app/database} is not under
+     * {@code /app/data}. A blank path gets no mount.
+     */
+    static boolean needsOwnWorkingDirVolume(String workingDirectoryPath) {
+        if (workingDirectoryPath == null || workingDirectoryPath.isBlank()) {
+            return false;
+        }
+        Path dir = Path.of(workingDirectoryPath).normalize();
+        return !dir.startsWith(DATA_MOUNT_PATH)
+            && !dir.startsWith(TMP_MOUNT_PATH)
+            && !dir.startsWith(HOME_MOUNT_PATH);
+    }
+
+    /**
      * The container-level security context for the job container (#237).
      *
-     * <p>The container's writes are confined to the data volume and {@code /tmp}, which the
-     * job builder mounts as an emptyDir; the image's own filesystem is read-only, so a
-     * solver cannot modify the measurement instrument it runs under. No capability is
-     * granted: execution needs none, and {@code allowPrivilegeEscalation} is what would
-     * turn a setuid binary in a solver upload into a way back to root.
+     * <p>The container's writes are confined to the data volume, {@code /tmp}, its HOME and the
+     * backend working directory: the job builder mounts {@code /tmp} and HOME as emptyDirs,
+     * and the working directory as another unless the data volume or {@code /tmp} already
+     * holds it. The image's own
+     * filesystem is read-only, so a solver cannot modify the measurement instrument it runs
+     * under. No capability is granted: execution needs none, and
+     * {@code allowPrivilegeEscalation} is what would turn a setuid binary in a solver upload
+     * into a way back to root.
      */
     SecurityContext jobContainerSecurityContext() {
         return new SecurityContextBuilder()
@@ -1954,6 +1996,25 @@ public class KubernetesNativeBackend implements Backend {
 
         Path outputDir = resolveOutputDirectory(logPath);
 
+        // The root filesystem is read-only (#237), so every path execution writes to must be
+        // a mount. The working directory is the jobscript's WORKING_DIR_BASE (both come from
+        // R.BACKEND_WORKING_DIR), under which it creates each pair's private workspace; unless
+        // the data volume or /tmp already holds it, it gets an emptyDir of its own. Mounting
+        // one there anyway would hide what is on that volume at the path.
+        List<VolumeMount> workingDirMounts = new ArrayList<>();
+        List<Volume> workingDirVolumes = new ArrayList<>();
+        if (needsOwnWorkingDirVolume(workingDirectoryPath)) {
+            workingDirMounts.add(new VolumeMountBuilder()
+                .withName(WORK_VOLUME)
+                .withMountPath(workingDirectoryPath)
+                .build());
+            workingDirVolumes.add(new VolumeBuilder()
+                .withName(WORK_VOLUME)
+                .withNewEmptyDir()
+                .endEmptyDir()
+                .build());
+        }
+
         ResourceRequirementsBuilder resourcesBuilder = new ResourceRequirementsBuilder()
             .addToRequests("memory", new Quantity(memoryLimit))
             .addToRequests("cpu", new Quantity(cpuLimit))
@@ -2045,6 +2106,14 @@ public class KubernetesNativeBackend implements Backend {
                                 .withName("STAREXEC_OUTPUT_DIR")
                                 .withValue(outputDir.toString())
                             .endEnv()
+                            // A writable home of the pod's own. The passwd home of the
+                            // configured runAsUser lies on the read-only root, so solvers
+                            // that keep state under ~ (~/.cache, ~/.elan, Java prefs) failed
+                            // or degraded; set explicitly, it holds whatever uid runs.
+                            .addNewEnv()
+                                .withName("HOME")
+                                .withValue(HOME_MOUNT_PATH)
+                            .endEnv()
                             // The node this pair actually ran on, from the downward API.
                             //
                             // Without it every Kubernetes pair lost its measurements.
@@ -2078,14 +2147,19 @@ public class KubernetesNativeBackend implements Backend {
                             .endEnv()
                             .addNewVolumeMount()
                                 .withName("starexec-data")
-                                .withMountPath("/app/data")
+                                .withMountPath(DATA_MOUNT_PATH)
                             .endVolumeMount()
-                            // The job container's root filesystem is read-only; /tmp is the
-                            // one path outside the data volume that execution writes to.
+                            // The job container's root filesystem is read-only, so /tmp and
+                            // the working directory (below) are mounts too.
                             .addNewVolumeMount()
                                 .withName("tmp")
-                                .withMountPath("/tmp")
+                                .withMountPath(TMP_MOUNT_PATH)
                             .endVolumeMount()
+                            .addNewVolumeMount()
+                                .withName(HOME_VOLUME)
+                                .withMountPath(HOME_MOUNT_PATH)
+                            .endVolumeMount()
+                            .addAllToVolumeMounts(workingDirMounts)
                             .withSecurityContext(jobContainerSecurityContext())
                             .withResources(resourcesBuilder.build())
                         .endContainer()
@@ -2100,6 +2174,12 @@ public class KubernetesNativeBackend implements Backend {
                             .withNewEmptyDir()
                             .endEmptyDir()
                         .endVolume()
+                        .addNewVolume()
+                            .withName(HOME_VOLUME)
+                            .withNewEmptyDir()
+                            .endEmptyDir()
+                        .endVolume()
+                        .addAllToVolumes(workingDirVolumes)
                     .endSpec()
                 .endTemplate()
             .endSpec()
@@ -3511,6 +3591,10 @@ public class KubernetesNativeBackend implements Backend {
                 " after a foreground delete; refusing to release its accounting because a" +
                 " pod for it may still execute and a replacement could then run twice."
             );
+            // The normal case for a running pod, not an anomaly: foreground propagation keeps
+            // the Job behind its finalizer until its pods are gone. So the hold must have an
+            // owner that comes back once it is, or the slot stays reserved until restart.
+            recordUnverified(execId, "kill of " + jobName + ": Job still present after delete");
             return KillOutcome.UNPROVEN;
         }
 
@@ -3723,6 +3807,9 @@ public class KubernetesNativeBackend implements Backend {
                 released++;
             } else {
                 retained++;
+                // Retained, and handed to the safety sweep so the hold is revisited rather
+                // than kept until the JVM restarts.
+                recordUnverified(execId, "killAll of " + jobName);
                 log.error(
                     "Cannot establish that execId " + execId + " (K8s job " + jobName +
                     ") has stopped during killAll: " +
