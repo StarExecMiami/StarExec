@@ -3591,6 +3591,10 @@ public class KubernetesNativeBackend implements Backend {
                 " after a foreground delete; refusing to release its accounting because a" +
                 " pod for it may still execute and a replacement could then run twice."
             );
+            // The normal case for a running pod, not an anomaly: foreground propagation keeps
+            // the Job behind its finalizer until its pods are gone. So the hold must have an
+            // owner that comes back once it is, or the slot stays reserved until restart.
+            recordUnverified(execId, "kill of " + jobName + ": Job still present after delete");
             return KillOutcome.UNPROVEN;
         }
 
@@ -3803,6 +3807,9 @@ public class KubernetesNativeBackend implements Backend {
                 released++;
             } else {
                 retained++;
+                // Retained, and handed to the safety sweep so the hold is revisited rather
+                // than kept until the JVM restarts.
+                recordUnverified(execId, "killAll of " + jobName);
                 log.error(
                     "Cannot establish that execId " + execId + " (K8s job " + jobName +
                     ") has stopped during killAll: " +

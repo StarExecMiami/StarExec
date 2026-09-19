@@ -951,6 +951,62 @@ public class KubernetesNativeBackendTests {
         );
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<Integer, ?> unverified(KubernetesNativeBackend backend) throws Exception {
+        return (Map<Integer, ?>) getField(backend, "unverifiedExecutions");
+    }
+
+    /**
+     * Foreground propagation keeps a Job present, behind its finalizer, until its pods are
+     * gone, so killing a pair whose pod is still running normally finds the Job still there.
+     * That hold needs an owner too. Without one the slot stayed reserved until the JVM
+     * restarted: reproduced on microk8s by pausing a job with a running pair, which left the
+     * pair RUNNING and, at maxConcurrentJobs=1, dispatch stopped.
+     */
+    @Test
+    public void aKillWhoseJobOutlivesTheDeleteIsRevisitedUntilItIsGone() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(40, "job-40");
+        givenJobDeletion(backend, "job-40", true, jobWithNoConditions(40), podInPhase(40, "Running"));
+        restore(backend, 40);
+
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 40));
+        assertTrue("the slot is held while the Job is still there", holdingSlot(backend).contains(40));
+        assertTrue("and the hold has an owner that will revisit it", unverified(backend).containsKey(40));
+
+        // The foreground deletion completes: neither the Job nor its pod remains.
+        KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
+        givenJobsFor(client);
+        givenPodsFor(client);
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertFalse("the hold is released", holdingSlot(backend).contains(40));
+        assertFalse("and the record is cleared", unverified(backend).containsKey(40));
+    }
+
+    /** The same for the admin pause-all path, which retains what it cannot confirm stopped. */
+    @Test
+    public void aKillAllThatRetainsAnExecutionHandsItToTheSweep() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(41, "job-41");
+        givenJobDeletion(backend, "job-41", true, jobWithNoConditions(41), podInPhase(41, "Running"));
+        restore(backend, 41);
+
+        assertFalse("killAll cannot report success while the Job is still there", backend.killAll());
+        assertTrue(holdingSlot(backend).contains(41));
+        assertTrue("the retained execution has an owner", unverified(backend).containsKey(41));
+
+        KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
+        givenJobsFor(client);
+        givenPodsFor(client);
+        invokePrivate(backend, "revisitUnverifiedExecutions");
+
+        assertFalse("the hold is released", holdingSlot(backend).contains(41));
+        assertFalse("and the record is cleared", unverified(backend).containsKey(41));
+    }
+
     @Test
     public void anUnprovenHoldSurvivesASweepThatStillCannotEstablishSafety() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
