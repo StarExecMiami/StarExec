@@ -298,7 +298,18 @@ public class Processors {
 
         Path target;
         try {
-            target = Paths.get(processorPath).toAbsolutePath().normalize();
+            Path stored = Paths.get(processorPath).toAbsolutePath();
+            target = stored.normalize();
+            // A processor named "." or ".." was stored as <date>/. or <date>/.., which
+            // normalizes to the date or community directory: other processors' files. Rows
+            // created before names made only of dots were refused can still hold such a path.
+            if (!stored.equals(target)) {
+                log.warn(
+                    method,
+                    "Refusing to delete [" + processorPath + "]: it contains . or .. segments."
+                );
+                return false;
+            }
         } catch (InvalidPathException e) {
             log.debug(
                 method,

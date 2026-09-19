@@ -444,6 +444,15 @@ public class Solvers {
 	 * @return The ID of the new solver, or -1 on failure
 	 * @author Eric Burns
 	 */
+	/**
+	 * Where a solver's files go: solverRoot/userId/name/date, with name refused unless it stays
+	 * directly inside the user's directory. Creates nothing.
+	 */
+	public static File solverDirectory(File solverRoot, int userId, String name, String date) {
+		File nameDir = Util.childWithin(new File(solverRoot, "" + userId), name);
+		return new File(nameDir, date);
+	}
+
 	public static int copySolver(Solver s, int userId, int spaceId) {
 		final String methodName = "copySolver";
 		log.debug("Copying solver " + s.getName() + " to new user id= " + String.valueOf(userId));
@@ -457,10 +466,8 @@ public class Solvers {
 		newSolver.setType(s.getType());
 		newSolver.setBuildStatus(s.buildStatus());
 		File solverDirectory = new File(s.getPath());
-		File uniqueDir = new File(R.getSolverPath(), "" + userId);
-		uniqueDir = new File(uniqueDir, newSolver.getName());
 		String date = shortDate.format(new Date());
-		uniqueDir = new File(uniqueDir, "" + date);
+		File uniqueDir = solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date);
 		uniqueDir.mkdirs();
 		newSolver.setPath(uniqueDir.getAbsolutePath());
 		try {
