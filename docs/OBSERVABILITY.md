@@ -53,10 +53,10 @@ SELECT 1;
 
 ```bash
 # Application logs
-kubectl logs -n starexec -l app=starexec -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -f
 
 # Database logs
-kubectl logs -n starexec -l app=postgres -f
+kubectl logs -n starexec -l app.kubernetes.io/name=starexec -c postgres -f
 
 # All pods
 kubectl logs -n starexec --all-containers -f
@@ -326,7 +326,7 @@ podman stats --no-stream starexec-app starexec-postgres
 # Helm values for health probes
 livenessProbe:
   httpGet:
-    path: /starexec/
+    path: /starexec/public/health/liveness
     port: 8080
   initialDelaySeconds: 60
   periodSeconds: 30
@@ -334,7 +334,7 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /starexec/
+    path: /starexec/public/health/readiness
     port: 8080
   initialDelaySeconds: 30
   periodSeconds: 10
@@ -383,12 +383,9 @@ exit 0
 
 ### Built-in Metrics
 
-Query via the `getStats()` method on backends:
-
-```bash
-# View backend statistics (if exposed via API)
-curl -b cookies.txt http://localhost:7827/starexec/services/admin/backend-stats
-```
+Query via the `getStats()` method on backends. These statistics are internal to
+the application and are not currently exposed over HTTP (there is no
+`/services/admin/backend-stats` endpoint).
 
 LocalBackend stats:
 - `activeJobs`: Currently running + queued

@@ -754,7 +754,12 @@ public class LocalJobMonitor {
         //    snapshot's pairId is validation data, not routing authority. Ownership is
         //    re-checked inside, immediately before the write, for the same reason step 4
         //    re-checks it -- reading files takes real time and a rerun may have landed.
-        ingestEarlierStageStatuses(pairId, state, outputDir, ss.stageNumber);
+        // A pair-level result names no stage, so every stage that finished is "earlier" than
+        // it: the bound is all stages rather than the one that produced the result (#165).
+        int snapshotBound = ss.stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? Integer.MAX_VALUE
+                : ss.stageNumber;
+        ingestEarlierStageStatuses(pairId, state, outputDir, snapshotBound);
 
         // 6. Update database, with runsolver's verdict allowed to correct the status
         //    bash derived by grepping prose.
@@ -769,6 +774,11 @@ public class LocalJobMonitor {
         //    updateDatabase, and nothing may be recorded against a result the database declined.
         //    Ownership is re-checked inside, immediately before each write, as in step 5. The
         //    runsolver stats parsed in step 2 decide the status only.
+        // Bounded by the reported stage, not by snapshotBound: a pair-level result names no
+        // stage, so this is empty and nothing is published. Recording a stage's status from
+        // its own snapshot is what the snapshot is for; publishing its measurements and
+        // attributes off the back of a pair that then failed outside every stage is a
+        // separate decision, and the one already made is that nothing is published (#165).
         Set<Integer> finishedEarlier =
                 StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
         int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
@@ -844,9 +854,9 @@ public class LocalJobMonitor {
     /**
      * Reads status and stageNumber from status.json using Gson.
      *
-     * <p>A missing file still returns the {@link StatusCode#ERROR_RUNSCRIPT} sentinel: a pair
-     * that produced no output at all is a different situation from one whose output cannot be
-     * believed, and it has always been reported this way.
+     * <p>The poll loop normally waits until the file exists. If it disappears between that
+     * check and this read, however, there is no solver result or stage identity to record. That
+     * race is refused as missing evidence rather than manufactured as ERROR_RUNSCRIPT/stage 1.
      *
      * <p>A file that exists and carries a status must carry a usable stage identity. It used
      * to substitute stage 1 for a missing or unusable {@code stageNumber}, which handed
@@ -859,8 +869,9 @@ public class LocalJobMonitor {
             throws StageStatusSnapshots.InvalidSnapshotException {
         Path statusFile = outputDir.resolve("status.json");
         if (!Files.exists(statusFile)) {
-            log.warn("No status.json found for pairId=" + pairId);
-            return new StatusAndStage(StatusCode.ERROR_RUNSCRIPT, 1);
+            throw new StageStatusSnapshots.InvalidSnapshotException(
+                    "status.json for pair " + pairId + " disappeared before it could be read;"
+                            + " neither its result nor stage is known");
         }
 
         try {
@@ -887,7 +898,7 @@ public class LocalJobMonitor {
                                 + e.getMessage());
             }
             StatusCode resolved = StatusCode.toStatusCode(statusCode);
-            int stageNumber = FinalStatusStage.require(obj, "pair " + pairId);
+            int stageNumber = FinalStatusStage.requireStageOrPairLevel(obj, "pair " + pairId);
 
             log.debug("Read status " + statusCode + " (" + resolved +
                     ") stageNumber=" + stageNumber + " from status.json for pairId=" + pairId);
@@ -1170,12 +1181,27 @@ public class LocalJobMonitor {
         log.info(
                 "Updating database for pairId=" + pairId + " with status=" + status
                 + " stageNumber=" + stageNumber);
-        PairStatusResult statusResult = JobPairs.setPairStatusPreciseResult(
-                pairId,
-                stageNumber,
-                status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal(),
-                false);
+
+        // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
+        // stage to carry the result (#165). A RUNNING record on that channel is the transient
+        // one the job script writes before it knows the stage, and writing it would say nothing
+        // the pair's own status does not already say.
+        if (stageNumber == FinalStatusStage.PAIR_LEVEL
+                && status == StatusCode.STATUS_RUNNING) {
+            log.debug("Pair " + pairId + " reports RUNNING with no stage; nothing to record");
+            return;
+        }
+        PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? JobPairs.setPairLevelStatusResult(
+                        pairId,
+                        status.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal())
+                : JobPairs.setPairStatusPreciseResult(
+                        pairId,
+                        stageNumber,
+                        status.getVal(),
+                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        false);
         if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
             // status.json named no stage. The job script's pair-level channel defaults to 0
             // -- exitJobscript, limitExceeded and the processor paths all take that default
@@ -1201,7 +1227,8 @@ public class LocalJobMonitor {
             // retry; it must never become a solver status.
             throw new org.starexec.backend.exception.RetryableIngestionException(
                     "Could not record terminal status " + status + " for pair " + pairId
-                            + " stage " + stageNumber);
+                            + (stageNumber == FinalStatusStage.PAIR_LEVEL
+                                    ? " at pair level" : " stage " + stageNumber));
         }
         if (statusResult == PairStatusResult.SUPERSEDED) {
             log.info("Pair " + pairId + " already had a different terminal status;"

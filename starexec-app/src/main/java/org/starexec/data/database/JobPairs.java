@@ -2436,6 +2436,74 @@ public class JobPairs {
      * must stay discoverable for a later attempt. Collapsing them into a boolean forces a
      * choice between leaking the resource and losing the result.
      */
+    /**
+     * Records a terminal status that belongs to the pair and to no stage (#165).
+     *
+     * <p>The job script reports a failure outside any stage on the pair-level channel, with
+     * stage number 0: before the stage loop starts, or between two stages. There is no stage to
+     * carry the result, so the status goes to the pair and every stage that had not finished is
+     * marked with {@code notReachedStatus}.
+     *
+     * @param pairId the pair
+     * @param terminalStatus the status to record; must be terminal
+     * @param notReachedStatus what unfinished stages become, normally STATUS_NOT_REACHED
+     * @return APPLIED, SUPERSEDED when the pair already held a different terminal status, or
+     *         FAILED when the write could not be performed
+     * @implNote the routine {@code starexec.UpdatePairStatusPairLevel} is defined in
+     *     {@code R__procedures_and_views.sql}, next to {@code UpdatePairStatusPrecise}, and
+     *     Flyway re-applies that file on every startup, so this method never runs against a
+     *     database that lacks it. A database failure still reports FAILED, which is
+     *     retryable.
+     */
+    public static PairStatusResult setPairLevelStatusResult(
+        int pairId,
+        int terminalStatus,
+        int notReachedStatus
+    ) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        Integer attemptNoForFinalize = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+            ps = con.prepareStatement(
+                "SELECT starexec.UpdatePairStatusPairLevel(?, ?, ?)"
+            );
+            ps.setInt(1, pairId);
+            ps.setInt(2, terminalStatus);
+            ps.setInt(3, notReachedStatus);
+
+            boolean applied;
+            try (ResultSet rs = ps.executeQuery()) {
+                applied = rs.next() && rs.getBoolean(1);
+            }
+            if (!applied) {
+                // Another writer recorded a different terminal result first, exactly as in the
+                // precise path: nothing was written, so roll back and report the loss rather
+                // than finalizing a manifest for a status the database refused.
+                Common.doRollback(con);
+                return PairStatusResult.SUPERSEDED;
+            }
+
+            if (isTerminalStatusCode(terminalStatus)) {
+                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+            }
+            con.commit();
+            Common.enableAutoCommit(con);
+            if (isTerminalStatusCode(terminalStatus) && attemptNoForFinalize != null) {
+                finalizePairManifest(pairId, attemptNoForFinalize, terminalStatus);
+            }
+            return PairStatusResult.APPLIED;
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return PairStatusResult.FAILED;
+    }
+
     public static PairStatusResult setPairStatusPreciseResult(
         int pairId,
         int stageNumber,

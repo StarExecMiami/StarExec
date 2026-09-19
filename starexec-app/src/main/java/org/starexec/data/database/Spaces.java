@@ -2620,6 +2620,17 @@ public class Spaces {
 	 * the already-committed space deletion.
 	 */
 	static void cleanProcessorFiles(List<String> filePaths) {
+		cleanProcessorFiles(filePaths, java.nio.file.Paths.get(R.getProcessorDir()));
+	}
+
+	/**
+	 * The same cleanup against an explicit processor root, so it can be exercised without a
+	 * deployment's data directory.
+	 *
+	 * @param filePaths the processor paths gathered before the cascade
+	 * @param processorRoot the root every processor path must be strictly inside
+	 */
+	static void cleanProcessorFiles(List<String> filePaths, java.nio.file.Path processorRoot) {
 		if (filePaths == null || filePaths.isEmpty()) {
 			return;
 		}
@@ -2627,9 +2638,15 @@ public class Spaces {
 		for (String filePath : filePaths) {
 			try {
 				File f = new File(filePath);
-				if (f.exists()) {
-					long size = f.length();
-					if (f.delete()) {
+				// NOFOLLOW_LINKS, because File.exists() follows a link and so reports a
+				// processor path that is a dangling symlink as absent, leaving the link
+				// behind. Processors.delete has no such guard and removes it.
+				if (Files.exists(f.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+					// A processor path names a directory, so its size is the size of its
+					// tree, and deleting it means deleting that tree. File.delete() refuses
+					// a non-empty directory, which is why this cleanup never freed anything.
+					long size = f.isDirectory() ? FileUtils.sizeOfDirectory(f) : f.length();
+					if (Processors.deleteProcessorFiles(processorRoot, filePath)) {
 						totalFreed += size;
 					} else {
 						log.warn("Could not delete processor file: " + filePath);

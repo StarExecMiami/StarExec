@@ -14,6 +14,8 @@ import io.fabric8.kubernetes.api.model.NodeSelectorRequirement;
 import io.fabric8.kubernetes.api.model.NodeSelectorTerm;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.PodSecurityContext;
+import io.fabric8.kubernetes.api.model.SecurityContext;
 import io.fabric8.kubernetes.api.model.StatusDetails;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
@@ -34,6 +36,7 @@ import org.starexec.backend.ExecutionRef;
 import org.starexec.backend.KubernetesNativeBackend;
 import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
+import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.database.PairStatusResult;
@@ -44,6 +47,18 @@ import org.starexec.data.to.Status.StatusCode;
  * require a live Kubernetes cluster.
  */
 public class KubernetesNativeBackendTests {
+
+    private static Path terminalOutput(StatusCode status) throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-terminal-evidence");
+        dir.toFile().deleteOnExit();
+        Path record = dir.resolve("status.json");
+        java.nio.file.Files.writeString(
+            record,
+            "{\"status\":" + status.getVal() + ",\"stageNumber\":1}"
+        );
+        record.toFile().deleteOnExit();
+        return dir;
+    }
 
     @Test
     public void isErrorTreatsZeroAndNegativeAsError() {
@@ -353,9 +368,10 @@ public class KubernetesNativeBackendTests {
         Map<Integer, Path> execToOut =
             (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
 
+        Path output = terminalOutput(StatusCode.STATUS_COMPLETE);
         execToJob.put(11, "job-11");
         execToPair.put(11, 111);
-        execToOut.put(11, Path.of("/tmp/output/11"));
+        execToOut.put(11, output);
 
         givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
@@ -381,7 +397,7 @@ public class KubernetesNativeBackendTests {
             assertFalse(callback.onJobComplete(execution(11, "job-11")));
             assertEquals("job-11", execToJob.get(11));
             assertEquals(Integer.valueOf(111), execToPair.get(11));
-            assertEquals(Path.of("/tmp/output/11"), execToOut.get(11));
+            assertEquals(output, execToOut.get(11));
 
             assertTrue(callback.onJobComplete(execution(11, "job-11")));
             assertTrue(execToJob.isEmpty());
@@ -409,9 +425,10 @@ public class KubernetesNativeBackendTests {
         Map<Integer, Path> execToOut =
             (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
 
+        Path output = terminalOutput(StatusCode.STATUS_COMPLETE);
         execToJob.put(21, "job-21");
         execToPair.put(21, 211);
-        execToOut.put(21, Path.of("/tmp/output/21"));
+        execToOut.put(21, output);
 
         givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
@@ -453,9 +470,10 @@ public class KubernetesNativeBackendTests {
         Map<Integer, Path> execToOut =
             (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
 
+        Path output = terminalOutput(StatusCode.ERROR_RUNSCRIPT);
         execToJob.put(12, "job-12");
         execToPair.put(12, 222);
-        execToOut.put(12, Path.of("/tmp/output/12"));
+        execToOut.put(12, output);
 
         givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
@@ -481,7 +499,7 @@ public class KubernetesNativeBackendTests {
             assertFalse(callback.onJobFailed(execution(12, "job-12"), "BackoffLimitExceeded"));
             assertEquals("job-12", execToJob.get(12));
             assertEquals(Integer.valueOf(222), execToPair.get(12));
-            assertEquals(Path.of("/tmp/output/12"), execToOut.get(12));
+            assertEquals(output, execToOut.get(12));
 
             assertTrue(callback.onJobFailed(execution(12, "job-12"), "BackoffLimitExceeded"));
             assertTrue(execToJob.isEmpty());
@@ -502,9 +520,10 @@ public class KubernetesNativeBackendTests {
         Map<Integer, Path> execToOut =
             (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
 
+        Path output = terminalOutput(StatusCode.STATUS_COMPLETE);
         execToJob.put(13, "job-13");
         execToPair.put(13, 313);
-        execToOut.put(13, Path.of("/tmp/output/13"));
+        execToOut.put(13, output);
 
         givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
@@ -531,7 +550,7 @@ public class KubernetesNativeBackendTests {
             assertFalse(callback.onJobComplete(execution(13, "job-13")));
             assertEquals("job-13", execToJob.get(13));
             assertEquals(Integer.valueOf(313), execToPair.get(13));
-            assertEquals(Path.of("/tmp/output/13"), execToOut.get(13));
+            assertEquals(output, execToOut.get(13));
 
             assertTrue(callback.onJobComplete(execution(13, "job-13")));
             assertTrue(execToJob.isEmpty());
@@ -552,9 +571,10 @@ public class KubernetesNativeBackendTests {
         Map<Integer, Path> execToOut =
             (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
 
+        Path output = terminalOutput(StatusCode.ERROR_RUNSCRIPT);
         execToJob.put(14, "job-14");
         execToPair.put(14, 414);
-        execToOut.put(14, Path.of("/tmp/output/14"));
+        execToOut.put(14, output);
 
         givenSafeCluster(backend);
         KubernetesJobMonitor.JobCompletionCallback callback =
@@ -581,13 +601,51 @@ public class KubernetesNativeBackendTests {
             assertFalse(callback.onJobFailed(execution(14, "job-14"), "BackoffLimitExceeded"));
             assertEquals("job-14", execToJob.get(14));
             assertEquals(Integer.valueOf(414), execToPair.get(14));
-            assertEquals(Path.of("/tmp/output/14"), execToOut.get(14));
+            assertEquals(output, execToOut.get(14));
 
             assertTrue(callback.onJobFailed(execution(14, "job-14"), "BackoffLimitExceeded"));
             assertTrue(execToJob.isEmpty());
             assertTrue(execToPair.isEmpty());
             assertTrue(execToOut.isEmpty());
         }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void evidenceLessFailureDoesNotOverwriteAnExistingScientificResult()
+        throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+
+        execToJob.put(15, "job-15");
+        execToPair.put(15, 415);
+        // No owned output directory: the lifecycle event supplies no scientific evidence.
+        givenSafeCluster(backend);
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(415))
+                .thenReturn(foundLookup(StatusCode.STATUS_COMPLETE.getVal()));
+
+            assertTrue(callback.onJobFailed(
+                execution(15, "job-15"), "BackoffLimitExceeded"));
+
+            jobPairsMock.verify(
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
+            );
+            jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
+        }
+
+        assertTrue(execToJob.isEmpty());
+        assertTrue(execToPair.isEmpty());
     }
 
     /**
@@ -1090,6 +1148,68 @@ public class KubernetesNativeBackendTests {
         m.invoke(target);
     }
 
+    @Test
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public void startupReconciliationWithoutAJobLeavesRunningResultUnresolved()
+        throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
+        V1BatchAPIGroupDSL v1 = Mockito.mock(V1BatchAPIGroupDSL.class);
+        MixedOperation jobs = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespacedJobs = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable managedJobs =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        JobList noJobs = new JobList();
+        noJobs.setItems(List.of());
+        Mockito.when(client.batch()).thenReturn(batch);
+        Mockito.when(batch.v1()).thenReturn(v1);
+        Mockito.when(v1.jobs()).thenReturn(jobs);
+        Mockito.when(jobs.inNamespace(Mockito.anyString())).thenReturn(namespacedJobs);
+        Mockito.when(namespacedJobs.withLabel(Mockito.anyString(), Mockito.anyString()))
+            .thenReturn(managedJobs);
+        Mockito.when(managedJobs.list()).thenReturn(noJobs);
+
+        MixedOperation pods = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespacedPods = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable managedPods =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable pairPods =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        io.fabric8.kubernetes.api.model.PodList noPods =
+            new io.fabric8.kubernetes.api.model.PodList();
+        noPods.setItems(List.of());
+        Mockito.when(client.pods()).thenReturn(pods);
+        Mockito.when(pods.inNamespace(Mockito.anyString())).thenReturn(namespacedPods);
+        Mockito.when(namespacedPods.withLabel(Mockito.anyString(), Mockito.anyString()))
+            .thenReturn(managedPods);
+        Mockito.when(namespacedPods.withLabels(Mockito.anyMap())).thenReturn(pairPods);
+        Mockito.when(managedPods.list()).thenReturn(noPods);
+        Mockito.when(pairPods.list()).thenReturn(noPods);
+        setField(backend, "kubernetesClient", client);
+
+        int pairId = 4242;
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_ENQUEUED.getVal()))
+                .thenReturn(List.of());
+            jobPairs.when(() -> JobPairs.getPairIdsByStatusCode(
+                    StatusCode.STATUS_RUNNING.getVal()))
+                .thenReturn(List.of(pairId));
+
+            invokePrivate(backend, "reconcileOrphanedPairs");
+
+            jobPairs.verify(() -> JobPairs.tryMarkRunningAsFailed(Mockito.anyInt()),
+                Mockito.never());
+            jobPairs.verify(() -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never());
+        }
+    }
+
     // ------------------------------------------------------------------
     // filesystem absence must fail closed
     // ------------------------------------------------------------------
@@ -1581,17 +1701,12 @@ public class KubernetesNativeBackendTests {
      * Builds a FOUND lookup result for callback tests. Reflection is required
      * because PairStatusLookupResult has no public constructor or factory.
      */
-    /**
-     * A pod that never started is recorded as ERROR_RUNSCRIPT so RERUN_FAILED_PAIRS picks
-     * it up — but that task's query also demands a non-null end_time, so without setEndTime
-     * the pair would sit failed and never be rerun. This test is the guard on that.
-     */
+    /** Lifecycle cleanup must not publish any result while a pod may still execute. */
     @Test
     @SuppressWarnings("unchecked")
     public void stuckPendingPublishesNothingWhileThePodMayStillRun() throws Exception {
-        // The status this path writes -- ERROR_RUNSCRIPT with an end_time -- is exactly what
-        // makes a pair rerun-eligible. Publishing it while a pod for the execution can still
-        // start would let a late pod write results over its own replacement's.
+        // Publishing any terminal result while this pod can still start would let it write
+        // output after the monitor had already retired its execution.
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
         setField(backend, "namespace", "starexec");
 
@@ -1641,7 +1756,7 @@ public class KubernetesNativeBackendTests {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void stuckPendingPairGetsAnEndTimeSoTheRerunCanFindIt() throws Exception {
+    public void stuckPendingWithoutStatusRemainsUnresolvedAfterJobIsGone() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
 
         Map<Integer, String> execToJob =
@@ -1654,9 +1769,11 @@ public class KubernetesNativeBackendTests {
         AtomicInteger activeJobCount =
             (AtomicInteger) getField(backend, "activeJobCount");
 
+        Path output = java.nio.file.Files.createTempDirectory("k8s-stuck-no-status");
+        output.toFile().deleteOnExit();
         execToJob.put(31, "job-31");
         execToPair.put(31, 431);
-        execToOut.put(31, Path.of("/tmp/output/31"));
+        execToOut.put(31, output);
         holdingSlot.add(31);
         activeJobCount.set(1);
         givenJobDeletion(backend, "job-31", true, null);
@@ -1668,20 +1785,6 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(431))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
-            jobPairsMock
-                .when(
-                    () ->
-                        JobPairs.setPairStatusPreciseResult(
-                            431,
-                            1,
-                            StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal(),
-                            false
-                        )
-                )
-                .thenReturn(PairStatusResult.APPLIED);
-            jobPairsMock.when(() -> JobPairs.setEndTime(431)).thenReturn(true);
-
             assertTrue(
                 callback.onJobStuckPending(
                     execution(31, "job-31"),
@@ -1690,21 +1793,19 @@ public class KubernetesNativeBackendTests {
             );
 
             jobPairsMock.verify(
-                () ->
-                    JobPairs.setPairStatusPreciseResult(
-                        431,
-                        1,
-                        StatusCode.ERROR_RUNSCRIPT.getVal(),
-                        StatusCode.STATUS_NOT_REACHED.getVal(),
-                        false
-                    )
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
             );
-            jobPairsMock.verify(() -> JobPairs.setEndTime(431));
+            jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
         }
 
         assertTrue(execToJob.isEmpty());
         assertTrue(execToPair.isEmpty());
         assertTrue(execToOut.isEmpty());
+        assertTrue("the unresolved execution's output must be retained",
+            java.nio.file.Files.isDirectory(output));
     }
 
     /**
@@ -1738,21 +1839,15 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(432))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
-            jobPairsMock
-                .when(
-                    () ->
-                        JobPairs.setPairStatusPreciseResult(
-                            432,
-                            1,
-                            StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal(),
-                            false
-                        )
-                )
-                .thenReturn(PairStatusResult.APPLIED);
-            jobPairsMock.when(() -> JobPairs.setEndTime(432)).thenReturn(true);
 
             assertTrue(callback.onJobStuckPending(execution(32, "job-32"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
+            );
+            jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
         }
 
         assertEquals(0, activeJobCount.get());
@@ -1772,12 +1867,16 @@ public class KubernetesNativeBackendTests {
             (Map<Integer, String>) getField(backend, "execIdToJobName");
         Map<Integer, Integer> execToPair =
             (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
         Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
         AtomicInteger activeJobCount =
             (AtomicInteger) getField(backend, "activeJobCount");
 
+        Path output = terminalOutput(StatusCode.ERROR_RUNSCRIPT);
         execToJob.put(33, "job-33");
         execToPair.put(33, 433);
+        execToOut.put(33, output);
         holdingSlot.add(33);
         activeJobCount.set(1);
         givenJobDeletion(backend, "job-33", true, null);
@@ -1806,7 +1905,6 @@ public class KubernetesNativeBackendTests {
             assertEquals("job-33", execToJob.get(33));
             assertEquals(1, activeJobCount.get());
 
-            jobPairsMock.when(() -> JobPairs.setEndTime(433)).thenReturn(true);
             assertTrue(callback.onJobStuckPending(execution(33, "job-33"), "Unschedulable"));
         }
 
@@ -1815,27 +1913,26 @@ public class KubernetesNativeBackendTests {
         assertTrue(execToJob.isEmpty());
     }
 
-    /**
-     * The Kubernetes Job is this callback's only retry trigger — the monitor iterates Jobs
-     * the API returns — so it must outlive every step that can fail. Deleting it first and
-     * then failing the end-time write would return false while nothing could ever bring
-     * the pair back: it would keep its old status and hold its slot forever.
-     */
+    /** The cleanup-pending record retains evidence ingestion after the Job is deleted. */
     @Test
     @SuppressWarnings("unchecked")
-    public void stuckPendingKeepsTheJobWhenTheEndTimeWriteFails() throws Exception {
+    public void stuckPendingRetainsTrackingWhenEvidenceWriteFails() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
 
         Map<Integer, String> execToJob =
             (Map<Integer, String>) getField(backend, "execIdToJobName");
         Map<Integer, Integer> execToPair =
             (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Map<Integer, Path> execToOut =
+            (Map<Integer, Path>) getField(backend, "execIdToOutputDir");
         Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
         AtomicInteger activeJobCount =
             (AtomicInteger) getField(backend, "activeJobCount");
 
+        Path output = terminalOutput(StatusCode.ERROR_RUNSCRIPT);
         execToJob.put(34, "job-34");
         execToPair.put(34, 434);
+        execToOut.put(34, output);
         holdingSlot.add(34);
         activeJobCount.set(1);
         givenJobDeletion(backend, "job-34", true, null);
@@ -1858,14 +1955,9 @@ public class KubernetesNativeBackendTests {
                             false
                         )
                 )
-                .thenReturn(PairStatusResult.APPLIED);
-            jobPairsMock.when(() -> JobPairs.setEndTime(434)).thenReturn(false);
+                .thenReturn(PairStatusResult.FAILED);
 
             assertFalse(callback.onJobStuckPending(execution(34, "job-34"), "Unschedulable"));
-
-            // Nothing was deleted and nothing was released, so the next poll sees the Job
-            // again and retries.
-            jobPairsMock.verify(() -> JobPairs.setEndTime(434));
         }
 
         assertEquals("job-34", execToJob.get(34));
@@ -1873,15 +1965,7 @@ public class KubernetesNativeBackendTests {
         assertTrue(holdingSlot.contains(34));
     }
 
-    /**
-     * The invariant: a pair must not become rerun-eligible while its Job still exists.
-     *
-     * <p>ERROR_RUNSCRIPT plus a non-null end_time is what
-     * GetJobPairIdsWithStatusNotRerunAfterDate selects, and nothing kills the old
-     * execution when RERUN_FAILED_PAIRS dispatches a new one — rerunPairsBatch only calls
-     * killPair for status &lt; STATUS_COMPLETE, and ERROR_RUNSCRIPT is 11. So if deletion
-     * fails, neither write may happen at all.
-     */
+    /** A lifecycle cleanup that cannot stop the Job may not publish a scientific result. */
     @Test
     @SuppressWarnings("unchecked")
     public void stuckPendingKeepsThePairWhenTheJobCannotBeDeleted() throws Exception {
@@ -1909,33 +1993,12 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(435))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
-            jobPairsMock
-                .when(
-                    () ->
-                        JobPairs.setPairStatusPreciseResult(
-                            435,
-                            1,
-                            StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal(),
-                            false
-                        )
-                )
-                .thenReturn(PairStatusResult.APPLIED);
-            jobPairsMock.when(() -> JobPairs.setEndTime(435)).thenReturn(true);
-
             assertFalse(callback.onJobStuckPending(execution(35, "job-35"), "Unschedulable"));
 
-            // Neither write may have happened: together they are precisely what makes the
-            // pair eligible for an automatic rerun, and the old pod is still out there.
             jobPairsMock.verify(
-                () ->
-                    JobPairs.setPairStatusPreciseResult(
-                        435,
-                        1,
-                        StatusCode.ERROR_RUNSCRIPT.getVal(),
-                        StatusCode.STATUS_NOT_REACHED.getVal(),
-                        false
-                    ),
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
                 Mockito.never()
             );
             jobPairsMock.verify(() -> JobPairs.setEndTime(435), Mockito.never());
@@ -1976,21 +2039,14 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(436))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
-            jobPairsMock
-                .when(
-                    () ->
-                        JobPairs.setPairStatusPreciseResult(
-                            436,
-                            1,
-                            StatusCode.ERROR_RUNSCRIPT.getVal(),
-                            StatusCode.STATUS_NOT_REACHED.getVal(),
-                            false
-                        )
-                )
-                .thenReturn(PairStatusResult.APPLIED);
-            jobPairsMock.when(() -> JobPairs.setEndTime(436)).thenReturn(true);
-
             assertTrue(callback.onJobStuckPending(execution(36, "job-36"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
+            );
+            jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
         }
 
         assertEquals(0, activeJobCount.get());
@@ -2647,8 +2703,7 @@ public class KubernetesNativeBackendTests {
 
     private int readTerminalStatus(
         KubernetesNativeBackend backend,
-        int execId,
-        int fallback
+        int execId
     ) throws Exception {
         Class<?> callbackClass = Class.forName(
             "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback"
@@ -2663,13 +2718,22 @@ public class KubernetesNativeBackendTests {
         ExecutionRef ref = execution(execId, "job-" + execId);
         Method read = callbackClass.getDeclaredMethod("readStatusRecord", ExecutionRef.class);
         read.setAccessible(true);
-        Object record = read.invoke(callback, ref);
+        Object record;
+        try {
+            record = read.invoke(callback, ref);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw (Exception) e.getCause();
+        }
 
         Method m = callbackClass.getDeclaredMethod(
-            "readTerminalStatus", ExecutionRef.class, com.google.gson.JsonObject.class, int.class
+            "readTerminalStatus", ExecutionRef.class, com.google.gson.JsonObject.class
         );
         m.setAccessible(true);
-        return (Integer) m.invoke(callback, ref, record, fallback);
+        try {
+            return (Integer) m.invoke(callback, ref, record);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw (Exception) e.getCause();
+        }
     }
 
     /**
@@ -2723,10 +2787,7 @@ public class KubernetesNativeBackendTests {
             "runsolver reported TIMEOUT=true, so STATUS_COMPLETE from status.json must"
                 + " not be what gets recorded",
             org.starexec.data.to.Status.StatusCode.EXCEED_CPU.getVal(),
-            readTerminalStatus(
-                backend, 9001,
-                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
-            )
+            readTerminalStatus(backend, 9001)
         );
     }
 
@@ -2749,10 +2810,7 @@ public class KubernetesNativeBackendTests {
         // TIMEOUT= is a disjunction and cannot say which limit fired; the prose can.
         assertEquals(
             org.starexec.data.to.Status.StatusCode.EXCEED_RUNTIME.getVal(),
-            readTerminalStatus(
-                backend, 9002,
-                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
-            )
+            readTerminalStatus(backend, 9002)
         );
     }
 
@@ -2774,10 +2832,30 @@ public class KubernetesNativeBackendTests {
         assertEquals(
             "the verdict must only override when runsolver actually reports a breach",
             org.starexec.data.to.Status.StatusCode.ERROR_RUNSCRIPT.getVal(),
-            readTerminalStatus(
-                backend, 9003,
-                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
-            )
+            readTerminalStatus(backend, 9003)
+        );
+    }
+
+    @Test
+    public void explicitRunscriptFailureOutranksRunsolverLimitArtifacts() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-verdict-runscript");
+        java.nio.file.Files.writeString(
+            dir.resolve("status.json"), "{\"status\": 11, \"stageNumber\": 3}"
+        );
+        java.nio.file.Files.writeString(
+            dir.resolve("var.out"), "TIMEOUT=true\nMEMOUT=false\n"
+        );
+        java.nio.file.Files.writeString(
+            dir.resolve("watcher.out"), "Maximum CPU time exceeded: ...\n"
+        );
+
+        KubernetesNativeBackend backend = backendWithOutputDir(9004, dir);
+
+        assertEquals(
+            "valid status.json explicitly records a run-script failure; limit artifacts"
+                + " must not replace that evidenced result",
+            org.starexec.data.to.Status.StatusCode.ERROR_RUNSCRIPT.getVal(),
+            readTerminalStatus(backend, 9004)
         );
     }
 
@@ -2808,17 +2886,15 @@ public class KubernetesNativeBackendTests {
             );
         }
 
-        // With the directory cleared the verdict abstains rather than inventing one, so
-        // the caller's own default stands.
+        // With the directory cleared there is no terminal record to classify. The reader
+        // must refuse rather than turning the caller's old default into a scientific result.
         KubernetesNativeBackend fresh = backendWithOutputDir(4242, dir);
-        assertEquals(
-            "with no runsolver output the verdict must abstain, not guess",
-            org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal(),
-            readTerminalStatus(
-                fresh, 4242,
-                org.starexec.data.to.Status.StatusCode.STATUS_COMPLETE.getVal()
-            )
-        );
+        try {
+            readTerminalStatus(fresh, 4242);
+            fail("an empty rerun attempt must not inherit a successful terminal status");
+        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+            assertTrue(expected.getMessage().contains("result is unknown"));
+        }
     }
 
     @Test
@@ -3310,5 +3386,40 @@ public class KubernetesNativeBackendTests {
 
         // No Job created, no pod listed, nothing submitted.
         Mockito.verifyNoInteractions(client);
+    }
+
+    /**
+     * Job pods run untrusted solvers on the shared data volume, so the pod and its
+     * container carry the restrictions #237 asks for: a non-root identity that matches
+     * the volume's owner, no privilege escalation, no capabilities, the runtime seccomp
+     * profile, and a read-only image filesystem.
+     */
+    @Test
+    public void jobPodsRunAsNonRootWithDroppedCapabilities() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Method podContextMethod =
+            KubernetesNativeBackend.class.getDeclaredMethod("jobPodSecurityContext");
+        podContextMethod.setAccessible(true);
+        PodSecurityContext pod =
+            (PodSecurityContext) podContextMethod.invoke(backend);
+
+        assertEquals(Boolean.TRUE, pod.getRunAsNonRoot());
+        assertEquals(Long.valueOf(1000), pod.getRunAsUser());
+        assertEquals(Long.valueOf(999), pod.getRunAsGroup());
+        assertEquals(Long.valueOf(999), pod.getFsGroup());
+        assertEquals("OnRootMismatch", pod.getFsGroupChangePolicy());
+        assertNotNull(pod.getSeccompProfile());
+        assertEquals("RuntimeDefault", pod.getSeccompProfile().getType());
+
+        Method containerContextMethod =
+            KubernetesNativeBackend.class.getDeclaredMethod("jobContainerSecurityContext");
+        containerContextMethod.setAccessible(true);
+        SecurityContext container =
+            (SecurityContext) containerContextMethod.invoke(backend);
+
+        assertEquals(Boolean.FALSE, container.getAllowPrivilegeEscalation());
+        assertEquals(Boolean.TRUE, container.getReadOnlyRootFilesystem());
+        assertEquals(List.of("ALL"), container.getCapabilities().getDrop());
     }
 }

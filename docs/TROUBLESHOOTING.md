@@ -709,8 +709,8 @@ podman ps | grep starexec-job
 make logs-app | grep ContainerJobMonitor
 
 # Check job output
-find /var/starexec -name "<JOB_ID>" -type d
-cat /var/starexec/output/<JOB_ID>/*/status.json
+podman exec starexec-app sh -c 'find "${STAREXEC_DATA_DIR:-/var/starexec/data}/output" -name "<JOB_ID>" -type d'
+podman exec starexec-app sh -c 'cat "${STAREXEC_DATA_DIR:-/var/starexec/data}/output/<JOB_ID>"/*/status.json'
 ```
 
 **Solution:**
@@ -853,7 +853,7 @@ kubectl exec -n starexec <pod-name> -- \
   http://localhost:8080/starexec/public/health/readiness
 
 # 3) 503 means the database is unreachable: check it
-kubectl get pods -n starexec -l app.kubernetes.io/component=postgres
+kubectl get pods -n starexec -l app.kubernetes.io/name=starexec
 kubectl logs -n starexec <pod-name> | grep -i "database probe failed"
 
 # 4) Verify credentials and service resolution
@@ -863,6 +863,82 @@ kubectl get secret starexec-postgres-credentials -n starexec
 ```
 
 Do not relax or remove the readiness probe to make the wait succeed; that only hides the dependency failure until a user finds it.
+
+### NFS server outage
+
+**Problem:** A pod is stuck `Terminating`, `kubectl describe` reports `FailedKillPod ... KillContainerError: context deadline exceeded`, the replacement pod sits in `Init:0/1` for hours, `starexec` endpoints are empty, and the Helm release is left `failed`.
+
+**Cause:** The PVCs are NFS-backed (`starexec-nfs-rwo`, served by `nfs-server.service` on the host). When the NFS server stops exporting `/starexec/k8s-shared`, every process doing I/O on the mounts blocks in uninterruptible sleep (D state) — including PostgreSQL. A D-state process cannot be killed, not even by SIGKILL, so the kubelet can never stop the old pod, its RWO volumes stay attached, and the rollout and its `--atomic` rollback both hang until the Helm timeout. On 2026-09-17 an unattended upgrade left `rpc.nfsd` failed and its stop hook ran `exportfs -au`; production lost its database and two deploy builds could not proceed.
+
+**Diagnostics:**
+
+```bash
+# 1) Is the NFS server exporting?
+systemctl status nfs-server --no-pager
+sudo exportfs -v                  # must list /starexec/k8s-shared
+
+# 2) Are processes blocked on NFS I/O?
+ps -eo pid,stat,args | awk '$2 ~ /D/ {print}'   # D/Ds = uninterruptible sleep
+mount | grep 'type nfs4'
+
+# 3) What the cluster thinks
+microk8s kubectl -n starexec get pods -o wide
+microk8s kubectl -n starexec get events --sort-by=.lastTimestamp | tail
+microk8s helm3 history starexec -n starexec | tail
+```
+
+**Solution:**
+
+```bash
+# 1) Restore the exports (root). Hard-mounted clients retry and unblock.
+sudo systemctl restart nfs-server
+sudo exportfs -v
+
+# 2) Wait for D-state processes to clear and the pod to finish init
+watch microk8s kubectl -n starexec get pods
+
+# 3) Only if a pod is still stuck Terminating after the exports are back:
+microk8s kubectl -n starexec delete pod <stuck-pod> --grace-period=0 --force
+
+# 4) Once pods are Ready and endpoints are populated, clear a failed release:
+microk8s helm3 rollback starexec <last-deployed-revision> -n starexec
+```
+
+**Prevention:**
+
+- The Jenkins deploy pre-flight now refuses to start when `nfs-server` is not active, and when any pod is `Terminating` or not ready, so a deploy can no longer wedge on this condition.
+- Install a health timer so a failed `nfs-server` is re-exported within a minute instead of staying down silently:
+
+```ini
+# /etc/systemd/system/nfs-health.service
+[Unit]
+Description=Verify the NFS exports and restart nfs-server if they are missing
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'systemctl is-active --quiet nfs-server || { logger -t nfs-health "nfs-server inactive; restarting"; systemctl restart nfs-server; }; exportfs -v | grep -q /starexec/k8s-shared || { logger -t nfs-health "exports missing; restarting"; systemctl restart nfs-server; }'
+```
+
+```ini
+# /etc/systemd/system/nfs-health.timer
+[Unit]
+Description=Periodic NFS export health check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nfs-health.timer
+```
+
+- Alert on the unit so a failure is noticed even without the timer: `node_systemd_unit_state{name="nfs-server.service",state="failed"} == 1`.
+- Longer term, PostgreSQL on NFS is the fragility. A local volume (or an external database) removes this failure class, because the data directory can then never block in NFS D state.
 
 ### Kubernetes pair will not rerun or new work remains queued
 
@@ -1032,14 +1108,14 @@ make start
 |---------|--------|-------|
 | `local` | ✅ Stable | Dev only, no isolation |
 | `podman` | ✅ Production | Recommended |
-| `kubernetes` | ⚠️ Limited | 50-job hardcoded limit |
+| `kubernetes` | ⚠️ Limited | Max concurrent jobs configurable via `STAREXEC_K8S_MAX_CONCURRENT_JOBS` (default 50) |
 | `sge` | ⚠️ Legacy | Tests disabled |
 | `oar` | ⚠️ Legacy | Tests disabled |
 
 ### Known Gaps
 
 1. **No horizontal scaling** - Single-instance monolith
-2. **No built-in metrics** - Manual Prometheus setup needed
+2. **No Prometheus endpoint** - Backend `getStats()` is internal only; manual Prometheus setup needed
 3. **Kubernetes backend incomplete** - Hybrid design has bottleneck
 4. **SGE/OAR tests disabled** - Use PowerMockito, not maintained
 

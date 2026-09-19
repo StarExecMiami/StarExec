@@ -69,10 +69,7 @@ public class BatchUtil {
 		log.debug("Generating Space XML for space " + space.getId());
 		Element spacesElement = null;
 
-		spacesElement = doc.createElementNS(Util.url("public/batchSpaceSchema.xsd"), "tns:Spaces");
-		spacesElement.setAttribute("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance");
-
-		spacesElement.setAttribute("xsi:schemaLocation", Util.url("public/batchSpaceSchema.xsd batchSpaceSchema.xsd"));
+		spacesElement = XMLUtil.createSpacesRoot(doc);
 
 		Element rootSpaceElement = generateSpaceXML(space, userId, includeAttributes, updates, upid);
 		spacesElement.appendChild(rootSpaceElement);

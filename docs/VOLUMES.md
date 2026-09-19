@@ -8,7 +8,7 @@ StarExec uses persistent volumes to store:
 
 - **Database data** - PostgreSQL data directory
 - **Application data** - Solvers, benchmarks, job outputs
-- **Configuration** - Runtime configuration files
+- **Working data** - Backend, sandbox, and work directories
 
 Volume management ensures data durability across container restarts and enables backup/restore operations.
 
@@ -22,18 +22,26 @@ StarExec creates environment-specific named volumes:
 
 | Volume Name | Purpose | Size Estimate |
 |-------------|---------|---------------|
-| `starexec-{ENV}-data` | Application data (solvers, benchmarks) | 10-500 GB |
+| `starexec-{ENV}-data` | Application data (solvers, benchmarks, uploads) | 10-500 GB |
+| `starexec-{ENV}-sandbox` | Job sandbox/working data | 1-100 GB |
+| `starexec-{ENV}-backend` | Backend working data | 1-100 GB |
+| `starexec-{ENV}-work` | Job work directory | 1-100 GB |
 | `starexec-{ENV}-postgres` | PostgreSQL database | 1-50 GB |
-| `starexec-{ENV}-config` | Configuration files | < 100 MB |
 
 Where `{ENV}` is `dev`, `ci`, or `prod`.
 
 ### Kubernetes PersistentVolumeClaims
 
 ```yaml
-# PVCs created by Helm chart
-starexec-data-pvc      # Application data
-starexec-postgres-pvc  # Database data
+# PVCs created by the Helm chart (one per volume type)
+starexec-{ENV}-data      # Application data
+starexec-{ENV}-sandbox   # Sandbox data
+starexec-{ENV}-backend   # Backend data
+starexec-{ENV}-work      # Work data
+starexec-{ENV}-postgres  # Database data
+
+# The Kubernetes-native backend's data claim can be overridden with
+# kubernetes.dataPvc.name (see charts/starexec/values-microk8s.yaml).
 ```
 
 ---
@@ -87,8 +95,10 @@ make volumes-create ENV=prod
 ```bash
 # Create individual volumes
 podman volume create starexec-prod-data
+podman volume create starexec-prod-sandbox
+podman volume create starexec-prod-backend
+podman volume create starexec-prod-work
 podman volume create starexec-prod-postgres
-podman volume create starexec-prod-config
 
 # Verify creation
 podman volume ls | grep starexec
@@ -102,16 +112,11 @@ PVCs are created by the Helm chart. Customize in `values.yaml`:
 persistence:
   enabled: true
   storageClass: "fast-ssd"  # Your storage class
-  
-  data:
-    size: 100Gi
-    accessModes:
-      - ReadWriteOnce
-  
-  postgres:
-    size: 50Gi
-    accessModes:
-      - ReadWriteOnce
+  appDataSize: 100Gi
+  backendSize: 10Gi
+  sandboxSize: 10Gi
+  workSize: 10Gi
+  postgresDataSize: 50Gi
 ```
 
 ---
@@ -171,7 +176,6 @@ starexec-prod-20250115-020000.tar.gz
 ├── postgres/       # Database files
 │   ├── base/       # PostgreSQL data
 │   └── pg_wal/     # Write-ahead logs
-├── config/         # Configuration
 └── metadata.json   # Backup metadata
 ```
 
@@ -273,11 +277,12 @@ make start
 # Scale down application
 kubectl scale deployment starexec -n starexec --replicas=0
 
-# Find postgres pod
-POSTGRES_POD=$(kubectl get pods -n starexec -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+# Embedded PostgreSQL is the `postgres` sidecar of the app Deployment
+# (when postgres.host=localhost); exec into that container instead of a pod.
+APP_POD=$(kubectl get pods -n starexec -l app.kubernetes.io/name=starexec -o jsonpath='{.items[0].metadata.name}')
 
 # Restore database
-kubectl exec -i -n starexec $POSTGRES_POD -- \
+kubectl exec -i -n starexec "$APP_POD" -c postgres -- \
   psql -U starexec starexec < backup.sql
 
 # Scale up application

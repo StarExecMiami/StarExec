@@ -83,7 +83,7 @@ fi
 export RUNSOLVER_PATH='$$RUNSOLVER_PATH$$'
 
 # Include common functions and status codes
-. $SCRIPT_DIR/functions.bash
+. "$SCRIPT_DIR/functions.bash"
 
 
 # Array of secondary benchmarks starexec paths
@@ -242,6 +242,10 @@ fi
 log "the number of stages is $NUM_STAGES"
 
 for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
+	# The stage this iteration runs, named before anything that can fail. The setup below --
+	# checkCache, copyDependencies, verifyWorkspace, sandboxWorkspace -- prepares THIS stage, so
+	# a failure in it belongs to this stage and not to the pair (#145).
+	CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}
 	CURRENT_STAGE_MEMORY=$MAX_MEM   #start with the default max mem
 	CURRENT_STAGE_CPU=$STAREXEC_CPU_LIMIT
 	CURRENT_STAGE_WALLCLOCK=$STAREXEC_WALLCLOCK_LIMIT
@@ -303,6 +307,64 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	createDir "$OUT_DIR/output_files"
 	chmod g+w "$OUT_DIR/output_files"
 
+	#Give job pairs 2 extra minutes before we kill them.
+	JOB_PAIR_EXTRA_TIME=120
+
+	# B7: copyDependencies (pre-processor, below) and copyOutput (post-processor, later
+	# this stage) each run their own processor under
+	# `timeout --signal=SIGKILL $((LIMIT))m`, but LIMIT is reachable as 0 -- a nullable
+	# column, and 0 is an intentional "no limit" state the product already allows (#229)
+	# -- and `timeout ... 0m` enforces no bound at all. Neither phase was covered by the
+	# defensive killDeadlockedJobPair watchdog below, which used to start only after
+	# both had already run, so an unbounded pre/post-processor could wedge the job slot
+	# forever. Start the watchdog here instead, before either phase, and size its sleep
+	# to cover both: an unbounded (0) processor still gets the same ceiling an admin can
+	# set in the UI (edit/processor.jsp max="60"), so the slot is always eventually
+	# reclaimed without cutting short an ordinary bounded pre/post-processor run.
+	#
+	# This reclaim only actually reaches the processor in CONTAINER_MODE. There,
+	# initSandbox/sandboxWorkspace run everything -- pre-processor, solver, and
+	# post-processor alike -- as one user, the same one killDeadlockedJobPair's
+	# `killall --user $SANDBOX_PARAM` targets. Under legacy (non-container/SGE)
+	# execution, the solver is explicitly `sudo -u $SANDBOX_PARAM`'d but the pre/post
+	# processor invocations below are not, so a hung processor there runs as the
+	# jobscript's own user and this watchdog cannot reach it -- pre-existing, and out
+	# of scope for this fix; Local/Podman/Kubernetes (this project's active backends)
+	# always run CONTAINER_MODE=true.
+	PROCESSOR_FALLBACK_LIMIT_SECS=$((60 * 60))
+
+	PRE_PROCESSOR_BUDGET_SECS=0
+	if [ -n "${PRE_PROCESSOR_PATH:-}" ]; then
+		if ((PRE_PROCESSOR_TIME_LIMIT > 0)); then
+			PRE_PROCESSOR_BUDGET_SECS=$((PRE_PROCESSOR_TIME_LIMIT * 60))
+		else
+			PRE_PROCESSOR_BUDGET_SECS=$PROCESSOR_FALLBACK_LIMIT_SECS
+		fi
+	fi
+
+	POST_PROCESSOR_BUDGET_SECS=0
+	if [ -n "${POST_PROCESSOR_PATH:-}" ]; then
+		if ((POST_PROCESSOR_TIME_LIMIT > 0)); then
+			POST_PROCESSOR_BUDGET_SECS=$((POST_PROCESSOR_TIME_LIMIT * 60))
+		else
+			POST_PROCESSOR_BUDGET_SECS=$PROCESSOR_FALLBACK_LIMIT_SECS
+		fi
+	fi
+
+	STAGE_WATCHDOG_TIMEOUT=$((PRE_PROCESSOR_BUDGET_SECS + CURRENT_STAGE_WALLCLOCK + POST_PROCESSOR_BUDGET_SECS))
+
+	log "pre processor watchdog budget (s) : $PRE_PROCESSOR_BUDGET_SECS"
+	log "post processor watchdog budget (s) : $POST_PROCESSOR_BUDGET_SECS"
+	log "combined stage watchdog timeout (s) : $STAGE_WATCHDOG_TIMEOUT"
+
+	# this will be set to true below if the job pair gets deadlocked
+	echo "Calling killDeadlockedJobPair"
+
+	killDeadlockedJobPair "$STAGE_WATCHDOG_TIMEOUT" $JOB_PAIR_EXTRA_TIME $SANDBOX_PARAM &
+	# Get the process of our defensive killDeadlockedJobPair function.
+	KILL_DEADLOCKED_JOB_PAIR_PID=$!
+	echo "KILL_DEADLOCKED_JOB_PAIR_PID = $KILL_DEADLOCKED_JOB_PAIR_PID"
+
 	checkCache
 	copyDependencies
 	verifyWorkspace
@@ -310,11 +372,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	log "listing contents of sandbox..."
 	ls -lR "$WORKING_DIR"
-
-	CURRENT_STAGE_NUMBER=${STAGE_NUMBERS[STAGE_INDEX]}
-
-	#Give job pairs 2 extra minutes before we kill them.
-	JOB_PAIR_EXTRA_TIME=120
 
 	log "doing stage index $STAGE_INDEX"
 	log "stage number : $CURRENT_STAGE_NUMBER"
@@ -341,14 +398,6 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	log "user disk quota : $DISK_QUOTA"
 
 	log "whoami: $(whoami)"
-
-	# this will be set to true in killDeadlockedJobPair if the job pair gets deadlocked
-	echo "Calling killDeadlockedJobPair"
-
-	killDeadlockedJobPair "$CURRENT_STAGE_WALLCLOCK" $JOB_PAIR_EXTRA_TIME $SANDBOX_PARAM &
-	# Get the process of our defensive killDeadlockedJobPair function.
-	KILL_DEADLOCKED_JOB_PAIR_PID=$!
-	echo "KILL_DEADLOCKED_JOB_PAIR_PID = $KILL_DEADLOCKED_JOB_PAIR_PID"
 
 	if ((RESULTS_INTERVAL > 0)); then
 		copyOutputIncrementally "$RESULTS_INTERVAL" "$STAREXEC_WALLCLOCK_LIMIT" "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" &
@@ -506,17 +555,16 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		kill $COPY_OUTPUT_INCREMENTALLY_PID 2>/dev/null || true
 	fi
 
-	# If runsolver finishes then stop the killDeadlockedJobPair function.
-	log "Runsolver finished. Killing the defensive killall function."
-	# BUG FIX: `kill` returns 1 when the process is already dead (deadlocked job case).
-	# With set -e that would abort before KILL_EXIT_STATUS=$? is reached. Use || to
-	# capture the exit code without triggering set -e.
-	KILL_EXIT_STATUS=0
-	kill $KILL_DEADLOCKED_JOB_PAIR_PID 2>/dev/null || KILL_EXIT_STATUS=$?
+	# B7: the watchdog started before this stage's pre-processor now also has to
+	# outlive this point, to cover the post-processor phase still ahead (copyOutput
+	# below) -- so only PROBE its liveness here with `kill -0` (sends no signal)
+	# instead of ending it. The real kill happens once this stage's post-processing
+	# is done (stopDeadlockWatchdog, right after the copyOutput call below), and
+	# again from exitJobscript as a safety net for every early-exit path in between.
+	log "Runsolver finished. Checking whether the defensive killall function already fired."
 	JOB_PAIR_DEADLOCKED=false
-	if ((KILL_EXIT_STATUS != 0)); then
-		#killDeadlockedJobPair was dead so the job pair
-		log "Job pair was deadlocked (kill returned $KILL_EXIT_STATUS)."
+	if ! kill -0 "$KILL_DEADLOCKED_JOB_PAIR_PID" 2>/dev/null; then
+		log "Job pair was deadlocked (killDeadlockedJobPair already ran)."
 		JOB_PAIR_DEADLOCKED=true
 	fi
 
@@ -536,7 +584,10 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	if [[ "$BENCHMARKING_FRAMEWORK" == "$RUNSOLVER" ]] && [[ ! -s "$WATCHFILE" ]]; then
 		log "Runsolver watchfile could not be found. Terminating job pair."
-		copyOutput "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
+		# Without the watchfile there are no statistics to read from it, and copyOutput reads it:
+		# under set -e that ended the pair before markRunscriptError below, as it did for the
+		# missing varfile above (#145).
+		copyOutputNoStats "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
 		markRunscriptError "${STAGE_NUMBERS[STAGE_INDEX]}"
 		exit 0
 	fi
@@ -555,6 +606,9 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 
 	# this also does post processing
 	copyOutput "$CURRENT_STAGE_NUMBER" "$STDOUT_SAVE_OPTION" "$EXTRA_SAVE_OPTION" "$BENCHMARKING_FRAMEWORK"
+	# B7: the post-processor above just ran under the watchdog started before this
+	# stage's pre-processor; this stage no longer needs it.
+	stopDeadlockWatchdog
 
 	if ((STDOUT_SAVE_OPTION == 3)); then
 		saveStdoutAsBenchmark
@@ -650,6 +704,14 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	# update the path to the input to the output of the last stage
 	BENCH_PATH="$SAVED_OUTPUT_DIR/$CURRENT_STAGE_NUMBER"
 	OTHER_INPUT_PATH=$SAVED_OUTPUT_DIR"/"$CURRENT_STAGE_NUMBER"_output"
+
+	# This stage is over and the next has not begun. A failure in between belongs to the pair,
+	# not to the stage that just finished, so nothing may keep naming it (#145).
+	#
+	# This must stay BELOW the two assignments above: they read CURRENT_STAGE_NUMBER to point
+	# the next stage at this stage's output. Moving it up sends the next stage to
+	# $SAVED_OUTPUT_DIR/ instead.
+	CURRENT_STAGE_NUMBER=
 done
 
 setEndTime

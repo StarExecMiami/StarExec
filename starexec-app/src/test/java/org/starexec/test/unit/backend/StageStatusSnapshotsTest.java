@@ -350,10 +350,10 @@ public class StageStatusSnapshotsTest {
 	// Stage numbers start at 1. Below that is not "nothing is in flight" -- read that way it
 	// skips the entire directory, which is the opposite -- it is "the producer did not say".
 	//
-	// It arrives here routinely. sendStatus defaults its stage argument to 0, and every
-	// pair-level error path takes that default: exitJobscript's fail-closed ERROR_BENCHMARK,
-	// limitExceeded, and both processor failures. status.json then carries stageNumber 0 and
-	// that is what the caller passes.
+	// It arrives here routinely. sendStatus defaults its stage argument to 0, and a pair-level
+	// error path takes that default: the fail-closed trap and limitExceeded now pass the stage
+	// they were running, which is 0 when none was, and both processor failures still default.
+	// status.json then carries stageNumber 0 and that is what the caller passes.
 
 	@Test
 	public void aStageNumberBelowOneIsNotABound() throws Exception {

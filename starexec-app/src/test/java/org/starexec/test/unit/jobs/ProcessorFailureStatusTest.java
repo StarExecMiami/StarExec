@@ -21,13 +21,13 @@ import static org.junit.Assert.assertTrue;
  * <h2>The contract</h2>
  *
  * {@code exitJobscript} is the EXIT trap, and it fails closed: any non-zero exit that has not
- * already reported a status is recorded as {@code ERROR_BENCHMARK}, so a pair can never be left
+ * already reported a status is recorded as {@code ERROR_RUNSCRIPT}, so a pair can never be left
  * without a terminal status. The escape hatch is {@code STATUS_SENT}, which a caller sets to
  * claim "I have already said what went wrong, do not overwrite it".
  *
  * <p>Several paths sent a specific status and then exited without claiming it, so the trap
- * overwrote every one of them with {@code ERROR_BENCHMARK} -- naming the benchmark for a
- * post-processor fault, a pre-processor fault, or a file-write limit breach. The status codes
+ * overwrote every one of them -- naming a post-processor fault, a pre-processor fault, or a
+ * file-write limit breach as something else. The status codes
  * existed and were emitted; nothing that read the database ever saw them.
  *
  * <p>These assert on the file the monitor actually reads, not on a log line, because the file
@@ -63,7 +63,7 @@ public class ProcessorFailureStatusTest {
 
 		assertEquals(
 				"this is the behaviour the affected paths were relying on and not getting",
-				ERROR_BENCHMARK, h.status());
+				ERROR_RUNSCRIPT, h.status());
 	}
 
 	/** And the claim that suppresses it, which is what the fixed paths now make. */
@@ -135,10 +135,10 @@ public class ProcessorFailureStatusTest {
 	 * they sit inside {@code copyOutput} and {@code copyDependencies}, whose surrounding
 	 * environment is most of a running job pair. What can be checked directly is the thing that
 	 * was wrong -- a specific status sent on a path that then exits non-zero, without claiming
-	 * it, so the trap replaces it.
+	 * it, so the trap replaces it. This also covers the guarded post-processor setup path.
 	 *
 	 * <p>Structural rather than behavioural, and stated as such. It pins the fix and would catch
-	 * a new failure path added without the claim, which is exactly how these four arose.
+	 * a new failure path added without the claim, which is exactly how the original four arose.
 	 */
 	@Test
 	public void everyProcessorFailurePathClaimsItsStatus() throws Exception {
@@ -163,11 +163,11 @@ public class ProcessorFailureStatusTest {
 			assertTrue(
 					"functions.bash:" + (i + 1) + " sends a processor status but does not claim"
 							+ " it with STATUS_SENT=true, so exitJobscript overwrites it with"
-							+ " ERROR_BENCHMARK: " + lines[i].trim(),
+							+ " ERROR_RUNSCRIPT: " + lines[i].trim(),
 					claimed);
 		}
 
-		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
+		assertEquals("the processor failure paths must still exist to be checked", 5, checked);
 	}
 
 	// ------------------------------------------------- which stage the fault is named against
@@ -223,9 +223,9 @@ public class ProcessorFailureStatusTest {
 	}
 
 	/**
-	 * The four processor failure paths, checked in the source for the same reason the claim
+	 * The five processor failure paths, checked in the source for the same reason the claim
 	 * test above is: they cannot be reached from this harness. It pins the stage argument and
-	 * would catch a fifth path added without one.
+	 * would catch a sixth path added without one.
 	 *
 	 * <p>The argument is required to come from an authoritative source rather than merely to be
 	 * present, so a literal cannot satisfy it. {@code copyOutput} takes the stage as its own
@@ -265,7 +265,7 @@ public class ProcessorFailureStatusTest {
 					stage.contains("$1") || stage.contains("STAGE_NUMBERS[STAGE_INDEX]"));
 		}
 
-		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
+		assertEquals("the processor failure paths must still exist to be checked", 5, checked);
 	}
 
 	// ------------------------------------------------------ the runscript error path

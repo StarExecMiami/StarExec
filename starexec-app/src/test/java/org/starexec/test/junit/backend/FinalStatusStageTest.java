@@ -75,6 +75,28 @@ public class FinalStatusStageTest {
 		}
 	}
 
+	/** The pair-level parser, reached the way the monitors reach it. */
+	private static int parsePairLevel(String body) throws Exception {
+		Class<?> c = Class.forName("org.starexec.backend.FinalStatusStage");
+		Method m = c.getDeclaredMethod("requireStageOrPairLevel", JsonObject.class, String.class);
+		m.setAccessible(true);
+		try {
+			return (int) m.invoke(null, json(body), "pair " + PAIR);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw (Exception) e.getCause();
+		}
+	}
+
+	private static void assertRejectedAsPairLevel(String body, String why) throws Exception {
+		try {
+			int got = parsePairLevel(body);
+			fail(why + " -- but it parsed as stage " + got + ": " + body);
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			assertTrue("the refusal must name the field it refused: " + expected.getMessage(),
+					expected.getMessage().contains("stageNumber"));
+		}
+	}
+
 	private static void assertRejected(String body, String why) throws Exception {
 		try {
 			int got = parse(body);
@@ -134,6 +156,42 @@ public class FinalStatusStageTest {
 	public void zeroAndNegativesAreRefused() throws Exception {
 		assertRejected("{\"status\":7,\"stageNumber\":0}", "stage numbers start at 1");
 		assertRejected("{\"status\":7,\"stageNumber\":-1}", "a negative names no stage");
+	}
+
+	// ------------------------------------------------- A2. the pair-level parser (#165)
+
+	/**
+	 * A pair can fail outside any stage -- before the stage loop starts, or between two stages --
+	 * and those failures report stage 0. {@code requireStageOrPairLevel} is how a reader asks for
+	 * "a stage, or the pair itself"; {@code require} stays strict for readers that need a stage.
+	 */
+	@Test
+	public void thePairLevelParserAcceptsExactlyZero() throws Exception {
+		assertEquals("stage 0 names the pair, not a stage",
+				0, parsePairLevel("{\"status\":24,\"stageNumber\":0}"));
+	}
+
+	@Test
+	public void thePairLevelParserStillAcceptsRealStages() throws Exception {
+		assertEquals(1, parsePairLevel("{\"status\":7,\"stageNumber\":1}"));
+		assertEquals(99, parsePairLevel("{\"status\":7,\"stageNumber\":99}"));
+	}
+
+	/** Everything that named no stage before still names nothing now. Only exactly 0 gains meaning. */
+	@Test
+	public void thePairLevelParserRefusesEverythingElse() throws Exception {
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":-1}", "a negative names neither a stage nor the pair");
+		assertRejectedAsPairLevel("{\"status\":7}", "an absent stageNumber names nothing");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":null}", "a null stageNumber names nothing");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":\"0\"}", "a string is not a stage identity");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":0.5}", "a fraction is not a stage identity");
+		assertRejectedAsPairLevel("{\"status\":7,\"stageNumber\":2147483648}", "one past INT_MAX must not wrap");
+	}
+
+	/** And the strict parser is unchanged: a reader that needs a stage still refuses 0. */
+	@Test
+	public void theStrictParserStillRefusesZero() throws Exception {
+		assertRejected("{\"status\":7,\"stageNumber\":0}", "require() must keep refusing the pair-level channel");
 	}
 
 	/** The controls. Without these a parser that refused everything would pass the above. */
@@ -237,10 +295,10 @@ public class FinalStatusStageTest {
 	// --------------------------------------------------- C. ContainerJobMonitor lifecycle
 
 	/**
-	 * Container's fallback for an unrecognised failure records {@code ERROR_RUNSCRIPT} against
-	 * a hardcoded stage 1 and then deletes the container. A status file with no stage must not
-	 * reach it -- that would invent the stage and the solver outcome together, and destroy the
-	 * evidence. The refusal is thrown as the type the poll loop holds on.
+	 * Historically, Container's fallback for an unrecognised failure recorded
+	 * {@code ERROR_RUNSCRIPT} against a hardcoded stage 1 and then deleted the container. A
+	 * status file with no stage is refused as invalid evidence and retained for inspection;
+	 * neither the stage nor the solver outcome may be invented.
 	 */
 	@Test
 	public void containerRefusesATerminalStatusWithNoStage() throws Throwable {
@@ -275,11 +333,11 @@ public class FinalStatusStageTest {
 	}
 
 	/**
-	 * status.json's pairId is an ownership claim: checked against the container label, and
-	 * adopted as the pair when the container has no usable label. gson's getAsInt made "4242",
-	 * 4242.5, [4242] and 4294971538 (2^32 + 4242) all equal 4242, so a malformed claim passed the
-	 * check, or named the pair outright (#196). Each is refused before anything is written,
-	 * with and without a label.
+	 * status.json's pairId is an ownership claim checked against the authoritative container
+	 * label. Gson's getAsInt made "4242", 4242.5, [4242] and 4294971538 (2^32 + 4242) all equal
+	 * 4242, so a malformed claim passed the check (#196). An owned container reaches that strict
+	 * parsing check; a container without an authoritative label is refused before its
+	 * self-authored claim is considered. Neither path may write a result.
 	 */
 	@Test
 	public void containerRefusesADeclaredPairIdThatIsNotAStrictInteger() throws Throwable {
@@ -303,11 +361,14 @@ public class FinalStatusStageTest {
 						fail(shape + " must be refused");
 					} catch (java.lang.reflect.InvocationTargetException e) {
 						assertTrue(shape + ": expected the invalid-snapshot refusal, got "
-										+ e.getCause(),
+									+ e.getCause(),
 								e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
-						assertTrue(shape + ": the refusal must name the field it refused: "
-										+ e.getCause().getMessage(),
-								e.getCause().getMessage().contains("non-integer pairId"));
+						String expectedReason = label > 0
+								? "non-integer pairId"
+								: "no authoritative pair identity";
+						assertTrue(shape + ": the refusal must explain its provenance boundary: "
+									+ e.getCause().getMessage(),
+								e.getCause().getMessage().contains(expectedReason));
 					}
 					jobPairsMock.verify(
 							() -> JobPairs.setPairStatusPreciseResult(
@@ -324,15 +385,9 @@ public class FinalStatusStageTest {
 		}
 	}
 
-	/**
-	 * The absent-file case, which must keep working: a container that produced no status.json
-	 * has nothing to misattribute, and refusing it would block every such pair. This is the
-	 * case an earlier revision of this change got wrong -- it left the stage at 0, which is
-	 * not a refusal but the very identity {@code UpdatePairStatusPrecise} spreads NOT_REACHED
-	 * across every stage of the pair.
-	 */
+	/** Missing terminal evidence names neither a result nor the stage that produced one. */
 	@Test
-	public void containerStillIngestsWhenThereIsNoStatusFileAtAll() throws Throwable {
+	public void containerRefusesToIngestWhenThereIsNoStatusFileAtAll() throws Throwable {
 		Path dir = folder.newFolder().toPath();
 		ContainerJobMonitor monitor = new ContainerJobMonitor(null);
 		PodmanBackend.CompletedContainerInfo info =
@@ -344,20 +399,19 @@ public class FinalStatusStageTest {
 		try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
 			try {
 				m.invoke(monitor, info);
+				fail("a container with no status.json must not be ingested");
 			} catch (java.lang.reflect.InvocationTargetException e) {
-				if (e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException) {
-					fail("no status.json is not a malformed status.json: " + e.getCause());
-				}
-				// any other failure is the absent database further down, which is fine here
+				assertTrue("expected an evidence refusal, got " + e.getCause(),
+						e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
 			}
 			jobPairsMock.verify(
 					() -> JobPairs.setPairStatusPreciseResult(
-							Mockito.anyInt(), Mockito.intThat(s -> s < 1), Mockito.anyInt(),
+							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
 							Mockito.anyInt(), Mockito.anyBoolean()),
 					Mockito.never());
 			jobPairsMock.verify(
 					() -> JobPairs.setPairStatusPrecise(
-							Mockito.anyInt(), Mockito.intThat(s -> s < 1), Mockito.anyInt(),
+							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
 							Mockito.anyInt()),
 					Mockito.never());
 		}
@@ -412,6 +466,28 @@ public class FinalStatusStageTest {
 		return c.newInstance(PairStatusLookupState.FOUND, statusCode);
 	}
 
+	private static int readKubernetesStage(Object callback, ExecutionRef execution)
+			throws Exception {
+		Method readRecord = callback.getClass().getDeclaredMethod(
+				"readStatusRecord", ExecutionRef.class);
+		readRecord.setAccessible(true);
+		JsonObject record;
+		try {
+			record = (JsonObject) readRecord.invoke(callback, execution);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw (Exception) e.getCause();
+		}
+
+		Method readStage = callback.getClass().getDeclaredMethod(
+				"readStageNumber", ExecutionRef.class, JsonObject.class);
+		readStage.setAccessible(true);
+		try {
+			return (int) (Integer) readStage.invoke(callback, execution, record);
+		} catch (java.lang.reflect.InvocationTargetException e) {
+			throw (Exception) e.getCause();
+		}
+	}
+
 	/**
 	 * Kubernetes owns its execution lifecycle, so its safe refusal looks different from the
 	 * other two: nothing is written, the execution is reported handled so the same job is not
@@ -451,23 +527,46 @@ public class FinalStatusStageTest {
 		}
 	}
 
-	/**
-	 * A pod that never started writes no status.json at all. That is a different situation --
-	 * nothing was produced, so there is nothing to misattribute -- and it must keep working,
-	 * or every stuck-pending pair is stranded instead of being made rerunnable.
-	 */
 	@Test
-	public void kubernetesStillUsesItsDefaultWhenNoStatusFileExistsAtAll() throws Exception {
+	public void kubernetesRefusesACompletedJobWithNoStatusFile() throws Exception {
 		Path empty = folder.newFolder().toPath();
 		KubernetesNativeBackend backend = new KubernetesNativeBackend();
 		Object callback = registerExecution(backend, 8, "job-8", PAIR, empty);
 		ExecutionRef execution = new ExecutionRef(8, "job-8", "uid-job-8");
 
-		Method read = callback.getClass().getDeclaredMethod(
-				"readStageNumber", ExecutionRef.class, int.class);
-		read.setAccessible(true);
-		assertEquals("an absent file keeps the caller's default", 1,
-				(int) (Integer) read.invoke(callback, execution, 1));
+		try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+			jobPairsMock.when(() -> JobPairs.getPairStatusLookup(PAIR))
+					.thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+
+			Method onComplete = callback.getClass().getDeclaredMethod(
+					"onJobComplete", ExecutionRef.class);
+			onComplete.setAccessible(true);
+			boolean handled = (boolean) onComplete.invoke(callback, execution);
+
+			assertTrue("the deterministic refusal must not be retried forever", handled);
+			jobPairsMock.verify(
+					() -> JobPairs.setPairStatusPreciseResult(
+							Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+							Mockito.anyInt(), Mockito.anyBoolean()),
+					Mockito.never());
+			jobPairsMock.verify(() -> JobPairs.setEndTime(Mockito.anyInt()), Mockito.never());
+		}
+	}
+
+	/** An absent file supplies no stage identity, even to a lifecycle-failure callback. */
+	@Test
+	public void kubernetesStageReaderRefusesAnAbsentStatusFile() throws Exception {
+		Path empty = folder.newFolder().toPath();
+		KubernetesNativeBackend backend = new KubernetesNativeBackend();
+		Object callback = registerExecution(backend, 8, "job-8", PAIR, empty);
+		ExecutionRef execution = new ExecutionRef(8, "job-8", "uid-job-8");
+
+		try {
+			readKubernetesStage(callback, execution);
+			fail("an absent status file must not silently become stage 1");
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			assertTrue(expected.getMessage().contains("stage is unknown"));
+		}
 	}
 
 	/** And the positive control: a file that does name a stage is used as given. */
@@ -478,10 +577,7 @@ public class FinalStatusStageTest {
 		Object callback = registerExecution(backend, 9, "job-9", PAIR, dir);
 		ExecutionRef execution = new ExecutionRef(9, "job-9", "uid-job-9");
 
-		Method read = callback.getClass().getDeclaredMethod(
-				"readStageNumber", ExecutionRef.class, int.class);
-		read.setAccessible(true);
-		assertEquals(3, (int) (Integer) read.invoke(callback, execution, 1));
+		assertEquals(3, readKubernetesStage(callback, execution));
 	}
 
 	/** A file that exists but cannot be parsed at all is also not a stage identity. */
@@ -492,15 +588,11 @@ public class FinalStatusStageTest {
 		Object callback = registerExecution(backend, 10, "job-10", PAIR, dir);
 		ExecutionRef execution = new ExecutionRef(10, "job-10", "uid-job-10");
 
-		Method read = callback.getClass().getDeclaredMethod(
-				"readStageNumber", ExecutionRef.class, int.class);
-		read.setAccessible(true);
 		try {
-			read.invoke(callback, execution, 1);
+			readKubernetesStage(callback, execution);
 			fail("an unparsable file must not silently become stage 1");
-		} catch (java.lang.reflect.InvocationTargetException e) {
-			assertTrue("expected the invalid-snapshot refusal, got " + e.getCause(),
-					e.getCause() instanceof StageStatusSnapshots.InvalidSnapshotException);
+		} catch (StageStatusSnapshots.InvalidSnapshotException expected) {
+			// as intended
 		}
 	}
 
