@@ -196,6 +196,32 @@ public class ProcessorFileDeletionTests {
     }
 
     @Test
+    public void refusesTargetReachedThroughIntermediateSymlink() throws Exception {
+        Path outsideCommunity = outsideRoot.newFolder("outside-community").toPath();
+        Path outsideProcessor = outsideCommunity.resolve("solver");
+        Files.createDirectories(outsideProcessor);
+        Path outsideFile = outsideProcessor.resolve("keep.txt");
+        Files.writeString(outsideFile, "keep");
+
+        Path linkedCommunity = processorRoot.getRoot().toPath().resolve("3");
+        createSymbolicLinkOrSkip(linkedCommunity, outsideCommunity);
+        Path escapedTarget = linkedCommunity.resolve("solver");
+
+        boolean deleted = deleteProcessorFiles(escapedTarget.toString());
+
+        assertFalse(
+            "a target reached through an intermediate symlink must be refused",
+            deleted
+        );
+        assertTrue(
+            "the intermediate symlink must be retained when deletion is refused",
+            Files.exists(linkedCommunity, LinkOption.NOFOLLOW_LINKS)
+        );
+        assertTrue("the outside directory must survive", Files.exists(outsideProcessor));
+        assertTrue("the outside file must survive", Files.exists(outsideFile));
+    }
+
+    @Test
     public void deletesPlainFileAndReturnsTrue() throws Exception {
         Path file = processorRoot
             .getRoot()

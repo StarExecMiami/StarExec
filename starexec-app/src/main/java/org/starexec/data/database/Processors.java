@@ -342,13 +342,24 @@ public class Processors {
             LinkOption.NOFOLLOW_LINKS
         );
         if (targetExists) {
-            // Resolve links in the root and in the components above the target so that a
-            // symlinked intermediate directory cannot be used to escape the root. The final
-            // component is deliberately not resolved: a symlink at processorPath must be
+            // Resolve links in the root and in every component above the target so that a
+            // symlinked intermediate directory cannot be used to escape the root. Resolve the
+            // parent normally, then append the final name without resolving it: passing
+            // NOFOLLOW_LINKS to target.toRealPath() would also preserve intermediate symlinks.
+            // The final component must remain unresolved so a symlink at processorPath is
             // removed as a link.
             try {
+                Path targetParent = target.getParent();
+                Path targetName = target.getFileName();
+                if (targetParent == null || targetName == null) {
+                    log.warn(
+                        method,
+                        "Refusing to delete [" + target + "]: it has no parent or file name."
+                    );
+                    return false;
+                }
                 root = root.toRealPath();
-                target = target.toRealPath(LinkOption.NOFOLLOW_LINKS);
+                target = targetParent.toRealPath().resolve(targetName);
             } catch (IOException e) {
                 log.warn(
                     method,
@@ -722,7 +733,52 @@ public class Processors {
         return false;
     }
 
+    /**
+     * Whether a time limit can be stored as written.
+     *
+     * <p>{@code processors.time_limit} is {@code SMALLINT} and
+     * {@code starexec.UpdateProcessorTimeLimit} takes a {@code SMALLINT}, so anything above
+     * {@link Short#MAX_VALUE} cannot be represented. It used to be narrowed with a cast, which
+     * wraps: 40000 became -25536 and the processor was given a negative limit while the request
+     * reported success.
+     *
+     * <p>Zero is storable and is deliberately allowed. The column is nullable, and the row
+     * mapper reads a NULL {@code time_limit} as 0 ({@link #resultSetToProcessor}), so a
+     * processor can already hold it. Downstream, {@code functions.bash} runs the processor
+     * under {@code timeout --signal=SIGKILL $((LIMIT))m}, and a duration of 0 disables the
+     * timeout -- so 0 means "no limit", not "no time". Refusing it here would reject a value
+     * the system already produces for itself.
+     *
+     * <p>Negative values are refused: no caller produces one except the truncation this
+     * method exists to prevent, and {@code timeout -1m} is not a command.
+     *
+     * <p>This answers only whether the value can be stored. Whether it is a sensible limit
+     * for a human to pick is a separate question, and belongs at the request boundary --
+     * {@code secure/edit/processor.jsp} offers 1..60 minutes.
+     *
+     * @param timeLimit the requested limit
+     * @return true if the column can hold this value
+     */
+    public static boolean isStorableTimeLimit(int timeLimit) {
+        return timeLimit >= 0 && timeLimit <= Short.MAX_VALUE;
+    }
+
     public static boolean updateTimeLimit(int processorId, int timeLimit) {
+        // Before the connection: a value the column cannot hold is not a database failure, and
+        // must not be silently narrowed into one that fits.
+        if (!isStorableTimeLimit(timeLimit)) {
+            log.warn(
+                "updateTimeLimit",
+                String.format(
+                    "Refusing to set processor [id=%d] time limit to [%d]: the column holds " +
+                        "0..%d.",
+                    processorId,
+                    timeLimit,
+                    (int) Short.MAX_VALUE
+                )
+            );
+            return false;
+        }
         Connection con = null;
         PreparedStatement ps = null;
         try {
