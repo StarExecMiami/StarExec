@@ -3336,6 +3336,81 @@ public class JobPairs {
     }
 
     /**
+     * Returns a pair that {@code JobManager.submitJobs} claimed (PENDING_SUBMIT to ENQUEUED)
+     * but whose submission the backend deferred, back to PENDING_SUBMIT for the next pass.
+     *
+     * <p>A deferral means the backend did not create an execution, so without this the pair
+     * stays ENQUEUED with no execution behind it: {@code getPendingJobs} never selects it
+     * again, yet it counts toward the queue size, and once enough accumulate the queue
+     * never dispatches again. Within three hours FIND_BROKEN_JOB_PAIRS then moves it to the
+     * terminal ERROR_SUBMIT_FAIL, because its execution id is never among the active ones.
+     *
+     * <p>Fenced on identity as well as status, under the row lock: the reset applies only if
+     * the pair is still ENQUEUED <em>and</em> {@code COALESCE(sge_id, 0)} still equals the
+     * value the caller loaded before claiming it. A pair only acquires an execution through a
+     * newly persisted execution id, so an unchanged one proves nothing has adopted it. The
+     * test is equality rather than {@code sge_id IS NULL} because a rerun pair keeps its
+     * previous execution id ({@code RerunJobPairsBatchCore} never clears it); the same idiom
+     * as {@code RerunJobPairsBatchChecked}.
+     *
+     * @param pairId        the deferred pair
+     * @param execIdAtClaim {@code COALESCE(sge_id, 0)} as loaded before the claim; what
+     *                      {@link JobPair#getBackendExecId()} holds for a pair read by
+     *                      {@link #resultToPair}
+     * @return UPDATED if reset; STALE if the pair is no longer ENQUEUED or its execution id
+     *         changed; ERROR on failure
+     */
+    public static ConditionalPairUpdateResult tryReturnDeferredPairToPending(int pairId, int execIdAtClaim) {
+        Connection con = null;
+        PreparedStatement pairPs = null;
+        PreparedStatement stagePs = null;
+        PreparedStatement lockPs = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            Common.beginTransaction(con);
+
+            lockPs = con.prepareStatement(
+                "SELECT status_code, COALESCE(sge_id, 0) FROM starexec.job_pairs WHERE id = ? FOR UPDATE");
+            lockPs.setInt(1, pairId);
+            rs = lockPs.executeQuery();
+            if (!rs.next()
+                || rs.getInt(1) != StatusCode.STATUS_ENQUEUED.getVal()
+                || rs.getInt(2) != execIdAtClaim) {
+                Common.doRollback(con);
+                return ConditionalPairUpdateResult.STALE;
+            }
+            Common.safeClose(rs);
+            Common.safeClose(lockPs);
+
+            pairPs = con.prepareStatement(
+                "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?");
+            pairPs.setInt(1, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+            pairPs.setInt(2, pairId);
+            pairPs.executeUpdate();
+
+            stagePs = con.prepareStatement(
+                "UPDATE starexec.jobpair_stage_data SET status_code = ? WHERE jobpair_id = ?");
+            stagePs.setInt(1, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+            stagePs.setInt(2, pairId);
+            stagePs.executeUpdate();
+
+            Common.endTransaction(con);
+            return ConditionalPairUpdateResult.UPDATED;
+        } catch (Exception e) {
+            log.error("tryReturnDeferredPairToPending pairId=" + pairId, e);
+            Common.doRollback(con);
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(lockPs);
+            Common.safeClose(stagePs);
+            Common.safeClose(pairPs);
+            Common.safeClose(con);
+        }
+        return ConditionalPairUpdateResult.ERROR;
+    }
+
+    /**
      * Marks a RUNNING pair as a terminal failure, but only if the pair
      * is still in RUNNING status (prevents race with concurrent updates).
      *
