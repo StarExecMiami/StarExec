@@ -48,6 +48,17 @@ public class GetPictureDefaultsTest {
 		assertTrue("and not an empty body", served.body.length > 0);
 	}
 
+	/** The same for benchmarks, the third kind of picture with a bundled default. */
+	@Test
+	public void servesTheBundledBenchmarkDefaultWhenTheDataVolumeHasNone() throws Exception {
+		Path pictures = folder.newFolder("pictures").toPath();
+
+		Served served = get(pictures, "bthn", "3");
+
+		assertEquals(0, served.errorStatus);
+		assertArrayEquals(bundled("static/default-pics/default-pics/benchmarks/Pic0.jpg"), served.body);
+	}
+
 	/** The Local and Podman layout: the data volume has the defaults, and they still win. */
 	@Test
 	public void aDefaultOnTheDataVolumeIsStillServedFirst() throws Exception {
@@ -116,6 +127,10 @@ public class GetPictureDefaultsTest {
 			served.errorStatus = call.getArgument(0);
 			return null;
 		}).when(response).sendError(Mockito.anyInt(), Mockito.anyString());
+		Mockito.doAnswer(call -> {
+			served.errorStatus = call.getArgument(0);
+			return null;
+		}).when(response).sendError(Mockito.anyInt());
 
 		try (MockedStatic<R> r = Mockito.mockStatic(R.class, Mockito.CALLS_REAL_METHODS)) {
 			r.when(R::getPicturePath).thenReturn(pictures.toString());
