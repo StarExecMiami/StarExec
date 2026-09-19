@@ -436,15 +436,6 @@ public class Solvers {
 	}
 
 	/**
-	 * Makes a deep copy of an existing solver, gives it a new user, and places it into a space
-	 *
-	 * @param s The existing solver to copy
-	 * @param userId The userID that the new solver will be given
-	 * @param spaceId The space ID of the space to place the new solver in to
-	 * @return The ID of the new solver, or -1 on failure
-	 * @author Eric Burns
-	 */
-	/**
 	 * Where a solver's files go: solverRoot/userId/name/date, with name refused unless it stays
 	 * directly inside the user's directory. Creates nothing.
 	 */
@@ -453,6 +444,15 @@ public class Solvers {
 		return new File(nameDir, date);
 	}
 
+	/**
+	 * Makes a deep copy of an existing solver, gives it a new user, and places it into a space
+	 *
+	 * @param s The existing solver to copy
+	 * @param userId The userID that the new solver will be given
+	 * @param spaceId The space ID of the space to place the new solver in to
+	 * @return The ID of the new solver, or -1 on failure
+	 * @author Eric Burns
+	 */
 	public static int copySolver(Solver s, int userId, int spaceId) {
 		final String methodName = "copySolver";
 		log.debug("Copying solver " + s.getName() + " to new user id= " + String.valueOf(userId));
