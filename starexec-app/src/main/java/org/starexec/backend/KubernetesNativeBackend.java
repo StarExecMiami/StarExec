@@ -184,7 +184,7 @@ public class KubernetesNativeBackend implements Backend {
 
     /**
      * The job container's HOME: an emptyDir of its own, per pod, whatever uid runs. Not under
-     * the working directory, which may lie on the shared data volume (values-local-dev).
+     * the working directory, which a deployment may put on the shared data volume.
      */
     private static final String HOME_MOUNT_PATH = "/app/home";
 

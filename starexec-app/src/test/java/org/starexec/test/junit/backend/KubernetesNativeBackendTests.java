@@ -3472,13 +3472,13 @@ public class KubernetesNativeBackendTests {
         assertNotNull("as an emptyDir", volumeNamed(pod, volume).getEmptyDir());
     }
 
-    /** values-local-dev puts the working directory on the data volume, which is writable. */
+    /** A working directory on the data volume (as values-local-dev intends) is writable already. */
     @Test
     public void aWorkingDirectoryOnTheDataVolumeGetsNoSecondMount() throws Exception {
         assertOnlyDataAndTmpMounted(podSpecFor("/app/data/work"));
     }
 
-    /** values-ci puts it under /tmp, which is already an emptyDir. */
+    /** One under /tmp (as values-ci intends) is on an emptyDir already. */
     @Test
     public void aWorkingDirectoryUnderTmpGetsNoSecondMount() throws Exception {
         assertOnlyDataAndTmpMounted(podSpecFor("/tmp/work"));
@@ -3513,7 +3513,7 @@ public class KubernetesNativeBackendTests {
             .filter(e -> "HOME".equals(e.getName()))
             .map(io.fabric8.kubernetes.api.model.EnvVar::getValue)
             .findFirst().orElse(null);
-        assertNotNull("HOME must be set explicitly", home);
+        assertEquals("HOME must be set explicitly, to the pod's own mount", "/app/home", home);
         String volume = mountsByPath(container).get(home);
         assertNotNull("HOME must be a mount", volume);
         assertNotNull("an emptyDir, so it is per pod", volumeNamed(pod, volume).getEmptyDir());
