@@ -27,7 +27,7 @@ volumePrefix: starexec
 backend:
   type: "kubernetes-native"  # Uses KubernetesNativeBackend
   root: "/app/backend"       # Not used for K8s backend
-  workingDir: "/app/work"    # Not used for K8s backend
+  workingDir: "/app/work"    # Job pods' working dir and private workspaces; an emptyDir each
 
 # Kubernetes-specific configuration
 kubernetes:
