@@ -6711,7 +6711,11 @@ BEGIN
                 JOIN jobpair_stage_data jpsd ON jpsd.jobpair_id = jp.id
                 JOIN job_attributes ja ON ja.pair_id = jp.id
             WHERE j.id = _jobId
-                AND ja.stage_number = _stageNumber
+                -- _stageNumber = 0 is the "Primary" pseudo-stage (#194): each pair resolves it
+                -- to its own primary_jobpair_data rather than a literal stage_number, since
+                -- job_attributes has no rows at stage 0.
+                AND ((_stageNumber = 0 AND ja.stage_number = jp.primary_jobpair_data)
+                     OR ja.stage_number = _stageNumber)
                 AND ja.attr_key = 'starexec-result'
                 AND ja.attr_value != 'starexec-unknown'
             GROUP BY jp.bench_id
@@ -6721,7 +6725,8 @@ BEGIN
     -- configuration's pairs on the same benchmark in another job are not its conflicts here.
     WHERE j_o.id = _jobId
         AND jpsd_o.config_id = _configId
-        AND jpsd_o.stage_number = _stageNumber
+        AND ((_stageNumber = 0 AND jpsd_o.stage_number = jp_o.primary_jobpair_data)
+             OR jpsd_o.stage_number = _stageNumber)
         AND ja_o.attr_key = 'starexec-result'
         AND ja_o.attr_value != 'starexec-unknown';
 END;
@@ -6747,7 +6752,11 @@ BEGIN
              JOIN jobpair_stage_data jpsd ON jpsd.jobpair_id = jp.id
              JOIN job_attributes ja ON ja.pair_id = jp.id
          WHERE j.id = _jobId
-                     AND ja.stage_number = _stageNumber
+                     -- _stageNumber = 0 is the "Primary" pseudo-stage (#194): each pair
+                     -- resolves it to its own primary_jobpair_data rather than a literal
+                     -- stage_number, since job_attributes has no rows at stage 0.
+                     AND ((_stageNumber = 0 AND ja.stage_number = jp.primary_jobpair_data)
+                          OR ja.stage_number = _stageNumber)
                      AND ja.attr_key = 'starexec-result'
                      AND ja.attr_value != 'starexec-unknown'
          GROUP BY jp.bench_id
@@ -6756,7 +6765,8 @@ BEGIN
     -- This job's pairs only (#189), as in GetConflictsForConfigInJob.
     WHERE j_o.id = _jobId
                 AND jpsd_o.config_id = _configId
-                AND jpsd_o.stage_number = _stageNumber
+                AND ((_stageNumber = 0 AND jpsd_o.stage_number = jp_o.primary_jobpair_data)
+                     OR jpsd_o.stage_number = _stageNumber)
                 AND ja_o.attr_key = 'starexec-result'
                 AND ja_o.attr_value != 'starexec-unknown'
     GROUP BY b_o.id, b_o.user_id, b_o.name, b_o.uploaded, b_o.path, b_o.description, b_o.downloadable, b_o.disk_size, b_o.deleted, b_o.recycled, b_o.recycled_original_name;
