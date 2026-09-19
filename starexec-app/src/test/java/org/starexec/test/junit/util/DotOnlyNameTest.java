@@ -3,10 +3,12 @@ package org.starexec.test.junit.util;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.starexec.data.database.Solvers;
+import org.starexec.data.to.Solver;
 import org.starexec.servlets.ProcessorManager;
 import org.starexec.util.Validator;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.Predicate;
@@ -75,6 +77,19 @@ public class DotOnlyNameTest {
 		}
 		assertEquals(new File("/processors/7/20260919/a..b"),
 				ProcessorManager.processorDirectory(root, 7, "20260919", "a..b"));
+	}
+
+	/**
+	 * Rows stored before this validation existed can still hold such a name. Copying one must fail
+	 * the way copySolver's other failures do, with -1, not throw into copySpace or a REST handler.
+	 */
+	@Test
+	public void copyingALegacyDotOnlySolverFailsCleanly() throws Exception {
+		Solver legacy = new Solver();
+		legacy.setName("..");
+		legacy.setPath(Files.createTempDirectory("legacy-solver").toString());
+
+		assertEquals(-1, Solvers.copySolver(legacy, 5, 1));
 	}
 
 	@Test

@@ -465,12 +465,13 @@ public class Solvers {
 		newSolver.setDownloadable(s.isDownloadable());
 		newSolver.setType(s.getType());
 		newSolver.setBuildStatus(s.buildStatus());
-		File solverDirectory = new File(s.getPath());
-		String date = shortDate.format(new Date());
-		File uniqueDir = solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date);
-		uniqueDir.mkdirs();
-		newSolver.setPath(uniqueDir.getAbsolutePath());
 		try {
+			File solverDirectory = new File(s.getPath());
+			String date = shortDate.format(new Date());
+			File uniqueDir = solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date);
+			uniqueDir.mkdirs();
+			newSolver.setPath(uniqueDir.getAbsolutePath());
+
 			//we need to check if the solver has a src dir. If it does, we also need to 
 			//copy it. This fixes issue 307
 			File maybeSrc = new File(s.getPath()+ "_src");
