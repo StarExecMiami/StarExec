@@ -286,6 +286,17 @@ public class LocalBackend implements Backend {
         if (outputDir == null || !outputDir.exists()) {
             return true;
         }
+        // Checked here, not left to the per-artifact probes below: under a non-directory
+        // ancestor, JDK 25 reports each probe as NoSuchFileException ("absent") while JDK 17
+        // reports FileSystemException, so whether this attempt fails closed would depend on
+        // the JVM.
+        if (!outputDir.isDirectory()) {
+            log.error(
+                    "Output path " + outputDir.getAbsolutePath() + " exists but is not a" +
+                            " directory; refusing to start this attempt, because its previous" +
+                            " results cannot be shown to be gone");
+            return false;
+        }
 
         String[] artifacts = {
                 "status.json",

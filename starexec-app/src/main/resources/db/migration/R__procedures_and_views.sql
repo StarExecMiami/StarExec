@@ -2474,7 +2474,12 @@ BEGIN
         jp.queuesub_time,
         jp.primary_jobpair_data
     FROM starexec.job_pairs jp
-    LEFT JOIN starexec.jobpair_stage_data jpsd ON jpsd.jobpair_id = jp.primary_jobpair_data
+    -- primary_jobpair_data is the primary stage's number, not a jobpair_stage_data key:
+    -- match the pair's own row for that stage, at most one by the (jobpair_id,
+    -- stage_number) primary key.
+    LEFT JOIN starexec.jobpair_stage_data jpsd
+        ON jpsd.jobpair_id = jp.id
+       AND jpsd.stage_number = jp.primary_jobpair_data
     WHERE jp.status_code = _status;
 END;
 $$ LANGUAGE plpgsql;
