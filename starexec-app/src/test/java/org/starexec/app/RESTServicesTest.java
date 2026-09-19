@@ -10,10 +10,12 @@ import org.mockito.Mockito;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Communities;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.Processors;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.BenchmarkSecurity;
 import org.starexec.data.security.JobSecurity;
+import org.starexec.data.security.ProcessorSecurity;
 import org.starexec.data.security.SpaceSecurity;
 import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
@@ -48,6 +50,35 @@ public class RESTServicesTest {
 	private static final Gson gson = new GsonBuilder()
 			.setDateFormat("yyyy-MM-dd'T'HH:mm:ss")
 			.create();
+
+	@Test
+	public void editProcessorRejectsANonNumericTimeLimitBeforeWriting() {
+		final int processorId = 42;
+		final int userId = 7;
+		Processor processor = new Processor();
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(request.getParameter("name")).thenReturn(processor.getName());
+		Mockito.when(request.getParameter("desc")).thenReturn(processor.getDescription());
+		Mockito.when(request.getParameter("timelimit")).thenReturn("not-a-number");
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+			 MockedStatic<ProcessorSecurity> processorSecurity = Mockito.mockStatic(ProcessorSecurity.class);
+			 MockedStatic<Processors> processors = Mockito.mockStatic(Processors.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
+			processors.when(() -> Processors.get(processorId)).thenReturn(processor);
+			processorSecurity.when(() -> ProcessorSecurity.canUserEditProcessor(
+					processorId, userId, processor.getName(), processor.getDescription()))
+					.thenReturn(new ValidatorStatusCode(true));
+
+			String response = new RESTServices().editProcessor(processorId, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			processors.verify(() -> Processors.updateName(Mockito.anyInt(), Mockito.anyString()), Mockito.never());
+			processors.verify(() -> Processors.updateDescription(Mockito.anyInt(), Mockito.anyString()), Mockito.never());
+			processors.verify(() -> Processors.updateTimeLimit(Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+		}
+	}
 
 	@Test
 	public void editJobDescriptionEndpointKeepsDescriptionOutOfThePath() throws Exception {

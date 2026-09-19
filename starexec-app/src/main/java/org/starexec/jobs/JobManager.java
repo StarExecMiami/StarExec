@@ -474,6 +474,7 @@ public abstract class JobManager {
 			// happen
 			final int maxLoops = 500;
 			int curLoops = 0;
+			scheduling:
 			while (!schedule.isEmpty()) {
 
 				curLoops++;
@@ -588,6 +589,10 @@ public abstract class JobManager {
 							continue;
 						}
 
+						// COALESCE(sge_id, 0) as loaded, before the claim: the identity a deferred
+						// submission is returned to PENDING_SUBMIT against (a rerun pair keeps its
+						// previous execution id, so this is not always 0).
+						final int execIdAtClaim = pair.getBackendExecId();
 						JobPairs.ConditionalPairUpdateResult claimResult = JobPairs.tryMarkPendingPairEnqueued(
 								pair.getId());
 						if (claimResult == JobPairs.ConditionalPairUpdateResult.STALE) {
@@ -705,10 +710,28 @@ public abstract class JobManager {
 							// per pair per scheduling pass, for a condition that resolves
 							// itself. This exception is unchecked, so this ordering is the
 							// entire guarantee.
-							log.debug(
+							//
+							// Staying queued means going back to PENDING_SUBMIT: the pair was
+							// claimed to ENQUEUED above, and an ENQUEUED pair with no execution
+							// is never selected again yet still counts toward queueSize, so left
+							// there it strands, fills the queue, and is finally errored by
+							// FIND_BROKEN_JOB_PAIRS. The backend is at capacity (or its create
+							// failed with nothing left behind), so every later pair in this pass
+							// would be deferred too: end the pass instead of claiming and
+							// returning each of them.
+							monitor.changeLoad(s.job.getUserId(), -s.job.getWallclockTimeout());
+							JobPairs.ConditionalPairUpdateResult returned =
+									JobPairs.tryReturnDeferredPairToPending(pair.getId(), execIdAtClaim);
+							if (returned == JobPairs.ConditionalPairUpdateResult.ERROR) {
+								log.error("submitJobs", "could not return deferred pair " + pair.getId() +
+										" to PENDING_SUBMIT; it stays ENQUEUED without an execution");
+							}
+							log.info(
 									"submitJobs",
-									"deferring pair " + pair.getId() + ": " + e.getMessage()
+									"deferring pair " + pair.getId() + " (" + returned + "): " + e.getMessage() +
+											"; ending this pass on queue " + q.getName()
 							);
+							break scheduling;
 						} catch (BenchmarkDependencyMissingException e) {
 							log.error("submitJobs", "ERROR_BENCHMARK for pair: " + pair.getId(), e);
 							setStatusForExistingPair(
