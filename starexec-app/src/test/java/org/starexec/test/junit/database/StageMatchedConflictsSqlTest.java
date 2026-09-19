@@ -183,6 +183,64 @@ public class StageMatchedConflictsSqlTest extends Common {
 
 	// ------------------------------------------------------------------- another job
 
+	// -------------------------------------------------------------- stage 0 ("Primary")
+
+	/**
+	 * Stage 0 is the "Primary" pseudo-stage the job page links to for its Primary column
+	 * (#194): each pair's own {@code primary_jobpair_data}, not a literal {@code stage_number}
+	 * of 0 that no row ever carries.
+	 */
+	@Test
+	public void stageZeroResolvesToEachPairsOwnPrimaryStage() throws SQLException {
+		// The fixture's pairs are all primary at stage 1, so stage 0 must agree with stage 1.
+		assertEquals(conflicts(c1q, 1), conflicts(c1q, 0));
+		assertEquals(conflicts(c1r, 1), conflicts(c1r, 0));
+		assertEquals(conflictingBenchmarks(c1q, 1), conflictingBenchmarks(c1q, 0));
+		assertEquals(conflictingBenchmarks(c1r, 1), conflictingBenchmarks(c1r, 0));
+
+		// A configuration that only ran at stage 2 has nothing at the (stage-1) primary.
+		assertEquals(0, conflicts(c2q, 0));
+		assertEquals(List.of(), conflictingBenchmarks(c2q, 0));
+	}
+
+	/**
+	 * The same configuration can be primary at different stages of different pairs. Stage 0
+	 * must count each pair against its own primary stage, not a job-wide one (#194).
+	 */
+	@Test
+	public void stageZeroCountsConsistentlyWhenPairsDisagreeOnWhichStageIsPrimary()
+			throws SQLException {
+		int mixedJobId;
+		int mixedSpaceId;
+		try (Connection con = Common.getConnection()) {
+			mixedJobId = insertReturningId(con,
+					"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size)"
+							+ " VALUES (?, 'stage-conflicts-mixed-primary-job', 2, 0) RETURNING id",
+					userId);
+			mixedSpaceId = insertReturningId(con,
+					"INSERT INTO starexec.job_spaces (job_id, name) VALUES (?, 'root') RETURNING id",
+					mixedJobId);
+			// Same configuration ("c1q") on both stages of both pairs, but pair S is primary
+			// at stage 1 while pair T is primary at stage 2. Only stage 2 conflicts (Theorem
+			// vs CounterSatisfiable); stage 1 agrees (both Satisfiable).
+			insertTwoStagePairWithPrimary(con, mixedJobId, mixedSpaceId, 1, c1q, "Satisfiable",
+					c1q, "Theorem");
+			insertTwoStagePairWithPrimary(con, mixedJobId, mixedSpaceId, 2, c1q, "Satisfiable",
+					c1q, "CounterSatisfiable");
+		}
+		try {
+			assertEquals("only the stage-2 result differs between the two pairs' primaries",
+					1, conflicts(mixedJobId, c1q, 0));
+			assertEquals(List.of(benchId), conflictingBenchmarks(mixedJobId, c1q, 0));
+		} finally {
+			try (Connection con = Common.getConnection()) {
+				update(con, "DELETE FROM starexec.job_pairs WHERE job_id = ?", mixedJobId);
+				update(con, "DELETE FROM starexec.job_spaces WHERE id = ?", mixedSpaceId);
+				update(con, "DELETE FROM starexec.jobs WHERE id = ?", mixedJobId);
+			}
+		}
+	}
+
 	/**
 	 * c1p's result in this job is unknown; its Theorem in the other job is not a conflict here.
 	 * And c1r's CounterSatisfiable here is not a conflict in the other job, where it never ran.
@@ -310,6 +368,17 @@ public class StageMatchedConflictsSqlTest extends Common {
 				"INSERT INTO starexec.job_pairs (job_id, job_space_id, bench_id, status_code,"
 						+ " primary_jobpair_data) VALUES (?, ?, ?, ?, 1) RETURNING id",
 				job, space, benchId, StatusCode.STATUS_COMPLETE.getVal());
+		insertStage(con, job, pairId, 1, stage1Config, stage1Result);
+		insertStage(con, job, pairId, 2, stage2Config, stage2Result);
+	}
+
+	private void insertTwoStagePairWithPrimary(
+			Connection con, int job, int space, int primaryStage, int stage1Config,
+			String stage1Result, int stage2Config, String stage2Result) throws SQLException {
+		int pairId = insertReturningId(con,
+				"INSERT INTO starexec.job_pairs (job_id, job_space_id, bench_id, status_code,"
+						+ " primary_jobpair_data) VALUES (?, ?, ?, ?, ?) RETURNING id",
+				job, space, benchId, StatusCode.STATUS_COMPLETE.getVal(), primaryStage);
 		insertStage(con, job, pairId, 1, stage1Config, stage1Result);
 		insertStage(con, job, pairId, 2, stage2Config, stage2Result);
 	}

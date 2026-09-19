@@ -25,7 +25,7 @@
         <postgresql.connector.version>42.7.12</postgresql.connector.version>
         <jackson.version>2.21.5</jackson.version>
         <jackson.annotations.version>2.21</jackson.annotations.version>
-        <bouncycastle.version>1.80.2</bouncycastle.version>
+        <bouncycastle.version>1.85</bouncycastle.version>
         <beanutils.version>1.11.0</beanutils.version>
         <esapi.version>2.7.0.0</esapi.version>
         <logback.version>1.5.38</logback.version>
