@@ -5148,8 +5148,59 @@ public class RESTServices {
 	}
 
 	/**
+	 * Removes the picture of a user, solver or benchmark, so the default image is served again.
+	 * Allowed to whoever may upload that picture ({@link PictureSecurity#canChangePicture}).
+	 * Only the entity's own upload is touched: the files are named by the entity's id, which
+	 * must be a real entity's, and never the shared default images. Removing a picture that does
+	 * not exist succeeds, so a repeated request is harmless.
+	 *
+	 * @param type    user, solver or benchmark
+	 * @param id      the id of the entity whose picture is removed
+	 * @param request HTTP request
+	 * @return json ValidatorStatusCode
+	 */
+	@POST
+	@Path("/delete/picture/{type}/{id}")
+	@Produces("application/json")
+	public String deletePicture(@PathParam("type") String type, @PathParam("id") int id,
+			@Context HttpServletRequest request) {
+		final String methodName = "deletePicture";
+		int userIdOfCaller = SessionUtil.getUserId(request);
+		if (id < 1 || !PictureSecurity.canChangePicture(type, id, userIdOfCaller)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to remove this picture"));
+		}
+		boolean exists;
+		switch (type) {
+			case PictureFiles.USER:
+				exists = Users.get(id) != null;
+				break;
+			case PictureFiles.SOLVER:
+				exists = Solvers.get(id) != null;
+				break;
+			default:
+				exists = Benchmarks.get(id) != null;
+				break;
+		}
+		if (!exists) {
+			return gson.toJson(new ValidatorStatusCode(false, "There is no such " + type));
+		}
+		boolean removed = true;
+		for (File picture : List.of(PictureFiles.original(type, id), PictureFiles.thumbnail(type, id))) {
+			try {
+				Files.deleteIfExists(picture.toPath());
+			} catch (IOException e) {
+				log.error(methodName, "could not delete " + picture, e);
+				removed = false;
+			}
+		}
+		return removed
+				? gson.toJson(new ValidatorStatusCode(true, "Picture removed"))
+				: gson.toJson(new ValidatorStatusCode(false, "The picture could not be removed"));
+	}
+
+	/**
 	 * Permanently deletes a user from the system. This is an admin-only function
-	 * 
+	 *
 	 * @param userToDeleteId The id of the user to be deleted.
 	 * @param request        HTTP request
 	 * @return json ValidatorStatusCode

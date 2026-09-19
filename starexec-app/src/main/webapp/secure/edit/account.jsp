@@ -124,6 +124,7 @@
 					                 showChangeLink="true"
 					                 changeLinkUrl="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}"
 					                 changeLinkLabel="Change Picture"
+					                 removeUrl="${starexecRoot}/services/delete/picture/user/${userId}"
 					                 useDataEnlarge="true" />
 					<td id="userDetail">
 						<table id="personal" class="shaded" role="table" aria-label="Personal information">

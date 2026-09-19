@@ -103,6 +103,24 @@ function initUI() {
     }
   });
 
+  $("#removePicture").click(function () {
+    if (!confirm("Remove your profile picture? The default picture will be shown instead.")) {
+      return;
+    }
+    $.post(
+      $(this).data("remove-url"),
+      {},
+      function (validatorStatusCode) {
+        if (parseReturnCode(validatorStatusCode)) {
+          // Bust the browser cache so the default picture replaces the removed one.
+          var img = $("#showPicture");
+          img.attr("src", img.attr("src").split("&t=")[0] + "&t=" + Date.now());
+        }
+      },
+      "json"
+    );
+  });
+
   $("#showPicture").on("keydown", function (event) {
     var uri = $(this).attr("data-enlarge") || $(this).attr("enlarge");
     if (uri && (event.key === "Enter" || event.key === " ")) {
