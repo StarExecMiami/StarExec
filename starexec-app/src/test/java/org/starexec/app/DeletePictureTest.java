@@ -7,9 +7,13 @@ import org.junit.rules.TemporaryFolder;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.constants.R;
+import org.starexec.data.database.Benchmarks;
+import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Users;
 import org.starexec.data.security.PictureSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.Benchmark;
+import org.starexec.data.to.Solver;
 import org.starexec.data.to.User;
 import org.starexec.util.SessionUtil;
 
@@ -66,6 +70,36 @@ public class DeletePictureTest {
 		assertTrue(Files.exists(pictures.resolve("users/Pic7_org.jpg")));
 	}
 
+	@Test
+	public void aSolverIdThatNamesNoSolverIsRefused() throws Exception {
+		Path pictures = pictureDir();
+
+		ValidatorStatusCode status = delete(pictures, "solver", 3, true, false);
+
+		assertFalse(status.isSuccess());
+	}
+
+	@Test
+	public void aBenchmarkIdThatNamesNoBenchmarkIsRefused() throws Exception {
+		Path pictures = pictureDir();
+
+		ValidatorStatusCode status = delete(pictures, "benchmark", 4, true, false);
+
+		assertFalse(status.isSuccess());
+	}
+
+	@Test
+	public void anExistingSolversPictureIsRemoved() throws Exception {
+		Path pictures = pictureDir();
+		Files.createDirectories(pictures.resolve("solvers"));
+		Files.write(pictures.resolve("solvers/Pic3_org.jpg"), new byte[] { 1 });
+
+		ValidatorStatusCode status = delete(pictures, "solver", 3, true, true);
+
+		assertTrue(status.getMessage(), status.isSuccess());
+		assertFalse(Files.exists(pictures.resolve("solvers/Pic3_org.jpg")));
+	}
+
 	/** Id 0 would name the default image's neighbours; no entity has it, and it is refused first. */
 	@Test
 	public void theDefaultIdIsRefusedEvenToACallerAllowedEverything() throws Exception {
@@ -103,10 +137,14 @@ public class DeletePictureTest {
 		try (MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
 				MockedStatic<PictureSecurity> security = Mockito.mockStatic(PictureSecurity.class);
 				MockedStatic<Users> users = Mockito.mockStatic(Users.class);
+				MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
+				MockedStatic<Benchmarks> benchmarks = Mockito.mockStatic(Benchmarks.class);
 				MockedStatic<R> r = Mockito.mockStatic(R.class, Mockito.CALLS_REAL_METHODS)) {
 			session.when(() -> SessionUtil.getUserId(request)).thenReturn(CALLER);
 			security.when(() -> PictureSecurity.canChangePicture(type, id, CALLER)).thenReturn(allowed);
-			users.when(() -> Users.get(id)).thenReturn(exists ? new User() : null);
+			users.when(() -> Users.get(id)).thenReturn(exists && "user".equals(type) ? new User() : null);
+			solvers.when(() -> Solvers.get(id)).thenReturn(exists && "solver".equals(type) ? new Solver() : null);
+			benchmarks.when(() -> Benchmarks.get(id)).thenReturn(exists && "benchmark".equals(type) ? new Benchmark() : null);
 			r.when(R::getPicturePath).thenReturn(pictures.toString());
 			return gson.fromJson(new RESTServices().deletePicture(type, id, request), ValidatorStatusCode.class);
 		}

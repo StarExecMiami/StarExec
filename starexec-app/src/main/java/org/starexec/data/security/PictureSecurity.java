@@ -20,8 +20,7 @@ public final class PictureSecurity {
 	 *
 	 * <p>The id means a user, a solver or a benchmark depending on {@code type}, and each is
 	 * owned by someone different, so each needs its own ownership test. An unrecognised type
-	 * is refused for every caller, administrators included: it names no picture, and the
-	 * upload used to write it to a file at the root of the picture directory.
+	 * is refused for every caller, administrators included: it names no picture.
 	 */
 	public static boolean canChangePicture(String type, int primId, int userIdOfCaller) {
 		if (!PictureFiles.isKnownType(type)) {
