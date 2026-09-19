@@ -135,10 +135,10 @@ public class ProcessorFailureStatusTest {
 	 * they sit inside {@code copyOutput} and {@code copyDependencies}, whose surrounding
 	 * environment is most of a running job pair. What can be checked directly is the thing that
 	 * was wrong -- a specific status sent on a path that then exits non-zero, without claiming
-	 * it, so the trap replaces it.
+	 * it, so the trap replaces it. This also covers the guarded post-processor setup path.
 	 *
 	 * <p>Structural rather than behavioural, and stated as such. It pins the fix and would catch
-	 * a new failure path added without the claim, which is exactly how these four arose.
+	 * a new failure path added without the claim, which is exactly how the original four arose.
 	 */
 	@Test
 	public void everyProcessorFailurePathClaimsItsStatus() throws Exception {
@@ -167,7 +167,7 @@ public class ProcessorFailureStatusTest {
 					claimed);
 		}
 
-		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
+		assertEquals("the processor failure paths must still exist to be checked", 5, checked);
 	}
 
 	// ------------------------------------------------- which stage the fault is named against
@@ -223,9 +223,9 @@ public class ProcessorFailureStatusTest {
 	}
 
 	/**
-	 * The four processor failure paths, checked in the source for the same reason the claim
+	 * The five processor failure paths, checked in the source for the same reason the claim
 	 * test above is: they cannot be reached from this harness. It pins the stage argument and
-	 * would catch a fifth path added without one.
+	 * would catch a sixth path added without one.
 	 *
 	 * <p>The argument is required to come from an authoritative source rather than merely to be
 	 * present, so a literal cannot satisfy it. {@code copyOutput} takes the stage as its own
@@ -265,7 +265,7 @@ public class ProcessorFailureStatusTest {
 					stage.contains("$1") || stage.contains("STAGE_NUMBERS[STAGE_INDEX]"));
 		}
 
-		assertEquals("the processor failure paths must still exist to be checked", 4, checked);
+		assertEquals("the processor failure paths must still exist to be checked", 5, checked);
 	}
 
 	// ------------------------------------------------------ the runscript error path
