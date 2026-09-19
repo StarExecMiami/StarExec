@@ -1,5 +1,6 @@
 package org.starexec.test.unit.jobs;
 
+import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -8,6 +9,8 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
@@ -121,6 +124,47 @@ public class DeadlockWatchdogReapTest {
 		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
 	}
 
+	/**
+	 * The jobscript stops the watchdog with SIGTERM when the stage ends. If that lands after the
+	 * watchdog has frozen part of the tree but before it has killed it, the frozen processes stay
+	 * stopped for good. The hook sends that TERM, through the real stopDeadlockWatchdog, right
+	 * after the first SIGSTOP. The victim runs in the background so a regression fails here
+	 * instead of hanging on a stopped foreground child.
+	 */
+	@Test
+	public void aStopMidFreezeLeavesNothingStopped() throws Exception {
+		Result r = runWithHelper(
+				"kill() {\n"
+				+ "  builtin kill \"$@\"; local rc=$?\n"
+				+ "  if [[ ${1:-} == -STOP && ! -e \"$SCRIPT_DIR/termed\" ]]; then\n"
+				+ "    : > \"$SCRIPT_DIR/termed\"\n"
+				+ "    KILL_DEADLOCKED_JOB_PAIR_PID=$BASHPID\n"
+				+ "    stopDeadlockWatchdog\n"
+				+ "  fi\n"
+				+ "  return $rc\n"
+				+ "}\n"
+				+ "sh -c 'sleep 99999 & echo \"$!\" > \"$SCRIPT_DIR/gc\"; exec sleep 99999' &\n"
+				+ "VICTIM=$!\n"
+				+ "echo \"$VICTIM\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "for _ in $(seq 200); do [ -s \"$SCRIPT_DIR/gc\" ] && break; sleep 0.05; done\n"
+				+ "GC=$(cat \"$SCRIPT_DIR/gc\")\n"
+				+ "echo \"$GC\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "killDeadlockedJobPair 0 0 starexec1 &\n"
+				+ "WATCHDOG=$!\n"
+				+ "wait \"$WATCHDOG\" 2>/dev/null || true\n"
+				+ "if [ -e \"$SCRIPT_DIR/termed\" ]; then echo T-TERM-DELIVERED; fi\n"
+				+ "sleep 0.3\n"
+				+ "for pid in \"$VICTIM\" \"$GC\"; do\n"
+				+ "  st=$(sed 's/.*) //' \"/proc/$pid/stat\" 2>/dev/null | cut -d' ' -f1) || st=\n"
+				+ "  if [ \"$st\" = T ]; then echo \"T-STOPPED-$pid\"; fi\n"
+				+ "done\n"
+				+ "builtin kill -9 \"$VICTIM\" \"$GC\" 2>/dev/null || true\n");
+
+		assertEquals(r.out, 0, r.exit);
+		assertTrue("the TERM must have landed mid-freeze:\n" + r.out, r.out.contains("T-TERM-DELIVERED"));
+		assertFalse("no process may be left stopped:\n" + r.out, r.out.contains("T-STOPPED-"));
+	}
+
 	/** The jobscript's own arming line, so this test cannot drift from what production runs. */
 	private static String armingLine() throws Exception {
 		return Files.readAllLines(SGE.resolve("jobscript")).stream()
@@ -132,8 +176,32 @@ public class DeadlockWatchdogReapTest {
 
 	// ----------------------------------------------------------------- harness
 
+	private final List<Path> scriptDirs = new ArrayList<>();
+
+	/**
+	 * A frozen process outlives the script that spawned it, so the timeout path in runWithHelper
+	 * cannot reach it: it has been reparented. Every PID a case records in its pids file is
+	 * killed here, pass or fail; SIGKILL ends a stopped process too.
+	 */
+	@After
+	public void killRecordedProcesses() throws Exception {
+		for (Path dir : scriptDirs) {
+			Path pids = dir.resolve("pids");
+			if (!Files.exists(pids)) {
+				continue;
+			}
+			for (String line : Files.readAllLines(pids)) {
+				String pid = line.trim();
+				if (pid.matches("[0-9]+")) {
+					ProcessHandle.of(Long.parseLong(pid)).ifPresent(ProcessHandle::destroyForcibly);
+				}
+			}
+		}
+	}
+
 	private Result runWithHelper(String body) throws Exception {
 		Path dir = folder.newFolder("reap-" + System.nanoTime()).toPath();
+		scriptDirs.add(dir);
 		Files.copy(SGE.resolve("functions.bash"), dir.resolve("functions.bash"));
 		Files.copy(SGE.resolve("status_codes.bash"), dir.resolve("status_codes.bash"));
 

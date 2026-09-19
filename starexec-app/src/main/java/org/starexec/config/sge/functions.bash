@@ -925,6 +925,11 @@ function descendantPids {
 function reapJobPairProcessTree {
 	local self=$BASHPID pid grew
 	local -A frozen=()
+	# stopDeadlockWatchdog ends this watchdog with SIGTERM when the stage finishes. Landing
+	# between the first SIGSTOP and the SIGKILLs, it would leave the frozen tree stopped for
+	# good, so TERM is ignored for exactly that span. The caller never waits on this process,
+	# and the span is at most five /proc scans and one kill per frozen process.
+	trap '' TERM
 	for _ in 1 2 3 4 5; do
 		grew=false
 		for pid in $(descendantPids "$$" "$self"); do
@@ -943,6 +948,7 @@ function reapJobPairProcessTree {
 	for pid in "${!frozen[@]}"; do
 		kill -KILL "$pid" 2>/dev/null || true
 	done
+	trap - TERM
 	log "killDeadlockedJobPair: reaped ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}" || true
 }
 
