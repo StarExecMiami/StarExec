@@ -1337,14 +1337,27 @@ function copyOutput {
 
 	if [ "${POST_PROCESSOR_PATH:-}" != "" ]; then
 		log "getting postprocessor"
-		mkdir $OUT_DIR/postProcessor
-		safeCpAll "copying post processor" "$POST_PROCESSOR_PATH" "$OUT_DIR/postProcessor"
-		chmod -R gu+rwx $OUT_DIR/postProcessor
-		# Recursively chmod to ensure all files and directories are executable
-		# The postprocessor may have a nested structure like process/process
-		find $OUT_DIR/postProcessor -type f -exec chmod a+x {} \;
-		find $OUT_DIR/postProcessor -type d -exec chmod a+x {} \;
-		cd "$OUT_DIR"/postProcessor
+		# This helper runs under set -e. Keep preparation in one guarded chain so a
+		# filesystem failure reaches the component-specific status below instead of
+		# falling through the EXIT trap's generic ERROR_RUNSCRIPT fallback.
+		# Recursively chmod to ensure all files and directories are executable. The
+		# postprocessor may have a nested structure like process/process.
+		if ! {
+			mkdir "$OUT_DIR/postProcessor" &&
+				safeCpAll "copying post processor" "$POST_PROCESSOR_PATH" "$OUT_DIR/postProcessor" &&
+				chmod -R gu+rwx "$OUT_DIR/postProcessor" &&
+				find "$OUT_DIR/postProcessor" -type f -exec chmod a+x {} \; &&
+				find "$OUT_DIR/postProcessor" -type d -exec chmod a+x {} \; &&
+				cd "$OUT_DIR/postProcessor"
+		}; then
+			log "post processor error: could not prepare the post processor"
+			STATUS_SENT=true
+			sendStatus "$ERROR_POST_PROCESSOR" "$1"
+			sendStatusToLaterStages "$ERROR_POST_PROCESSOR" 0
+			setRunStatsToZeroForLaterStages 0
+			setEndTime
+			exit 1
+		fi
 		log "executing post processor"
 		log "time limit: $POST_PROCESSOR_TIME_LIMIT minutes"
 		# The postprocessor may be in process/process subdirectory or directly as process
