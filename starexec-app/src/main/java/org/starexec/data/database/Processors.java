@@ -331,13 +331,24 @@ public class Processors {
             LinkOption.NOFOLLOW_LINKS
         );
         if (targetExists) {
-            // Resolve links in the root and in the components above the target so that a
-            // symlinked intermediate directory cannot be used to escape the root. The final
-            // component is deliberately not resolved: a symlink at processorPath must be
+            // Resolve links in the root and in every component above the target so that a
+            // symlinked intermediate directory cannot be used to escape the root. Resolve the
+            // parent normally, then append the final name without resolving it: passing
+            // NOFOLLOW_LINKS to target.toRealPath() would also preserve intermediate symlinks.
+            // The final component must remain unresolved so a symlink at processorPath is
             // removed as a link.
             try {
+                Path targetParent = target.getParent();
+                Path targetName = target.getFileName();
+                if (targetParent == null || targetName == null) {
+                    log.warn(
+                        method,
+                        "Refusing to delete [" + target + "]: it has no parent or file name."
+                    );
+                    return false;
+                }
                 root = root.toRealPath();
-                target = target.toRealPath(LinkOption.NOFOLLOW_LINKS);
+                target = targetParent.toRealPath().resolve(targetName);
             } catch (IOException e) {
                 log.warn(
                     method,
