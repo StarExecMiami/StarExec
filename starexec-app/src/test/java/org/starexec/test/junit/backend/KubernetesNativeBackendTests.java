@@ -1004,6 +1004,7 @@ public class KubernetesNativeBackendTests {
         invokePrivate(backend, "revisitUnverifiedExecutions");
 
         assertFalse("the hold is released", holdingSlot(backend).contains(41));
+        assertFalse("and the record is cleared", unverified(backend).containsKey(41));
     }
 
     @Test
