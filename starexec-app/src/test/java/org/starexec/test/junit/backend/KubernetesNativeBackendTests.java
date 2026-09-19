@@ -3495,7 +3495,33 @@ public class KubernetesNativeBackendTests {
     private static void assertOnlyDataAndTmpMounted(PodSpec pod) {
         Map<String, String> mounts = mountsByPath(pod.getContainers().get(0));
         assertEquals("a nested emptyDir would hide what is on the volume at that path",
-            Set.of("/app/data", "/tmp"), mounts.keySet());
-        assertEquals(2, pod.getVolumes().size());
+            Set.of("/app/data", "/tmp", "/app/home"), mounts.keySet());
+        assertEquals(3, pod.getVolumes().size());
+    }
+
+    /**
+     * HOME is the pod's own writable emptyDir, set explicitly so it does not depend on the
+     * configured runAsUser's passwd entry, whose home lies on the read-only root: solvers
+     * that keep state under ~ (~/.cache, ~/.elan, Java prefs) failed or degraded.
+     */
+    @Test
+    public void homeIsAWritableEmptyDirOfThePodsOwn() throws Exception {
+        PodSpec pod = podSpecFor("/app/work");
+        Container container = pod.getContainers().get(0);
+
+        String home = container.getEnv().stream()
+            .filter(e -> "HOME".equals(e.getName()))
+            .map(io.fabric8.kubernetes.api.model.EnvVar::getValue)
+            .findFirst().orElse(null);
+        assertNotNull("HOME must be set explicitly", home);
+        String volume = mountsByPath(container).get(home);
+        assertNotNull("HOME must be a mount", volume);
+        assertNotNull("an emptyDir, so it is per pod", volumeNamed(pod, volume).getEmptyDir());
+    }
+
+    /** A working directory configured at or under HOME must not become a second mount there. */
+    @Test
+    public void aWorkingDirectoryUnderHomeGetsNoSecondMount() throws Exception {
+        assertOnlyDataAndTmpMounted(podSpecFor("/app/home/work"));
     }
 }
