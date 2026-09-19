@@ -857,25 +857,29 @@ function killDeadlockedJobPair {
 	EXTRA=$2
 	CURRENT_USER=$3
 
-	log "Combined watchdog sleep budget for current jobpair (pre-processor + wallclock + post-processor, B7) = $TIMEOUT"
-	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA"
-	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER"
+	# Every log line here is non-fatal: in container mode log() appends to the output
+	# volume, and under set -e a full disk or an NFS outage there would end this watchdog
+	# before it kills anything.
+	log "Combined watchdog sleep budget for current jobpair (pre-processor + wallclock + post-processor, B7) = $TIMEOUT" || true
+	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA" || true
+	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER" || true
 
 	sleep $(( TIMEOUT + EXTRA ))
 
-	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime."
-	cd $WORKING_DIR
+	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime." || true
 
 	# Container mode (#254): nothing runs as the sandbox user here -- Podman runs the pair as
 	# root, Kubernetes as runAsUser, Local as Tomcat's own user -- and busybox killall has no
 	# --user anyway, so "kill by user" killed nothing (or, on Local, would kill Tomcat).
-	# Reap this jobscript's own process tree instead.
+	# Reap this jobscript's own process tree instead. Done before the cd below, which only
+	# the build-job cleanup needs, so a vanished working directory cannot prevent it.
 	if isContainerMode; then
 		reapJobPairProcessTree
 	else
 		sudo -u $CURRENT_USER killall -SIGKILL --user $CURRENT_USER
 	fi
 
+	cd $WORKING_DIR
 	if [ $BUILD_JOB == "true" ]; then
 		cleanUpAfterKilledBuildJob
 	fi
@@ -932,10 +936,12 @@ function reapJobPairProcessTree {
 		done
 		[[ $grew == true ]] || break
 	done
-	log "killDeadlockedJobPair: reaping ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}"
+	# Nothing that can fail may run between freezing and killing: a watchdog that died here
+	# would leave the whole tree stopped for good. So kill first, and log afterwards.
 	for pid in "${!frozen[@]}"; do
 		kill -KILL "$pid" 2>/dev/null || true
 	done
+	log "killDeadlockedJobPair: reaped ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}" || true
 }
 
 # Stops the current stage's defensive killDeadlockedJobPair watchdog (B7), if one is

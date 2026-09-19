@@ -75,6 +75,30 @@ public class DeadlockWatchdogReapTest {
 		assertFalse(r.out, r.out.contains("T-SUBSHELL-KILLED"));
 	}
 
+	/**
+	 * The container log lives on the output volume, which can fail (full, NFS outage). Under
+	 * {@code set -e} a failed log line used to end the watchdog between freezing the tree and
+	 * killing it, leaving the hung processes stopped for good. Here the log's directory cannot
+	 * be created, because a regular file sits where it should be.
+	 */
+	@Test
+	public void killsEvenWhenTheLogCannotBeWritten() throws Exception {
+		Result r = runWithHelper(
+				"touch \"$SCRIPT_DIR/blocked\"\n"
+				+ "CONTAINER_LOG_FILE=\"$SCRIPT_DIR/blocked/log/1.txt\"\n"
+				+ "killDeadlockedJobPair 1 0 starexec1 &\n"
+				+ "WATCHDOG=$!\n"
+				+ "sh -c 'sleep 99999 & echo \"$!\" > \"$SCRIPT_DIR/gc\"; exec sleep 20' || echo T-FOREGROUND-ENDED\n"
+				+ "GC=$(cat \"$SCRIPT_DIR/gc\")\n"
+				+ "wait \"$WATCHDOG\" 2>/dev/null || true\n"
+				+ "sleep 0.2\n"
+				+ "if kill -0 \"$GC\" 2>/dev/null; then echo T-GRANDCHILD-ALIVE; kill -9 \"$GC\"; else echo T-GRANDCHILD-GONE; fi\n");
+
+		assertEquals(r.out, 0, r.exit);
+		assertTrue("the hung child must be killed, not left stopped:\n" + r.out, r.out.contains("T-FOREGROUND-ENDED"));
+		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
+	}
+
 	// ----------------------------------------------------------------- harness
 
 	private Result runWithHelper(String body) throws Exception {
@@ -99,11 +123,21 @@ public class DeadlockWatchdogReapTest {
 		File script = new File(dir.toFile(), "generated.sh");
 		Files.writeString(script.toPath(), s.toString());
 
+		// Output goes to a file, not a pipe: a regression here leaves processes stopped, and
+		// they would hold a pipe open so that reading it never returns. Bounded instead, and
+		// the stopped tree is killed so it does not outlive the test.
+		File log = new File(dir.toFile(), "out.txt");
 		ProcessBuilder pb = new ProcessBuilder(Bash.PATH, script.getAbsolutePath());
 		pb.redirectErrorStream(true);
+		pb.redirectOutput(log);
 		Process p = pb.start();
-		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		assertTrue("command must not hang", p.waitFor(60, TimeUnit.SECONDS));
+		boolean finished = p.waitFor(60, TimeUnit.SECONDS);
+		if (!finished) {
+			p.descendants().forEach(ProcessHandle::destroyForcibly);
+			p.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+		}
+		String out = Files.readString(log.toPath(), StandardCharsets.UTF_8);
+		assertTrue("command must not hang:\n" + out, finished);
 		return new Result(p.exitValue(), out);
 	}
 
