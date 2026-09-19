@@ -866,9 +866,12 @@ function killDeadlockedJobPair {
 	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime."
 	cd $WORKING_DIR
 
-	# In container mode, we don't need sudo since we're already root with container isolation
+	# Container mode (#254): nothing runs as the sandbox user here -- Podman runs the pair as
+	# root, Kubernetes as runAsUser, Local as Tomcat's own user -- and busybox killall has no
+	# --user anyway, so "kill by user" killed nothing (or, on Local, would kill Tomcat).
+	# Reap this jobscript's own process tree instead.
 	if isContainerMode; then
-		killall -SIGKILL --user $CURRENT_USER 2>/dev/null || true
+		reapJobPairProcessTree
 	else
 		sudo -u $CURRENT_USER killall -SIGKILL --user $CURRENT_USER
 	fi
@@ -876,6 +879,63 @@ function killDeadlockedJobPair {
 	if [ $BUILD_JOB == "true" ]; then
 		cleanUpAfterKilledBuildJob
 	fi
+}
+
+# Echoes the PIDs of every live descendant of $1, one per line, skipping $2 and its whole
+# subtree. Read from /proc so it does not depend on which ps/pkill an image ships.
+function descendantPids {
+	local root=$1 prune=$2 dir stat rest ppid pid child
+	local -A children=()
+	for dir in /proc/[0-9]*; do
+		# The process may exit between the glob and the read.
+		{ stat=$(<"$dir/stat"); } 2>/dev/null || continue
+		# comm (field 2) may contain spaces and parentheses; ppid follows the LAST ')'.
+		rest=${stat##*) }
+		read -r _ ppid _ <<< "$rest"
+		[[ $ppid =~ ^[0-9]+$ ]] || continue
+		children[$ppid]+="${dir#/proc/} "
+	done
+	local -a queue=("$root")
+	while ((${#queue[@]} > 0)); do
+		pid=${queue[0]}
+		queue=("${queue[@]:1}")
+		for child in ${children[$pid]:-}; do
+			[[ $child == "$prune" ]] && continue
+			echo "$child"
+			queue+=("$child")
+		done
+	done
+}
+
+# Called by the watchdog when the pair has overrun its budget (#254). SIGKILLs every
+# descendant of this jobscript ($$) except this watchdog's own subtree and the jobscript's
+# bash subshells (e.g. the incremental output copier), recognisable because a subshell keeps
+# the script's exact command line; the children of those subshells ARE reaped. Tomcat
+# (Local) and PID 1 are ancestors, never descendants, so they cannot be reached. The tree is
+# frozen with SIGSTOP and re-scanned until it stops growing, so a process forked mid-kill
+# cannot escape. The copier itself usually ends too, because its reaped child fails under
+# set -e; the jobscript stops it after the solver regardless, and the final copyOutput
+# supersedes any incremental copy the reap interrupted.
+function reapJobPairProcessTree {
+	local self=$BASHPID pid grew
+	local -A frozen=()
+	for _ in 1 2 3 4 5; do
+		grew=false
+		for pid in $(descendantPids "$$" "$self"); do
+			[[ -n ${frozen[$pid]:-} ]] && continue
+			if cmp -s "/proc/$$/cmdline" "/proc/$pid/cmdline" 2>/dev/null; then
+				continue
+			fi
+			kill -STOP "$pid" 2>/dev/null || continue
+			frozen[$pid]=1
+			grew=true
+		done
+		[[ $grew == true ]] || break
+	done
+	log "killDeadlockedJobPair: reaping ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}"
+	for pid in "${!frozen[@]}"; do
+		kill -KILL "$pid" 2>/dev/null || true
+	done
 }
 
 # Stops the current stage's defensive killDeadlockedJobPair watchdog (B7), if one is
