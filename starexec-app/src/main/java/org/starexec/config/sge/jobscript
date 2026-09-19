@@ -360,7 +360,7 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 	# this will be set to true below if the job pair gets deadlocked
 	echo "Calling killDeadlockedJobPair"
 
-	killDeadlockedJobPair "$STAGE_WATCHDOG_TIMEOUT" $JOB_PAIR_EXTRA_TIME $SANDBOX_PARAM &
+	killDeadlockedJobPair "$STAGE_WATCHDOG_TIMEOUT" "$JOB_PAIR_EXTRA_TIME" "$SANDBOX_PARAM" &
 	# Get the process of our defensive killDeadlockedJobPair function.
 	KILL_DEADLOCKED_JOB_PAIR_PID=$!
 	echo "KILL_DEADLOCKED_JOB_PAIR_PID = $KILL_DEADLOCKED_JOB_PAIR_PID"

@@ -99,6 +99,37 @@ public class DeadlockWatchdogReapTest {
 		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
 	}
 
+	/**
+	 * The jobscript arms the watchdog with its own line, run here verbatim with an empty sandbox
+	 * user. Unquoted, the empty word vanished, so under {@code set -u} the watchdog's
+	 * {@code CURRENT_USER=$3} aborted it before it slept: a pair with no watchdog, silently.
+	 */
+	@Test
+	public void armsAndReapsWithAnEmptySandboxUser() throws Exception {
+		Result r = runWithHelper(
+				"SANDBOX_PARAM=\nSTAGE_WATCHDOG_TIMEOUT=1\nJOB_PAIR_EXTRA_TIME=0\n"
+				+ armingLine() + "\n"
+				+ "WATCHDOG=$!\n"
+				+ "sh -c 'sleep 99999 & echo \"$!\" > \"$SCRIPT_DIR/gc\"; exec sleep 20' || echo T-FOREGROUND-ENDED\n"
+				+ "GC=$(cat \"$SCRIPT_DIR/gc\")\n"
+				+ "wait \"$WATCHDOG\" 2>/dev/null || true\n"
+				+ "sleep 0.2\n"
+				+ "if kill -0 \"$GC\" 2>/dev/null; then echo T-GRANDCHILD-ALIVE; kill -9 \"$GC\"; else echo T-GRANDCHILD-GONE; fi\n");
+
+		assertEquals(r.out, 0, r.exit);
+		assertTrue("the watchdog must arm and kill the hung child:\n" + r.out, r.out.contains("T-FOREGROUND-ENDED"));
+		assertTrue("its grandchild must be killed too:\n" + r.out, r.out.contains("T-GRANDCHILD-GONE"));
+	}
+
+	/** The jobscript's own arming line, so this test cannot drift from what production runs. */
+	private static String armingLine() throws Exception {
+		return Files.readAllLines(SGE.resolve("jobscript")).stream()
+				.map(String::trim)
+				.filter(l -> l.startsWith("killDeadlockedJobPair "))
+				.reduce((a, b) -> { throw new AssertionError("more than one arming line"); })
+				.orElseThrow(() -> new AssertionError("jobscript no longer arms the watchdog"));
+	}
+
 	// ----------------------------------------------------------------- harness
 
 	private Result runWithHelper(String body) throws Exception {

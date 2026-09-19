@@ -855,7 +855,9 @@ function cleanForNextStage {
 function killDeadlockedJobPair {
 	TIMEOUT=$1
 	EXTRA=$2
-	CURRENT_USER=$3
+	# Defaulted: under set -u a missing user would end this watchdog before it slept, and
+	# container mode reaps by process tree, never by user.
+	CURRENT_USER=${3:-}
 
 	# Every log line here is non-fatal: in container mode log() appends to the output
 	# volume, and under set -e a full disk or an NFS outage there would end this watchdog
