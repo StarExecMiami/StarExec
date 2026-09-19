@@ -8153,9 +8153,17 @@ public class Jobs {
             // since getPairsInBackend() was called
             if (!backendIDs.contains(p.getBackendExecId())) {
                 if (Jobs.get(p.getJobId()).isBuildJob()) {
-                    Solver s = p.getPrimarySolver();
-                    int status = SolverBuildStatusCode.BUILD_FAILED.getVal();
-                    Solvers.setSolverBuildStatus(s, status);
+                    // getPairsInBackend() loads no stages, so p has no primary solver; the
+                    // single-pair read does.
+                    JobPair withStage = JobPairs.getPair(p.getId());
+                    Solver s = withStage == null ? null : withStage.getPrimarySolver();
+                    if (s == null) {
+                        log.warn("setBrokenPairsToErrorStatus",
+                            "no primary solver for broken build pair " + p.getId());
+                    } else {
+                        int status = SolverBuildStatusCode.BUILD_FAILED.getVal();
+                        Solvers.setSolverBuildStatus(s, status);
+                    }
                 }
                 JobPairs.setBrokenPairStatus(p);
             }
