@@ -857,24 +857,114 @@ function killDeadlockedJobPair {
 	EXTRA=$2
 	CURRENT_USER=$3
 
-	log "Wallclock timeout for current jobpair = $TIMEOUT"
-	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA"
-	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER"
+	# Every log line here is non-fatal: in container mode log() appends to the output
+	# volume, and under set -e a full disk or an NFS outage there would end this watchdog
+	# before it kills anything.
+	log "Combined watchdog sleep budget for current jobpair (pre-processor + wallclock + post-processor, B7) = $TIMEOUT" || true
+	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA" || true
+	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER" || true
 
 	sleep $(( TIMEOUT + EXTRA ))
 
-	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime."
-	cd $WORKING_DIR
+	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime." || true
 
-	# In container mode, we don't need sudo since we're already root with container isolation
+	# Container mode (#254): nothing runs as the sandbox user here -- Podman runs the pair as
+	# root, Kubernetes as runAsUser, Local as Tomcat's own user -- and busybox killall has no
+	# --user anyway, so "kill by user" killed nothing (or, on Local, would kill Tomcat).
+	# Reap this jobscript's own process tree instead. Done before the cd below, which only
+	# the build-job cleanup needs, so a vanished working directory cannot prevent it.
 	if isContainerMode; then
-		killall -SIGKILL --user $CURRENT_USER 2>/dev/null || true
+		reapJobPairProcessTree
 	else
 		sudo -u $CURRENT_USER killall -SIGKILL --user $CURRENT_USER
 	fi
 
+	cd $WORKING_DIR
 	if [ $BUILD_JOB == "true" ]; then
 		cleanUpAfterKilledBuildJob
+	fi
+}
+
+# Echoes the PIDs of every live descendant of $1, one per line, skipping $2 and its whole
+# subtree. Read from /proc so it does not depend on which ps/pkill an image ships.
+function descendantPids {
+	local root=$1 prune=$2 dir stat rest ppid pid child
+	local -A children=()
+	for dir in /proc/[0-9]*; do
+		# The process may exit between the glob and the read.
+		{ stat=$(<"$dir/stat"); } 2>/dev/null || continue
+		# comm (field 2) may contain spaces and parentheses; ppid follows the LAST ')'.
+		rest=${stat##*) }
+		read -r _ ppid _ <<< "$rest"
+		[[ $ppid =~ ^[0-9]+$ ]] || continue
+		children[$ppid]+="${dir#/proc/} "
+	done
+	local -a queue=("$root")
+	while ((${#queue[@]} > 0)); do
+		pid=${queue[0]}
+		queue=("${queue[@]:1}")
+		for child in ${children[$pid]:-}; do
+			[[ $child == "$prune" ]] && continue
+			echo "$child"
+			queue+=("$child")
+		done
+	done
+}
+
+# Called by the watchdog when the pair has overrun its budget (#254). SIGKILLs every
+# descendant of this jobscript ($$) except this watchdog's own subtree and the jobscript's
+# bash subshells (e.g. the incremental output copier), recognisable because a subshell keeps
+# the script's exact command line; the children of those subshells ARE reaped. Tomcat
+# (Local) and PID 1 are ancestors, never descendants, so they cannot be reached. The tree is
+# frozen with SIGSTOP and re-scanned until it stops growing, so a process forked mid-kill
+# cannot escape. The copier itself usually ends too, because its reaped child fails under
+# set -e; the jobscript stops it after the solver regardless, and the final copyOutput
+# supersedes any incremental copy the reap interrupted.
+function reapJobPairProcessTree {
+	local self=$BASHPID pid grew
+	local -A frozen=()
+	for _ in 1 2 3 4 5; do
+		grew=false
+		for pid in $(descendantPids "$$" "$self"); do
+			[[ -n ${frozen[$pid]:-} ]] && continue
+			if cmp -s "/proc/$$/cmdline" "/proc/$pid/cmdline" 2>/dev/null; then
+				continue
+			fi
+			kill -STOP "$pid" 2>/dev/null || continue
+			frozen[$pid]=1
+			grew=true
+		done
+		[[ $grew == true ]] || break
+	done
+	# Nothing that can fail may run between freezing and killing: a watchdog that died here
+	# would leave the whole tree stopped for good. So kill first, and log afterwards.
+	for pid in "${!frozen[@]}"; do
+		kill -KILL "$pid" 2>/dev/null || true
+	done
+	log "killDeadlockedJobPair: reaped ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}" || true
+}
+
+# Stops the current stage's defensive killDeadlockedJobPair watchdog (B7), if one is
+# still running. Safe to call before the first watchdog of the script's life has
+# started (KILL_DEADLOCKED_JOB_PAIR_PID unset). The PID is cleared after it is
+# signaled, so the second call on a pair's last stage (explicit call after
+# copyOutput, then again from the EXIT trap via exitJobscript) is a no-op instead
+# of re-signaling a PID the OS may already have handed to an unrelated process.
+#
+# Deliberately does NOT verify the PID's identity before signaling it (e.g. by
+# matching `ps -o cmd=` the way isPairRunning above matches a sandbox PID): tested
+# directly against a real script-file invocation (not `bash -c`), a backgrounded
+# function's subshell reports its OWN script's invocation line as its `cmd`
+# ("bash /path/to/jobscript"), never the function's name, so a cmd-text match can
+# never succeed here and would silently turn this into a permanent no-op -- worse
+# than the PID-reuse window it would have tried to close, since a watchdog that is
+# never actually stopped survives to `killall` a later, unrelated, still-running
+# stage. The PID-reuse window this call is exposed to is unchanged from what
+# COPY_OUTPUT_INCREMENTALLY_PID (jobscript, unrelated to B7) already accepts.
+function stopDeadlockWatchdog {
+	if [ -n "${KILL_DEADLOCKED_JOB_PAIR_PID:-}" ]; then
+		kill "$KILL_DEADLOCKED_JOB_PAIR_PID" 2>/dev/null || true
+		KILL_DEADLOCKED_JOB_PAIR_PID=
 	fi
 }
 
@@ -1906,6 +1996,12 @@ function isOutputValid {
 
 function exitJobscript {
 	local EXIT_CODE=${1:-0}
+	# B7: safety net for the watchdog started before this stage's pre-processor --
+	# every early exit between there and the explicit stopDeadlockWatchdog call after
+	# copyOutput (a missing varfile/watchfile, invalid output, a pre/post-processor
+	# error) leaves it still sleeping otherwise. Idempotent with that later call and
+	# a no-op if no watchdog is currently running.
+	stopDeadlockWatchdog
 	# On non-zero exit, ensure orchestrator receives a terminal status (fail closed).
 	# Do not run commands that can fail and mask the original exit code.
 	if [ "$EXIT_CODE" -ne 0 ] && [ "$STATUS_SENT" != "true" ]; then
