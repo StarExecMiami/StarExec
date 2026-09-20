@@ -5192,25 +5192,41 @@ public class RESTServices {
 			case PictureFiles.SOLVER:
 				exists = Solvers.get(id) != null;
 				break;
-			default:
+			case PictureFiles.BENCHMARK:
 				exists = Benchmarks.get(id) != null;
 				break;
+			default:
+				// Unreachable: canChangePicture has already refused every type but these
+				// three. Named rather than left to a default that means "benchmark", so a
+				// fourth picture type is refused here instead of being silently checked
+				// against the benchmark table -- the wrong entity, under a different
+				// ownership rule.
+				return gson.toJson(new ValidatorStatusCode(false, "Unknown picture type"));
 		}
 		if (!exists) {
 			return gson.toJson(new ValidatorStatusCode(false, "There is no such " + type));
 		}
-		boolean removed = true;
+		List<File> kept = new ArrayList<>();
 		for (File picture : List.of(PictureFiles.original(type, id), PictureFiles.thumbnail(type, id))) {
 			try {
 				Files.deleteIfExists(picture.toPath());
 			} catch (IOException e) {
 				log.error(methodName, "could not delete " + picture, e);
-				removed = false;
+				kept.add(picture);
 			}
 		}
-		return removed
-				? gson.toJson(new ValidatorStatusCode(true, "Picture removed"))
-				: gson.toJson(new ValidatorStatusCode(false, "The picture could not be removed"));
+		if (kept.isEmpty()) {
+			// A destructive action an administrator may take against another user's data,
+			// so it leaves a record, as the sibling delete endpoints do.
+			log.info(methodName, "user " + userIdOfCaller + " removed the picture of " + type + " " + id);
+			return gson.toJson(new ValidatorStatusCode(true, "Picture removed"));
+		}
+		// Which file survived decides what the user is still looking at: with the thumbnail
+		// gone and the original kept, the full-size picture is still served. "Could not be
+		// removed" would say nothing happened, which is not true of a partial failure.
+		return gson.toJson(new ValidatorStatusCode(false, kept.size() == 2
+				? "The picture could not be removed"
+				: "The picture was only partly removed; please try again"));
 	}
 
 	/**

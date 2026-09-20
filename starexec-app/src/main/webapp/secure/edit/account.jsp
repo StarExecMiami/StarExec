@@ -30,6 +30,11 @@
 			// The user can be deleted if the visting user has admin write privileges and the user being deleted is NOT an admin.
 			boolean canDeleteUser =
 					hasAdminWritePrivileges && !Users.isAdmin(userId);
+			// This page admits admin READ privileges, which a developer has, but changing
+			// another user's picture needs admin WRITE. Without this, a developer viewing
+			// someone else's account is offered a button whose request is then refused.
+			boolean canChangePicture =
+					(visiting_userId == userId) || hasAdminWritePrivileges;
 			if ((visiting_userId != userId) && !hasAdminReadPrivileges) {
 				owner = false;
 				response.sendError(
@@ -85,6 +90,7 @@
 
 			request.setAttribute("owner", owner);
 			request.setAttribute("canDeleteUser", canDeleteUser);
+			request.setAttribute("canChangePicture", canChangePicture);
 			request.setAttribute(
 					"hasAdminReadPrivileges", hasAdminReadPrivileges);
 			request.setAttribute(
@@ -118,13 +124,17 @@
 			<h2>Personal Information</h2>
 			<table id="infoTable" data-user-id="${userId}" role="presentation">
 				<tr>
+					<c:set var="removePictureUrl" value="" />
+					<c:if test="${canChangePicture}">
+						<c:set var="removePictureUrl" value="${starexecRoot}/services/delete/picture/user/${userId}" />
+					</c:if>
 					<star:picSection thumbSrc="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uthn"
 					                 enlargeSrc="${starexecRoot}/secure/get/pictures?Id=${userId}&type=uorg"
 					                 altText="User profile picture"
 					                 showChangeLink="true"
 					                 changeLinkUrl="${starexecRoot}/secure/add/picture.jsp?type=user&Id=${userId}"
 					                 changeLinkLabel="Change Picture"
-					                 removeUrl="${starexecRoot}/services/delete/picture/user/${userId}"
+					                 removeUrl="${removePictureUrl}"
 					                 useDataEnlarge="true" />
 					<td id="userDetail">
 						<table id="personal" class="shaded" role="table" aria-label="Personal information">

@@ -21,6 +21,7 @@ import javax.servlet.http.HttpServletRequest;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -118,6 +119,45 @@ public class DeletePictureTest {
 		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
 
 		assertTrue(status.getMessage(), status.isSuccess());
+	}
+
+	/**
+	 * A type this endpoint does not know is refused rather than looked up as a benchmark.
+	 * {@code canChangePicture} already refuses every type but the three, so this is only
+	 * reachable if a fourth is ever added -- which is exactly when guessing the entity would
+	 * check the wrong table.
+	 */
+	@Test
+	public void anUnknownTypeIsRefusedRatherThanTreatedAsABenchmark() throws Exception {
+		Path pictures = pictureDir();
+
+		ValidatorStatusCode status = delete(pictures, "space", CALLER, true, true);
+
+		assertFalse(status.isSuccess());
+		assertEquals("Unknown picture type", status.getMessage());
+	}
+
+	/**
+	 * When only one of the two files can be removed, the caller is told so. Reporting the
+	 * flat "could not be removed" would say nothing happened, while in fact the picture is
+	 * half gone -- and with the thumbnail removed and the original kept, the full-size
+	 * picture is still served.
+	 */
+	@Test
+	public void aPartialRemovalSaysSoRatherThanReportingNothingHappened() throws Exception {
+		Path pictures = pictureDir();
+		// A non-empty directory where the thumbnail belongs: deleteIfExists throws on it,
+		// which is the failure this branch reports, without mocking the filesystem.
+		Files.delete(pictures.resolve("users/Pic7_thn.jpg"));
+		Files.createDirectory(pictures.resolve("users/Pic7_thn.jpg"));
+		Files.write(pictures.resolve("users/Pic7_thn.jpg/occupied"), new byte[] { 1 });
+
+		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
+
+		assertFalse(status.isSuccess());
+		assertTrue("the message must say it was partial: " + status.getMessage(),
+				status.getMessage().contains("partly"));
+		assertFalse("what could be removed is gone", Files.exists(pictures.resolve("users/Pic7_org.jpg")));
 	}
 
 	// ----------------------------------------------------------------- harness
