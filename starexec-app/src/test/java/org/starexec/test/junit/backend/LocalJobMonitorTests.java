@@ -16,8 +16,12 @@ import java.util.Map;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.StageStatusSnapshots;
+import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 
 /**
@@ -694,21 +698,29 @@ public class LocalJobMonitorTests {
      * flight", which would skip the whole directory and let the caller record a result for a
      * pair whose history it had just declined to read.
      *
-     * <p>The pre-bound behaviour is the conservative one, so 0 keeps it: validate everything, and
-     * refuse a stage that is not holding a result.
+     * <p>What such a pair leaves behind, though, is a stage that never finished: its snapshot
+     * reads RUNNING and always will. Refusing the pair for that -- which this test used to
+     * require -- held every pair that died mid-stage for intervention, permanently. So an
+     * unfinished stage is skipped, while the directory is still read and every stage that DID
+     * finish is still ingested, which is the property this case exists to protect.
      */
     @Test
-    public void aStageNumberBelowOneIsNotTreatedAsABound() throws Exception {
-        Path dir = dirWithStageSnapshot(49, 1, 4);
+    public void aStageNumberBelowOneStillReadsTheStagesThatFinished() throws Exception {
+        Path dir = dirWithStageSnapshot(49, 1, StatusCode.STATUS_COMPLETE.getVal());
+        Files.writeString(
+            dir.resolve("stage-status").resolve("2.json"),
+            "{\"pairId\":49,\"status\":4,\"stageNumber\":2,\"timestamp\":1788988692}\n");
         monitor.registerJob(dir.toString(), 49);
 
-        try {
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setEarlierStageStatuses(
+                    Mockito.eq(49), Mockito.anyMap()))
+                .thenReturn(StageStatusBatchResult.APPLIED);
+
             ingestEarlierStageStatuses(49, stateFor(49), dir, 0);
-            fail("stageNumber 0 must not silently skip every snapshot");
-        } catch (StageStatusSnapshots.InvalidSnapshotException expected) {
-            assertTrue(
-                "wrong refusal: " + expected.getMessage(),
-                expected.getMessage().contains("carries status 4"));
+
+            jobPairs.verify(() -> JobPairs.setEarlierStageStatuses(
+                49, java.util.Map.of(1, StatusCode.STATUS_COMPLETE.getVal())));
         }
     }
 
