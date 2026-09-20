@@ -587,12 +587,11 @@ public class ContainerJobMonitor {
         //
         // A pair-level result names no stage, so the bound is all stages rather than the one
         // the record does not name: a stage that finished keeps its own result (#165).
-        int snapshotBound = stageNumber == FinalStatusStage.PAIR_LEVEL
-            ? Integer.MAX_VALUE
-            : stageNumber;
         Map<Integer, Integer> stageSnapshots;
         try {
-            stageSnapshots = StageStatusSnapshots.read(outputPath, pairId, snapshotBound);
+            stageSnapshots = stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? StageStatusSnapshots.readForPairLevelResult(outputPath, pairId)
+                : StageStatusSnapshots.read(outputPath, pairId, stageNumber);
         } catch (IOException e) {
             // The filesystem, not the contents: retried, as the other monitors classify it.
             throw new RetryableIngestionException(
@@ -641,8 +640,8 @@ public class ContainerJobMonitor {
         //    already known to have finished -- earlier stages, whose snapshots StageStatusSnapshots
         //    required to be terminal, and the terminal stage itself. runsolver's var.out and
         //    watcher.out, read in step 1, decide the terminal status only.
-        // Bounded by the reported stage, not by snapshotBound: a pair-level result names no
-        // stage, so nothing is published. See the same bound in LocalJobMonitor (#165).
+        // Bounded by the reported stage: a pair-level result names no stage, so nothing is
+        // published. See the same rule in LocalJobMonitor (#165).
         Set<Integer> finishedEarlier = new TreeSet<>();
         for (Integer stage : stageSnapshots.keySet()) {
             if (stage < stageNumber) {

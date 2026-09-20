@@ -622,6 +622,40 @@ public class ContainerJobMonitorTests {
         assertHeld(out, "running");
     }
 
+    /**
+     * A pair that died while a stage was still running reports at the pair level -- stage 0 --
+     * and leaves that stage's snapshot reading RUNNING for good. That is what a missing
+     * benchmark dependency looks like (jobscript:217 reports after sendNode has published
+     * stage 1 as RUNNING), and holding it made every such pair unresolvable. It is ingested.
+     */
+    @Test
+    public void aPairThatDiedWhileAStageRanIsIngestedRatherThanHeld() throws Exception {
+        java.nio.file.Path out = failedBeforeAnyStage("mid-stage");
+        writeSnapshotFile(out, "1.json",
+            snapshotRecord(HELD_PAIR, 1, StatusCode.STATUS_RUNNING.getVal()));
+        String container = "container-mid-stage";
+        PodmanBackend.CompletedContainerInfo info =
+            new PodmanBackend.CompletedContainerInfo(container, HELD_PAIR, out.toString(), 0);
+
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            jobPairs.when(() -> JobPairs.setPairLevelStatusResult(
+                    HELD_PAIR,
+                    StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal()))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            invokeProcessCompletedJob(info);
+
+            jobPairs.verify(() -> JobPairs.setPairLevelStatusResult(
+                HELD_PAIR,
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal()));
+        }
+        assertFalse("an unfinished stage under a pair-level result is not a bad artifact",
+            quarantine().contains(container));
+    }
+
+    /** The control, unchanged: under a result that NAMES a stage, an unfinished one is held. */
     @Test
     public void anEarlierStageClaimingProcessingIsHeldWithItsContainer() throws Exception {
         java.nio.file.Path out = finishedAtStageTwo("processing");
@@ -692,6 +726,15 @@ public class ContainerJobMonitorTests {
             .thenReturn(java.util.Collections.singletonList(info));
         invokeCheckCompletedJobs();
         invokeCheckCompletedJobs();
+    }
+
+    /** A labelled pair whose status.json reports a failure that belongs to no stage. */
+    private static java.nio.file.Path failedBeforeAnyStage(String label) throws IOException {
+        java.nio.file.Path out = java.nio.file.Files.createTempDirectory("cjm-pair-" + label);
+        out.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(out.resolve("status.json"),
+            snapshotRecord(HELD_PAIR, 0, StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()));
+        return out;
     }
 
     /** A labelled pair whose status.json says stage 2 finished cleanly. */
