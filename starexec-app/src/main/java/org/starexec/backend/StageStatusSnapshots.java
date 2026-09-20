@@ -3,13 +3,13 @@ package org.starexec.backend;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.data.to.Status.StatusCode;
-import org.starexec.logger.StarLogger;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.regex.Matcher;
@@ -62,7 +62,8 @@ import java.util.regex.Pattern;
  */
 public final class StageStatusSnapshots {
 
-    private static final StarLogger log = StarLogger.getLogger(StageStatusSnapshots.class);
+    /** Set by each pair-level read on the reading thread; see lastContradiction(). */
+    private static final ThreadLocal<String> lastContradiction = new ThreadLocal<>();
 
     /**
      * File names this accepts, bounded to nine digits.
@@ -354,41 +355,70 @@ public final class StageStatusSnapshots {
             }
         }
 
-        warnIfAStageWasSkippedBeneathAFinishedOne(expectedPairId, skipped, snapshots);
+        lastContradiction.set(contradiction(expectedPairId, skipped, snapshots));
         return Collections.unmodifiableMap(snapshots);
     }
 
     /**
-     * Reports the one shape of skipped record the producer cannot legitimately have written.
+     * The contradiction the last pair-level read found, or empty.
+     *
+     * <p>Returned rather than logged. This class holds no database connection by contract
+     * (see the class javadoc), and {@code StarLogger} routes every WARN through
+     * {@code ErrorLogs.add}, which opens one -- so warning from here would put a database
+     * round-trip inside a monitor's poll loop, from the one class documented not to have one.
+     * It is also not this class's decision: it reports what the bytes say and "never decides
+     * what to do about a failure". The caller logs it, where database access is expected.
+     *
+     * <p>Not thread-local by accident: a monitor polls pairs one at a time on its own thread,
+     * and tying the value to the reading thread keeps two monitors from reading each other's.
+     */
+    public static Optional<String> lastContradiction() {
+        return Optional.ofNullable(lastContradiction.get());
+    }
+
+    /**
+     * The one shape of skipped record the producer cannot legitimately have written.
      *
      * <p>A stage that never finished is ordinary under a pair-level result: the pair died while
-     * it was running, and that is most of what this mode exists for. It is NOT worth a warning,
-     * and warning on every skip would fire on the normal case until nobody reads the warnings.
+     * it was running, and that is most of what this mode exists for. It is NOT worth reporting,
+     * and reporting every skip would fire on the normal case until nobody reads the reports.
      *
      * <p>What cannot happen is an unfinished stage sitting BELOW one that finished: stage 2 only
      * runs because stage 1 completed. Such a pair's evidence contradicts itself. Skipping is
      * still the right handling -- nothing non-terminal is ingested either way, and refusing the
      * pair is the defect this class was changed to stop -- but the contradiction must not vanish
-     * silently, so it is logged where the stage numbers and statuses are still in hand.
+     * silently.
+     *
+     * <p>One message per pair, not per stage: two unfinished stages under one finished one are
+     * one contradiction, and one log line and one error_logs row are the right cost for it.
      */
-    private static void warnIfAStageWasSkippedBeneathAFinishedOne(
+    private static String contradiction(
         int pairId,
         Map<Integer, Integer> skipped,
         Map<Integer, Integer> returned
     ) {
         if (skipped.isEmpty() || returned.isEmpty()) {
-            return;
+            return null;
         }
         int highestFinished = Collections.max(returned.keySet());
+        Map<Integer, Integer> below = new TreeMap<>();
         for (Map.Entry<Integer, Integer> unfinished : skipped.entrySet()) {
             if (unfinished.getKey() < highestFinished) {
-                log.warn("Pair " + pairId + ": stage " + unfinished.getKey() + " reports status "
-                    + unfinished.getValue() + ", which is not terminal, while stage "
-                    + highestFinished + " reports a result. A later stage runs only after an"
-                    + " earlier one finishes, so this pair's stage records contradict each other."
-                    + " The unfinished record is skipped and not ingested.");
+                below.put(unfinished.getKey(), unfinished.getValue());
             }
         }
+        if (below.isEmpty()) {
+            return null;
+        }
+        StringBuilder stages = new StringBuilder();
+        for (Map.Entry<Integer, Integer> e : below.entrySet()) {
+            stages.append(stages.length() == 0 ? "" : ", ")
+                .append("stage ").append(e.getKey()).append(" reports status ").append(e.getValue());
+        }
+        return "Pair " + pairId + ": " + stages + ", which is not terminal, while stage "
+            + highestFinished + " reports a result. A later stage runs only after an earlier one"
+            + " finishes, so this pair's stage records contradict each other. The unfinished"
+            + " record is skipped and not ingested.";
     }
 
     private static int requiredInt(JsonObject record, String field, Path entry)

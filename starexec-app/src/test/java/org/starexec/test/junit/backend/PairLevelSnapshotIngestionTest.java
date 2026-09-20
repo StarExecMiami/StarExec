@@ -15,6 +15,7 @@ import java.util.List;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -151,34 +152,36 @@ public class PairLevelSnapshotIngestionTest {
 		}
 	}
 
-	// ------------------------------------------------------------------ the warning itself
+	// ------------------------------------------------- the contradiction, as a value
 
 	/**
-	 * The visibility is the deliverable, so it is asserted rather than assumed.
+	 * The detection is a VALUE, not a log line, and it is asserted as one.
 	 *
-	 * <p>Without this, the whole detection could be deleted and every other case here would stay
-	 * green: they pin what is INGESTED, and the ingestion is identical whether or not anyone is
-	 * told that the pair's own records contradict each other.
+	 * <p>Not logged by the reader because this class holds no database connection by contract, and
+	 * in this codebase a {@code log.warn} IS one: {@code StarLogger} routes every WARN through
+	 * {@code ErrorLogs.add}. Warning from here would put a database round-trip inside a monitor's
+	 * poll loop, from the single class documented not to have a connection. The monitor logs it;
+	 * {@link #theMonitorLogsTheContradiction()} pins that it does.
 	 */
 	@Test
-	public void theContradictionIsReported() throws Exception {
-		Path out = folder.newFolder("warns").toPath();
+	public void theContradictionIsReportedToTheCaller() throws Exception {
+		Path out = folder.newFolder("reports").toPath();
 		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
 
-		List<ILoggingEvent> logged = captureWhileReading(out);
+		StageStatusSnapshots.readForPairLevelResult(out, PAIR);
+		String reported = StageStatusSnapshots.lastContradiction().orElse("");
 
-		assertEquals("exactly one warning, naming the pair and both stages: " + logged, 1, logged.size());
-		String message = logged.get(0).getFormattedMessage();
-		assertTrue(message, message.contains("Pair " + PAIR));
-		assertTrue("it must name the unfinished stage: " + message, message.contains("stage 1"));
-		assertTrue("and its status: " + message, message.contains("status 4"));
+		assertTrue("it must name the pair: " + reported, mentions(reported, "Pair " + PAIR));
+		assertTrue("the unfinished stage: " + reported, mentions(reported, "stage 1"));
+		assertTrue("its status: " + reported, mentions(reported, "status 4"));
+		assertTrue("and the finished one it sits below: " + reported, mentions(reported, "stage 2"));
 	}
 
 	/**
-	 * And the restraint, which is equally untested otherwise: the ORDINARY case under this mode is
-	 * a pair dying while its last stage ran. Warning on that would fire on every such pair until
-	 * nobody reads warnings at all, which would cost the signal this exists to add.
+	 * The restraint, equally untested otherwise: the ORDINARY case under this mode is a pair dying
+	 * while its LAST stage ran. Reporting that would fire on every such pair until nobody reads the
+	 * reports at all, and each one would cost an error_logs row.
 	 */
 	@Test
 	public void theOrdinaryMidStageDeathIsNotReported() throws Exception {
@@ -186,26 +189,91 @@ public class PairLevelSnapshotIngestionTest {
 		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
 		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
 
-		List<ILoggingEvent> logged = captureWhileReading(out);
+		StageStatusSnapshots.readForPairLevelResult(out, PAIR);
 
-		assertEquals("a pair dying in its last stage is ordinary and must not warn: " + logged,
-				0, logged.size());
+		assertEquals("a pair dying in its last stage is ordinary and must not be reported",
+				Optional.empty(), StageStatusSnapshots.lastContradiction());
 	}
 
-	/** Reads for a pair-level result with an appender attached, and returns the warnings. */
-	private static List<ILoggingEvent> captureWhileReading(Path out) throws Exception {
-		ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
-				org.slf4j.LoggerFactory.getLogger(StageStatusSnapshots.class);
+	/** Two unfinished stages under one finished one are ONE contradiction, not two. */
+	@Test
+	public void oneReportPerPairNotPerStage() throws Exception {
+		Path out = folder.newFolder("one-per-pair").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
+		write(out, 3, PAIR, 3, StatusCode.STATUS_COMPLETE.getVal());
+
+		StageStatusSnapshots.readForPairLevelResult(out, PAIR);
+		String reported = StageStatusSnapshots.lastContradiction().orElse("");
+
+		assertTrue("both unfinished stages in one message: " + reported,
+				mentions(reported, "stage 1") && mentions(reported, "stage 2"));
+		assertEquals("one message, so one log line and one error_logs row: " + reported,
+				1, reported.split("Pair " + PAIR, -1).length - 1);
+	}
+
+	/**
+	 * And the visibility itself, at the monitor, where the logging now lives. Without this the
+	 * reader could keep reporting a contradiction nobody ever logs -- a value-based test alone
+	 * does not pin that an operator sees it.
+	 */
+	@Test
+	public void theMonitorLogsTheContradiction() throws Throwable {
+		Path out = folder.newFolder("monitor-logs").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
+
+		List<ILoggingEvent> logged = warningsWhile(LocalJobMonitor.class,
+				() -> ingestEarlierStageStatuses(out, PAIR_LEVEL));
+
+		assertEquals("the monitor must log it: " + logged, 1, logged.size());
+		assertTrue(logged.get(0).getFormattedMessage(),
+				mentions(logged.get(0).getFormattedMessage(), "Pair " + PAIR));
+	}
+
+	/** And stays silent on the ordinary shape, so the log is not trained into noise. */
+	@Test
+	public void theMonitorStaysSilentOnTheOrdinaryShape() throws Throwable {
+		Path out = folder.newFolder("monitor-quiet").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
+
+		List<ILoggingEvent> logged = warningsWhile(LocalJobMonitor.class,
+				() -> ingestEarlierStageStatuses(out, PAIR_LEVEL));
+
+		assertEquals("no warning for an ordinary mid-stage death: " + logged, 0, logged.size());
+	}
+
+	/** A whole-word match, so a stage or status number cannot be matched by a longer one. */
+	private static boolean mentions(String message, String phrase) {
+		return message.matches("(?s).*\\b" + java.util.regex.Pattern.quote(phrase) + "\\b.*");
+	}
+
+	/** Runs {@code body} with an appender on {@code type}'s logger and returns its warnings. */
+	private static List<ILoggingEvent> warningsWhile(Class<?> type, ThrowingRunnable body)
+			throws Throwable {
+		ch.qos.logback.classic.Logger logger =
+				(ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(type);
 		ListAppender<ILoggingEvent> appender = new ListAppender<>();
 		appender.start();
+		// This test's subject IS the logging, so it must not depend on ambient configuration.
+		Level original = logger.getLevel();
+		logger.setLevel(Level.WARN);
 		logger.addAppender(appender);
 		try {
-			StageStatusSnapshots.readForPairLevelResult(out, PAIR);
+			body.run();
 		} finally {
 			logger.detachAppender(appender);
+			logger.setLevel(original);
 			appender.stop();
 		}
+		// The WARN filter is LOAD-BEARING: StarLogger reports every WARN to error_logs, and with
+		// no database behind these tests that report fails and logs an ERROR on the same logger.
 		return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).toList();
+	}
+
+	private interface ThrowingRunnable {
+		void run() throws Throwable;
 	}
 
 	// ---------------------------------------------------------------- through the monitor

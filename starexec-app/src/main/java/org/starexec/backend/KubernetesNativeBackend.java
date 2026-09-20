@@ -5194,6 +5194,9 @@ public class KubernetesNativeBackend implements Backend {
                 earlier = terminalStage == FinalStatusStage.PAIR_LEVEL
                     ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
                     : StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+                // See LocalJobMonitor: reported by the reader, logged here, because a WARN is a
+                // database write and the reader is documented as holding no connection.
+                StageStatusSnapshots.lastContradiction().ifPresent(log::warn);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
