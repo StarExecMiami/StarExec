@@ -247,7 +247,15 @@ public class DeadlockWatchdogReapTest {
 	private static long elapsedMs(String out) {
 		for (String line : out.split("\n")) {
 			if (line.startsWith("T-ELAPSED-MS=")) {
-				return Long.parseLong(line.substring("T-ELAPSED-MS=".length()).trim());
+				String value = line.substring("T-ELAPSED-MS=".length()).trim();
+				try {
+					return Long.parseLong(value);
+				} catch (NumberFormatException e) {
+					// The script computes this from date(1), so a value that is not a number
+					// is a defect in the evidence: report it as a failed assertion rather
+					// than an error in the test itself.
+					throw new AssertionError("elapsed time is not a number [" + value + "]:\n" + out, e);
+				}
 			}
 		}
 		throw new AssertionError("no elapsed time reported:\n" + out);
