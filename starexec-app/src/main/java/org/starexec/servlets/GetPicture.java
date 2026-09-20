@@ -44,6 +44,14 @@ public class GetPicture extends HttpServlet {
 				return;
 			}
 
+			// Parsed once, and every name below is built from this int rather than from the
+			// parameter. validateRequest has already refused anything that is not a
+			// non-negative integer, so this cannot throw; what it adds is that the value put
+			// into a path has been through Integer.parseInt, which is where the check and the
+			// use stop being in two different methods. It also canonicalises the id: "007"
+			// names Pic7, as it already does when a picture is uploaded.
+			int id = Integer.parseInt(request.getParameter("Id"));
+
 			// Check what type is the request, and generate file in different folders according to it.
 			String defaultPicFilename = "";
 			String picFilename = "";
@@ -55,7 +63,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("users");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_thn.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("users");
@@ -64,7 +72,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("users");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_org.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("users");
@@ -73,7 +81,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("solvers");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_thn.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("solvers");
@@ -82,7 +90,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("solvers");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_org.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("solvers");
@@ -91,7 +99,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("benchmarks");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_thn.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("benchmarks");
@@ -100,7 +108,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("benchmarks");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_org.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("benchmarks");
@@ -109,7 +117,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("resultCharts");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append(".jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("chart");

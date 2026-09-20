@@ -85,6 +85,23 @@ public class GetPictureDefaultsTest {
 		assertArrayEquals(uploaded, served.body);
 	}
 
+	/**
+	 * The id names a primitive, not a file name, so a non-canonical spelling of it names the
+	 * same primitive. Before the id was parsed, "007" built Pic007_org.jpg, found nothing and
+	 * served the default -- the picture of a user who exists, reported as a user with none.
+	 */
+	@Test
+	public void aNonCanonicalIdNamesTheSamePicture() throws Exception {
+		Path pictures = folder.newFolder("pictures").toPath();
+		byte[] uploaded = "uploaded picture".getBytes();
+		write(pictures.resolve("solvers/Pic7_org.jpg"), uploaded);
+
+		Served served = get(pictures, "sorg", "007");
+
+		assertEquals(0, served.errorStatus);
+		assertArrayEquals(uploaded, served.body);
+	}
+
 	/** Result charts have no default: a missing one is an error, not an empty success. */
 	@Test
 	public void aMissingPictureWithNoDefaultIsNotFound() throws Exception {
