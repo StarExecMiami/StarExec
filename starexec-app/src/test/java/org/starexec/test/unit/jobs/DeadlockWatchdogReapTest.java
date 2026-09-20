@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -311,9 +313,13 @@ public class DeadlockWatchdogReapTest {
 	 * what these files use.
 	 *
 	 * <p>Comment lines are skipped: the fix's own comments name the construct they warn about.
+	 * {@code $( <file)} with a space is the same construct to bash and is matched too. The
+	 * exemption must come before the read on the line, so a trailing {@code # set +e} comment
+	 * cannot excuse a fatal one.
 	 */
 	@Test
 	public void noCommandSubstitutionReadsAFile() throws Exception {
+		Pattern read = Pattern.compile("\\$\\(\\s*<");
 		for (String script : new String[] {"functions.bash", "jobscript"}) {
 			List<String> lines = Files.readAllLines(SGE.resolve(script));
 			for (int i = 0; i < lines.size(); i++) {
@@ -321,9 +327,14 @@ public class DeadlockWatchdogReapTest {
 				if (line.trim().startsWith("#")) {
 					continue;
 				}
-				assertFalse(script + ":" + (i + 1) + " reads a file with $(<...), which ends the shell"
+				Matcher matcher = read.matcher(line);
+				if (!matcher.find()) {
+					continue;
+				}
+				int exemption = line.indexOf("set +e");
+				assertTrue(script + ":" + (i + 1) + " reads a file with $(<...), which ends the shell"
 								+ " on bash 5.2 when the file is missing: " + line.trim(),
-						line.contains("$(<") && !line.contains("set +e"));
+						exemption >= 0 && exemption < matcher.start());
 			}
 		}
 	}

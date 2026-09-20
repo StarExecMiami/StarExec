@@ -872,12 +872,15 @@ function killDeadlockedJobPair {
 	# own timer ran out, one per stage on Local, where the jobscript is not in a container
 	# that takes them with it.
 	#
-	# The trap is removed as soon as the sleep is over, so the reap below starts from a
-	# default TERM disposition and reapJobPairProcessTree's own `trap '' TERM` window is
-	# exactly what it was.
+	# The trap goes in before the sleep is started, not after: a TERM landing between the two
+	# would leak exactly the orphan this avoids. ${WATCHDOG_SLEEP_PID:-} is empty until the
+	# assignment runs, and `kill ""` is refused harmlessly.
+	#
+	# It is removed as soon as the sleep is over, so the reap below starts from a default TERM
+	# disposition and reapJobPairProcessTree's own `trap '' TERM` window is exactly what it was.
+	trap 'kill "${WATCHDOG_SLEEP_PID:-}" 2>/dev/null || true; exit 0' TERM
 	sleep $(( TIMEOUT + EXTRA )) &
 	WATCHDOG_SLEEP_PID=$!
-	trap 'kill "$WATCHDOG_SLEEP_PID" 2>/dev/null || true; exit 0' TERM
 	wait "$WATCHDOG_SLEEP_PID" || true
 	trap - TERM
 
