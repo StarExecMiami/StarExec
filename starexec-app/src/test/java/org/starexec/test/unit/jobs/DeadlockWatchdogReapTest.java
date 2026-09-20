@@ -262,18 +262,33 @@ public class DeadlockWatchdogReapTest {
 	}
 
 	/**
-	 * Under set -e, bash 5.2 -- the job image's, and CI's -- exits the whole shell when
-	 * {@code $(<file)} names a missing file, even inside {@code || return}. bash 5.3 does not, so a
-	 * local run cannot catch it. The watchdog reads /proc entries that vanish as processes are
-	 * reaped, so a guarded read must use the {@code read} builtin instead.
+	 * Under set -e, bash 5.2 -- the job image's (alpine 3.21) and CI's -- exits the whole shell
+	 * when {@code $(<file)} names a missing file. bash 5.3 returns non-zero instead, so a local run
+	 * cannot catch it.
+	 *
+	 * <p>No handling at the call site prevents it, which is why this bans the construct outright
+	 * rather than only where it is guarded. {@code || return}, {@code || continue},
+	 * {@code if ! x=$(<f)} and an {@code ||} continued on the next line all die the same way: the
+	 * shell is gone before the status is ever tested. Only {@code set +e} on the same line changes
+	 * the outcome, because errexit is what turns the failure into an exit, so that is the single
+	 * exemption. The {@code read} builtin reports the failure as a status on every version and is
+	 * what these files use.
+	 *
+	 * <p>Comment lines are skipped: the fix's own comments name the construct they warn about.
 	 */
 	@Test
-	public void noGuardedReadUsesCommandSubstitution() throws Exception {
-		List<String> lines = Files.readAllLines(SGE.resolve("functions.bash"));
-		for (int i = 0; i < lines.size(); i++) {
-			String line = lines.get(i);
-			assertFalse("functions.bash:" + (i + 1) + " guards a $(<file) read with ||: " + line.trim(),
-					line.contains("$(<") && line.contains("||"));
+	public void noCommandSubstitutionReadsAFile() throws Exception {
+		for (String script : new String[] {"functions.bash", "jobscript"}) {
+			List<String> lines = Files.readAllLines(SGE.resolve(script));
+			for (int i = 0; i < lines.size(); i++) {
+				String line = lines.get(i);
+				if (line.trim().startsWith("#")) {
+					continue;
+				}
+				assertFalse(script + ":" + (i + 1) + " reads a file with $(<...), which ends the shell"
+								+ " on bash 5.2 when the file is missing: " + line.trim(),
+						line.contains("$(<") && !line.contains("set +e"));
+			}
 		}
 	}
 

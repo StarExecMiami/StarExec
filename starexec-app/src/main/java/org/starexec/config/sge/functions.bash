@@ -1599,7 +1599,6 @@ function copyOutput {
 		fi
 
 		log "processing attributes"
-		atts=$(<$OUT_DIR/attributes.txt)
 		processAttributes $OUT_DIR/attributes.txt $1
 
 		# In CONTAINER_MODE, copy attributes.txt to STAREXEC_OUTPUT_DIR for LocalJobMonitor to find
