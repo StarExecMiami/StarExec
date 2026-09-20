@@ -253,6 +253,22 @@ public class DeadlockWatchdogReapTest {
 		throw new AssertionError("no elapsed time reported:\n" + out);
 	}
 
+	/**
+	 * Under set -e, bash 5.2 -- the job image's, and CI's -- exits the whole shell when
+	 * {@code $(<file)} names a missing file, even inside {@code || return}. bash 5.3 does not, so a
+	 * local run cannot catch it. The watchdog reads /proc entries that vanish as processes are
+	 * reaped, so a guarded read must use the {@code read} builtin instead.
+	 */
+	@Test
+	public void noGuardedReadUsesCommandSubstitution() throws Exception {
+		List<String> lines = Files.readAllLines(SGE.resolve("functions.bash"));
+		for (int i = 0; i < lines.size(); i++) {
+			String line = lines.get(i);
+			assertFalse("functions.bash:" + (i + 1) + " guards a $(<file) read with ||: " + line.trim(),
+					line.contains("$(<") && line.contains("||"));
+		}
+	}
+
 	/** The jobscript's own arming line, so this test cannot drift from what production runs. */
 	private static String armingLine() throws Exception {
 		return Files.readAllLines(SGE.resolve("jobscript")).stream()

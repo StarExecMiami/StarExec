@@ -893,8 +893,10 @@ function descendantPids {
 	local root=$1 prune=$2 dir stat rest ppid pid child
 	local -A children=()
 	for dir in /proc/[0-9]*; do
-		# The process may exit between the glob and the read.
-		{ stat=$(<"$dir/stat"); } 2>/dev/null || continue
+		# The process may exit between the glob and the read. `read`, not $(<file): under
+		# set -e, bash 5.2 (the job image's) exits the whole shell when $(<file) names a
+		# missing file, even inside `|| continue`.
+		{ read -r stat < "$dir/stat"; } 2>/dev/null || continue
 		# comm (field 2) may contain spaces and parentheses; ppid follows the LAST ')'.
 		rest=${stat##*) }
 		read -r _ ppid _ <<< "$rest"
@@ -1003,7 +1005,8 @@ function stopDeadlockWatchdog {
 # it has no timeout.
 function isOwnLiveChild {
 	local stat rest state ppid
-	{ stat=$(<"/proc/$1/stat"); } 2>/dev/null || return 1
+	# `read`, not $(<file): see descendantPids. The PID's /proc entry vanishes once it is reaped.
+	{ read -r stat < "/proc/$1/stat"; } 2>/dev/null || return 1
 	# comm (field 2) may contain spaces and parentheses; state and ppid follow the LAST ')'.
 	rest=${stat##*) }
 	read -r state ppid _ <<< "$rest"
