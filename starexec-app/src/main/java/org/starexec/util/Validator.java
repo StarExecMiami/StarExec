@@ -156,7 +156,17 @@ public class Validator {
 		return
 			(name != null)
 			&& patternPrimName.matcher(name).matches()
+			&& !isOnlyDots(name)
 			&& (name.length() <= maxLength);
+	}
+
+	/**
+	 * Names become directory names on disk, and "." and ".." there mean the directory itself
+	 * and its parent. Longer runs of dots are ordinary names on Linux, but are refused too so
+	 * that the rule is one rule: no primitive needs a name made only of dots.
+	 */
+	private static boolean isOnlyDots(String name) {
+		return !name.isEmpty() && name.chars().allMatch(c -> c == '.');
 	}
 
 	/**
@@ -193,7 +203,7 @@ public class Validator {
 				}
 			}
 		}
-		return patternSpaceName.matcher(name).matches();
+		return patternSpaceName.matcher(name).matches() && !isOnlyDots(name);
 	}
 
 	/**

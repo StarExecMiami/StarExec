@@ -267,6 +267,27 @@ public class ProcessorFileDeletionTests {
         assertTrue(deleteProcessorFiles(missing.toString()));
     }
 
+    /**
+     * A processor named ".." was stored as its date directory plus "..". Normalized, that is the
+     * community directory, which is inside the root, so deleting the processor removed every
+     * processor of the community. Rows like that may already exist.
+     */
+    @Test
+    public void refusesAStoredPathThatClimbsOutOfItsDirectory() throws Exception {
+        Path other = createProcessorDir("other");
+        Files.writeString(other.resolve("process"), "#!/bin/sh\n");
+        Path dateDir = other.getParent();
+
+        boolean deleted = deleteProcessorFiles(dateDir.toString() + "/..");
+
+        assertFalse("the deletion must be refused", deleted);
+        assertTrue("another processor's files must survive", Files.exists(other.resolve("process")));
+
+        assertFalse("a stored <date>/. must be refused too",
+            deleteProcessorFiles(dateDir.toString() + "/."));
+        assertTrue(Files.exists(other.resolve("process")));
+    }
+
     private boolean deleteProcessorFiles(String processorPath) {
         return Processors.deleteProcessorFiles(
             processorRoot.getRoot().toPath(),

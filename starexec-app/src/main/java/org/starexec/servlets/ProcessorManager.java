@@ -304,12 +304,20 @@ public class ProcessorManager extends HttpServlet {
 	 *         directories are created as needed)
 	 */
 	public static File getProcessorDirectory(int communityId, String procName) {
-		File uniqueDir = new File(R.getProcessorDir(), "" + communityId);
 		// use the date to make sure the directory is unique
-		uniqueDir = new File(uniqueDir, "" + shortDate.format(new Date()));
-		uniqueDir = new File(uniqueDir, procName);
+		File uniqueDir = processorDirectory(
+				new File(R.getProcessorDir()), communityId, shortDate.format(new Date()), procName);
 		uniqueDir.mkdirs();
 		return uniqueDir;
+	}
+
+	/**
+	 * Where a processor's files go: processorRoot/communityId/date/procName, with procName
+	 * refused unless it stays directly inside the date directory. Creates nothing.
+	 */
+	public static File processorDirectory(File processorRoot, int communityId, String date, String procName) {
+		File dateDir = new File(new File(processorRoot, "" + communityId), date);
+		return Util.childWithin(dateDir, procName);
 	}
 
 	/**
