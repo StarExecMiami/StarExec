@@ -1,5 +1,8 @@
 package org.starexec.test.junit.backend;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -8,6 +11,7 @@ import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.to.Status.StatusCode;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -145,6 +149,63 @@ public class PairLevelSnapshotIngestionTest {
 			assertTrue(expected.getMessage(),
 					expected.getMessage().contains("not a terminal execution result"));
 		}
+	}
+
+	// ------------------------------------------------------------------ the warning itself
+
+	/**
+	 * The visibility is the deliverable, so it is asserted rather than assumed.
+	 *
+	 * <p>Without this, the whole detection could be deleted and every other case here would stay
+	 * green: they pin what is INGESTED, and the ingestion is identical whether or not anyone is
+	 * told that the pair's own records contradict each other.
+	 */
+	@Test
+	public void theContradictionIsReported() throws Exception {
+		Path out = folder.newFolder("warns").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
+
+		List<ILoggingEvent> logged = captureWhileReading(out);
+
+		assertEquals("exactly one warning, naming the pair and both stages: " + logged, 1, logged.size());
+		String message = logged.get(0).getFormattedMessage();
+		assertTrue(message, message.contains("Pair " + PAIR));
+		assertTrue("it must name the unfinished stage: " + message, message.contains("stage 1"));
+		assertTrue("and its status: " + message, message.contains("status 4"));
+	}
+
+	/**
+	 * And the restraint, which is equally untested otherwise: the ORDINARY case under this mode is
+	 * a pair dying while its last stage ran. Warning on that would fire on every such pair until
+	 * nobody reads warnings at all, which would cost the signal this exists to add.
+	 */
+	@Test
+	public void theOrdinaryMidStageDeathIsNotReported() throws Exception {
+		Path out = folder.newFolder("quiet").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_COMPLETE.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_RUNNING.getVal());
+
+		List<ILoggingEvent> logged = captureWhileReading(out);
+
+		assertEquals("a pair dying in its last stage is ordinary and must not warn: " + logged,
+				0, logged.size());
+	}
+
+	/** Reads for a pair-level result with an appender attached, and returns the warnings. */
+	private static List<ILoggingEvent> captureWhileReading(Path out) throws Exception {
+		ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+				org.slf4j.LoggerFactory.getLogger(StageStatusSnapshots.class);
+		ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		logger.addAppender(appender);
+		try {
+			StageStatusSnapshots.readForPairLevelResult(out, PAIR);
+		} finally {
+			logger.detachAppender(appender);
+			appender.stop();
+		}
+		return appender.list.stream().filter(e -> e.getLevel() == Level.WARN).toList();
 	}
 
 	// ---------------------------------------------------------------- through the monitor
