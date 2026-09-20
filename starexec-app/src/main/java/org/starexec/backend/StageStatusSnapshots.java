@@ -3,6 +3,7 @@ package org.starexec.backend;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.logger.StarLogger;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -60,6 +61,8 @@ import java.util.regex.Pattern;
  * silent omission.
  */
 public final class StageStatusSnapshots {
+
+    private static final StarLogger log = StarLogger.getLogger(StageStatusSnapshots.class);
 
     /**
      * File names this accepts, bounded to nine digits.
@@ -250,6 +253,7 @@ public final class StageStatusSnapshots {
         final int bound = namesAStage ? terminalStage : Integer.MAX_VALUE;
 
         Map<Integer, Integer> snapshots = new TreeMap<>();
+        Map<Integer, Integer> skipped = new TreeMap<>();
         int seen = 0;
 
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
@@ -335,6 +339,7 @@ public final class StageStatusSnapshots {
                         // A stage that never finished, under a result that names no stage. Not
                         // returned, so it cannot be ingested; not refused, because this is what
                         // a pair dying mid-stage leaves behind. See readForPairLevelResult.
+                        skipped.put(stageFromName, recordStatus);
                         continue;
                     }
                     throw new InvalidSnapshotException(
@@ -349,7 +354,41 @@ public final class StageStatusSnapshots {
             }
         }
 
+        warnIfAStageWasSkippedBeneathAFinishedOne(expectedPairId, skipped, snapshots);
         return Collections.unmodifiableMap(snapshots);
+    }
+
+    /**
+     * Reports the one shape of skipped record the producer cannot legitimately have written.
+     *
+     * <p>A stage that never finished is ordinary under a pair-level result: the pair died while
+     * it was running, and that is most of what this mode exists for. It is NOT worth a warning,
+     * and warning on every skip would fire on the normal case until nobody reads the warnings.
+     *
+     * <p>What cannot happen is an unfinished stage sitting BELOW one that finished: stage 2 only
+     * runs because stage 1 completed. Such a pair's evidence contradicts itself. Skipping is
+     * still the right handling -- nothing non-terminal is ingested either way, and refusing the
+     * pair is the defect this class was changed to stop -- but the contradiction must not vanish
+     * silently, so it is logged where the stage numbers and statuses are still in hand.
+     */
+    private static void warnIfAStageWasSkippedBeneathAFinishedOne(
+        int pairId,
+        Map<Integer, Integer> skipped,
+        Map<Integer, Integer> returned
+    ) {
+        if (skipped.isEmpty() || returned.isEmpty()) {
+            return;
+        }
+        int highestFinished = Collections.max(returned.keySet());
+        for (Map.Entry<Integer, Integer> unfinished : skipped.entrySet()) {
+            if (unfinished.getKey() < highestFinished) {
+                log.warn("Pair " + pairId + ": stage " + unfinished.getKey() + " reports status "
+                    + unfinished.getValue() + ", which is not terminal, while stage "
+                    + highestFinished + " reports a result. A later stage runs only after an"
+                    + " earlier one finishes, so this pair's stage records contradict each other."
+                    + " The unfinished record is skipped and not ingested.");
+            }
+        }
     }
 
     private static int requiredInt(JsonObject record, String field, Path entry)

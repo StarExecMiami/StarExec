@@ -585,8 +585,9 @@ public class ContainerJobMonitor {
         // an InvalidSnapshotException, which the poll loop holds with the container rather than
         // recording as a solver failure.
         //
-        // A pair-level result names no stage, so the bound is all stages rather than the one
-        // the record does not name: a stage that finished keeps its own result (#165).
+        // A pair-level result names no stage, so nothing can be bounded out: every stage that
+        // finished keeps its own result (#165), and one that did not finish is skipped rather
+        // than refused, because that is what a pair dying mid-stage leaves behind.
         Map<Integer, Integer> stageSnapshots;
         try {
             stageSnapshots = stageNumber == FinalStatusStage.PAIR_LEVEL

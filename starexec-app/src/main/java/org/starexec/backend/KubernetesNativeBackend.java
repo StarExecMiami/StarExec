@@ -4954,8 +4954,13 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             // The terminal stage's own status comes from the runsolver artifacts, and a pair
-            // killed mid-stage legitimately leaves that snapshot non-terminal. Both are expressed
-            // by the bound, so the read never returns a record this method would have to discard.
+            // killed mid-stage legitimately leaves that snapshot non-terminal. Neither is
+            // returned, so the read never hands this method a record it would have to discard.
+            //
+            // Which read expresses that depends on what the result names: a stage-level result
+            // bounds by that stage, while a pair-level result names no stage, so nothing can be
+            // bounded out -- every stage that finished is earlier than it (#165), and one that
+            // did not finish is skipped rather than refused.
             Map<Integer, Integer> earlier;
             try {
                 earlier = terminalStage == FinalStatusStage.PAIR_LEVEL

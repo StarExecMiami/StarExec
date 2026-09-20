@@ -69,6 +69,25 @@ public class PairLevelSnapshotIngestionTest {
 	}
 
 	/**
+	 * The one shape the producer cannot legitimately have written: an unfinished stage BELOW one
+	 * that finished. Stage 2 runs only because stage 1 completed, so such a pair's records
+	 * contradict each other. Skipping is still the right handling -- refusing the pair is the
+	 * defect this change removes, and nothing non-terminal is ingested either way -- but the
+	 * finished stage must still be returned, and the contradiction is logged rather than lost.
+	 */
+	@Test
+	public void anUnfinishedStageBeneathAFinishedOneIsSkippedAndTheFinishedOneKept() throws Exception {
+		Path out = folder.newFolder("inconsistent").toPath();
+		write(out, 1, PAIR, 1, StatusCode.STATUS_RUNNING.getVal());
+		write(out, 2, PAIR, 2, StatusCode.STATUS_COMPLETE.getVal());
+
+		Map<Integer, Integer> read = StageStatusSnapshots.readForPairLevelResult(out, PAIR);
+
+		assertEquals("the finished stage is still ingested", "[2]", read.keySet().toString());
+		assertEquals(Integer.valueOf(StatusCode.STATUS_COMPLETE.getVal()), read.get(2));
+	}
+
+	/**
 	 * Skipping is not returning-unchecked. STATUS_PROCESSING(22) means work is still owed, and a
 	 * pair left at 22 is completed by the post-processing task, so it must never reach a caller.
 	 */
@@ -131,8 +150,11 @@ public class PairLevelSnapshotIngestionTest {
 	// ---------------------------------------------------------------- through the monitor
 
 	/**
-	 * The Local backend's own path, which is where this was observed: three pairs on one stack
-	 * (27, 76 and 107) were held with "INGESTION REQUIRES INTERVENTION ... carries status 4".
+	 * The Local backend's own path, which is where this was observed: pair 76 was held with
+	 * "INGESTION REQUIRES INTERVENTION ... carries status 4" after its script correctly reported
+	 * a missing benchmark dependency as {@code {"status":24,"stageNumber":0}}. Pairs 27 and 107
+	 * on the same stack wore the same error message but had a different cause -- a wallclock
+	 * timeout reported at STAGE level -- and belong to the producer fix, not to this one.
 	 *
 	 * <p>The state is passed as null deliberately: an untracked pair short-circuits the generation
 	 * check before it is dereferenced, so the read is what this exercises, and a refusal would
