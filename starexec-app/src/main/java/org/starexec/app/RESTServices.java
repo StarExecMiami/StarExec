@@ -4762,6 +4762,12 @@ public class RESTServices {
 	 * that did succeed are kept either way, so silence would leave the user believing they have
 	 * solvers they do not have.
 	 *
+	 * <p>This message reaches an HTML sink: the client passes it to showMessage, which falls back
+	 * to showMessageLegacy, and that inserts it with {@code .html(message)} (master.js:466). It is
+	 * safe because every part of it is built here from literals and ints. Interpolating anything a
+	 * user chose, a solver's name above all, would make this an XSS sink and would need escaping
+	 * at the sink, not here.
+	 *
 	 * @param failedCopies solvers copySolvers could not copy
 	 * @param associated solvers that were copied and associated with the space
 	 * @param copy true for a copy, false for a link
@@ -4771,9 +4777,14 @@ public class RESTServices {
 			return new ValidatorStatusCode(true,
 					copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully");
 		}
+		int requested = failedCopies + associated;
+		if (associated == 0) {
+			return new ValidatorStatusCode(false,
+					"None of the " + requested + " solver(s) could be copied");
+		}
 		return new ValidatorStatusCode(false,
-				failedCopies + " of " + (failedCopies + associated) + " solver(s) could not be copied; the"
-						+ " remaining " + associated + " were copied successfully");
+				failedCopies + " of " + requested + " solver(s) could not be copied; the remaining "
+						+ associated + (associated == 1 ? " was" : " were") + " copied successfully");
 	}
 
 	@POST
@@ -4834,7 +4845,12 @@ public class RESTServices {
 						failedCopies++;
 					}
 				}
-				response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				// Only when there is something to name: makeCommaSeparatedList deletes a trailing
+				// comma it never wrote for an empty list, and the exception would be reported as a
+				// database error instead of the failure that actually happened.
+				if (!selectedSolvers.isEmpty()) {
+					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				}
 			}
 
 			// if we did a copy, the solvers are already associated with the root space, so

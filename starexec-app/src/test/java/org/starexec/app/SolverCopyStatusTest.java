@@ -55,7 +55,40 @@ public class SolverCopyStatusTest {
 				response.get("success").getAsBoolean());
 		String message = response.get("message").getAsString();
 		assertTrue("the message must say how many failed: " + message, message.contains("1 of 2"));
-		assertTrue("the message must say the rest were copied: " + message, message.contains("1 were copied"));
+		assertTrue("the message must say the rest were copied: " + message, message.contains("1 was copied"));
+	}
+
+	/**
+	 * Every copy failing is reachable: associate on an empty list succeeds, so the handler still
+	 * takes the reporting branch. It must not then claim that 0 solvers were copied successfully.
+	 */
+	@Test
+	public void everyCopyFailingIsReportedWithoutClaimingSuccesses() {
+		JsonObject response = copyTwoSolvers(List.of(-1, -1));
+
+		assertFalse(response.toString(), response.get("success").getAsBoolean());
+		String message = response.get("message").getAsString();
+		assertEquals("None of the 2 solver(s) could be copied", message);
+	}
+
+	/** One surviving copy reads as one, not as "1 were copied". */
+	@Test
+	public void aSingleSurvivingCopyIsWordedInTheSingular() {
+		String message = RESTServices.solverCopyStatus(1, 1, true).getMessage();
+
+		assertTrue(message, message.contains("the remaining 1 was copied successfully"));
+	}
+
+	/**
+	 * A link copies nothing, so failedCopies is never incremented on that path: a link must keep
+	 * its own message and never report a partial copy.
+	 */
+	@Test
+	public void aLinkNeverReportsAPartialCopy() {
+		JsonObject response = linkTwoSolvers();
+
+		assertTrue(response.toString(), response.get("success").getAsBoolean());
+		assertEquals("Solver(s) linked successfully", response.get("message").getAsString());
 	}
 
 	/** Only the ids of solvers that exist may be associated with the space. */
@@ -69,6 +102,23 @@ public class SolverCopyStatusTest {
 			new RESTServices().copySolversToSpace(SPACE_ID, request(), Mockito.mock(HttpServletResponse.class));
 
 			solvers.verify(() -> Solvers.associate(List.of(101), SPACE_ID, false, USER_ID, false));
+		}
+	}
+
+	private JsonObject linkTwoSolvers() {
+		try (MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
+				MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<SpaceSecurity> security = Mockito.mockStatic(SpaceSecurity.class)) {
+			stub(solvers, session, security, List.of());
+
+			HttpServletRequest request = request();
+			Mockito.when(request.getParameter("copy")).thenReturn("false");
+			String json = new RESTServices()
+					.copySolversToSpace(SPACE_ID, request, Mockito.mock(HttpServletResponse.class));
+
+			solvers.verify(() -> Solvers.copySolvers(Mockito.anyList(), Mockito.anyInt(), Mockito.anyInt()),
+					Mockito.never());
+			return JsonParser.parseString(json).getAsJsonObject();
 		}
 	}
 
