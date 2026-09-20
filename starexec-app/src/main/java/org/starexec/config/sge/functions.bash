@@ -1087,8 +1087,10 @@ function sendStageStatus {
 		# A successful intermediate stage is not a completed pair. The jobscript
 		# explicitly calls sendStatus after its final stage; publishing COMPLETE
 		# here lets a live monitor retire the pair before later stages execute.
-		# Keep failure publication so error helpers still attach the precise stage
-		# to their preceding pair-level (stage 0) failure notification.
+		# Keep failure publication: a failed stage ends the pair, and sendStageFailure
+		# writes this record alone, so it is the pair's result as well as the stage's.
+		# There is no longer a preceding pair-level (stage 0) notification for it to
+		# attach a stage to.
 		local WRITE_PAIR_STATUS=true
 		if [[ "$STATUS" == "$STATUS_COMPLETE" ]]; then
 			WRITE_PAIR_STATUS=false
@@ -1135,22 +1137,37 @@ function sendStatus {
 	fi
 }
 
+# Reports the failure of a stage: the pair's status and the stage it belongs to.
+# $1 the status, $2 the stage number
+function sendStageFailure {
+	if isContainerMode; then
+		# One stage-level record: status.json and this stage's snapshot. Writing the
+		# pair-level record first (as sendStatus with no stage does) published a terminal
+		# pair status while this stage's snapshot still read RUNNING; for a pair-level
+		# result the monitor validates every snapshot, and a Local monitor polling between
+		# the two writes held a finished pair for intervention for good. The stage-level
+		# record alone ends exactly where the two writes ended, and the monitor does not
+		# validate the snapshot of the stage a result names.
+		sendStageStatus "$1" "$2"
+	else
+		sendStatus "$1"
+		sendStageStatus "$1" "$2"
+	fi
+}
+
 function sendWallclockExceededStatus {
 	log "epilog detects wall clock time exceeded"
-	sendStatus $EXCEED_RUNTIME
-	sendStageStatus $EXCEED_RUNTIME ${STAGE_NUMBERS[STAGE_INDEX]}
+	sendStageFailure $EXCEED_RUNTIME "${STAGE_NUMBERS[STAGE_INDEX]}"
 }
 
 function sendCpuExceededStatus {
 	log "epilog detects cpu time exceeded"
-	sendStatus $EXCEED_CPU
-	sendStageStatus $EXCEED_CPU ${STAGE_NUMBERS[STAGE_INDEX]}
+	sendStageFailure $EXCEED_CPU "${STAGE_NUMBERS[STAGE_INDEX]}"
 }
 
 function sendExceedMemStatus {
 	log "epilog detects max virtual memory exceeded"
-	sendStatus $EXCEED_MEM
-	sendStageStatus $EXCEED_MEM ${STAGE_NUMBERS[STAGE_INDEX]}
+	sendStageFailure $EXCEED_MEM "${STAGE_NUMBERS[STAGE_INDEX]}"
 }
 
 function setStartTime {
