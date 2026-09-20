@@ -1,15 +1,12 @@
 package org.starexec.servlets;
 
 import org.starexec.constants.R;
-import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Users;
-import org.starexec.data.security.BenchmarkSecurity;
-import org.starexec.data.security.GeneralSecurity;
-import org.starexec.data.security.SolverSecurity;
+import org.starexec.data.security.PictureSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
-import org.starexec.data.to.Benchmark;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.PartWrapper;
+import org.starexec.util.PictureFiles;
 import org.starexec.util.SessionUtil;
 import org.starexec.util.Util;
 import org.starexec.util.Validator;
@@ -57,37 +54,6 @@ public class UploadPicture extends HttpServlet {
 		response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Wrong type of request.");
 	}
 
-	/**
-	 * Whether the caller may replace the picture of the entity this request names.
-	 *
-	 * <p>The {@code Id} form field means a user, a solver or a benchmark depending on
-	 * {@code type}, and each is owned by someone different, so each needs its own
-	 * ownership test. An unrecognised type is refused: {@code handleUploadRequest}
-	 * matches no branch for it and would fall through to the default filename.
-	 */
-	private boolean callerMayChangePictureOf(String type, int primId, int userIdOfCaller) {
-		if (Users.isPublicUser(userIdOfCaller)) {
-			return false;
-		}
-		if (GeneralSecurity.hasAdminWritePrivileges(userIdOfCaller)) {
-			return true;
-		}
-		if (type == null) {
-			return false;
-		}
-		switch (type) {
-			case "user":
-				return primId == userIdOfCaller;
-			case R.SOLVER:
-				return SolverSecurity.userOwnsSolverOrIsAdmin(primId, userIdOfCaller);
-			case "benchmark":
-				Benchmark bench = Benchmarks.get(primId);
-				return bench != null && BenchmarkSecurity.userOwnsBenchOrIsAdmin(bench, userIdOfCaller);
-			default:
-				return false;
-		}
-	}
-
 	protected void doPost(HttpServletRequest request, HttpServletResponse response)
 			throws ServletException, IOException {
 		int userIdOfCaller = SessionUtil.getUserId(request);
@@ -111,7 +77,7 @@ public class UploadPicture extends HttpServlet {
 			// that primitive's picture -- handleUploadRequest writes to
 			// /solvers/Pic<id> or /benchmarks/Pic<id> from the very same parameter.
 			String type = (String) form.get(UploadPicture.TYPE);
-			if (!callerMayChangePictureOf(type, primId, userIdOfCaller)) {
+			if (!PictureSecurity.canChangePicture(type, primId, userIdOfCaller)) {
 				response.sendError(HttpServletResponse.SC_FORBIDDEN, "You cannot change this picture.");
 				return;
 			}
@@ -120,7 +86,7 @@ public class UploadPicture extends HttpServlet {
 			// If the request is valid
 			if (status.isSuccess()) {
 				try {
-					String redirectUrl = this.handleUploadRequest(userIdOfCaller, form);
+					String redirectUrl = this.handleUploadRequest(userIdOfCaller, primId, form);
 					if (redirectUrl != null) {
 						response.sendRedirect(redirectUrl);
 					} else {
@@ -153,56 +119,28 @@ public class UploadPicture extends HttpServlet {
 	 * @throws Exception
 	 * @author Ruoyu Zhang
 	 */
-	private String handleUploadRequest(int userId, HashMap<String, Object> form) throws Exception {
+	private String handleUploadRequest(int userId, int primId, HashMap<String, Object> form) throws Exception {
 		PartWrapper item = (PartWrapper) form.get(UploadPicture.PICTURE_FILE);
-		String fileName = "";
-		String redir = Util.docRoot("secure/edit/account.jsp");
-
 		String type = (String) form.get(UploadPicture.TYPE);
-		String id = (String) form.get(UploadPicture.ID);
-		StringBuilder sb = new StringBuilder();
 
-		log.info("Starting picture upload for userId=" + userId + " type=" + type + " id=" + id);
+		log.info("Starting picture upload for userId=" + userId + " type=" + type + " id=" + primId);
 
+		String redir;
 		switch (type) {
-			case "user":
-				sb.delete(0, sb.length());
-				sb.append("/users/Pic");
-				sb.append(id);
-				fileName = sb.toString();
+			case PictureFiles.SOLVER:
+				redir = Util.docRoot("secure/details/solver.jsp?id=" + primId);
+				break;
+			case PictureFiles.BENCHMARK:
+				redir = Util.docRoot("secure/details/benchmark.jsp?id=" + primId);
+				break;
+			default:
 				redir = Util.docRoot("secure/edit/account.jsp");
-				break;
-			case R.SOLVER:
-				sb.delete(0, sb.length());
-				sb.append("/solvers/Pic");
-				sb.append(id);
-				fileName = sb.toString();
-
-				sb.delete(0, sb.length());
-				sb.append(Util.docRoot("secure/details/solver.jsp?id="));
-				sb.append(id);
-				redir = sb.toString();
-				break;
-			case "benchmark":
-				sb.delete(0, sb.length());
-				sb.append("/benchmarks/Pic");
-				sb.append(id);
-				fileName = sb.toString();
-
-				sb.delete(0, sb.length());
-				sb.append(Util.docRoot("secure/details/benchmark.jsp?id="));
-				sb.append(id);
-				redir = sb.toString();
 				break;
 		}
 
-		sb.delete(0, sb.length());
-		sb.append(R.getPicturePath());
-		sb.append(File.separator);
-		sb.append(fileName);
-		sb.append("_org.jpg");
-		String filenameupload = sb.toString();
-
+		// The parsed id, not the raw form string: "007" and "7" must name the same file, the
+		// one the delete endpoint removes.
+		String filenameupload = PictureFiles.original(type, primId).getPath();
 		log.debug("Picture file path: " + filenameupload);
 
 		// Ensure parent directories exist with proper error handling
@@ -219,12 +157,7 @@ public class UploadPicture extends HttpServlet {
 		item.write(archiveFile);
 		log.debug("Picture file written successfully");
 
-		sb.delete(0, sb.length());
-		sb.append(R.getPicturePath());
-		sb.append(File.separator);
-		sb.append(fileName);
-		sb.append("_thn.jpg");
-		String fileNameThumbnail = sb.toString();
+String fileNameThumbnail = PictureFiles.thumbnail(type, primId).getPath();
 
 		log.debug("Thumbnail file path: " + fileNameThumbnail);
 		log.debug("Creating thumbnail with dimensions 320x320");

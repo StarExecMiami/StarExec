@@ -5163,8 +5163,85 @@ public class RESTServices {
 	}
 
 	/**
+	 * Removes the picture of a user, solver or benchmark, so the default image is served again.
+	 * Allowed to whoever may upload that picture ({@link PictureSecurity#canChangePicture}).
+	 * Only the entity's own upload is touched: the files are named by the entity's id, which
+	 * must be a real entity's, and never the shared default images. Removing a picture that does
+	 * not exist succeeds, so a repeated request is harmless.
+	 *
+	 * @param type    user, solver or benchmark
+	 * @param id      the id of the entity whose picture is removed
+	 * @param request HTTP request
+	 * @return json ValidatorStatusCode
+	 */
+	@POST
+	@Path("/delete/picture/{type}/{id}")
+	@Produces("application/json")
+	public String deletePicture(@PathParam("type") String type, @PathParam("id") int id,
+			@Context HttpServletRequest request) {
+		final String methodName = "deletePicture";
+		int userIdOfCaller = SessionUtil.getUserId(request);
+		if (id < 1 || !PictureSecurity.canChangePicture(type, id, userIdOfCaller)) {
+			return gson.toJson(new ValidatorStatusCode(false, "You do not have permission to remove this picture"));
+		}
+		boolean exists;
+		switch (type) {
+			case PictureFiles.USER:
+				exists = Users.get(id) != null;
+				break;
+			case PictureFiles.SOLVER:
+				exists = Solvers.get(id) != null;
+				break;
+			case PictureFiles.BENCHMARK:
+				exists = Benchmarks.get(id) != null;
+				break;
+			default:
+				// Unreachable: canChangePicture has already refused every type but these
+				// three. Named rather than left to a default that means "benchmark", so a
+				// fourth picture type is refused here instead of being silently checked
+				// against the benchmark table -- the wrong entity, under a different
+				// ownership rule.
+				return gson.toJson(new ValidatorStatusCode(false, "Unknown picture type"));
+		}
+		if (!exists) {
+			return gson.toJson(new ValidatorStatusCode(false, "There is no such " + type));
+		}
+		// Counted, not inferred from the failures: deleteIfExists returns false for a file
+		// that was not there, which is not a deletion. Inferring made "absent original plus
+		// a thumbnail that would not delete" report a partial removal, though nothing at all
+		// had been removed.
+		int deleted = 0;
+		int failed = 0;
+		for (File picture : List.of(PictureFiles.original(type, id), PictureFiles.thumbnail(type, id))) {
+			try {
+				if (Files.deleteIfExists(picture.toPath())) {
+					deleted++;
+				}
+			} catch (IOException e) {
+				log.error(methodName, "could not delete " + picture, e);
+				failed++;
+			}
+		}
+		if (failed == 0) {
+			if (deleted > 0) {
+				// A destructive action an administrator may take against another user's
+				// data, so it leaves a record, as the sibling delete endpoints do. Nothing
+				// removed is nothing to record.
+				log.info(methodName, "user " + userIdOfCaller + " removed the picture of " + type + " " + id);
+			}
+			return gson.toJson(new ValidatorStatusCode(true, "Picture removed"));
+		}
+		// What survived decides what the caller is still looking at: with the thumbnail gone
+		// and the original kept, the full-size picture is still served, and saying "could not
+		// be removed" would claim nothing happened.
+		return gson.toJson(new ValidatorStatusCode(false, deleted > 0
+				? "The picture was only partly removed; please try again"
+				: "The picture could not be removed"));
+	}
+
+	/**
 	 * Permanently deletes a user from the system. This is an admin-only function
-	 * 
+	 *
 	 * @param userToDeleteId The id of the user to be deleted.
 	 * @param request        HTTP request
 	 * @return json ValidatorStatusCode

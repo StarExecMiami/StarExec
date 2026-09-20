@@ -6,6 +6,7 @@
 <%@attribute name="showChangeLink" required="false" type="java.lang.Boolean" description="Whether to show the change/upload picture link" %>
 <%@attribute name="changeLinkUrl" required="false" type="java.lang.String" description="URL for the change picture link" %>
 <%@attribute name="changeLinkLabel" required="false" type="java.lang.String" description="Label for the change link (default: Change picture)" %>
+<%@attribute name="removeUrl" required="false" type="java.lang.String" description="Service URL that removes the picture; shows a Remove picture button when set" %>
 <%@attribute name="useDataEnlarge" required="false" type="java.lang.Boolean" description="Use data-enlarge instead of enlarge attribute (for account page JS)" %>
 
 <c:set var="label" value="${empty changeLinkLabel ? 'Change picture' : changeLinkLabel}" />
@@ -37,6 +38,9 @@
 				<nav aria-label="Picture actions">
 					<ul>
 						<li><a class="btn btn-secondary" id="uploadPicture" href="${changeLinkUrl}">${label}</a></li>
+						<c:if test="${not empty removeUrl}">
+							<li><button type="button" class="btn btn-secondary" id="removePicture" data-remove-url="${removeUrl}">Remove Picture</button></li>
+						</c:if>
 					</ul>
 				</nav>
 			</c:when>
