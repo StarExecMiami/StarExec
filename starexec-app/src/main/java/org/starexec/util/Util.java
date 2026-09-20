@@ -1046,12 +1046,18 @@ public class Util {
      * @return A string containing a comma-separated list of the given numbers
      */
     public static String makeCommaSeparatedList(List<Integer> nums) {
+        // Built by joining rather than by appending a comma to each element and deleting the
+        // last one: that deleted a character an empty list never wrote, so it threw
+        // StringIndexOutOfBoundsException instead of returning the empty list's own
+        // representation, the empty string. Every caller puts the result in a New_ID cookie,
+        // where "nothing" is a meaningful answer and an exception is not.
         StringBuilder sb = new StringBuilder();
-        nums.forEach(id -> {
+        for (Integer id : nums) {
+            if (sb.length() > 0) {
+                sb.append(",");
+            }
             sb.append(id);
-            sb.append(",");
-        });
-        sb.deleteCharAt(sb.length() - 1);
+        }
         return sb.toString();
     }
 
