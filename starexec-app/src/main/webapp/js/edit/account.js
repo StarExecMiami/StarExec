@@ -113,8 +113,15 @@ function initUI() {
       function (validatorStatusCode) {
         if (parseReturnCode(validatorStatusCode)) {
           // Bust the browser cache so the default picture replaces the removed one.
+          // Both URLs: the thumbnail shown here and the full-size one the enlarge
+          // popup loads, or enlarging still shows the picture just removed.
           var img = $("#showPicture");
-          img.attr("src", img.attr("src").split("&t=")[0] + "&t=" + Date.now());
+          var bust = "&t=" + Date.now();
+          img.attr("src", img.attr("src").split("&t=")[0] + bust);
+          var enlarge = img.attr("data-enlarge");
+          if (enlarge) {
+            img.attr("data-enlarge", enlarge.split("&t=")[0] + bust);
+          }
         }
       },
       "json"

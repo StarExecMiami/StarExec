@@ -10,6 +10,7 @@ import org.starexec.constants.R;
 import org.starexec.data.database.Benchmarks;
 import org.starexec.data.database.Solvers;
 import org.starexec.data.database.Users;
+import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.PictureSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.Benchmark;
@@ -160,6 +161,33 @@ public class DeletePictureTest {
 		assertFalse("what could be removed is gone", Files.exists(pictures.resolve("users/Pic7_org.jpg")));
 	}
 
+	/**
+	 * The junction between the endpoint and the rule, with nothing stubbed in between. Every
+	 * other case here stubs {@link PictureSecurity}, so breaking the real rule leaves them all
+	 * green and only its own test fails; these two run the real rule through the endpoint, so
+	 * the wiring -- that the endpoint asks about the type and id it is about to delete, and
+	 * obeys the answer -- is covered too.
+	 */
+	@Test
+	public void theRealRuleRefusesAnotherUsersPicture() throws Exception {
+		Path pictures = pictureDir();
+
+		ValidatorStatusCode status = deleteUnderTheRealRule(pictures, "user", 8);
+
+		assertFalse(status.isSuccess());
+		assertTrue("the other user's picture stays", Files.exists(pictures.resolve("users/Pic8_org.jpg")));
+	}
+
+	@Test
+	public void theRealRuleAllowsTheOwnersOwnPicture() throws Exception {
+		Path pictures = pictureDir();
+
+		ValidatorStatusCode status = deleteUnderTheRealRule(pictures, "user", CALLER);
+
+		assertTrue(status.getMessage(), status.isSuccess());
+		assertFalse(Files.exists(pictures.resolve("users/Pic7_org.jpg")));
+	}
+
 	// ----------------------------------------------------------------- harness
 
 	/** Pictures for users 7 and 8, and the default. */
@@ -170,6 +198,26 @@ public class DeletePictureTest {
 			Files.write(pictures.resolve("users").resolve(name), name.getBytes());
 		}
 		return pictures;
+	}
+
+	/**
+	 * As {@link #delete}, but with the real {@link PictureSecurity} deciding. Only what the
+	 * rule itself reaches out to is stubbed: who is public, who is an administrator, and
+	 * whether the entity exists.
+	 */
+	private ValidatorStatusCode deleteUnderTheRealRule(Path pictures, String type, int id) {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		try (MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<Users> users = Mockito.mockStatic(Users.class);
+				MockedStatic<GeneralSecurity> general = Mockito.mockStatic(GeneralSecurity.class);
+				MockedStatic<R> r = Mockito.mockStatic(R.class, Mockito.CALLS_REAL_METHODS)) {
+			session.when(() -> SessionUtil.getUserId(request)).thenReturn(CALLER);
+			users.when(() -> Users.isPublicUser(CALLER)).thenReturn(false);
+			users.when(() -> Users.get(id)).thenReturn(new User());
+			general.when(() -> GeneralSecurity.hasAdminWritePrivileges(CALLER)).thenReturn(false);
+			r.when(R::getPicturePath).thenReturn(pictures.toString());
+			return gson.fromJson(new RESTServices().deletePicture(type, id, request), ValidatorStatusCode.class);
+		}
 	}
 
 	private ValidatorStatusCode delete(Path pictures, String type, int id, boolean allowed, boolean exists) {
