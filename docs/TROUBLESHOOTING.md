@@ -768,6 +768,11 @@ then compare each candidate's `status.json` with that verdict. A pair whose outp
 terminal status other than 9 — especially one whose `stage-status/*.json` still reads `4` — was
 misrecorded.
 
+**Which version this applies to.** On a deployment that predates these fixes, both causes
+produce the hold and then the sweep's `ERROR_SUBMIT_FAIL`. On one that carries them, neither
+cause can hold a pair — so a held pair on a current deployment is something else, and the table
+above will send you the wrong way.
+
 **There is no automatic repair.** Nothing re-examines a pair that is already `RUNNING`
 (`LocalJobMonitor.registerJob` is called only at submit time), and a pair already swept to
 `ERROR_SUBMIT_FAIL` is terminal. Rerunning such a pair **re-executes it**: that is a new
