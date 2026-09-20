@@ -5206,27 +5206,37 @@ public class RESTServices {
 		if (!exists) {
 			return gson.toJson(new ValidatorStatusCode(false, "There is no such " + type));
 		}
-		List<File> kept = new ArrayList<>();
+		// Counted, not inferred from the failures: deleteIfExists returns false for a file
+		// that was not there, which is not a deletion. Inferring made "absent original plus
+		// a thumbnail that would not delete" report a partial removal, though nothing at all
+		// had been removed.
+		int deleted = 0;
+		int failed = 0;
 		for (File picture : List.of(PictureFiles.original(type, id), PictureFiles.thumbnail(type, id))) {
 			try {
-				Files.deleteIfExists(picture.toPath());
+				if (Files.deleteIfExists(picture.toPath())) {
+					deleted++;
+				}
 			} catch (IOException e) {
 				log.error(methodName, "could not delete " + picture, e);
-				kept.add(picture);
+				failed++;
 			}
 		}
-		if (kept.isEmpty()) {
-			// A destructive action an administrator may take against another user's data,
-			// so it leaves a record, as the sibling delete endpoints do.
-			log.info(methodName, "user " + userIdOfCaller + " removed the picture of " + type + " " + id);
+		if (failed == 0) {
+			if (deleted > 0) {
+				// A destructive action an administrator may take against another user's
+				// data, so it leaves a record, as the sibling delete endpoints do. Nothing
+				// removed is nothing to record.
+				log.info(methodName, "user " + userIdOfCaller + " removed the picture of " + type + " " + id);
+			}
 			return gson.toJson(new ValidatorStatusCode(true, "Picture removed"));
 		}
-		// Which file survived decides what the user is still looking at: with the thumbnail
-		// gone and the original kept, the full-size picture is still served. "Could not be
-		// removed" would say nothing happened, which is not true of a partial failure.
-		return gson.toJson(new ValidatorStatusCode(false, kept.size() == 2
-				? "The picture could not be removed"
-				: "The picture was only partly removed; please try again"));
+		// What survived decides what the caller is still looking at: with the thumbnail gone
+		// and the original kept, the full-size picture is still served, and saying "could not
+		// be removed" would claim nothing happened.
+		return gson.toJson(new ValidatorStatusCode(false, deleted > 0
+				? "The picture was only partly removed; please try again"
+				: "The picture could not be removed"));
 	}
 
 	/**

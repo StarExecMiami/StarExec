@@ -139,26 +139,46 @@ public class DeletePictureTest {
 	}
 
 	/**
-	 * When only one of the two files can be removed, the caller is told so. Reporting the
-	 * flat "could not be removed" would say nothing happened, while in fact the picture is
-	 * half gone -- and with the thumbnail removed and the original kept, the full-size
-	 * picture is still served.
+	 * What the caller is told, for each combination of the two files. The distinction that
+	 * matters is between a partial removal and none at all: a file that was not there
+	 * deletes silently and is not a deletion, so counting only the failures reported
+	 * "partly removed" for a case where nothing had been removed.
 	 */
 	@Test
-	public void aPartialRemovalSaysSoRatherThanReportingNothingHappened() throws Exception {
+	public void oneFileRemovedAndOneThatWouldNotIsAPartialRemoval() throws Exception {
 		Path pictures = pictureDir();
-		// A non-empty directory where the thumbnail belongs: deleteIfExists throws on it,
-		// which is the failure this branch reports, without mocking the filesystem.
-		Files.delete(pictures.resolve("users/Pic7_thn.jpg"));
-		Files.createDirectory(pictures.resolve("users/Pic7_thn.jpg"));
-		Files.write(pictures.resolve("users/Pic7_thn.jpg/occupied"), new byte[] { 1 });
+		undeletable(pictures.resolve("users/Pic7_thn.jpg"));
 
 		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
 
 		assertFalse(status.isSuccess());
-		assertTrue("the message must say it was partial: " + status.getMessage(),
-				status.getMessage().contains("partly"));
+		assertTrue("must say it was partial: " + status.getMessage(), status.getMessage().contains("partly"));
 		assertFalse("what could be removed is gone", Files.exists(pictures.resolve("users/Pic7_org.jpg")));
+	}
+
+	@Test
+	public void anAbsentFileAndOneThatWouldNotDeleteIsNotAPartialRemoval() throws Exception {
+		Path pictures = pictureDir();
+		Files.delete(pictures.resolve("users/Pic7_org.jpg"));
+		undeletable(pictures.resolve("users/Pic7_thn.jpg"));
+
+		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
+
+		assertFalse(status.isSuccess());
+		assertEquals("nothing was removed, so it must not claim a partial removal",
+				"The picture could not be removed", status.getMessage());
+	}
+
+	@Test
+	public void neitherFileDeletableIsReportedAsNoRemoval() throws Exception {
+		Path pictures = pictureDir();
+		undeletable(pictures.resolve("users/Pic7_org.jpg"));
+		undeletable(pictures.resolve("users/Pic7_thn.jpg"));
+
+		ValidatorStatusCode status = delete(pictures, "user", CALLER, true, true);
+
+		assertFalse(status.isSuccess());
+		assertEquals("The picture could not be removed", status.getMessage());
 	}
 
 	/**
@@ -189,6 +209,16 @@ public class DeletePictureTest {
 	}
 
 	// ----------------------------------------------------------------- harness
+
+	/**
+	 * Replaces a picture with something {@code deleteIfExists} refuses to remove: a directory
+	 * that is not empty. The real failure, rather than a mocked filesystem.
+	 */
+	private static void undeletable(Path picture) throws Exception {
+		Files.deleteIfExists(picture);
+		Files.createDirectory(picture);
+		Files.write(picture.resolve("occupied"), new byte[] { 1 });
+	}
 
 	/** Pictures for users 7 and 8, and the default. */
 	private Path pictureDir() throws Exception {
