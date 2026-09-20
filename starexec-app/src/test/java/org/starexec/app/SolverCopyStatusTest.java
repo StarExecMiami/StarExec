@@ -1,0 +1,109 @@
+package org.starexec.app;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
+import org.starexec.data.database.Solvers;
+import org.starexec.data.security.SpaceSecurity;
+import org.starexec.data.security.ValidatorStatusCode;
+import org.starexec.data.to.Solver;
+import org.starexec.util.SessionUtil;
+import org.starexec.util.Validator;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.util.List;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * What the copy handler tells the user when some solvers could not be copied.
+ *
+ * <p>It used to answer "Solver(s) copied successfully" whatever happened, so a user whose solver
+ * failed to copy was told it had. The copies that did succeed are kept, so the report names the
+ * failures rather than failing the whole request.
+ */
+public class SolverCopyStatusTest {
+
+	private static final int SPACE_ID = 3;
+	private static final int USER_ID = 7;
+
+	@BeforeClass
+	public static void initialize() {
+		Validator.initialize();
+	}
+
+	@Test
+	public void aCleanCopyIsReportedAsSuccess() {
+		JsonObject response = copyTwoSolvers(List.of(101, 102));
+
+		assertTrue(response.toString(), response.get("success").getAsBoolean());
+		assertEquals("Solver(s) copied successfully", response.get("message").getAsString());
+	}
+
+	/** The handler must report the failure, and must still keep the solver that did copy. */
+	@Test
+	public void aFailedCopyIsReportedByTheHandler() {
+		JsonObject response = copyTwoSolvers(List.of(101, -1));
+
+		assertFalse("a failed copy must not be reported as success: " + response,
+				response.get("success").getAsBoolean());
+		String message = response.get("message").getAsString();
+		assertTrue("the message must say how many failed: " + message, message.contains("1 of 2"));
+		assertTrue("the message must say the rest were copied: " + message, message.contains("1 were copied"));
+	}
+
+	/** Only the ids of solvers that exist may be associated with the space. */
+	@Test
+	public void onlyTheSolversThatCopiedAreAssociated() {
+		try (MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
+				MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<SpaceSecurity> security = Mockito.mockStatic(SpaceSecurity.class)) {
+			stub(solvers, session, security, List.of(101, -1));
+
+			new RESTServices().copySolversToSpace(SPACE_ID, request(), Mockito.mock(HttpServletResponse.class));
+
+			solvers.verify(() -> Solvers.associate(List.of(101), SPACE_ID, false, USER_ID, false));
+		}
+	}
+
+	private JsonObject copyTwoSolvers(List<Integer> copyResults) {
+		try (MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
+				MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
+				MockedStatic<SpaceSecurity> security = Mockito.mockStatic(SpaceSecurity.class)) {
+			stub(solvers, session, security, copyResults);
+
+			String json = new RESTServices()
+					.copySolversToSpace(SPACE_ID, request(), Mockito.mock(HttpServletResponse.class));
+
+			return JsonParser.parseString(json).getAsJsonObject();
+		}
+	}
+
+	private void stub(MockedStatic<Solvers> solvers, MockedStatic<SessionUtil> session,
+			MockedStatic<SpaceSecurity> security, List<Integer> copyResults) {
+		session.when(() -> SessionUtil.getUserId(Mockito.any())).thenReturn(USER_ID);
+		security.when(() -> SpaceSecurity.canCopyOrLinkSolverBetweenSpaces(
+						Mockito.any(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyList(),
+						Mockito.anyBoolean(), Mockito.anyBoolean()))
+				.thenReturn(new ValidatorStatusCode(true));
+		solvers.when(() -> Solvers.get(Mockito.anyList())).thenReturn(List.of(new Solver(), new Solver()));
+		solvers.when(() -> Solvers.copySolvers(Mockito.anyList(), Mockito.anyInt(), Mockito.anyInt()))
+				.thenReturn(copyResults);
+		solvers.when(() -> Solvers.associate(Mockito.anyList(), Mockito.anyInt(),
+				Mockito.anyBoolean(), Mockito.anyInt(), Mockito.anyBoolean())).thenReturn(true);
+	}
+
+	private HttpServletRequest request() {
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		Mockito.when(request.getParameterValues("selectedIds[]")).thenReturn(new String[] {"11", "12"});
+		Mockito.when(request.getParameter("copyToSubspaces")).thenReturn("false");
+		Mockito.when(request.getParameter("copy")).thenReturn("true");
+		return request;
+	}
+}

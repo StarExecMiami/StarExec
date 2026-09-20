@@ -4755,6 +4755,27 @@ public class RESTServices {
 	 *         7: there exists a primitive with the same name
 	 * @author Tyler Jensen & Todd Elvers
 	 */
+	/**
+	 * What to tell the user after a copy or link, given how many solvers could not be copied.
+	 *
+	 * <p>A partial failure is reported as a failure naming the count, not as success: the copies
+	 * that did succeed are kept either way, so silence would leave the user believing they have
+	 * solvers they do not have.
+	 *
+	 * @param failedCopies solvers copySolvers could not copy
+	 * @param associated solvers that were copied and associated with the space
+	 * @param copy true for a copy, false for a link
+	 */
+	protected static ValidatorStatusCode solverCopyStatus(int failedCopies, int associated, boolean copy) {
+		if (failedCopies == 0) {
+			return new ValidatorStatusCode(true,
+					copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully");
+		}
+		return new ValidatorStatusCode(false,
+				failedCopies + " of " + (failedCopies + associated) + " solver(s) could not be copied; the"
+						+ " remaining " + associated + " were copied successfully");
+	}
+
 	@POST
 	@Path("/spaces/{spaceId}/add/solver")
 	@Produces("application/json")
@@ -4798,9 +4819,21 @@ public class RESTServices {
 			if (!status.isSuccess()) {
 				return gson.toJson(status);
 			}
+			int failedCopies = 0;
 			if (copy) {
 				List<Solver> oldSolvers = Solvers.get(selectedSolvers);
-				selectedSolvers = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
+				List<Integer> copied = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
+				// copySolvers reports a solver it could not copy as a non-positive id. Carrying
+				// those on said "copied successfully" while the solver was missing, so count them
+				// and keep only the copies that exist.
+				selectedSolvers = new ArrayList<>();
+				for (Integer id : copied) {
+					if (id != null && id > 0) {
+						selectedSolvers.add(id);
+					} else {
+						failedCopies++;
+					}
+				}
 				response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
 			}
 
@@ -4808,8 +4841,7 @@ public class RESTServices {
 			// we don't need to link to that one
 			return Solvers.associate(selectedSolvers, spaceId, copyToSubspaces, requestUserId, !copy)
 					// Fix: was "Solver(s) moved successfully" — see GitHub issue #85 audit
-					? gson.toJson(new ValidatorStatusCode(true,
-							copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully"))
+					? gson.toJson(solverCopyStatus(failedCopies, selectedSolvers.size(), copy))
 					: gson.toJson(ERROR_DATABASE);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
