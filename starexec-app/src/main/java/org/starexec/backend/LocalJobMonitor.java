@@ -231,12 +231,20 @@ public class LocalJobMonitor {
             int terminalStage) throws Exception {
 
         // The terminal stage's own snapshot is not used -- its status comes from the runsolver
-        // artifacts -- and while a stage is still running its snapshot legitimately reads
-        // STATUS_RUNNING. Both are expressed by the bound, so the read never returns a record
-        // this method would have to discard. Selecting here as well would put the rule in two
-        // places, which is how the running stage came to be validated at all.
+        // artifacts -- and a stage still running legitimately reads STATUS_RUNNING. Neither is
+        // returned, so the read never hands this method a record it would have to discard, and
+        // selecting here as well would put the rule in two places -- which is how the running
+        // stage came to be validated at all.
+        //
+        // Which read expresses that depends on what the result names. A stage-level result
+        // bounds by that stage. A pair-level result names no stage, so nothing can be bounded
+        // out: every stage that finished is earlier than it (#165), and the stage that did not
+        // finish is skipped instead of refused, because a pair dying mid-stage is exactly what
+        // leaves it unfinished.
         Map<Integer, Integer> earlier =
-                StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+                terminalStage == FinalStatusStage.PAIR_LEVEL
+                        ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
+                        : StageStatusSnapshots.read(outputDir, pairId, terminalStage);
 
         if (earlier.isEmpty()) {
             return;
@@ -756,10 +764,7 @@ public class LocalJobMonitor {
         //    re-checks it -- reading files takes real time and a rerun may have landed.
         // A pair-level result names no stage, so every stage that finished is "earlier" than
         // it: the bound is all stages rather than the one that produced the result (#165).
-        int snapshotBound = ss.stageNumber == FinalStatusStage.PAIR_LEVEL
-                ? Integer.MAX_VALUE
-                : ss.stageNumber;
-        ingestEarlierStageStatuses(pairId, state, outputDir, snapshotBound);
+        ingestEarlierStageStatuses(pairId, state, outputDir, ss.stageNumber);
 
         // 6. Update database, with runsolver's verdict allowed to correct the status
         //    bash derived by grepping prose.
@@ -774,13 +779,18 @@ public class LocalJobMonitor {
         //    updateDatabase, and nothing may be recorded against a result the database declined.
         //    Ownership is re-checked inside, immediately before each write, as in step 5. The
         //    runsolver stats parsed in step 2 decide the status only.
-        // Bounded by the reported stage, not by snapshotBound: a pair-level result names no
-        // stage, so this is empty and nothing is published. Recording a stage's status from
-        // its own snapshot is what the snapshot is for; publishing its measurements and
-        // attributes off the back of a pair that then failed outside every stage is a
-        // separate decision, and the one already made is that nothing is published (#165).
-        Set<Integer> finishedEarlier =
-                StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
+        // Bounded by the reported stage: a pair-level result names no stage, so nothing is
+        // published for any of them. Recording a stage's status from its own snapshot is what
+        // the snapshot is for; publishing its measurements and attributes off the back of a
+        // pair that then failed outside every stage is a separate decision, and the one
+        // already made is that nothing is published (#165).
+        //
+        // Skipped rather than read and discarded, which is not only wasted work: reading it
+        // with a bound of 0 validated every snapshot for terminality, so a pair that died with
+        // a stage still RUNNING was refused here even when step 5 had accepted it.
+        Set<Integer> finishedEarlier = ss.stageNumber == FinalStatusStage.PAIR_LEVEL
+                ? Set.of()
+                : StageStatusSnapshots.read(outputDir, pairId, ss.stageNumber).keySet();
         int terminalStage = ss.status.isTerminalExecutionResult() ? ss.stageNumber : 0;
         recordMeasurements(pairId, state, outputDir, finishedEarlier, terminalStage);
         recordAttributes(pairId, state, outputDir, finishedEarlier, terminalStage, attributes);
