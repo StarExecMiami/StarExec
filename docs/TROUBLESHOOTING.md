@@ -731,6 +731,53 @@ podman exec starexec-app sh -c 'cat "${STAREXEC_DATA_DIR:-/var/starexec/data}/ou
 3. **Solver crashed without output**
    - Check solver logs in job output directory
 
+### A pair is held: "INGESTION REQUIRES INTERVENTION"
+
+**Problem:** the log carries
+
+```
+Monitor: INGESTION REQUIRES INTERVENTION for pairId=<N> in <dir>. The results are retained
+and the pair is left unresolved ... Cause: InvalidSnapshotException: <dir>/stage-status/1.json
+carries status 4, which is not a terminal execution result
+```
+
+The pair stays `RUNNING`, and within three hours `FIND_BROKEN_JOB_PAIRS` records it as
+`ERROR_SUBMIT_FAIL(9)` — a terminal status its own output contradicts.
+
+**Tell the two causes apart by the stage number in `status.json`:**
+
+```bash
+cat /app/data/logs/<job_id>/<job_space_id>/pair_<pair_id>/status.json
+```
+
+| what it reads | cause | fixed by |
+| --- | --- | --- |
+| `"stageNumber":<N>` with N ≥ 1 | the stage failure race: the pair reported a limit breach and a poll landed between its two writes. Local backend only — the container and Kubernetes monitors read after exit. | reporting a stage failure once, as that stage |
+| `"stageNumber":0` | a failure that belongs to no stage, most often a missing benchmark dependency (`jobscript:217`). Deterministic, and it reaches **every** backend. | the monitor accepting a pair-level result whose in-flight stage never finished |
+
+**Finding every pair this has already affected**, read-only:
+
+```sql
+SELECT p.id AS pair_id, p.job_id, p.job_space_id, j.name AS job, p.end_time
+FROM   starexec.job_pairs p JOIN starexec.jobs j ON j.id = p.job_id
+WHERE  p.status_code = 9
+ORDER  BY p.id;
+```
+
+then compare each candidate's `status.json` with that verdict. A pair whose output carries a
+terminal status other than 9 — especially one whose `stage-status/*.json` still reads `4` — was
+misrecorded.
+
+**Which version this applies to.** On a deployment that predates these fixes, both causes
+produce the hold and then the sweep's `ERROR_SUBMIT_FAIL`. On one that carries them, neither
+cause can hold a pair — so a held pair on a current deployment is something else, and the table
+above will send you the wrong way.
+
+**There is no automatic repair.** Nothing re-examines a pair that is already `RUNNING`
+(`LocalJobMonitor.registerJob` is called only at submit time), and a pair already swept to
+`ERROR_SUBMIT_FAIL` is terminal. Rerunning such a pair **re-executes it**: that is a new
+experiment, not a recovery of the original run, whose measurements are never ingested.
+
 ### Jobs Start but No status.json (LocalBackend in container)
 
 **Problem:** Logs show `LocalJobMonitor - Monitor poll: checked N pairs, found 0 status files`. Jobs are enqueued and the monitor has registered them (they started), but no job writes `status.json`, so pairs never complete.

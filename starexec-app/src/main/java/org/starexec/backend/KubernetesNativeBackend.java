@@ -4954,11 +4954,18 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             // The terminal stage's own status comes from the runsolver artifacts, and a pair
-            // killed mid-stage legitimately leaves that snapshot non-terminal. Both are expressed
-            // by the bound, so the read never returns a record this method would have to discard.
+            // killed mid-stage legitimately leaves that snapshot non-terminal. Neither is
+            // returned, so the read never hands this method a record it would have to discard.
+            //
+            // Which read expresses that depends on what the result names: a stage-level result
+            // bounds by that stage, while a pair-level result names no stage, so nothing can be
+            // bounded out -- every stage that finished is earlier than it (#165), and one that
+            // did not finish is skipped rather than refused.
             Map<Integer, Integer> earlier;
             try {
-                earlier = StageStatusSnapshots.read(outputDir, pairId, snapshotBound(terminalStage));
+                earlier = terminalStage == FinalStatusStage.PAIR_LEVEL
+                    ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
+                    : StageStatusSnapshots.read(outputDir, pairId, terminalStage);
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 log.error(
                     "Refusing the stage snapshots for pair " + pairId + " (" + execution +
@@ -5002,19 +5009,6 @@ public class KubernetesNativeBackend implements Backend {
                 " (" + result + "); nothing was written and completion will be retried"
             );
             return false;
-        }
-
-        /**
-         * How far back the per-stage snapshots are read.
-         *
-         * <p>A pair-level result names no stage, so every stage that finished is earlier than
-         * it and the bound is all stages rather than the 0 the record carries -- otherwise a
-         * stage that did finish would lose its own result (#165).
-         */
-        private int snapshotBound(int stageNumber) {
-            return stageNumber == FinalStatusStage.PAIR_LEVEL
-                ? Integer.MAX_VALUE
-                : stageNumber;
         }
 
         /**
@@ -5100,8 +5094,9 @@ public class KubernetesNativeBackend implements Backend {
                 // write; read again rather than threaded through, as persistAttributes does.
                 // Bounded by the reported stage, not by that method's bound: a pair-level
                 // result names no stage, so nothing is published for any of them (#165).
-                Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                Set<Integer> finishedEarlier = stageNumber == FinalStatusStage.PAIR_LEVEL
+                    ? Set.of()
+                    : StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
                 byStage = StageStatsFiles.select(
                     outputDir,
                     pairId,
@@ -5184,8 +5179,9 @@ public class KubernetesNativeBackend implements Backend {
                 // write; read again rather than threaded through, as the stats path does.
                 // Bounded by the reported stage, not by that method's bound: a pair-level
                 // result names no stage, so nothing is published for any of them (#165).
-                Set<Integer> finishedEarlier =
-                    StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
+                Set<Integer> finishedEarlier = stageNumber == FinalStatusStage.PAIR_LEVEL
+                    ? Set.of()
+                    : StageStatusSnapshots.read(outputDir, pairId, stageNumber).keySet();
                 byStage = StageAttributeFiles.select(
                     outputDir,
                     pairId,
