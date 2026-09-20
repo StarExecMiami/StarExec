@@ -219,6 +219,42 @@ public class DeadlockWatchdogReapTest {
 	}
 
 	/**
+	 * The watchdog sleeps out the pair's budget in a child process. Stopping the watchdog left
+	 * that child running: reparented and idle until its own timer ended, one per stage. In a
+	 * container it dies with the container, but on Local the jobscript has no such boundary.
+	 */
+	@Test
+	public void stoppingTheWatchdogTakesItsSleepWithIt() throws Exception {
+		Result r = runWithHelper(
+				"killDeadlockedJobPair 3600 0 starexec1 &\n"
+				+ "KILL_DEADLOCKED_JOB_PAIR_PID=$!\n"
+				// The watchdog's OWN sleep, by name: while it logs it briefly has other children,
+				// and taking whatever is there would leave this asserting about a pid that never
+				// existed, which passes whether the sleep survives or not.
+				+ "SLEEP=\n"
+				+ "for _ in $(seq 200); do\n"
+				+ "  for c in $(cat \"/proc/$KILL_DEADLOCKED_JOB_PAIR_PID/task/$KILL_DEADLOCKED_JOB_PAIR_PID/children\" 2>/dev/null); do\n"
+				+ "    comm=$(cat \"/proc/$c/comm\" 2>/dev/null) || comm=\n"
+				+ "    if [ \"$comm\" = sleep ]; then SLEEP=$c; fi\n"
+				+ "  done\n"
+				+ "  [ -n \"$SLEEP\" ] && break\n"
+				+ "  sleep 0.05\n"
+				+ "done\n"
+				+ "echo \"$SLEEP\" >> \"$SCRIPT_DIR/pids\"\n"
+				+ "if [ -z \"$SLEEP\" ]; then echo T-NO-SLEEP-FOUND; fi\n"
+				+ "if kill -0 \"$SLEEP\" 2>/dev/null; then echo T-SLEEP-RUNNING-BEFORE-STOP; fi\n"
+				+ "stopDeadlockWatchdog\n"
+				+ "sleep 0.3\n"
+				+ "if kill -0 \"$SLEEP\" 2>/dev/null; then echo T-SLEEP-SURVIVED; else echo T-SLEEP-GONE; fi\n");
+
+		assertEquals(r.out, 0, r.exit);
+		assertFalse("the watchdog's sleep child must be found:\n" + r.out, r.out.contains("T-NO-SLEEP-FOUND"));
+		assertTrue("the sleep must be running before the stop, or this proves nothing:\n" + r.out,
+				r.out.contains("T-SLEEP-RUNNING-BEFORE-STOP"));
+		assertTrue("the watchdog's sleep must not outlive it:\n" + r.out, r.out.contains("T-SLEEP-GONE"));
+	}
+
+	/**
 	 * A watchdog that ignores the TERM and never exits (wedged, e.g. on a hung log append) must
 	 * not hold the pair: stop gives up at the cap, SIGKILLs it, and returns.
 	 */
