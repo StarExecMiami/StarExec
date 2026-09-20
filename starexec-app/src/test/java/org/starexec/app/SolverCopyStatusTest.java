@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.starexec.data.database.Solvers;
@@ -13,6 +14,7 @@ import org.starexec.data.to.Solver;
 import org.starexec.util.SessionUtil;
 import org.starexec.util.Validator;
 
+import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.util.List;
@@ -91,6 +93,32 @@ public class SolverCopyStatusTest {
 		assertEquals("Solver(s) linked successfully", response.get("message").getAsString());
 	}
 
+	/**
+	 * The New_ID cookie tells the client which solvers now exist. A failed copy's id in there
+	 * names a solver that was never created, so the cookie must carry the real ids only.
+	 */
+	@Test
+	public void theCookieCarriesOnlyTheIdsThatCopied() {
+		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
+
+		copyTwoSolvers(List.of(101, -1), response);
+
+		ArgumentCaptor<Cookie> cookie = ArgumentCaptor.forClass(Cookie.class);
+		Mockito.verify(response).addCookie(cookie.capture());
+		assertEquals("New_ID", cookie.getValue().getName());
+		assertEquals("101", cookie.getValue().getValue());
+	}
+
+	/** With nothing copied there is no id to name, and the cookie must not be set at all. */
+	@Test
+	public void noCookieIsSetWhenNothingCopied() {
+		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
+
+		copyTwoSolvers(List.of(-1, -1), response);
+
+		Mockito.verify(response, Mockito.never()).addCookie(Mockito.any());
+	}
+
 	/** Only the ids of solvers that exist may be associated with the space. */
 	@Test
 	public void onlyTheSolversThatCopiedAreAssociated() {
@@ -123,13 +151,16 @@ public class SolverCopyStatusTest {
 	}
 
 	private JsonObject copyTwoSolvers(List<Integer> copyResults) {
+		return copyTwoSolvers(copyResults, Mockito.mock(HttpServletResponse.class));
+	}
+
+	private JsonObject copyTwoSolvers(List<Integer> copyResults, HttpServletResponse response) {
 		try (MockedStatic<Solvers> solvers = Mockito.mockStatic(Solvers.class);
 				MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
 				MockedStatic<SpaceSecurity> security = Mockito.mockStatic(SpaceSecurity.class)) {
 			stub(solvers, session, security, copyResults);
 
-			String json = new RESTServices()
-					.copySolversToSpace(SPACE_ID, request(), Mockito.mock(HttpServletResponse.class));
+			String json = new RESTServices().copySolversToSpace(SPACE_ID, request(), response);
 
 			return JsonParser.parseString(json).getAsJsonObject();
 		}
