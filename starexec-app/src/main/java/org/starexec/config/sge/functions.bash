@@ -855,7 +855,9 @@ function cleanForNextStage {
 function killDeadlockedJobPair {
 	TIMEOUT=$1
 	EXTRA=$2
-	CURRENT_USER=$3
+	# Defaulted: under set -u a missing user would end this watchdog before it slept, and
+	# container mode reaps by process tree, never by user.
+	CURRENT_USER=${3:-}
 
 	# Every log line here is non-fatal: in container mode log() appends to the output
 	# volume, and under set -e a full disk or an NFS outage there would end this watchdog
@@ -891,8 +893,10 @@ function descendantPids {
 	local root=$1 prune=$2 dir stat rest ppid pid child
 	local -A children=()
 	for dir in /proc/[0-9]*; do
-		# The process may exit between the glob and the read.
-		{ stat=$(<"$dir/stat"); } 2>/dev/null || continue
+		# The process may exit between the glob and the read. `read`, not $(<file): under
+		# set -e, bash 5.2 (the job image's) exits the whole shell when $(<file) names a
+		# missing file, even inside `|| continue`.
+		{ read -r stat < "$dir/stat"; } 2>/dev/null || continue
 		# comm (field 2) may contain spaces and parentheses; ppid follows the LAST ')'.
 		rest=${stat##*) }
 		read -r _ ppid _ <<< "$rest"
@@ -923,6 +927,11 @@ function descendantPids {
 function reapJobPairProcessTree {
 	local self=$BASHPID pid grew
 	local -A frozen=()
+	# stopDeadlockWatchdog ends this watchdog with SIGTERM when the stage finishes. Landing
+	# between the first SIGSTOP and the SIGKILLs, it would leave the frozen tree stopped for
+	# good, so TERM is ignored for exactly that span. The caller never waits on this process,
+	# and the span is at most five /proc scans and one kill per frozen process.
+	trap '' TERM
 	for _ in 1 2 3 4 5; do
 		grew=false
 		for pid in $(descendantPids "$$" "$self"); do
@@ -941,6 +950,7 @@ function reapJobPairProcessTree {
 	for pid in "${!frozen[@]}"; do
 		kill -KILL "$pid" 2>/dev/null || true
 	done
+	trap - TERM
 	log "killDeadlockedJobPair: reaped ${#frozen[@]} process(es) of job pair $PAIR_ID: ${!frozen[*]}" || true
 }
 
@@ -961,11 +971,46 @@ function reapJobPairProcessTree {
 # never actually stopped survives to `killall` a later, unrelated, still-running
 # stage. The PID-reuse window this call is exposed to is unchanged from what
 # COPY_OUTPUT_INCREMENTALLY_PID (jobscript, unrelated to B7) already accepts.
+#
+# Then waits for the watchdog to exit. A watchdog already reaping ignores TERM until the
+# tree is killed (reapJobPairProcessTree), and until it exits it keeps rescanning this
+# script's descendants, so work started after this returns -- the next stage's solver,
+# copyOutput, the next watchdog -- would be frozen and killed with it. A sleeping watchdog
+# dies on the TERM itself, so the common case returns on the first poll.
+#
+# Bounded, because a wedged watchdog (a log append hanging on a dead NFS mount) must not
+# hold the pair. The cap, 30 s, is about 34 times a measured 880 ms reap of a 200-process
+# tree. Past it the watchdog is SIGKILLed; anything it had frozen then stays stopped, the
+# pre-fix leak, accepted because only a watchdog that is itself stuck gets there.
 function stopDeadlockWatchdog {
-	if [ -n "${KILL_DEADLOCKED_JOB_PAIR_PID:-}" ]; then
-		kill "$KILL_DEADLOCKED_JOB_PAIR_PID" 2>/dev/null || true
+	local pid=${KILL_DEADLOCKED_JOB_PAIR_PID:-} polls=0
+	local cap=${DEADLOCK_WATCHDOG_STOP_CAP_TENTHS:-300}
+	if [ -n "$pid" ]; then
+		kill "$pid" 2>/dev/null || true
 		KILL_DEADLOCKED_JOB_PAIR_PID=
+		while isOwnLiveChild "$pid"; do
+			if ((polls >= cap)); then
+				kill -KILL "$pid" 2>/dev/null || true
+				log "stopDeadlockWatchdog: watchdog $pid did not exit within $((cap / 10)) s of TERM; killed it" || true
+				break
+			fi
+			sleep 0.1 || true
+			polls=$((polls + 1))
+		done
 	fi
+}
+
+# Whether $1 is a running child of this script. A zombie is not running, and a PID whose
+# parent is someone else has been reused, so neither is waited on or killed. Not `wait`:
+# it has no timeout.
+function isOwnLiveChild {
+	local stat rest state ppid
+	# `read`, not $(<file): see descendantPids. The PID's /proc entry vanishes once it is reaped.
+	{ read -r stat < "/proc/$1/stat"; } 2>/dev/null || return 1
+	# comm (field 2) may contain spaces and parentheses; state and ppid follow the LAST ')'.
+	rest=${stat##*) }
+	read -r state ppid _ <<< "$rest"
+	[[ $state != Z && $ppid == "$$" ]]
 }
 
 # Calls copyOutput at an increment specified. Should be killed
