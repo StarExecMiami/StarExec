@@ -89,7 +89,7 @@ public class UploadJobXML extends HttpServlet {
 				if (result != null) {
 					//send back new ids to the user
 					log.info(method, "Sending back new job ids to user.");
-					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(result)));
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(result)));
 					response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp"));
 				} else {
 					// Not every failure is the request's fault. A database failure answered
