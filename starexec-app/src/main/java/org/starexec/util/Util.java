@@ -2049,6 +2049,29 @@ public class Util {
     }
 
     /**
+     * The directory {@code name} directly inside {@code parent}, refusing a name that would
+     * resolve anywhere else. "." resolves to the parent itself and ".." to its parent, so a
+     * user-chosen name used as a path component must be checked where the path is built, not
+     * only where the name is validated: names already stored before that validation existed
+     * still reach here.
+     *
+     * @param parent the directory the result must be directly inside
+     * @param name the path component, typically a user-chosen primitive name
+     * @return {@code new File(parent, name)}, unchanged in form
+     * @throws IllegalArgumentException when the name does not resolve to a direct child
+     */
+    public static File childWithin(File parent, String name) {
+        java.nio.file.Path base = parent.toPath().toAbsolutePath().normalize();
+        java.nio.file.Path child = base.resolve(name).normalize();
+        if (!base.equals(child.getParent())) {
+            throw new IllegalArgumentException(
+                "name [" + name + "] does not stay directly inside " + base
+            );
+        }
+        return new File(parent, name);
+    }
+
+    /**
      * Replaces NODE path separator with HEAD path separator
      *
      * @param path to normalize

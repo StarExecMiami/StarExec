@@ -436,6 +436,15 @@ public class Solvers {
 	}
 
 	/**
+	 * Where a solver's files go: solverRoot/userId/name/date, with name refused unless it stays
+	 * directly inside the user's directory. Creates nothing.
+	 */
+	public static File solverDirectory(File solverRoot, int userId, String name, String date) {
+		File nameDir = Util.childWithin(new File(solverRoot, "" + userId), name);
+		return new File(nameDir, date);
+	}
+
+	/**
 	 * Makes a deep copy of an existing solver, gives it a new user, and places it into a space
 	 *
 	 * @param s The existing solver to copy
@@ -456,14 +465,13 @@ public class Solvers {
 		newSolver.setDownloadable(s.isDownloadable());
 		newSolver.setType(s.getType());
 		newSolver.setBuildStatus(s.buildStatus());
-		File solverDirectory = new File(s.getPath());
-		File uniqueDir = new File(R.getSolverPath(), "" + userId);
-		uniqueDir = new File(uniqueDir, newSolver.getName());
-		String date = shortDate.format(new Date());
-		uniqueDir = new File(uniqueDir, "" + date);
-		uniqueDir.mkdirs();
-		newSolver.setPath(uniqueDir.getAbsolutePath());
 		try {
+			File solverDirectory = new File(s.getPath());
+			String date = shortDate.format(new Date());
+			File uniqueDir = solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date);
+			uniqueDir.mkdirs();
+			newSolver.setPath(uniqueDir.getAbsolutePath());
+
 			//we need to check if the solver has a src dir. If it does, we also need to 
 			//copy it. This fixes issue 307
 			File maybeSrc = new File(s.getPath()+ "_src");
