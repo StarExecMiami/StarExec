@@ -339,6 +339,53 @@ public class DeadlockWatchdogReapTest {
 		}
 	}
 
+	/**
+	 * The TERM trap must be installed before the sleep is backgrounded. Between the two, a TERM
+	 * from the end of the stage orphans the sleep exactly as it did before the fix. That window
+	 * is unobservable from outside, so no behavioural test can catch a reorder; this asserts the
+	 * order in the source instead, which is the failure mode worth guarding.
+	 *
+	 * <p>Anchored to killDeadlockedJobPair so an unrelated backgrounded sleep cannot satisfy or
+	 * break it, and both lines must exist, so deleting the trap fails here rather than passing
+	 * vacuously.
+	 */
+	@Test
+	public void theSleepsTrapIsInstalledBeforeTheSleepStarts() throws Exception {
+		List<String> lines = Files.readAllLines(SGE.resolve("functions.bash"));
+		int start = -1;
+		int end = lines.size();
+		for (int i = 0; i < lines.size(); i++) {
+			if (lines.get(i).startsWith("function killDeadlockedJobPair")) {
+				start = i;
+			} else if (start >= 0 && lines.get(i).equals("}")) {
+				end = i;
+				break;
+			}
+		}
+		assertTrue("killDeadlockedJobPair must exist in functions.bash", start >= 0);
+
+		int trapLine = -1;
+		int sleepLine = -1;
+		for (int i = start; i < end; i++) {
+			String line = lines.get(i);
+			if (line.trim().startsWith("#")) {
+				continue;
+			}
+			if (trapLine < 0 && line.contains("trap ") && line.contains("WATCHDOG_SLEEP_PID")) {
+				trapLine = i;
+			}
+			if (sleepLine < 0 && line.matches(".*\\bsleep\\b.*&\\s*$")) {
+				sleepLine = i;
+			}
+		}
+
+		assertTrue("the watchdog must install a TERM trap naming its sleep", trapLine >= 0);
+		assertTrue("the watchdog must background its sleep", sleepLine >= 0);
+		assertTrue("the trap (line " + (trapLine + 1) + ") must be installed before the sleep is"
+						+ " backgrounded (line " + (sleepLine + 1) + "), or a TERM in between orphans it",
+				trapLine < sleepLine);
+	}
+
 	/** The jobscript's own arming line, so this test cannot drift from what production runs. */
 	private static String armingLine() throws Exception {
 		return Files.readAllLines(SGE.resolve("jobscript")).stream()
