@@ -1168,7 +1168,17 @@ public class Spaces {
 			List<Integer> solverIds = new LinkedList<>();
 
 			if (copyPrimitives.shouldCopySolvers()) {
-				Solvers.copySolvers(solvers, usrId, newSpaceId);
+				// A space copy is a bulk operation with no way to report a partial result: it
+				// returns the new space's id. A solver that could not be copied is therefore
+				// named here rather than silently missing from the new space.
+				List<Integer> copiedSolverIds = Solvers.copySolvers(solvers, usrId, newSpaceId);
+				for (int i = 0; i < copiedSolverIds.size(); i++) {
+					if (copiedSolverIds.get(i) <= 0) {
+						log.warn("copySpace", "Solver [" + solvers.get(i).getName() + "] (id " +
+								solvers.get(i).getId() + ") could not be copied into space [" +
+								newSpaceId + "]; the rest of the space copy continues.");
+					}
+				}
 			} else if (copyPrimitives.shouldLinkSolvers()) {
 				for (Solver solver : solvers) {
 					int solverId = solver.getId();

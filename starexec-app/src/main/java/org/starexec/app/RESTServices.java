@@ -4755,6 +4755,38 @@ public class RESTServices {
 	 *         7: there exists a primitive with the same name
 	 * @author Tyler Jensen & Todd Elvers
 	 */
+	/**
+	 * What to tell the user after a copy or link, given how many solvers could not be copied.
+	 *
+	 * <p>A partial failure is reported as a failure naming the count, not as success: the copies
+	 * that did succeed are kept either way, so silence would leave the user believing they have
+	 * solvers they do not have.
+	 *
+	 * <p>This message reaches an HTML sink: the client passes it to showMessage, which falls back
+	 * to showMessageLegacy, and that inserts it with {@code .html(message)} (master.js:466). It is
+	 * safe because every part of it is built here from literals and ints. Interpolating anything a
+	 * user chose, a solver's name above all, would make this an XSS sink and would need escaping
+	 * at the sink, not here.
+	 *
+	 * @param failedCopies solvers copySolvers could not copy
+	 * @param associated solvers that were copied and associated with the space
+	 * @param copy true for a copy, false for a link
+	 */
+	protected static ValidatorStatusCode solverCopyStatus(int failedCopies, int associated, boolean copy) {
+		if (failedCopies == 0) {
+			return new ValidatorStatusCode(true,
+					copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully");
+		}
+		int requested = failedCopies + associated;
+		if (associated == 0) {
+			return new ValidatorStatusCode(false,
+					"None of the " + requested + " solver(s) could be copied");
+		}
+		return new ValidatorStatusCode(false,
+				failedCopies + " of " + requested + " solver(s) could not be copied; the remaining "
+						+ associated + (associated == 1 ? " was" : " were") + " copied successfully");
+	}
+
 	@POST
 	@Path("/spaces/{spaceId}/add/solver")
 	@Produces("application/json")
@@ -4798,18 +4830,34 @@ public class RESTServices {
 			if (!status.isSuccess()) {
 				return gson.toJson(status);
 			}
+			int failedCopies = 0;
 			if (copy) {
 				List<Solver> oldSolvers = Solvers.get(selectedSolvers);
-				selectedSolvers = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
-				response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				List<Integer> copied = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
+				// copySolvers reports a solver it could not copy as a non-positive id. Carrying
+				// those on said "copied successfully" while the solver was missing, so count them
+				// and keep only the copies that exist.
+				selectedSolvers = new ArrayList<>();
+				for (Integer id : copied) {
+					if (id != null && id > 0) {
+						selectedSolvers.add(id);
+					} else {
+						failedCopies++;
+					}
+				}
+				// Only when there is something to name: makeCommaSeparatedList deletes a trailing
+				// comma it never wrote for an empty list, and the exception would be reported as a
+				// database error instead of the failure that actually happened.
+				if (!selectedSolvers.isEmpty()) {
+					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				}
 			}
 
 			// if we did a copy, the solvers are already associated with the root space, so
 			// we don't need to link to that one
 			return Solvers.associate(selectedSolvers, spaceId, copyToSubspaces, requestUserId, !copy)
 					// Fix: was "Solver(s) moved successfully" — see GitHub issue #85 audit
-					? gson.toJson(new ValidatorStatusCode(true,
-							copy ? "Solver(s) copied successfully" : "Solver(s) linked successfully"))
+					? gson.toJson(solverCopyStatus(failedCopies, selectedSolvers.size(), copy))
 					: gson.toJson(ERROR_DATABASE);
 		} catch (Exception e) {
 			log.error(e.getMessage(), e);
