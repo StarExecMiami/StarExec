@@ -14,6 +14,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Handles the request to get the picture from the file system. If there is such a picture for the request, or else a
@@ -43,6 +44,14 @@ public class GetPicture extends HttpServlet {
 				return;
 			}
 
+			// Parsed once, and every name below is built from this int rather than from the
+			// parameter. validateRequest has already refused anything that is not a
+			// non-negative integer, so this cannot throw; what it adds is that the value put
+			// into a path has been through Integer.parseInt, which is where the check and the
+			// use stop being in two different methods. It also canonicalises the id: "007"
+			// names Pic7, as it already does when a picture is uploaded.
+			int id = Integer.parseInt(request.getParameter("Id"));
+
 			// Check what type is the request, and generate file in different folders according to it.
 			String defaultPicFilename = "";
 			String picFilename = "";
@@ -54,7 +63,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("users");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_thn.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("users");
@@ -63,7 +72,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("users");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_org.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("users");
@@ -72,7 +81,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("solvers");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_thn.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("solvers");
@@ -81,7 +90,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("solvers");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_org.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("solvers");
@@ -90,7 +99,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("benchmarks");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_thn.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("benchmarks");
@@ -99,7 +108,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("benchmarks");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append("_org.jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("benchmarks");
@@ -108,7 +117,7 @@ public class GetPicture extends HttpServlet {
 				sb.append("resultCharts");
 				sb.append(File.separator);
 				sb.append("Pic");
-				sb.append(request.getParameter("Id").toString());
+				sb.append(id);
 				sb.append(".jpg");
 
 				defaultPicFilename = GetPicture.getDefaultPicture("chart");
@@ -133,6 +142,15 @@ public class GetPicture extends HttpServlet {
 
 			// Return the file in the response.
 			try {
+				if (!file.exists()) {
+					// The defaults ship inside the application, and the Dockerfile copies them
+					// into the data directory of the image. A volume mounted over that directory
+					// -- every Kubernetes deployment -- hides them, and this used to answer 200
+					// with an empty body instead of a picture. Serve the bundled copy, and say
+					// so honestly when there is none.
+					serveBundledDefault(defaultPicFilename, response);
+					return;
+				}
 				java.io.OutputStream os = response.getOutputStream();
 				FileUtils.copyFile(file, os);
 			} catch (Exception e) {
@@ -142,6 +160,28 @@ public class GetPicture extends HttpServlet {
 		} catch (Exception e) {
 			log.warn("Caught Exception in GetPicture.doGet", e);
 			throw e;
+		}
+	}
+
+	/** Where the default pictures sit on the application's classpath. */
+	private static final String BUNDLED_DEFAULTS = "static/default-pics/default-pics/";
+
+	/**
+	 * Writes the default picture bundled with the application, or a 404 when none is bundled
+	 * for this kind of picture (result charts have no default).
+	 *
+	 * @param defaultPicFilename the default's path relative to the picture directory
+	 * @param response the response to write to
+	 */
+	private static void serveBundledDefault(String defaultPicFilename, HttpServletResponse response)
+			throws IOException {
+		String resource = BUNDLED_DEFAULTS + defaultPicFilename.replace(File.separatorChar, '/');
+		try (InputStream bundled = GetPicture.class.getClassLoader().getResourceAsStream(resource)) {
+			if (bundled == null) {
+				response.sendError(HttpServletResponse.SC_NOT_FOUND, "No such picture.");
+				return;
+			}
+			bundled.transferTo(response.getOutputStream());
 		}
 	}
 
