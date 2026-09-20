@@ -231,10 +231,16 @@ public class LocalJobMonitor {
             int terminalStage) throws Exception {
 
         // The terminal stage's own snapshot is not used -- its status comes from the runsolver
-        // artifacts -- and while a stage is still running its snapshot legitimately reads
-        // STATUS_RUNNING. Both are expressed by the bound, so the read never returns a record
-        // this method would have to discard. Selecting here as well would put the rule in two
-        // places, which is how the running stage came to be validated at all.
+        // artifacts -- and a stage still running legitimately reads STATUS_RUNNING. Neither is
+        // returned, so the read never hands this method a record it would have to discard, and
+        // selecting here as well would put the rule in two places -- which is how the running
+        // stage came to be validated at all.
+        //
+        // Which read expresses that depends on what the result names. A stage-level result
+        // bounds by that stage. A pair-level result names no stage, so nothing can be bounded
+        // out: every stage that finished is earlier than it (#165), and the stage that did not
+        // finish is skipped instead of refused, because a pair dying mid-stage is exactly what
+        // leaves it unfinished.
         Map<Integer, Integer> earlier =
                 terminalStage == FinalStatusStage.PAIR_LEVEL
                         ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
