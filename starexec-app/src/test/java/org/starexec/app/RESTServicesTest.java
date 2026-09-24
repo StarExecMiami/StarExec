@@ -447,6 +447,35 @@ public class RESTServicesTest {
 		}
 	}
 
+	@Test
+	public void deleteUserExplainsWhenAnOwnedExecutionCannotBeRetired() throws Exception {
+		final int userToDelete = 99;
+		final int adminId = 1;
+		HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+		UserDeletionBlockedException blocked = new UserDeletionBlockedException(
+				UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+				"backend-private-detail-must-not-reach-the-client",
+				java.util.Collections.emptyList(),
+				java.util.Collections.emptyList());
+
+		try (MockedStatic<SessionUtil> sessionUtil = Mockito.mockStatic(SessionUtil.class);
+				 MockedStatic<UserSecurity> userSecurity = Mockito.mockStatic(UserSecurity.class);
+				 MockedStatic<Users> users = Mockito.mockStatic(Users.class)) {
+			sessionUtil.when(() -> SessionUtil.getUserId(request)).thenReturn(adminId);
+			userSecurity.when(() -> UserSecurity.canDeleteUser(userToDelete, adminId))
+					.thenReturn(new ValidatorStatusCode(true));
+			users.when(() -> Users.deleteUser(userToDelete)).thenThrow(blocked);
+
+			String response = new RESTServices().deleteUser(userToDelete, request);
+			ValidatorStatusCode status = gson.fromJson(response, ValidatorStatusCode.class);
+
+			assertFalse(status.isSuccess());
+			assertTrue(status.getMessage().contains("active jobs could not be safely stopped and retired"));
+			assertTrue(status.getMessage().contains("retry the deletion"));
+			assertFalse(status.getMessage().contains("backend-private-detail"));
+		}
+	}
+
 	/**
 	 * An unexpected database failure must yield the stable generic category, with
 	 * no internal text reaching the client. This is what makes a future return to

@@ -5296,6 +5296,10 @@ public class RESTServices {
 	 * structured fields only. No part of the underlying cause reaches the client.
 	 */
 	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED.equals(e.getReasonCode())) {
+			return "Cannot delete this user yet: one or more active jobs could not be safely stopped and retired. "
+					+ "Resolve the backend state and retry the deletion.";
+		}
 		if (UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE.equals(e.getReasonCode())) {
 			StringBuilder sb = new StringBuilder(
 					"Cannot delete this user: more than one personal space matches, so the "

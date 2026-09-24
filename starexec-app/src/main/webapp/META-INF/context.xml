@@ -34,8 +34,8 @@
 
   <!-- SameSite=Lax limits cross-site cookie transmission in browsers.
        StarExecCommand and the Python API use cookie jars rather than browsers,
-       so SameSite does not apply to them. CSRF protection for /secure/* and
-       /public/registration/ is enforced by CsrfFilter; SessionFilter does not
+       so SameSite does not apply to them. CsrfFilter protects POST requests
+       under /secure/*, /public/registration/, and /services/*; SessionFilter does not
        perform Origin/Referer validation. -->
   <CookieProcessor className="org.apache.tomcat.util.http.Rfc6265CookieProcessor"
                    sameSiteCookies="lax" />

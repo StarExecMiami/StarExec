@@ -148,6 +148,44 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Retires completed-container ingestion for a pair whose execution was confirmed
+     * stopped. Synchronizing with {@link #checkCompletedJobs()} makes this a drain: a
+     * poll already processing the pair finishes before the caller can delete its rows,
+     * and a later poll cannot rediscover the retained exited container.
+     *
+     * @throws IllegalStateException if the exited container could not be listed or removed
+     */
+    public synchronized void clearPairTracking(int pairId) {
+        final List<PodmanBackend.CompletedContainerInfo> completed;
+        try {
+            completed = backend.getCompletedContainers();
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "Could not inspect completed containers while retiring pair " + pairId,
+                e
+            );
+        }
+
+        boolean allRetired = true;
+        for (PodmanBackend.CompletedContainerInfo info : completed) {
+            if (info.pairId != pairId) {
+                continue;
+            }
+            if (backend.discardCompletedContainer(info.containerId)) {
+                ingestionAttempts.remove(info.containerId);
+                ingestionQuarantine.remove(info.containerId);
+            } else {
+                allRetired = false;
+            }
+        }
+        if (!allRetired) {
+            throw new IllegalStateException(
+                "Could not retire every completed container for pair " + pairId
+            );
+        }
+    }
+
+    /**
      * Cancels the currently scheduled poll (if any) and immediately schedules
      * a new poll at the current interval.
      *

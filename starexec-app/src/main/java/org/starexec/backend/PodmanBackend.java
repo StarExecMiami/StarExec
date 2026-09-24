@@ -3552,6 +3552,38 @@ public class PodmanBackend implements Backend {
         }
     }
 
+    /**
+     * Discards an exited container after its pair has been explicitly killed. This is
+     * different from normal result ingestion: the caller has already recorded a killed
+     * pair and is retiring its database row, so retaining the container would let the
+     * monitor retry writes against that missing row.
+     *
+     * @return true if the container is gone or was removed; false if it is running or
+     *         could not be inspected or removed
+     */
+    public boolean discardCompletedContainer(String containerId) {
+        try {
+            Boolean isRunning = inspectContainerRunningState(containerId);
+            if (!Boolean.FALSE.equals(isRunning)) {
+                log.warn(
+                    "Refusing to discard container " + containerId +
+                        " because its stopped state could not be established"
+                );
+                return false;
+            }
+            removeContainerArtifacts(containerId, false);
+        } catch (NotFoundException e) {
+            // A completion poll may have removed it just before this retire request.
+        } catch (Exception e) {
+            log.warn("Could not discard killed pair container " + containerId, e);
+            return false;
+        }
+
+        releaseSlotForCompletedContainer(containerId);
+        containerIdToPairId.invalidate(containerId);
+        return true;
+    }
+
     public void removeCompletedContainer(String containerId) {
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
@@ -3657,7 +3689,12 @@ public class PodmanBackend implements Backend {
 
     @Override
     public void clearPairTracking(int pairId) {
-        // PodmanBackend does not track pair state - no-op
+        if (jobMonitor == null) {
+            throw new IllegalStateException(
+                "Cannot retire Podman result tracking before the monitor is initialized"
+            );
+        }
+        jobMonitor.clearPairTracking(pairId);
     }
 
     /**

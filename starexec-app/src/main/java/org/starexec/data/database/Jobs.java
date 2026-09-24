@@ -28,6 +28,7 @@ import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.TimePair;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -6536,6 +6537,16 @@ public class Jobs {
                 }
                 if (!JobPairs.killPairConfirmed(jp.getId(), jp.getBackendExecId())) {
                     unproven++;
+                    continue;
+                }
+                try {
+                    R.BACKEND.clearPairTracking(jp.getId());
+                } catch (Exception clearException) {
+                    log.warn(
+                        "kill: could not retire backend tracking for pairId=" + jp.getId(),
+                        clearException
+                    );
+                    unproven++;
                 }
             }
 
@@ -6543,7 +6554,7 @@ public class Jobs {
                 log.warn(
                     "kill: job " + jobId + " is marked killed, but " + unproven +
                         " of its " + toStop.size() + " in-flight pair(s) could not be" +
-                        " confirmed stopped and were left unchanged"
+                        " stopped and retired from backend tracking"
                 );
                 return false;
             }
@@ -6573,13 +6584,32 @@ public class Jobs {
         try {
             con = Common.getConnection();
             List<Job> usersJobs = Jobs.getByUserId(userId);
+            if (usersJobs == null) {
+                throw new StarExecDatabaseException(
+                    "Could not enumerate jobs owned by user with id=" + userId
+                );
+            }
             for (Job job : usersJobs) {
                 int jobId = job.getId();
                 // Kill any jobs that are still running.
                 if (!Jobs.isJobComplete(jobId)) {
-                    Jobs.kill(jobId, con);
+                    if (!con.getAutoCommit()) {
+                        throw new StarExecDatabaseException(
+                            "Cannot kill user jobs using a pooled connection with an open transaction"
+                        );
+                    }
+                    if (!Jobs.kill(jobId, con)) {
+                        throw new UserDeletionBlockedException(
+                            UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                            "Could not confirm that every active job pair was stopped and retired for user " + userId,
+                            null,
+                            null
+                        );
+                    }
                 }
             }
+        } catch (UserDeletionBlockedException e) {
+            throw e;
         } catch (Exception e) {
             throw new StarExecDatabaseException(
                 "Database error while deleting all jobs owned by user with id=" +

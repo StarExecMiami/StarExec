@@ -206,8 +206,10 @@ public interface Backend {
      * the new results, leaving the pair stuck in ENQUEUED status. This method ensures that
      * state is cleared so the rerun results are processed correctly.</p>
      *
-     * @param pairId The pair ID being rerun. For most backends (SGE, Kubernetes, etc.),
-     *               this is a no-op. For LocalBackend, this clears monitor tracking.
+     * @param pairId The pair ID being retired. For most backends (SGE, Kubernetes, etc.),
+     *               this is a no-op. LocalBackend clears monitor state; Podman drains and
+     *               removes any retained exited container so it cannot ingest against a
+     *               pair that is being removed.
      */
     void clearPairTracking(int pairId);
 
