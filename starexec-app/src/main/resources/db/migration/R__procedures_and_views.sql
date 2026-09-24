@@ -1686,6 +1686,17 @@ BEGIN
 
     _delta := _diskSize - COALESCE(_priorDiskSize, 0);
 
+    -- Apply this stage's delta to the job and user totals in the same order as
+    -- RerunJobPairsBatchCore's disk-accounting writes.
+    -- Taking users before jobs lets a stats write for one pair hold the user row while
+    -- waiting for a job row held by a rerun of another pair owned by the same user.
+    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
     UPDATE users
     SET disk_size = disk_size + _delta
     WHERE id = _userId;
@@ -1708,15 +1719,6 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
-    END IF;
-
-    -- Same difference, for the same reason: the job total drifted upward on every
-    -- redelivery exactly as the user total did.
-    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -10387,10 +10389,10 @@ $$ LANGUAGE plpgsql;
 --
 -- Internal. Callers must already hold the row locks and have revalidated eligibility; this
 -- function deliberately makes no decisions of its own. Its lock order is job_pairs (callers),
--- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats takes users
--- before jobs, so a concurrent stats write for another pair of the same job and user can
--- deadlock with a rerun; that predates this definition and is #188. AddJobAttr's insert takes
--- only a key-share lock on job_pairs, so it waits behind a rerun rather than deadlocking.
+-- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats updates
+-- jobs before users too, so its shared disk-accounting locks cannot invert against a rerun
+-- of another pair owned by the same user. AddJobAttr's insert takes only a key-share lock on
+-- job_pairs, so it waits behind a rerun rather than deadlocking.
 CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
 RETURNS VOID AS $$
 BEGIN

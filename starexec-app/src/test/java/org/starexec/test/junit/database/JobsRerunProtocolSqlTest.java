@@ -1,6 +1,7 @@
 package org.starexec.test.junit.database;
 
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -20,10 +21,20 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -51,15 +62,39 @@ public class JobsRerunProtocolSqlTest extends Common {
 
 	/** A pair whose end_time is this recent is inside the rerun window. */
 	private static final String RECENT_END_TIME = "NOW() - INTERVAL '10 minutes'";
+	private static final String LOCK_ORDER_PROBE_PREFIX = "probe_job_lock_order_";
+	private static final long CONCURRENCY_TIMEOUT_SECONDS = 30L;
 
 	private int jobId;
 	private int pairId;
+	private int fixtureUserId;
+	private long fixtureUserDiskSize;
+	private boolean restoreFixtureUserDiskSize;
 	private Backend originalBackend;
 
 	@BeforeClass
 	public static void requireDatabase() {
 		DatabaseTestSupport.assumeDatabaseAvailable("JobsRerunProtocolSqlTest");
 		Common.initialize();
+	}
+
+	@AfterClass
+	public static void noLockOrderProbeObjectsSurvive() throws SQLException {
+		if (!DatabaseTestSupport.isDatabaseConfigured()) {
+			return;
+		}
+		try (Connection con = Common.getConnection()) {
+			assertEquals("the rerun lock-order trigger must never outlive its test", 0,
+					selectInt(con, "SELECT count(*) FROM pg_trigger WHERE left(tgname, length('"
+							+ LOCK_ORDER_PROBE_PREFIX + "trg_')) = '"
+							+ LOCK_ORDER_PROBE_PREFIX + "trg_'"));
+			assertEquals("the rerun lock-order function must never outlive its test", 0,
+					selectInt(con, "SELECT count(*) FROM pg_proc p"
+							+ " JOIN pg_namespace n ON n.oid = p.pronamespace"
+							+ " WHERE n.nspname = 'starexec' AND left(p.proname, length('"
+							+ LOCK_ORDER_PROBE_PREFIX + "fn_')) = '"
+							+ LOCK_ORDER_PROBE_PREFIX + "fn_'"));
+		}
 	}
 
 	/**
@@ -103,19 +138,29 @@ public class JobsRerunProtocolSqlTest extends Common {
 	private int visibilityConfigId;
 	/** The node attempt 2's measurements are recorded against; 0 when unused. */
 	private int resultsNodeId;
+	/** Trigger/function used only to stop a rerun after its job row has been updated. */
+	private String lockOrderProbeTrigger;
+	private String lockOrderProbeFunction;
 
 	@Before
 	public void createFixture() throws SQLException {
 		originalBackend = R.BACKEND;
+		fixtureUserId = 0;
+		fixtureUserDiskSize = 0L;
+		restoreFixtureUserDiskSize = false;
+		lockOrderProbeTrigger = null;
+		lockOrderProbeFunction = null;
 		try (Connection con = Common.getConnection()) {
 			requireCleanPooledConnection(con, "createFixture");
 			con.setAutoCommit(false);
 			boolean transactionFinished = false;
 			try {
-				int userId = selectInt(con, "SELECT min(id) FROM starexec.users");
+				fixtureUserId = selectInt(con, "SELECT min(id) FROM starexec.users");
+				fixtureUserDiskSize = selectLong(con,
+						"SELECT disk_size FROM starexec.users WHERE id = " + fixtureUserId);
 				jobId = selectInt(con,
 						"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size) " +
-								"VALUES (" + userId + ", 'rerun-protocol-test', 1, 0) RETURNING id");
+								"VALUES (" + fixtureUserId + ", 'rerun-protocol-test', 1, 0) RETURNING id");
 				pairId = selectInt(con,
 						"INSERT INTO starexec.job_pairs (job_id, sge_id, status_code, start_time, end_time, primary_jobpair_data) " +
 								"VALUES (" + jobId + ", 987654, " + StatusCode.ERROR_RUNSCRIPT.getVal() +
@@ -151,9 +196,40 @@ public class JobsRerunProtocolSqlTest extends Common {
 	@After
 	public void dropFixture() throws SQLException {
 		R.BACKEND = originalBackend;
-		if (jobId == 0) {
-			return;
+		SQLException cleanupFailure = null;
+		try {
+			dropLockOrderProbe();
+		} catch (SQLException failure) {
+			cleanupFailure = failure;
 		}
+		if (jobId != 0) {
+			try {
+				deleteFixtureRows();
+			} catch (SQLException failure) {
+				if (cleanupFailure == null) {
+					cleanupFailure = failure;
+				} else {
+					cleanupFailure.addSuppressed(failure);
+				}
+			}
+		}
+		if (restoreFixtureUserDiskSize && fixtureUserId != 0) {
+			try {
+				restoreFixtureUserDiskSize();
+			} catch (SQLException failure) {
+				if (cleanupFailure == null) {
+					cleanupFailure = failure;
+				} else {
+					cleanupFailure.addSuppressed(failure);
+				}
+			}
+		}
+		if (cleanupFailure != null) {
+			throw cleanupFailure;
+		}
+	}
+
+	private void deleteFixtureRows() throws SQLException {
 		try (Connection con = Common.getConnection()) {
 			requireCleanPooledConnection(con, "dropFixture");
 			con.setAutoCommit(false);
@@ -200,6 +276,18 @@ public class JobsRerunProtocolSqlTest extends Common {
 				}
 			}
 			assertConnectionReturnedClean(con, "dropFixture");
+		}
+	}
+
+	private void restoreFixtureUserDiskSize() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "restoreFixtureUserDiskSize");
+			try (PreparedStatement ps = con.prepareStatement(
+					"UPDATE starexec.users SET disk_size = ? WHERE id = ?")) {
+				ps.setLong(1, fixtureUserDiskSize);
+				ps.setInt(2, fixtureUserId);
+				assertEquals("the disk accounting fixture user still exists", 1, ps.executeUpdate());
+			}
 		}
 	}
 
@@ -344,6 +432,203 @@ public class JobsRerunProtocolSqlTest extends Common {
 		// The old path never asked, because 11 < 7 is false. Asserting the call happened is
 		// what makes the status-band regression impossible to reintroduce silently.
 		org.mockito.Mockito.verify(backend).killPairConfirmed(987654);
+	}
+
+	// ------------------------------------------------------------------
+	// #188: shared job/user disk accounting must use the rerun lock order
+	// ------------------------------------------------------------------
+
+	@Test
+	public void statsForOnePairWaitsOnJobBeforeUserWhileAnotherPairIsRerun() throws Exception {
+		int statsPairId = insertPair(987656, StatusCode.ERROR_RUNSCRIPT.getVal());
+		seedLockOrderDiskTotals(statsPairId);
+		String nodeName = resultsNodeName();
+		long barrierKey = UUID.randomUUID().getMostSignificantBits();
+		String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+		String applicationPrefix = "se188_" + suffix;
+		String rerunApplicationName = applicationPrefix + "_rerun";
+		String statsApplicationName = applicationPrefix + "_stats";
+		installLockOrderProbe(barrierKey, suffix);
+
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		Connection gateConnection = null;
+		boolean gateHeld = false;
+		Future<?> rerun = null;
+		Future<?> stats = null;
+		AtomicInteger rerunPid = new AtomicInteger();
+		AtomicInteger statsPid = new AtomicInteger();
+		try {
+			gateConnection = Common.getConnection();
+			requireCleanPooledConnection(gateConnection, "lock-order advisory gate");
+			gateConnection.setAutoCommit(true);
+			advisoryLock(gateConnection, barrierKey);
+			gateHeld = true;
+
+			rerun = executor.submit((Callable<Void>) () -> {
+				runProbeTransaction(rerunApplicationName, rerunPid, con -> {
+					try (PreparedStatement lockPair = con.prepareStatement(
+							"SELECT id FROM starexec.job_pairs WHERE id = ? FOR UPDATE")) {
+						lockPair.setInt(1, pairId);
+						try (ResultSet rs = lockPair.executeQuery()) {
+							assertTrue("the rerun caller locks its pair before invoking the core", rs.next());
+						}
+					}
+					try (PreparedStatement ps = con.prepareStatement(
+							"SELECT starexec.RerunJobPairsBatchCore(ARRAY[?]::INT[])")) {
+						ps.setInt(1, pairId);
+						ps.execute();
+					}
+				});
+				return null;
+			});
+			try (Connection observer = Common.getConnection()) {
+				awaitAdvisoryWait(observer, rerunApplicationName, rerun);
+			}
+
+			stats = executor.submit((Callable<Void>) () -> {
+				runProbeTransaction(statsApplicationName, statsPid, con -> {
+					try (PreparedStatement ps = con.prepareStatement(
+							"CALL starexec.UpdatePairRunSolverStats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+						ps.setInt(1, statsPairId);
+						ps.setString(2, nodeName);
+						ps.setDouble(3, 12.0);
+						ps.setDouble(4, 10.0);
+						ps.setDouble(5, 8.0);
+						ps.setDouble(6, 2.0);
+						ps.setDouble(7, 256.0);
+						ps.setLong(8, 128L);
+						ps.setInt(9, 1);
+						ps.setLong(10, 3072L);
+						ps.execute();
+					}
+				});
+				return null;
+			});
+			try (Connection observer = Common.getConnection()) {
+				awaitBlockedBy(observer, statsApplicationName, rerunPid.get(), stats);
+			}
+			assertTrue("the stats worker reached PostgreSQL before its lock wait",
+					statsPid.get() > 0);
+
+			assertUserRowCanBeLockedNowait();
+			releaseAdvisoryLock(gateConnection, barrierKey);
+			gateHeld = false;
+			awaitSuccessful(rerun, "RerunJobPairsBatchCore");
+			awaitSuccessful(stats, "UpdatePairRunSolverStats");
+
+			assertEquals("the rerun reclaimed its pair and stats added only the other pair's delta",
+					3072L, diskSizeOfJob(jobId));
+			assertEquals("the user total changed by the same net delta",
+					fixtureUserDiskSize + 3072L, diskSizeOfUser(fixtureUserId));
+			assertEquals("the rerun reclaimed its stage's bytes", 0L, stageDiskSize(pairId, 1));
+			assertEquals("the stats write replaced the stage amount", 3072L,
+					stageDiskSize(statsPairId, 1));
+		} finally {
+			try {
+				if (gateConnection != null) {
+					try {
+						if (gateHeld) {
+							releaseAdvisoryLock(gateConnection, barrierKey);
+						}
+					} finally {
+						try (Statement s = gateConnection.createStatement()) {
+							s.execute("SELECT pg_advisory_unlock_all()");
+						} finally {
+							gateConnection.close();
+						}
+					}
+				}
+			} finally {
+				executor.shutdown();
+				awaitTaskForCleanup(rerun);
+				awaitTaskForCleanup(stats);
+				if (!executor.awaitTermination(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+					executor.shutdownNow();
+					assertTrue("the lock-order workers must terminate before probe cleanup",
+							executor.awaitTermination(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+				}
+			}
+		}
+	}
+
+	private void seedLockOrderDiskTotals(int statsPairId) throws SQLException {
+		assertEquals("both pairs share the fixture job", jobId,
+				selectInt("SELECT job_id FROM starexec.job_pairs WHERE id = " + statsPairId));
+		assertEquals("the job is owned by the fixture user", fixtureUserId,
+				selectInt("SELECT user_id FROM starexec.jobs WHERE id = " + jobId));
+		restoreFixtureUserDiskSize = true;
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "seedLockOrderDiskTotals");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			try {
+				try (PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.jobpair_stage_data SET disk_size = 2048"
+								+ " WHERE jobpair_id = ? AND stage_number = 1")) {
+					ps.setInt(1, statsPairId);
+					assertEquals(1, ps.executeUpdate());
+				}
+				try (PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.jobs SET disk_size = 6144 WHERE id = ?")) {
+					ps.setInt(1, jobId);
+					assertEquals(1, ps.executeUpdate());
+				}
+				try (PreparedStatement ps = con.prepareStatement(
+						"UPDATE starexec.users SET disk_size = ? WHERE id = ?")) {
+					ps.setLong(1, fixtureUserDiskSize + 6144L);
+					ps.setInt(2, fixtureUserId);
+					assertEquals(1, ps.executeUpdate());
+				}
+				con.commit();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				throw primary;
+			} finally {
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
+			}
+			assertConnectionReturnedClean(con, "seedLockOrderDiskTotals");
+		}
+	}
+
+	private void installLockOrderProbe(long barrierKey, String suffix) throws SQLException {
+		lockOrderProbeTrigger = LOCK_ORDER_PROBE_PREFIX + "trg_" + suffix;
+		lockOrderProbeFunction = LOCK_ORDER_PROBE_PREFIX + "fn_" + suffix;
+		String function = "CREATE FUNCTION starexec." + lockOrderProbeFunction
+				+ "() RETURNS trigger AS $$ BEGIN IF NEW.id = " + jobId
+				+ " THEN PERFORM pg_advisory_xact_lock(" + barrierKey + "); END IF;"
+				+ " RETURN NEW; END; $$ LANGUAGE plpgsql";
+		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
+			requireCleanPooledConnection(con, "installLockOrderProbe");
+			s.execute(function);
+			s.execute("CREATE TRIGGER " + lockOrderProbeTrigger
+					+ " AFTER UPDATE OF disk_size ON starexec.jobs FOR EACH ROW"
+					+ " EXECUTE FUNCTION starexec." + lockOrderProbeFunction + "()");
+		}
+	}
+
+	private void dropLockOrderProbe() throws SQLException {
+		if (lockOrderProbeTrigger == null && lockOrderProbeFunction == null) {
+			return;
+		}
+		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
+			requireCleanPooledConnection(con, "dropLockOrderProbe");
+			if (lockOrderProbeTrigger != null) {
+				s.execute("DROP TRIGGER IF EXISTS " + lockOrderProbeTrigger + " ON starexec.jobs");
+			}
+			if (lockOrderProbeFunction != null) {
+				s.execute("DROP FUNCTION IF EXISTS starexec." + lockOrderProbeFunction + "()");
+			}
+		}
+		lockOrderProbeTrigger = null;
+		lockOrderProbeFunction = null;
 	}
 
 	@Test
@@ -1076,6 +1361,217 @@ public class JobsRerunProtocolSqlTest extends Common {
 		return backend;
 	}
 
+	@FunctionalInterface
+	private interface ProbeTransaction {
+		void run(Connection con) throws Exception;
+	}
+
+	private static void runProbeTransaction(String applicationName, AtomicInteger backendPid,
+			ProbeTransaction body) throws Exception {
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "runProbeTransaction");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			Throwable failure = null;
+			try {
+				try (PreparedStatement ps = con.prepareStatement(
+						"SELECT set_config('application_name', ?, true)")) {
+					ps.setString(1, applicationName);
+					ps.executeQuery().close();
+				}
+				try (PreparedStatement ps = con.prepareStatement(
+						"SELECT set_config('statement_timeout', '30s', true)")) {
+					ps.executeQuery().close();
+				}
+				backendPid.set(selectInt(con, "SELECT pg_backend_pid()"));
+				body.run(con);
+				con.commit();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				failure = primary;
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+			} finally {
+				if (transactionFinished) {
+					try {
+						con.setAutoCommit(true);
+					} catch (SQLException resetFailure) {
+						if (failure == null) {
+							failure = resetFailure;
+						} else {
+							failure.addSuppressed(resetFailure);
+						}
+					}
+				}
+			}
+			if (failure != null) {
+				rethrow(failure);
+			}
+			assertConnectionReturnedClean(con, "runProbeTransaction");
+		}
+	}
+
+	private static void rethrow(Throwable failure) throws Exception {
+		if (failure instanceof Exception) {
+			throw (Exception) failure;
+		}
+		if (failure instanceof Error) {
+			throw (Error) failure;
+		}
+		throw new AssertionError(failure);
+	}
+
+	private static void awaitAdvisoryWait(Connection observer, String applicationName,
+			Future<?> worker) throws Exception {
+		awaitDatabaseCondition(observer, applicationName, -1, worker, true);
+	}
+
+	private static void awaitBlockedBy(Connection observer, String applicationName,
+			int blockerPid, Future<?> worker) throws Exception {
+		assertTrue("the rerun backend pid must be known before checking the stats wait",
+				blockerPid > 0);
+		awaitDatabaseCondition(observer, applicationName, blockerPid, worker, false);
+	}
+
+	private static void awaitDatabaseCondition(Connection observer, String applicationName,
+			int blockerPid, Future<?> worker, boolean advisoryWait) throws Exception {
+		String sql = advisoryWait
+				? "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = ?"
+						+ " AND a.wait_event_type = 'Lock' AND a.wait_event = 'advisory')"
+				: "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.application_name = ?"
+						+ " AND a.wait_event_type = 'Lock'"
+						+ " AND ? = ANY(pg_blocking_pids(a.pid)))";
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L);
+		try (PreparedStatement ps = observer.prepareStatement(sql)) {
+			while (System.nanoTime() < deadline) {
+				ps.setString(1, applicationName);
+				if (!advisoryWait) {
+					ps.setInt(2, blockerPid);
+				}
+				try (ResultSet rs = ps.executeQuery()) {
+					assertTrue(rs.next());
+					if (rs.getBoolean(1)) {
+						return;
+					}
+				}
+				if (worker.isDone()) {
+					try {
+						worker.get();
+						fail(applicationName + " completed before reaching its expected lock wait");
+					} catch (ExecutionException failure) {
+						throw new AssertionError(applicationName + " failed before reaching its lock wait",
+								failure.getCause());
+					}
+				}
+				Thread.sleep(20L);
+			}
+		}
+		throw new AssertionError("timed out waiting for " + applicationName
+				+ (advisoryWait ? " to reach the job-update barrier" : " to wait on the rerun backend"));
+	}
+
+	private void assertUserRowCanBeLockedNowait() throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			requireCleanPooledConnection(con, "assertUserRowCanBeLockedNowait");
+			con.setAutoCommit(false);
+			boolean transactionFinished = false;
+			try {
+				try (PreparedStatement ps = con.prepareStatement(
+						"SELECT id FROM starexec.users WHERE id = ? FOR UPDATE NOWAIT")) {
+					ps.setInt(1, fixtureUserId);
+					try (ResultSet rs = ps.executeQuery()) {
+						assertTrue("the fixture user remains present", rs.next());
+					}
+				} catch (SQLException lockFailure) {
+					if ("55P03".equals(lockFailure.getSQLState())) {
+						throw new AssertionError("stats took the users row before waiting on jobs",
+								lockFailure);
+					}
+					throw lockFailure;
+				}
+				con.rollback();
+				transactionFinished = true;
+			} catch (Throwable primary) {
+				try {
+					con.rollback();
+					transactionFinished = true;
+				} catch (SQLException rollbackFailure) {
+					primary.addSuppressed(rollbackFailure);
+				}
+				if (primary instanceof SQLException) {
+					throw (SQLException) primary;
+				}
+				if (primary instanceof Error) {
+					throw (Error) primary;
+				}
+				throw new AssertionError(primary);
+			} finally {
+				if (transactionFinished) {
+					con.setAutoCommit(true);
+				}
+			}
+			assertConnectionReturnedClean(con, "assertUserRowCanBeLockedNowait");
+		}
+	}
+
+	private static void advisoryLock(Connection con, long key) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT pg_advisory_lock(?)")) {
+			ps.setLong(1, key);
+			ps.executeQuery().close();
+		}
+	}
+
+	private static void releaseAdvisoryLock(Connection con, long key) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT pg_advisory_unlock(?)")) {
+			ps.setLong(1, key);
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue(rs.next());
+				assertTrue("the test advisory gate was held by its controller", rs.getBoolean(1));
+			}
+		}
+	}
+
+	private static void awaitSuccessful(Future<?> worker, String operation) throws Exception {
+		try {
+			worker.get(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (ExecutionException failure) {
+			assertFalse(operation + " must not deadlock with PostgreSQL SQLSTATE 40P01",
+					containsSqlState(failure.getCause(), "40P01"));
+			throw new AssertionError(operation + " failed", failure.getCause());
+		} catch (TimeoutException timeout) {
+			throw new AssertionError(operation + " did not finish after the barrier was released", timeout);
+		}
+	}
+
+	private static void awaitTaskForCleanup(Future<?> worker) throws InterruptedException {
+		if (worker == null) {
+			return;
+		}
+		try {
+			worker.get(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (ExecutionException | TimeoutException ignored) {
+			// The main assertion reports operation errors; this wait exists to release all
+			// connections and row locks before @After drops the injected trigger.
+		}
+	}
+
+	private static boolean containsSqlState(Throwable failure, String sqlState) {
+		for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+			if (cause instanceof SQLException) {
+				for (SQLException sql = (SQLException) cause; sql != null; sql = sql.getNextException()) {
+					if (sqlState.equals(sql.getSQLState())) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
 	private boolean selectedBySweep(int id) throws SQLException {
 		List<Integer> selected = JobPairs.getPairIdsByStatusNotRerunAfterDate(
 				StatusCode.ERROR_RUNSCRIPT, R.earliestDateToRerunFailedPairs());
@@ -1113,12 +1609,40 @@ public class JobsRerunProtocolSqlTest extends Common {
 		}
 	}
 
+	private long diskSizeOfJob(int id) throws SQLException {
+		return selectLong("SELECT disk_size FROM starexec.jobs WHERE id = " + id);
+	}
+
+	private long diskSizeOfUser(int id) throws SQLException {
+		return selectLong("SELECT disk_size FROM starexec.users WHERE id = " + id);
+	}
+
+	private long stageDiskSize(int pair, int stage) throws SQLException {
+		return selectLong("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id = "
+				+ pair + " AND stage_number = " + stage);
+	}
+
+	private long selectLong(String sql) throws SQLException {
+		try (Connection con = Common.getConnection()) {
+			return selectLong(con, sql);
+		}
+	}
+
 	private static int selectInt(Connection con, String sql) throws SQLException {
 		try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
 			if (!rs.next()) {
 				throw new IllegalStateException("Query returned no rows: " + sql);
 			}
 			return rs.getInt(1);
+		}
+	}
+
+	private static long selectLong(Connection con, String sql) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+			if (!rs.next()) {
+				throw new IllegalStateException("Query returned no rows: " + sql);
+			}
+			return rs.getLong(1);
 		}
 	}
 
