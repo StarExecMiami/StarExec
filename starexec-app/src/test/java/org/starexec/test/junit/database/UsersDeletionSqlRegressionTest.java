@@ -3,9 +3,12 @@ package org.starexec.test.junit.database;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
+import org.starexec.data.database.Jobs;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.Space;
@@ -390,6 +393,39 @@ public class UsersDeletionSqlRegressionTest extends Common {
 			assertEquals(StatusCode.STATUS_RUNNING.getVal(),
 					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId));
 			verify(backend, org.mockito.Mockito.never()).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionPreservesRowsWhenRunningPairEnumerationFails() throws Exception {
+		buildVictimWithAnalytics();
+		addRunningJob(victimId, 771104);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		try (MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class, Mockito.CALLS_REAL_METHODS)) {
+			jobs.when(() -> Jobs.getRunningPairs(runningJobId))
+					.thenThrow(new IllegalStateException("injected running-pair query failure"));
+
+			try {
+				Users.deleteUser(victimId);
+				fail("user deletion must stop when running pairs cannot be enumerated");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+
+			assertEquals("the user must remain when active pairs could not be enumerated",
+					1, countUsers(victimId));
+			assertEquals("the job must remain when active pairs could not be enumerated",
+					1, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("the running pair must remain when enumeration failed",
+					1, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?"
+							+ " AND status_code = " + StatusCode.STATUS_RUNNING.getVal(), runningPairId));
+			Mockito.verify(backend, Mockito.never())
+					.killPairConfirmed(Mockito.anyInt());
 		} finally {
 			R.BACKEND = original;
 		}

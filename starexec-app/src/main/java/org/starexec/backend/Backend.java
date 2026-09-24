@@ -124,28 +124,21 @@ public interface Backend {
     }
 
     /**
-     * Kills an execution and reports whether its absence was <em>established</em>.
+     * Requests termination of an execution and reports whether its absence was
+     * <em>established</em>.
      *
-     * <p>Distinct from {@link #killPair(int)} because that method's boolean cannot carry
-     * this meaning. Audited across the implementations: {@code LocalBackend} returns false
-     * when the job is not in its map, {@code PodmanBackend} returns false when the
-     * container is absent or has already exited (releasing the slot as it does so), and
-     * the SGE and OAR backends return false when {@code qdel}/{@code oardel} throws,
-     * including for a job that no longer exists. In every one of those cases false means
-     * <em>already gone</em> — the safe case. Reinterpreting it as "unproven" would strand
-     * pairs on all four.
-     *
-     * <p>So the strict contract is opt-in. The default keeps each backend's existing
-     * behaviour exactly, and a backend adopts the contract by overriding this method.
-     * Kubernetes does, because deleting a {@code batch/v1} Job does not synchronously stop
-     * its pod. Podman is the next candidate: it has the same asynchronous-teardown shape.
+     * <p>The boolean from {@link #killPair(int)} only reports the result of a backend's
+     * termination operation; it does not establish that the execution can no longer run
+     * or write results. Backends that can prove this stronger condition must override this
+     * method. The default still sends the best-effort termination request, but fails closed
+     * because the interface provides no evidence that the execution has stopped.
      *
      * @return {@link KillOutcome#CONFIRMED_SAFE} only when nothing for this execution can
      *         still run or write
      */
     default KillOutcome killPairConfirmed(int execId) {
         killPair(execId);
-        return KillOutcome.CONFIRMED_SAFE;
+        return KillOutcome.UNPROVEN;
     }
 
     /**

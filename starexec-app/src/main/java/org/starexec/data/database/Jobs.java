@@ -6029,6 +6029,7 @@ public class Jobs {
      *
      * @param jobId The id of the job to get pairs for
      * @return A list of job pair objects that are running.
+     * @throws IllegalStateException if running pairs could not be enumerated
      * @author Wyatt Kaiser
      */
     public static List<JobPair> getRunningPairs(int jobId) {
@@ -6039,11 +6040,13 @@ public class Jobs {
             return Jobs.getRunningPairs(con, jobId);
         } catch (Exception e) {
             log.error("getRunningPairs", "jobId: " + jobId, e);
+            throw new IllegalStateException(
+                "Could not enumerate running pairs for job " + jobId,
+                e
+            );
         } finally {
             Common.safeClose(con);
         }
-
-        return null;
     }
 
     /**
@@ -6514,13 +6517,19 @@ public class Jobs {
             // already walks both lists; this now matches it.
             List<JobPair> toStop = new ArrayList<>();
             List<JobPair> enqueued = Jobs.getEnqueuedPairs(jobId);
-            if (enqueued != null) {
-                toStop.addAll(enqueued);
+            if (enqueued == null) {
+                throw new SQLException(
+                    "Could not enumerate enqueued pairs for job " + jobId
+                );
             }
+            toStop.addAll(enqueued);
             List<JobPair> running = Jobs.getRunningPairs(jobId);
-            if (running != null) {
-                toStop.addAll(running);
+            if (running == null) {
+                throw new SQLException(
+                    "Could not enumerate running pairs for job " + jobId
+                );
             }
+            toStop.addAll(running);
 
             int unproven = 0;
             for (JobPair jp : toStop) {
