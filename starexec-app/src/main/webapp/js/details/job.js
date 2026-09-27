@@ -1884,37 +1884,61 @@ function fnShortStatsPaginationHandler(sSource, aoData, fnCallback) {
 }
 
 function fnStatsPaginationHandler(sSource, aoData, fnCallback) {
-	if (typeof curSpaceId == 'undefined') {
-		return;
+	var echo;
+	for (var i = 0; i < aoData.length; i++) {
+		if (aoData[i].name === "sEcho") { echo = aoData[i].value; }
 	}
-
+	var request = {};
+	fnStatsPaginationHandler.currentRequest = request;
+	var space = curSpaceId, stage = getSelectedStage(), wallclock = useWallclock, unknown = includeUnknown;
+	var settled = false;
+	function finish(page) {
+		if (settled) { return; }
+		settled = true;
+		fnCallback(page || {sEcho: echo, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: []});
+	}
+	function current() {
+		return fnStatsPaginationHandler.currentRequest === request && space === curSpaceId &&
+			stage === getSelectedStage() && wallclock === useWallclock && unknown === includeUnknown;
+	}
+	if (typeof space === "undefined") { finish(); return; }
 	var postUrl;
 	if (DETAILS_JOB.isAnonymousPage) {
-		postUrl = sSource + "solvers/anonymousLink/pagination/" + curSpaceId + "/" + getParameterByName(
-			"anonId") +
-			"/" + DETAILS_JOB.primitivesToAnonymize + "/false/" + useWallclock + "/" + getSelectedStage() + "/" + includeUnknown;
+		postUrl = sSource + "solvers/anonymousLink/pagination/" + space + "/" + getParameterByName("anonId") +
+			"/" + DETAILS_JOB.primitivesToAnonymize + "/false/" + wallclock + "/" + stage + "/" + unknown;
 	} else {
-		postUrl = sSource + "solvers/pagination/" + curSpaceId + "/false/" + useWallclock + "/" + getSelectedStage() + "/" + includeUnknown;
+		postUrl = sSource + "solvers/pagination/" + space + "/false/" + wallclock + "/" + stage + "/" + unknown;
 	}
-	// var xhr = $.post(
-	// 	postUrl,
-	// 	aoData,
-	// 	function(nextDataTablePage) {
-	// 		//if the user has clicked on a different space since this was called, we want those results, not these
-	// 		var s = parseReturnCode(nextDataTablePage);
-	// 		if (s) {
-	// 			$("#solverSummaryField").show();
-	// 			$("#graphField").show();
-	// 			$("#statsErrorField").hide();
-	// 			fnCallback(nextDataTablePage);
-	// 		}
-	// 	},
-	// 	"json"
-	// ).fail(function(code, textStatus) {
-	// 	handleAjaxError(textStatus);
-	// });
-
-	// openAjaxRequests.push(xhr);
+	function validCount(value) {
+		return typeof value === "number" && isFinite(value) && value >= 0 && Math.floor(value) === value;
+	}
+	var xhr = $.post(postUrl, aoData, function(page) {
+		if (settled) { return; }
+		if (!current()) { finish(); return; }
+		if (!page || typeof page !== "object" || !parseReturnCode(page) ||
+			!Array.isArray(page.aaData) || !validCount(page.iTotalRecords) || !validCount(page.iTotalDisplayRecords)) {
+			$("#statsErrorField").hide();
+			$("#graphField").hide();
+			handleAjaxError("invalid response");
+			finish();
+			return;
+		}
+		// Use this draw's echo, never an absent or unrelated server echo.
+		page.sEcho = echo;
+		$("#solverSummaryField").show();
+		$("#graphField").show();
+		$("#statsErrorField").hide();
+		finish(page);
+	}, "json").fail(function(code, textStatus) {
+		if (settled) { return; }
+		if (current() && textStatus !== "abort") {
+			$("#statsErrorField").hide();
+			$("#graphField").hide();
+			handleAjaxError(textStatus);
+		}
+		finish();
+	});
+	openAjaxRequests.push(xhr);
 }
 
 //
