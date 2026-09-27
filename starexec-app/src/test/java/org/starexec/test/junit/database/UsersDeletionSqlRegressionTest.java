@@ -9,6 +9,7 @@ import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.Space;
@@ -363,6 +364,92 @@ public class UsersDeletionSqlRegressionTest extends Common {
 					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
 			assertEquals("the active pair must be gone after successful user deletion", 0,
 					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionRetriesTrackingRetirementBeforeCascadingKilledRows() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771105;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		Mockito.doThrow(new IllegalStateException("injected one-time tracking failure"))
+				.doNothing().when(backend).clearPairTracking(runningPairId);
+		try {
+			try {
+				Users.deleteUser(victimId);
+				fail("a tracking failure must block user deletion");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+
+			assertEquals("user must remain after tracking cleanup fails", 1, countUsers(victimId));
+			assertEquals("job must remain after tracking cleanup fails", 1,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("pair must remain after tracking cleanup fails", 1,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals("confirmed stop must be persisted for a safe retry",
+					StatusCode.STATUS_KILLED.getVal(),
+					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			verify(backend).killPairConfirmed(execId);
+			verify(backend).clearPairTracking(runningPairId);
+
+			assertTrue("retry must retire tracking before deleting the retained rows",
+					Users.deleteUser(victimId));
+			assertEquals("user deletion should complete after tracking retirement", 0,
+					countUsers(victimId));
+			assertEquals("job must be cascaded only after tracking retirement", 0,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("pair must be cascaded only after tracking retirement", 0,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			verify(backend, Mockito.times(2)).clearPairTracking(runningPairId);
+			verify(backend, Mockito.times(1)).killPairConfirmed(execId);
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionRetriesTrackingRetirementForKilledPairInCompleteJob() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771106;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		try {
+			assertTrue("the pair should be marked killed only after a confirmed stop",
+					JobPairs.killPairConfirmed(runningPairId, execId));
+			assertTrue("a job containing only terminal pairs is complete", Jobs.isJobComplete(runningJobId));
+			Mockito.doThrow(new IllegalStateException("injected one-time tracking failure"))
+					.doNothing().when(backend).clearPairTracking(runningPairId);
+
+			try {
+				Users.deleteUser(victimId);
+				fail("a tracking failure must block deletion of a complete job");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+			assertEquals("the user must remain after tracking cleanup fails", 1, countUsers(victimId));
+			assertEquals("the complete job must remain", 1,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("the killed pair must remain", 1,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+
+			assertTrue("retry must clear tracking even though the job is already complete",
+					Users.deleteUser(victimId));
+			assertEquals("user deletion should complete after tracking retirement", 0,
+					countUsers(victimId));
+			verify(backend, Mockito.times(2)).clearPairTracking(runningPairId);
+			verify(backend, Mockito.times(1)).killPairConfirmed(execId);
 		} finally {
 			R.BACKEND = original;
 		}

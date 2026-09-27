@@ -133,6 +133,12 @@ public interface Backend {
      * method. The default still sends the best-effort termination request, but fails closed
      * because the interface provides no evidence that the execution has stopped.
      *
+     * <p>{@link GridEngineBackend} and {@link OARBackend} currently inherit this default.
+     * Their kill request is still sent, but operations that require proof before replacing
+     * or deleting execution state (including reruns and job/user deletion) remain withheld
+     * when the result is {@link KillOutcome#UNPROVEN}. This is intentional until those
+     * backends can provide evidence that the exact execution has stopped.</p>
+     *
      * @return {@link KillOutcome#CONFIRMED_SAFE} only when nothing for this execution can
      *         still run or write
      */

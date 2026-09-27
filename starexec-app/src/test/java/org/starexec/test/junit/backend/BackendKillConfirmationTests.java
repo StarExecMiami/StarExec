@@ -2,6 +2,8 @@ package org.starexec.test.junit.backend;
 
 import org.junit.Test;
 import org.starexec.backend.Backend;
+import org.starexec.backend.GridEngineBackend;
+import org.starexec.backend.OARBackend;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -21,6 +23,20 @@ public class BackendKillConfirmationTests {
     @Test
     public void rejectedKillRequestDoesNotProveExecutionAbsence() {
         assertEquals(Backend.KillOutcome.UNPROVEN, killPairConfirmedFor(false));
+    }
+
+    @Test
+    public void legacyQueueBackendsIntentionallyInheritTheFailClosedDefault() throws Exception {
+        assertEquals(
+            "SGE must not claim termination safety without backend evidence",
+            Backend.class,
+            GridEngineBackend.class.getMethod("killPairConfirmed", int.class).getDeclaringClass()
+        );
+        assertEquals(
+            "OAR must not claim termination safety without backend evidence",
+            Backend.class,
+            OARBackend.class.getMethod("killPairConfirmed", int.class).getDeclaringClass()
+        );
     }
 
     private Backend.KillOutcome killPairConfirmedFor(boolean killPairResult) {
