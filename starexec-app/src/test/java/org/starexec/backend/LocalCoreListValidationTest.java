@@ -5,8 +5,10 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -412,6 +414,96 @@ public class LocalCoreListValidationTest {
         } finally {
             backend.destroyIf();
         }
+    }
+
+    /**
+     * Forced sandbox mode still runs inside the LocalBackend container. Its BENCHEXEC
+     * invocation passes {@code CORES} to runexec, so that value must preserve a restricted,
+     * non-contiguous inherited affinity instead of rebuilding a range from host topology.
+     */
+    @Test
+    public void forcedSandboxPreservesInheritedAffinityForRunexec() throws Exception {
+        List<Integer> effectiveAffinity = LocalBackend.readEffectiveCpuAffinity(
+                Path.of("/proc/self/status"));
+        List<Integer> requestedAffinity = new ArrayList<>();
+        for (int cpu : effectiveAffinity) {
+            if (cpu > 0 && (requestedAffinity.isEmpty()
+                    || cpu > requestedAffinity.get(requestedAffinity.size() - 1) + 1)) {
+                requestedAffinity.add(cpu);
+                if (requestedAffinity.size() == 2) {
+                    break;
+                }
+            }
+        }
+        if (requestedAffinity.size() < 2) {
+            requestedAffinity.clear();
+            for (int cpu : effectiveAffinity) {
+                requestedAffinity.add(cpu);
+                if (requestedAffinity.size() == 2) {
+                    break;
+                }
+            }
+        }
+        assertTrue(
+                "The test process must have an effective CPU affinity",
+                !requestedAffinity.isEmpty());
+
+        Process lookup = new ProcessBuilder("bash", "-c", "command -v taskset")
+                .redirectErrorStream(true)
+                .start();
+        String taskset = new String(lookup.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
+                .trim();
+        assertEquals(
+                "Requires taskset to exercise the kernel affinity boundary",
+                0,
+                lookup.waitFor());
+        assertTrue("taskset path must not be empty", !taskset.isEmpty());
+
+        String affinity = requestedAffinity.get(0) + "," + requestedAffinity.get(1);
+        Path helper = Path.of("src/main/java/org/starexec/config/sge/functions.bash")
+                .toAbsolutePath();
+        Path directory = Files.createTempDirectory("forced-sandbox-affinity");
+        Path output = directory.resolve("affinity.out");
+        String script = "export SCRIPT_DIR='" + helper.getParent() + "'\n"
+                + "export STAREXEC_OUTPUT_DIR='" + directory.resolve("output") + "'\n"
+                + "export CONTAINER_MODE=true STAREXEC_FORCE_SANDBOX=true PAIR_ID=41\n"
+                + "export WORKING_DIR_BASE='" + directory.resolve("work") + "'\n"
+                + "export SHARED_DIR='" + directory.resolve("shared") + "'\n"
+                + "export BENCH_PATH=\"$(printf '/bench/primary.p' | base64 -w0)\"\n"
+                + "export PAIR_OUTPUT_DIRECTORY=\"$(printf '/out/pair' | base64 -w0)\"\n"
+                + "export SANDBOX_USER_ONE=starexec HOSTNAME=test-node\n"
+                + "SOLVER_PATHS=()\n"
+                + ". \"$SCRIPT_DIR/functions.bash\"\n"
+                + "trySandbox() { return 0; }\n"
+                + "sendNode() { :; }\n"
+                + "log() { :; }\n"
+                + "initSandbox\n"
+                + "printf '%s\\n' \"$CORES\" > '" + output + "'\n"
+                + taskset + " -c \"$CORES\" bash -c \"awk '/^Cpus_allowed_list:/ { print \\$2 }' "
+                + "/proc/self/status\" >> '" + output + "'\n";
+        Process process = new ProcessBuilder(
+                taskset,
+                "-c",
+                affinity,
+                "bash",
+                "-c",
+                script)
+                .redirectErrorStream(true)
+                .start();
+        String processOutput = new String(
+                process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        int exit = process.waitFor();
+
+        assertEquals("Affinity harness failed: " + processOutput, 0, exit);
+        List<String> actual = Files.readAllLines(output);
+        assertEquals(
+                "initSandbox CORES must preserve the inherited affinity",
+                affinity,
+                actual.get(0));
+        assertEquals(
+                "runexec's requested CPUs must not widen process affinity",
+                affinity,
+                actual.get(1));
     }
 
     private static Map<Integer, List<Integer>> singletonTopology(Integer... cpus) {

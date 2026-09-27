@@ -649,37 +649,25 @@ function trySandbox {
 # figures out which sandbox the given job pair should run in.
 # If no sandbox can be secured, terminate this jobpair
 function initSandbox {
-	# Container mode: each container IS its own isolated sandbox, no locking needed
+	local containerCores=""
+	if [ "$CONTAINER_MODE" = "true" ]; then
+		# Use the kernel's effective affinity for every container-mode job, including
+		# forced sandbox mode. LocalBackend starts each job under its validated CPU lease;
+		# lscpu describes host topology and can make runexec widen that lease.
+		if ! containerCores="$(awk '/^Cpus_allowed_list:/ { print $2; exit }' /proc/self/status 2>/dev/null)" \
+				|| [[ ! "$containerCores" =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]]; then
+			log "job error: cannot determine the allowed CPU list from /proc/self/status"
+			STATUS_SENT=true
+			sendStatus "$ERROR_RUNSCRIPT"
+			sendStatusToLaterStages "$ERROR_RUNSCRIPT" 0
+			exit 0
+		fi
+	fi
 	if [ "$CONTAINER_MODE" = "true" ] && [ "${STAREXEC_FORCE_SANDBOX:-false}" != "true" ]; then
 		log "Container mode detected - using container as sandbox (no locking needed)"
 		SANDBOX=1
 		SANDBOX_PARAM=$SANDBOX_USER_ONE
-		# Use the CPUs this container was actually given, not the host's topology.
-		#
-		# This used to compute "0-(N-1)" from lscpu's "Core(s) per socket". lscpu reports
-		# the machine, not the cpuset: it is unaffected by --cpuset-cpus or by a cpuset
-		# the kubelet assigned, so the range it produces names CPU ids we may have no
-		# right to run on. Under a kubelet with --cpu-manager-policy=static a Guaranteed
-		# pod is pinned to whichever CPUs the kubelet chose -- 16-31, say -- and
-		# "--cores 0-15" then asks runsolver to set an affinity outside the container's
-		# cpuset. PodmanBackend now sets a cpuset too, so the same applies there.
-		#
-		# Cpus_allowed_list is the kernel's answer to "which CPUs may this process use",
-		# so it already accounts for the cpuset and for any inherited affinity. Note the
-		# old lscpu branch was the *less* correct of the two: the nproc fallback beneath
-		# it respects sched_getaffinity, while lscpu does not.
-		if [ -r /proc/self/status ] && grep -q '^Cpus_allowed_list:' /proc/self/status; then
-			CORES="$(awk '/^Cpus_allowed_list:/ { print $2 }' /proc/self/status)"
-			log "Container mode: using the CPUs this container is allowed: $CORES"
-		elif command -v nproc &> /dev/null; then
-			# Correct in count, but loses the real ids -- only right when the container
-			# happens to hold CPU 0 upward.
-			CORES="0-$(($(nproc)-1))"
-			log "Container mode: Cpus_allowed_list unavailable; assuming $CORES from nproc"
-		else
-			CORES="0"
-			log "Container mode: cannot determine allowed CPUs; falling back to $CORES"
-		fi
+		CORES="$containerCores"
 		# One workspace per execution attempt.
 		#
 		# initWorkspaceVariables derives every execution path from WORKING_DIR -- solver,
@@ -778,6 +766,11 @@ function initSandbox {
 		sendStatus "$ERROR_RUNSCRIPT"
 		sendStatusToLaterStages "$ERROR_RUNSCRIPT" 0
 		exit 0
+	fi
+	if [ "$CONTAINER_MODE" = "true" ]; then
+		# Forced sandbox mode keeps its legacy lock/workspace selection, but never
+		# replaces the per-job container affinity with a host-derived CPU range.
+		CORES="$containerCores"
 	fi
 
 	sendNode "$HOSTNAME" "$SANDBOX"

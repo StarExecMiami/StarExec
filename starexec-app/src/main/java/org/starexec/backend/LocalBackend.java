@@ -45,8 +45,8 @@ import org.starexec.logger.StarLogger;
  * runsolver (default: false)</li>
  * <li>{@code STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS} - Shutdown timeout
  * (default: 30)</li>
- * <li>{@code STAREXEC_LOCAL_FORCE_SANDBOX} - Enforce physical core isolation
- * via sandbox locking (default: false)</li>
+ * <li>{@code STAREXEC_LOCAL_FORCE_SANDBOX} - Retain the legacy two-slot sandbox
+ * lock and workspace path in container mode (default: false)</li>
  * </ul>
  *
  * <h3>Configuration Guidance</h3>
@@ -67,9 +67,10 @@ import org.starexec.logger.StarLogger;
  * Requires runsolver to be installed and configured.</li>
  * <li><strong>STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS</strong>: Increase for
  * systems with slow shutdown processes.</li>
- * <li><strong>STAREXEC_LOCAL_FORCE_SANDBOX</strong>: Set to true to enable
- * strict CPU affinity via sandbox locking (limited to 2 concurrent jobs).
- * Useful for precise benchmarking to avoid cache interference.</li>
+ * <li><strong>STAREXEC_LOCAL_FORCE_SANDBOX</strong>: Set to true to use the
+ * legacy two-slot sandbox lock and workspace path (limited to 2 concurrent
+ * jobs). CPU affinity continues to come from the validated per-job core lease;
+ * this option does not reserve SMT siblings or provide host-wide CPU isolation.</li>
  * </ul>
  *
  * <h2>Performance Considerations</h2>

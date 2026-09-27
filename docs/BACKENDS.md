@@ -173,6 +173,14 @@ a physical core. It does not reserve the unused sibling against unrelated host
 workloads; full-core exclusivity still requires host CPU isolation or an
 equivalent cgroup/cpuset policy.
 
+Each LocalBackend job starts under `taskset -c` with its validated one-CPU lease.
+In container mode, `functions.bash` passes that inherited `Cpus_allowed_list` to
+`runexec --cores`; it must not reconstruct a CPU range from host `lscpu` data,
+because that could widen the solver beyond its lease. If the kernel affinity list
+cannot be read, the job fails closed. `STAREXEC_LOCAL_FORCE_SANDBOX=true` retains
+the legacy two-slot lock and workspace path, but it does not change CPU leases or
+reserve SMT siblings.
+
 ### Concurrency Tuning
 
 | System             | Recommended Setting             |
