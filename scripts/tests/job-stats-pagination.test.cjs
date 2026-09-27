@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(root, 'starexec-app/src/main/webapp/js/
 const handler = source.slice(source.indexOf('function fnStatsPaginationHandler('), source.indexOf('\n//\r\n//  Handles querying', source.indexOf('function fnStatsPaginationHandler(')));
 
 function setup(anonymous = false) {
-    const requests = [], errors = [], visibility = {};
+    const requests = [], errors = [], notifications = [], visibility = {};
     const table = {draw: 0, rows: [], processing: false, accepted: 0};
     const $ = selector => ({show() { visibility[selector] = true; }, hide() { visibility[selector] = false; }});
     $.post = (url, data, success) => {
@@ -19,8 +19,11 @@ function setup(anonymous = false) {
     const context = { $, curSpaceId: undefined, stage: 0, useWallclock: false, includeUnknown: true,
         DETAILS_JOB: {isAnonymousPage: anonymous, primitivesToAnonymize: 'true'},
         getParameterByName: () => 'synthetic-link', openAjaxRequests: [],
-        parseReturnCode: result => result.success !== false,
-        handleAjaxError: status => { if (status !== 'abort') errors.push(status); },
+        parseReturnCode: result => {
+            if (result.success === false && result.message) notifications.push(result.message);
+            return result.success !== false;
+        },
+        handleAjaxError: status => { if (status !== 'abort') { errors.push(status); notifications.push('generic'); } },
         getSelectedStage() { return context.stage; }
     };
     vm.createContext(context); vm.runInContext(handler, context);
@@ -38,7 +41,7 @@ function setup(anonymous = false) {
         return echo;
     }
     const page = (echo, label = 'row') => ({sEcho: echo, iTotalRecords: 1, iTotalDisplayRecords: 1, aaData: [[label]]});
-    return {context, requests, errors, visibility, table, draw, page};
+    return {context, requests, errors, notifications, visibility, table, draw, page};
 }
 
 test('draw model is anchored to bundled DataTables stale-echo guard', () => {
@@ -59,9 +62,21 @@ for (const anonymous of [false, true]) test(`Primary stage zero route anonymous=
     assert.equal(h.visibility['#solverSummaryField'], true);
     assert.equal(h.visibility['#graphField'], true);
 });
-for (const malformed of [null, {}, {success: false}, {aaData: 'bad', iTotalRecords: 1, iTotalDisplayRecords: 1}]) test(`bad response ${JSON.stringify(malformed)}`, () => {
+for (const malformed of [null, {}, {aaData: 'bad', iTotalRecords: 1, iTotalDisplayRecords: 1}]) test(`bad response ${JSON.stringify(malformed)}`, () => {
     const h = setup(); h.context.curSpaceId = 7; h.draw(); h.requests[0].success(malformed);
     assert.equal(h.table.processing, false); assert.equal(h.visibility['#statsErrorField'], false); assert.equal(h.errors.length, 1);
+});
+test('application error retains descriptive notification without generic replacement', () => {
+    const h = setup(); h.context.curSpaceId = 7; h.draw();
+    h.requests[0].success({success: false, message: 'Specific permission failure'});
+    assert.equal(h.table.processing, false);
+    assert.deepEqual(h.notifications, ['Specific permission failure']);
+    assert.equal(h.visibility['#graphField'], false);
+});
+test('application error without message still settles without invented transport failure', () => {
+    const h = setup(); h.context.curSpaceId = 7; h.draw();
+    h.requests[0].success({success: false});
+    assert.equal(h.table.processing, false); assert.equal(h.errors.length, 0);
 });
 for (const status of ['error', 'parsererror', 'abort']) test(`transport ${status} settles`, () => {
     const h = setup(); h.context.curSpaceId = 7; h.draw(); h.requests[0].failure({}, status);

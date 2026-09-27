@@ -1915,7 +1915,13 @@ function fnStatsPaginationHandler(sSource, aoData, fnCallback) {
 	var xhr = $.post(postUrl, aoData, function(page) {
 		if (settled) { return; }
 		if (!current()) { finish(); return; }
-		if (!page || typeof page !== "object" || !parseReturnCode(page) ||
+		if (page && typeof page === "object" && !parseReturnCode(page)) {
+			$("#statsErrorField").hide();
+			$("#graphField").hide();
+			finish();
+			return;
+		}
+		if (!page || typeof page !== "object" ||
 			!Array.isArray(page.aaData) || !validCount(page.iTotalRecords) || !validCount(page.iTotalDisplayRecords)) {
 			$("#statsErrorField").hide();
 			$("#graphField").hide();
