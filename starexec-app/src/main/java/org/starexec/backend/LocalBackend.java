@@ -34,10 +34,11 @@ import org.starexec.logger.StarLogger;
  * The backend is configured via environment variables:
  * </p>
  * <ul>
- * <li>{@code STAREXEC_LOCAL_CONCURRENCY} - Number of concurrent jobs (default:
- * min(4, CPU cores))</li>
+ * <li>{@code STAREXEC_LOCAL_CONCURRENCY} - Number of concurrent physical-core
+ * leases (default: min(4, JVM available processors), then topology-validated)</li>
  * <li>{@code STAREXEC_LOCAL_CORE_LIST} - Ordered comma-separated logical CPU
- * leases. When set, its validated length determines concurrency.</li>
+ * leases. Every lease must be allowed and online; the validated length determines
+ * concurrency.</li>
  * <li>{@code STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS} - Per-job timeout in seconds
  * (default: 3600)</li>
  * <li>{@code STAREXEC_LOCAL_USE_RUNSOLVER} - Whether to wrap jobs with
@@ -50,12 +51,10 @@ import org.starexec.logger.StarLogger;
  *
  * <h3>Configuration Guidance</h3>
  * <ul>
- * <li><strong>STAREXEC_LOCAL_CONCURRENCY</strong>: Set to match your system's
- * CPU cores for optimal performance.
- * Values higher than available cores may cause thrashing. For I/O-bound jobs,
- * higher values may be beneficial.
- * Default is conservative (min of 4 and CPU cores) to prevent system
- * overload. Ignored when {@code STAREXEC_LOCAL_CORE_LIST} is set.</li>
+ * <li><strong>STAREXEC_LOCAL_CONCURRENCY</strong>: Set no higher than the
+ * distinct physical-core count in this process's effective affinity. Startup
+ * fails closed when sysfs topology cannot prove that many cores. Ignored when
+ * {@code STAREXEC_LOCAL_CORE_LIST} is set.</li>
  * <li><strong>STAREXEC_LOCAL_CORE_LIST</strong>: Select one allowed logical CPU
  * per physical core. Startup rejects malformed or duplicate IDs, CPUs outside
  * the process affinity, and two leases that are SMT siblings.</li>
@@ -128,6 +127,7 @@ public class LocalBackend implements Backend {
     private static final int DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30;
     private static final Path PROC_SELF_STATUS_PATH = Path.of("/proc/self/status");
     private static final Path SYSFS_CPU_PATH = Path.of("/sys/devices/system/cpu");
+    private static final Path CPU_ONLINE_PATH = SYSFS_CPU_PATH.resolve("online");
 
     // Node and queue names
     private String nodeName = "local-node";
@@ -1369,11 +1369,14 @@ public class LocalBackend implements Backend {
     private void loadConfiguration() {
         // Concurrency level and Core Pinning
         String coreList = EnvironmentConfig.getLocalCoreList();
+        List<Integer> effectiveAffinity = readEffectiveCpuAffinity(PROC_SELF_STATUS_PATH);
+        List<Integer> onlineCpus = readOnlineCpuList(CPU_ONLINE_PATH);
         if (coreList != null && !coreList.trim().isEmpty()) {
             List<Integer> parsedCores = parseConfiguredCoreList(coreList);
             configuredCores = validateConfiguredCoreList(
                     parsedCores,
-                    readEffectiveCpuAffinity(PROC_SELF_STATUS_PATH),
+                    effectiveAffinity,
+                    onlineCpus,
                     CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH));
             // Concurrency is derived only after the complete lease list is valid.
             maxConcurrency = configuredCores.size();
@@ -1381,7 +1384,6 @@ public class LocalBackend implements Backend {
                     "Using validated core list for CPU pinning: " + configuredCores +
                             " (Concurrency: " + maxConcurrency + ")");
         } else {
-            configuredCores = Collections.emptyList();
             maxConcurrency = getEnvInt(
                     "STAREXEC_LOCAL_CONCURRENCY",
                     DEFAULT_CONCURRENCY);
@@ -1393,7 +1395,15 @@ public class LocalBackend implements Backend {
                                 DEFAULT_CONCURRENCY);
                 maxConcurrency = DEFAULT_CONCURRENCY;
             }
-            log.warn("STAREXEC_LOCAL_CORE_LIST not set. CPU pinning will use blind sequential assignment (0 to " + (maxConcurrency - 1) + "). This may cause SMT/L3 cache thrashing.");
+            configuredCores = selectDefaultCoreList(
+                    maxConcurrency,
+                    effectiveAffinity,
+                    onlineCpus,
+                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH));
+            log.info(
+                    "STAREXEC_LOCAL_CORE_LIST not set. Using one allowed logical CPU " +
+                            "from each of " + maxConcurrency + " physical cores: " +
+                            configuredCores);
         }
 
         // Job timeout
@@ -1473,11 +1483,12 @@ public class LocalBackend implements Backend {
     }
 
     /**
-     * Checks leases against the kernel affinity and physical-core topology.
+     * Checks leases against the kernel affinity, online mask, and physical-core topology.
      */
     static List<Integer> validateConfiguredCoreList(
             List<Integer> cores,
             List<Integer> effectiveAffinity,
+            List<Integer> onlineCpus,
             Map<Integer, List<Integer>> siblingTopology) {
         if (cores == null || cores.isEmpty()) {
             throw new IllegalArgumentException(
@@ -1487,14 +1498,25 @@ public class LocalBackend implements Backend {
             throw new IllegalStateException(
                     "Cannot validate STAREXEC_LOCAL_CORE_LIST: effective CPU affinity is empty");
         }
+        if (onlineCpus == null || onlineCpus.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot validate STAREXEC_LOCAL_CORE_LIST: online CPU list is empty");
+        }
 
         Set<Integer> allowed = new HashSet<>(effectiveAffinity);
+        Set<Integer> online = new HashSet<>(onlineCpus);
         for (int cpu : cores) {
             if (!allowed.contains(cpu)) {
                 throw new IllegalArgumentException(
                         "STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
                                 " is outside this process's effective affinity " +
                                 CpuPartitionManager.compressCpuset(effectiveAffinity));
+            }
+            if (!online.contains(cpu)) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
+                                " is offline; online CPUs: " +
+                                CpuPartitionManager.compressCpuset(onlineCpus));
             }
         }
 
@@ -1526,6 +1548,175 @@ public class LocalBackend implements Backend {
     }
 
     /**
+     * Selects one allowed, online logical CPU per physical core without expanding the
+     * affinity inherited by this JVM.
+     */
+    static List<Integer> selectDefaultCoreList(
+            int concurrency,
+            List<Integer> effectiveAffinity,
+            List<Integer> onlineCpus,
+            Map<Integer, List<Integer>> siblingTopology) {
+        if (concurrency < 1) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY must be at least 1, but was " + concurrency);
+        }
+        if (effectiveAffinity == null || effectiveAffinity.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select LocalBackend CPU leases: effective CPU affinity is empty");
+        }
+
+        Set<Integer> uniqueAllowedCpus = new HashSet<>();
+        for (Integer cpu : effectiveAffinity) {
+            if (cpu == null || cpu < 0) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: effective affinity contains " +
+                                "an invalid CPU ID: " + cpu);
+            }
+            if (!uniqueAllowedCpus.add(cpu)) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: effective affinity contains " +
+                                "duplicate CPU ID " + cpu);
+            }
+        }
+        if (concurrency > effectiveAffinity.size()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY requests " + concurrency +
+                            " CPU leases, but effective affinity " +
+                            CpuPartitionManager.compressCpuset(effectiveAffinity) +
+                            " has an allowed CPU count of " + effectiveAffinity.size());
+        }
+
+        if (onlineCpus == null || onlineCpus.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select LocalBackend CPU leases: online CPU list is empty");
+        }
+        Set<Integer> online = new HashSet<>();
+        for (Integer cpu : onlineCpus) {
+            if (cpu == null || cpu < 0) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: online CPU list contains " +
+                                "an invalid CPU ID: " + cpu);
+            }
+            if (!online.add(cpu)) {
+                throw new IllegalStateException(
+                        "Cannot select LocalBackend CPU leases: online CPU list contains " +
+                                "duplicate CPU ID " + cpu);
+            }
+        }
+
+        List<Integer> schedulableCpus = new ArrayList<>();
+        for (int cpu : effectiveAffinity) {
+            if (online.contains(cpu)) {
+                schedulableCpus.add(cpu);
+            }
+        }
+        if (schedulableCpus.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select LocalBackend CPU leases: effective affinity " +
+                            CpuPartitionManager.compressCpuset(effectiveAffinity) +
+                            " contains no online CPUs");
+        }
+        if (concurrency > schedulableCpus.size()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY requests " + concurrency +
+                            " CPU leases, but effective/online CPU intersection " +
+                            CpuPartitionManager.compressCpuset(schedulableCpus) +
+                            " has a schedulable CPU count of " + schedulableCpus.size());
+        }
+
+        if (concurrency == 1) {
+            return Collections.singletonList(schedulableCpus.get(0));
+        }
+
+        Map<Integer, List<Integer>> topology = siblingTopology == null
+                ? Collections.emptyMap()
+                : siblingTopology;
+        if (topology.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select multiple LocalBackend CPU leases: sysfs " +
+                            "thread_siblings_list topology is unavailable");
+        }
+
+        Map<Integer, Set<Integer>> normalizedGroups = new HashMap<>();
+        for (int cpu : schedulableCpus) {
+            Set<Integer> group = normalizedSiblingGroup(cpu, topology, normalizedGroups);
+            for (int sibling : group) {
+                Set<Integer> reciprocal = normalizedSiblingGroup(
+                        sibling,
+                        topology,
+                        normalizedGroups);
+                if (!group.equals(reciprocal)) {
+                    throw new IllegalStateException(
+                            "Cannot select multiple LocalBackend CPU leases from asymmetric " +
+                                    "thread_siblings_list topology: CPU " + cpu + " reports " +
+                                    group + ", but CPU " + sibling + " reports " + reciprocal);
+                }
+            }
+        }
+
+        List<Integer> physicalCoreRepresentatives = new ArrayList<>();
+        Set<Set<Integer>> seenPhysicalCores = new HashSet<>();
+        for (int cpu : schedulableCpus) {
+            Set<Integer> group = normalizedGroups.get(cpu);
+            if (seenPhysicalCores.add(group)) {
+                physicalCoreRepresentatives.add(cpu);
+            }
+        }
+        if (concurrency > physicalCoreRepresentatives.size()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CONCURRENCY requests " + concurrency +
+                            " physical-core leases, but effective/online CPU intersection " +
+                            CpuPartitionManager.compressCpuset(schedulableCpus) +
+                            " provides only " + physicalCoreRepresentatives.size() +
+                            " distinct physical core" +
+                            (physicalCoreRepresentatives.size() == 1 ? "" : "s"));
+        }
+        return Collections.unmodifiableList(
+                new ArrayList<>(physicalCoreRepresentatives.subList(0, concurrency)));
+    }
+
+    private static Set<Integer> normalizedSiblingGroup(
+            int cpu,
+            Map<Integer, List<Integer>> topology,
+            Map<Integer, Set<Integer>> normalizedGroups) {
+        Set<Integer> cached = normalizedGroups.get(cpu);
+        if (cached != null) {
+            return cached;
+        }
+
+        List<Integer> siblings = topology.get(cpu);
+        if (siblings == null || siblings.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot select multiple LocalBackend CPU leases: sysfs " +
+                            "thread_siblings_list topology is unavailable for CPU " + cpu);
+        }
+
+        Set<Integer> group = new LinkedHashSet<>();
+        for (Integer sibling : siblings) {
+            if (sibling == null || sibling < 0) {
+                throw new IllegalStateException(
+                        "Malformed thread_siblings_list for CPU " + cpu +
+                                ": invalid sibling CPU ID " + sibling);
+            }
+            if (!group.add(sibling)) {
+                throw new IllegalStateException(
+                        "Malformed thread_siblings_list for CPU " + cpu +
+                                ": duplicate sibling CPU ID " + sibling);
+            }
+        }
+        if (!group.contains(cpu)) {
+            throw new IllegalStateException(
+                    "Malformed thread_siblings_list for CPU " + cpu +
+                            ": thread_siblings_list for CPU " + cpu +
+                            " does not include CPU " + cpu + " itself");
+        }
+
+        Set<Integer> normalized = Collections.unmodifiableSet(group);
+        normalizedGroups.put(cpu, normalized);
+        return normalized;
+    }
+
+    /**
      * Reads the kernel's effective scheduler affinity for this process.
      */
     static List<Integer> readEffectiveCpuAffinity(Path statusPath) {
@@ -1541,13 +1732,30 @@ public class LocalBackend implements Backend {
             }
         } catch (IOException | IllegalArgumentException e) {
             throw new IllegalStateException(
-                    "Cannot validate STAREXEC_LOCAL_CORE_LIST against effective CPU affinity " +
-                            "from " + statusPath,
+                    "Cannot read LocalBackend effective CPU affinity from " + statusPath,
                     e);
         }
         throw new IllegalStateException(
-                "Cannot validate STAREXEC_LOCAL_CORE_LIST: " + statusPath +
+                "Cannot read LocalBackend effective CPU affinity: " + statusPath +
                         " does not contain Cpus_allowed_list");
+    }
+
+    /**
+     * Reads the CPUs on which Linux can currently schedule work.
+     */
+    static List<Integer> readOnlineCpuList(Path onlinePath) {
+        if (onlinePath == null) {
+            throw new IllegalStateException("Cannot read online CPU list: path is null");
+        }
+        try {
+            String cpuset = Files.readString(onlinePath).trim();
+            return Collections.unmodifiableList(
+                    CpuPartitionManager.expandCpuset(cpuset));
+        } catch (IOException | IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    "Cannot read online CPU list from " + onlinePath,
+                    e);
+        }
     }
 
     private int getEnvInt(String key, int defaultValue) {
@@ -1597,14 +1805,7 @@ public class LocalBackend implements Backend {
 
         // Initialize available cores for CPU pinning
         availableCores = new LinkedBlockingQueue<>();
-        if (!configuredCores.isEmpty()) {
-            availableCores.addAll(configuredCores);
-        } else {
-            // Fallback to blind sequential assignment if not configured
-            for (int i = 0; i < maxConcurrency; i++) {
-                availableCores.offer(i);
-            }
-        }
+        availableCores.addAll(configuredCores);
 
         // Create thread pool with custom thread factory for better naming
         ThreadFactory threadFactory = new ThreadFactory() {

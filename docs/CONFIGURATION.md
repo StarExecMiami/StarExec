@@ -139,8 +139,8 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU_cores)` | Max parallel jobs (local backend) |
-| `STAREXEC_LOCAL_CORE_LIST` | unset | Ordered comma-separated logical CPU IDs. When set, startup validates every ID against `Cpus_allowed_list`, rejects empty/non-integer/negative/duplicate IDs and SMT siblings, and derives concurrency from the validated list. Multiple leases require readable sysfs sibling topology. |
+| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, JVM available processors)` | Max parallel jobs when `STAREXEC_LOCAL_CORE_LIST` is unset. LocalBackend selects one online, allowed logical CPU from each sysfs sibling group. Multiple leases require complete, reciprocal topology and fail if N exceeds the distinct physical-core count. A missing or malformed online mask fails startup. This does not reserve unused siblings from unrelated host workloads. |
+| `STAREXEC_LOCAL_CORE_LIST` | unset | Ordered comma-separated logical CPU IDs. When set, startup validates every ID against both `Cpus_allowed_list` and `/sys/devices/system/cpu/online`, rejects empty/non-integer/negative/duplicate IDs and SMT siblings, and derives concurrency from the validated list. Multiple leases require readable sysfs sibling topology. |
 | `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `4096` | Memory per container (4GB) |
 | `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `1` | CPU cores per container |
