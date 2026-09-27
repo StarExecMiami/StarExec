@@ -150,8 +150,6 @@ public class PodmanBackend implements Backend {
     private String jobImage;
     private boolean usePrebuiltImage;
     private long defaultMemoryMb;
-    private int defaultCpuLimit;
-    private int defaultWallclockLimit;
     private int maxConcurrentJobs = 1;
     private long exitedContainerCleanupAgeSeconds =
         EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
@@ -779,9 +777,6 @@ public class PodmanBackend implements Backend {
         jobImage = EnvironmentConfig.getContainerJobImage();
         usePrebuiltImage = EnvironmentConfig.getContainerUsePrebuiltImage();
         defaultMemoryMb = EnvironmentConfig.getContainerDefaultMemoryMb();
-        defaultCpuLimit = EnvironmentConfig.getContainerDefaultCpuLimit();
-        defaultWallclockLimit =
-            EnvironmentConfig.getContainerDefaultWallclockLimit();
         maxConcurrentJobs = EnvironmentConfig.getContainerMaxConcurrentJobs();
         exitedContainerCleanupAgeSeconds =
             EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
@@ -2300,15 +2295,12 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String outputDir
     ) {
-        // NOTE (issue #284): STAREXEC_CPU_LIMIT and STAREXEC_WALLCLOCK_LIMIT below are
-        // overwritten by the job script (it exports them from the queue/job limits),
-        // so these defaults never reach the solver. STAREXEC_CPU_LIMIT is CPU seconds,
-        // not a core count. Only defaultMemoryMb has an effect (HostConfig memory limit).
+        // CPU-time and wallclock budgets deliberately do not come from the container
+        // environment. JobManager renders each pair's queue/job limits into jobscript,
+        // which exports the authoritative values before the solver runs.
         List<String> envVars = new ArrayList<>(
             Arrays.asList(
                 "STAREXEC_PAIR_ID=" + pairId,
-                "STAREXEC_CPU_LIMIT=" + defaultCpuLimit,
-                "STAREXEC_WALLCLOCK_LIMIT=" + defaultWallclockLimit,
                 "STAREXEC_MEM_LIMIT=" + defaultMemoryMb,
                 "CONTAINER_MODE=true", // Signal to job script to use file-based communication
                 "STAREXEC_OUTPUT_DIR=" + outputDir

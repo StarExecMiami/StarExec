@@ -27,6 +27,7 @@ import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.jobs.JobManager;
 
 /**
  * Unit tests for PodmanBackend container-based job execution.
@@ -382,10 +383,115 @@ public class PodmanBackendTests {
             "ghcr.io/starexecmiami/starexec-job-runner:latest"
         );
         setBackendField("defaultMemoryMb", 2048L);
-        setBackendField("defaultCpuLimit", 600);
-        setBackendField("defaultWallclockLimit", 600);
         setBackendField("containerDataPath", "/app/data");
         setBackendField("hostDataPath", "");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> createEnvironmentVariables(
+        long pairId,
+        String workingDirectory,
+        String outputDirectory
+    ) throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "createEnvironmentVariables",
+            long.class,
+            String.class,
+            String.class
+        );
+        method.setAccessible(true);
+        return (List<String>) method.invoke(
+            backend,
+            pairId,
+            workingDirectory,
+            outputDirectory
+        );
+    }
+
+    private HostConfig createHostConfig(
+        String workingDirectory,
+        String logPath,
+        CpuPartition partition
+    ) throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "createHostConfig",
+            String.class,
+            String.class,
+            CpuPartition.class
+        );
+        method.setAccessible(true);
+        return (HostConfig) method.invoke(
+            backend,
+            workingDirectory,
+            logPath,
+            partition
+        );
+    }
+
+    @Test
+    public void pairBudgetsComeFromTheGeneratedJobscriptNotContainerDefaults()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+
+        assertFalse(
+            "the container environment must not invent a CPU-time budget that the"
+                + " generated jobscript immediately replaces",
+            environment.stream().anyMatch(value ->
+                value.startsWith("STAREXEC_CPU_LIMIT="))
+        );
+        assertFalse(
+            "the container environment must not invent a wallclock budget that the"
+                + " generated jobscript immediately replaces",
+            environment.stream().anyMatch(value ->
+                value.startsWith("STAREXEC_WALLCLOCK_LIMIT="))
+        );
+
+        String jobscript = Files.readString(
+            Path.of("src/main/java/org/starexec/config/sge/jobscript")
+        );
+        String generated = JobManager.addParametersToJobscript(
+            jobscript,
+            Map.of("$$MAX_CPUTIME$$", "137", "$$MAX_RUNTIME$$", "251")
+        );
+        assertTrue(
+            "the per-pair CPU budget must remain a generated jobscript value",
+            generated.contains("export STAREXEC_CPU_LIMIT='137'")
+        );
+        assertTrue(
+            "the per-pair wallclock budget must remain a generated jobscript value",
+            generated.contains("export STAREXEC_WALLCLOCK_LIMIT='251'")
+        );
+    }
+
+    @Test
+    public void containerMemoryDefaultStillBoundsHostConfigAndIsExposed()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        HostConfig hostConfig = createHostConfig(
+            "/app/data/jobin/job_1",
+            tempDir.resolve("job.log").toString(),
+            new CpuPartition(0, "0", "0")
+        );
+        long expectedBytes = 2048L * 1024L * 1024L;
+        assertEquals(Long.valueOf(expectedBytes), hostConfig.getMemory());
+        assertEquals(Long.valueOf(expectedBytes), hostConfig.getMemorySwap());
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+        assertTrue(
+            "GetComputerInfo must still receive the cgroup memory ceiling",
+            environment.contains("STAREXEC_MEM_LIMIT=2048")
+        );
     }
 
     private void configureCreateContainerSuccess(String containerId) {

@@ -1096,15 +1096,19 @@ podman stats
 **Solution:**
 
 ```bash
-# Increase the container memory limit
+# Increase the Podman cgroup memory ceiling
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
+
+# Example for a 16-physical-core host: four cores per solver partition
+export STAREXEC_CPU_PARTITION_COUNT=4
 make stop && make start
 ```
 
-`STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` does not add cores: it is CPU seconds and is
-overwritten by the job script. If a solver is slow because it is starved of cores, check the
-CPU partition width (`docs/cpu-partition-scheduling.md`) or `STAREXEC_CONTAINER_CPU_QUOTA_CORES`
-(an active CFS quota shows under `CpuQuota` in `podman inspect`).
+CPU-time and wallclock budgets must be changed in the StarExec queue/job. For
+scientific runs, derive partitions from the host topology as described in
+[CPU partition scheduling](cpu-partition-scheduling.md). On an unpartitioned
+host, `STAREXEC_CONTAINER_CPU_QUOTA_CORES` is only a CFS safety cap and does not
+provide affinity.
 
 ## Volume and Backup Issues
 
