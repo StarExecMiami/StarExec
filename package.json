@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "description": "Build tooling for StarExec web assets",
   "scripts": {
-    "sass-build": "sass --style=compressed --load-path=src/main/webapp/css src/main/webapp/css:src/main/webapp/css",
-    "lint:css": "stylelint 'src/main/webapp/css/**/*.scss'",
-    "lint:css:fix": "stylelint 'src/main/webapp/css/**/*.scss' --fix"
+    "sass-build": "sass --style=compressed --load-path=starexec-app/src/main/webapp/css starexec-app/src/main/webapp/css:starexec-app/src/main/webapp/css",
+    "lint:css": "stylelint 'starexec-app/src/main/webapp/css/**/*.scss'",
+    "lint:css:fix": "stylelint 'starexec-app/src/main/webapp/css/**/*.scss' --fix"
   },
   "devDependencies": {
     "jquery": "3.7.1",
