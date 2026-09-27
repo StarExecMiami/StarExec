@@ -5079,10 +5079,15 @@ public class KubernetesNativeBackend implements Backend {
             // directory is exactly the case this must refuse.
             Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
-                log.info(
-                    "Not ingesting stage snapshots for " + execution +
-                        ": this execution no longer owns its tracking"
-                );
+                // Both states still refuse ingestion. Only the diagnostic differs:
+                // missing artifacts for an owned execution are not a stale callback.
+                if (ownsTracking(execution)) {
+                    log.warn("Not ingesting stage snapshots for " + execution +
+                        ": execution owns its tracking but has no output directory mapping");
+                } else {
+                    log.info("Not ingesting stage snapshots for " + execution +
+                        ": this execution no longer owns its tracking");
+                }
                 return EarlierStages.RETRY;
             }
 

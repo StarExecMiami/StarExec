@@ -65,6 +65,46 @@ public class KubernetesNativeBackendTests {
     }
 
     @Test
+    public void ownedExecutionMissingOutputMappingIsNotReportedAsLostOwnership() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-owned-output");
+        KubernetesNativeBackend backend = backendWithOutputDir(987, dir);
+        ((Map<?, ?>) getField(backend, "execIdToOutputDir")).clear();
+        assertOutputMappingDiagnostic(backend, execution(987, "job-987"),
+            "execution owns its tracking but has no output directory mapping");
+    }
+
+    @Test
+    public void staleExecutionStillReportsLostOwnership() throws Exception {
+        assertOutputMappingDiagnostic(new KubernetesNativeBackend(), execution(987, "job-987"),
+            "this execution no longer owns its tracking");
+    }
+
+    private void assertOutputMappingDiagnostic(KubernetesNativeBackend backend,
+            ExecutionRef execution, String expected) throws Exception {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(KubernetesNativeBackend.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            Class<?> type = Class.forName(
+                "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback");
+            Constructor<?> ctor = type.getDeclaredConstructor(KubernetesNativeBackend.class);
+            ctor.setAccessible(true);
+            Method method = type.getDeclaredMethod("ingestEarlierStageStatuses",
+                ExecutionRef.class, int.class, int.class);
+            method.setAccessible(true);
+            assertEquals(false, method.invoke(ctor.newInstance(backend), execution, 77, 1));
+            assertTrue("expected diagnostic: " + expected,
+                appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains(expected)));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
     public void isErrorTreatsZeroAndNegativeAsError() {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
 
