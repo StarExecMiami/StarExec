@@ -36,6 +36,8 @@ import org.starexec.logger.StarLogger;
  * <ul>
  * <li>{@code STAREXEC_LOCAL_CONCURRENCY} - Number of concurrent jobs (default:
  * min(4, CPU cores))</li>
+ * <li>{@code STAREXEC_LOCAL_CORE_LIST} - Ordered comma-separated logical CPU
+ * leases. When set, its validated length determines concurrency.</li>
  * <li>{@code STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS} - Per-job timeout in seconds
  * (default: 3600)</li>
  * <li>{@code STAREXEC_LOCAL_USE_RUNSOLVER} - Whether to wrap jobs with
@@ -53,7 +55,10 @@ import org.starexec.logger.StarLogger;
  * Values higher than available cores may cause thrashing. For I/O-bound jobs,
  * higher values may be beneficial.
  * Default is conservative (min of 4 and CPU cores) to prevent system
- * overload.</li>
+ * overload. Ignored when {@code STAREXEC_LOCAL_CORE_LIST} is set.</li>
+ * <li><strong>STAREXEC_LOCAL_CORE_LIST</strong>: Select one allowed logical CPU
+ * per physical core. Startup rejects malformed or duplicate IDs, CPUs outside
+ * the process affinity, and two leases that are SMT siblings.</li>
  * <li><strong>STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS</strong>: Adjust based on
  * expected job duration.
  * Longer timeouts allow more complex jobs but increase resource usage for stuck
@@ -121,6 +126,8 @@ public class LocalBackend implements Backend {
             Runtime.getRuntime().availableProcessors());
     private static final int DEFAULT_JOB_TIMEOUT_SECONDS = 3600; // 1 hour
     private static final int DEFAULT_GRACEFUL_SHUTDOWN_SECONDS = 30;
+    private static final Path PROC_SELF_STATUS_PATH = Path.of("/proc/self/status");
+    private static final Path SYSFS_CPU_PATH = Path.of("/sys/devices/system/cpu");
 
     // Node and queue names
     private String nodeName = "local-node";
@@ -128,7 +135,7 @@ public class LocalBackend implements Backend {
 
     // Thread pool for concurrent job execution
     private ExecutorService executorService;
-    private String coreList;
+    private List<Integer> configuredCores = Collections.emptyList();
     private int maxConcurrency;
     private int jobTimeoutSeconds;
     private int gracefulShutdownSeconds;
@@ -1361,13 +1368,20 @@ public class LocalBackend implements Backend {
      */
     private void loadConfiguration() {
         // Concurrency level and Core Pinning
-        coreList = EnvironmentConfig.getLocalCoreList();
+        String coreList = EnvironmentConfig.getLocalCoreList();
         if (coreList != null && !coreList.trim().isEmpty()) {
-            // If core list is provided, concurrency is bounded by the number of configured cores
-            String[] cores = coreList.split(",");
-            maxConcurrency = cores.length;
-            log.info("Using explicitly configured core list for CPU pinning: " + coreList + " (Concurrency: " + maxConcurrency + ")");
+            List<Integer> parsedCores = parseConfiguredCoreList(coreList);
+            configuredCores = validateConfiguredCoreList(
+                    parsedCores,
+                    readEffectiveCpuAffinity(PROC_SELF_STATUS_PATH),
+                    CpuPartitionManager.readThreadSiblings(SYSFS_CPU_PATH));
+            // Concurrency is derived only after the complete lease list is valid.
+            maxConcurrency = configuredCores.size();
+            log.info(
+                    "Using validated core list for CPU pinning: " + configuredCores +
+                            " (Concurrency: " + maxConcurrency + ")");
         } else {
+            configuredCores = Collections.emptyList();
             maxConcurrency = getEnvInt(
                     "STAREXEC_LOCAL_CONCURRENCY",
                     DEFAULT_CONCURRENCY);
@@ -1409,6 +1423,131 @@ public class LocalBackend implements Backend {
                     "⚠️  CRITICAL SAFETY WARNING: Running untrusted jobs without resource limits! " +
                             "Set STAREXEC_LOCAL_USE_RUNSOLVER=true or disable untrusted job execution.");
         }
+    }
+
+    /**
+     * Parses the operator-provided lease list without reordering it.
+     *
+     * <p>Each entry is one worker lease, so accepting a duplicate would let two jobs run on
+     * the same logical CPU while the executor reports two independent slots.</p>
+     */
+    static List<Integer> parseConfiguredCoreList(String rawCoreList) {
+        if (rawCoreList == null || rawCoreList.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CORE_LIST must contain at least one CPU ID");
+        }
+
+        String[] tokens = rawCoreList.split(",", -1);
+        List<Integer> cores = new ArrayList<>(tokens.length);
+        Set<Integer> seen = new HashSet<>();
+        for (int i = 0; i < tokens.length; i++) {
+            String token = tokens[i].trim();
+            if (token.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST token " + (i + 1) +
+                                " is empty; provide comma-separated integer CPU IDs");
+            }
+
+            final int cpu;
+            try {
+                cpu = Integer.parseInt(token);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST token " + (i + 1) + " ('" + token +
+                                "') is not an integer CPU ID",
+                        e);
+            }
+            if (cpu < 0) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST CPU IDs must be non-negative; token " +
+                                (i + 1) + " was " + cpu);
+            }
+            if (!seen.add(cpu)) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST contains duplicate CPU ID " + cpu +
+                                "; each logical CPU can back only one concurrent job");
+            }
+            cores.add(cpu);
+        }
+        return Collections.unmodifiableList(cores);
+    }
+
+    /**
+     * Checks leases against the kernel affinity and physical-core topology.
+     */
+    static List<Integer> validateConfiguredCoreList(
+            List<Integer> cores,
+            List<Integer> effectiveAffinity,
+            Map<Integer, List<Integer>> siblingTopology) {
+        if (cores == null || cores.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "STAREXEC_LOCAL_CORE_LIST must contain at least one CPU ID");
+        }
+        if (effectiveAffinity == null || effectiveAffinity.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot validate STAREXEC_LOCAL_CORE_LIST: effective CPU affinity is empty");
+        }
+
+        Set<Integer> allowed = new HashSet<>(effectiveAffinity);
+        for (int cpu : cores) {
+            if (!allowed.contains(cpu)) {
+                throw new IllegalArgumentException(
+                        "STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
+                                " is outside this process's effective affinity " +
+                                CpuPartitionManager.compressCpuset(effectiveAffinity));
+            }
+        }
+
+        if (cores.size() > 1) {
+            Map<Integer, List<Integer>> topology = siblingTopology == null
+                    ? Collections.emptyMap()
+                    : siblingTopology;
+            Set<Integer> selected = new HashSet<>(cores);
+            for (int cpu : cores) {
+                List<Integer> siblings = topology.get(cpu);
+                if (siblings == null || siblings.isEmpty()) {
+                    throw new IllegalStateException(
+                            "Cannot validate STAREXEC_LOCAL_CORE_LIST CPU " + cpu +
+                                    ": sysfs thread_siblings_list topology is unavailable; " +
+                                    "refusing multiple scientific CPU leases");
+                }
+                for (int sibling : siblings) {
+                    if (sibling != cpu && selected.contains(sibling)) {
+                        throw new IllegalArgumentException(
+                                "STAREXEC_LOCAL_CORE_LIST CPUs " + cpu + " and " + sibling +
+                                        " are SMT siblings on the same physical core; select " +
+                                        "at most one logical CPU per physical core");
+                    }
+                }
+            }
+        }
+
+        return Collections.unmodifiableList(new ArrayList<>(cores));
+    }
+
+    /**
+     * Reads the kernel's effective scheduler affinity for this process.
+     */
+    static List<Integer> readEffectiveCpuAffinity(Path statusPath) {
+        final String field = "Cpus_allowed_list:";
+        try (BufferedReader reader = Files.newBufferedReader(statusPath)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith(field)) {
+                    String cpuset = line.substring(field.length()).trim();
+                    return Collections.unmodifiableList(
+                            CpuPartitionManager.expandCpuset(cpuset));
+                }
+            }
+        } catch (IOException | IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    "Cannot validate STAREXEC_LOCAL_CORE_LIST against effective CPU affinity " +
+                            "from " + statusPath,
+                    e);
+        }
+        throw new IllegalStateException(
+                "Cannot validate STAREXEC_LOCAL_CORE_LIST: " + statusPath +
+                        " does not contain Cpus_allowed_list");
     }
 
     private int getEnvInt(String key, int defaultValue) {
@@ -1458,18 +1597,8 @@ public class LocalBackend implements Backend {
 
         // Initialize available cores for CPU pinning
         availableCores = new LinkedBlockingQueue<>();
-        if (coreList != null && !coreList.trim().isEmpty()) {
-            String[] cores = coreList.split(",");
-            for (String core : cores) {
-                try {
-                    availableCores.offer(Integer.parseInt(core.trim()));
-                } catch (NumberFormatException e) {
-                    log.error("Invalid core ID in STAREXEC_LOCAL_CORE_LIST: " + core);
-                }
-            }
-            // CRITICAL: Ensure maxConcurrency exactly matches the number of valid cores leased
-            // to prevent executor threads from blocking indefinitely waiting for a core.
-            maxConcurrency = availableCores.size();
+        if (!configuredCores.isEmpty()) {
+            availableCores.addAll(configuredCores);
         } else {
             // Fallback to blind sequential assignment if not configured
             for (int i = 0; i < maxConcurrency; i++) {

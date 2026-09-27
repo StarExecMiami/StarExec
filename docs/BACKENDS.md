@@ -147,12 +147,21 @@ The Local Backend executes jobs as processes on the host system. It's simple and
 # Required
 export STAREXEC_BACKEND_TYPE=local
 
+# Choose one concurrency control (the validated core list takes precedence)
+export STAREXEC_LOCAL_CORE_LIST=0,2,4,6      # Example only; use IDs measured on this host
+# export STAREXEC_LOCAL_CONCURRENCY=4        # Used only when the core list is unset
+
 # Optional (with defaults)
-export STAREXEC_LOCAL_CONCURRENCY=4          # Max parallel jobs
 export STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS=3600   # 1 hour timeout
 export STAREXEC_LOCAL_USE_RUNSOLVER=false    # Use runsolver wrapper
 export STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS=30
 ```
+
+When `STAREXEC_LOCAL_CORE_LIST` is set, LocalBackend fails startup unless every
+entry is a unique, non-negative integer in the process's effective CPU affinity.
+It also rejects two entries that sysfs identifies as SMT siblings. The validated
+list order becomes the lease order, and its length is the executor concurrency.
+More than one lease requires readable sysfs `thread_siblings_list` topology.
 
 ### Concurrency Tuning
 
