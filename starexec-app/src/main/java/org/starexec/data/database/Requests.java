@@ -39,12 +39,11 @@ public class Requests {
 			ps.setInt(1, user.getId());
 			ps.setString(2, code);
 			Common.executeAndDrain(ps);
-			log.info(String.format("New email activation code [%s] added to VERIFY for user [%s]", code,
-			                       user.getFullName()
-			));
+			log.info(String.format("Email activation record added for user %d", user.getId()));
 			return true;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the activation value; omit exception details.
+			log.error(String.format("Adding email activation record failed for user %d", user.getId()));
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -462,10 +461,11 @@ public class Requests {
 			rs = stmt.executeQuery();
 			rs.next();
 			int userId = rs.getInt(1);
-			log.info(String.format("Activation code %s redeemed by user %d", codeFromUser, userId));
+			log.info(String.format("Email activation redemption returned user %d", userId));
 			return userId;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the activation value; omit exception details.
+			log.error("Email activation redemption failed");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(rs);
