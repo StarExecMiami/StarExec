@@ -85,7 +85,7 @@ public class Verify extends HttpServlet {
 			if (codeInDb.equals(codeParam)) {
 				Users.updateEmail(userId, newEmail);
 				Requests.deleteChangeEmailRequest(userId);
-				response.sendRedirect(Util.docRoot("public/messages/email_changed.jsp?email=" + newEmail));
+				response.sendRedirect(Util.docRoot("public/messages/email_changed.jsp"));
 			} else {
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 			}

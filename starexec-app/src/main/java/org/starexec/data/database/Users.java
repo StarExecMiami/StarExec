@@ -846,7 +846,6 @@ public class Users {
 	 */
 
 	public static boolean getUserByEmail(String email) {
-		log.debug("email = " + email);
 		Connection con = null;
 		java.sql.PreparedStatement procedure = null;
 		ResultSet results = null;
@@ -858,7 +857,8 @@ public class Users {
 
 			return results.next();
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to check whether an email address is registered");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);
@@ -1217,14 +1217,16 @@ public class Users {
 			procedure.setString(2, newValue);
 
 			procedure.execute();
-			log.info("User [" + userId + "] updated e-mail address to [" + newValue + "]");
+			log.info("User [" + userId + "] updated e-mail address");
 		} catch (PSQLException e) {
 			if ("P0002".equals(e.getSQLState())) {
-				throw new StarExecDatabaseException("User not found: " + userId, e);
+				throw new StarExecDatabaseException("User not found: " + userId);
 			}
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to update e-mail address for user [" + userId + "]");
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the bound address; omit exception details.
+			log.error("Failed to update e-mail address for user [" + userId + "]");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(procedure);

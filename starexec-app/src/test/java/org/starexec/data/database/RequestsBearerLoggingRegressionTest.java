@@ -1,5 +1,6 @@
 package org.starexec.data.database;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
@@ -23,6 +24,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -96,15 +98,22 @@ public class RequestsBearerLoggingRegressionTest {
 		String newEmail = "synthetic-audit@example.invalid";
 		AtomicReference<String> generatedCode = new AtomicReference<>();
 		Connection connection = mock(Connection.class);
-		PreparedStatement statement = mock(PreparedStatement.class);
-		when(connection.prepareStatement(anyString())).thenReturn(statement);
+		PreparedStatement lookupStatement = mock(PreparedStatement.class);
+		PreparedStatement claimStatement = mock(PreparedStatement.class);
+		ResultSet lookupResults = mock(ResultSet.class);
+		when(connection.prepareStatement(anyString())).thenAnswer(invocation -> {
+			String sql = invocation.getArgument(0, String.class);
+			return sql.contains("GetUserByEmail") ? lookupStatement : claimStatement;
+		});
+		when(lookupStatement.executeQuery()).thenReturn(lookupResults);
+		when(lookupResults.next()).thenReturn(false);
 		doAnswer(invocation -> {
 			if (invocation.getArgument(0, Integer.class) == 3) {
 				generatedCode.set(invocation.getArgument(1, String.class));
 			}
 			return null;
-		}).when(statement).setString(anyInt(), anyString());
-		when(statement.executeQuery()).thenAnswer(invocation -> {
+		}).when(claimStatement).setString(anyInt(), anyString());
+		when(claimStatement.executeQuery()).thenAnswer(invocation -> {
 			String code = generatedCode.get();
 			if (code == null) {
 				throw new AssertionError("Change-email code was not bound before execution");
@@ -117,20 +126,21 @@ public class RequestsBearerLoggingRegressionTest {
 		try (MockedStatic<SessionUtil> sessions = mockStatic(SessionUtil.class);
 		     MockedStatic<UserSecurity> userSecurity = mockStatic(UserSecurity.class);
 		     MockedStatic<GeneralSecurity> generalSecurity = mockStatic(GeneralSecurity.class);
-		     MockedStatic<Users> users = mockStatic(Users.class);
 		     MockedStatic<Common> common = mockStatic(Common.class)) {
 			sessions.when(() -> SessionUtil.getUserId(request)).thenReturn(userId);
 			userSecurity.when(() -> UserSecurity.canUpdateData(userId, userId, "email", newEmail))
 					.thenReturn(new ValidatorStatusCode(true));
 			generalSecurity.when(() -> GeneralSecurity.hasAdminWritePrivileges(userId)).thenReturn(false);
-			users.when(() -> Users.getUserByEmail(newEmail)).thenReturn(false);
 			common.when(Common::getConnection).thenReturn(connection);
 
-			assertFailureDoesNotLeak(RESTServices.class, List.of(generatedCode::get, () -> newEmail), () -> {
+			assertFailureDoesNotLeak(List.of(RESTServices.class, Users.class),
+					List.of(generatedCode::get, () -> newEmail), () -> {
 				String response = new RESTServices().editUserInfoFromBody(userId, request);
 				assertTrue(response.contains("verification link has been sent"));
 				assertNotNull("Expected the production route to generate a bearer code", generatedCode.get());
-				verify(statement).setString(3, generatedCode.get());
+				verify(lookupStatement).setString(1, newEmail);
+				verify(claimStatement).setString(2, newEmail);
+				verify(claimStatement).setString(3, generatedCode.get());
 			});
 		}
 	}
@@ -176,8 +186,14 @@ public class RequestsBearerLoggingRegressionTest {
 	private static void assertFailureDoesNotLeak(
 			Class<?> loggerClass, List<Supplier<String>> bearerSuppliers, ThrowingRunnable operation
 	) throws Exception {
+		assertFailureDoesNotLeak(List.of(loggerClass), bearerSuppliers, operation);
+	}
+
+	private static void assertFailureDoesNotLeak(
+			List<Class<?>> loggerClasses, List<Supplier<String>> bearerSuppliers, ThrowingRunnable operation
+	) throws Exception {
 		List<String> persistedMessages = new ArrayList<>();
-		try (LogCapture logs = new LogCapture(loggerClass);
+		try (LogCapture logs = new LogCapture(loggerClasses);
 		     MockedStatic<ErrorLogs> errors = mockStatic(ErrorLogs.class)) {
 			errors.when(() -> ErrorLogs.add(anyString(), any(StarLevel.class))).thenAnswer(invocation -> {
 				persistedMessages.add(invocation.getArgument(0, String.class));
@@ -256,23 +272,36 @@ public class RequestsBearerLoggingRegressionTest {
 	}
 
 	private static final class LogCapture implements AutoCloseable {
-		private final Logger logger;
+		private final List<Logger> loggers = new ArrayList<>();
+		private final List<Boolean> additiveStates = new ArrayList<>();
+		private final List<Level> levels = new ArrayList<>();
 		private final ListAppender<ILoggingEvent> appender = new ListAppender<>();
-		private final boolean additive;
 		private final List<ILoggingEvent> events = appender.list;
 
 		private LogCapture(Class<?> loggerClass) {
-			logger = (Logger) LoggerFactory.getLogger(loggerClass);
-			additive = logger.isAdditive();
+			this(List.of(loggerClass));
+		}
+
+		private LogCapture(List<Class<?>> loggerClasses) {
 			appender.start();
-			logger.setAdditive(false);
-			logger.addAppender(appender);
+			for (Class<?> loggerClass : loggerClasses) {
+				Logger logger = (Logger) LoggerFactory.getLogger(loggerClass);
+				loggers.add(logger);
+				additiveStates.add(logger.isAdditive());
+				levels.add(logger.getLevel());
+				logger.setLevel(Level.DEBUG);
+				logger.setAdditive(false);
+				logger.addAppender(appender);
+			}
 		}
 
 		@Override
 		public void close() {
-			logger.detachAppender(appender);
-			logger.setAdditive(additive);
+			for (int i = 0; i < loggers.size(); i++) {
+				loggers.get(i).detachAppender(appender);
+				loggers.get(i).setAdditive(additiveStates.get(i));
+				loggers.get(i).setLevel(levels.get(i));
+			}
 			appender.stop();
 		}
 	}
