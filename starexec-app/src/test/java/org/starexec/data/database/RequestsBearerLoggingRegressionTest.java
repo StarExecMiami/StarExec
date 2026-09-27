@@ -12,6 +12,7 @@ import org.starexec.data.security.GeneralSecurity;
 import org.starexec.data.security.UserSecurity;
 import org.starexec.data.security.ValidatorStatusCode;
 import org.starexec.data.to.User;
+import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.logger.StarLevel;
 import org.starexec.util.SessionUtil;
 
@@ -108,7 +109,7 @@ public class RequestsBearerLoggingRegressionTest {
 			if (code == null) {
 				throw new AssertionError("Change-email code was not bound before execution");
 			}
-			throw new SQLException("Database parameter: " + code);
+			throw new SQLException("Database parameters: " + code + " " + newEmail);
 		});
 
 		HttpServletRequest request = requestWithBody(
@@ -125,7 +126,7 @@ public class RequestsBearerLoggingRegressionTest {
 			users.when(() -> Users.getUserByEmail(newEmail)).thenReturn(false);
 			common.when(Common::getConnection).thenReturn(connection);
 
-			assertFailureDoesNotLeak(RESTServices.class, generatedCode::get, () -> {
+			assertFailureDoesNotLeak(RESTServices.class, List.of(generatedCode::get, () -> newEmail), () -> {
 				String response = new RESTServices().editUserInfoFromBody(userId, request);
 				assertTrue(response.contains("verification link has been sent"));
 				assertNotNull("Expected the production route to generate a bearer code", generatedCode.get());
@@ -134,8 +135,46 @@ public class RequestsBearerLoggingRegressionTest {
 		}
 	}
 
+	@Test
+	public void directEmailChangeRequestDoesNotExposeBoundValuesOrDatabaseCause() throws Exception {
+		int userId = 42;
+		String newEmail = "synthetic-direct@example.invalid";
+		String code = "10000000-0000-4000-8000-000000000005";
+		Connection connection = mock(Connection.class);
+		PreparedStatement statement = mock(PreparedStatement.class);
+		SQLException echoed = new SQLException("Database parameters: " + newEmail + " " + code);
+		when(connection.prepareStatement(anyString())).thenReturn(statement);
+
+		try (MockedStatic<Common> common = mockStatic(Common.class)) {
+			common.when(Common::getConnection).thenReturn(connection);
+			common.when(() -> Common.executeAndDrain(statement)).thenThrow(echoed);
+
+			StarExecDatabaseException thrown = null;
+			try {
+				Requests.addChangeEmailRequest(userId, newEmail, code);
+				fail("Expected addChangeEmailRequest to preserve its database-error contract");
+			} catch (StarExecDatabaseException e) {
+				thrown = e;
+			}
+
+			assertNotNull(thrown);
+			assertFalse("New email leaked into exception message", contains(thrown.getMessage(), newEmail));
+			assertFalse("Verification code leaked into exception message", contains(thrown.getMessage(), code));
+			assertNull("A database cause can echo bound values", thrown.getCause());
+			verify(statement).setInt(1, userId);
+			verify(statement).setString(2, newEmail);
+			verify(statement).setString(3, code);
+		}
+	}
+
 	private static void assertFailureDoesNotLeak(
 			Class<?> loggerClass, Supplier<String> bearerSupplier, ThrowingRunnable operation
+	) throws Exception {
+		assertFailureDoesNotLeak(loggerClass, List.of(bearerSupplier), operation);
+	}
+
+	private static void assertFailureDoesNotLeak(
+			Class<?> loggerClass, List<Supplier<String>> bearerSuppliers, ThrowingRunnable operation
 	) throws Exception {
 		List<String> persistedMessages = new ArrayList<>();
 		try (LogCapture logs = new LogCapture(loggerClass);
@@ -145,22 +184,24 @@ public class RequestsBearerLoggingRegressionTest {
 				return Optional.of(1);
 			});
 			operation.run();
-			String bearer = bearerSupplier.get();
-			assertNotNull("Expected a synthetic bearer value", bearer);
 			assertFalse("Expected the failure to be logged", logs.events.isEmpty());
 			assertFalse("Expected the failure to be recorded through ErrorLogs.add", persistedMessages.isEmpty());
 
-			List<String> leakChannels = new ArrayList<>();
-			if (logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), bearer))) {
-				leakChannels.add("formatted-message");
+			for (Supplier<String> bearerSupplier : bearerSuppliers) {
+				String bearer = bearerSupplier.get();
+				assertNotNull("Expected a synthetic bearer value", bearer);
+				List<String> leakChannels = new ArrayList<>();
+				if (logs.events.stream().anyMatch(event -> contains(event.getFormattedMessage(), bearer))) {
+					leakChannels.add("formatted-message");
+				}
+				if (logs.events.stream().anyMatch(event -> throwableContains(event.getThrowableProxy(), bearer))) {
+					leakChannels.add("throwable-or-cause");
+				}
+				if (persistedMessages.stream().anyMatch(message -> contains(message, bearer))) {
+					leakChannels.add("ErrorLogs.add");
+				}
+				assertTrue("Synthetic bearer leaked through " + leakChannels, leakChannels.isEmpty());
 			}
-			if (logs.events.stream().anyMatch(event -> throwableContains(event.getThrowableProxy(), bearer))) {
-				leakChannels.add("throwable-or-cause");
-			}
-			if (persistedMessages.stream().anyMatch(message -> contains(message, bearer))) {
-				leakChannels.add("ErrorLogs.add");
-			}
-			assertTrue("Synthetic bearer leaked through " + leakChannels, leakChannels.isEmpty());
 		}
 	}
 
