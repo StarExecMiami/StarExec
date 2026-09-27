@@ -5229,10 +5229,32 @@ public class KubernetesNativeBackend implements Backend {
                 throws StageStatusSnapshots.InvalidSnapshotException {
             if (record == null) {
                 throw new StageStatusSnapshots.InvalidSnapshotException(
-                    "status.json for " + execution + " is absent, so its stage is unknown"
+                    "status.json for " + execution + " is absent, so its stage is unknown; "
+                        + missingOutputDiagnostic(execution)
                 );
             }
             return FinalStatusStage.requireStageOrPairLevel(record, String.valueOf(execution));
+        }
+
+        /** Diagnose the existing absent-record refusal without changing its classification. */
+        private String missingOutputDiagnostic(ExecutionRef execution) {
+            Path outputDir = ownedOutputDir(execution);
+            if (outputDir == null) {
+                return ownsTracking(execution)
+                    ? "execution owns its tracking but has no output directory mapping"
+                    : "this execution no longer owns its tracking";
+            }
+            try (java.nio.file.DirectoryStream<Path> entries = Files.newDirectoryStream(outputDir)) {
+                // Some providers defer access failures until iteration starts.
+                entries.iterator().hasNext();
+                return "output directory is readable but status.json is missing";
+            } catch (java.nio.file.NoSuchFileException e) {
+                return "output directory is missing";
+            } catch (java.nio.file.NotDirectoryException e) {
+                return "output path is not a directory";
+            } catch (IOException | java.nio.file.DirectoryIteratorException | SecurityException e) {
+                return "output directory cannot be read: " + e.getClass().getSimpleName();
+            }
         }
 
         private Path resolveStatusPath(ExecutionRef execution) {

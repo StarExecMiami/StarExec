@@ -65,6 +65,61 @@ public class KubernetesNativeBackendTests {
     }
 
     @Test
+    public void missingKubernetesOutputParentHasDistinctDiagnostic() throws Exception {
+        assertMissingKubernetesOutputDiagnostic(java.nio.file.Files.createTempDirectory(
+            "k8s-missing-parent").resolve("absent"), "output directory is missing");
+    }
+
+    @Test
+    public void nonDirectoryKubernetesOutputParentHasDistinctDiagnostic() throws Exception {
+        assertMissingKubernetesOutputDiagnostic(java.nio.file.Files.createTempFile(
+            "k8s-output-file", ".tmp"), "output path is not a directory");
+    }
+
+    @Test
+    public void readableEmptyKubernetesOutputHasDistinctDiagnostic() throws Exception {
+        assertMissingKubernetesOutputDiagnostic(java.nio.file.Files.createTempDirectory(
+            "k8s-empty-parent"), "output directory is readable but status.json is missing");
+    }
+
+    @Test
+    public void deniedKubernetesOutputParentHasDistinctDiagnostic() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-denied-parent");
+        try (org.mockito.MockedStatic<java.nio.file.Files> files = org.mockito.Mockito.mockStatic(
+                java.nio.file.Files.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            files.when(() -> java.nio.file.Files.newDirectoryStream(dir))
+                .thenThrow(new java.nio.file.AccessDeniedException(dir.toString()));
+            assertMissingKubernetesOutputDiagnostic(dir,
+                "output directory cannot be read: AccessDeniedException");
+            files.verify(() -> java.nio.file.Files.newDirectoryStream(dir));
+        }
+    }
+
+    private void assertMissingKubernetesOutputDiagnostic(Path dir, String expected) throws Exception {
+        KubernetesNativeBackend backend = backendWithOutputDir(986, dir);
+        Class<?> type = Class.forName(
+            "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback");
+        Constructor<?> ctor = type.getDeclaredConstructor(KubernetesNativeBackend.class);
+        ctor.setAccessible(true);
+        Object callback = ctor.newInstance(backend);
+        Method read = type.getDeclaredMethod("readStatusRecord", ExecutionRef.class);
+        read.setAccessible(true);
+        ExecutionRef ref = execution(986, "job-986");
+        Object record = read.invoke(callback, ref);
+        assertNull(record);
+        Method stage = type.getDeclaredMethod("readStageNumber", ExecutionRef.class,
+            com.google.gson.JsonObject.class);
+        stage.setAccessible(true);
+        try {
+            stage.invoke(callback, ref, record);
+            org.junit.Assert.fail("absent terminal evidence must still be refused");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            assertTrue(e.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
+            assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains(expected));
+        }
+    }
+
+    @Test
     public void ownedExecutionMissingOutputMappingIsNotReportedAsLostOwnership() throws Exception {
         Path dir = java.nio.file.Files.createTempDirectory("k8s-owned-output");
         KubernetesNativeBackend backend = backendWithOutputDir(987, dir);
