@@ -308,7 +308,7 @@ public interface Backend {
 │   │   │ Core pool: min(4, CPU_cores)                │   │   │
 │   │   │ Max pool: configurable                      │   │   │
 │   │   │ Queue: bounded (10,000)                     │   │   │
-│   │   │ Policy: CallerRunsPolicy (backpressure)     │   │   │
+│   │   │ Policy: AbortPolicy (submission deferred)   │   │   │
 │   │   └─────────────────────────────────────────────┘   │   │
 │   └─────────────────────────────────────────────────────┘   │
 │                              │                              │
