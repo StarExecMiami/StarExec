@@ -3,18 +3,6 @@ package org.starexec.test.integration;
 import org.apache.commons.io.FileUtils;
 import org.starexec.constants.R;
 import org.starexec.logger.StarLogger;
-import org.starexec.test.integration.StateTests.IntroStateTests;
-import org.starexec.test.integration.app.RESTHelpersTests;
-import org.starexec.test.integration.app.RESTServicesSecurityTests;
-import org.starexec.test.integration.database.*;
-import org.starexec.test.integration.security.*;
-import org.starexec.test.integration.servlets.BenchmarkUploaderTests;
-import org.starexec.test.integration.util.JobUtilTests;
-import org.starexec.test.integration.util.XMLValidationTests;
-import org.starexec.test.integration.util.dataStructures.TreeNodeTests;
-import org.starexec.test.integration.web.GetPageTests;
-import org.starexec.test.integration.web.StarexecCommandTests;
-import org.starexec.util.Util;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -35,56 +23,21 @@ public class TestManager {
 	private static final StarLogger log = StarLogger.getLogger(TestManager.class);
 	private final static AtomicBoolean isRunning = new AtomicBoolean(false);
 	private final static AtomicBoolean isRunningStress = new AtomicBoolean(false);
-	// this should never be modified outside of the initializeTests method
-	private final static List<TestSequence> tests = new ArrayList<>();
+	private static volatile List<TestSequence> tests = List.of();
 
 	/**
-	 * all test sequences need to be initialized here. Simply add new TestSequences
-	 * to the
-	 * list of all tests. This is called once on Starexec startup.
+	 * Discovers and instantiates all test sequences once. Repeated startup callbacks
+	 * retain the same ordered instances and cannot duplicate the registry.
 	 */
-	public static void initializeTests() {
-		tests.add(new AnonymousLinkTests());
-		tests.add(new SolverTests());
-		tests.add(new SpaceTests());
-		tests.add(new StarexecCommandTests());
-		tests.add(new SolverSecurityTests());
-		tests.add(new ValidatorTests());
-		tests.add(new UserSecurityTests());
-		tests.add(new QueueSecurityTests());
-		tests.add(new GeneralSecurityTests());
-		tests.add(new JobSecurityTests());
-		tests.add(new BenchmarkSecurityTests());
-		tests.add(new UserTests());
-		tests.add(new PermissionsTests());
-		tests.add(new IntroStateTests());
-		tests.add(new UtilTests());
-		tests.add(new SpaceSecurityTests());
-		tests.add(new WebsiteTests());
-		tests.add(new BenchmarkTests());
-		tests.add(new ProcessorTests());
-		tests.add(new JobTests());
-		tests.add(new GetPageTests());
-		tests.add(new JobPairTests());
-		tests.add(new ClusterTests());
-		tests.add(new QueueTests());
-		tests.add(new DefaultSettingsTests());
-		tests.add(new UploadTests());
-		tests.add(new RequestsTests());
-		tests.add(new PipelineTests());
-		tests.add(new TreeNodeTests());
-		tests.add(new RESTHelpersTests());
-		tests.add(new CommunitiesTests());
-		tests.add(new ProcessorSecurityTests());
-		tests.add(new StatisticsTests());
-		tests.add(new UploadSecurityTests());
-		tests.add(new RESTServicesSecurityTests());
-		tests.add(new WebsiteSecurityTests());
-		tests.add(new JobUtilTests());
-		tests.add(new ReportsTests());
-		tests.add(new ErrorLogsTests());
-		tests.add(new BenchmarkUploaderTests());
-		tests.add(new XMLValidationTests());
+	public static synchronized void initializeTests() {
+		if (!tests.isEmpty()) {
+			return;
+		}
+		List<TestSequence> discovered = new ArrayList<>();
+		for (TestSequenceDiscovery.DiscoveredSequence sequence : TestSequenceDiscovery.discover()) {
+			discovered.add(TestSequenceDiscovery.instantiate(sequence));
+		}
+		tests = List.copyOf(discovered);
 	}
 
 	/**
