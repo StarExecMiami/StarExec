@@ -519,7 +519,7 @@ public class JobsRerunProtocolSqlTest extends Common {
 			assertEquals("the rerun reclaimed its pair and stats added only the other pair's delta",
 					3072L, diskSizeOfJob(jobId));
 			assertEquals("the user total changed by the same net delta",
-					fixtureUserDiskSize + 3072L, diskSizeOfUser(fixtureUserId));
+					3072L, diskSizeOfUser(fixtureUserId));
 			assertEquals("the rerun reclaimed its stage's bytes", 0L, stageDiskSize(pairId, 1));
 			assertEquals("the stats write replaced the stage amount", 3072L,
 					stageDiskSize(statsPairId, 1));
@@ -575,7 +575,11 @@ public class JobsRerunProtocolSqlTest extends Common {
 				}
 				try (PreparedStatement ps = con.prepareStatement(
 						"UPDATE starexec.users SET disk_size = ? WHERE id = ?")) {
-					ps.setLong(1, fixtureUserDiskSize + 6144L);
+					// An absolute value, not one relative to the shared user's current total: the
+					// rerun clamps users.disk_size at 0 (GREATEST), so a user left negative by
+					// another suite would make the expected net delta below unreachable.
+					// @After restores fixtureUserDiskSize.
+					ps.setLong(1, 6144L);
 					ps.setInt(2, fixtureUserId);
 					assertEquals(1, ps.executeUpdate());
 				}
