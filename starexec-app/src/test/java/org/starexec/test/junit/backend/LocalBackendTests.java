@@ -462,12 +462,13 @@ public class LocalBackendTests {
             CountDownLatch controlStarted = new CountDownLatch(1);
             control = callers.submit(() -> {
                 controlStarted.countDown();
-                return backend.killPair(Integer.MIN_VALUE);
+                // Both monitor-holding control paths must stay responsive.
+                return !backend.killPair(Integer.MIN_VALUE) && backend.killAll();
             });
             Assert.assertTrue(controlStarted.await(2, TimeUnit.SECONDS));
             boolean controlCompleted = false;
             try {
-                Assert.assertFalse(control.get(500, TimeUnit.MILLISECONDS));
+                Assert.assertTrue(control.get(500, TimeUnit.MILLISECONDS));
                 controlCompleted = true;
             } catch (TimeoutException expectedWhenCallerRuns) {
                 // Released below so the baseline failure does not strand a solver process.
@@ -494,6 +495,8 @@ public class LocalBackendTests {
                 "a saturated solver must not run on its submitting thread");
             Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
                 "a rejected or completed submission must not leave a tracked execution ID");
+            Assert.assertEquals(((LocalBackend) backend).getQueuedJobCount(), 0);
+            Assert.assertEquals(((LocalBackend) backend).getRunningJobCount(), 0);
 
             saturatedExecutor.getQueue().clear();
             int queuedId = backend.submitScript(
@@ -531,6 +534,69 @@ public class LocalBackendTests {
             saturatedExecutor.shutdownNow();
             callers.awaitTermination(2, TimeUnit.SECONDS);
             saturatedExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void saturatedNonPairSubmissionReturnsErrorAndLeavesNothingTracked() throws Exception {
+        waitForFixtureJob();
+
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        ThreadPoolExecutor saturatedExecutor = replaceWithSingleWorkerExecutor(false);
+        Path solverStarted = tempDir.resolve("non-pair-solver-started");
+        Path script = executableScript(
+            "non-pair-job.sh", "touch '" + solverStarted + "'");
+        Path workDir = Files.createDirectory(tempDir.resolve("non-pair-work"));
+        Path logPath = tempDir.resolve("non-pair-output/job.log");
+
+        try {
+            occupyWorkerAndQueue(saturatedExecutor, releaseWorker);
+
+            int execId = backend.submitScript(
+                -1, script.toString(), workDir.toString(), logPath.toString());
+
+            Assert.assertEquals(execId, -1,
+                "a saturated maintenance submission reports an error instead of running inline");
+            Assert.assertFalse(Files.exists(solverStarted));
+            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty());
+        } finally {
+            releaseWorker.countDown();
+            saturatedExecutor.shutdownNow();
+            saturatedExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void unexpectedHandOffFailureLeavesNothingTracked() throws Exception {
+        waitForFixtureJob();
+
+        Field executorField = LocalBackend.class.getDeclaredField("executorService");
+        executorField.setAccessible(true);
+        ThreadPoolExecutor configuredExecutor =
+            (ThreadPoolExecutor) executorField.get(backend);
+        configuredExecutor.shutdownNow();
+        Assert.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
+        ThreadPoolExecutor failing = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1)) {
+            @Override
+            public void execute(Runnable command) {
+                throw new IllegalStateException("simulated hand-off failure");
+            }
+        };
+        executorField.set(backend, failing);
+        Path script = executableScript("hand-off-failure.sh", "true");
+        Path workDir = Files.createDirectory(tempDir.resolve("hand-off-work"));
+        Path logPath = tempDir.resolve("hand-off-output/job.log");
+
+        try {
+            int execId = backend.submitScript(
+                42, script.toString(), workDir.toString(), logPath.toString());
+
+            Assert.assertEquals(execId, -1);
+            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+                "a failed hand-off must not leave a tracked execution ID");
+        } finally {
+            failing.shutdownNow();
         }
     }
 

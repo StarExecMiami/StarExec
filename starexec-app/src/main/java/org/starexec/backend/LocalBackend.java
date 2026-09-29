@@ -1045,6 +1045,14 @@ public class LocalBackend implements Backend {
                                     " stays queued");
                 }
                 return -1;
+            } catch (RuntimeException e) {
+                // Any other hand-off failure must not strand the entry registered above;
+                // the outer handler reports it and returns -1.
+                future.cancel(false);
+                job.state = LocalJob.JobState.FAILED;
+                job.completedAt = System.currentTimeMillis();
+                activeJobs.remove(execId, job);
+                throw e;
             }
 
             log.debug(
