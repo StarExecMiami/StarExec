@@ -22,6 +22,10 @@ final class LegacyTestLayerInventory {
 		this.layersByIdentity = Map.copyOf(layersByIdentity);
 	}
 
+	static LegacyTestLayerInventory of(Map<String, Layer> layersByIdentity) {
+		return new LegacyTestLayerInventory(layersByIdentity);
+	}
+
 	static LegacyTestLayerInventory load() {
 		InputStream stream = LegacyTestLayerInventory.class.getResourceAsStream(RESOURCE);
 		if (stream == null) {
@@ -117,7 +121,7 @@ final class LegacyTestLayerInventory {
 				+ (ordered.size() > displayed ? " ..." : "");
 	}
 
-	private enum Layer {
+	enum Layer {
 		COMPONENT_DAO,
 		BACKEND_INTEGRATION,
 		DEPLOYED_E2E,

@@ -33,11 +33,19 @@ public class TestManager {
 		if (!tests.isEmpty()) {
 			return;
 		}
+		List<TestSequenceDiscovery.DiscoveredSequence> sequences = TestSequenceDiscovery.discover();
+		tests = instantiateReadySequences(sequences, LegacyTestLayerInventory.load());
+	}
+
+	static List<TestSequence> instantiateReadySequences(
+			List<TestSequenceDiscovery.DiscoveredSequence> sequences,
+			LegacyTestLayerInventory inventory) {
+		inventory.validateReady(sequences);
 		List<TestSequence> discovered = new ArrayList<>();
-		for (TestSequenceDiscovery.DiscoveredSequence sequence : TestSequenceDiscovery.discover()) {
+		for (TestSequenceDiscovery.DiscoveredSequence sequence : sequences) {
 			discovered.add(TestSequenceDiscovery.instantiate(sequence));
 		}
-		tests = List.copyOf(discovered);
+		return List.copyOf(discovered);
 	}
 
 	/**
@@ -73,6 +81,7 @@ public class TestManager {
 		if (!R.ALLOW_TESTING) {
 			return false; // right now, don't run anything on production
 		}
+		initializeTests();
 		// don't do anything if the tests are already running
 		if (!isRunning.compareAndSet(false, true)) {
 			return false;
@@ -126,6 +135,7 @@ public class TestManager {
 		if (!R.ALLOW_TESTING) {
 			return false; // right now, don't run anything on production
 		}
+		initializeTests();
 		// don't run anything if we are already going
 		if (!isRunning.compareAndSet(false, true)) {
 			return false;
@@ -198,6 +208,7 @@ public class TestManager {
 	 * @param test
 	 */
 	public static void executeTest(TestSequence test) {
+		initializeTests();
 		test.execute();
 	}
 

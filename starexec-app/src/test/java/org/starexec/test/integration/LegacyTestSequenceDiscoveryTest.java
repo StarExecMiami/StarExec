@@ -1,12 +1,12 @@
 package org.starexec.test.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -57,19 +57,48 @@ public class LegacyTestSequenceDiscoveryTest {
 	}
 
 	@Test
-	public void testManagerInitializesFromDiscoveryOnlyOnce() {
-		List<Class<? extends TestSequence>> discoveredClasses = TestSequenceDiscovery.discover().stream()
-				.map(TestSequenceDiscovery.DiscoveredSequence::sequenceClass)
-				.collect(Collectors.toList());
+	public void testManagerStopsAtInventoryPreflightWithoutRegisteringSequences() {
+		assertTrue(TestManager.getAllTestSequences().isEmpty());
 
-		TestManager.initializeTests();
-		List<TestSequence> firstInitialization = TestManager.getAllTestSequences();
-		TestManager.initializeTests();
-		List<TestSequence> secondInitialization = TestManager.getAllTestSequences();
+		IllegalStateException first = assertThrows(IllegalStateException.class,
+				TestManager::initializeTests);
+		IllegalStateException second = assertThrows(IllegalStateException.class,
+				TestManager::initializeTests);
 
-		assertSame(firstInitialization, secondInitialization);
-		assertEquals(discoveredClasses,
-				firstInitialization.stream().map(TestSequence::getClass).collect(Collectors.toList()));
+		assertTrue(first.getMessage().contains("725 UNVERIFIED"));
+		assertEquals(first.getMessage(), second.getMessage());
+		assertTrue(TestManager.getAllTestSequences().isEmpty());
+	}
+
+	@Test
+	public void testManagerValidatesBeforeInstantiatingDiscoveredSequences() {
+		BlockedManagerSequence.reset();
+		List<TestSequenceDiscovery.DiscoveredSequence> sequences =
+				TestSequenceDiscovery.inspectClasses(List.of(BlockedManagerSequence.class));
+		String identity = TestSequenceDiscovery.identity(
+				BlockedManagerSequence.class, sequences.get(0).testMethods().get(0));
+		LegacyTestLayerInventory inventory = LegacyTestLayerInventory.of(
+				Map.of(identity, LegacyTestLayerInventory.Layer.UNVERIFIED));
+
+		IllegalStateException error = assertThrows(IllegalStateException.class,
+				() -> TestManager.instantiateReadySequences(sequences, inventory));
+
+		assertTrue(error.getMessage().contains("1 UNVERIFIED"));
+		assertEquals(0, BlockedManagerSequence.constructions);
+		assertEquals(0, BlockedManagerSequence.executions);
+	}
+
+	@Test
+	public void testManagerExecuteTestRechecksPreflightBeforeExecution() {
+		BlockedManagerSequence.reset();
+		BlockedManagerSequence sequence = new BlockedManagerSequence();
+
+		IllegalStateException error = assertThrows(IllegalStateException.class,
+				() -> TestManager.executeTest(sequence));
+
+		assertTrue(error.getMessage().contains("725 UNVERIFIED"));
+		assertEquals(1, BlockedManagerSequence.constructions);
+		assertEquals(0, BlockedManagerSequence.executions);
 	}
 
 	@Test
@@ -159,6 +188,25 @@ public class LegacyTestSequenceDiscoveryTest {
 		@StarexecTest
 		private int returnsValue() {
 			return 1;
+		}
+	}
+
+	private static final class BlockedManagerSequence extends InMemorySequence {
+		private static int constructions;
+		private static int executions;
+
+		private BlockedManagerSequence() {
+			constructions++;
+		}
+
+		private static void reset() {
+			constructions = 0;
+			executions = 0;
+		}
+
+		@StarexecTest
+		private void wouldExecute() {
+			executions++;
 		}
 	}
 }
