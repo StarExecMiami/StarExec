@@ -43,6 +43,7 @@ import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.database.PairStatusResult;
+import org.starexec.data.database.StageStatusBatchResult;
 import org.starexec.data.to.Status.StatusCode;
 
 /**
@@ -3579,5 +3580,314 @@ public class KubernetesNativeBackendTests {
     @Test
     public void aWorkingDirectoryUnderHomeGetsNoSecondMount() throws Exception {
         assertOnlyDataAndTmpMounted(podSpecFor("/app/home/work"));
+    }
+
+    // ---- #185: result writes are fenced on the attempt captured at submit ----------------
+
+    private static final int COMPLETE = StatusCode.STATUS_COMPLETE.getVal();
+    private static final int NOT_REACHED = StatusCode.STATUS_NOT_REACHED.getVal();
+
+    /** An output directory holding a terminal status.json for {@code stage}, and optionally more. */
+    private static Path fencedOutput(int pairId, int status, int stage, boolean statsAndAttrs)
+        throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-fence-evidence");
+        dir.toFile().deleteOnExit();
+        java.nio.file.Files.writeString(
+            dir.resolve("status.json"),
+            "{\"status\":" + status + ",\"stageNumber\":" + stage + "}"
+        );
+        if (statsAndAttrs) {
+            java.nio.file.Files.writeString(
+                dir.resolve("stats.json"),
+                "{\"pairId\":" + pairId + ",\"stageNumber\":" + stage
+                    + ",\"wallclockTime\":1.5,\"cpuTime\":1.5,\"userTime\":1.0,\"systemTime\":0.5,"
+                    + "\"maxVirtualMemory\":10,\"maxResidentSetSize\":10,\"diskSize\":10,"
+                    + "\"hostname\":\"node-a\"}"
+            );
+            java.nio.file.Files.writeString(
+                dir.resolve("attributes.txt"), "starexec-result=sat\n");
+        }
+        return dir;
+    }
+
+    /** Tracks the execution as submit would, then returns a callback for it. */
+    @SuppressWarnings("unchecked")
+    private KubernetesJobMonitor.JobCompletionCallback armFenced(
+        KubernetesNativeBackend backend, int execId, int pairId, Path out, Integer attemptNo
+    ) throws Exception {
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(execId, "job-" + execId);
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(execId, pairId);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(execId, out);
+        if (attemptNo != null) {
+            ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(execId, attemptNo);
+        }
+        givenSafeCluster(backend);
+        return instantiateCompletionCallback(backend);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertNothingTracked(KubernetesNativeBackend backend, int execId)
+        throws Exception {
+        for (String name : new String[] {
+            "execIdToJobName", "execIdToPairId", "execIdToOutputDir", "execIdToAttemptNo" }) {
+            assertFalse(name + " must be released",
+                ((Map<Integer, ?>) getField(backend, name)).containsKey(execId));
+        }
+    }
+
+    private void stubOpenPair(MockedStatic<JobPairs> jp, int pairId) throws Exception {
+        jp.when(() -> JobPairs.getPairStatusLookup(pairId))
+            .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+        jp.when(() -> JobPairs.getStageNumbers(pairId)).thenReturn(Set.of(1));
+    }
+
+    @Test
+    public void attemptCapturedAtSubmitReachesStatusStatsAndAttributeWrites() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(611, COMPLETE, 1, true);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 61, 611, out, 4);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 611);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(611, 1, COMPLETE, NOT_REACHED, false, 4))
+                .thenReturn(PairStatusResult.APPLIED);
+            jp.when(() -> JobPairs.updateRunSolverStats(
+                Mockito.eq(611), Mockito.eq("node-a"), Mockito.anyDouble(), Mockito.anyDouble(),
+                Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+                Mockito.eq(1), Mockito.anyLong(), Mockito.eq(Integer.valueOf(4)))).thenReturn(true);
+            jp.when(() -> JobPairs.addJobPairAttributes(
+                Mockito.eq(611), Mockito.eq(1), Mockito.any(java.util.Properties.class),
+                Mockito.eq(Integer.valueOf(4)))).thenReturn(true);
+
+            assertTrue(callback.onJobComplete(execution(61, "job-61")));
+
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(611, 1, COMPLETE, NOT_REACHED, false, 4));
+            jp.verify(() -> JobPairs.updateRunSolverStats(
+                Mockito.eq(611), Mockito.eq("node-a"), Mockito.anyDouble(), Mockito.anyDouble(),
+                Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+                Mockito.eq(1), Mockito.anyLong(), Mockito.eq(Integer.valueOf(4))));
+            jp.verify(() -> JobPairs.addJobPairAttributes(
+                Mockito.eq(611), Mockito.eq(1), Mockito.any(java.util.Properties.class),
+                Mockito.eq(Integer.valueOf(4))));
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean()), Mockito.never());
+        }
+        assertNothingTracked(backend, 61);
+    }
+
+    @Test
+    public void attemptReachesEarlierStageStatusWrite() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(621, COMPLETE, 2, false);
+        java.nio.file.Files.createDirectories(out.resolve("stage-status"));
+        java.nio.file.Files.writeString(
+            out.resolve("stage-status").resolve("1.json"),
+            "{\"pairId\":621,\"stageNumber\":1,\"status\":" + COMPLETE + "}");
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 62, 621, out, 7);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 621);
+            jp.when(() -> JobPairs.setEarlierStageStatuses(621, Map.of(1, COMPLETE), 7))
+                .thenReturn(StageStatusBatchResult.APPLIED);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(621, 2, COMPLETE, NOT_REACHED, false, 7))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            assertTrue(callback.onJobComplete(execution(62, "job-62")));
+
+            jp.verify(() -> JobPairs.setEarlierStageStatuses(621, Map.of(1, COMPLETE), 7));
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(621, 2, COMPLETE, NOT_REACHED, false, 7));
+        }
+        assertNothingTracked(backend, 62);
+    }
+
+    @Test
+    public void attemptReachesPairLevelStatusWrite() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        int status = StatusCode.ERROR_RUNSCRIPT.getVal();
+        Path out = fencedOutput(631, status, 0, false);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 63, 631, out, 2);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 631);
+            jp.when(() -> JobPairs.setPairLevelStatusResult(631, status, NOT_REACHED, 2))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            assertTrue(callback.onJobComplete(execution(63, "job-63")));
+
+            jp.verify(() -> JobPairs.setPairLevelStatusResult(631, status, NOT_REACHED, 2));
+            jp.verify(() -> JobPairs.setPairLevelStatusResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
+        }
+        assertNothingTracked(backend, 63);
+    }
+
+    @Test
+    public void staleStatusWriteReleasesTheExecutionWithoutRetryOrFurtherWrites() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(641, COMPLETE, 1, true);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 64, 641, out, 1);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 641);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(641, 1, COMPLETE, NOT_REACHED, false, 1))
+                .thenReturn(PairStatusResult.STALE_ATTEMPT);
+
+            assertTrue("a stale refusal is handled, not retried",
+                callback.onJobComplete(execution(64, "job-64")));
+
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(
+                641, 1, COMPLETE, NOT_REACHED, false, 1), Mockito.times(1));
+            jp.verify(() -> JobPairs.updateRunSolverStats(
+                Mockito.anyInt(), Mockito.any(), Mockito.anyDouble(), Mockito.anyDouble(),
+                Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+                Mockito.anyInt(), Mockito.anyLong(), Mockito.any()), Mockito.never());
+            jp.verify(() -> JobPairs.addJobPairAttributes(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.any(java.util.Properties.class),
+                Mockito.any(Integer.class)), Mockito.never());
+        }
+        assertNothingTracked(backend, 64);
+    }
+
+    @Test
+    public void staleEarlierStageWriteReleasesTheExecutionAndWritesNoStatus() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(651, COMPLETE, 2, false);
+        java.nio.file.Files.createDirectories(out.resolve("stage-status"));
+        java.nio.file.Files.writeString(
+            out.resolve("stage-status").resolve("1.json"),
+            "{\"pairId\":651,\"stageNumber\":1,\"status\":" + COMPLETE + "}");
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 65, 651, out, 3);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 651);
+            jp.when(() -> JobPairs.setEarlierStageStatuses(651, Map.of(1, COMPLETE), 3))
+                .thenReturn(StageStatusBatchResult.STALE_ATTEMPT);
+
+            assertTrue(callback.onJobComplete(execution(65, "job-65")));
+
+            jp.verify(() -> JobPairs.setEarlierStageStatuses(
+                Mockito.anyInt(), Mockito.anyMap(), Mockito.any(Integer.class)), Mockito.times(1));
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean(), Mockito.any(Integer.class)), Mockito.never());
+        }
+        assertNothingTracked(backend, 65);
+    }
+
+    @Test
+    public void staleStatsRefusalSkipsAttributesAndReleasesTheExecution() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(661, COMPLETE, 1, true);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 66, 661, out, 4);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 661);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(661, 1, COMPLETE, NOT_REACHED, false, 4))
+                .thenReturn(PairStatusResult.APPLIED);
+            // The stats writer reports a stale refusal as plain false; the pair has moved on.
+            jp.when(() -> JobPairs.getCurrentAttemptNo(661)).thenReturn(5);
+
+            assertTrue(callback.onJobComplete(execution(66, "job-66")));
+
+            jp.verify(() -> JobPairs.addJobPairAttributes(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.any(java.util.Properties.class),
+                Mockito.any(Integer.class)), Mockito.never());
+        }
+        assertNothingTracked(backend, 66);
+    }
+
+    @Test
+    public void staleAttributeRefusalIsNotAFailure() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(671, COMPLETE, 1, true);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 67, 671, out, 4);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 671);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(671, 1, COMPLETE, NOT_REACHED, false, 4))
+                .thenReturn(PairStatusResult.APPLIED);
+            jp.when(() -> JobPairs.updateRunSolverStats(
+                Mockito.eq(671), Mockito.any(), Mockito.anyDouble(), Mockito.anyDouble(),
+                Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+                Mockito.anyInt(), Mockito.anyLong(), Mockito.any())).thenReturn(true);
+            jp.when(() -> JobPairs.addJobPairAttributes(
+                Mockito.eq(671), Mockito.eq(1), Mockito.any(java.util.Properties.class),
+                Mockito.eq(Integer.valueOf(4)))).thenReturn(false);
+            jp.when(() -> JobPairs.getCurrentAttemptNo(671)).thenReturn(5);
+
+            assertTrue(callback.onJobComplete(execution(67, "job-67")));
+        }
+        assertNothingTracked(backend, 67);
+    }
+
+    @Test
+    public void executionWithoutAnAttemptKeepsTheUnfencedWrites() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = fencedOutput(681, COMPLETE, 1, false);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 68, 681, out, null);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubOpenPair(jp, 681);
+            jp.when(() -> JobPairs.setPairStatusPreciseResult(681, 1, COMPLETE, NOT_REACHED, false))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            assertTrue(callback.onJobComplete(execution(68, "job-68")));
+
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(681, 1, COMPLETE, NOT_REACHED, false));
+            jp.verify(() -> JobPairs.setPairStatusPreciseResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean(), Mockito.any(Integer.class)), Mockito.never());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void rebuildTrackingReadsTheAttemptLabelAndTreatsItsAbsenceAsUnfenced() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Method rebuild = KubernetesNativeBackend.class
+            .getDeclaredMethod("rebuildTrackingFromJob", Job.class, PodPhaseView.class);
+        rebuild.setAccessible(true);
+        Map<Integer, Integer> attempts =
+            (Map<Integer, Integer>) getField(backend, "execIdToAttemptNo");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            jp.when(() -> JobPairs.trySetPairRunning(Mockito.anyInt()))
+                .thenReturn(JobPairs.ConditionalPairUpdateResult.UPDATED);
+            Job labelled = new JobBuilder().withNewMetadata()
+                .withName("starexec-job-91")
+                .addToLabels("starexec.org/managed", "true")
+                .addToLabels("starexec.org/exec-id", "91")
+                .addToLabels("starexec.org/pair-id", "901")
+                .addToLabels("starexec.org/attempt-no", "6")
+                .addToAnnotations("starexec.org/output-dir", "/tmp/starexec/out/901")
+                .endMetadata().withNewStatus().withActive(1).endStatus().build();
+            Job legacy = new JobBuilder().withNewMetadata()
+                .withName("starexec-job-92")
+                .addToLabels("starexec.org/managed", "true")
+                .addToLabels("starexec.org/exec-id", "92")
+                .addToLabels("starexec.org/pair-id", "902")
+                .addToAnnotations("starexec.org/output-dir", "/tmp/starexec/out/902")
+                .endMetadata().withNewStatus().withActive(1).endStatus().build();
+
+            rebuild.invoke(backend, labelled, viewWithPod(91, "Running"));
+            rebuild.invoke(backend, legacy, viewWithPod(92, "Running"));
+        }
+
+        assertEquals(Integer.valueOf(6), attempts.get(91));
+        assertNull("a Job from before the label is unfenced, never attempt 0", attempts.get(92));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void destroyReleasesTheAttemptMapToo() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Map<Integer, Integer> attempts =
+            (Map<Integer, Integer>) getField(backend, "execIdToAttemptNo");
+        attempts.put(3, 9);
+
+        backend.destroyIf();
+
+        assertTrue(attempts.isEmpty());
     }
 }
