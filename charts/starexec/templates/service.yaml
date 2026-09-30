@@ -1,4 +1,6 @@
-{{- $embeddedPostgres := eq (include "starexec.usesEmbeddedPostgres" .) "true" -}}
+{{- /* The embedded PostgreSQL sidecar is reached over pod-local localhost; it is
+     deliberately not published here (a NodePort Service would open 5432 on every
+     node). Use `kubectl port-forward pod/...` for admin access. */ -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -16,8 +18,3 @@ spec:
       {{- if eq .Values.service.type "NodePort" }}
       nodePort: {{ .Values.service.nodePort }}
       {{- end }}
-{{- if $embeddedPostgres }}
-    - name: postgres
-      port: 5432
-      targetPort: 5432
-{{- end }}
