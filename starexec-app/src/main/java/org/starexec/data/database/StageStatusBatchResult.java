@@ -23,5 +23,12 @@ public enum StageStatusBatchResult {
      * a lock timed out, the stored routine is missing because migrations have not run. Nothing
      * was written, and a later attempt may well succeed.
      */
-    FAILED
+    FAILED,
+
+    /**
+     * The batch carried an attempt number other than the pair's current one (#185): it came
+     * from an execution a rerun has replaced. Nothing was written, and retrying can never
+     * succeed.
+     */
+    STALE_ATTEMPT
 }
