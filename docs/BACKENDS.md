@@ -147,12 +147,39 @@ The Local Backend executes jobs as processes on the host system. It's simple and
 # Required
 export STAREXEC_BACKEND_TYPE=local
 
+# Choose one concurrency control (the validated core list takes precedence)
+export STAREXEC_LOCAL_CORE_LIST=2,4,6,8      # Example only; use IDs measured on this host
+# export STAREXEC_LOCAL_CONCURRENCY=4        # Used only when the core list is unset
+
 # Optional (with defaults)
-export STAREXEC_LOCAL_CONCURRENCY=4          # Max parallel jobs
 export STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS=3600   # 1 hour timeout
 export STAREXEC_LOCAL_USE_RUNSOLVER=false    # Use runsolver wrapper
 export STAREXEC_LOCAL_GRACEFUL_SHUTDOWN_SECONDS=30
 ```
+
+When `STAREXEC_LOCAL_CORE_LIST` is set, LocalBackend fails startup unless every
+entry is a unique, non-negative, online CPU in the process's effective affinity.
+It also rejects two entries that sysfs identifies as SMT siblings. The validated
+list order becomes the lease order, and its length is the executor concurrency.
+More than one lease requires readable sysfs `thread_siblings_list` topology.
+Both modes require a readable, valid `/sys/devices/system/cpu/online`; no
+fallback may invent schedulable CPUs. When the list is unset, LocalBackend walks
+the intersection of `Cpus_allowed_list` and the online mask in affinity order,
+then leases the first logical CPU from each distinct sysfs sibling group.
+Multiple leases fail startup when `thread_siblings_list` is unavailable,
+inconsistent, or describes fewer physical cores than
+`STAREXEC_LOCAL_CONCURRENCY`. This prevents two LocalBackend jobs from sharing
+a physical core. It does not reserve the unused sibling against unrelated host
+workloads; full-core exclusivity still requires host CPU isolation or an
+equivalent cgroup/cpuset policy.
+
+Each LocalBackend job starts under `taskset -c` with its validated one-CPU lease.
+In container mode, `functions.bash` passes that inherited `Cpus_allowed_list` to
+`runexec --cores`; it must not reconstruct a CPU range from host `lscpu` data,
+because that could widen the solver beyond its lease. If the kernel affinity list
+cannot be read, the job fails closed. `STAREXEC_LOCAL_FORCE_SANDBOX=true` retains
+the legacy two-slot lock and workspace path, but it does not change CPU leases or
+reserve SMT siblings.
 
 ### Concurrency Tuning
 
@@ -436,8 +463,9 @@ introduce noise that is unacceptable for scientific comparison. Prefer lower
 throughput over biased benchmark data.
 
 For local execution, follow the repository's CPU-pinning guidance: exclude
-logical CPU 0, use exactly one logical CPU per physical core, and derive
-concurrency from the selected core list. For Kubernetes, keep
+logical CPU 0 and use exactly one logical CPU per physical core. Both local
+selection modes enforce that mapping, but host CPU isolation is still needed
+to keep unrelated processes off each core's unused sibling. For Kubernetes, keep
 `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` unless you have workload-specific
 validation that relaxing it preserves benchmark integrity.
 

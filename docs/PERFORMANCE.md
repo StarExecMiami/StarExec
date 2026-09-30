@@ -20,7 +20,8 @@ This guide covers:
 
 | Parameter | Default | Tuning Goal |
 |-----------|---------|-------------|
-| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU cores)` | Match physical cores; prefer `STAREXEC_LOCAL_CORE_LIST` |
+| `STAREXEC_LOCAL_CONCURRENCY` | `min(4, JVM available processors)` | Select this many distinct physical cores from the online portion of process affinity; use `STAREXEC_LOCAL_CORE_LIST` to choose exact CPUs |
+| `STAREXEC_LOCAL_CORE_LIST` | unset | One online, allowed logical CPU per physical core; its validated length sets LocalBackend concurrency |
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME` | 5 | Keep queue 50-100 deep |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS` | 5000 | Lower for latency, higher for scale |
 | `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 4096 | Match solver requirements |
@@ -88,7 +89,7 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 | 16 | 16 | 96 | 2,304 |
 | 32 | 32 | 192 | 4,608 |
 
-*Note: concurrency is whatever `STAREXEC_LOCAL_CONCURRENCY` or the `STAREXEC_LOCAL_CORE_LIST` yields; there is no built-in cap. For benchmark fidelity use one job pair per physical core.*
+*Note: concurrency is whatever `STAREXEC_LOCAL_CONCURRENCY` or the validated `STAREXEC_LOCAL_CORE_LIST` yields. Both modes lease only CPUs in the intersection of `Cpus_allowed_list` and the sysfs online mask, permit at most one lease per sibling group, and fail closed when required sysfs data is unreadable. This prevents LocalBackend jobs from sharing a core but does not reserve unused siblings from other host workloads.*
 
 #### Podman Backend
 
@@ -132,11 +133,21 @@ When live log streaming is enabled, protect benchmark throughput with these goal
 # Check CPU cores
 nproc
 
-# For benchmark fidelity, set the core list to one logical CPU per physical
-# core and let concurrency derive from it (see cpu-partition-scheduling.md)
-export STAREXEC_LOCAL_CORE_LIST="0,2,4,6"
+# Inspect both physical-core identity and this process's allowed CPU set first.
+lscpu -e=CPU,CORE,SOCKET,ONLINE
+awk '/^Cpus_allowed_list:/ { print $2 }' /proc/self/status
+cat /sys/devices/system/cpu/online
 
-# For memory-bound solvers, reduce further
+# For benchmark fidelity, set one allowed logical CPU per physical core.
+# LocalBackend validates the list at startup and derives concurrency from it.
+# This is an example; replace the IDs with those measured on this host.
+export STAREXEC_LOCAL_CORE_LIST="2,4,6,8"
+
+# Alternatively, use a count only after removing the explicit core list. The
+# backend selects one allowed CPU per sysfs sibling group and fails startup if
+# the topology cannot prove enough distinct physical cores. Use host cpusets or
+# cgroups as well when unrelated workloads must be excluded from sibling CPUs.
+unset STAREXEC_LOCAL_CORE_LIST
 export STAREXEC_LOCAL_CONCURRENCY=$(( $(nproc) / 2 ))
 ```
 
