@@ -1900,6 +1900,31 @@ CREATE TRIGGER job_pairs_terminal_end_time
     )
     EXECUTE FUNCTION starexec.stamp_terminal_end_time();
 
+-- Serialises the "is the job finished?" decision of concurrent pair completions.
+--
+-- The three routines that stamp jobs.completed (UpdatePairStatus, UpdatePairStatusPrecise,
+-- UpdatePairStatusPairLevel) count the pairs still pending and write nothing if one is. Under
+-- READ COMMITTED, two last pairs of a job completing at the same time each lock only their own
+-- pair row, so each counts the other as still pending, each skips the write, and
+-- jobs.completed stays NULL for good. Taking this lock BEFORE the count makes the second
+-- completer wait for the first to commit, and its count -- a fresh snapshot, taken after the
+-- lock is granted -- then sees the first pair as finished.
+--
+-- FOR NO KEY UPDATE rather than FOR UPDATE: it still conflicts with itself (which is the whole
+-- point) but not with the FOR KEY SHARE that inserting a job_pairs row takes on its jobs
+-- parent, so job creation and reruns are not held up behind a completion. SetBrokenPairStatus
+-- takes FOR UPDATE, which conflicts with this, so both serialise against each other.
+--
+-- Lock order: callers hold the job_pairs row lock already, so this is job_pairs -> jobs, the
+-- same order the disk and accounting writers use (job_pairs -> jobs -> users). Never call it
+-- before the pair row is locked, and never take a users lock and then this one.
+CREATE OR REPLACE FUNCTION starexec.LockJobForCompletionCheck(_job_id INT)
+RETURNS VOID AS $$
+BEGIN
+	PERFORM 1 FROM starexec.jobs WHERE id = _job_id FOR NO KEY UPDATE;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE PROCEDURE starexec.UpdatePairStatus(_jobPairId INT, _statusCode INT)
 AS $$
 DECLARE
@@ -1907,8 +1932,14 @@ DECLARE
 	_current_status INT;
 	_count INT;
 BEGIN
-	-- Initialize _job_id
-	SELECT job_id, status_code INTO _job_id, _current_status FROM job_pairs WHERE id = _jobPairId;
+	-- FOR UPDATE: the status read below and the write further down must see the same row.
+	-- With a plain SELECT, a terminal status recorded in between (KILLED from the monitor,
+	-- for instance) was invisible to the transition check and then overwritten by the
+	-- unconditional UPDATE. Same lock the Precise and PairLevel routines take, and it comes
+	-- first, so the order stays job_pairs -> jobs.
+	SELECT job_id, status_code INTO _job_id, _current_status
+	FROM job_pairs WHERE id = _jobPairId
+	FOR UPDATE;
 	IF NOT FOUND THEN
 	    RAISE EXCEPTION USING
 	        ERRCODE = 'P0002',
@@ -1963,6 +1994,11 @@ BEGIN
 		-- It checks by trying to find exactly 1 pair (for efficiency) that is not yet complete
 		-- A pair is "not yet complete" if its status is Pending (1), Enqueued (2), Running (4),
 		-- Processing Results (19), Paused (20), or Awaiting post-processor (22).
+		--
+		-- Serialise with the other pair completions of this job first (see
+		-- LockJobForCompletionCheck): otherwise two last pairs finishing together each
+		-- count the other as still pending and jobs.completed is never written.
+		PERFORM starexec.LockJobForCompletionCheck(_job_id);
 		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND status_code IN (1, 2, 4, 19, 20, 22) LIMIT 1) AS subq;
 		IF _count = 0 THEN
 			UPDATE jobs SET completed=COALESCE(completed, CURRENT_TIMESTAMP) WHERE id=_job_id;
@@ -10175,7 +10211,10 @@ BEGIN
 		INSERT INTO job_pair_completion (pair_id) VALUES (_pairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
-		-- Check if all pairs in the job are now complete; if so, stamp jobs.completed
+		-- Check if all pairs in the job are now complete; if so, stamp jobs.completed.
+		-- The job lock comes first so concurrent last-pair completions cannot each miss the
+		-- other (see LockJobForCompletionCheck); the pair row is already locked above.
+		PERFORM starexec.LockJobForCompletionCheck(_job_id);
 		SELECT COUNT(*) INTO _count FROM (
 			SELECT id FROM starexec.job_pairs
 			WHERE job_id = _job_id AND status_code IN (1, 2, 4, 19, 20, 22)
@@ -10311,7 +10350,10 @@ BEGIN
 		INSERT INTO job_pair_completion (pair_id) VALUES (_pairId)
 		ON CONFLICT (pair_id) DO NOTHING;
 
-		-- Check if all pairs in the job are now complete; if so, stamp jobs.completed
+		-- Check if all pairs in the job are now complete; if so, stamp jobs.completed.
+		-- The job lock comes first so concurrent last-pair completions cannot each miss the
+		-- other (see LockJobForCompletionCheck); the pair row is already locked above.
+		PERFORM starexec.LockJobForCompletionCheck(_job_id);
 		SELECT COUNT(*) INTO _count FROM (
 			SELECT id FROM starexec.job_pairs
 			WHERE job_id = _job_id AND status_code IN (1, 2, 4, 19, 20, 22)
