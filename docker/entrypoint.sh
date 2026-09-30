@@ -247,6 +247,68 @@ else
     echo ""
 fi
 
+# BEGIN substitute_context_placeholders (extracted verbatim by
+# scripts/tests/test-entrypoint-secrets.sh; keep the markers)
+# Replace ${STAREXEC_DB_HOST|PORT|NAME|USER|PASSWORD} in a context.xml with the
+# given values, XML-escaped for use inside an attribute. Values travel through
+# the environment and are matched literally (index/substr), so no character in a
+# value can act as sed/awk syntax, and a value is never re-scanned for
+# placeholders. Prints the result on stdout.
+# Usage: substitute_context_placeholders FILE HOST PORT NAME USER PASSWORD
+# (fails, printing nothing, if any value contains a CR or LF)
+substitute_context_placeholders() {
+    local _nl _cr _v
+    _nl='
+'
+    _cr=$(printf '\r')
+    for _v in "$2" "$3" "$4" "$5" "$6"; do
+        case "$_v" in
+            *"$_nl"*|*"$_cr"*)
+                echo "ERROR: database settings must not contain line breaks" >&2
+                return 1
+                ;;
+        esac
+    done
+    SX_HOST="$2" SX_PORT="$3" SX_NAME="$4" SX_USER="$5" SX_PASSWORD="$6" \
+    awk '
+        function esc(s,   i, c, o) {
+            o = ""
+            for (i = 1; i <= length(s); i++) {
+                c = substr(s, i, 1)
+                if (c == "&") c = "&amp;"
+                else if (c == "<") c = "&lt;"
+                else if (c == ">") c = "&gt;"
+                else if (c == "\"") c = "&quot;"
+                else if (c == "\047") c = "&apos;"
+                o = o c
+            }
+            return o
+        }
+        BEGIN {
+            n = split("HOST PORT NAME USER PASSWORD", names, " ")
+            for (i = 1; i <= n; i++) {
+                key[i] = "${STAREXEC_DB_" names[i] "}"
+                val[i] = esc(ENVIRON["SX_" names[i]])
+            }
+        }
+        {
+            line = $0; out = ""
+            while (1) {
+                best = 0; bi = 0
+                for (i = 1; i <= n; i++) {
+                    p = index(line, key[i])
+                    if (p > 0 && (best == 0 || p < best)) { best = p; bi = i }
+                }
+                if (best == 0) break
+                out = out substr(line, 1, best - 1) val[bi]
+                line = substr(line, best + length(key[bi]))
+            }
+            print out line
+        }
+    ' "$1"
+}
+# END substitute_context_placeholders
+
 # ============================================================================
 # TOMCAT CONTEXT.XML PROPERTY SUBSTITUTION
 # ============================================================================
@@ -267,12 +329,9 @@ if [ -f "$CONTEXT_XML_FILE" ]; then
         echo "Substituting DB properties in context.xml..."
         # Create temporary file with substituted values
         TMP_CONTEXT=$(mktemp)
-        sed -e "s|\${STAREXEC_DB_HOST}|${STAREXEC_DB_HOST}|g" \
-            -e "s|\${STAREXEC_DB_PORT}|${STAREXEC_DB_PORT}|g" \
-            -e "s|\${STAREXEC_DB_NAME}|${STAREXEC_DB_NAME}|g" \
-            -e "s|\${STAREXEC_DB_USER}|${STAREXEC_DB_USER}|g" \
-            -e "s|\${STAREXEC_DB_PASSWORD}|${STAREXEC_DB_PASSWORD}|g" \
-            "$CONTEXT_XML_FILE" > "$TMP_CONTEXT"
+        substitute_context_placeholders "$CONTEXT_XML_FILE" \
+            "$STAREXEC_DB_HOST" "$STAREXEC_DB_PORT" "$STAREXEC_DB_NAME" \
+            "$STAREXEC_DB_USER" "$STAREXEC_DB_PASSWORD" > "$TMP_CONTEXT"
         # Replace original with substituted version
         mv "$TMP_CONTEXT" "$CONTEXT_XML_FILE"
         echo "✓ DB properties substituted in context.xml"
@@ -463,16 +522,21 @@ run_database_migrations() {
     # Run the embedded launcher bundled inside the WAR (uses flyway-core from WEB-INF/lib)
     # The EmbeddedFlywayLauncher is a lightweight wrapper around Flyway that executes
     # all versioned migrations using the flyway-core dependency included in the application.
-    # Pass JDBC info via -D properties for clean separation of concerns.
     local EMBED_CLASSPATH="${WEBAPP_DIR}/WEB-INF/classes:${WEBAPP_DIR}/WEB-INF/lib/*"
 
     # Temporarily disable immediate exit to capture migration exit code
     set +e
 
-    java -cp "$EMBED_CLASSPATH" \
-        -Dflyway.url="$JDBC_URL" \
-        -Dflyway.user="$DB_USER" \
-        -Dflyway.password="$DB_PASSWORD" \
+    # The launcher reads only STAREXEC_DB_* from its environment (it ignores
+    # -Dflyway.* properties). Credentials are passed as per-command environment
+    # assignments, never as arguments: argv is readable via ps and
+    # /proc/<pid>/cmdline.
+    STAREXEC_DB_HOST="$DB_HOST" \
+    STAREXEC_DB_PORT="$DB_PORT" \
+    STAREXEC_DB_NAME="$DB_NAME" \
+    STAREXEC_DB_USER="$DB_USER" \
+    STAREXEC_DB_PASSWORD="$DB_PASSWORD" \
+        java -cp "$EMBED_CLASSPATH" \
         org.starexec.migration.EmbeddedFlywayLauncher
     local migration_exit_code=$?
 
