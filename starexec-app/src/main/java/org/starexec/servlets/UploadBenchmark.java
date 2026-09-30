@@ -48,6 +48,10 @@ public class UploadBenchmark extends HttpServlet {
 	private static final String FILE_URL = "url";
 	private static final String FILE_GIT = "git";
 	private static final String FILE_LOC = "localOrURLOrGit";
+	/** Why a URL or Git source is refused; StarExecCommand shows it from the status cookie. */
+	static final String UNSUPPORTED_SOURCE =
+			"Uploading benchmarks from a URL or a Git repository is not supported;"
+					+ " upload a .zip, .tar or .tgz archive";
 	private static final String addSolver = "addSolver";
 	private static final String addBench = "addBench";
 	private static final String addUser = "addUser";
@@ -175,8 +179,8 @@ public class UploadBenchmark extends HttpServlet {
 			
 		log.info(method, "Saved uploaded file to: " + archiveFile.getAbsolutePath());
 	} else {
-		// TODO: Handle URL and Git uploads
-		throw new UnsupportedOperationException("URL and Git uploads not yet supported in async mode");
+		// isRequestValid refuses every other source with a 400 before this is reached (#139).
+		throw new IllegalStateException("Only local benchmark archives are accepted, not " + localOrUrlOrGit);
 	}
 	
 	// Enqueue job using the new immutable request builder.
@@ -746,30 +750,18 @@ public class UploadBenchmark extends HttpServlet {
 			// Check file location selection
 			String fileLoc = (String) form.get(FILE_LOC);
 			if (fileLoc == null || fileLoc.isEmpty()) {
-				return new ValidatorStatusCode(false, "Please select a file source (local, URL, or Git)");
+				return new ValidatorStatusCode(false, "Please select a file source (a local .zip, .tar or .tgz archive)");
 			}
 
-			String fileName = null;
-			// Last test, return true when we find a valid file extension
-			if (fileLoc.equals("local")) {
-				fileName = ((PartWrapper) form.get(BENCHMARK_FILE)).getName();
-				if (!Validator.isValidArchiveType(fileName)) {
-					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
-				}
+			// Only an archive the user sends. Fetching a URL or cloning a repository server-side is
+			// not supported: the async upload path never implemented it, and doing so would expose a
+			// server-side request forgery and git transport (file://, ext::) surface (#139).
+			if (!fileLoc.equals("local")) {
+				return new ValidatorStatusCode(false, UNSUPPORTED_SOURCE);
 			}
-			else if (fileLoc.equals("URL")) {
-				fileName = (String) form.get(FILE_URL);
-				if (!Validator.isValidArchiveType(fileName)) {
-					return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
-				}
-			}
-			else {
-				log.debug("in else");
-				fileName = (String) form.get(FILE_GIT);
-				log.debug("fileName: "+ fileName);
-				if (!Validator.isValidGitType(fileName)) {
-					return new ValidatorStatusCode(false, "Uploaded Git URLs need to be .git");
-				}
+			String fileName = ((PartWrapper) form.get(BENCHMARK_FILE)).getName();
+			if (!Validator.isValidArchiveType(fileName)) {
+				return new ValidatorStatusCode(false, "Uploaded archives need to be either .zip, .tar, or .tgz");
 			}
 
 			// Validate space parameter for permission check
