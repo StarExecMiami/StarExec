@@ -210,9 +210,8 @@ The Podman Backend executes jobs in isolated containers. It provides strong isol
 export STAREXEC_BACKEND_TYPE=podman
 
 # Optional (with defaults)
-export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096      # 4GB per job
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1         # 1 CPU per job
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300 # 5 minutes
+export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096      # 4GB cgroup memory limit per job container
+export STAREXEC_CONTAINER_CPU_QUOTA_CORES=0           # CFS cap in cores when no CPU partition exists (0 = none)
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=5000       # Poll every 5s
 export STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS=86400 # Sweep stale exited managed containers after 24h
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5             # Batch size
@@ -329,13 +328,11 @@ replace an already persisted helper. Refresh `/app/data/sge_scripts/functions.ba
 # High-throughput cluster (32-core, 256GB RAM)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=8
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=2000
 
 # Memory-constrained (16GB RAM)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=3
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=10000
 ```
 
@@ -626,9 +623,16 @@ export OAR_SERVER=oar-server.example.com
 | `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`           | 5       | Batch size per submission cycle  |
 | `STAREXEC_NODE_MULTIPLIER`                   | 16      | Queue depth = multiplier × nodes |
 | `STAREXEC_CONTAINER_POLL_INTERVAL_MS`        | 5000    | Poll interval for job completion |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB`       | 4096    | Memory limit per container       |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT`       | 1       | CPU cores per container          |
-| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 300     | Wallclock timeout (seconds)      |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB`       | 2048    | Memory limit per container (cgroup) |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES`         | 0       | CFS cap in cores, only when no CPU partition exists (0 = none) |
+| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT`       | 600     | CPU seconds (not cores); overwritten by the job script, currently has no effect |
+| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 600     | Wallclock seconds; overwritten by the job script, currently has no effect |
+
+The solver's CPU-time and wallclock budgets come from the queue and the job
+(`$$MAX_CPUTIME$$` / `$$MAX_RUNTIME$$` in the job script), not from these variables. Cores
+are controlled only by CPU partitions (cpuset, see
+[cpu-partition-scheduling.md](cpu-partition-scheduling.md)) or, when no partition is
+configured, by `STAREXEC_CONTAINER_CPU_QUOTA_CORES`.
 
 ### Tuning by Workload
 
@@ -636,8 +640,6 @@ export OAR_SERVER=oar-server.example.com
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5
 ```
 
@@ -645,8 +647,6 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=1200
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=4
 ```
 
@@ -654,10 +654,15 @@ export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=4
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=16384
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=8
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=3600
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
+# Cores for a parallel solver come from the CPU partition width
+# (STAREXEC_CPU_PARTITION_COUNT / STAREXEC_CPU_PARTITIONS), not from a limit variable.
+# The CPU-time and wallclock budgets (e.g. 3600 s) are set on the queue/job.
 ```
+
+The per-workload wallclock and CPU-time values that earlier versions of these profiles
+set through `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` / `..._CPU_LIMIT` were never
+applied; configure them on the queue or the job instead.
 
 ### Monitoring
 
