@@ -87,6 +87,15 @@ public class PairListingClosureSqlTest extends Common {
 					userId);
 			rootPair = insertPair(con, rootSpace);
 			subPair = insertPair(con, subSpace);
+
+			// Pair filters must classify the selected stage, not a later stage's pair status.
+			int resourceOut = StatusCode.EXCEED_RUNTIME.getVal();
+			int dependencyFailure = StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal();
+			update(con, "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?", resourceOut, rootPair);
+			insertStage(con, rootPair, 2, resourceOut);
+			update(con, "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?", dependencyFailure, subPair);
+			update(con, "UPDATE starexec.jobpair_stage_data SET status_code = ?"
+					+ " WHERE jobpair_id = ? AND stage_number = 1", dependencyFailure, subPair);
 		}
 		assertEquals("precondition: nothing has filled the closure for the root", 0, closureRows(rootSpace));
 		assertEquals("precondition: nothing has filled the closure for the subspace", 0, closureRows(subSpace));
@@ -135,13 +144,85 @@ public class PairListingClosureSqlTest extends Common {
 		assertEquals("subspace: itself", 1, closureRows(subSpace));
 	}
 
+	@Test
+	public void typeFiltersClassifyTheRequestedStage() {
+		// The root pair's primary stage is complete; its later stage is a resource-out.
+		assertEquals(0, count(rootSpace, "resource", 1));
+		assertEquals(List.of(), listedPairs(rootSpace, 1, "resource"));
+		assertEquals(1, count(rootSpace, "resource", 2));
+		assertEquals(List.of(rootPair), listedPairs(rootSpace, 2, "resource"));
+		// Resource-out stages deliberately also count as complete for solver statistics.
+		assertEquals(1, count(rootSpace, "complete", 2));
+		assertEquals(List.of(rootPair), listedPairs(rootSpace, 2, "complete"));
+
+		// A dependency failure is failed, never incomplete, in both the table and count.
+		assertEquals(1, count(rootSpace, "failed", 1));
+		assertEquals(List.of(subPair), listedPairs(rootSpace, 1, "failed"));
+		assertEquals(0, count(rootSpace, "incomplete", 1));
+		assertEquals(List.of(), listedPairs(rootSpace, 1, "incomplete"));
+	}
+
+	/** A stage the pair never ran has no row to classify, so no type lists it, "all" included. */
+	@Test
+	public void aStageThePairNeverRanIsInNoType() {
+		for (String type : new String[] {"all", "resource", "complete", "failed", "incomplete"}) {
+			assertEquals(type + " count, stage 2 of the subspace pair", 0, count(subSpace, type, 2));
+			assertEquals(type + " listing, stage 2 of the subspace pair", List.of(),
+					listedPairs(subSpace, 2, type));
+			assertEquals(type + " count, stage 3", 0, count(rootSpace, type, 3));
+			assertEquals(type + " listing, stage 3", List.of(), listedPairs(rootSpace, 3, type));
+		}
+	}
+
+	/**
+	 * For every status code, the listing and the count put a stage in the same types as
+	 * {@code Jobs.addStageToSolverStats} does, whatever the pair's final status is.
+	 */
+	@Test
+	public void everyStatusCodeIsClassifiedLikeTheStatsRow() throws SQLException {
+		for (int code = 0; code <= StatusCode.ERROR_POST_PROCESSOR.getVal(); code++) {
+			try (Connection con = Common.getConnection()) {
+				// The pair's own status stays a resource-out, so it can never be what decides.
+				update(con, "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?",
+						StatusCode.EXCEED_RUNTIME.getVal(), subPair);
+				update(con, "UPDATE starexec.jobpair_stage_data SET status_code = ?"
+						+ " WHERE jobpair_id = ? AND stage_number = 1", code, subPair);
+			}
+			StatusCode sc = StatusCode.toStatusCode(code);
+			boolean failed = sc.failed();
+			boolean resource = !failed && sc.resource();
+			boolean incomplete = !failed && !resource && sc.incomplete();
+			boolean complete = resource || (!failed && !incomplete && sc.statComplete());
+			assertClassified(code, "failed", failed);
+			assertClassified(code, "resource", resource);
+			assertClassified(code, "incomplete", incomplete);
+			assertClassified(code, "complete", complete);
+		}
+	}
+
+	private void assertClassified(int code, String type, boolean expected) {
+		String message = "status " + code + " as " + type;
+		assertEquals(message + " (count)", expected ? 1 : 0, count(subSpace, type, 1));
+		assertEquals(message + " (listing)", expected ? List.of(subPair) : List.of(),
+				listedPairs(subSpace, 1, type));
+	}
+
 	private int count(int jobSpaceId) {
-		return Jobs.getCountOfJobPairsByConfigInJobSpaceHierarchy(jobSpaceId, configId, "all", "", 0);
+		return count(jobSpaceId, "all", 0);
+	}
+
+	private int count(int jobSpaceId, String type, int stageNumber) {
+		return Jobs.getCountOfJobPairsByConfigInJobSpaceHierarchy(
+				jobSpaceId, configId, type, "", stageNumber);
 	}
 
 	private List<Integer> listedPairs(int jobSpaceId) {
+		return listedPairs(jobSpaceId, 0, "all");
+	}
+
+	private List<Integer> listedPairs(int jobSpaceId, int stageNumber, String type) {
 		List<JobPair> pairs = Jobs.getJobPairsForTableInJobSpaceHierarchy(
-				jobSpaceId, new DataTablesQuery(0, 10, 0, true, ""), configId, 0, "all");
+				jobSpaceId, new DataTablesQuery(0, 10, 0, true, ""), configId, stageNumber, type);
 		assertNotNull("the listing loads", pairs);
 		List<Integer> ids = new ArrayList<>();
 		for (JobPair pair : pairs) {
@@ -171,6 +252,20 @@ public class PairListingClosureSqlTest extends Common {
 		returningId(con,
 				"INSERT INTO starexec.job_pair_completion (pair_id) VALUES (?) RETURNING completion_id", pairId);
 		return pairId;
+	}
+
+	private void insertStage(Connection con, int pairId, int stageNumber, int status) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(
+				"INSERT INTO starexec.jobpair_stage_data (jobpair_id, stage_number, status_code,"
+						+ " solver_id, solver_name, config_id, config_name, wallclock, cpu, disk_size)"
+						+ " VALUES (?, ?, ?, ?, 'pair-listing-solver', ?, 'pair-listing-config', 1, 1, 0)")) {
+			ps.setInt(1, pairId);
+			ps.setInt(2, stageNumber);
+			ps.setInt(3, status);
+			ps.setInt(4, solverId);
+			ps.setInt(5, configId);
+			assertEquals(1, ps.executeUpdate());
+		}
 	}
 
 	private static int closureRows(int ancestor) throws SQLException {
@@ -208,9 +303,11 @@ public class PairListingClosureSqlTest extends Common {
 		}
 	}
 
-	private static void update(Connection con, String sql, int param) throws SQLException {
+	private static void update(Connection con, String sql, int... params) throws SQLException {
 		try (PreparedStatement ps = con.prepareStatement(sql)) {
-			ps.setInt(1, param);
+			for (int i = 0; i < params.length; i++) {
+				ps.setInt(i + 1, params[i]);
+			}
 			ps.executeUpdate();
 		}
 	}
