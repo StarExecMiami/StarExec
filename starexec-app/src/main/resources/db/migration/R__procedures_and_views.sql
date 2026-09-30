@@ -1620,10 +1620,52 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Attempt fence (#185). Every writer of a pair's results carries the attempt it was started
+-- for; a write for any attempt other than the pair's current one is refused, so a late
+-- write from a superseded execution cannot land on the attempt that replaced it.
+--
+-- Must be called right after the caller has taken its job_pairs FOR UPDATE lock: the
+-- rerun that bumps current_attempt_no holds that same lock, so the read below cannot
+-- observe one attempt and let the caller write against another. It reads and never
+-- inserts. A pair with no job_pair_attempts row has never been rerun, so it is on
+-- attempt 1. _attemptNo NULL means "unfenced" and keeps every existing caller,
+-- including the bash on execution nodes that predates this fence, working unchanged.
+--
+-- Refusal is an exception with the dedicated SQLSTATE 'SX185' because procedures cannot
+-- return a value and the callers use CALL. The Java wrappers map this one code to a
+-- stale-attempt result and never let it escape as a failure.
+DROP ROUTINE IF EXISTS starexec.EnforcePairAttempt(INT, INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.EnforcePairAttempt(_pairId INT, _attemptNo INT)
+RETURNS VOID AS $$
+DECLARE
+	_currentAttempt INT;
+BEGIN
+	IF _attemptNo IS NULL THEN
+		RETURN;
+	END IF;
+	SELECT current_attempt_no INTO _currentAttempt
+	FROM starexec.job_pair_attempts WHERE pair_id = _pairId;
+	IF NOT FOUND THEN
+		_currentAttempt := 1;
+	END IF;
+	IF _attemptNo <> _currentAttempt THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'SX185',
+			MESSAGE = format(
+				'Stale attempt for pair %s: write carries attempt %s but the current attempt is %s',
+				_pairId,
+				_attemptNo,
+				_currentAttempt
+			);
+	END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Updates a job pair's statistics directly from the execution node
 -- Author: Benton McCune
 DROP ROUTINE IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT) CASCADE;
-CREATE OR REPLACE PROCEDURE starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT)
+DROP ROUTINE IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT, _attemptNo INT DEFAULT NULL)
 AS $$
 DECLARE
     _nodeId INT;
@@ -1632,6 +1674,17 @@ DECLARE
     _priorDiskSize BIGINT;
     _delta BIGINT;
 BEGIN
+    -- job_pairs is locked and the attempt fenced BEFORE anything else is read or written
+    -- (#185), so a superseded execution's statistics touch neither the node column nor the
+    -- job and user disk totals below. The jobs -> users order after it is unchanged (#299).
+    PERFORM 1 FROM starexec.job_pairs WHERE id = _jobPairId FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
+    PERFORM starexec.EnforcePairAttempt(_jobPairId, _attemptNo);
+
     SELECT id INTO _nodeId FROM starexec.nodes WHERE name = _nodeName;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -1640,11 +1693,6 @@ BEGIN
     END IF;
 
     UPDATE job_pairs SET node_id = _nodeId WHERE id = _jobPairId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job pair %s not found', _jobPairId);
-    END IF;
 
     SELECT j.id, j.user_id
     INTO _jobId, _userId
@@ -2014,7 +2062,8 @@ $$ LANGUAGE plpgsql;
 -- different terminal result. FALSE rather than an exception because a replay is expected
 -- rather than exceptional, and the caller has to distinguish the two.
 DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatusIfUnresolved(INT, INT, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatusIfUnresolved(_jobPairId INT, _stageNumber INT, _statusCode INT)
+DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatusIfUnresolved(INT, INT, INT, INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatusIfUnresolved(_jobPairId INT, _stageNumber INT, _statusCode INT, _attemptNo INT DEFAULT NULL)
 RETURNS BOOLEAN AS $$
 DECLARE
 	_current INT;
@@ -2028,6 +2077,9 @@ BEGIN
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _jobPairId);
 	END IF;
+
+	-- Attempt fence (#185): after the job_pairs lock, before any stage row is touched.
+	PERFORM starexec.EnforcePairAttempt(_jobPairId, _attemptNo);
 
 	SELECT status_code INTO _current
 	FROM starexec.jobpair_stage_data
@@ -2636,9 +2688,17 @@ $$ LANGUAGE plpgsql;
 -- Adds a new attribute to a job pair for the given stage
 -- Author: Tyler Jensen
 DROP ROUTINE IF EXISTS starexec.AddJobAttr(INT, VARCHAR, VARCHAR, INT) CASCADE;
-CREATE OR REPLACE PROCEDURE starexec.AddJobAttr(_pairId INT, _key VARCHAR(128), _val VARCHAR(128), _stage INT)
+DROP ROUTINE IF EXISTS starexec.AddJobAttr(INT, VARCHAR, VARCHAR, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.AddJobAttr(_pairId INT, _key VARCHAR(128), _val VARCHAR(128), _stage INT, _attemptNo INT DEFAULT NULL)
 AS $$
 BEGIN
+	-- Lock the pair first, then fence on its attempt (#185): a superseded execution's
+	-- post-processor attributes must not land on the attempt that replaced it. job_pairs is
+	-- the first table in the lock order, so this cannot deadlock against the other writers.
+	-- A missing pair is left to the insert below exactly as before (NULL job_id).
+	PERFORM 1 FROM starexec.job_pairs WHERE id = _pairId FOR UPDATE;
+	PERFORM starexec.EnforcePairAttempt(_pairId, _attemptNo);
+
 	INSERT INTO job_attributes (pair_id, attr_key, attr_value, job_id, stage_number)
 	VALUES (_pairId, _key, _val, (SELECT job_id FROM starexec.job_pairs WHERE id=_pairId), _stage)
 	ON CONFLICT (pair_id, attr_key, stage_number) DO UPDATE SET
@@ -10017,6 +10077,7 @@ $$ LANGUAGE plpgsql;
 -- This replaces the non-atomic two-call sequence of UpdatePairStatus + UpdateLaterStageStatuses.
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT) CASCADE;
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT, BOOLEAN) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT, BOOLEAN, INT) CASCADE;
 -- Returns TRUE when the pair now holds _terminalStatus, FALSE when another writer had
 -- already recorded a different terminal result and _forceOverride was not given.
 --
@@ -10030,7 +10091,8 @@ CREATE OR REPLACE FUNCTION starexec.UpdatePairStatusPrecise(
 	_stageNumber INT,
 	_terminalStatus INT,
 	_notReachedStatus INT,
-	_forceOverride BOOLEAN DEFAULT FALSE
+	_forceOverride BOOLEAN DEFAULT FALSE,
+	_attemptNo INT DEFAULT NULL
 )
 RETURNS BOOLEAN AS $$
 DECLARE
@@ -10076,6 +10138,11 @@ BEGIN
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
+
+	-- Attempt fence (#185): right after the lock, before any mutation. It applies even when
+	-- _forceOverride is set: the override lets a run replace a conflicting terminal result of
+	-- ITS OWN attempt, and never licenses a write for an attempt that was superseded.
+	PERFORM starexec.EnforcePairAttempt(_pairId, _attemptNo);
 
 	-- And the stage has to be a stage OF THIS PAIR, not merely a positive number.
 	--
@@ -10229,10 +10296,13 @@ $$ LANGUAGE plpgsql;
 -- are re-run idempotently), and FALSE when the pair already held a different terminal
 -- status -- nothing is written then, and the caller reports SUPERSEDED. An absent pair is
 -- an exception, not FALSE: no caller writes a result for a pair it did not create.
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPairLevel(INT, INT, INT) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPairLevel(INT, INT, INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.UpdatePairStatusPairLevel(
 	_pairId INT,
 	_terminalStatus INT,
-	_notReachedStatus INT
+	_notReachedStatus INT,
+	_attemptNo INT DEFAULT NULL
 )
 RETURNS BOOLEAN AS $$
 DECLARE
@@ -10251,6 +10321,9 @@ BEGIN
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
+
+	-- Attempt fence (#185): right after the lock, before any mutation.
+	PERFORM starexec.EnforcePairAttempt(_pairId, _attemptNo);
 
 	-- Terminal pairs must not be moved back into an earlier non-terminal state. Same
 	-- contract as UpdatePairStatus and UpdatePairStatusPrecise: no caller does it
