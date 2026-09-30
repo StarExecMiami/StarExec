@@ -33,6 +33,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
@@ -1351,6 +1352,9 @@ public class PodmanBackend implements Backend {
                     );
                     submissionAccepted = true;
                     return execId;
+                } catch (SubmissionDeferredException e) {
+                    // Not a failure: the pair stays queued; the finally releases the slot.
+                    throw e;
                 } catch (Exception e) {
                     boolean isRetryable =
                         e.getMessage() != null &&
@@ -1422,6 +1426,26 @@ public class PodmanBackend implements Backend {
         int execId,
         CpuPartition selectedPartition
     ) throws Exception {
+        // Capture the attempt this container belongs to (#185), after JobManager has claimed
+        // the pair and so after any rerun reset. It travels as a label so a monitor that
+        // finds the container later -- including after a restart -- fences its writes on it.
+        // Read first, before any image is built or directory made: a failed read is not
+        // guessed at (an unfenced container could overwrite a rerun) and is not the pair's
+        // fault, so it defers instead of returning -1, which JobManager would turn into a
+        // terminal ERROR_SGE_REJECT. submitScript's finally releases the partition slot.
+        // Maintenance jobs (pairId <= 0) carry no attempt.
+        Integer attemptNo = null;
+        if (pairId > 0) {
+            try {
+                attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+            } catch (java.sql.SQLException e) {
+                throw new SubmissionDeferredException(
+                    "Could not read the current attempt of pair " + pairId +
+                        " (" + e.getMessage() + "); pair stays queued"
+                );
+            }
+        }
+
         log.info("Submitting job: " + jobName);
         log.debug("Working directory: " + workingDirectory);
         log.debug("Script path: " + scriptPath);
@@ -1462,15 +1486,6 @@ public class PodmanBackend implements Backend {
             workingDirectory,
             outputDir
         );
-        // Capture the attempt this container belongs to (#185), after JobManager has claimed
-        // the pair and so after any rerun reset. It travels as a label so a monitor that
-        // finds the container later -- including after a restart -- fences its writes on it.
-        // A failed read is not guessed at: it throws out of here and fails the submit like
-        // every other error on this path, rather than starting a container whose results
-        // could overwrite a rerun. Maintenance jobs (pairId <= 0) carry no attempt.
-        Integer attemptNo = pairId > 0
-            ? JobPairs.getCurrentAttemptNo(pairId)
-            : null;
         Map<String, String> labels = createContainerLabels(
             pairId,
             execId,

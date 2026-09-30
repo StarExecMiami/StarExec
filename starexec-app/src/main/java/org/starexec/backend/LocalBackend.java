@@ -1016,11 +1016,22 @@ public class LocalBackend implements Backend {
             // Capture the attempt this execution belongs to (#185). Read here, after
             // JobManager has claimed the pair (and so after any rerun reset), so every result
             // write can be fenced on it and a superseded execution cannot overwrite the
-            // rerun. A failed read is not guessed at: it throws to the handler below, which
-            // fails the submit exactly as every other database error in this method does,
-            // rather than running the pair with unfenced writes. Maintenance jobs
-            // (pairId <= 0) have no pair and carry no attempt.
-            Integer attemptNo = pairId > 0 ? JobPairs.getCurrentAttemptNo(pairId) : null;
+            // rerun. A failed read is not guessed at -- running the pair unfenced could let a
+            // superseded execution overwrite the rerun -- and it is not the pair's fault
+            // either, so it defers: returning -1 would become a terminal ERROR_SGE_REJECT for
+            // a healthy pair. Nothing is reserved yet (activeJobs is only written below), so
+            // there is no slot to release. Maintenance jobs (pairId <= 0) carry no attempt.
+            Integer attemptNo = null;
+            if (pairId > 0) {
+                try {
+                    attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+                } catch (java.sql.SQLException e) {
+                    log.warn("Cannot read attempt for pair " + pairId + ": " + e.getMessage(), e);
+                    throw new SubmissionDeferredException(
+                            "Could not read the current attempt of pair " + pairId +
+                                    " (" + e.getMessage() + "); pair stays queued");
+                }
+            }
 
             // Create the job
             int execId = generateExecId();
