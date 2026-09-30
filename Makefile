@@ -337,13 +337,13 @@ build-prod:
 # Pre-fetch all base images required by the Dockerfile.
 # Run once while online; subsequent offline builds will use the local cache.
 # Base images:
-#   node:20-alpine             Stage 1 - SCSS/CSS asset compilation
+#   node:24-alpine             Stage 1 - SCSS/CSS asset compilation
 #   alpine:3.19                Stage 2 - runsolver build
 #   maven:3.9-eclipse-temurin-17-alpine  Stage 3 & 4 - credential handler + app build
 #   eclipse-temurin:17-jre-alpine        Stage 5 - runtime
 cache-images:
 	@echo "Pre-fetching base images for offline builds..."
-	$(PODMAN_CMD) pull docker.io/library/node:20-alpine
+	$(PODMAN_CMD) pull docker.io/library/node:24-alpine
 	$(PODMAN_CMD) pull docker.io/library/alpine:3.19
 	$(PODMAN_CMD) pull docker.io/library/maven:3.9-eclipse-temurin-17-alpine
 	$(PODMAN_CMD) pull docker.io/library/eclipse-temurin:17-jre-alpine

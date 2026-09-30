@@ -2300,6 +2300,10 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String outputDir
     ) {
+        // NOTE (issue #284): STAREXEC_CPU_LIMIT and STAREXEC_WALLCLOCK_LIMIT below are
+        // overwritten by the job script (it exports them from the queue/job limits),
+        // so these defaults never reach the solver. STAREXEC_CPU_LIMIT is CPU seconds,
+        // not a core count. Only defaultMemoryMb has an effect (HostConfig memory limit).
         List<String> envVars = new ArrayList<>(
             Arrays.asList(
                 "STAREXEC_PAIR_ID=" + pairId,
