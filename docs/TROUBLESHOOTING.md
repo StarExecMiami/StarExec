@@ -300,7 +300,7 @@ podman pull ghcr.io/starexecmiami/starexec:latest
 
 **Problem:** `make build` or `make start` fails with:
 ```
-Error: creating build container: initializing source docker://node:20-alpine: 
+Error: creating build container: initializing source docker://node:24-alpine: 
 pinging container registry registry-1.docker.io: Get "https://registry-1.docker.io/v2/": 
 dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: server misbehaving
 make: *** [Makefile:231: build] Error 125
