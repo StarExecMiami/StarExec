@@ -147,7 +147,7 @@ public class UploadSolver extends HttpServlet {
 						}
 					}
 
-					response.addCookie(new Cookie("New_ID", String.valueOf(result.solverId)));
+					response.addCookie(Util.createIdCookie("New_ID", String.valueOf(result.solverId)));
 					if (result.isBuildJob && !runTestJob) {
 						response.sendRedirect(Util.docRoot("secure/details/solver.jsp?id=" + result.solverId +
 																   "&buildmsg=Building Solver On Starexec"));

@@ -237,6 +237,12 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-commons</artifactId>
+            <version>${junit-platform.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <version>5.23.0</version>
@@ -372,6 +378,9 @@
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
+                <excludes>
+                    <exclude>flyway.conf</exclude>
+                </excludes>
             </resource>
             <!-- Include SGE bash scripts and other non-Java files from src/main/java -->
             <resource>
@@ -487,8 +496,8 @@
                             <goal>install-node-and-npm</goal>
                         </goals>
                         <configuration>
-                            <nodeVersion>v18.19.0</nodeVersion>
-                            <npmVersion>9.8.1</npmVersion>
+                            <nodeVersion>v24.21.0</nodeVersion>
+                            <npmVersion>11.19.0</npmVersion>
                         </configuration>
                     </execution>
                     <execution>
@@ -632,6 +641,43 @@
     </build>
 
     <profiles>
+        <!--
+            Deterministic adapter for the pre-JUnit TestSequence suite.
+
+                mvn verify -Plegacy-test-sequences -pl starexec-app
+
+            This profile is deliberately opt-in. Its inventory preflight blocks
+            execution while any method remains UNVERIFIED, before a sequence is
+            instantiated or any database/fixture setup can run.
+        -->
+        <profile>
+            <id>legacy-test-sequences</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.2.5</version>
+                        <configuration>
+                            <includes>
+                                <include>**/LegacyTestSequenceSuite.java</include>
+                            </includes>
+                            <failIfNoTests>true</failIfNoTests>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>legacy-test-sequences</id>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!--
             Integration tests that need a real PostgreSQL.
 

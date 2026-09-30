@@ -172,6 +172,8 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Label key for job pair ID */
     private static final String PAIR_ID_LABEL = LABEL_PREFIX + "pair-id";
+    /** The pair attempt this Job was submitted for; absent on Jobs from before #185. */
+    static final String ATTEMPT_NO_LABEL = LABEL_PREFIX + "attempt-no";
 
     /** Where the job container mounts the shared data volume. */
     private static final String DATA_MOUNT_PATH = "/app/data";
@@ -357,6 +359,17 @@ public class KubernetesNativeBackend implements Backend {
 
     /** Maps StarExec execution IDs to output directories */
     private final Map<Integer, Path> execIdToOutputDir =
+        new ConcurrentHashMap<>();
+
+    /**
+     * Maps StarExec execution IDs to the pair attempt they were submitted for (#185).
+     *
+     * <p>Every result write carries this so the database can refuse a write from an
+     * execution whose pair has since been rerun. An id with no entry is UNFENCED, not
+     * attempt 0: Jobs created before this label existed have none, and a rerun cannot
+     * be told apart for them. Released wherever {@code execIdToOutputDir} is.
+     */
+    private final Map<Integer, Integer> execIdToAttemptNo =
         new ConcurrentHashMap<>();
 
     /** Execution ID generator */
@@ -1122,6 +1135,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToJobUid.clear();
         execIdToPairId.clear();
         execIdToOutputDir.clear();
+        execIdToAttemptNo.clear();
         initialized = false;
         log.info("KubernetesNativeBackend shut down");
     }
@@ -1223,6 +1237,7 @@ public class KubernetesNativeBackend implements Backend {
                 execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
+                execIdToAttemptNo.remove(execId);
                 releaseSubmissionSlot(execId);
                 unverifiedExecutions.remove(execId);
                 deleted++;
@@ -1374,6 +1389,7 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            execIdToAttemptNo.remove(execId);
             ambiguousSubmissions.remove(execId);
             // Deliberately NOT recordExecutionStopped. That set means "explicitly
             // killed, so ignore any callback for it", and every terminal callback
@@ -1760,6 +1776,27 @@ public class KubernetesNativeBackend implements Backend {
             );
         }
 
+        // The attempt this execution is for (#185), read now, while the pair is the one the
+        // caller just claimed. It is carried on the Job and handed to every result write, so
+        // a rerun that has moved the pair on refuses this execution's late results.
+        // Read failure defers rather than submits unfenced or terminally rejects: no Job
+        // exists yet, so the pair simply stays queued and the read is retried next pass.
+        Integer attemptNo = null;
+        if (pairId > 0) {
+            try {
+                attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+            } catch (Exception e) {
+                log.error(
+                    "Could not read the current attempt of pair " + pairId +
+                    "; deferring its submission", e
+                );
+                releaseSubmissionSlot(execId);
+                throw new SubmissionDeferredException(
+                    "attempt of pair " + pairId + " unreadable; pair stays queued"
+                );
+            }
+        }
+
         log.info(
             "Submitting K8s Job: execId=" +
                 execId +
@@ -1776,7 +1813,8 @@ public class KubernetesNativeBackend implements Backend {
                 jobName,
                 scriptPath,
                 workingDirectoryPath,
-                logPath
+                logPath,
+                attemptNo
             );
 
             // Clear the previous attempt's result artifacts before this Job can write new
@@ -1859,6 +1897,7 @@ public class KubernetesNativeBackend implements Backend {
             // callback that arrives between these writes would otherwise own the id while
             // still reading the previous execution's pair.
             execIdToPairId.put(execId, pairId);
+            putAttemptNo(execId, attemptNo);
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
             execIdToJobName.put(execId, submitted.jobName());
             execIdToJobUid.put(execId, submitted.jobUid());
@@ -1883,7 +1922,16 @@ public class KubernetesNativeBackend implements Backend {
             throw e;
         } catch (Exception e) {
             log.error("Failed to submit Kubernetes Job: " + jobName, e);
-            return resolveAmbiguousSubmission(execId, pairId, jobName, logPath);
+            return resolveAmbiguousSubmission(execId, pairId, jobName, logPath, attemptNo);
+        }
+    }
+
+    /** Records the attempt for an execution; null means unfenced and stores nothing. */
+    private void putAttemptNo(int execId, Integer attemptNo) {
+        if (attemptNo == null) {
+            execIdToAttemptNo.remove(execId);
+        } else {
+            execIdToAttemptNo.put(execId, attemptNo);
         }
     }
 
@@ -1920,7 +1968,8 @@ public class KubernetesNativeBackend implements Backend {
         int execId,
         int pairId,
         String jobName,
-        String logPath
+        String logPath,
+        Integer attemptNo
     ) {
         // Tri-state, NOT kubernetesJobExists. That helper reports true when it cannot tell,
         // which is the correct fail-closed answer to "may I release this execution" but the
@@ -1936,6 +1985,7 @@ public class KubernetesNativeBackend implements Backend {
             execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
             execIdToOutputDir.remove(execId);
+            execIdToAttemptNo.remove(execId);
             releaseSubmissionSlot(execId);
             log.warn(
                 "Submission of pair " + pairId + " failed and the cluster confirms nothing" +
@@ -1956,6 +2006,7 @@ public class KubernetesNativeBackend implements Backend {
         // something that was never established.
         execIdToJobUid.remove(execId);
         execIdToPairId.put(execId, pairId);
+        putAttemptNo(execId, attemptNo);
         try {
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
         } catch (Exception ignored) {
@@ -1981,6 +2032,7 @@ public class KubernetesNativeBackend implements Backend {
         return execId;
     }
 
+    /** As below, for an execution with no attempt to fence on (no label is written). */
     private Job buildKubernetesJob(
         int pairId,
         int execId,
@@ -1989,10 +2041,27 @@ public class KubernetesNativeBackend implements Backend {
         String workingDirectoryPath,
         String logPath
     ) {
+        return buildKubernetesJob(
+            pairId, execId, jobName, scriptPath, workingDirectoryPath, logPath, null);
+    }
+
+    private Job buildKubernetesJob(
+        int pairId,
+        int execId,
+        String jobName,
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath,
+        Integer attemptNo
+    ) {
         Map<String, String> labels = new HashMap<>();
         labels.put(MANAGED_LABEL, "true");
         labels.put(EXEC_ID_LABEL, String.valueOf(execId));
         labels.put(PAIR_ID_LABEL, String.valueOf(pairId));
+        // Survives a restart, which the in-memory map does not: recovery reads it back.
+        if (attemptNo != null) {
+            labels.put(ATTEMPT_NO_LABEL, String.valueOf(attemptNo));
+        }
 
         Path outputDir = resolveOutputDirectory(logPath);
 
@@ -2480,6 +2549,7 @@ public class KubernetesNativeBackend implements Backend {
                     execIdToJobUid.remove(execId);
                     execIdToPairId.remove(execId);
                     execIdToOutputDir.remove(execId);
+                    execIdToAttemptNo.remove(execId);
                     releaseSubmissionSlot(execId);
 
                     // But the RECORD survives until the database agrees. Dropping it here
@@ -2604,6 +2674,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
         execIdToOutputDir.remove(execId);
+        execIdToAttemptNo.remove(execId);
         ambiguousSubmissions.remove(execId);
         unverifiedExecutions.remove(execId);
         releaseSubmissionSlot(execId);
@@ -2857,6 +2928,8 @@ public class KubernetesNativeBackend implements Backend {
         // Pair and output directory first, then the identity that grants ownership of them.
         ExecutionRef execution = ExecutionRef.fromJob(execId, job);
         execIdToPairId.put(execId, pairId);
+        // Null (no label: a Job from before #185) is stored as absent, i.e. unfenced.
+        putAttemptNo(execId, extractIntegerLabel(job, ATTEMPT_NO_LABEL));
         execIdToOutputDir.put(execId, resolveOutputDirectory(job, pairId));
         execIdToJobName.put(execId, jobName);
         if (execution != null) {
@@ -3550,6 +3623,7 @@ public class KubernetesNativeBackend implements Backend {
                 execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
+                execIdToAttemptNo.remove(execId);
                 ambiguousSubmissions.remove(execId);
                 unverifiedExecutions.remove(execId);
                 releaseSubmissionSlot(execId);
@@ -3619,6 +3693,7 @@ public class KubernetesNativeBackend implements Backend {
         execIdToJobUid.remove(execId);
         execIdToPairId.remove(execId);
         execIdToOutputDir.remove(execId);
+        execIdToAttemptNo.remove(execId);
         ambiguousSubmissions.remove(execId);
         unverifiedExecutions.remove(execId);
         releaseSubmissionSlot(execId);
@@ -3803,6 +3878,7 @@ public class KubernetesNativeBackend implements Backend {
                 execIdToJobUid.remove(execId);
                 execIdToPairId.remove(execId);
                 execIdToOutputDir.remove(execId);
+                execIdToAttemptNo.remove(execId);
                 releaseSubmissionSlot(execId);
                 released++;
             } else {
@@ -4344,6 +4420,8 @@ public class KubernetesNativeBackend implements Backend {
                 log.warn("Unable to resolve pair ID for completed job: " + execution);
                 return false;
             }
+            // After the pair: resolvePairId may refill the attempt from the Job's label.
+            Integer attemptNo = resolveAttemptNo(execution);
 
             try {
                 // Guard: skip DB update when the pair row has disappeared or the
@@ -4387,7 +4465,12 @@ public class KubernetesNativeBackend implements Backend {
                 // status.json. That file is a single slot every stage truncates, so without
                 // this the pair keeps only its final stage and every earlier one stays at
                 // whatever it was enqueued with.
-                if (!ingestEarlierStageStatuses(execution, pairId, stageNumber)) {
+                EarlierStages earlier =
+                    ingestEarlierStageStatuses(execution, pairId, stageNumber, attemptNo);
+                if (earlier == EarlierStages.STALE_ATTEMPT) {
+                    return releaseStaleExecution(execution, pairId, "earlier stage statuses");
+                }
+                if (earlier == EarlierStages.RETRY) {
                     return false;
                 }
 
@@ -4422,7 +4505,10 @@ public class KubernetesNativeBackend implements Backend {
                 }
 
                 PairStatusResult updated =
-                    recordTerminalResult(pairId, stageNumber, terminalStatus);
+                    recordTerminalResult(pairId, stageNumber, terminalStatus, attemptNo);
+                if (updated == PairStatusResult.STALE_ATTEMPT) {
+                    return releaseStaleExecution(execution, pairId, "terminal status");
+                }
                 if (updated == PairStatusResult.REJECTED_INVALID_STAGE) {
                     // The stage named is not a stage this pair has, so there is nothing to
                     // record this result against.
@@ -4484,10 +4570,14 @@ public class KubernetesNativeBackend implements Backend {
 
                 // Persist run-solver statistics (wallclock, cpu, memory, disk)
                 // so K8s-native jobs produce the same data as container jobs.
-                persistRunSolverStats(execution, pairId, stageNumber);
+                if (!persistRunSolverStats(execution, pairId, stageNumber, attemptNo)) {
+                    return releaseStaleExecution(execution, pairId, "run-solver stats");
+                }
 
                 // Persist attributes generated by post-processors
-                persistAttributes(execution, pairId, stageNumber);
+                if (!persistAttributes(execution, pairId, stageNumber, attemptNo)) {
+                    return releaseStaleExecution(execution, pairId, "attributes");
+                }
             } catch (StageStatusSnapshots.InvalidSnapshotException e) {
                 // No usable stage identity, so nothing was written and nothing will be. The
                 // pair keeps its non-terminal status and its output stays on the PVC.
@@ -4510,6 +4600,43 @@ public class KubernetesNativeBackend implements Backend {
             }
 
             releaseAccountingIfSafe(execution, "completion of " + jobName);
+            return true;
+        }
+
+        /** Outcome of recording the earlier stages of a finished execution. */
+        private enum EarlierStages { RECORDED, RETRY, STALE_ATTEMPT }
+
+        /**
+         * The attempt this execution was submitted for, or null when it is unfenced.
+         *
+         * <p>Read only while the execution owns its id, and re-checked after the read as
+         * {@link #resolvePairId} does: the map entry belongs to whoever holds the id.
+         */
+        private Integer resolveAttemptNo(ExecutionRef execution) {
+            if (!ownsTracking(execution)) {
+                return null;
+            }
+            Integer attemptNo = execIdToAttemptNo.get(execution.execId());
+            return ownsTracking(execution) ? attemptNo : null;
+        }
+
+        /**
+         * The database refused a result write because the pair has moved on to a later
+         * attempt (#185). Nothing this execution holds is valid any more, so it is finished:
+         * not retried (the refusal cannot heal), not recorded as applied, and its
+         * accounting released as on every other completed exit.
+         */
+        private boolean releaseStaleExecution(
+            ExecutionRef execution,
+            int pairId,
+            String write
+        ) {
+            log.info(
+                "Discarding the result of " + execution + " for pair " + pairId + ": its " +
+                write + " write was refused because the pair has been rerun since this" +
+                " execution was submitted. No further results are written for it."
+            );
+            releaseAccountingIfSafe(execution, "stale attempt for " + execution);
             return true;
         }
 
@@ -4734,6 +4861,9 @@ public class KubernetesNativeBackend implements Backend {
                 Integer parsed = Integer.parseInt(pairIdValue);
                 if (ownsTracking(execution)) {
                     execIdToPairId.put(execId, parsed);
+                    // The attempt comes from the same object, so it is refilled with the
+                    // pair (clearPairTracking drops the pair, not the attempt).
+                    putAttemptNo(execId, extractIntegerLabel(job, ATTEMPT_NO_LABEL));
                 }
                 return parsed;
             } catch (Exception e) {
@@ -4933,12 +5063,15 @@ public class KubernetesNativeBackend implements Backend {
          * be believed is an evidence problem, and answering it with {@code ERROR_RUNSCRIPT}
          * would put a scientific failure on a pair whose solver may have been perfectly fine.
          *
-         * @return true when the earlier stages are recorded, or when there are none to record
+         * @return RECORDED when the earlier stages are recorded or there are none to record,
+         *         STALE_ATTEMPT when the database refused them for a superseded attempt,
+         *         RETRY for every other failure
          */
-        private boolean ingestEarlierStageStatuses(
+        private EarlierStages ingestEarlierStageStatuses(
             ExecutionRef execution,
             int pairId,
-            int terminalStage
+            int terminalStage,
+            Integer attemptNo
         ) {
             // Ownership dominates artifact ownership. ownedOutputDir is gated on positive
             // ownership of execId, job name and UID; the output directory is keyed by pair
@@ -4950,7 +5083,7 @@ public class KubernetesNativeBackend implements Backend {
                     "Not ingesting stage snapshots for " + execution +
                         ": this execution no longer owns its tracking"
                 );
-                return false;
+                return EarlierStages.RETRY;
             }
 
             // The terminal stage's own status comes from the runsolver artifacts, and a pair
@@ -4972,18 +5105,18 @@ public class KubernetesNativeBackend implements Backend {
                     "); nothing was written and the output is retained for diagnosis",
                     e
                 );
-                return false;
+                return EarlierStages.RETRY;
             } catch (Exception e) {
                 log.error(
                     "Could not read the stage snapshots for pair " + pairId + " (" + execution +
                     "); results are retained and ingestion will retry",
                     e
                 );
-                return false;
+                return EarlierStages.RETRY;
             }
 
             if (earlier.isEmpty()) {
-                return true;
+                return EarlierStages.RECORDED;
             }
 
             // Re-checked at the mutation boundary, as the terminal write is. Everything above
@@ -4997,18 +5130,26 @@ public class KubernetesNativeBackend implements Backend {
                     "Discarding stage snapshots for " + execution +
                     ": ownership changed while its output was being read"
                 );
-                return false;
+                return EarlierStages.RETRY;
             }
 
-            StageStatusBatchResult result = JobPairs.setEarlierStageStatuses(pairId, earlier);
+            // Null attempt (a Job from before #185) keeps the unfenced call.
+            StageStatusBatchResult result = attemptNo == null
+                ? JobPairs.setEarlierStageStatuses(pairId, earlier)
+                : JobPairs.setEarlierStageStatuses(pairId, earlier, attemptNo);
             if (result == StageStatusBatchResult.APPLIED) {
-                return true;
+                return EarlierStages.RECORDED;
+            }
+            if (result == StageStatusBatchResult.STALE_ATTEMPT) {
+                // Not a failure and not applied: the pair was rerun, so this execution's
+                // stages are not its stages any more. Retrying cannot change that.
+                return EarlierStages.STALE_ATTEMPT;
             }
             log.error(
                 "Could not record earlier stage statuses " + earlier + " for pair " + pairId +
                 " (" + result + "); nothing was written and completion will be retried"
             );
-            return false;
+            return EarlierStages.RETRY;
         }
 
         /**
@@ -5023,22 +5164,48 @@ public class KubernetesNativeBackend implements Backend {
             int stageNumber,
             int terminalStatus
         ) {
+            return recordTerminalResult(pairId, stageNumber, terminalStatus, null);
+        }
+
+        private PairStatusResult recordTerminalResult(
+            int pairId,
+            int stageNumber,
+            int terminalStatus,
+            Integer attemptNo
+        ) {
             // Stage 0 is the pair-level channel: the pair failed outside any stage, so there
             // is no stage to carry the result and it is recorded against the pair (#165).
+            // A null attempt (a Job from before #185) keeps the unfenced overloads.
             if (stageNumber == FinalStatusStage.PAIR_LEVEL) {
-                return JobPairs.setPairLevelStatusResult(
-                    pairId,
-                    terminalStatus,
-                    StatusCode.STATUS_NOT_REACHED.getVal()
-                );
+                return attemptNo == null
+                    ? JobPairs.setPairLevelStatusResult(
+                        pairId,
+                        terminalStatus,
+                        StatusCode.STATUS_NOT_REACHED.getVal()
+                    )
+                    : JobPairs.setPairLevelStatusResult(
+                        pairId,
+                        terminalStatus,
+                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        attemptNo
+                    );
             }
-            return JobPairs.setPairStatusPreciseResult(
-                pairId,
-                stageNumber,
-                terminalStatus,
-                StatusCode.STATUS_NOT_REACHED.getVal(),
-                false
-            );
+            return attemptNo == null
+                ? JobPairs.setPairStatusPreciseResult(
+                    pairId,
+                    stageNumber,
+                    terminalStatus,
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false
+                )
+                : JobPairs.setPairStatusPreciseResult(
+                    pairId,
+                    stageNumber,
+                    terminalStatus,
+                    StatusCode.STATUS_NOT_REACHED.getVal(),
+                    false,
+                    attemptNo
+                );
         }
 
         /**
@@ -5082,10 +5249,15 @@ public class KubernetesNativeBackend implements Backend {
          * stage's measurements were lost, and a final stage that never reached copyOutput was
          * given the previous stage's.
          */
-        private void persistRunSolverStats(ExecutionRef execution, int pairId, int stageNumber) {
+        private boolean persistRunSolverStats(
+            ExecutionRef execution,
+            int pairId,
+            int stageNumber,
+            Integer attemptNo
+        ) {
             Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
-                return;
+                return true;
             }
 
             Map<Integer, StageStatsFiles.Stats> byStage;
@@ -5106,7 +5278,7 @@ public class KubernetesNativeBackend implements Backend {
                 );
             } catch (Exception e) {
                 log.warn("Failed to select the run stats to persist for pair " + pairId, e);
-                return;
+                return true;
             }
 
             for (Map.Entry<Integer, StageStatsFiles.Stats> entry : byStage.entrySet()) {
@@ -5129,21 +5301,40 @@ public class KubernetesNativeBackend implements Backend {
                         );
                         continue;
                     }
-                    boolean ok = JobPairs.updateRunSolverStats(
-                        pairId,
-                        nodeName,
-                        stats.wallclockTime,
-                        stats.cpuTime,
-                        stats.userTime,
-                        stats.systemTime,
-                        stats.maxVirtualMemory,
-                        stats.maxResidentSetSize,
-                        entry.getKey(),
-                        stats.diskSize
-                    );
+                    // Null attempt (a Job from before #185) keeps the unfenced overload.
+                    boolean ok = attemptNo == null
+                        ? JobPairs.updateRunSolverStats(
+                            pairId,
+                            nodeName,
+                            stats.wallclockTime,
+                            stats.cpuTime,
+                            stats.userTime,
+                            stats.systemTime,
+                            stats.maxVirtualMemory,
+                            stats.maxResidentSetSize,
+                            entry.getKey(),
+                            stats.diskSize
+                        )
+                        : JobPairs.updateRunSolverStats(
+                            pairId,
+                            nodeName,
+                            stats.wallclockTime,
+                            stats.cpuTime,
+                            stats.userTime,
+                            stats.systemTime,
+                            stats.maxVirtualMemory,
+                            stats.maxResidentSetSize,
+                            entry.getKey(),
+                            stats.diskSize,
+                            attemptNo
+                        );
                     if (ok) {
                         log.debug("Persisted run stats for pair " + pairId + " stage " +
                             entry.getKey() + ": " + stats);
+                    } else if (isStaleAttempt(pairId, attemptNo)) {
+                        // false also means "refused as stale"; that is not a failure, and
+                        // no later stage's stats would be accepted either.
+                        return false;
                     } else {
                         log.warn("Failed to persist run stats for pair " + pairId + " stage " +
                             entry.getKey());
@@ -5152,6 +5343,25 @@ public class KubernetesNativeBackend implements Backend {
                     log.warn("Exception persisting run stats for pair " + pairId + " stage " +
                         entry.getKey(), e);
                 }
+            }
+            return true;
+        }
+
+        /**
+         * Whether a boolean-returning fenced write that reported false did so because the
+         * pair has moved past {@code attemptNo}, rather than because it failed. Those
+         * writers cannot say which, so the pair's current attempt is asked. An unreadable
+         * answer is "not known to be stale": it is reported as the ordinary failure.
+         */
+        private boolean isStaleAttempt(int pairId, Integer attemptNo) {
+            if (attemptNo == null) {
+                return false;
+            }
+            try {
+                return JobPairs.getCurrentAttemptNo(pairId) != attemptNo;
+            } catch (Exception e) {
+                log.warn("Could not re-read the attempt of pair " + pairId, e);
+                return false;
             }
         }
 
@@ -5169,9 +5379,14 @@ public class KubernetesNativeBackend implements Backend {
          * {@code starexec-unknown} so downstream correctness logic treats
          * timeout/unknown outcomes consistently.</p>
          */
-        private void persistAttributes(ExecutionRef execution, int pairId, int stageNumber) {
+        private boolean persistAttributes(
+            ExecutionRef execution,
+            int pairId,
+            int stageNumber,
+            Integer attemptNo
+        ) {
             Path outputDir = ownedOutputDir(execution);
-            if (outputDir == null) return;
+            if (outputDir == null) return true;
 
             Map<Integer, Properties> byStage;
             try {
@@ -5192,7 +5407,7 @@ public class KubernetesNativeBackend implements Backend {
                 );
             } catch (Exception e) {
                 log.warn("Failed to select the attributes to persist for pair " + pairId, e);
-                return;
+                return true;
             }
 
             for (Map.Entry<Integer, Properties> entry : byStage.entrySet()) {
@@ -5200,14 +5415,27 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
                 try {
-                    JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue());
-                    log.debug("Persisted attributes for pair " + pairId + " stage " +
-                        entry.getKey() + ": " + entry.getValue().size());
+                    // Null attempt (a Job from before #185) keeps the unfenced overload.
+                    boolean ok = attemptNo == null
+                        ? JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue())
+                        : JobPairs.addJobPairAttributes(
+                            pairId, entry.getKey(), entry.getValue(), attemptNo);
+                    if (ok) {
+                        log.debug("Persisted attributes for pair " + pairId + " stage " +
+                            entry.getKey() + ": " + entry.getValue().size());
+                    } else if (isStaleAttempt(pairId, attemptNo)) {
+                        // Refused as stale: not a failure, and later stages are refused too.
+                        return false;
+                    } else {
+                        log.warn("Failed to persist attributes for pair " + pairId + " stage " +
+                            entry.getKey());
+                    }
                 } catch (Exception e) {
                     log.warn("Failed to persist attributes for pair " + pairId + " stage " +
                         entry.getKey(), e);
                 }
             }
+            return true;
         }
 
         /** The legacy attributes.txt, parsed; empty when absent or unreadable. */

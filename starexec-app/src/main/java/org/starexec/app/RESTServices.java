@@ -4801,7 +4801,7 @@ public class RESTServices {
 			if (copy) {
 				List<Solver> oldSolvers = Solvers.get(selectedSolvers);
 				selectedSolvers = Solvers.copySolvers(oldSolvers, requestUserId, spaceId);
-				response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+				response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
 			}
 
 			// if we did a copy, the solvers are already associated with the root space, so
@@ -4891,13 +4891,13 @@ public class RESTServices {
 							"Failed to copy all " + failed.size() + " benchmark(s). "
 							+ "The source files may be missing on disk. Check the server logs for details."));
 				} else {
-					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 					return gson.toJson(new ValidatorStatusCode(false,
 							succeeded.size() + " benchmark(s) copied successfully, but "
 							+ failed.size() + " failed. Check the server logs for details."));
 				}
 			}
-			response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+			response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 			return gson.toJson(new ValidatorStatusCode(true, "The selected benchmark(s) were copied successfully"));
 		} else {
 			// Return a value based on results from database operation
@@ -6454,7 +6454,7 @@ public class RESTServices {
 				return gson.toJson(new ValidatorStatusCode(false, e.getMessage()));
 			}
 		}
-		response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(newSpaceIds)));
+		response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(newSpaceIds)));
 		return gson.toJson(new ValidatorStatusCode(true, "Space copied successfully"));
 	}
 

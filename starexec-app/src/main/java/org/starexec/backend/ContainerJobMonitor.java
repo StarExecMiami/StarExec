@@ -627,13 +627,23 @@ public class ContainerJobMonitor {
         //    decided with the per-stage files in step 5.
         Properties attributes = parseAttributes(outputPath);
 
-        // 4. Update database
-        updateDatabase(
+        // 4. Update database. info.attemptNo fences every result write on the attempt the
+        //    container was created for (#185); null, from a container that predates the
+        //    label, leaves them unfenced as before. A stale refusal means a rerun replaced
+        //    this execution: nothing later would be accepted either, so the remaining writes
+        //    are skipped and the caller releases the container. It is not a failure, is not
+        //    retried and is not quarantined.
+        if (updateDatabase(
             pairId,
             stageNumber,
             status,
-            stageSnapshots
-        );
+            stageSnapshots,
+            info.attemptNo
+        )) {
+            log.info("Completed job " + pairId + " belongs to a superseded attempt ("
+                + info.attemptNo + "); its results were discarded and the container is released");
+            return;
+        }
 
         // 5. Measurements and attributes, each against the stage that produced it. Only after
         //    updateDatabase returned: a refused status throws out of it, and nothing may be
@@ -649,8 +659,10 @@ public class ContainerJobMonitor {
                 finishedEarlier.add(stage);
             }
         }
-        recordMeasurements(pairId, outputPath, stageNumber, finishedEarlier, info.partitionIndex);
-        recordAttributes(pairId, outputPath, stageNumber, finishedEarlier, attributes);
+        recordMeasurements(pairId, outputPath, stageNumber, finishedEarlier, info.partitionIndex,
+            info.attemptNo);
+        recordAttributes(pairId, outputPath, stageNumber, finishedEarlier, attributes,
+            info.attemptNo);
 
         log.info("Completed job " + pairId + " processed: status=" + status + " stageNumber=" + stageNumber);
     }
@@ -993,11 +1005,12 @@ public class ContainerJobMonitor {
      * call (it is a no-op there), so without this step the completion timestamp
      * remains NULL for container-executed pairs.</p>
      */
-    private void updateDatabase(
+    private boolean updateDatabase(
         int pairId,
         int stageNumber,
         StatusCode status,
-        Map<Integer, Integer> stageSnapshots
+        Map<Integer, Integer> stageSnapshots,
+        Integer attemptNo
     ) throws Exception {
         // Earlier stages first. UpdatePairStatusPrecise below rewrites the terminal stage
         // and everything after it, so these survive it; writing them afterwards would
@@ -1019,7 +1032,12 @@ public class ContainerJobMonitor {
             }
         }
         StageStatusBatchResult batch =
-            JobPairs.setEarlierStageStatuses(pairId, earlierStages);
+            FencedResultWrites.setEarlierStageStatuses(pairId, earlierStages, attemptNo);
+        if (batch == StageStatusBatchResult.STALE_ATTEMPT) {
+            log.info("Pair " + pairId + ": stage statuses refused as stale (attempt "
+                + attemptNo + "); the pair was rerun");
+            return true;
+        }
         if (batch == StageStatusBatchResult.REJECTED_UNKNOWN_STAGE) {
             // The output names a stage this pair does not have. No retry changes that.
             throw new Exception(
@@ -1050,17 +1068,26 @@ public class ContainerJobMonitor {
         // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
         // stage to carry the result and it is recorded against the pair itself (#165).
         PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
-            ? JobPairs.setPairLevelStatusResult(
+            ? FencedResultWrites.setPairLevelStatusResult(
                 pairId,
                 status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal())
-            : JobPairs.setPairStatusPreciseResult(
+                StatusCode.STATUS_NOT_REACHED.getVal(),
+                attemptNo)
+            : FencedResultWrites.setPairStatusPreciseResult(
                 pairId,
                 stageNumber,
                 status.getVal(),
                 StatusCode.STATUS_NOT_REACHED.getVal(),
-                false
+                false,
+                attemptNo
             );
+        if (statusResult == PairStatusResult.STALE_ATTEMPT) {
+            // Refused before anything was written: the pair was rerun after this container
+            // was created (#185). Not FAILED -- no retry can succeed -- and not APPLIED.
+            log.info("Pair " + pairId + ": status " + status + " refused as stale (attempt "
+                + attemptNo + "); the pair was rerun");
+            return true;
+        }
         if (statusResult == PairStatusResult.REJECTED_INVALID_STAGE) {
             // The stage named is not a stage this pair has, so no retry changes it.
             //
@@ -1106,6 +1133,7 @@ public class ContainerJobMonitor {
         // recorded finish time must not drift each time one happens.
 
         log.debug("Updated database for pair " + pairId + ": status=" + status);
+        return false;
     }
 
     /**
@@ -1122,7 +1150,8 @@ public class ContainerJobMonitor {
         Path outputPath,
         int stageNumber,
         Set<Integer> finishedEarlier,
-        int partitionIndex
+        int partitionIndex,
+        Integer attemptNo
     ) throws Exception {
         Map<Integer, StageStatsFiles.Stats> byStage = StageStatsFiles.select(
             outputPath,
@@ -1138,7 +1167,7 @@ public class ContainerJobMonitor {
                 String nodeName = stats.hostname != null
                     ? stats.hostname
                     : backend.getWorkerNodeNameForPartition(partitionIndex);
-                boolean ok = JobPairs.updateRunSolverStats(
+                boolean ok = FencedResultWrites.updateRunSolverStats(
                     pairId,
                     nodeName,
                     stats.wallclockTime,
@@ -1148,7 +1177,8 @@ public class ContainerJobMonitor {
                     stats.maxVirtualMemory,
                     stats.maxResidentSetSize,
                     entry.getKey(),
-                    stats.diskSize
+                    stats.diskSize,
+                    attemptNo
                 );
                 if (ok) {
                     log.debug("Persisted run stats for pair " + pairId + " stage "
@@ -1173,7 +1203,8 @@ public class ContainerJobMonitor {
         Path outputPath,
         int stageNumber,
         Set<Integer> finishedEarlier,
-        Properties legacy
+        Properties legacy,
+        Integer attemptNo
     ) throws Exception {
         Map<Integer, Properties> byStage = StageAttributeFiles.select(
             outputPath,
@@ -1186,7 +1217,8 @@ public class ContainerJobMonitor {
 
         for (Map.Entry<Integer, Properties> entry : byStage.entrySet()) {
             if (!entry.getValue().isEmpty()) {
-                JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue());
+                FencedResultWrites.addJobPairAttributes(
+                    pairId, entry.getKey(), entry.getValue(), attemptNo);
             }
         }
     }

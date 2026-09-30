@@ -196,7 +196,7 @@ public class AddSpace extends HttpServlet {
 				);
 			} else {
 				// On success, redirect to the space explorer on the new space so they can see changes
-				response.addCookie(new Cookie("New_ID", String.valueOf(newSpaceId)));
+				response.addCookie(Util.createIdCookie("New_ID", String.valueOf(newSpaceId)));
 				response.sendRedirect(Util.docRoot("secure/explore/spaces.jsp?id=" + newSpaceId));
 			}
 		} catch (Exception e) {

@@ -284,7 +284,7 @@ public class Common {
 			try {
 				con.rollback();
 			} catch (SQLException rollbackFailure) {
-				failure.addSuppressed(rollbackFailure);
+				if (failure != rollbackFailure) failure.addSuppressed(rollbackFailure);
 			}
 		}
 
@@ -295,7 +295,7 @@ public class Common {
 			discard(con, restoreFailure);
 			if (failure != null) {
 				// Cleanup must not overwrite the reason the caller needs to see.
-				failure.addSuppressed(restoreFailure);
+				if (failure != restoreFailure) failure.addSuppressed(restoreFailure);
 			} else {
 				// The commit returned. The caller's write is durable, exactly once, and that
 				// is the answer the caller needs -- reporting a failure here would have it
@@ -338,12 +338,14 @@ public class Common {
 				pooled.setDiscarded(true);
 			}
 		} catch (SQLException | RuntimeException e) {
-			reason.addSuppressed(e);
+			if (reason != e) reason.addSuppressed(e);
 		}
 		try {
 			con.abort(Runnable::run);
 		} catch (SQLException | RuntimeException | AbstractMethodError e) {
-			reason.addSuppressed(new SQLException("could not abort the unrestorable connection", e));
+			if (reason != e) {
+				reason.addSuppressed(new SQLException("could not abort the unrestorable connection", e));
+			}
 		}
 	}
 

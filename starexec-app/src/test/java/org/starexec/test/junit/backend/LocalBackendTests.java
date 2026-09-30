@@ -429,6 +429,48 @@ public class LocalBackendTests {
     }
 
     @Test
+    public void failedAttemptReadDefersInsteadOfReturningMinusOne() throws Exception {
+        // A transient database error while reading the pair's attempt (#185) is not the
+        // pair's fault. Returning -1 would become a terminal ERROR_SGE_REJECT in JobManager;
+        // the pair must be deferred so it stays queued.
+        Path script = executableScript("attempt-read-fails.sh", "exit 0");
+        Path workDir = Files.createDirectory(tempDir.resolve("attempt-read-work"));
+        Path logPath = tempDir.resolve("attempt-read-output/job.log");
+
+        Field activeField = LocalBackend.class.getDeclaredField("activeJobs");
+        activeField.setAccessible(true);
+        Map<?, ?> active = (Map<?, ?>) activeField.get(backend);
+        int before = active.size();
+
+        try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42))
+                .thenThrow(new java.sql.SQLException("connection reset"));
+
+            try {
+                int execId = backend.submitScript(
+                    42, script.toString(), workDir.toString(), logPath.toString());
+                Assert.fail("a failed attempt read must defer, not return " + execId);
+            } catch (SubmissionDeferredException expected) {
+                Assert.assertTrue(expected.getMessage().contains("42"),
+                    "the message names the pair: " + expected.getMessage());
+                Assert.assertTrue(expected.getMessage().contains("connection reset"),
+                    "the message names the cause: " + expected.getMessage());
+            }
+        }
+
+        Assert.assertEquals(active.size(), before,
+            "a deferred submission must not register an execution");
+
+        // Nothing is left reserved: the same pair submits once the database recovers.
+        try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+            pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+            int execId = backend.submitScript(
+                42, script.toString(), workDir.toString(), logPath.toString());
+            Assert.assertTrue(execId > 0, "the next pass submits the pair");
+        }
+    }
+
+    @Test
     public void saturatedQueueDefersWithoutRunningSolverOrBlockingControls() throws Exception {
         waitForFixtureJob();
 
@@ -454,8 +496,13 @@ public class LocalBackendTests {
             CountDownLatch submitStarted = new CountDownLatch(1);
             submission = callers.submit(() -> {
                 submitStarted.countDown();
-                return backend.submitScript(
-                    42, script.toString(), workDir.toString(), logPath.toString());
+                // submitScript reads the pair's attempt (#185); mocking is thread-local, so
+                // the stub belongs on the submitting thread. No database is involved.
+                try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+                    pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+                    return backend.submitScript(
+                        42, script.toString(), workDir.toString(), logPath.toString());
+                }
             });
             Assert.assertTrue(submitStarted.await(2, TimeUnit.SECONDS));
 
@@ -505,8 +552,12 @@ public class LocalBackendTests {
             Assert.assertEquals(((LocalBackend) backend).getRunningJobCount(), 0);
 
             saturatedExecutor.getQueue().clear();
-            int queuedId = backend.submitScript(
-                42, script.toString(), workDir.toString(), logPath.toString());
+            int queuedId;
+            try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+                pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+                queuedId = backend.submitScript(
+                    42, script.toString(), workDir.toString(), logPath.toString());
+            }
             Assert.assertTrue(queuedId > 0, "the freed queue slot must accept a submission");
             Assert.assertTrue(backend.killPair(queuedId),
                 "a job must be cancellable immediately after submitScript returns");

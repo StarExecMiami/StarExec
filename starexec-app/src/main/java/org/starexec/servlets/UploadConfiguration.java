@@ -99,7 +99,7 @@ public class UploadConfiguration extends HttpServlet {
 				} else {
 
 					//result should be the new ID of the configuration
-					response.addCookie(new Cookie("New_ID", String.valueOf(result.getStatusCode())));
+					response.addCookie(Util.createIdCookie("New_ID", String.valueOf(result.getStatusCode())));
 					response.sendRedirect(Util.docRoot(
 							"secure/details/solver.jsp?id=" + Integer.parseInt((String) configAttrMap.get(SOLVER_ID)
 							)));
