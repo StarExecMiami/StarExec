@@ -1,7 +1,7 @@
 # ==============================================================================
 # Stage 1: Compile SCSS/CSS Assets
 # ==============================================================================
-FROM docker.io/library/node:20-alpine AS assets
+FROM docker.io/library/node:24-alpine AS assets
 
 LABEL stage=assets
 
