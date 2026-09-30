@@ -114,6 +114,42 @@ public class GridEngineBackend implements Backend {
      * -terse to only get the job id from stdout
      * the command we run is qsub -b n -v TMPDIR={$workingDirectoryPath} -o {$logPath} -terse {$scriptPath}
      **/
+    /**
+     * The argv for the qsub call, as separate elements rather than one command line.
+     *
+     * <p>This used to be built with a {@link StringBuilder} and wrapped in a one-element
+     * array, which {@code Util} then handed to {@code /bin/sh -c}. Three of the four
+     * values interpolated into it are paths, so a shell metacharacter anywhere in a
+     * scratch, log or script path was interpreted rather than passed along -- and a path
+     * containing an ordinary space was silently split into two arguments.
+     *
+     * <p>Kept separate from {@link #submitScript} so the command's shape can be asserted
+     * without a grid engine present: everything around it needs a live qsub, which is why
+     * this had no test.
+     *
+     * @param scriptPath           the jobscript to run
+     * @param workingDirectoryPath scratch space, passed as TMPDIR
+     * @param logPath              where qsub should write stdout
+     * @return the command and its arguments, one element each
+     */
+    static String[] submitCommand(
+        String scriptPath,
+        String workingDirectoryPath,
+        String logPath
+    ) {
+        return new String[] {
+            "qsub",
+            "-b",
+            "n",
+            "-v",
+            "TMPDIR=" + workingDirectoryPath,
+            "-o",
+            logPath,
+            "-terse",
+            scriptPath,
+        };
+    }
+
     public int submitScript(
         int pairId,
         String scriptPath,
@@ -121,15 +157,11 @@ public class GridEngineBackend implements Backend {
         String logPath
     ) {
         log.debug("made it to submitScript!");
-        //build the command
-        StringBuilder sb = new StringBuilder();
-        sb.append("qsub -b n -v TMPDIR=");
-        sb.append(workingDirectoryPath);
-        sb.append(" -o ");
-        sb.append(logPath);
-        sb.append(" -terse ");
-        sb.append(scriptPath);
-        String[] finalCommand = { sb.toString() };
+        String[] finalCommand = submitCommand(
+            scriptPath,
+            workingDirectoryPath,
+            logPath
+        );
         //get the stdout.
         try {
             Process p = Util.executeCommandAndReturnProcess(
