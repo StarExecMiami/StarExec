@@ -1965,7 +1965,7 @@ BEGIN
 		-- Processing Results (19), Paused (20), or Awaiting post-processor (22).
 		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND status_code IN (1, 2, 4, 19, 20, 22) LIMIT 1) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed=CURRENT_TIMESTAMP WHERE id=_job_id;
+			UPDATE jobs SET completed=COALESCE(completed, CURRENT_TIMESTAMP) WHERE id=_job_id;
             IF NOT FOUND THEN
                 RAISE EXCEPTION USING
                     ERRCODE = 'P0002',
@@ -10182,7 +10182,9 @@ BEGIN
 			LIMIT 1
 		) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			-- Preserve an established completion time on duplicate reports, repairing NULL.
+			-- Keep the id-only predicate so FOUND still distinguishes a missing job.
+			UPDATE jobs SET completed = COALESCE(completed, CURRENT_TIMESTAMP) WHERE id = _job_id;
 			IF NOT FOUND THEN
 				RAISE EXCEPTION USING
 					ERRCODE = 'P0002',
@@ -10316,7 +10318,9 @@ BEGIN
 			LIMIT 1
 		) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			-- Preserve an established completion time on duplicate reports, repairing NULL.
+			-- Keep the id-only predicate so FOUND still distinguishes a missing job.
+			UPDATE jobs SET completed = COALESCE(completed, CURRENT_TIMESTAMP) WHERE id = _job_id;
 			IF NOT FOUND THEN
 				RAISE EXCEPTION USING
 					ERRCODE = 'P0002',
