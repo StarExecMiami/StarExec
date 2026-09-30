@@ -57,6 +57,14 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	private static final String PROBE_FUNCTION = PROBE_PREFIX + "fn";
 	private static final String SETTING_USER_ID = "starexec_probe.user_id";
 	private static final String SETTING_BARRIER_KEY = "starexec_probe.barrier_key";
+	/** Constant DDL: every part is a compile-time constant, so nothing is built from input. */
+	private static final String PROBE_FUNCTION_DDL = "CREATE OR REPLACE FUNCTION starexec." + PROBE_FUNCTION
+				+ "() RETURNS trigger AS $$ DECLARE"
+				+ " uid text := NULLIF(current_setting('" + SETTING_USER_ID + "', true), '');"
+				+ " bkey text := NULLIF(current_setting('" + SETTING_BARRIER_KEY + "', true), '');"
+				+ " BEGIN IF uid IS NOT NULL AND bkey IS NOT NULL AND NEW.id = uid::int"
+				+ " THEN PERFORM pg_advisory_xact_lock(bkey::bigint); END IF;"
+				+ " RETURN NEW; END; $$ LANGUAGE plpgsql";
 	private static final long TIMEOUT_SECONDS = 30L;
 
 	// Absolute fixture values: user 10000, job 3072 = pair A 2048 + pair B 1024.
@@ -370,18 +378,12 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		// Constant DDL. The trigger parks only a transaction that carries the barrier settings,
 		// and runTransaction sets them for the holder alone (transaction-local, so nothing
 		// persists on a pooled connection); the contender never has them and passes through.
-		String function = "CREATE OR REPLACE FUNCTION starexec." + PROBE_FUNCTION
-				+ "() RETURNS trigger AS $$ DECLARE"
-				+ " uid text := NULLIF(current_setting('" + SETTING_USER_ID + "', true), '');"
-				+ " bkey text := NULLIF(current_setting('" + SETTING_BARRIER_KEY + "', true), '');"
-				+ " BEGIN IF uid IS NOT NULL AND bkey IS NOT NULL AND NEW.id = uid::int"
-				+ " THEN PERFORM pg_advisory_xact_lock(bkey::bigint); END IF;"
-				+ " RETURN NEW; END; $$ LANGUAGE plpgsql";
+
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			requireAutoCommit(con, "installProbe");
 			probeInstalled = true;
 			s.execute("DROP TRIGGER IF EXISTS " + PROBE_TRIGGER + " ON starexec.users");
-			s.execute(function);
+			s.execute(PROBE_FUNCTION_DDL);
 			s.execute("CREATE TRIGGER " + PROBE_TRIGGER
 					+ " AFTER UPDATE OF disk_size ON starexec.users FOR EACH ROW"
 					+ " EXECUTE FUNCTION starexec." + PROBE_FUNCTION + "()");
