@@ -51,6 +51,19 @@ jobs:
           cd starexec-app
           mvn clean package -DskipTests -B -q
 
+      - name: Verify runtime config excluded from WAR
+        run: |
+          WAR_FILE="starexec-app/target/starexec.war"
+          WAR_ENTRIES=$(mktemp)
+          trap 'rm -f "$WAR_ENTRIES"' EXIT
+          unzip -Z1 "$WAR_FILE" > "$WAR_ENTRIES"
+
+          if grep -Fxq "WEB-INF/classes/flyway.conf" "$WAR_ENTRIES"; then
+            echo "❌ FAILED: Runtime Flyway config was packaged in the WAR"
+            exit 1
+          fi
+          echo "✅ PASSED: Runtime Flyway config excluded from WAR"
+
       - name: Verify migration files in source
         run: |
           MIGRATION_DIR="starexec-app/src/main/resources/db/migration"
@@ -118,6 +131,16 @@ jobs:
             echo "✓ Image ci-test-latest found" || \
             { echo "✗ Image not found"; docker images | grep starexec; exit 1; }
           echo "Verification passed"
+
+      - name: Verify runtime config excluded from Docker image
+        run: |
+          IMAGE="ghcr.io/starexecmiami/starexec:${{ github.sha }}"
+          if ! docker run --rm --user 0 --entrypoint sh "$IMAGE" -eu -c \
+            'test ! -e "$CATALINA_HOME/webapps/starexec/WEB-INF/classes/flyway.conf"'; then
+            echo "❌ FAILED: Runtime Flyway config was packaged in the Docker image"
+            exit 1
+          fi
+          echo "✅ PASSED: Runtime Flyway config excluded from Docker image"
 
       - name: Start PostgreSQL service
         env:

@@ -1686,6 +1686,17 @@ BEGIN
 
     _delta := _diskSize - COALESCE(_priorDiskSize, 0);
 
+    -- Apply this stage's delta to the job and user totals in the same order as
+    -- RerunJobPairsBatchCore's disk-accounting writes.
+    -- Taking users before jobs lets a stats write for one pair hold the user row while
+    -- waiting for a job row held by a rerun of another pair owned by the same user.
+    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
     UPDATE users
     SET disk_size = disk_size + _delta
     WHERE id = _userId;
@@ -1708,15 +1719,6 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
-    END IF;
-
-    -- Same difference, for the same reason: the job total drifted upward on every
-    -- redelivery exactly as the user total did.
-    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -1965,7 +1967,7 @@ BEGIN
 		-- Processing Results (19), Paused (20), or Awaiting post-processor (22).
 		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND status_code IN (1, 2, 4, 19, 20, 22) LIMIT 1) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed=CURRENT_TIMESTAMP WHERE id=_job_id;
+			UPDATE jobs SET completed=COALESCE(completed, CURRENT_TIMESTAMP) WHERE id=_job_id;
             IF NOT FOUND THEN
                 RAISE EXCEPTION USING
                     ERRCODE = 'P0002',
@@ -2567,10 +2569,10 @@ BEGIN
 	WHERE ancestor=_jobSpaceId AND jobpair_stage_data.config_id=_configId AND
 	(( _stageNumber = 0 AND jobpair_stage_data.stage_number = job_pairs.primary_jobpair_data) OR jobpair_stage_data.stage_number = _stageNumber) AND
 	((_type = 'all') OR
-	(_type='resource' AND job_pairs.status_code BETWEEN 14 AND 17) OR
-	(_type = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
-	(_type='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
-	(_type ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
+	(_type='resource' AND jobpair_stage_data.status_code BETWEEN 14 AND 17) OR
+	(_type = 'incomplete' AND (jobpair_stage_data.status_code <= 6 OR jobpair_stage_data.status_code BETWEEN 19 AND 23)) OR
+	(_type='failed' AND (jobpair_stage_data.status_code BETWEEN 8 AND 13 OR jobpair_stage_data.status_code = 18 OR jobpair_stage_data.status_code BETWEEN 24 AND 26)) OR
+	(_type ='complete' AND (jobpair_stage_data.status_code = 7 OR jobpair_stage_data.status_code BETWEEN 14 AND 17)) OR
 	(_type = 'unknown' AND jobpair_stage_data.status_code = 7 AND (
 		job_attributes.attr_value = 'starexec-unknown' OR
 		bench_attributes.attr_value IS NULL OR
@@ -9488,14 +9490,19 @@ DECLARE
     _userDiskSize BIGINT;
     _sizeDelta BIGINT;
 BEGIN
+    -- Serialize with resource accounting before taking the aggregate snapshot.
+    -- Keep the aggregate in a separate statement: at READ COMMITTED it sees
+    -- writers that committed while this lock waited. Do not lock resource rows
+    -- here, which would invert the job-before-user order of accounting writers.
+    SELECT disk_size INTO _userDiskSize FROM starexec.users
+    WHERE id = _userID FOR NO KEY UPDATE;
+
     SELECT COALESCE(SUM(disk_size), 0) INTO _sumDiskSize FROM
     (SELECT disk_size FROM starexec.solvers WHERE user_id = _userID AND deleted = false
      UNION ALL
      SELECT disk_size FROM starexec.benchmarks WHERE user_id = _userID AND deleted = false
      UNION ALL
      SELECT disk_size FROM starexec.jobs WHERE user_id = _userID AND deleted = false) AS tmp;
-
-    SELECT disk_size INTO _userDiskSize FROM starexec.users WHERE id = _userID;
 
     _sizeDelta := _userDiskSize - _sumDiskSize;
 
@@ -10182,7 +10189,9 @@ BEGIN
 			LIMIT 1
 		) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			-- Preserve an established completion time on duplicate reports, repairing NULL.
+			-- Keep the id-only predicate so FOUND still distinguishes a missing job.
+			UPDATE jobs SET completed = COALESCE(completed, CURRENT_TIMESTAMP) WHERE id = _job_id;
 			IF NOT FOUND THEN
 				RAISE EXCEPTION USING
 					ERRCODE = 'P0002',
@@ -10316,7 +10325,9 @@ BEGIN
 			LIMIT 1
 		) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			-- Preserve an established completion time on duplicate reports, repairing NULL.
+			-- Keep the id-only predicate so FOUND still distinguishes a missing job.
+			UPDATE jobs SET completed = COALESCE(completed, CURRENT_TIMESTAMP) WHERE id = _job_id;
 			IF NOT FOUND THEN
 				RAISE EXCEPTION USING
 					ERRCODE = 'P0002',
@@ -10387,10 +10398,10 @@ $$ LANGUAGE plpgsql;
 --
 -- Internal. Callers must already hold the row locks and have revalidated eligibility; this
 -- function deliberately makes no decisions of its own. Its lock order is job_pairs (callers),
--- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats takes users
--- before jobs, so a concurrent stats write for another pair of the same job and user can
--- deadlock with a rerun; that predates this definition and is #188. AddJobAttr's insert takes
--- only a key-share lock on job_pairs, so it waits behind a rerun rather than deadlocking.
+-- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats updates
+-- jobs before users too, so its shared disk-accounting locks cannot invert against a rerun
+-- of another pair owned by the same user. AddJobAttr's insert takes only a key-share lock on
+-- job_pairs, so it waits behind a rerun rather than deadlocking.
 CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
 RETURNS VOID AS $$
 BEGIN
