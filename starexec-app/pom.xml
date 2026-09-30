@@ -378,6 +378,9 @@
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
+                <excludes>
+                    <exclude>flyway.conf</exclude>
+                </excludes>
             </resource>
             <!-- Include SGE bash scripts and other non-Java files from src/main/java -->
             <resource>

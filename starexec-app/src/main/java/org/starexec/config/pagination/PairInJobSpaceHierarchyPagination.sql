@@ -40,10 +40,10 @@
 				AND
 				
 			(( :pairType = 'all') OR
-			( :pairType='resource' AND job_pairs.status_code BETWEEN 14 AND 17) OR
-			( :pairType = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
-			( :pairType='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
-			( :pairType ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
+			( :pairType='resource' AND jobpair_stage_data.status_code BETWEEN 14 AND 17) OR
+			( :pairType = 'incomplete' AND (jobpair_stage_data.status_code <= 6 OR jobpair_stage_data.status_code BETWEEN 19 AND 23)) OR
+			( :pairType='failed' AND (jobpair_stage_data.status_code BETWEEN 8 AND 13 OR jobpair_stage_data.status_code = 18 OR jobpair_stage_data.status_code BETWEEN 24 AND 26)) OR
+			( :pairType ='complete' AND (jobpair_stage_data.status_code = 7 OR jobpair_stage_data.status_code BETWEEN 14 AND 17)) OR
 				( :pairType = 'unknown' AND jobpair_stage_data.status_code = 7 AND (
 						job_attributes.attr_value = 'starexec-unknown' OR
 						bench_attributes.attr_value IS NULL OR
