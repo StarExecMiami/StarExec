@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -28,6 +29,9 @@ import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.Jobs;
+import org.starexec.data.to.Job;
+import org.starexec.data.to.JobPair;
 import org.testng.Assert;
 
 /**
@@ -629,6 +633,113 @@ public class LocalBackendTests {
             callerRunsExecutor.shutdownNow();
             callerRunsExecutor.awaitTermination(2, TimeUnit.SECONDS);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // The broken-pair sweep (Jobs.setBrokenPairsToErrorStatus) declares every ENQUEUED/RUNNING
+    // pair whose exec id the backend does not report a submit failure, terminally. A finished
+    // pair whose result the monitor has not yet recorded must therefore stay reported.
+    // ------------------------------------------------------------------
+
+    private static final String TERMINAL_STATUS_JSON =
+        "{\"pairId\":1,\"status\":7,\"stageNumber\":1,\"timestamp\":1788988692}";
+
+    private JobPair pairWithExecId(int pairId, int execId) {
+        JobPair pair = new JobPair();
+        pair.setId(pairId);
+        pair.setJobId(1);
+        pair.setBackendExecId(execId);
+        return pair;
+    }
+
+    /** Runs the real sweep against the real backend; returns the pair ids it marked broken. */
+    private List<Integer> sweepMarkedBroken(JobPair... pairs) throws Exception {
+        Job notABuildJob = Mockito.mock(Job.class);
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class);
+             MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class, Mockito.CALLS_REAL_METHODS)) {
+            jobPairs.when(JobPairs::getPairsInBackend).thenReturn(List.of(pairs));
+            jobs.when(() -> Jobs.get(Mockito.anyInt())).thenReturn(notABuildJob);
+            Jobs.setBrokenPairsToErrorStatus(backend);
+            var captor = org.mockito.ArgumentCaptor.forClass(JobPair.class);
+            jobPairs.verify(() -> JobPairs.setBrokenPairStatus(captor.capture()),
+                Mockito.atLeast(0));
+            return captor.getAllValues().stream().map(JobPair::getId).toList();
+        }
+    }
+
+    /** Runs a job whose script writes {@code statusJson} (or nothing) and exits 0. */
+    private void runFinishedJob(int execId, int pairId, String name, String statusJson)
+        throws Exception {
+        Path output = Files.createDirectory(tempDir.resolve(name));
+        String body = statusJson == null
+            ? "exit 0"
+            : "printf '%s' '" + statusJson + "' > '" + output.resolve("status.json") + "'";
+        Object job = localJob(execId, pairId, executableScript(name + ".sh", body),
+            tempDir, output.resolve("job.log"));
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            executeJob(job);
+        }
+    }
+
+    @Test
+    public void sweepDoesNotFailAFinishedPairTheMonitorHasNotIngested() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop(); // no polling: the pair stays "finished but not yet ingested"
+        runFinishedJob(201, 5201, "finished-not-ingested", TERMINAL_STATUS_JSON);
+
+        Assert.assertTrue(backend.getActiveExecutionIds().contains(201),
+            "the backend must keep answering for a pair whose terminal result is unrecorded");
+        Assert.assertFalse(sweepMarkedBroken(pairWithExecId(5201, 201)).contains(5201),
+            "a finished pair awaiting ingestion must not be recorded as ERROR_SUBMIT_FAIL");
+    }
+
+    @Test
+    public void sweepDoesNotFailAPairWhoseIngestionIsHeldForIntervention() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop();
+        runFinishedJob(202, 5202, "blocked-ingestion", "{ not json");
+
+        Field pairsField = LocalJobMonitor.class.getDeclaredField("pairs");
+        pairsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<Integer, Object> tracked = (Map<Integer, Object>) pairsField.get(jobMonitor());
+        Object state = tracked.get(5202);
+        Method block = state.getClass().getDeclaredMethod("blockedForIngestion", String.class);
+        block.setAccessible(true);
+        tracked.put(5202, block.invoke(state, "invalid snapshot"));
+
+        Assert.assertTrue(backend.getActiveExecutionIds().contains(202));
+        Assert.assertFalse(sweepMarkedBroken(pairWithExecId(5202, 202)).contains(5202),
+            "a pair held for intervention keeps its retained results and stays unresolved");
+    }
+
+    @Test
+    public void sweepStillFailsAGenuinelyOrphanedPair() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop();
+        // Exited without ever writing a terminal status: nothing will complete it.
+        runFinishedJob(203, 5203, "orphan-no-status", null);
+        runFinishedJob(204, 5204, "orphan-running-status", status(4));
+
+        Assert.assertFalse(backend.getActiveExecutionIds().contains(203));
+        Assert.assertFalse(backend.getActiveExecutionIds().contains(204));
+        List<Integer> broken = sweepMarkedBroken(
+            pairWithExecId(5203, 203), pairWithExecId(5204, 204), pairWithExecId(5205, 205));
+        Assert.assertTrue(broken.contains(5203), "no status.json: orphan");
+        Assert.assertTrue(broken.contains(5204), "non-terminal status.json and no process: orphan");
+        Assert.assertTrue(broken.contains(5205), "unknown execution: orphan");
+    }
+
+    @Test
+    public void anIngestedPairIsNoLongerReportedByTheBackend() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop();
+        runFinishedJob(206, 5206, "ingested", TERMINAL_STATUS_JSON);
+        Assert.assertTrue(backend.getActiveExecutionIds().contains(206));
+
+        jobMonitor().clearPairTracking(5206); // what retiring the pair does to the monitor
+        Assert.assertFalse(backend.getActiveExecutionIds().contains(206),
+            "the retained id must be released once the monitor no longer holds the result");
     }
 
     /** Everything the job script can actually emit, both directions. */

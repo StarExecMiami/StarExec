@@ -142,6 +142,12 @@ public class LocalBackend implements Backend {
     // Thread-safe mapping of execution IDs to job futures and metadata
     private final ConcurrentHashMap<Integer, LocalJob> activeJobs = new ConcurrentHashMap<>();
 
+    // Executions that have left activeJobs but whose pair still has a result waiting for
+    // LocalJobMonitor to ingest (execId -> pairId). Reported by getActiveExecutionIds() so
+    // the periodic broken-pair sweep does not declare a finished pair a submit failure while
+    // the monitor still owns its result. Pruned lazily, when the monitor no longer holds it.
+    private final ConcurrentHashMap<Integer, Integer> awaitingIngestion = new ConcurrentHashMap<>();
+
     // Metrics counters
     private final AtomicInteger completedJobCount = new AtomicInteger(0);
     private final AtomicInteger failedJobCount = new AtomicInteger(0);
@@ -724,8 +730,17 @@ public class LocalBackend implements Backend {
                 job.coreId = null;
             }
             job.completedAt = System.currentTimeMillis();
-            // Remove from active jobs immediately
+            // Remove from active jobs immediately, after recording that the monitor may
+            // still owe this pair an ingestion (see getActiveExecutionIds).
+            retainForIngestion(job);
             activeJobs.remove(job.execId, job);
+        }
+    }
+
+    /** Remembers an execution whose pair may still have a result awaiting ingestion. */
+    private void retainForIngestion(LocalJob job) {
+        if (job.pairId > 0 && jobMonitor != null) {
+            awaitingIngestion.put(job.execId, job.pairId);
         }
     }
 
@@ -1094,6 +1109,7 @@ public class LocalBackend implements Backend {
             }
 
             job.state = LocalJob.JobState.CANCELLED;
+            retainForIngestion(job);
             activeJobs.remove(execId, job);
 
             return true;
@@ -1150,9 +1166,27 @@ public class LocalBackend implements Backend {
         return sb.toString();
     }
 
+    /**
+     * Executions this backend still answers for: those running or queued, plus those that
+     * have exited but whose terminal result the monitor has not yet recorded (or has held
+     * for intervention). Without the second group, {@code Jobs.setBrokenPairsToErrorStatus}
+     * records a finished pair as {@code ERROR_SUBMIT_FAIL} in the window between process
+     * exit and ingestion, and the real result is then refused as a conflicting terminal
+     * status. An exited execution with no terminal {@code status.json} is not reported:
+     * nothing will complete it, so it is a genuine orphan.
+     */
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
-        return new HashSet<>(activeJobs.keySet());
+        Set<Integer> ids = new HashSet<>(activeJobs.keySet());
+        LocalJobMonitor monitor = jobMonitor;
+        for (Map.Entry<Integer, Integer> entry : awaitingIngestion.entrySet()) {
+            if (monitor != null && monitor.holdsUningestedResult(entry.getValue())) {
+                ids.add(entry.getKey());
+            } else {
+                awaitingIngestion.remove(entry.getKey(), entry.getValue());
+            }
+        }
+        return ids;
     }
 
     /**
