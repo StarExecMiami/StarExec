@@ -3778,21 +3778,20 @@ public class KubernetesNativeBackendTests {
     @Test
     public void staleStatsRefusalSkipsAttributesAndReleasesTheExecution() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
-        Path out = fencedOutput(661, COMPLETE, 1, true);
+        Path out = twoStageOutput(661);
         KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 66, 661, out, 4);
 
         try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
-            stubOpenPair(jp, 661);
-            jp.when(() -> JobPairs.setPairStatusPreciseResult(661, 1, COMPLETE, NOT_REACHED, false, 4))
-                .thenReturn(PairStatusResult.APPLIED);
+            stubTwoStages(jp, 661, 4);
             // The stats writer reports a stale refusal as plain false; the pair has moved on.
+            stubStatsWrite(jp, 661, 1, 4, false);
             jp.when(() -> JobPairs.getCurrentAttemptNo(661)).thenReturn(5);
 
             assertTrue(callback.onJobComplete(execution(66, "job-66")));
 
-            jp.verify(() -> JobPairs.addJobPairAttributes(
-                Mockito.anyInt(), Mockito.anyInt(), Mockito.any(java.util.Properties.class),
-                Mockito.any(Integer.class)), Mockito.never());
+            // Stage 1's refusal ends the writes: neither stage 2's stats nor any attribute.
+            verifyStatsWrites(jp, 661, Mockito.times(1));
+            verifyAttributeWrites(jp, 661, Mockito.never());
         }
         assertNothingTracked(backend, 66);
     }
@@ -3800,25 +3799,138 @@ public class KubernetesNativeBackendTests {
     @Test
     public void staleAttributeRefusalIsNotAFailure() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
-        Path out = fencedOutput(671, COMPLETE, 1, true);
+        Path out = twoStageOutput(671);
         KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 67, 671, out, 4);
 
         try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
-            stubOpenPair(jp, 671);
-            jp.when(() -> JobPairs.setPairStatusPreciseResult(671, 1, COMPLETE, NOT_REACHED, false, 4))
-                .thenReturn(PairStatusResult.APPLIED);
-            jp.when(() -> JobPairs.updateRunSolverStats(
-                Mockito.eq(671), Mockito.any(), Mockito.anyDouble(), Mockito.anyDouble(),
-                Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
-                Mockito.anyInt(), Mockito.anyLong(), Mockito.any())).thenReturn(true);
-            jp.when(() -> JobPairs.addJobPairAttributes(
-                Mockito.eq(671), Mockito.eq(1), Mockito.any(java.util.Properties.class),
-                Mockito.eq(Integer.valueOf(4)))).thenReturn(false);
+            stubTwoStages(jp, 671, 4);
+            stubStatsWrite(jp, 671, 1, 4, true);
+            stubStatsWrite(jp, 671, 2, 4, true);
+            stubAttributeWrite(jp, 671, 1, 4, false);
             jp.when(() -> JobPairs.getCurrentAttemptNo(671)).thenReturn(5);
 
-            assertTrue(callback.onJobComplete(execution(67, "job-67")));
+            assertTrue("a stale refusal is handled, not retried",
+                callback.onJobComplete(execution(67, "job-67")));
+
+            // Both stages' stats were written before the attributes were reached, and the
+            // refusal of stage 1's attributes stopped the loop: stage 2's was never tried.
+            verifyStatsWrites(jp, 671, Mockito.times(2));
+            verifyAttributeWrites(jp, 671, Mockito.times(1));
+            jp.verify(() -> JobPairs.addJobPairAttributes(
+                Mockito.eq(671), Mockito.eq(2), Mockito.any(java.util.Properties.class),
+                Mockito.any(Integer.class)), Mockito.never());
         }
         assertNothingTracked(backend, 67);
+    }
+
+    /** A stats write that says false while the pair is still on this attempt is a failure. */
+    @Test
+    public void aFailedStatsWriteOnTheCurrentAttemptIsNotTreatedAsStale() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = twoStageOutput(691);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 69, 691, out, 4);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubTwoStages(jp, 691, 4);
+            stubStatsWrite(jp, 691, 1, 4, false);
+            stubStatsWrite(jp, 691, 2, 4, true);
+            stubAttributeWrite(jp, 691, 1, 4, true);
+            stubAttributeWrite(jp, 691, 2, 4, true);
+            jp.when(() -> JobPairs.getCurrentAttemptNo(691)).thenReturn(4);
+
+            assertTrue(callback.onJobComplete(execution(69, "job-69")));
+
+            // The loop went on: stage 2's stats and both stages' attributes were written.
+            verifyStatsWrites(jp, 691, Mockito.times(2));
+            verifyAttributeWrites(jp, 691, Mockito.times(2));
+        }
+        assertNothingTracked(backend, 69);
+    }
+
+    /** As above for attributes: false on the current attempt must not end the loop. */
+    @Test
+    public void aFailedAttributeWriteOnTheCurrentAttemptIsNotTreatedAsStale() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path out = twoStageOutput(701);
+        KubernetesJobMonitor.JobCompletionCallback callback = armFenced(backend, 70, 701, out, 4);
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            stubTwoStages(jp, 701, 4);
+            stubStatsWrite(jp, 701, 1, 4, true);
+            stubStatsWrite(jp, 701, 2, 4, true);
+            stubAttributeWrite(jp, 701, 1, 4, false);
+            stubAttributeWrite(jp, 701, 2, 4, true);
+            jp.when(() -> JobPairs.getCurrentAttemptNo(701)).thenReturn(4);
+
+            assertTrue(callback.onJobComplete(execution(70, "job-70")));
+
+            verifyAttributeWrites(jp, 701, Mockito.times(2));
+        }
+        assertNothingTracked(backend, 70);
+    }
+
+    /** Terminal at stage 2, stage 1 finished earlier, and a stats and attributes file each. */
+    private static Path twoStageOutput(int pairId) throws Exception {
+        Path dir = fencedOutput(pairId, COMPLETE, 2, false);
+        java.nio.file.Files.createDirectories(dir.resolve("stage-status"));
+        java.nio.file.Files.writeString(
+            dir.resolve("stage-status").resolve("1.json"),
+            "{\"pairId\":" + pairId + ",\"stageNumber\":1,\"status\":" + COMPLETE + "}");
+        java.nio.file.Files.createDirectories(dir.resolve("stage-stats"));
+        java.nio.file.Files.createDirectories(dir.resolve("stage-attributes"));
+        for (int stage = 1; stage <= 2; stage++) {
+            java.nio.file.Files.writeString(
+                dir.resolve("stage-stats").resolve(stage + ".json"),
+                "{\"pairId\":" + pairId + ",\"stageNumber\":" + stage
+                    + ",\"wallclockTime\":1.5,\"cpuTime\":1.5,\"userTime\":1.0,\"systemTime\":0.5,"
+                    + "\"maxVirtualMemory\":10,\"maxResidentSetSize\":10,\"diskSize\":10,"
+                    + "\"hostname\":\"node-a\"}");
+            java.nio.file.Files.writeString(
+                dir.resolve("stage-attributes").resolve(stage + ".txt"),
+                "starexec-result=sat\n");
+        }
+        return dir;
+    }
+
+    private void stubTwoStages(MockedStatic<JobPairs> jp, int pairId, int attempt)
+        throws Exception {
+        stubOpenPair(jp, pairId);
+        jp.when(() -> JobPairs.getStageNumbers(pairId)).thenReturn(Set.of(1, 2));
+        jp.when(() -> JobPairs.setEarlierStageStatuses(pairId, Map.of(1, COMPLETE), attempt))
+            .thenReturn(StageStatusBatchResult.APPLIED);
+        jp.when(() -> JobPairs.setPairStatusPreciseResult(
+            pairId, 2, COMPLETE, NOT_REACHED, false, attempt)).thenReturn(PairStatusResult.APPLIED);
+    }
+
+    private void stubStatsWrite(
+        MockedStatic<JobPairs> jp, int pairId, int stage, int attempt, boolean result) {
+        jp.when(() -> JobPairs.updateRunSolverStats(
+            Mockito.eq(pairId), Mockito.eq("node-a"), Mockito.anyDouble(), Mockito.anyDouble(),
+            Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+            Mockito.eq(stage), Mockito.anyLong(), Mockito.eq(Integer.valueOf(attempt))))
+            .thenReturn(result);
+    }
+
+    private void stubAttributeWrite(
+        MockedStatic<JobPairs> jp, int pairId, int stage, int attempt, boolean result) {
+        jp.when(() -> JobPairs.addJobPairAttributes(
+            Mockito.eq(pairId), Mockito.eq(stage), Mockito.any(java.util.Properties.class),
+            Mockito.eq(Integer.valueOf(attempt)))).thenReturn(result);
+    }
+
+    private void verifyStatsWrites(
+        MockedStatic<JobPairs> jp, int pairId, org.mockito.verification.VerificationMode mode) {
+        jp.verify(() -> JobPairs.updateRunSolverStats(
+            Mockito.eq(pairId), Mockito.any(), Mockito.anyDouble(), Mockito.anyDouble(),
+            Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyDouble(), Mockito.anyLong(),
+            Mockito.anyInt(), Mockito.anyLong(), Mockito.any(Integer.class)), mode);
+    }
+
+    private void verifyAttributeWrites(
+        MockedStatic<JobPairs> jp, int pairId, org.mockito.verification.VerificationMode mode) {
+        jp.verify(() -> JobPairs.addJobPairAttributes(
+            Mockito.eq(pairId), Mockito.anyInt(), Mockito.any(java.util.Properties.class),
+            Mockito.any(Integer.class)), mode);
     }
 
     @Test
@@ -3889,5 +4001,236 @@ public class KubernetesNativeBackendTests {
         backend.destroyIf();
 
         assertTrue(attempts.isEmpty());
+    }
+
+    // ---- #185: submitScript captures the attempt --------------------------------------
+
+    /** What a submitScript run did to the mocked cluster. */
+    private static final class Submission {
+        final List<Job> built = new java.util.ArrayList<>();
+        final List<String> events = new java.util.ArrayList<>();
+    }
+
+    /**
+     * A backend configured to build Jobs against a mocked client. {@code create()} returns the
+     * Job it was given with a UID, throws {@code createFailure} when given, and a lookup by
+     * name finds {@code presentJob} (null means the Job is absent).
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private KubernetesNativeBackend submittingBackend(
+        Submission submission, RuntimeException createFailure, Job presentJob
+    ) throws Exception {
+        KubernetesNativeBackend backend = backendWithCpu("2");
+        setField(backend, "initialized", true);
+        setField(backend, "maxConcurrentJobs", 4);
+        // Ids in use by earlier tests' worth of state cannot matter, but a recycled id must
+        // be reachable: the counter starts at a known place.
+        setField(backend, "nextExecId", 5);
+
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
+        V1BatchAPIGroupDSL v1 = Mockito.mock(V1BatchAPIGroupDSL.class);
+        MixedOperation jobs = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespaced = Mockito.mock(NonNamespaceOperation.class);
+        ScalableResource<Job> created = Mockito.mock(ScalableResource.class);
+        ScalableResource<Job> lookup = Mockito.mock(ScalableResource.class);
+
+        Mockito.when(client.batch()).thenReturn(batch);
+        Mockito.when(batch.v1()).thenReturn(v1);
+        Mockito.when(v1.jobs()).thenReturn(jobs);
+        Mockito.when(jobs.inNamespace(Mockito.any())).thenReturn(namespaced);
+        Mockito.doAnswer(inv -> {
+            submission.built.add((Job) inv.getArgument(0));
+            submission.events.add("resource");
+            return created;
+        }).when(namespaced).resource(Mockito.any(Job.class));
+        if (createFailure != null) {
+            Mockito.when(created.create()).thenThrow(createFailure);
+        } else {
+            Mockito.when(created.create()).thenAnswer(inv ->
+                new JobBuilder(submission.built.get(submission.built.size() - 1))
+                    .editMetadata().withUid("uid-created").endMetadata().build());
+        }
+        Mockito.when(namespaced.withName(Mockito.anyString())).thenReturn(lookup);
+        Mockito.when(lookup.get()).thenReturn(presentJob);
+        setField(backend, "kubernetesClient", client);
+        return backend;
+    }
+
+    private static String logIn(Path dir) {
+        return dir.resolve("stdout.txt").toString();
+    }
+
+    @Test
+    public void theAttemptIsReadAfterTheSlotIsHeldAndBeforeTheJobIsBuilt() throws Exception {
+        Submission submission = new Submission();
+        KubernetesNativeBackend backend = submittingBackend(submission, null, null);
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-submit");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            jp.when(() -> JobPairs.getCurrentAttemptNo(801)).thenAnswer(inv -> {
+                submission.events.add("attempt slots=" + holdingSlot(backend).size()
+                    + " active=" + activeCount(backend));
+                return 3;
+            });
+
+            int execId = backend.submitScript(801, "/script.sh", "/work", logIn(dir));
+
+            assertTrue(execId > 0);
+        }
+        assertEquals(
+            "one slot must already be held when the attempt is read, and no Job built yet",
+            List.of("attempt slots=1 active=1", "resource"),
+            submission.events
+        );
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void anUnreadableAttemptDefersTheSubmissionAndLeavesNothingBehind() throws Exception {
+        Submission submission = new Submission();
+        KubernetesNativeBackend backend = submittingBackend(submission, null, null);
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-submit");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            jp.when(() -> JobPairs.getCurrentAttemptNo(802))
+                .thenThrow(new java.sql.SQLException("connection reset"));
+
+            try {
+                backend.submitScript(802, "/script.sh", "/work", logIn(dir));
+                fail("an unreadable attempt must defer, not submit unfenced");
+            } catch (org.starexec.backend.exception.SubmissionDeferredException expected) {
+                // The pair stays queued and is retried on the next scheduling pass.
+            }
+            jp.verify(() -> JobPairs.setStartTime(Mockito.anyInt()), Mockito.never());
+        }
+
+        assertEquals("the reservation must go back", 0, activeCount(backend));
+        assertTrue(holdingSlot(backend).isEmpty());
+        assertTrue("no Job may be created", submission.built.isEmpty());
+        for (String name : new String[] {
+            "execIdToJobName", "execIdToPairId", "execIdToOutputDir", "execIdToAttemptNo",
+            "execIdToJobUid" }) {
+            assertTrue(name + " must be empty", ((Map<Integer, ?>) getField(backend, name)).isEmpty());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void theBuiltJobCarriesTheAttemptLabelAndTracksTheAttempt() throws Exception {
+        Submission submission = new Submission();
+        KubernetesNativeBackend backend = submittingBackend(submission, null, null);
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-submit");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            jp.when(() -> JobPairs.getCurrentAttemptNo(803)).thenReturn(7);
+
+            int execId = backend.submitScript(803, "/script.sh", "/work", logIn(dir));
+
+            assertEquals("7", submission.built.get(0).getMetadata().getLabels()
+                .get("starexec.org/attempt-no"));
+            assertEquals(Integer.valueOf(7),
+                ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(execId));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aNullAttemptWritesNoLabelAndTracksNothing() throws Exception {
+        // pairId 0 is the only way the attempt is not read; it must not be labelled 0 either.
+        Submission submission = new Submission();
+        KubernetesNativeBackend backend = submittingBackend(submission, null, null);
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-submit");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            int execId = backend.submitScript(0, "/script.sh", "/work", logIn(dir));
+
+            assertFalse(submission.built.get(0).getMetadata().getLabels()
+                .containsKey("starexec.org/attempt-no"));
+            assertFalse(((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo"))
+                .containsKey(execId));
+            jp.verify(() -> JobPairs.getCurrentAttemptNo(Mockito.anyInt()), Mockito.never());
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void anAmbiguousSubmissionKeepsTheAttempt() throws Exception {
+        Submission submission = new Submission();
+        // create() fails, and the Job is found: the outcome is resolved as "it exists".
+        Job existing = new JobBuilder().withNewMetadata().withName("whatever").endMetadata().build();
+        KubernetesNativeBackend backend =
+            submittingBackend(submission, new RuntimeException("timeout after create"), existing);
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-submit");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            jp.when(() -> JobPairs.getCurrentAttemptNo(804)).thenReturn(9);
+
+            int execId = backend.submitScript(804, "/script.sh", "/work", logIn(dir));
+
+            assertTrue("treated as established", execId > 0);
+            assertTrue("this is the ambiguous path",
+                ((Map<Integer, ?>) getField(backend, "ambiguousSubmissions")).containsKey(execId));
+            assertEquals(Integer.valueOf(9),
+                ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(execId));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aRecycledExecIdDoesNotKeepTheEarlierAttempt() throws Exception {
+        Submission submission = new Submission();
+        KubernetesNativeBackend backend = submittingBackend(submission, null, null);
+        Map<Integer, Integer> attempts =
+            (Map<Integer, Integer>) getField(backend, "execIdToAttemptNo");
+        // Ids 5 and 6 are the next two handed out, each still carrying a dead attempt.
+        attempts.put(5, 99);
+        attempts.put(6, 99);
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-submit");
+
+        try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
+            jp.when(() -> JobPairs.getCurrentAttemptNo(805)).thenReturn(2);
+
+            int first = backend.submitScript(805, "/script.sh", "/work", logIn(dir));
+            assertEquals(5, first);
+            assertEquals("the new attempt overwrites the stale one",
+                Integer.valueOf(2), attempts.get(5));
+
+            // Id 6 is reused by an execution with no attempt to fence on: the stale entry must
+            // not survive to fence it against attempt 99.
+            int second = backend.submitScript(0, "/script.sh", "/work", logIn(dir));
+            assertEquals(6, second);
+            assertFalse("no attempt means no entry, not the previous one",
+                attempts.containsKey(6));
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aLostPairAndAttemptAreRefilledFromTheJobLabels() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        Job labelled = new JobBuilder().withNewMetadata()
+            .withName("job-71")
+            .addToLabels("starexec.org/pair-id", "9071")
+            .addToLabels("starexec.org/attempt-no", "5")
+            .endMetadata().build();
+        givenJobDeletion(backend, "job-71", false, labelled);
+        // The name alone is what establishes ownership; the pair and attempt entries are gone,
+        // as after a partial loss of tracking.
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(71, "job-71");
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        Method resolve = callback.getClass()
+            .getDeclaredMethod("resolvePairId", ExecutionRef.class);
+        resolve.setAccessible(true);
+        assertEquals(Integer.valueOf(9071), resolve.invoke(callback, execution(71, "job-71")));
+
+        assertEquals(Integer.valueOf(9071),
+            ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).get(71));
+        assertEquals("the attempt is refilled from the same Job as the pair",
+            Integer.valueOf(5),
+            ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).get(71));
     }
 }

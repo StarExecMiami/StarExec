@@ -5420,12 +5420,16 @@ public class KubernetesNativeBackend implements Backend {
                         ? JobPairs.addJobPairAttributes(pairId, entry.getKey(), entry.getValue())
                         : JobPairs.addJobPairAttributes(
                             pairId, entry.getKey(), entry.getValue(), attemptNo);
-                    if (!ok && isStaleAttempt(pairId, attemptNo)) {
+                    if (ok) {
+                        log.debug("Persisted attributes for pair " + pairId + " stage " +
+                            entry.getKey() + ": " + entry.getValue().size());
+                    } else if (isStaleAttempt(pairId, attemptNo)) {
                         // Refused as stale: not a failure, and later stages are refused too.
                         return false;
+                    } else {
+                        log.warn("Failed to persist attributes for pair " + pairId + " stage " +
+                            entry.getKey());
                     }
-                    log.debug("Persisted attributes for pair " + pairId + " stage " +
-                        entry.getKey() + ": " + entry.getValue().size());
                 } catch (Exception e) {
                     log.warn("Failed to persist attributes for pair " + pairId + " stage " +
                         entry.getKey(), e);
