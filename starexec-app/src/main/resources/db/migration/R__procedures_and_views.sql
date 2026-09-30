@@ -2567,10 +2567,10 @@ BEGIN
 	WHERE ancestor=_jobSpaceId AND jobpair_stage_data.config_id=_configId AND
 	(( _stageNumber = 0 AND jobpair_stage_data.stage_number = job_pairs.primary_jobpair_data) OR jobpair_stage_data.stage_number = _stageNumber) AND
 	((_type = 'all') OR
-	(_type='resource' AND job_pairs.status_code BETWEEN 14 AND 17) OR
-	(_type = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
-	(_type='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
-	(_type ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
+	(_type='resource' AND jobpair_stage_data.status_code BETWEEN 14 AND 17) OR
+	(_type = 'incomplete' AND (jobpair_stage_data.status_code <= 6 OR jobpair_stage_data.status_code BETWEEN 19 AND 23)) OR
+	(_type='failed' AND (jobpair_stage_data.status_code BETWEEN 8 AND 13 OR jobpair_stage_data.status_code = 18 OR jobpair_stage_data.status_code BETWEEN 24 AND 26)) OR
+	(_type ='complete' AND (jobpair_stage_data.status_code = 7 OR jobpair_stage_data.status_code BETWEEN 14 AND 17)) OR
 	(_type = 'unknown' AND jobpair_stage_data.status_code = 7 AND (
 		job_attributes.attr_value = 'starexec-unknown' OR
 		bench_attributes.attr_value IS NULL OR
