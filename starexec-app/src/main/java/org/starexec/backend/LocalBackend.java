@@ -8,6 +8,7 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -177,6 +178,8 @@ public class LocalBackend implements Backend {
         volatile long startedAt;
         volatile long completedAt;
         volatile Integer coreId; // The leased CPU core ID
+        /** The pair's attempt at submit (#185); null for maintenance jobs. */
+        volatile Integer attemptNo;
 
         enum JobState {
             PENDING, // Submitted but not yet started
@@ -524,7 +527,7 @@ public class LocalBackend implements Backend {
         }
 
         if (pairId > 0 && jobMonitor != null) {
-            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId);
+            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId, job.attemptNo);
             log.info(
                     "Registered job with monitor: execId=" +
                             job.execId +
@@ -1010,6 +1013,26 @@ public class LocalBackend implements Backend {
                 }
             }
 
+            // Capture the attempt this execution belongs to (#185). Read here, after
+            // JobManager has claimed the pair (and so after any rerun reset), so every result
+            // write can be fenced on it and a superseded execution cannot overwrite the
+            // rerun. A failed read is not guessed at -- running the pair unfenced could let a
+            // superseded execution overwrite the rerun -- and it is not the pair's fault
+            // either, so it defers: returning -1 would become a terminal ERROR_SGE_REJECT for
+            // a healthy pair. Nothing is reserved yet (activeJobs is only written below), so
+            // there is no slot to release. Maintenance jobs (pairId <= 0) carry no attempt.
+            Integer attemptNo = null;
+            if (pairId > 0) {
+                try {
+                    attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+                } catch (java.sql.SQLException e) {
+                    log.warn("Cannot read attempt for pair " + pairId + ": " + e.getMessage(), e);
+                    throw new SubmissionDeferredException(
+                            "Could not read the current attempt of pair " + pairId +
+                                    " (" + e.getMessage() + "); pair stays queued");
+                }
+            }
+
             // Create the job
             int execId = generateExecId();
             LocalJob job = new LocalJob(
@@ -1018,6 +1041,7 @@ public class LocalBackend implements Backend {
                     scriptPath,
                     workingDirectoryPath,
                     logPath);
+            job.attemptNo = attemptNo;
 
             // Publish all cancellation state before a worker can observe the job. This
             // also makes a custom caller-run handler safe: a synchronously completed job

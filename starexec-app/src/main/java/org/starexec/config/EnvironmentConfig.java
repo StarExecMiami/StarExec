@@ -721,6 +721,11 @@ public class EnvironmentConfig {
      * {@code docs/CONFIGURATION.md} describes it as "CPU cores per container", which is
      * wrong; wiring this into a CFS quota would request a 600-core allocation. For the
      * CPU quota see {@link #getContainerCpuQuotaCores()}.
+     *
+     * <p><b>Currently inert.</b> The job script exports {@code STAREXEC_CPU_LIMIT} from
+     * the queue/job CPU timeout ({@code $$MAX_CPUTIME$$}) and so replaces this value
+     * before the solver runs; the queue/job is the single source of the solver's CPU
+     * budget. Same for {@link #getContainerDefaultWallclockLimit()}. See issue #284.
      */
     public static int getContainerDefaultCpuLimit() {
         return getEnvInt("STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT", 600);
@@ -746,6 +751,9 @@ public class EnvironmentConfig {
 
     /**
      * Default wallclock limit for job containers (in seconds).
+     *
+     * <p>Currently inert: the job script overwrites {@code STAREXEC_WALLCLOCK_LIMIT}
+     * with the queue/job wallclock timeout ({@code $$MAX_RUNTIME$$}). See issue #284.
      */
     public static int getContainerDefaultWallclockLimit() {
         return getEnvInt("STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT", 600);

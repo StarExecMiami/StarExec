@@ -1816,19 +1816,35 @@ DECLARE
     _jobId INT;
     _userId INT;
 BEGIN
-	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
-    _sumDiskSize := COALESCE(_sumDiskSize, 0);
-
-    SELECT j.id, j.user_id
-    INTO _jobId, _userId
+    -- Lock order: job_pairs row, then jobs, then users, then jobpair_stage_data -- the
+    -- order UpdatePairRunSolverStats and RerunJobPairsBatchCore use (#188). The pair row
+    -- is locked first so the stage total read below cannot be changed underneath us by a
+    -- stats write for this pair, and so that write cannot hold the stage row while
+    -- waiting for the job row this procedure holds.
+    SELECT jp.job_id
+    INTO _jobId
     FROM starexec.job_pairs jp
-    JOIN jobs j ON j.id = jp.job_id
-    WHERE jp.id = _jobPairId;
+    WHERE jp.id = _jobPairId
+    FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job for job pair %s not found', _jobPairId);
     END IF;
+
+    SELECT j.user_id
+    INTO _userId
+    FROM starexec.jobs j
+    WHERE j.id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
+	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
+    _sumDiskSize := COALESCE(_sumDiskSize, 0);
 
     UPDATE jobs
     SET disk_size = disk_size - _sumDiskSize
@@ -2281,30 +2297,37 @@ DECLARE
     _jobId INT;
     _userId INT;
 BEGIN
-    SELECT jp.job_id, j.user_id
-    INTO _jobId, _userId
+    -- Lock order: job_pairs row, then jobs, then users -- the order
+    -- UpdatePairRunSolverStats and RerunJobPairsBatchCore use (#188). Users used to be
+    -- updated before jobs, so this could deadlock (SQLSTATE 40P01) with a stats write or
+    -- rerun of another pair owned by the same user. Locking the pair first also makes the
+    -- stage total read below stable against a concurrent stats write for this pair.
+    SELECT jp.job_id
+    INTO _jobId
     FROM starexec.job_pairs jp
-    JOIN jobs j ON j.id = jp.job_id
-    WHERE jp.id = _pairId;
+    WHERE jp.id = _pairId
+    FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job pair %s not found', _pairId);
     END IF;
 
+    SELECT j.user_id
+    INTO _userId
+    FROM starexec.jobs j
+    WHERE j.id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _pairId);
+    END IF;
+
     SELECT COALESCE(SUM(disk_size), 0)
     INTO pair_disk_size
     FROM starexec.jobpair_stage_data
     WHERE jobpair_id = _pairId;
-
-    UPDATE users
-    SET disk_size = disk_size - pair_disk_size
-    WHERE id = _userId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('User %s for job pair %s not found', _userId, _pairId);
-    END IF;
 
     UPDATE jobs
     SET disk_size = disk_size - pair_disk_size,
@@ -2314,6 +2337,15 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s for job pair %s not found', _jobId, _pairId);
+    END IF;
+
+    UPDATE users
+    SET disk_size = disk_size - pair_disk_size
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job pair %s not found', _userId, _pairId);
     END IF;
 
     DELETE FROM starexec.job_pairs
@@ -3504,8 +3536,20 @@ DECLARE
     _userId INT;
     _diskSize BIGINT;
 BEGIN
+    -- Lock order: jobs, then users (#188). The job row is locked when its disk_size is
+    -- read, so the amount subtracted from the user is the amount actually zeroed below
+    -- rather than a stale value a concurrent stats write can change in between.
     SELECT user_id, disk_size INTO _userId, _diskSize
     FROM starexec.jobs
+    WHERE id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
     WHERE id = _jobId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -3521,14 +3565,6 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('User %s for job %s not found', _userId, _jobId);
     END IF;
-
-    UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
-    WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s not found', _jobId);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3539,8 +3575,19 @@ DECLARE
     _userId INT;
     _oldDiskSize BIGINT;
 BEGIN
+    -- Lock order: jobs, then users (#188). The job row is locked when the old size is
+    -- read, so the user total moves by exactly the change applied to the job.
     SELECT user_id, disk_size INTO _userId, _oldDiskSize
     FROM starexec.jobs
+    WHERE id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    UPDATE jobs SET disk_size = _diskSize
     WHERE id = _jobId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -3555,14 +3602,6 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('User %s for job %s not found', _userId, _jobId);
-    END IF;
-
-    UPDATE jobs SET disk_size = _diskSize
-    WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s not found', _jobId);
     END IF;
 END;
 $$ LANGUAGE plpgsql;
