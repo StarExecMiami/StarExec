@@ -555,10 +555,10 @@ public class LocalJobMonitorTests {
 
     private void updateDatabase(int pairId, StatusCode status, int stageNumber) throws Throwable {
         for (Method m : LocalJobMonitor.class.getDeclaredMethods()) {
-            if (m.getName().equals("updateDatabase")) {
+            if (m.getName().equals("updateDatabase") && m.getParameterCount() == 4) {
                 m.setAccessible(true);
                 try {
-                    m.invoke(monitor, pairId, status, stageNumber);
+                    m.invoke(monitor, pairId, status, stageNumber, (Integer) null);
                 } catch (java.lang.reflect.InvocationTargetException e) {
                     throw e.getCause();
                 }

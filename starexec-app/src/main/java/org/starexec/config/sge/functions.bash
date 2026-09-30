@@ -1024,8 +1024,13 @@ function copyOutputIncrementally {
 	PERIOD=$1
 	TIMEOUT=$2
 	while ((TIMEOUT > 0)); do
-		sleep $PERIOD
-		copyOutputNoStats $3 $4 $5
+		sleep "$PERIOD"
+		# The solver is still running and holds $OUT_DIR/output_files, so this snapshot
+		# must only copy from it (#159). A failed snapshot is logged and retried at the
+		# next interval; it must not end this loop, which runs under set -e.
+		if ! OUTPUT_FILES_TRANSFER="cp" copyOutputNoStats "$3" "$4" "$5"; then
+			log "incremental output copy failed; will retry at the next interval"
+		fi
 
 		if ((DISK_QUOTA_EXCEEDED == 1)); then
 			break
@@ -1406,6 +1411,30 @@ function createDir {
 	fi
 }
 
+# Replaces $2 with a copy of directory $1 without ever touching $1. The copy is built next
+# to $2 and swapped in, so the previous snapshot survives until the new one is complete.
+# Never fatal: the source is live and may change or vanish mid-copy, so a failure is logged
+# and the caller keeps its previous snapshot.
+# $1 Source directory (may be held open by a running solver)
+# $2 Destination directory
+function snapshotOutputFiles {
+	local TMP_SNAPSHOT="$2.incremental.tmp"
+	if [ ! -d "$1" ]; then
+		log "incremental output: source '$1' does not exist; keeping the previous snapshot"
+		return 0
+	fi
+	rm -rf "$TMP_SNAPSHOT"
+	log "cp -r $1 $2 (snapshot)"
+	if cp -r -- "$1" "$TMP_SNAPSHOT"; then
+		rm -rf "$2"
+		mv -- "$TMP_SNAPSHOT" "$2" || log "incremental output: could not publish snapshot '$2'"
+	else
+		log "incremental output: copy of '$1' failed; keeping the previous snapshot"
+		rm -rf "$TMP_SNAPSHOT"
+	fi
+	return 0
+}
+
 # copys output without doing post-processing or updating the database stats
 # $1 The current stage number
 # $2 the stdout copy option (1 means don't save, otherwise save)
@@ -1432,15 +1461,36 @@ function copyOutputNoStats {
 		cp "$STDOUT_FILE" "$PAIR_OUTPUT_PATH"
 	fi
 
+	# OUTPUT_FILES_TRANSFER is "mv" (the default) once the solver has exited, and "cp" for
+	# incremental snapshots taken while it is still running: the live directory is then never
+	# removed, renamed or moved (#159). The incremental copier is the only caller that sets it.
+	local TRANSFER="${OUTPUT_FILES_TRANSFER:-mv}"
+
 	if (($3 != 1)); then
-		log "mv $OUT_DIR/output_files/ $PAIR_OTHER_OUTPUT_PATH"
-		rm -rf "$PAIR_OTHER_OUTPUT_PATH"
-		mv "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
+		if [[ "$TRANSFER" == cp ]]; then
+			snapshotOutputFiles "$OUT_DIR/output_files" "$PAIR_OTHER_OUTPUT_PATH"
+		else
+			log "mv $OUT_DIR/output_files/ $PAIR_OTHER_OUTPUT_PATH"
+			rm -rf "$PAIR_OTHER_OUTPUT_PATH"
+			mv "$OUT_DIR/output_files/" "$PAIR_OTHER_OUTPUT_PATH"
+		fi
 	fi
 	SAVED_PAIR_OUTPUT_PATH="$SAVED_OUTPUT_DIR/$1"
 	SAVED_PAIR_OTHER_OUTPUT_PATH=$SAVED_OUTPUT_DIR"/"$1"_output"
 
 	cp "$STDOUT_FILE" "$SAVED_PAIR_OUTPUT_PATH"
+	if [[ "$TRANSFER" == cp ]]; then
+		# Copy from the snapshot just taken when there is one, so both destinations agree.
+		if (($3 != 1)); then
+			snapshotOutputFiles "$PAIR_OTHER_OUTPUT_PATH" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+		else
+			snapshotOutputFiles "$OUT_DIR/output_files" "$SAVED_PAIR_OTHER_OUTPUT_PATH"
+		fi
+		return 0
+	fi
+
+	# The solver has exited: drop any half-written incremental snapshot, then finish as before.
+	rm -rf "$PAIR_OTHER_OUTPUT_PATH.incremental.tmp" "$SAVED_PAIR_OTHER_OUTPUT_PATH.incremental.tmp"
 	rm -rf "$SAVED_PAIR_OTHER_OUTPUT_PATH"
 	if [ -d "$OUT_DIR/output_files/" ]; then
 		log "mv $OUT_DIR/output_files/ $SAVED_PAIR_OTHER_OUTPUT_PATH"

@@ -261,10 +261,11 @@ public class PairLevelStatusIngestionTest {
 			StatusCode status, int stageNumber, Map<Integer, Integer> snapshots) throws Throwable {
 		ContainerJobMonitor container = new ContainerJobMonitor(null);
 		Method m = ContainerJobMonitor.class.getDeclaredMethod(
-				"updateDatabase", int.class, int.class, StatusCode.class, Map.class);
+				"updateDatabase", int.class, int.class, StatusCode.class, Map.class,
+				Integer.class);
 		m.setAccessible(true);
 		try {
-			m.invoke(container, PAIR, stageNumber, status, snapshots);
+			m.invoke(container, PAIR, stageNumber, status, snapshots, (Integer) null);
 		} catch (java.lang.reflect.InvocationTargetException e) {
 			throw e.getCause();
 		}
@@ -274,10 +275,10 @@ public class PairLevelStatusIngestionTest {
 		LocalJobMonitor monitor = new LocalJobMonitor();
 		try {
 			Method m = LocalJobMonitor.class.getDeclaredMethod(
-					"updateDatabase", int.class, StatusCode.class, int.class);
+					"updateDatabase", int.class, StatusCode.class, int.class, Integer.class);
 			m.setAccessible(true);
 			try {
-				m.invoke(monitor, PAIR, status, stageNumber);
+				m.invoke(monitor, PAIR, status, stageNumber, (Integer) null);
 			} catch (java.lang.reflect.InvocationTargetException e) {
 				throw e.getCause();
 			}

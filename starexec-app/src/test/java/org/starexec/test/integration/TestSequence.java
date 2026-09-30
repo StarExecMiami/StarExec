@@ -6,12 +6,31 @@ import org.starexec.test.TestUtil;
 import org.starexec.test.resources.IResourceLoader;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 public abstract class TestSequence {
+	interface ExecutionListener {
+		ExecutionListener NONE = new ExecutionListener() {
+		};
+
+		default void testStarted(Method method) {
+		}
+
+		default void testFailure(Method method, Throwable failure) {
+		}
+
+		default void testFinished(Method method) {
+		}
+
+		default void lifecycleFailure(String phase, Throwable failure) {
+		}
+	}
+
 	protected static final StarLogger log = StarLogger.getLogger(TestSequence.class);
 	protected String sequenceName = "No Name";
 	protected final TestStatus status = new TestStatus();
@@ -22,7 +41,7 @@ public abstract class TestSequence {
 	protected IResourceLoader loader = null;
 	// maps the names of tests to some data about them. Every test gets an entry
 	// when the TestSequence object is created
-	final HashMap<String, TestResult> testResults = new HashMap<>();
+	final LinkedHashMap<String, TestResult> testResults = new LinkedHashMap<>();
 
 	public TestSequence() {
 		initTestResults();
@@ -65,32 +84,46 @@ public abstract class TestSequence {
 	 * @return
 	 */
 	protected final boolean execute() {
+		return execute(ExecutionListener.NONE);
+	}
+
+	final boolean execute(ExecutionListener listener) {
+		clearResults();
+		status.setCode(TestStatus.TestStatusCode.STATUS_RUNNING.getVal());
+		Throwable setupFailure = null;
+		Throwable teardownFailure = null;
 
 		try {
-			testsPassed = 0;
-			testsFailed = 0;
-			loader = initializeResourceLoader();
-			clearResults();
-			status.setCode(TestStatus.TestStatusCode.STATUS_RUNNING.getVal());
-			turnOffExternalLogging();
-			setup();
-			runTests();
-			teardown();
-			if (testsFailed == 0) {
-				status.setCode(TestStatus.TestStatusCode.STATUS_SUCCESS.getVal());
-				setMessage("test completed successfully");
-			} else {
-				status.setCode(TestStatus.TestStatusCode.STATUS_FAILED.getVal());
-				setMessage("failed tests detected");
+			try {
+				loader = initializeResourceLoader();
+				turnOffExternalLogging();
+				setup();
+			} catch (Throwable failure) {
+				setupFailure = unwrap(failure);
+				recordLifecycleFailure("setup", setupFailure, listener == ExecutionListener.NONE);
+				listener.lifecycleFailure("setup", setupFailure);
 			}
+			if (setupFailure == null) {
+				runTests(listener);
+			}
+		} finally {
+			try {
+				teardown();
+			} catch (Throwable failure) {
+				teardownFailure = unwrap(failure);
+				recordLifecycleFailure("teardown", teardownFailure, listener == ExecutionListener.NONE);
+				listener.lifecycleFailure("teardown", teardownFailure);
+			}
+		}
 
+		if (setupFailure == null && teardownFailure == null && testsFailed == 0) {
+			status.setCode(TestStatus.TestStatusCode.STATUS_SUCCESS.getVal());
+			setMessage("test completed successfully");
 			return true;
-		} catch (Throwable e) {
-			status.setCode(TestStatus.TestStatusCode.STATUS_FAILED.getVal());
-			setMessage(e.getMessage());
-			log.error(e.getMessage(), e);
-			error = e;
-
+		}
+		status.setCode(TestStatus.TestStatusCode.STATUS_FAILED.getVal());
+		if (setupFailure == null && teardownFailure == null) {
+			setMessage("failed tests detected");
 		}
 		return false;
 	}
@@ -160,58 +193,68 @@ public abstract class TestSequence {
 	abstract protected void setup() throws Exception;
 
 	protected final void runTests() {
-		for (TestResult r : testResults.values()) {
-			r.clearMessages();
-			r.addMessage("test running");
-			r.getStatus().setCode(TestStatus.TestStatusCode.STATUS_RUNNING.getVal());
-		}
+		runTests(ExecutionListener.NONE);
+	}
 
-		try {
-			List<Method> tests = getTests();
-			List<Method> afters = getAfters();
-			for (Method m : tests) {
-				TestResult t = testResults.get(m.getName());
-				t.clearMessages();
-				double a = System.currentTimeMillis();
+	private void runTests(ExecutionListener listener) {
+		List<Method> afters = getAfters();
+		for (Method method : getTests()) {
+			TestResult result = testResults.get(method.getName());
+			result.clearMessages();
+			result.addMessage("test running");
+			result.getStatus().setCode(TestStatus.TestStatusCode.STATUS_RUNNING.getVal());
+			long started = System.currentTimeMillis();
+			Throwable failure = null;
+			listener.testStarted(method);
+			try {
+				method.setAccessible(true);
+				method.invoke(this, (Object[]) null);
+			} catch (Throwable thrown) {
+				failure = unwrap(thrown);
+			}
+
+			for (Method after : afters) {
 				try {
-					m.setAccessible(true);
-					m.invoke(this, (Object[]) null);
-					t.getStatus().setCode(TestStatus.TestStatusCode.STATUS_SUCCESS.getVal());
-					t.setTime(System.currentTimeMillis() - a);
-					t.addMessage("test executed without errors");
-					testsPassed++;
-
-				} catch (Throwable e) {
-					e.printStackTrace();
-					t.setTime(System.currentTimeMillis() - a);
-					e = e.getCause();
-					testsFailed++;
-					t.setError(e);
-					t.addMessage(e.getMessage());
-					t.getStatus().setCode(TestStatus.TestStatusCode.STATUS_FAILED.getVal());
-				}
-				// after every test, we run the methods marked with @StarexecAfter
-				// these functions are passed the test method so they can easily log the time
-				// they are running, if necessary
-				for (Method after : afters) {
-					try {
-						after.setAccessible(true);
-						after.invoke(this, m);
-					} catch (Throwable e) {
-						log.error("error in after method!");
-						log.error(e.getMessage(), e);
+					after.setAccessible(true);
+					after.invoke(this, method);
+				} catch (Throwable thrown) {
+					Throwable afterFailure = unwrap(thrown);
+					if (failure == null) {
+						failure = afterFailure;
+					} else if (failure != afterFailure) {
+						failure.addSuppressed(afterFailure);
 					}
 				}
-
 			}
-		} catch (Exception e) {
-			log.debug("runTests", e);
+
+			result.setTime(System.currentTimeMillis() - started);
+			if (failure == null) {
+				result.getStatus().setCode(TestStatus.TestStatusCode.STATUS_SUCCESS.getVal());
+				result.addMessage("test executed without errors");
+				testsPassed++;
+			} else {
+				result.setError(failure);
+				result.addMessage(failureMessage(failure));
+				result.getStatus().setCode(TestStatus.TestStatusCode.STATUS_FAILED.getVal());
+				testsFailed++;
+				if (listener == ExecutionListener.NONE) {
+					log.error("legacy test failed: " + getClass().getName() + "#" + method.getName(), failure);
+				}
+			}
+
+			try {
+				if (failure != null) {
+					listener.testFailure(method, failure);
+				}
+			} finally {
+				listener.testFinished(method);
+			}
 		}
 	}
 
 	/**
 	 * This function is called after all the tests have finished running
-	 * It will be called ONLY if setup ran successfully.
+	 * It is called from a finally block, including when setup fails.
 	 */
 
 	abstract protected void teardown() throws Exception;
@@ -317,7 +360,7 @@ public abstract class TestSequence {
 		return getMethodsWithAnnotation(StarexecAfter.class);
 	}
 
-	private List<Method> getMethodsWithAnnotation(Class annotationClass) {
+	private List<Method> getMethodsWithAnnotation(Class<? extends Annotation> annotationClass) {
 		Method[] methods = this.getClass().getDeclaredMethods();
 
 		List<Method> tests = new ArrayList<>();
@@ -326,7 +369,7 @@ public abstract class TestSequence {
 				tests.add(m);
 			}
 		}
-
+		tests.sort(Comparator.comparing(Method::getName).thenComparing(Method::toGenericString));
 		return tests;
 	}
 
@@ -337,7 +380,7 @@ public abstract class TestSequence {
 	 * @param m The method to check
 	 * @return
 	 */
-	protected static boolean hasAnnotation(Method m, Class annotationClass) {
+	protected static boolean hasAnnotation(Method m, Class<? extends Annotation> annotationClass) {
 		Annotation[] anns = m.getAnnotations();
 		for (Annotation a : anns) {
 			if (a.annotationType().equals(annotationClass)) {
@@ -345,6 +388,30 @@ public abstract class TestSequence {
 			}
 		}
 		return false;
+	}
+
+	private void recordLifecycleFailure(String phase, Throwable failure, boolean logFailure) {
+		status.setCode(TestStatus.TestStatusCode.STATUS_FAILED.getVal());
+		setMessage(phase + " failed: " + failureMessage(failure));
+		if (logFailure) {
+			log.error("legacy sequence " + getClass().getName() + "#" + phase + " failed", failure);
+		}
+		if (error == null) {
+			error = failure;
+		} else if (error != failure) {
+			error.addSuppressed(failure);
+		}
+	}
+
+	private static Throwable unwrap(Throwable failure) {
+		if (failure instanceof InvocationTargetException && failure.getCause() != null) {
+			return failure.getCause();
+		}
+		return failure;
+	}
+
+	private static String failureMessage(Throwable failure) {
+		return failure.getMessage() == null ? failure.getClass().getName() : failure.getMessage();
 	}
 
 	/**

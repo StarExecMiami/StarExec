@@ -851,14 +851,39 @@ public class JobPairs {
         String key,
         String val
     ) {
+        addJobPairAttr(con, pairId, stageId, key, val, null);
+    }
+
+    /**
+     * As {@link #addJobPairAttr(Connection, int, int, String, String)}, fenced on the
+     * attempt the caller was started for (#185).
+     *
+     * <p>Every failure other than a stale attempt is logged and swallowed exactly as before,
+     * and reported as {@code true}; only the routine's dedicated refusal is surfaced, as
+     * {@code false}, so a caller can stop writing attributes for a superseded attempt.
+     * The connection is the caller's: after a refusal a caller inside a transaction must roll
+     * back, as PostgreSQL has aborted it.
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     * @return false when the routine refused the write as stale, true otherwise
+     */
+    protected static boolean addJobPairAttr(
+        Connection con,
+        int pairId,
+        int stageId,
+        String key,
+        String val,
+        Integer attemptNo
+    ) {
         PreparedStatement ps = null;
         try {
-            ps = con.prepareStatement("CALL starexec.AddJobAttr(?, ?, ?, ?)");
+            ps = con.prepareStatement("CALL starexec.AddJobAttr(?, ?, ?, ?, ?)");
             ps.setInt(1, pairId);
 
             ps.setString(2, key);
             ps.setString(3, val);
             ps.setInt(4, stageId);
+            setNullableInt(ps, 5, attemptNo);
             boolean hasResultSet = ps.execute();
             if (hasResultSet) {
                 ResultSet rs = ps.getResultSet();
@@ -868,10 +893,16 @@ public class JobPairs {
                 Common.safeClose(rs);
             }
         } catch (Exception e) {
+            if (namesStaleAttempt(e)) {
+                log.info("Pair " + pairId + ": attribute '" + key + "' refused as stale (attempt "
+                        + attemptNo + "); nothing written: " + e.getMessage());
+                return false;
+            }
             log.error("addJobPairAttr", e);
         } finally {
             Common.safeClose(ps);
         }
+        return true;
     }
 
     /**
@@ -892,6 +923,25 @@ public class JobPairs {
         Properties attributes,
         Connection con
     ) {
+        return addJobPairAttributes(pairId, stageId, attributes, con, null);
+    }
+
+    /**
+     * As {@link #addJobPairAttributes(int, int, Properties, Connection)}, fenced on the
+     * attempt the caller was started for (#185).
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     * @return false on error, and false when the write was refused as stale -- in which case
+     *         the remaining attributes are not written either. Other per-attribute failures
+     *         are logged and still reported as success, as before.
+     */
+    public static boolean addJobPairAttributes(
+        int pairId,
+        int stageId,
+        Properties attributes,
+        Connection con,
+        Integer attemptNo
+    ) {
         try {
             // For each attribute (key, value)...
             log.info(
@@ -902,13 +952,16 @@ public class JobPairs {
             );
             for (Entry<Object, Object> keyVal : attributes.entrySet()) {
                 // Add the attribute to the database
-                JobPairs.addJobPairAttr(
+                if (!JobPairs.addJobPairAttr(
                     con,
                     pairId,
                     stageId,
                     (String) keyVal.getKey(),
-                    (String) keyVal.getValue()
-                );
+                    (String) keyVal.getValue(),
+                    attemptNo
+                )) {
+                    return false;
+                }
             }
 
             return true;
@@ -932,10 +985,25 @@ public class JobPairs {
         int stageId,
         Properties attributes
     ) {
+        return addJobPairAttributes(pairId, stageId, attributes, (Integer) null);
+    }
+
+    /**
+     * As {@link #addJobPairAttributes(int, int, Properties)}, fenced on the attempt the
+     * caller was started for (#185). False when the write was refused as stale.
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     */
+    public static boolean addJobPairAttributes(
+        int pairId,
+        int stageId,
+        Properties attributes,
+        Integer attemptNo
+    ) {
         Connection con = null;
         try {
             con = Common.getConnection();
-            return addJobPairAttributes(pairId, stageId, attributes, con);
+            return addJobPairAttributes(pairId, stageId, attributes, con, attemptNo);
         } catch (Exception e) {
             log.error("error adding Job Attributes = " + e.getMessage(), e);
         } finally {
@@ -2180,6 +2248,22 @@ public class JobPairs {
         int pairId,
         Map<Integer, Integer> stageStatuses
     ) {
+        return setEarlierStageStatuses(pairId, stageStatuses, null);
+    }
+
+    /**
+     * As {@link #setEarlierStageStatuses(int, Map)}, fenced on the attempt the caller was
+     * started for (#185). A batch for a superseded attempt writes nothing and returns
+     * {@link StageStatusBatchResult#STALE_ATTEMPT}; an empty batch is a success whatever the
+     * attempt, since it writes nothing.
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     */
+    public static StageStatusBatchResult setEarlierStageStatuses(
+        int pairId,
+        Map<Integer, Integer> stageStatuses,
+        Integer attemptNo
+    ) {
         if (stageStatuses.isEmpty()) {
             return StageStatusBatchResult.APPLIED;
         }
@@ -2189,13 +2273,14 @@ public class JobPairs {
             con = Common.getConnection();
             Common.beginTransaction(con);
             ps = con.prepareStatement(
-                "SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?)"
+                "SELECT starexec.UpdatePairStageStatusIfUnresolved(?, ?, ?, ?)"
             );
             List<Integer> refused = new ArrayList<>();
             for (Entry<Integer, Integer> stage : stageStatuses.entrySet()) {
                 ps.setInt(1, pairId);
                 ps.setInt(2, stage.getKey());
                 ps.setInt(3, stage.getValue());
+                setNullableInt(ps, 4, attemptNo);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!(rs.next() && rs.getBoolean(1))) {
                         refused.add(stage.getKey());
@@ -2218,6 +2303,13 @@ public class JobPairs {
             // itself being absent, which means migrations have not run: infrastructure, and
             // it resolves the moment they do. Everything else is treated as infrastructure
             // too, because assuming otherwise records a solver failure for a lock timeout.
+            if (namesStaleAttempt(e)) {
+                log.info(
+                    "Pair " + pairId + ": stage batch " + stageStatuses + " carries attempt "
+                        + attemptNo + ", which is no longer current; nothing written"
+                );
+                return StageStatusBatchResult.STALE_ATTEMPT;
+            }
             String state = e.getSQLState();
             if ("P0002".equals(state)) {
                 log.warn(
@@ -2460,6 +2552,23 @@ public class JobPairs {
         int terminalStatus,
         int notReachedStatus
     ) {
+        return setPairLevelStatusResult(pairId, terminalStatus, notReachedStatus, null);
+    }
+
+    /**
+     * As {@link #setPairLevelStatusResult(int, int, int)}, fenced on the attempt the caller
+     * was started for (#185).
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     * @return as the unfenced form, plus {@link PairStatusResult#STALE_ATTEMPT} when the
+     *         pair is no longer on {@code attemptNo}; nothing was written then
+     */
+    public static PairStatusResult setPairLevelStatusResult(
+        int pairId,
+        int terminalStatus,
+        int notReachedStatus,
+        Integer attemptNo
+    ) {
         Connection con = null;
         PreparedStatement ps = null;
         Integer attemptNoForFinalize = null;
@@ -2467,15 +2576,25 @@ public class JobPairs {
             con = Common.getConnection();
             Common.beginTransaction(con);
             ps = con.prepareStatement(
-                "SELECT starexec.UpdatePairStatusPairLevel(?, ?, ?)"
+                "SELECT starexec.UpdatePairStatusPairLevel(?, ?, ?, ?)"
             );
             ps.setInt(1, pairId);
             ps.setInt(2, terminalStatus);
             ps.setInt(3, notReachedStatus);
+            setNullableInt(ps, 4, attemptNo);
 
             boolean applied;
             try (ResultSet rs = ps.executeQuery()) {
                 applied = rs.next() && rs.getBoolean(1);
+            } catch (SQLException e) {
+                if (namesStaleAttempt(e)) {
+                    log.info("Refusing a pair-level status write for pair " + pairId
+                            + ": attempt " + attemptNo + " is no longer current. Status "
+                            + terminalStatus + " was not recorded: " + e.getMessage());
+                    Common.doRollback(con);
+                    return PairStatusResult.STALE_ATTEMPT;
+                }
+                throw e;
             }
             if (!applied) {
                 // Another writer recorded a different terminal result first, exactly as in the
@@ -2486,7 +2605,8 @@ public class JobPairs {
             }
 
             if (isTerminalStatusCode(terminalStatus)) {
-                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+                int current = getOrCreateCurrentAttemptNo(con, pairId, true);
+                attemptNoForFinalize = attemptNo != null ? attemptNo : current;
             }
             con.commit();
             Common.enableAutoCommit(con);
@@ -2510,6 +2630,30 @@ public class JobPairs {
         int terminalStatus,
         int notReachedStatus,
         boolean forceOverride
+    ) {
+        return setPairStatusPreciseResult(
+            pairId, stageNumber, terminalStatus, notReachedStatus, forceOverride, null);
+    }
+
+    /**
+     * As {@link #setPairStatusPreciseResult(int, int, int, int, boolean)}, fenced on the
+     * attempt the caller was started for (#185).
+     *
+     * <p>The fence holds even with {@code forceOverride}: the override replaces a
+     * conflicting result of the current attempt and never licenses a write for a superseded
+     * one. A refusal is {@link PairStatusResult#STALE_ATTEMPT}: nothing was written, nothing
+     * should be retried, and the manifest is not finalised. When a terminal status is applied
+     * the manifest is finalised for {@code attemptNo}, the attempt the database just fenced on.
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     */
+    public static PairStatusResult setPairStatusPreciseResult(
+        int pairId,
+        int stageNumber,
+        int terminalStatus,
+        int notReachedStatus,
+        boolean forceOverride,
+        Integer attemptNo
     ) {
         // A stage argument can fail to identify a stage in two ways, and both are refused.
         //
@@ -2541,13 +2685,14 @@ public class JobPairs {
             con = Common.getConnection();
             Common.beginTransaction(con);
             ps = con.prepareStatement(
-                "SELECT starexec.UpdatePairStatusPrecise(?, ?, ?, ?, ?)"
+                "SELECT starexec.UpdatePairStatusPrecise(?, ?, ?, ?, ?, ?)"
             );
             ps.setInt(1, pairId);
             ps.setInt(2, stageNumber);
             ps.setInt(3, terminalStatus);
             ps.setInt(4, notReachedStatus);
             ps.setBoolean(5, forceOverride);
+            setNullableInt(ps, 6, attemptNo);
 
             boolean applied;
             try (ResultSet rs = ps.executeQuery()) {
@@ -2556,6 +2701,14 @@ public class JobPairs {
                 // Scoped to the call itself rather than to the whole method. The outer catch
                 // also spans getConnection, the commit and the manifest write, and a 22023
                 // from any of those would not be this routine speaking.
+                if (namesStaleAttempt(e)) {
+                    log.info("Refusing a precise status write for pair " + pairId
+                            + ": attempt " + attemptNo + " is no longer current. Status "
+                            + terminalStatus + " was not recorded and no stage history was"
+                            + " touched: " + e.getMessage());
+                    Common.doRollback(con);
+                    return PairStatusResult.STALE_ATTEMPT;
+                }
                 if (namesNoStage(e)) {
                     log.error("Refusing a precise status write for pair " + pairId
                             + ": stage number " + stageNumber + " does not identify a stage of"
@@ -2576,7 +2729,8 @@ public class JobPairs {
             }
 
             if (isTerminalStatusCode(terminalStatus)) {
-                attemptNoForFinalize = getOrCreateCurrentAttemptNo(con, pairId, true);
+                int current = getOrCreateCurrentAttemptNo(con, pairId, true);
+                attemptNoForFinalize = attemptNo != null ? attemptNo : current;
             }
             // Committed here rather than through endTransaction, which swallows a failed
             // commit. The manifest is written below on the strength of this commit, so a
@@ -2626,14 +2780,72 @@ public class JobPairs {
      * reaches here, and is bounded so a self-referencing chain cannot spin.
      */
     private static boolean namesNoStage(Throwable failure) {
+        return namesSqlState(failure, INVALID_STAGE_SQLSTATE);
+    }
+
+    /**
+     * SQLSTATE 'SX185', raised by {@code starexec.EnforcePairAttempt} when a result write
+     * carries an attempt other than the pair's current one (#185). A dedicated code so it
+     * cannot be confused with any other refusal.
+     */
+    private static final String STALE_ATTEMPT_SQLSTATE = "SX185";
+
+    /** Whether a failure is the attempt fence refusing a superseded write. */
+    private static boolean namesStaleAttempt(Throwable failure) {
+        return namesSqlState(failure, STALE_ATTEMPT_SQLSTATE);
+    }
+
+    private static boolean namesSqlState(Throwable failure, String sqlState) {
         Throwable t = failure;
         for (int depth = 0; t != null && depth < 16; t = t.getCause(), depth++) {
             if (t instanceof SQLException
-                    && INVALID_STAGE_SQLSTATE.equals(((SQLException) t).getSQLState())) {
+                    && sqlState.equals(((SQLException) t).getSQLState())) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static void setNullableInt(PreparedStatement ps, int index, Integer value)
+            throws SQLException {
+        if (value == null) {
+            ps.setNull(index, Types.INTEGER);
+        } else {
+            ps.setInt(index, value);
+        }
+    }
+
+    /**
+     * The attempt a pair's results currently belong to: {@code current_attempt_no}, or 1
+     * when the pair has no {@code job_pair_attempts} row, meaning it has never been rerun.
+     *
+     * <p>Read-only: takes no lock and inserts nothing, unlike the private
+     * {@code getOrCreateCurrentAttemptNo}. A backend reads this when it launches an
+     * execution and carries the value on every later result write, so that a late write from
+     * a superseded execution is refused (#185). Returns 1 for a pair that does not exist too,
+     * as there is no row to say otherwise.
+     *
+     * @throws SQLException when the database cannot be read; the caller must not guess
+     */
+    public static int getCurrentAttemptNo(int pairId) throws SQLException {
+        Connection con = null;
+        try {
+            con = Common.getConnection();
+            return getCurrentAttemptNo(con, pairId);
+        } finally {
+            Common.safeClose(con);
+        }
+    }
+
+    /** As {@link #getCurrentAttemptNo(int)}, on a connection the caller owns. */
+    public static int getCurrentAttemptNo(Connection con, int pairId) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(
+                "SELECT current_attempt_no FROM starexec.job_pair_attempts WHERE pair_id = ?")) {
+            ps.setInt(1, pairId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 1;
+            }
+        }
     }
 
     /**
@@ -3503,12 +3715,38 @@ public class JobPairs {
         int stageNumber,
         long diskSize
     ) {
+        return updateRunSolverStats(
+            pairId, nodeName, wallClock, cpu, userTime, systemTime, maxVmem, maxResSet,
+            stageNumber, diskSize, null);
+    }
+
+    /**
+     * As {@link #updateRunSolverStats(int, String, double, double, double, double, double,
+     * long, int, long)}, fenced on the attempt the caller was started for (#185).
+     *
+     * @param attemptNo the attempt the write belongs to, or null for an unfenced write
+     * @return false when the write failed, or was refused as stale (logged at INFO; nothing
+     *         was written, and no user or job disk total moved)
+     */
+    public static boolean updateRunSolverStats(
+        int pairId,
+        String nodeName,
+        double wallClock,
+        double cpu,
+        double userTime,
+        double systemTime,
+        double maxVmem,
+        long maxResSet,
+        int stageNumber,
+        long diskSize,
+        Integer attemptNo
+    ) {
         Connection con = null;
         PreparedStatement ps = null;
         try {
             con = Common.getConnection();
             ps = con.prepareStatement(
-                "CALL starexec.UpdatePairRunSolverStats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "CALL starexec.UpdatePairRunSolverStats(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             );
 
             ps.setInt(1, pairId);
@@ -3521,11 +3759,18 @@ public class JobPairs {
             ps.setLong(8, maxResSet);
             ps.setInt(9, stageNumber);
             ps.setLong(10, diskSize);
+            setNullableInt(ps, 11, attemptNo);
 
             Common.executeAndDrain(ps);
 
             return true;
         } catch (Exception e) {
+            if (namesStaleAttempt(e)) {
+                log.info("Refusing run solver stats for pair " + pairId + ": attempt "
+                        + attemptNo + " is no longer current; nothing written: "
+                        + e.getMessage());
+                return false;
+            }
             log.error("Error updating run solver stats for pair " + pairId, e);
         } finally {
             Common.safeClose(con);

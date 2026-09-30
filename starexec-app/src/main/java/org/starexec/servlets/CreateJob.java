@@ -446,7 +446,7 @@ public class CreateJob extends HttpServlet {
 				}
 
 				// If the submission was successful, send back to space explorer
-				response.addCookie(new Cookie("New_ID", String.valueOf(j.getId())));
+				response.addCookie(Util.createIdCookie("New_ID", String.valueOf(j.getId())));
 
 				if (selection.equals("quickJob")) {
 					Analytics.JOB_CREATE_QUICKJOB.record(userId);
