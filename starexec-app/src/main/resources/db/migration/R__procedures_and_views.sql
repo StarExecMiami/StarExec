@@ -9918,54 +9918,56 @@ $$ LANGUAGE plpgsql;
 -- Returns "complete" if the job represented by the given id had no pending job pairs,
 -- and returns "incomplete" otherwise
 -- Author: Todd Elvers
+--
+-- Job-scoped: the EXISTS is correlated on job_id, so the probe stops at the first pending
+-- pair of THIS job. The previous "_jobId IN (SELECT job_id FROM job_pairs WHERE status_code
+-- IN (...))" form was uncorrelated and materialised the pending set of every job on each
+-- call, and this function is evaluated once per job row in the job listings.
+-- Deliberately left VOLATILE (the default) so its behaviour inside a caller's transaction
+-- is unchanged.
 DROP FUNCTION IF EXISTS starexec.GetJobStatus CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobStatus(_jobId INT)
 RETURNS TEXT AS $$
-DECLARE
-    status TEXT;
 BEGIN
-    SELECT CASE WHEN _jobId IN (
-        SELECT job_id
+    RETURN CASE WHEN EXISTS (
+        SELECT 1
         FROM starexec.job_pairs
-        WHERE status_code IN (1, 2, 4, 19, 20, 22)
-    ) THEN 'incomplete' ELSE 'complete' END
-    INTO status;
-
-    RETURN status;
+        WHERE job_id = _jobId
+        AND status_code IN (1, 2, 4, 19, 20, 22)
+    ) THEN 'incomplete' ELSE 'complete' END;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Returns human readable description of this job's status
 -- This Function looks intimidating, but it is just a big IF ELSE IF chain
+-- Every branch is correlated on the job id (see GetJobStatus above); the branch order and the
+-- returned strings are unchanged.
 DROP FUNCTION IF EXISTS starexec.GetJobStatusDetail CASCADE;
 CREATE OR REPLACE FUNCTION starexec.GetJobStatusDetail(_jobId INT)
 RETURNS TEXT AS $$
-DECLARE
-    status TEXT;
 BEGIN
-    SELECT CASE
-        WHEN _jobId IN (SELECT id FROM starexec.jobs WHERE deleted) THEN 'DELETED'
-        WHEN _jobId IN (SELECT id FROM starexec.jobs WHERE killed) THEN 'KILLED'
-        WHEN _jobId IN (SELECT id FROM starexec.jobs WHERE paused) THEN 'PAUSED'
-        WHEN _jobId IN (SELECT job_id FROM starexec.job_pairs WHERE status_code = 22) THEN 'PROCESSING'
-        WHEN _jobId IN (SELECT job_id FROM starexec.job_pairs WHERE status_code = 19) THEN 'PROCESSING_RESULTS'
-        WHEN _jobId IN (SELECT job_id FROM starexec.job_pairs WHERE status_code BETWEEN 1 AND 6) THEN
+    RETURN CASE
+        WHEN EXISTS (SELECT 1 FROM starexec.jobs WHERE id = _jobId AND deleted) THEN 'DELETED'
+        WHEN EXISTS (SELECT 1 FROM starexec.jobs WHERE id = _jobId AND killed) THEN 'KILLED'
+        WHEN EXISTS (SELECT 1 FROM starexec.jobs WHERE id = _jobId AND paused) THEN 'PAUSED'
+        WHEN EXISTS (SELECT 1 FROM starexec.job_pairs WHERE job_id = _jobId AND status_code = 22) THEN 'PROCESSING'
+        WHEN EXISTS (SELECT 1 FROM starexec.job_pairs WHERE job_id = _jobId AND status_code = 19) THEN 'PROCESSING_RESULTS'
+        WHEN EXISTS (SELECT 1 FROM starexec.job_pairs WHERE job_id = _jobId AND status_code BETWEEN 1 AND 6) THEN
             CASE
                 WHEN EXISTS (SELECT 1 FROM starexec.system_flags WHERE paused = TRUE)
-                     AND _jobId NOT IN (
-                         SELECT j.id
+                     AND NOT EXISTS (
+                         SELECT 1
                          FROM starexec.jobs j
                          JOIN users u ON j.user_id = u.id
                          JOIN user_roles ur ON ur.email = u.email
-                         WHERE ur.role IN ('admin', 'developer')
+                         WHERE j.id = _jobId
+                         AND ur.role IN ('admin', 'developer')
                      )
                 THEN 'GLOBAL_PAUSE'
                 ELSE 'RUNNING'
             END
         ELSE 'COMPLETE'
-    END INTO status;
-
-    RETURN status;
+    END;
 END;
 $$ LANGUAGE plpgsql;
 
