@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -18,6 +19,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -740,6 +742,133 @@ public class LocalBackendTests {
         jobMonitor().clearPairTracking(5206); // what retiring the pair does to the monitor
         Assert.assertFalse(backend.getActiveExecutionIds().contains(206),
             "the retained id must be released once the monitor no longer holds the result");
+    }
+
+    // ------------------------------------------------------------------
+    // Killing a pair must kill the whole bash -> runsolver -> solver tree, and the core must
+    // not go back to the pool while any member of it is alive (one solver per core).
+    // ------------------------------------------------------------------
+
+    @SuppressWarnings("unchecked")
+    private Map<Integer, Object> activeJobsMap() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("activeJobs");
+        field.setAccessible(true);
+        return (Map<Integer, Object>) field.get(backend);
+    }
+
+    private LinkedBlockingQueue<Integer> coreQueue() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("availableCores");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        LinkedBlockingQueue<Integer> cores = (LinkedBlockingQueue<Integer>) field.get(backend);
+        return cores;
+    }
+
+    private int maxConcurrency() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("maxConcurrency");
+        field.setAccessible(true);
+        return field.getInt(backend);
+    }
+
+    @Test
+    public void killPairKillsTheWholeProcessTreeAndOnlyThenFreesTheCore() throws Exception {
+        waitForFixtureJob();
+        Path output = Files.createDirectory(tempDir.resolve("tree-output"));
+        // bash starts a child that outlives it unless the child is signalled too.
+        Path script = executableScript("tree-job.sh", "sleep 300 &\nwait");
+        Path workDir = Files.createDirectory(tempDir.resolve("tree-work"));
+
+        int execId = backend.submitScript(
+            -1, script.toString(), workDir.toString(), output.resolve("job.log").toString());
+        Assert.assertTrue(execId > 0);
+
+        Process wrapper = null;
+        List<ProcessHandle> tree = List.of();
+        try {
+            await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+                .pollInterval(10, TimeUnit.MILLISECONDS)
+                .until(() -> {
+                    Object job = activeJobsMap().get(execId);
+                    if (job == null) {
+                        return false;
+                    }
+                    Field process = job.getClass().getDeclaredField("process");
+                    process.setAccessible(true);
+                    Process p = (Process) process.get(job);
+                    return p != null && p.descendants().findAny().isPresent();
+                });
+            Object job = activeJobsMap().get(execId);
+            Field processField = job.getClass().getDeclaredField("process");
+            processField.setAccessible(true);
+            wrapper = (Process) processField.get(job);
+            tree = wrapper.descendants().toList();
+            Assert.assertFalse(tree.isEmpty(), "the fixture must have a live descendant");
+
+            Assert.assertTrue(backend.killPair(execId));
+
+            for (ProcessHandle member : tree) {
+                Assert.assertFalse(member.isAlive(),
+                    "killPair left descendant " + member.pid() + " running after the wrapper died");
+            }
+            Assert.assertFalse(wrapper.isAlive());
+            await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+                .pollInterval(10, TimeUnit.MILLISECONDS)
+                .until(() -> coreQueue().size() == maxConcurrency());
+        } finally {
+            for (ProcessHandle member : tree) {
+                member.destroyForcibly();
+            }
+            if (wrapper != null) {
+                wrapper.destroyForcibly();
+            }
+        }
+    }
+
+    /** A process no signal can remove: alive until the test says otherwise. */
+    private static ProcessHandle unkillableProcess(AtomicBoolean alive, CompletableFuture<ProcessHandle> exit) {
+        ProcessHandle handle = Mockito.mock(ProcessHandle.class);
+        Mockito.when(handle.isAlive()).thenAnswer(invocation -> alive.get());
+        Mockito.when(handle.onExit()).thenReturn(exit);
+        Mockito.when(handle.destroy()).thenReturn(true);
+        Mockito.when(handle.destroyForcibly()).thenReturn(true);
+        Mockito.when(handle.pid()).thenReturn(4_000_000_000L);
+        return handle;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aCoreIsNotLeasedAgainWhileAMemberOfItsTreeSurvives() throws Exception {
+        waitForFixtureJob();
+        Field wait = LocalBackend.class.getDeclaredField("treeKillWaitMillis");
+        wait.setAccessible(true);
+        wait.setLong(backend, 100L); // bounded: the survivor below never exits on its own
+
+        AtomicBoolean alive = new AtomicBoolean(true);
+        CompletableFuture<ProcessHandle> exit = new CompletableFuture<>();
+        ProcessHandle survivor = unkillableProcess(alive, exit);
+
+        Path output = Files.createDirectory(tempDir.resolve("quarantine-output"));
+        Object job = localJob(301, -1, executableScript("quarantine-job.sh", "exit 0"),
+            tempDir, output.resolve("job.log"));
+        Field known = job.getClass().getDeclaredField("knownTree");
+        known.setAccessible(true);
+        ((java.util.Set<ProcessHandle>) known.get(job)).add(survivor);
+        activeJobsMap().put(301, job);
+
+        int total = maxConcurrency();
+        executeJob(job);
+
+        Assert.assertEquals(coreQueue().size(), total - 1,
+            "the core of a job whose tree is still alive must not be offered back");
+        Assert.assertEquals(backend.killPairConfirmed(301), Backend.KillOutcome.UNPROVEN,
+            "a surviving descendant means the kill is not proven");
+
+        alive.set(false);
+        exit.complete(survivor);
+        await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+            .pollInterval(10, TimeUnit.MILLISECONDS)
+            .until(() -> coreQueue().size() == total);
+        Assert.assertEquals(backend.killPairConfirmed(301), Backend.KillOutcome.CONFIRMED_SAFE);
     }
 
     /** Everything the job script can actually emit, both directions. */
