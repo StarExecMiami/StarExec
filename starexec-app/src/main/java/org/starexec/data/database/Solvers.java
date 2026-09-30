@@ -191,7 +191,15 @@ public class Solvers {
 	protected static void associate(Connection con, List<Integer> solverIds, int spaceId) throws Exception {
 		// final String methodName = "associate";
 		for (int sid : solverIds) {
-			Solvers.associate(con, spaceId, sid);
+			// Same guard as the single-space overload. A failed copy is reported as a
+			// non-positive id, and AddSolverAssociation would fail its foreign key on one:
+			// inside this transaction that rolls back every association in the batch, so one
+			// solver that could not be copied would undo all the ones that could.
+			if (sid > 0) {
+				Solvers.associate(con, spaceId, sid);
+			} else {
+				log.warn("Skipping association for invalid solver ID: " + sid);
+			}
 		}
 	}
 
