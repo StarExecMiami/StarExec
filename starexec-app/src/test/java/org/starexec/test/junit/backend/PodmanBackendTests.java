@@ -1090,6 +1090,42 @@ public class PodmanBackendTests {
     }
 
     @Test
+    public void testSubmitScript_AttemptReadFails_DefersAndReleasesSlot()
+        throws Exception {
+        // A transient database error while reading the pair's attempt (#185) is not the
+        // pair's fault. Returning -1 would become a terminal ERROR_SGE_REJECT in JobManager;
+        // the pair must be deferred so it stays queued, and its slot must be freed.
+        configureBackendForSubmitScript();
+        configureCreateContainerSuccess(TEST_CONTAINER_ID);
+
+        String workingDir = "/app/data/jobin/job_5";
+        String scriptPath = "/app/data/jobin/job_5/run.sh";
+        String logPath = tempDir.resolve("out").resolve("job5.log").toString();
+
+        try (MockedStatic<JobPairs> jobPairsMock = mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getCurrentAttemptNo(55))
+                .thenThrow(new java.sql.SQLException("connection reset"));
+
+            try {
+                int execId = backend.submitScript(55, scriptPath, workingDir, logPath);
+                fail("a failed attempt read must defer, not return " + execId);
+            } catch (org.starexec.backend.exception.SubmissionDeferredException expected) {
+                assertTrue("names the pair: " + expected.getMessage(),
+                    expected.getMessage().contains("55"));
+                assertTrue("names the cause: " + expected.getMessage(),
+                    expected.getMessage().contains("connection reset"));
+            }
+        }
+
+        verify(mockDockerClient, never()).createContainerCmd(anyString());
+        verify(mockStartContainerCmd, never()).exec();
+        assertTrue("no execution may be registered", getExecIdMap().isEmpty());
+        assertTrue("the partition slot must be released", getSlotHolderSet().isEmpty());
+        assertEquals(0, getActiveSubmissionSlots());
+    }
+
+    @Test
     public void testSubmitScript_MonitorThrows_StillReturnsExecIdWithoutRetry()
         throws Exception {
         // Arrange

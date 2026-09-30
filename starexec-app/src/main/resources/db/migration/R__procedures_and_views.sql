@@ -1620,10 +1620,52 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Attempt fence (#185). Every writer of a pair's results carries the attempt it was started
+-- for; a write for any attempt other than the pair's current one is refused, so a late
+-- write from a superseded execution cannot land on the attempt that replaced it.
+--
+-- Must be called right after the caller has taken its job_pairs FOR UPDATE lock: the
+-- rerun that bumps current_attempt_no holds that same lock, so the read below cannot
+-- observe one attempt and let the caller write against another. It reads and never
+-- inserts. A pair with no job_pair_attempts row has never been rerun, so it is on
+-- attempt 1. _attemptNo NULL means "unfenced" and keeps every existing caller,
+-- including the bash on execution nodes that predates this fence, working unchanged.
+--
+-- Refusal is an exception with the dedicated SQLSTATE 'SX185' because procedures cannot
+-- return a value and the callers use CALL. The Java wrappers map this one code to a
+-- stale-attempt result and never let it escape as a failure.
+DROP ROUTINE IF EXISTS starexec.EnforcePairAttempt(INT, INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.EnforcePairAttempt(_pairId INT, _attemptNo INT)
+RETURNS VOID AS $$
+DECLARE
+	_currentAttempt INT;
+BEGIN
+	IF _attemptNo IS NULL THEN
+		RETURN;
+	END IF;
+	SELECT current_attempt_no INTO _currentAttempt
+	FROM starexec.job_pair_attempts WHERE pair_id = _pairId;
+	IF NOT FOUND THEN
+		_currentAttempt := 1;
+	END IF;
+	IF _attemptNo <> _currentAttempt THEN
+		RAISE EXCEPTION USING
+			ERRCODE = 'SX185',
+			MESSAGE = format(
+				'Stale attempt for pair %s: write carries attempt %s but the current attempt is %s',
+				_pairId,
+				_attemptNo,
+				_currentAttempt
+			);
+	END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Updates a job pair's statistics directly from the execution node
 -- Author: Benton McCune
 DROP ROUTINE IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT) CASCADE;
-CREATE OR REPLACE PROCEDURE starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT)
+DROP ROUTINE IF EXISTS starexec.UpdatePairRunSolverStats(INT, VARCHAR, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, BIGINT, INT, BIGINT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.UpdatePairRunSolverStats(_jobPairId INT, _nodeName VARCHAR(64), _wallClock DOUBLE PRECISION, _cpu DOUBLE PRECISION, _userTime DOUBLE PRECISION, _systemTime DOUBLE PRECISION, _maxVmem DOUBLE PRECISION, _maxResSet BIGINT, _stageNumber INT, _diskSize BIGINT, _attemptNo INT DEFAULT NULL)
 AS $$
 DECLARE
     _nodeId INT;
@@ -1632,6 +1674,17 @@ DECLARE
     _priorDiskSize BIGINT;
     _delta BIGINT;
 BEGIN
+    -- job_pairs is locked and the attempt fenced BEFORE anything else is read or written
+    -- (#185), so a superseded execution's statistics touch neither the node column nor the
+    -- job and user disk totals below. The jobs -> users order after it is unchanged (#299).
+    PERFORM 1 FROM starexec.job_pairs WHERE id = _jobPairId FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job pair %s not found', _jobPairId);
+    END IF;
+    PERFORM starexec.EnforcePairAttempt(_jobPairId, _attemptNo);
+
     SELECT id INTO _nodeId FROM starexec.nodes WHERE name = _nodeName;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -1640,11 +1693,6 @@ BEGIN
     END IF;
 
     UPDATE job_pairs SET node_id = _nodeId WHERE id = _jobPairId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job pair %s not found', _jobPairId);
-    END IF;
 
     SELECT j.id, j.user_id
     INTO _jobId, _userId
@@ -1686,6 +1734,17 @@ BEGIN
 
     _delta := _diskSize - COALESCE(_priorDiskSize, 0);
 
+    -- Apply this stage's delta to the job and user totals in the same order as
+    -- RerunJobPairsBatchCore's disk-accounting writes.
+    -- Taking users before jobs lets a stats write for one pair hold the user row while
+    -- waiting for a job row held by a rerun of another pair owned by the same user.
+    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
     UPDATE users
     SET disk_size = disk_size + _delta
     WHERE id = _userId;
@@ -1708,15 +1767,6 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Stage %s for job pair %s not found', _stageNumber, _jobPairId);
-    END IF;
-
-    -- Same difference, for the same reason: the job total drifted upward on every
-    -- redelivery exactly as the user total did.
-    UPDATE jobs SET disk_size = disk_size + _delta WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -1766,19 +1816,35 @@ DECLARE
     _jobId INT;
     _userId INT;
 BEGIN
-	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
-    _sumDiskSize := COALESCE(_sumDiskSize, 0);
-
-    SELECT j.id, j.user_id
-    INTO _jobId, _userId
+    -- Lock order: job_pairs row, then jobs, then users, then jobpair_stage_data -- the
+    -- order UpdatePairRunSolverStats and RerunJobPairsBatchCore use (#188). The pair row
+    -- is locked first so the stage total read below cannot be changed underneath us by a
+    -- stats write for this pair, and so that write cannot hold the stage row while
+    -- waiting for the job row this procedure holds.
+    SELECT jp.job_id
+    INTO _jobId
     FROM starexec.job_pairs jp
-    JOIN jobs j ON j.id = jp.job_id
-    WHERE jp.id = _jobPairId;
+    WHERE jp.id = _jobPairId
+    FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job for job pair %s not found', _jobPairId);
     END IF;
+
+    SELECT j.user_id
+    INTO _userId
+    FROM starexec.jobs j
+    WHERE j.id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _jobPairId);
+    END IF;
+
+	SELECT SUM(disk_size) FROM starexec.jobpair_stage_data WHERE jobpair_id=_jobPairId INTO _sumDiskSize;
+    _sumDiskSize := COALESCE(_sumDiskSize, 0);
 
     UPDATE jobs
     SET disk_size = disk_size - _sumDiskSize
@@ -1965,7 +2031,7 @@ BEGIN
 		-- Processing Results (19), Paused (20), or Awaiting post-processor (22).
 		SELECT COUNT(*) INTO _count FROM (SELECT id FROM starexec.job_pairs WHERE job_id=_job_id AND status_code IN (1, 2, 4, 19, 20, 22) LIMIT 1) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed=CURRENT_TIMESTAMP WHERE id=_job_id;
+			UPDATE jobs SET completed=COALESCE(completed, CURRENT_TIMESTAMP) WHERE id=_job_id;
             IF NOT FOUND THEN
                 RAISE EXCEPTION USING
                     ERRCODE = 'P0002',
@@ -2012,7 +2078,8 @@ $$ LANGUAGE plpgsql;
 -- different terminal result. FALSE rather than an exception because a replay is expected
 -- rather than exceptional, and the caller has to distinguish the two.
 DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatusIfUnresolved(INT, INT, INT) CASCADE;
-CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatusIfUnresolved(_jobPairId INT, _stageNumber INT, _statusCode INT)
+DROP ROUTINE IF EXISTS starexec.UpdatePairStageStatusIfUnresolved(INT, INT, INT, INT) CASCADE;
+CREATE OR REPLACE FUNCTION starexec.UpdatePairStageStatusIfUnresolved(_jobPairId INT, _stageNumber INT, _statusCode INT, _attemptNo INT DEFAULT NULL)
 RETURNS BOOLEAN AS $$
 DECLARE
 	_current INT;
@@ -2026,6 +2093,9 @@ BEGIN
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _jobPairId);
 	END IF;
+
+	-- Attempt fence (#185): after the job_pairs lock, before any stage row is touched.
+	PERFORM starexec.EnforcePairAttempt(_jobPairId, _attemptNo);
 
 	SELECT status_code INTO _current
 	FROM starexec.jobpair_stage_data
@@ -2227,30 +2297,37 @@ DECLARE
     _jobId INT;
     _userId INT;
 BEGIN
-    SELECT jp.job_id, j.user_id
-    INTO _jobId, _userId
+    -- Lock order: job_pairs row, then jobs, then users -- the order
+    -- UpdatePairRunSolverStats and RerunJobPairsBatchCore use (#188). Users used to be
+    -- updated before jobs, so this could deadlock (SQLSTATE 40P01) with a stats write or
+    -- rerun of another pair owned by the same user. Locking the pair first also makes the
+    -- stage total read below stable against a concurrent stats write for this pair.
+    SELECT jp.job_id
+    INTO _jobId
     FROM starexec.job_pairs jp
-    JOIN jobs j ON j.id = jp.job_id
-    WHERE jp.id = _pairId;
+    WHERE jp.id = _pairId
+    FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job pair %s not found', _pairId);
     END IF;
 
+    SELECT j.user_id
+    INTO _userId
+    FROM starexec.jobs j
+    WHERE j.id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s for job pair %s not found', _jobId, _pairId);
+    END IF;
+
     SELECT COALESCE(SUM(disk_size), 0)
     INTO pair_disk_size
     FROM starexec.jobpair_stage_data
     WHERE jobpair_id = _pairId;
-
-    UPDATE users
-    SET disk_size = disk_size - pair_disk_size
-    WHERE id = _userId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('User %s for job pair %s not found', _userId, _pairId);
-    END IF;
 
     UPDATE jobs
     SET disk_size = disk_size - pair_disk_size,
@@ -2260,6 +2337,15 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('Job %s for job pair %s not found', _jobId, _pairId);
+    END IF;
+
+    UPDATE users
+    SET disk_size = disk_size - pair_disk_size
+    WHERE id = _userId;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('User %s for job pair %s not found', _userId, _pairId);
     END IF;
 
     DELETE FROM starexec.job_pairs
@@ -2567,10 +2653,10 @@ BEGIN
 	WHERE ancestor=_jobSpaceId AND jobpair_stage_data.config_id=_configId AND
 	(( _stageNumber = 0 AND jobpair_stage_data.stage_number = job_pairs.primary_jobpair_data) OR jobpair_stage_data.stage_number = _stageNumber) AND
 	((_type = 'all') OR
-	(_type='resource' AND job_pairs.status_code BETWEEN 14 AND 17) OR
-	(_type = 'incomplete' AND job_pairs.status_code NOT IN (7, 14, 15, 16, 17, 25, 26)) OR
-	(_type='failed' AND job_pairs.status_code IN (8, 9, 10, 11, 12, 13, 18, 24, 25, 26)) OR
-	(_type ='complete' AND job_pairs.status_code IN (7, 14, 15, 16, 17, 25, 26)) OR
+	(_type='resource' AND jobpair_stage_data.status_code BETWEEN 14 AND 17) OR
+	(_type = 'incomplete' AND (jobpair_stage_data.status_code <= 6 OR jobpair_stage_data.status_code BETWEEN 19 AND 23)) OR
+	(_type='failed' AND (jobpair_stage_data.status_code BETWEEN 8 AND 13 OR jobpair_stage_data.status_code = 18 OR jobpair_stage_data.status_code BETWEEN 24 AND 26)) OR
+	(_type ='complete' AND (jobpair_stage_data.status_code = 7 OR jobpair_stage_data.status_code BETWEEN 14 AND 17)) OR
 	(_type = 'unknown' AND jobpair_stage_data.status_code = 7 AND (
 		job_attributes.attr_value = 'starexec-unknown' OR
 		bench_attributes.attr_value IS NULL OR
@@ -2634,9 +2720,17 @@ $$ LANGUAGE plpgsql;
 -- Adds a new attribute to a job pair for the given stage
 -- Author: Tyler Jensen
 DROP ROUTINE IF EXISTS starexec.AddJobAttr(INT, VARCHAR, VARCHAR, INT) CASCADE;
-CREATE OR REPLACE PROCEDURE starexec.AddJobAttr(_pairId INT, _key VARCHAR(128), _val VARCHAR(128), _stage INT)
+DROP ROUTINE IF EXISTS starexec.AddJobAttr(INT, VARCHAR, VARCHAR, INT, INT) CASCADE;
+CREATE OR REPLACE PROCEDURE starexec.AddJobAttr(_pairId INT, _key VARCHAR(128), _val VARCHAR(128), _stage INT, _attemptNo INT DEFAULT NULL)
 AS $$
 BEGIN
+	-- Lock the pair first, then fence on its attempt (#185): a superseded execution's
+	-- post-processor attributes must not land on the attempt that replaced it. job_pairs is
+	-- the first table in the lock order, so this cannot deadlock against the other writers.
+	-- A missing pair is left to the insert below exactly as before (NULL job_id).
+	PERFORM 1 FROM starexec.job_pairs WHERE id = _pairId FOR UPDATE;
+	PERFORM starexec.EnforcePairAttempt(_pairId, _attemptNo);
+
 	INSERT INTO job_attributes (pair_id, attr_key, attr_value, job_id, stage_number)
 	VALUES (_pairId, _key, _val, (SELECT job_id FROM starexec.job_pairs WHERE id=_pairId), _stage)
 	ON CONFLICT (pair_id, attr_key, stage_number) DO UPDATE SET
@@ -3442,8 +3536,20 @@ DECLARE
     _userId INT;
     _diskSize BIGINT;
 BEGIN
+    -- Lock order: jobs, then users (#188). The job row is locked when its disk_size is
+    -- read, so the amount subtracted from the user is the amount actually zeroed below
+    -- rather than a stale value a concurrent stats write can change in between.
     SELECT user_id, disk_size INTO _userId, _diskSize
     FROM starexec.jobs
+    WHERE id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
     WHERE id = _jobId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -3459,14 +3565,6 @@ BEGIN
             ERRCODE = 'P0002',
             MESSAGE = format('User %s for job %s not found', _userId, _jobId);
     END IF;
-
-    UPDATE jobs SET deleted = true, total_pairs = 0, disk_size = 0
-    WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s not found', _jobId);
-    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -3477,8 +3575,19 @@ DECLARE
     _userId INT;
     _oldDiskSize BIGINT;
 BEGIN
+    -- Lock order: jobs, then users (#188). The job row is locked when the old size is
+    -- read, so the user total moves by exactly the change applied to the job.
     SELECT user_id, disk_size INTO _userId, _oldDiskSize
     FROM starexec.jobs
+    WHERE id = _jobId
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0002',
+            MESSAGE = format('Job %s not found', _jobId);
+    END IF;
+
+    UPDATE jobs SET disk_size = _diskSize
     WHERE id = _jobId;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING
@@ -3493,14 +3602,6 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = 'P0002',
             MESSAGE = format('User %s for job %s not found', _userId, _jobId);
-    END IF;
-
-    UPDATE jobs SET disk_size = _diskSize
-    WHERE id = _jobId;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING
-            ERRCODE = 'P0002',
-            MESSAGE = format('Job %s not found', _jobId);
     END IF;
 END;
 $$ LANGUAGE plpgsql;
@@ -9488,14 +9589,19 @@ DECLARE
     _userDiskSize BIGINT;
     _sizeDelta BIGINT;
 BEGIN
+    -- Serialize with resource accounting before taking the aggregate snapshot.
+    -- Keep the aggregate in a separate statement: at READ COMMITTED it sees
+    -- writers that committed while this lock waited. Do not lock resource rows
+    -- here, which would invert the job-before-user order of accounting writers.
+    SELECT disk_size INTO _userDiskSize FROM starexec.users
+    WHERE id = _userID FOR NO KEY UPDATE;
+
     SELECT COALESCE(SUM(disk_size), 0) INTO _sumDiskSize FROM
     (SELECT disk_size FROM starexec.solvers WHERE user_id = _userID AND deleted = false
      UNION ALL
      SELECT disk_size FROM starexec.benchmarks WHERE user_id = _userID AND deleted = false
      UNION ALL
      SELECT disk_size FROM starexec.jobs WHERE user_id = _userID AND deleted = false) AS tmp;
-
-    SELECT disk_size INTO _userDiskSize FROM starexec.users WHERE id = _userID;
 
     _sizeDelta := _userDiskSize - _sumDiskSize;
 
@@ -10012,6 +10118,7 @@ $$ LANGUAGE plpgsql;
 -- This replaces the non-atomic two-call sequence of UpdatePairStatus + UpdateLaterStageStatuses.
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT) CASCADE;
 DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT, BOOLEAN) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPrecise(INT, INT, INT, INT, BOOLEAN, INT) CASCADE;
 -- Returns TRUE when the pair now holds _terminalStatus, FALSE when another writer had
 -- already recorded a different terminal result and _forceOverride was not given.
 --
@@ -10025,7 +10132,8 @@ CREATE OR REPLACE FUNCTION starexec.UpdatePairStatusPrecise(
 	_stageNumber INT,
 	_terminalStatus INT,
 	_notReachedStatus INT,
-	_forceOverride BOOLEAN DEFAULT FALSE
+	_forceOverride BOOLEAN DEFAULT FALSE,
+	_attemptNo INT DEFAULT NULL
 )
 RETURNS BOOLEAN AS $$
 DECLARE
@@ -10071,6 +10179,11 @@ BEGIN
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
+
+	-- Attempt fence (#185): right after the lock, before any mutation. It applies even when
+	-- _forceOverride is set: the override lets a run replace a conflicting terminal result of
+	-- ITS OWN attempt, and never licenses a write for an attempt that was superseded.
+	PERFORM starexec.EnforcePairAttempt(_pairId, _attemptNo);
 
 	-- And the stage has to be a stage OF THIS PAIR, not merely a positive number.
 	--
@@ -10184,7 +10297,9 @@ BEGIN
 			LIMIT 1
 		) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			-- Preserve an established completion time on duplicate reports, repairing NULL.
+			-- Keep the id-only predicate so FOUND still distinguishes a missing job.
+			UPDATE jobs SET completed = COALESCE(completed, CURRENT_TIMESTAMP) WHERE id = _job_id;
 			IF NOT FOUND THEN
 				RAISE EXCEPTION USING
 					ERRCODE = 'P0002',
@@ -10222,10 +10337,13 @@ $$ LANGUAGE plpgsql;
 -- are re-run idempotently), and FALSE when the pair already held a different terminal
 -- status -- nothing is written then, and the caller reports SUPERSEDED. An absent pair is
 -- an exception, not FALSE: no caller writes a result for a pair it did not create.
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPairLevel(INT, INT, INT) CASCADE;
+DROP ROUTINE IF EXISTS starexec.UpdatePairStatusPairLevel(INT, INT, INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.UpdatePairStatusPairLevel(
 	_pairId INT,
 	_terminalStatus INT,
-	_notReachedStatus INT
+	_notReachedStatus INT,
+	_attemptNo INT DEFAULT NULL
 )
 RETURNS BOOLEAN AS $$
 DECLARE
@@ -10244,6 +10362,9 @@ BEGIN
 			ERRCODE = 'P0002',
 			MESSAGE = format('Job pair %s not found', _pairId);
 	END IF;
+
+	-- Attempt fence (#185): right after the lock, before any mutation.
+	PERFORM starexec.EnforcePairAttempt(_pairId, _attemptNo);
 
 	-- Terminal pairs must not be moved back into an earlier non-terminal state. Same
 	-- contract as UpdatePairStatus and UpdatePairStatusPrecise: no caller does it
@@ -10318,7 +10439,9 @@ BEGIN
 			LIMIT 1
 		) AS subq;
 		IF _count = 0 THEN
-			UPDATE jobs SET completed = CURRENT_TIMESTAMP WHERE id = _job_id;
+			-- Preserve an established completion time on duplicate reports, repairing NULL.
+			-- Keep the id-only predicate so FOUND still distinguishes a missing job.
+			UPDATE jobs SET completed = COALESCE(completed, CURRENT_TIMESTAMP) WHERE id = _job_id;
 			IF NOT FOUND THEN
 				RAISE EXCEPTION USING
 					ERRCODE = 'P0002',
@@ -10389,10 +10512,10 @@ $$ LANGUAGE plpgsql;
 --
 -- Internal. Callers must already hold the row locks and have revalidated eligibility; this
 -- function deliberately makes no decisions of its own. Its lock order is job_pairs (callers),
--- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats takes users
--- before jobs, so a concurrent stats write for another pair of the same job and user can
--- deadlock with a rerun; that predates this definition and is #188. AddJobAttr's insert takes
--- only a key-share lock on job_pairs, so it waits behind a rerun rather than deadlocking.
+-- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats updates
+-- jobs before users too, so its shared disk-accounting locks cannot invert against a rerun
+-- of another pair owned by the same user. AddJobAttr's insert takes only a key-share lock on
+-- job_pairs, so it waits behind a rerun rather than deadlocking.
 CREATE OR REPLACE FUNCTION starexec.RerunJobPairsBatchCore(_pairIds INT[])
 RETURNS VOID AS $$
 BEGIN
