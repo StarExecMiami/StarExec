@@ -219,6 +219,63 @@ public class TransactionOwnershipTest {
 				recorder.calls.contains("close"));
 	}
 
+	@Test
+	public void rollbackReusingPrimaryExceptionPreservesItAndRestoresState() {
+		assertSharedCleanupFailure("rollback");
+	}
+
+	@Test
+	public void restorationReusingPrimaryExceptionPreservesItAndAborts() {
+		assertSharedCleanupFailure("setAutoCommit(true)");
+	}
+
+	@Test
+	public void discardUnwrapReusingRestorationExceptionStillAborts() {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = "setAutoCommit(true)";
+		recorder.alsoFailOn = "unwrap";
+		recorder.sharedFailure = new SQLException("shared restoration failure");
+		SQLException primary = new SQLException("primary");
+		SQLException surfaced = runExpectingFailure(recorder, con -> { throw primary; });
+		assertSame(primary, surfaced);
+		assertSame(recorder.sharedFailure, surfaced.getSuppressed()[0]);
+		assertTrue(recorder.calls.contains("abort"));
+	}
+
+	@Test
+	public void discardAbortReusingRestorationExceptionPreservesPrimary() {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = "setAutoCommit(true)";
+		recorder.alsoFailOn = "abort";
+		recorder.sharedFailure = new SQLException("shared failure");
+		assertSame(recorder.sharedFailure,
+			runExpectingFailure(recorder, con -> { throw recorder.sharedFailure; }));
+		assertTrue(recorder.calls.contains("abort"));
+	}
+
+	@Test
+	public void distinctAbortFailureRemainsAttachedToRestorationFailure() {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = "setAutoCommit(true)";
+		recorder.alsoFailOn = "abort";
+		SQLException primary = new SQLException("primary");
+		assertSame(primary, runExpectingFailure(recorder, con -> { throw primary; }));
+		Throwable restoration = primary.getSuppressed()[0];
+		assertEquals(1, restoration.getSuppressed().length);
+		assertTrue(restoration.getSuppressed()[0].getCause().getMessage().contains("abort"));
+	}
+
+	private void assertSharedCleanupFailure(String operation) {
+		RecordingConnection recorder = new RecordingConnection(true);
+		recorder.failOn = operation;
+		recorder.sharedFailure = new SQLException("original");
+		assertSame(recorder.sharedFailure,
+			runExpectingFailure(recorder, con -> { throw recorder.sharedFailure; }));
+		assertTrue(recorder.calls.contains("setAutoCommit(true)"));
+		if (operation.equals("setAutoCommit(true)")) assertTrue(recorder.calls.contains("abort"));
+		else assertTrue(recorder.autoCommit);
+	}
+
 	// ------------------------------------------------------------------ helpers
 
 	private SQLException runExpectingFailure(RecordingConnection recorder,
@@ -245,6 +302,7 @@ public class TransactionOwnershipTest {
 		private boolean autoCommit;
 		private String failOn;
 		private String alsoFailOn;
+		private SQLException sharedFailure;
 
 		RecordingConnection(boolean autoCommit) {
 			this.autoCommit = autoCommit;
@@ -265,7 +323,7 @@ public class TransactionOwnershipTest {
 					String call = "setAutoCommit(" + args[0] + ")";
 					calls.add(call);
 					if (call.equals(failOn) || call.equals(alsoFailOn)) {
-						throw new SQLException(call + " failed");
+						throw sharedFailure != null ? sharedFailure : new SQLException(call + " failed");
 					}
 					autoCommit = (Boolean) args[0];
 					return null;
@@ -273,9 +331,11 @@ public class TransactionOwnershipTest {
 				case "commit":
 				case "rollback":
 				case "close":
+				case "unwrap":
+				case "abort":
 					calls.add(name);
 					if (name.equals(failOn) || name.equals(alsoFailOn)) {
-						throw new SQLException(name + " failed");
+						throw sharedFailure != null ? sharedFailure : new SQLException(name + " failed");
 					}
 					return null;
 				case "toString":

@@ -8,8 +8,15 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -18,6 +25,7 @@ import org.mockito.Mockito;
 import org.starexec.backend.Backend;
 import org.starexec.backend.LocalBackend;
 import org.starexec.backend.LocalJobMonitor;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
 import org.testng.Assert;
@@ -227,6 +235,49 @@ public class LocalBackendTests {
         return script;
     }
 
+    private ThreadPoolExecutor replaceWithSingleWorkerExecutor(boolean callerRuns)
+        throws Exception {
+        Field executorField = LocalBackend.class.getDeclaredField("executorService");
+        executorField.setAccessible(true);
+        ThreadPoolExecutor configuredExecutor =
+            (ThreadPoolExecutor) executorField.get(backend);
+        configuredExecutor.shutdownNow();
+        Assert.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
+
+        var rejectionHandler = callerRuns
+            ? new ThreadPoolExecutor.CallerRunsPolicy()
+            : configuredExecutor.getRejectedExecutionHandler();
+        ThreadPoolExecutor replacement = new ThreadPoolExecutor(
+            1,
+            1,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new LinkedBlockingQueue<>(1),
+            rejectionHandler
+        );
+        executorField.set(backend, replacement);
+        return replacement;
+    }
+
+    private void occupyWorkerAndQueue(
+        ThreadPoolExecutor executor,
+        CountDownLatch releaseWorker
+    ) throws InterruptedException {
+        CountDownLatch workerStarted = new CountDownLatch(1);
+        executor.execute(() -> {
+            workerStarted.countDown();
+            try {
+                releaseWorker.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        Assert.assertTrue(workerStarted.await(2, TimeUnit.SECONDS));
+        executor.execute(() -> { });
+        Assert.assertEquals(executor.getQueue().size(), 1,
+            "the single worker and bounded queue must both be occupied");
+    }
+
     private void verifyNoScientificStatusWrites(MockedStatic<JobPairs> jobPairs) {
         jobPairs.verify(() -> JobPairs.setStatusForPairAndStages(
                 Mockito.anyInt(), Mockito.anyInt()),
@@ -369,6 +420,215 @@ public class LocalBackendTests {
             "a refused attempt must still record operational completion");
         Assert.assertEquals(jobMonitor().getTrackedPairCount(), 0,
             "cleanup failed before monitor registration");
+    }
+
+    @Test
+    public void saturatedQueueDefersWithoutRunningSolverOrBlockingControls() throws Exception {
+        waitForFixtureJob();
+
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        ThreadPoolExecutor saturatedExecutor = replaceWithSingleWorkerExecutor(false);
+
+        Path solverStarted = tempDir.resolve("saturated-solver-started");
+        Path releaseSolver = tempDir.resolve("release-saturated-solver");
+        Path script = executableScript(
+            "saturated-job.sh",
+            "touch '" + solverStarted + "'\n" +
+                "while [ ! -e '" + releaseSolver + "' ]; do sleep 0.01; done"
+        );
+        Path workDir = Files.createDirectory(tempDir.resolve("saturated-work"));
+        Path logPath = tempDir.resolve("saturated-output/job.log");
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        Future<Integer> submission = null;
+        Future<Boolean> control = null;
+
+        try {
+            occupyWorkerAndQueue(saturatedExecutor, releaseWorker);
+
+            CountDownLatch submitStarted = new CountDownLatch(1);
+            submission = callers.submit(() -> {
+                submitStarted.countDown();
+                return backend.submitScript(
+                    42, script.toString(), workDir.toString(), logPath.toString());
+            });
+            Assert.assertTrue(submitStarted.await(2, TimeUnit.SECONDS));
+
+            Future<Integer> submittedJob = submission;
+            await()
+                .atMost(2, TimeUnit.SECONDS)
+                .pollInterval(10, TimeUnit.MILLISECONDS)
+                .until(() -> submittedJob.isDone() || Files.exists(solverStarted));
+
+            CountDownLatch controlStarted = new CountDownLatch(1);
+            control = callers.submit(() -> {
+                controlStarted.countDown();
+                // Both monitor-holding control paths must stay responsive.
+                return !backend.killPair(Integer.MIN_VALUE) && backend.killAll();
+            });
+            Assert.assertTrue(controlStarted.await(2, TimeUnit.SECONDS));
+            boolean controlCompleted = false;
+            try {
+                Assert.assertTrue(control.get(500, TimeUnit.MILLISECONDS));
+                controlCompleted = true;
+            } catch (TimeoutException expectedWhenCallerRuns) {
+                // Released below so the baseline failure does not strand a solver process.
+            }
+
+            Files.writeString(releaseSolver, "release\n");
+            boolean deferred = false;
+            try {
+                submission.get(2, TimeUnit.SECONDS);
+            } catch (ExecutionException e) {
+                Assert.assertTrue(e.getCause() instanceof SubmissionDeferredException,
+                    "saturation must use the scheduler's non-terminal deferral signal");
+                deferred = true;
+            }
+            if (control != null) {
+                control.get(2, TimeUnit.SECONDS);
+            }
+
+            Assert.assertTrue(controlCompleted,
+                "a saturated submission must not hold the backend monitor while a solver runs");
+            Assert.assertTrue(deferred,
+                "the explicit saturation contract is to defer the submission");
+            Assert.assertFalse(Files.exists(solverStarted),
+                "a saturated solver must not run on its submitting thread");
+            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+                "a rejected or completed submission must not leave a tracked execution ID");
+            Assert.assertEquals(((LocalBackend) backend).getQueuedJobCount(), 0);
+            Assert.assertEquals(((LocalBackend) backend).getRunningJobCount(), 0);
+
+            saturatedExecutor.getQueue().clear();
+            int queuedId = backend.submitScript(
+                42, script.toString(), workDir.toString(), logPath.toString());
+            Assert.assertTrue(queuedId > 0, "the freed queue slot must accept a submission");
+            Assert.assertTrue(backend.killPair(queuedId),
+                "a job must be cancellable immediately after submitScript returns");
+            releaseWorker.countDown();
+            await()
+                .atMost(2, TimeUnit.SECONDS)
+                .until(() -> saturatedExecutor.getQueue().isEmpty());
+            Assert.assertFalse(Files.exists(solverStarted),
+                "an immediately cancelled queued job must never execute");
+            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty());
+
+            saturatedExecutor.shutdown();
+            try {
+                backend.submitScript(
+                    42, script.toString(), workDir.toString(), logPath.toString());
+                Assert.fail("a job-pair submission during shutdown must be deferred");
+            } catch (SubmissionDeferredException expected) {
+                Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+                    "shutdown rejection must not leave a tracked execution ID");
+            }
+        } finally {
+            Files.writeString(releaseSolver, "release\n");
+            releaseWorker.countDown();
+            if (submission != null) {
+                submission.cancel(true);
+            }
+            if (control != null) {
+                control.cancel(true);
+            }
+            callers.shutdownNow();
+            saturatedExecutor.shutdownNow();
+            callers.awaitTermination(2, TimeUnit.SECONDS);
+            saturatedExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void saturatedNonPairSubmissionReturnsErrorAndLeavesNothingTracked() throws Exception {
+        waitForFixtureJob();
+
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        ThreadPoolExecutor saturatedExecutor = replaceWithSingleWorkerExecutor(false);
+        Path solverStarted = tempDir.resolve("non-pair-solver-started");
+        Path script = executableScript(
+            "non-pair-job.sh", "touch '" + solverStarted + "'");
+        Path workDir = Files.createDirectory(tempDir.resolve("non-pair-work"));
+        Path logPath = tempDir.resolve("non-pair-output/job.log");
+
+        try {
+            occupyWorkerAndQueue(saturatedExecutor, releaseWorker);
+
+            int execId = backend.submitScript(
+                -1, script.toString(), workDir.toString(), logPath.toString());
+
+            Assert.assertEquals(execId, -1,
+                "a saturated maintenance submission reports an error instead of running inline");
+            Assert.assertFalse(Files.exists(solverStarted));
+            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty());
+        } finally {
+            releaseWorker.countDown();
+            saturatedExecutor.shutdownNow();
+            saturatedExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void unexpectedHandOffFailureLeavesNothingTracked() throws Exception {
+        waitForFixtureJob();
+
+        Field executorField = LocalBackend.class.getDeclaredField("executorService");
+        executorField.setAccessible(true);
+        ThreadPoolExecutor configuredExecutor =
+            (ThreadPoolExecutor) executorField.get(backend);
+        configuredExecutor.shutdownNow();
+        Assert.assertTrue(configuredExecutor.awaitTermination(2, TimeUnit.SECONDS));
+        ThreadPoolExecutor failing = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(1)) {
+            @Override
+            public void execute(Runnable command) {
+                throw new IllegalStateException("simulated hand-off failure");
+            }
+        };
+        executorField.set(backend, failing);
+        Path script = executableScript("hand-off-failure.sh", "true");
+        Path workDir = Files.createDirectory(tempDir.resolve("hand-off-work"));
+        Path logPath = tempDir.resolve("hand-off-output/job.log");
+
+        try {
+            int execId = backend.submitScript(
+                42, script.toString(), workDir.toString(), logPath.toString());
+
+            Assert.assertEquals(execId, -1);
+            Assert.assertTrue(backend.getActiveExecutionIds().isEmpty(),
+                "a failed hand-off must not leave a tracked execution ID");
+        } finally {
+            failing.shutdownNow();
+        }
+    }
+
+    @Test
+    public void callerRunCompletionIsNotReinsertedIntoActiveJobs() throws Exception {
+        waitForFixtureJob();
+
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        ThreadPoolExecutor callerRunsExecutor = replaceWithSingleWorkerExecutor(true);
+
+        Path solverStarted = tempDir.resolve("caller-run-solver-started");
+        Path script = executableScript(
+            "caller-run-job.sh", "touch '" + solverStarted + "'");
+        Path workDir = Files.createDirectory(tempDir.resolve("caller-run-work"));
+        Path logPath = tempDir.resolve("caller-run-output/job.log");
+
+        try {
+            occupyWorkerAndQueue(callerRunsExecutor, releaseWorker);
+
+            int execId = backend.submitScript(
+                -1, script.toString(), workDir.toString(), logPath.toString());
+
+            Assert.assertTrue(execId > 0);
+            Assert.assertTrue(Files.exists(solverStarted),
+                "the fixture must prove CallerRunsPolicy executed the saturated task");
+            Assert.assertFalse(backend.getActiveExecutionIds().contains(execId),
+                "a task completed inside execute() must not be registered afterward");
+        } finally {
+            releaseWorker.countDown();
+            callerRunsExecutor.shutdownNow();
+            callerRunsExecutor.awaitTermination(2, TimeUnit.SECONDS);
+        }
     }
 
     /** Everything the job script can actually emit, both directions. */

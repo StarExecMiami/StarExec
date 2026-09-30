@@ -11,6 +11,7 @@ import java.util.*;
 import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.constants.R;
 import org.starexec.logger.StarLogger;
@@ -72,8 +73,8 @@ import org.starexec.logger.StarLogger;
  * <ul>
  * <li>Concurrent execution improves throughput but increases CPU and memory
  * usage</li>
- * <li>Thread pool uses bounded queue (10,000 jobs) with CallerRunsPolicy for
- * backpressure</li>
+ * <li>Thread pool uses a bounded queue (10,000 jobs) and defers submissions
+ * when that queue is full</li>
  * <li>Monitor thread pool metrics (active threads, queue size) to tune
  * concurrency</li>
  * <li>Jobs are isolated in separate processes with proper cleanup on
@@ -724,7 +725,7 @@ public class LocalBackend implements Backend {
             }
             job.completedAt = System.currentTimeMillis();
             // Remove from active jobs immediately
-            activeJobs.remove(job.execId);
+            activeJobs.remove(job.execId, job);
         }
     }
 
@@ -954,11 +955,16 @@ public class LocalBackend implements Backend {
      * <strong>Concurrency Note:</strong> This method blocks the calling thread only
      * during
      * queue insertion. Job execution happens asynchronously in the thread pool.
+     * If the bounded queue is full, a job-pair submission is deferred; a non-pair
+     * maintenance submission returns {@code -1}. The job is never run on the
+     * submitting thread.
      *
      * @param scriptPath           Path to the executable job script
      * @param workingDirectoryPath Working directory for job execution
      * @param logPath              Path where job output/logs should be written
      * @return Execution ID for tracking the job, or -1 on error
+     * @throws SubmissionDeferredException if a job pair reaches a full or shutting-down
+     *                                     executor and should remain queued
      */
     @Override
     public synchronized int submitScript(
@@ -966,8 +972,16 @@ public class LocalBackend implements Backend {
             String scriptPath,
             String workingDirectoryPath,
             String logPath) {
-        if (executorService == null || executorService.isShutdown()) {
+        if (executorService == null) {
             log.error("Cannot submit job: executor service is not available");
+            return -1;
+        }
+        if (executorService.isShutdown()) {
+            log.warn("Cannot submit job: executor service is shutting down");
+            if (pairId > 0) {
+                throw new SubmissionDeferredException(
+                        "Local executor is shutting down; pair " + pairId + " stays queued");
+            }
             return -1;
         }
 
@@ -1005,12 +1019,41 @@ public class LocalBackend implements Backend {
                     workingDirectoryPath,
                     logPath);
 
-            // Submit to executor
-            Future<?> future = executorService.submit(() -> executeJob(job));
+            // Publish all cancellation state before a worker can observe the job. This
+            // also makes a custom caller-run handler safe: a synchronously completed job
+            // removes the entry that is already present instead of being reinserted here.
+            FutureTask<Void> future = new FutureTask<>(() -> {
+                executeJob(job);
+                return null;
+            });
             job.future = future;
-
-            // Track the job
             activeJobs.put(execId, job);
+
+            try {
+                executorService.execute(future);
+            } catch (RejectedExecutionException e) {
+                future.cancel(false);
+                job.state = LocalJob.JobState.CANCELLED;
+                job.completedAt = System.currentTimeMillis();
+                activeJobs.remove(execId, job);
+                log.warn(
+                        "Cannot submit job " + execId +
+                                ": local executor queue is full or shutting down");
+                if (pairId > 0) {
+                    throw new SubmissionDeferredException(
+                            "Local executor queue is full or shutting down; pair " + pairId +
+                                    " stays queued");
+                }
+                return -1;
+            } catch (RuntimeException e) {
+                // Any other hand-off failure must not strand the entry registered above;
+                // the outer handler reports it and returns -1.
+                future.cancel(false);
+                job.state = LocalJob.JobState.FAILED;
+                job.completedAt = System.currentTimeMillis();
+                activeJobs.remove(execId, job);
+                throw e;
+            }
 
             log.debug(
                     "Job submitted: execId=" +
@@ -1021,6 +1064,8 @@ public class LocalBackend implements Backend {
                             activeJobs.size());
 
             return execId;
+        } catch (SubmissionDeferredException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Error submitting job: " + e.getMessage(), e);
             return -1;
@@ -1049,7 +1094,7 @@ public class LocalBackend implements Backend {
             }
 
             job.state = LocalJob.JobState.CANCELLED;
-            activeJobs.remove(execId);
+            activeJobs.remove(execId, job);
 
             return true;
         } catch (Exception e) {
@@ -1505,7 +1550,7 @@ public class LocalBackend implements Backend {
                 TimeUnit.SECONDS, // Keep-alive time for idle threads
                 new LinkedBlockingQueue<>(queueSize), // Work queue with bounded capacity
                 threadFactory,
-                new ThreadPoolExecutor.CallerRunsPolicy() // Backpressure: caller thread runs if queue is full
+                new ThreadPoolExecutor.AbortPolicy()
         );
 
         // Create and start job completion monitor
