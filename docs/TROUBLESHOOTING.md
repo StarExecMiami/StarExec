@@ -1096,11 +1096,15 @@ podman stats
 **Solution:**
 
 ```bash
-# Increase container resources
+# Increase the container memory limit
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
 make stop && make start
 ```
+
+`STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` does not add cores: it is CPU seconds and is
+overwritten by the job script. If a solver is slow because it is starved of cores, check the
+CPU partition width (`docs/cpu-partition-scheduling.md`) or `STAREXEC_CONTAINER_CPU_QUOTA_CORES`
+(an active CFS quota shows under `CpuQuota` in `podman inspect`).
 
 ## Volume and Backup Issues
 
