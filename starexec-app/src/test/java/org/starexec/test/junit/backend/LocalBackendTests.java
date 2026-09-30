@@ -448,8 +448,13 @@ public class LocalBackendTests {
             CountDownLatch submitStarted = new CountDownLatch(1);
             submission = callers.submit(() -> {
                 submitStarted.countDown();
-                return backend.submitScript(
-                    42, script.toString(), workDir.toString(), logPath.toString());
+                // submitScript reads the pair's attempt (#185); mocking is thread-local, so
+                // the stub belongs on the submitting thread. No database is involved.
+                try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+                    pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+                    return backend.submitScript(
+                        42, script.toString(), workDir.toString(), logPath.toString());
+                }
             });
             Assert.assertTrue(submitStarted.await(2, TimeUnit.SECONDS));
 
@@ -499,8 +504,12 @@ public class LocalBackendTests {
             Assert.assertEquals(((LocalBackend) backend).getRunningJobCount(), 0);
 
             saturatedExecutor.getQueue().clear();
-            int queuedId = backend.submitScript(
-                42, script.toString(), workDir.toString(), logPath.toString());
+            int queuedId;
+            try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+                pairs.when(() -> JobPairs.getCurrentAttemptNo(42)).thenReturn(1);
+                queuedId = backend.submitScript(
+                    42, script.toString(), workDir.toString(), logPath.toString());
+            }
             Assert.assertTrue(queuedId > 0, "the freed queue slot must accept a submission");
             Assert.assertTrue(backend.killPair(queuedId),
                 "a job must be cancellable immediately after submitScript returns");

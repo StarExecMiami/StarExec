@@ -124,6 +124,12 @@ public class PodmanBackend implements Backend {
     // Label keys for container management
     private static final String LABEL_PAIR_ID = "starexec.pair.id";
     private static final String LABEL_EXEC_ID = "starexec.exec.id";
+    /**
+     * The pair's attempt number when the container was created (#185). Containers created
+     * before this label existed, and maintenance containers, do not carry it: it reads back
+     * as null and their result writes are unfenced, exactly as they were before.
+     */
+    private static final String LABEL_ATTEMPT = "starexec.attempt";
     private static final String LABEL_MANAGED = "starexec.managed";
     private static final String LABEL_VERSION = "starexec.label.version";
     private static final String LABEL_PARTITION_INDEX = "starexec.partition.index";
@@ -1456,10 +1462,20 @@ public class PodmanBackend implements Backend {
             workingDirectory,
             outputDir
         );
+        // Capture the attempt this container belongs to (#185), after JobManager has claimed
+        // the pair and so after any rerun reset. It travels as a label so a monitor that
+        // finds the container later -- including after a restart -- fences its writes on it.
+        // A failed read is not guessed at: it throws out of here and fails the submit like
+        // every other error on this path, rather than starting a container whose results
+        // could overwrite a rerun. Maintenance jobs (pairId <= 0) carry no attempt.
+        Integer attemptNo = pairId > 0
+            ? JobPairs.getCurrentAttemptNo(pairId)
+            : null;
         Map<String, String> labels = createContainerLabels(
             pairId,
             execId,
-            selectedPartition
+            selectedPartition,
+            attemptNo
         );
 
         // Log container creation parameters for debugging
@@ -2296,6 +2312,21 @@ public class PodmanBackend implements Backend {
         return envVars;
     }
 
+    /** Reads {@code starexec.attempt}; null when absent or malformed (unfenced). */
+    static Integer parseAttemptLabel(Map<String, String> labels) {
+        String value = labels == null ? null : labels.get(LABEL_ATTEMPT);
+        if (value == null) {
+            return null;
+        }
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            log.warn("Ignoring malformed " + LABEL_ATTEMPT + " label: " + value);
+            return null;
+        }
+    }
+
     /**
      * Creates labels for container management.
      *
@@ -2308,10 +2339,27 @@ public class PodmanBackend implements Backend {
         int execId,
         CpuPartition partition
     ) {
+        return createContainerLabels(pairId, execId, partition, null);
+    }
+
+    /**
+     * As above, also stamping {@code starexec.attempt} when the attempt is known.
+     *
+     * @param attemptNo The pair's attempt at submit, or null for none (#185)
+     */
+    private Map<String, String> createContainerLabels(
+        int pairId,
+        int execId,
+        CpuPartition partition,
+        Integer attemptNo
+    ) {
         Map<String, String> labels = new HashMap<>();
         labels.put(LABEL_MANAGED, "true");
         labels.put(LABEL_PAIR_ID, String.valueOf(pairId));
         labels.put(LABEL_EXEC_ID, String.valueOf(execId));
+        if (attemptNo != null) {
+            labels.put(LABEL_ATTEMPT, String.valueOf(attemptNo));
+        }
         labels.put(LABEL_VERSION, CURRENT_LABEL_VERSION);
         labels.put(LABEL_KIND, pairId > 0 ? KIND_JOB_PAIR : KIND_MAINTENANCE);
         CpuPartition effectivePartition = partition == null
@@ -2731,7 +2779,8 @@ public class PodmanBackend implements Backend {
                     pairId,
                     info.outputDir,
                     info.exitCode,
-                    info.partitionIndex);
+                    info.partitionIndex,
+                    info.attemptNo);
             }
 
             // Delegate to ContainerJobMonitor for full processing
@@ -2834,7 +2883,8 @@ public class PodmanBackend implements Backend {
                             pairId,
                             outputDir,
                             exitCode,
-                            Math.max(0, parsePartitionIndex(container.getLabels()))));
+                            Math.max(0, parsePartitionIndex(container.getLabels())),
+                            parseAttemptLabel(container.getLabels())));
                     }
                 }
             }
@@ -3028,6 +3078,13 @@ public class PodmanBackend implements Backend {
         public final int exitCode;
         public final int partitionIndex;
 
+        /**
+         * The attempt the container was created for (#185), or null when it carries no
+         * {@code starexec.attempt} label -- a container created before the label existed.
+         * Null means its writes are unfenced, as they were before the label.
+         */
+        public final Integer attemptNo;
+
         public CompletedContainerInfo(
             String containerId,
             int pairId,
@@ -3044,6 +3101,18 @@ public class PodmanBackend implements Backend {
             int exitCode,
             int partitionIndex
         ) {
+            this(containerId, pairId, outputDir, exitCode, partitionIndex, null);
+        }
+
+        public CompletedContainerInfo(
+            String containerId,
+            int pairId,
+            String outputDir,
+            int exitCode,
+            int partitionIndex,
+            Integer attemptNo
+        ) {
+            this.attemptNo = attemptNo;
             this.containerId = containerId;
             this.pairId = pairId;
             this.outputDir = outputDir;
@@ -3229,7 +3298,10 @@ public class PodmanBackend implements Backend {
                             pairId,
                             outputDir,
                             exitCode,
-                            Math.max(0, parsePartitionIndex(container.getLabels()))
+                            Math.max(0, parsePartitionIndex(container.getLabels())),
+                            isV2Label
+                                ? parseAttemptLabel(container.getLabels())
+                                : null
                         )
                     );
                     log.debug(

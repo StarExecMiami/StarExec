@@ -8,6 +8,7 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -177,6 +178,8 @@ public class LocalBackend implements Backend {
         volatile long startedAt;
         volatile long completedAt;
         volatile Integer coreId; // The leased CPU core ID
+        /** The pair's attempt at submit (#185); null for maintenance jobs. */
+        volatile Integer attemptNo;
 
         enum JobState {
             PENDING, // Submitted but not yet started
@@ -524,7 +527,7 @@ public class LocalBackend implements Backend {
         }
 
         if (pairId > 0 && jobMonitor != null) {
-            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId);
+            jobMonitor.registerJob(outputDir.getAbsolutePath(), pairId, job.attemptNo);
             log.info(
                     "Registered job with monitor: execId=" +
                             job.execId +
@@ -1010,6 +1013,15 @@ public class LocalBackend implements Backend {
                 }
             }
 
+            // Capture the attempt this execution belongs to (#185). Read here, after
+            // JobManager has claimed the pair (and so after any rerun reset), so every result
+            // write can be fenced on it and a superseded execution cannot overwrite the
+            // rerun. A failed read is not guessed at: it throws to the handler below, which
+            // fails the submit exactly as every other database error in this method does,
+            // rather than running the pair with unfenced writes. Maintenance jobs
+            // (pairId <= 0) have no pair and carry no attempt.
+            Integer attemptNo = pairId > 0 ? JobPairs.getCurrentAttemptNo(pairId) : null;
+
             // Create the job
             int execId = generateExecId();
             LocalJob job = new LocalJob(
@@ -1018,6 +1030,7 @@ public class LocalBackend implements Backend {
                     scriptPath,
                     workingDirectoryPath,
                     logPath);
+            job.attemptNo = attemptNo;
 
             // Publish all cancellation state before a worker can observe the job. This
             // also makes a custom caller-run handler safe: a synchronously completed job
