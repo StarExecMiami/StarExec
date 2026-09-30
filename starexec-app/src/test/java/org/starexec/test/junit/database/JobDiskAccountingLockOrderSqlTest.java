@@ -51,6 +51,12 @@ import static org.junit.Assert.fail;
 public class JobDiskAccountingLockOrderSqlTest extends Common {
 
 	private static final String PROBE_PREFIX = "probe_disk_lock_order_";
+	// Fixed names: DDL cannot take bind parameters, so the identifiers are constants and the
+	// per-test values reach the trigger function through transaction-local settings.
+	private static final String PROBE_TRIGGER = PROBE_PREFIX + "trg";
+	private static final String PROBE_FUNCTION = PROBE_PREFIX + "fn";
+	private static final String SETTING_USER_ID = "starexec_probe.user_id";
+	private static final String SETTING_BARRIER_KEY = "starexec_probe.barrier_key";
 	private static final long TIMEOUT_SECONDS = 30L;
 
 	// Absolute fixture values: user 10000, job 3072 = pair A 2048 + pair B 1024.
@@ -64,8 +70,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	private int pairB;
 	private int nodeId;
 	private String nodeName;
-	private String probeTrigger;
-	private String probeFunction;
+	private boolean probeInstalled;
 
 	@BeforeClass
 	public static void requireDatabase() {
@@ -80,13 +85,13 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		}
 		try (Connection con = Common.getConnection()) {
 			assertEquals("the lock-order trigger must never outlive its test", 0,
-					selectLong(con, "SELECT count(*) FROM pg_trigger WHERE left(tgname, "
-							+ PROBE_PREFIX.length() + ") = '" + PROBE_PREFIX + "'"));
+					selectLong(con, "SELECT count(*) FROM pg_trigger WHERE left(tgname, ?) = ?",
+							PROBE_PREFIX.length(), PROBE_PREFIX));
 			assertEquals("the lock-order function must never outlive its test", 0,
 					selectLong(con, "SELECT count(*) FROM pg_proc p"
-							+ " JOIN pg_namespace n ON n.oid = p.pronamespace"
-							+ " WHERE n.nspname = 'starexec' AND left(p.proname, "
-							+ PROBE_PREFIX.length() + ") = '" + PROBE_PREFIX + "'"));
+								+ " JOIN pg_namespace n ON n.oid = p.pronamespace"
+								+ " WHERE n.nspname = 'starexec' AND left(p.proname, ?) = ?",
+								PROBE_PREFIX.length(), PROBE_PREFIX));
 		}
 	}
 
@@ -95,23 +100,24 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		userId = 0;
 		jobId = 0;
 		nodeId = 0;
-		probeTrigger = null;
-		probeFunction = null;
+		probeInstalled = false;
 		String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 		nodeName = "disk-lock-order-" + suffix;
 		try (Connection con = Common.getConnection()) {
 			requireAutoCommit(con, "createFixture");
 			userId = (int) selectLong(con,
 					"INSERT INTO starexec.users (email, first_name, last_name, institution, created,"
-							+ " password, disk_quota, disk_size) VALUES ('disk-lock-" + suffix
-							+ "@example.invalid', 'Disk', 'Lock', 'test', NOW(), 'x', 1000000, "
-							+ USER_START + ") RETURNING id");
-			nodeId = (int) selectLong(con, "INSERT INTO starexec.nodes (name, status) VALUES ('"
-					+ nodeName + "', 'ACTIVE') RETURNING id");
+							+ " password, disk_quota, disk_size)"
+							+ " VALUES (?, 'Disk', 'Lock', 'test', NOW(), 'x', 1000000, ?)"
+							+ " RETURNING id",
+					"disk-lock-" + suffix + "@example.invalid", USER_START);
+			nodeId = (int) selectLong(con,
+					"INSERT INTO starexec.nodes (name, status) VALUES (?, 'ACTIVE') RETURNING id",
+					nodeName);
 			jobId = (int) selectLong(con,
-					"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size) VALUES ("
-							+ userId + ", 'disk-lock-order-test', 2, "
-							+ (PAIR_A_BYTES + PAIR_B_BYTES) + ") RETURNING id");
+					"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size)"
+							+ " VALUES (?, 'disk-lock-order-test', 2, ?) RETURNING id",
+					userId, PAIR_A_BYTES + PAIR_B_BYTES);
 			pairA = insertPair(con, PAIR_A_BYTES);
 			pairB = insertPair(con, PAIR_B_BYTES);
 		}
@@ -120,9 +126,9 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	private int insertPair(Connection con, long stageBytes) throws SQLException {
 		int id = (int) selectLong(con,
 				"INSERT INTO starexec.job_pairs (job_id, status_code, primary_jobpair_data)"
-						+ " VALUES (" + jobId + ", 4, 1) RETURNING id");
+						+ " VALUES (?, 4, 1) RETURNING id", jobId);
 		exec(con, "INSERT INTO starexec.jobpair_stage_data (jobpair_id, stage_number, status_code,"
-				+ " disk_size) VALUES (" + id + ", 1, 4, " + stageBytes + ")");
+				+ " disk_size) VALUES (?, 1, 4, ?)", id, stageBytes);
 		return id;
 	}
 
@@ -131,11 +137,9 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		SQLException failure = null;
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			requireAutoCommit(con, "dropFixture");
-			if (probeTrigger != null) {
-				s.execute("DROP TRIGGER IF EXISTS " + probeTrigger + " ON starexec.users");
-			}
-			if (probeFunction != null) {
-				s.execute("DROP FUNCTION IF EXISTS starexec." + probeFunction + "()");
+			if (probeInstalled) {
+				s.execute("DROP TRIGGER IF EXISTS " + PROBE_TRIGGER + " ON starexec.users");
+				s.execute("DROP FUNCTION IF EXISTS starexec." + PROBE_FUNCTION + "()");
 			}
 		} catch (SQLException e) {
 			failure = e;
@@ -144,10 +148,10 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 			requireAutoCommit(con, "dropFixture");
 			if (userId != 0) {
 				// jobs, job_pairs and jobpair_stage_data cascade from the user.
-				exec(con, "DELETE FROM starexec.users WHERE id = " + userId);
+				exec(con, "DELETE FROM starexec.users WHERE id = ?", userId);
 			}
 			if (nodeId != 0) {
-				exec(con, "DELETE FROM starexec.nodes WHERE id = " + nodeId);
+				exec(con, "DELETE FROM starexec.nodes WHERE id = ?", nodeId);
 			}
 		} catch (SQLException e) {
 			if (failure == null) {
@@ -170,8 +174,8 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		run(con -> call(con, "SELECT starexec.DeleteJobPair(?)", pairA), statsFor(pairB, 4096L));
 		// job 3072 - 2048 + 3072; the pair count drops by the deleted pair
 		assertTotals(4096L, 11024L);
-		assertEquals(1L, scalar("SELECT total_pairs FROM starexec.jobs WHERE id = " + jobId));
-		assertEquals(0L, scalar("SELECT count(*) FROM starexec.job_pairs WHERE id = " + pairA));
+		assertEquals(1L, scalar("SELECT total_pairs FROM starexec.jobs WHERE id = ?", jobId));
+		assertEquals(0L, scalar("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", pairA));
 		assertEquals(4096L, stageBytes(pairB));
 	}
 
@@ -179,7 +183,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	public void deleteJobPairVersusRerunOfAnotherPair() throws Exception {
 		run(con -> call(con, "SELECT starexec.DeleteJobPair(?)", pairA), rerunFor(pairB));
 		assertTotals(0L, USER_START - PAIR_A_BYTES - PAIR_B_BYTES);
-		assertEquals(0L, scalar("SELECT count(*) FROM starexec.job_pairs WHERE id = " + pairA));
+		assertEquals(0L, scalar("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", pairA));
 		assertEquals(0L, stageBytes(pairB));
 	}
 
@@ -220,7 +224,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		// the delete refunds the whole 3072 and zeroes the job; the stats write then adds 3072
 		assertTotals(3072L, USER_START);
 		assertEquals(1L, scalar("SELECT CASE WHEN deleted THEN 1 ELSE 0 END FROM starexec.jobs"
-				+ " WHERE id = " + jobId));
+				+ " WHERE id = ?", jobId));
 	}
 
 	@Test
@@ -295,7 +299,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 		String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 		String holderApp = "se188f_" + suffix + "_holder";
 		String contenderApp = "se188f_" + suffix + "_contender";
-		installProbe(barrierKey, suffix, holderApp);
+		installProbe();
 
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		Connection gate = null;
@@ -311,7 +315,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 			gateHeld = true;
 
 			holder = executor.submit((Callable<Void>) () -> {
-				runTransaction(holderApp, holderPid, holderBody);
+				runTransaction(holderApp, holderPid, holderBody, userId, barrierKey);
 				return null;
 			});
 			try (Connection observer = Common.getConnection()) {
@@ -319,7 +323,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 			}
 
 			contender = executor.submit((Callable<Void>) () -> {
-				runTransaction(contenderApp, contenderPid, contenderBody);
+				runTransaction(contenderApp, contenderPid, contenderBody, 0, 0L);
 				return null;
 			});
 			try (Connection observer = Common.getConnection()) {
@@ -362,21 +366,25 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	 * Stops the holder after it has updated the owner's users row, and only the holder: the
 	 * contender updates the same row and must not park on the barrier.
 	 */
-	private void installProbe(long barrierKey, String suffix, String holderApp)
-			throws SQLException {
-		probeTrigger = PROBE_PREFIX + "trg_" + suffix;
-		probeFunction = PROBE_PREFIX + "fn_" + suffix;
-		String function = "CREATE FUNCTION starexec." + probeFunction
-				+ "() RETURNS trigger AS $$ BEGIN IF NEW.id = " + userId
-				+ " AND current_setting('application_name') = '" + holderApp
-				+ "' THEN PERFORM pg_advisory_xact_lock(" + barrierKey + "); END IF;"
+	private void installProbe() throws SQLException {
+		// Constant DDL. The trigger parks only a transaction that carries the barrier settings,
+		// and runTransaction sets them for the holder alone (transaction-local, so nothing
+		// persists on a pooled connection); the contender never has them and passes through.
+		String function = "CREATE OR REPLACE FUNCTION starexec." + PROBE_FUNCTION
+				+ "() RETURNS trigger AS $$ DECLARE"
+				+ " uid text := NULLIF(current_setting('" + SETTING_USER_ID + "', true), '');"
+				+ " bkey text := NULLIF(current_setting('" + SETTING_BARRIER_KEY + "', true), '');"
+				+ " BEGIN IF uid IS NOT NULL AND bkey IS NOT NULL AND NEW.id = uid::int"
+				+ " THEN PERFORM pg_advisory_xact_lock(bkey::bigint); END IF;"
 				+ " RETURN NEW; END; $$ LANGUAGE plpgsql";
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
 			requireAutoCommit(con, "installProbe");
+			probeInstalled = true;
+			s.execute("DROP TRIGGER IF EXISTS " + PROBE_TRIGGER + " ON starexec.users");
 			s.execute(function);
-			s.execute("CREATE TRIGGER " + probeTrigger
+			s.execute("CREATE TRIGGER " + PROBE_TRIGGER
 					+ " AFTER UPDATE OF disk_size ON starexec.users FOR EACH ROW"
-					+ " EXECUTE FUNCTION starexec." + probeFunction + "()");
+					+ " EXECUTE FUNCTION starexec." + PROBE_FUNCTION + "()");
 		}
 	}
 
@@ -386,7 +394,7 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 	}
 
 	private static void runTransaction(String applicationName, AtomicInteger backendPid,
-			ProbeTransaction body) throws Exception {
+			ProbeTransaction body, int barrierUserId, long barrierKey) throws Exception {
 		try (Connection con = Common.getConnection()) {
 			requireAutoCommit(con, "runTransaction");
 			con.setAutoCommit(false);
@@ -400,6 +408,16 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 				}
 				try (Statement s = con.createStatement()) {
 					s.execute("SET LOCAL statement_timeout = '30s'");
+				}
+				if (barrierUserId != 0) {
+					try (PreparedStatement ps = con.prepareStatement(
+							"SELECT set_config(?, ?, true), set_config(?, ?, true)")) {
+						ps.setString(1, SETTING_USER_ID);
+						ps.setString(2, Integer.toString(barrierUserId));
+						ps.setString(3, SETTING_BARRIER_KEY);
+						ps.setString(4, Long.toString(barrierKey));
+						ps.executeQuery().close();
+					}
 				}
 				backendPid.set((int) selectLong(con, "SELECT pg_backend_pid()"));
 				body.run(con);
@@ -544,33 +562,44 @@ public class JobDiskAccountingLockOrderSqlTest extends Common {
 
 	private void assertTotals(long jobBytes, long userBytes) throws SQLException {
 		assertEquals("job disk_size", jobBytes,
-				scalar("SELECT disk_size FROM starexec.jobs WHERE id = " + jobId));
+				scalar("SELECT disk_size FROM starexec.jobs WHERE id = ?", jobId));
 		assertEquals("user disk_size", userBytes,
-				scalar("SELECT disk_size FROM starexec.users WHERE id = " + userId));
+				scalar("SELECT disk_size FROM starexec.users WHERE id = ?", userId));
 	}
 
 	private long stageBytes(int pair) throws SQLException {
-		return scalar("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id = "
-				+ pair + " AND stage_number = 1");
+		return scalar("SELECT disk_size FROM starexec.jobpair_stage_data WHERE jobpair_id = ?"
+				+ " AND stage_number = 1", pair);
 	}
 
-	private long scalar(String sql) throws SQLException {
+	private long scalar(String sql, Object... params) throws SQLException {
 		try (Connection con = Common.getConnection()) {
-			return selectLong(con, sql);
+			return selectLong(con, sql, params);
 		}
 	}
 
-	private static long selectLong(Connection con, String sql) throws SQLException {
-		try (PreparedStatement ps = con.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
-			if (!rs.next()) {
-				throw new IllegalStateException("Query returned no rows: " + sql);
-			}
-			return rs.getLong(1);
-		}
-	}
-
-	private static void exec(Connection con, String sql) throws SQLException {
+	private static long selectLong(Connection con, String sql, Object... params)
+			throws SQLException {
 		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			bind(ps, params);
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) {
+					throw new IllegalStateException("Query returned no rows: " + sql);
+				}
+				return rs.getLong(1);
+			}
+		}
+	}
+
+	private static void bind(PreparedStatement ps, Object... params) throws SQLException {
+		for (int i = 0; i < params.length; i++) {
+			ps.setObject(i + 1, params[i]);
+		}
+	}
+
+	private static void exec(Connection con, String sql, Object... params) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			bind(ps, params);
 			ps.executeUpdate();
 		}
 	}
