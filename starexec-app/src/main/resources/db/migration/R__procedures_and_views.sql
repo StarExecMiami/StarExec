@@ -9488,14 +9488,19 @@ DECLARE
     _userDiskSize BIGINT;
     _sizeDelta BIGINT;
 BEGIN
+    -- Serialize with resource accounting before taking the aggregate snapshot.
+    -- Keep the aggregate in a separate statement: at READ COMMITTED it sees
+    -- writers that committed while this lock waited. Do not lock resource rows
+    -- here, which would invert the job-before-user order of accounting writers.
+    SELECT disk_size INTO _userDiskSize FROM starexec.users
+    WHERE id = _userID FOR NO KEY UPDATE;
+
     SELECT COALESCE(SUM(disk_size), 0) INTO _sumDiskSize FROM
     (SELECT disk_size FROM starexec.solvers WHERE user_id = _userID AND deleted = false
      UNION ALL
      SELECT disk_size FROM starexec.benchmarks WHERE user_id = _userID AND deleted = false
      UNION ALL
      SELECT disk_size FROM starexec.jobs WHERE user_id = _userID AND deleted = false) AS tmp;
-
-    SELECT disk_size INTO _userDiskSize FROM starexec.users WHERE id = _userID;
 
     _sizeDelta := _userDiskSize - _sumDiskSize;
 
