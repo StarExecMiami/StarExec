@@ -7,7 +7,9 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -17,6 +19,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -28,6 +31,9 @@ import org.starexec.backend.LocalJobMonitor;
 import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.Jobs;
+import org.starexec.data.to.Job;
+import org.starexec.data.to.JobPair;
 import org.testng.Assert;
 
 /**
@@ -680,6 +686,240 @@ public class LocalBackendTests {
             callerRunsExecutor.shutdownNow();
             callerRunsExecutor.awaitTermination(2, TimeUnit.SECONDS);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // The broken-pair sweep (Jobs.setBrokenPairsToErrorStatus) declares every ENQUEUED/RUNNING
+    // pair whose exec id the backend does not report a submit failure, terminally. A finished
+    // pair whose result the monitor has not yet recorded must therefore stay reported.
+    // ------------------------------------------------------------------
+
+    private static final String TERMINAL_STATUS_JSON =
+        "{\"pairId\":1,\"status\":7,\"stageNumber\":1,\"timestamp\":1788988692}";
+
+    private JobPair pairWithExecId(int pairId, int execId) {
+        JobPair pair = new JobPair();
+        pair.setId(pairId);
+        pair.setJobId(1);
+        pair.setBackendExecId(execId);
+        return pair;
+    }
+
+    /** Runs the real sweep against the real backend; returns the pair ids it marked broken. */
+    private List<Integer> sweepMarkedBroken(JobPair... pairs) throws Exception {
+        Job notABuildJob = Mockito.mock(Job.class);
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class);
+             MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class, Mockito.CALLS_REAL_METHODS)) {
+            jobPairs.when(JobPairs::getPairsInBackend).thenReturn(List.of(pairs));
+            jobs.when(() -> Jobs.get(Mockito.anyInt())).thenReturn(notABuildJob);
+            Jobs.setBrokenPairsToErrorStatus(backend);
+            var captor = org.mockito.ArgumentCaptor.forClass(JobPair.class);
+            jobPairs.verify(() -> JobPairs.setBrokenPairStatus(captor.capture()),
+                Mockito.atLeast(0));
+            return captor.getAllValues().stream().map(JobPair::getId).toList();
+        }
+    }
+
+    /** Runs a job whose script writes {@code statusJson} (or nothing) and exits 0. */
+    private void runFinishedJob(int execId, int pairId, String name, String statusJson)
+        throws Exception {
+        Path output = Files.createDirectory(tempDir.resolve(name));
+        String body = statusJson == null
+            ? "exit 0"
+            : "printf '%s' '" + statusJson + "' > '" + output.resolve("status.json") + "'";
+        Object job = localJob(execId, pairId, executableScript(name + ".sh", body),
+            tempDir, output.resolve("job.log"));
+        try (MockedStatic<JobPairs> jobPairs = Mockito.mockStatic(JobPairs.class)) {
+            executeJob(job);
+        }
+    }
+
+    @Test
+    public void sweepDoesNotFailAFinishedPairTheMonitorHasNotIngested() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop(); // no polling: the pair stays "finished but not yet ingested"
+        runFinishedJob(201, 5201, "finished-not-ingested", TERMINAL_STATUS_JSON);
+
+        Assert.assertTrue(backend.getActiveExecutionIds().contains(201),
+            "the backend must keep answering for a pair whose terminal result is unrecorded");
+        Assert.assertFalse(sweepMarkedBroken(pairWithExecId(5201, 201)).contains(5201),
+            "a finished pair awaiting ingestion must not be recorded as ERROR_SUBMIT_FAIL");
+    }
+
+    @Test
+    public void sweepDoesNotFailAPairWhoseIngestionIsHeldForIntervention() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop();
+        runFinishedJob(202, 5202, "blocked-ingestion", "{ not json");
+
+        Field pairsField = LocalJobMonitor.class.getDeclaredField("pairs");
+        pairsField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<Integer, Object> tracked = (Map<Integer, Object>) pairsField.get(jobMonitor());
+        Object state = tracked.get(5202);
+        Method block = state.getClass().getDeclaredMethod("blockedForIngestion", String.class);
+        block.setAccessible(true);
+        tracked.put(5202, block.invoke(state, "invalid snapshot"));
+
+        Assert.assertTrue(backend.getActiveExecutionIds().contains(202));
+        Assert.assertFalse(sweepMarkedBroken(pairWithExecId(5202, 202)).contains(5202),
+            "a pair held for intervention keeps its retained results and stays unresolved");
+    }
+
+    @Test
+    public void sweepStillFailsAGenuinelyOrphanedPair() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop();
+        // Exited without ever writing a terminal status: nothing will complete it.
+        runFinishedJob(203, 5203, "orphan-no-status", null);
+        runFinishedJob(204, 5204, "orphan-running-status", status(4));
+
+        Assert.assertFalse(backend.getActiveExecutionIds().contains(203));
+        Assert.assertFalse(backend.getActiveExecutionIds().contains(204));
+        List<Integer> broken = sweepMarkedBroken(
+            pairWithExecId(5203, 203), pairWithExecId(5204, 204), pairWithExecId(5205, 205));
+        Assert.assertTrue(broken.contains(5203), "no status.json: orphan");
+        Assert.assertTrue(broken.contains(5204), "non-terminal status.json and no process: orphan");
+        Assert.assertTrue(broken.contains(5205), "unknown execution: orphan");
+    }
+
+    @Test
+    public void anIngestedPairIsNoLongerReportedByTheBackend() throws Exception {
+        waitForFixtureJob();
+        jobMonitor().stop();
+        runFinishedJob(206, 5206, "ingested", TERMINAL_STATUS_JSON);
+        Assert.assertTrue(backend.getActiveExecutionIds().contains(206));
+
+        jobMonitor().clearPairTracking(5206); // what retiring the pair does to the monitor
+        Assert.assertFalse(backend.getActiveExecutionIds().contains(206),
+            "the retained id must be released once the monitor no longer holds the result");
+    }
+
+    // ------------------------------------------------------------------
+    // Killing a pair must kill the whole bash -> runsolver -> solver tree, and the core must
+    // not go back to the pool while any member of it is alive (one solver per core).
+    // ------------------------------------------------------------------
+
+    @SuppressWarnings("unchecked")
+    private Map<Integer, Object> activeJobsMap() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("activeJobs");
+        field.setAccessible(true);
+        return (Map<Integer, Object>) field.get(backend);
+    }
+
+    private LinkedBlockingQueue<Integer> coreQueue() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("availableCores");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        LinkedBlockingQueue<Integer> cores = (LinkedBlockingQueue<Integer>) field.get(backend);
+        return cores;
+    }
+
+    private int maxConcurrency() throws Exception {
+        Field field = LocalBackend.class.getDeclaredField("maxConcurrency");
+        field.setAccessible(true);
+        return field.getInt(backend);
+    }
+
+    @Test
+    public void killPairKillsTheWholeProcessTreeAndOnlyThenFreesTheCore() throws Exception {
+        waitForFixtureJob();
+        Path output = Files.createDirectory(tempDir.resolve("tree-output"));
+        // bash starts a child that outlives it unless the child is signalled too.
+        Path script = executableScript("tree-job.sh", "sleep 300 &\nwait");
+        Path workDir = Files.createDirectory(tempDir.resolve("tree-work"));
+
+        int execId = backend.submitScript(
+            -1, script.toString(), workDir.toString(), output.resolve("job.log").toString());
+        Assert.assertTrue(execId > 0);
+
+        Process wrapper = null;
+        List<ProcessHandle> tree = List.of();
+        try {
+            await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+                .pollInterval(10, TimeUnit.MILLISECONDS)
+                .until(() -> {
+                    Object job = activeJobsMap().get(execId);
+                    if (job == null) {
+                        return false;
+                    }
+                    Field process = job.getClass().getDeclaredField("process");
+                    process.setAccessible(true);
+                    Process p = (Process) process.get(job);
+                    return p != null && p.descendants().findAny().isPresent();
+                });
+            Object job = activeJobsMap().get(execId);
+            Field processField = job.getClass().getDeclaredField("process");
+            processField.setAccessible(true);
+            wrapper = (Process) processField.get(job);
+            tree = wrapper.descendants().toList();
+            Assert.assertFalse(tree.isEmpty(), "the fixture must have a live descendant");
+
+            Assert.assertTrue(backend.killPair(execId));
+
+            for (ProcessHandle member : tree) {
+                Assert.assertFalse(member.isAlive(),
+                    "killPair left descendant " + member.pid() + " running after the wrapper died");
+            }
+            Assert.assertFalse(wrapper.isAlive());
+            await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+                .pollInterval(10, TimeUnit.MILLISECONDS)
+                .until(() -> coreQueue().size() == maxConcurrency());
+        } finally {
+            for (ProcessHandle member : tree) {
+                member.destroyForcibly();
+            }
+            if (wrapper != null) {
+                wrapper.destroyForcibly();
+            }
+        }
+    }
+
+    /** A process no signal can remove: alive until the test says otherwise. */
+    private static ProcessHandle unkillableProcess(AtomicBoolean alive, CompletableFuture<ProcessHandle> exit) {
+        ProcessHandle handle = Mockito.mock(ProcessHandle.class);
+        Mockito.when(handle.isAlive()).thenAnswer(invocation -> alive.get());
+        Mockito.when(handle.onExit()).thenReturn(exit);
+        Mockito.when(handle.destroy()).thenReturn(true);
+        Mockito.when(handle.destroyForcibly()).thenReturn(true);
+        Mockito.when(handle.pid()).thenReturn(4_000_000_000L);
+        return handle;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aCoreIsNotLeasedAgainWhileAMemberOfItsTreeSurvives() throws Exception {
+        waitForFixtureJob();
+        Field wait = LocalBackend.class.getDeclaredField("treeKillWaitMillis");
+        wait.setAccessible(true);
+        wait.setLong(backend, 100L); // bounded: the survivor below never exits on its own
+
+        AtomicBoolean alive = new AtomicBoolean(true);
+        CompletableFuture<ProcessHandle> exit = new CompletableFuture<>();
+        ProcessHandle survivor = unkillableProcess(alive, exit);
+
+        Path output = Files.createDirectory(tempDir.resolve("quarantine-output"));
+        Object job = localJob(301, -1, executableScript("quarantine-job.sh", "exit 0"),
+            tempDir, output.resolve("job.log"));
+        Field known = job.getClass().getDeclaredField("knownTree");
+        known.setAccessible(true);
+        ((java.util.Set<ProcessHandle>) known.get(job)).add(survivor);
+        activeJobsMap().put(301, job);
+
+        int total = maxConcurrency();
+        executeJob(job);
+
+        Assert.assertEquals(coreQueue().size(), total - 1,
+            "the core of a job whose tree is still alive must not be offered back");
+        Assert.assertEquals(backend.killPairConfirmed(301), Backend.KillOutcome.UNPROVEN,
+            "a surviving descendant means the kill is not proven");
+
+        alive.set(false);
+        exit.complete(survivor);
+        await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
+            .pollInterval(10, TimeUnit.MILLISECONDS)
+            .until(() -> coreQueue().size() == total);
+        Assert.assertEquals(backend.killPairConfirmed(301), Backend.KillOutcome.CONFIRMED_SAFE);
     }
 
     /** Everything the job script can actually emit, both directions. */
