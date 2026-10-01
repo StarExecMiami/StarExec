@@ -861,7 +861,11 @@ public class LocalBackendTests {
                 Assert.assertFalse(member.isAlive(),
                     "killPair left descendant " + member.pid() + " running after the wrapper died");
             }
-            Assert.assertFalse(wrapper.isAlive());
+            // killTree waits on the ProcessHandles' onExit(); Process.isAlive() is updated by a
+            // separate reaper thread and can lag it by an instant, so wait for the wrapper instead
+            // of sampling it once.
+            Assert.assertTrue(wrapper.waitFor(MAX_WAIT_SECONDS, TimeUnit.SECONDS),
+                "the wrapper must have exited once killPair returned");
             await().atMost(MAX_WAIT_SECONDS, TimeUnit.SECONDS)
                 .pollInterval(10, TimeUnit.MILLISECONDS)
                 .until(() -> coreQueue().size() == maxConcurrency());
