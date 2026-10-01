@@ -143,6 +143,38 @@ public class LocalBackend implements Backend {
     // Thread-safe mapping of execution IDs to job futures and metadata
     private final ConcurrentHashMap<Integer, LocalJob> activeJobs = new ConcurrentHashMap<>();
 
+    // Executions that have left activeJobs but whose pair still has a result waiting for
+    // LocalJobMonitor to ingest (execId -> pairId). Reported by getActiveExecutionIds() so
+    // the periodic broken-pair sweep does not declare a finished pair a submit failure while
+    // the monitor still owns its result. Pruned lazily, when the monitor no longer holds it.
+    private final ConcurrentHashMap<Integer, Integer> awaitingIngestion = new ConcurrentHashMap<>();
+
+    /** A leased core withheld from the pool because part of its job's tree is still alive. */
+    private static final class QuarantinedCore {
+        final int core;
+        final List<ProcessHandle> survivors;
+
+        QuarantinedCore(int core, List<ProcessHandle> survivors) {
+            this.core = core;
+            this.survivors = survivors;
+        }
+
+        boolean anyAlive() {
+            for (ProcessHandle handle : survivors) {
+                if (handle.isAlive()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    // execId -> core that must not be leased again until its job's tree has exited.
+    private final ConcurrentHashMap<Integer, QuarantinedCore> quarantinedCores = new ConcurrentHashMap<>();
+
+    // Bounded wait for each of the SIGTERM and SIGKILL phases of a tree kill.
+    private volatile long treeKillWaitMillis = 5000L;
+
     // Metrics counters
     private final AtomicInteger completedJobCount = new AtomicInteger(0);
     private final AtomicInteger failedJobCount = new AtomicInteger(0);
@@ -180,6 +212,11 @@ public class LocalBackend implements Backend {
         volatile Integer coreId; // The leased CPU core ID
         /** The pair's attempt at submit (#185); null for maintenance jobs. */
         volatile Integer attemptNo;
+
+        // Serialises tree kills for this job, and remembers every descendant observed so a
+        // later kill can still find processes that were re-parented after an earlier one.
+        final Object killLock = new Object();
+        final Set<ProcessHandle> knownTree = ConcurrentHashMap.newKeySet();
 
         enum JobState {
             PENDING, // Submitted but not yet started
@@ -589,19 +626,17 @@ public class LocalBackend implements Backend {
                     finished = true;
                     break;
                 }
+                // Keep a record of the tree while the wrapper is alive: once it exits its
+                // children are re-parented and can no longer be found from it.
+                recordDescendants(job);
 
                 // Check if the job reported completion status >= 7 (Complete/Error) via file
                 // This handles "zombie" processes that write status but don't exit
                 if (isJobReportedComplete(job)) {
                     log.warn("Job " + job.execId
                             + " reported complete via status file but process is still running. Killing zombie process.");
-                    killProcess(job.process);
-                    // Give it a moment to die
-                    finished = job.process.waitFor(5, TimeUnit.SECONDS);
-                    if (!finished) {
-                        job.process.destroyForcibly();
-                        finished = true;
-                    }
+                    killTree(job);
+                    finished = !job.process.isAlive();
                     break;
                 }
             }
@@ -617,7 +652,7 @@ public class LocalBackend implements Backend {
                                 ") exceeded timeout of " +
                                 jobTimeoutSeconds +
                                 " seconds, killing process");
-                killProcess(job.process);
+                killTree(job);
                 job.state = LocalJob.JobState.TIMEOUT;
                 failedJobCount.incrementAndGet();
             } else {
@@ -675,9 +710,7 @@ public class LocalBackend implements Backend {
                             pairId +
                             ") was interrupted/cancelled");
             job.state = LocalJob.JobState.CANCELLED;
-            if (job.process != null) {
-                killProcess(job.process);
-            }
+            killTree(job);
             Thread.currentThread().interrupt();
         } catch (IOException e) {
             // Process creation failed - likely a user/system error
@@ -713,22 +746,26 @@ public class LocalBackend implements Backend {
                     e);
             job.state = LocalJob.JobState.FAILED;
             failedJobCount.incrementAndGet();
-            if (job.process != null) {
-                killProcess(job.process);
-            }
+            killTree(job);
             if (pairId > 0) {
                 log.error(
                         "Pair " + pairId + " remains unresolved and tracked: an unexpected" +
                         " backend failure is not terminal solver evidence.");
             }
         } finally {
-            if (job.coreId != null) {
-                availableCores.offer(job.coreId);
-                job.coreId = null;
-            }
+            releaseCore(job);
             job.completedAt = System.currentTimeMillis();
-            // Remove from active jobs immediately
+            // Remove from active jobs immediately, after recording that the monitor may
+            // still owe this pair an ingestion (see getActiveExecutionIds).
+            retainForIngestion(job);
             activeJobs.remove(job.execId, job);
+        }
+    }
+
+    /** Remembers an execution whose pair may still have a result awaiting ingestion. */
+    private void retainForIngestion(LocalJob job) {
+        if (job.pairId > 0 && jobMonitor != null) {
+            awaitingIngestion.put(job.execId, job.pairId);
         }
     }
 
@@ -885,64 +922,161 @@ public class LocalBackend implements Backend {
     }
 
     /**
-     * Forcibly kills a process and its descendants.
-     * Attempts graceful termination first, then forceful termination if needed.
-     * Also attempts to kill child processes to prevent zombies.
+     * Kills a job's whole process tree and reports whether every member has exited.
      *
-     * @param process The process to kill
+     * <p>The tree is bash -> runsolver -> solver. Signalling the bash wrapper alone leaves
+     * the rest alive, reparented to PID 1, still burning the leased core. The descendants
+     * are therefore snapshotted <em>before</em> the wrapper is signalled (afterwards they
+     * are no longer its children and cannot be found), each is sent SIGTERM, and survivors
+     * are sent SIGKILL after a bounded wait.
+     *
+     * <p>This deliberately signals individual processes, never a process group
+     * ({@code kill -- -pgid}). The commented-out group kill it replaces was disabled because
+     * a group signal can reach the JVM's own group and take the test runner or the
+     * application down. A {@link ProcessHandle} can only name processes that were observed
+     * as descendants of the job, and never the JVM itself.
+     *
+     * <p>Safe to call concurrently and repeatedly: calls for one job serialise, and a later
+     * call finds the tree already gone. A process that re-parents itself away from the
+     * wrapper before a snapshot (a double fork) is not reachable this way.
+     *
+     * @return true only if the wrapper and every recorded descendant have exited
      */
-    private void killProcess(Process process) {
-        if (process == null)
+    private boolean killTree(LocalJob job) {
+        Process process = job.process;
+        if (process == null) {
+            return true;
+        }
+        synchronized (job.killLock) {
+            try {
+                recordDescendants(job);
+                List<ProcessHandle> tree = treeOf(job);
+                for (ProcessHandle handle : tree) {
+                    if (handle.isAlive()) {
+                        handle.destroy();
+                    }
+                }
+                if (!awaitExit(tree, treeKillWaitMillis)) {
+                    // A member may have forked between the snapshot and the signal.
+                    for (ProcessHandle handle : tree) {
+                        if (handle.isAlive()) {
+                            handle.descendants().forEach(job.knownTree::add);
+                        }
+                    }
+                    tree = treeOf(job);
+                    for (ProcessHandle handle : tree) {
+                        if (handle.isAlive()) {
+                            handle.destroyForcibly();
+                        }
+                    }
+                    if (!awaitExit(tree, treeKillWaitMillis)) {
+                        log.warn("Process tree of job " + job.execId + " did not exit after"
+                                + " SIGKILL; its CPU core stays out of service until it does");
+                        return false;
+                    }
+                }
+                return true;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                for (ProcessHandle handle : treeOf(job)) {
+                    if (handle.isAlive()) {
+                        handle.destroyForcibly();
+                    }
+                }
+                return !isTreeAlive(job);
+            }
+        }
+    }
+
+    /** Adds the wrapper's current descendants to the job's recorded tree. */
+    private void recordDescendants(LocalJob job) {
+        Process process = job.process;
+        if (process != null) {
+            process.descendants().forEach(job.knownTree::add);
+        }
+    }
+
+    private List<ProcessHandle> treeOf(LocalJob job) {
+        List<ProcessHandle> tree = new ArrayList<>(job.knownTree);
+        if (job.process != null) {
+            tree.add(job.process.toHandle());
+        }
+        return tree;
+    }
+
+    private boolean isTreeAlive(LocalJob job) {
+        for (ProcessHandle handle : treeOf(job)) {
+            if (handle.isAlive()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean awaitExit(List<ProcessHandle> handles, long millis)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+        for (ProcessHandle handle : handles) {
+            if (!handle.isAlive()) {
+                continue;
+            }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return false;
+            }
+            try {
+                handle.onExit().get(remaining, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                return false;
+            } catch (ExecutionException e) {
+                // onExit does not complete exceptionally in practice; liveness is re-checked.
+            }
+            if (handle.isAlive()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Returns the job's core to the pool only once its whole tree has exited. A tree that
+     * outlives the kill keeps its core out of service: leasing it to the next pair would
+     * put two solvers on one core, which the benchmark isolation policy forbids.
+     */
+    private void releaseCore(LocalJob job) {
+        Integer core = job.coreId;
+        if (core == null) {
             return;
-
-        try {
-            long pid = process.pid();
-
-            // Try graceful termination first (SIGTERM)
-            process.destroy();
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                // Force kill if still running (SIGKILL)
-                process.destroyForcibly();
-                if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                    log.warn(
-                            "Process " +
-                                    pid +
-                                    " did not terminate after SIGKILL, may become zombie");
+        }
+        job.coreId = null;
+        if (isTreeAlive(job) && !killTree(job)) {
+            List<ProcessHandle> survivors = new ArrayList<>();
+            for (ProcessHandle handle : treeOf(job)) {
+                if (handle.isAlive()) {
+                    survivors.add(handle);
                 }
             }
+            quarantinedCores.put(job.execId, new QuarantinedCore(core, survivors));
+            log.error("Core " + core + " of job " + job.execId + " is quarantined: "
+                    + survivors.size() + " process(es) of its tree are still alive");
+            for (ProcessHandle handle : survivors) {
+                handle.onExit().thenRun(this::reclaimQuarantinedCores);
+            }
+            reclaimQuarantinedCores();
+            return;
+        }
+        availableCores.offer(core);
+    }
 
-            // Attempt to kill any child processes (process group)
-            // This helps prevent orphaned child processes on Unix systems
-            // Commented out to prevent potential system crashes during testing
-            /*
-             * try {
-             * if (
-             * System.getProperty("os.name")
-             * .toLowerCase()
-             * .contains("linux") ||
-             * System.getProperty("os.name")
-             * .toLowerCase()
-             * .contains("unix") ||
-             * System.getProperty("os.name").toLowerCase().contains("mac")
-             * ) {
-             * // On Unix-like systems, try to kill the process group
-             * Runtime.getRuntime().exec(
-             * new String[] { "kill", "-9", "-" + pid }
-             * );
-             * }
-             * } catch (Exception e) {
-             * // Silently ignore if process group kill fails - process may already be dead
-             * log.debug(
-             * "Could not kill process group for " +
-             * pid +
-             * ": " +
-             * e.getMessage()
-             * );
-             * }
-             */
-        } catch (InterruptedException e) {
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
+    /** Returns quarantined cores whose processes have all exited to the pool. */
+    private void reclaimQuarantinedCores() {
+        for (Map.Entry<Integer, QuarantinedCore> entry : quarantinedCores.entrySet()) {
+            QuarantinedCore quarantined = entry.getValue();
+            if (!quarantined.anyAlive() && quarantinedCores.remove(entry.getKey(), quarantined)) {
+                availableCores.offer(quarantined.core);
+                log.info("Core " + quarantined.core + " reclaimed after job " + entry.getKey()
+                        + " tree exited");
+            }
         }
     }
 
@@ -1098,10 +1232,32 @@ public class LocalBackend implements Backend {
 
     @Override
     public synchronized boolean killPair(int execId) {
+        return killPairOutcome(execId) != null;
+    }
+
+    /**
+     * Unlike the default, does not claim safety it has not seen: a job whose process tree
+     * still has a live member (or whose core is quarantined for that reason) is UNPROVEN.
+     * An execution this backend never held, or whose tree is gone, is CONFIRMED_SAFE.
+     */
+    @Override
+    public synchronized KillOutcome killPairConfirmed(int execId) {
+        KillOutcome outcome = killPairOutcome(execId);
+        if (outcome != null) {
+            return outcome;
+        }
+        QuarantinedCore quarantined = quarantinedCores.get(execId);
+        return quarantined != null && quarantined.anyAlive()
+                ? KillOutcome.UNPROVEN
+                : KillOutcome.CONFIRMED_SAFE;
+    }
+
+    /** @return null if the execution is not held here, otherwise whether its tree is gone */
+    private KillOutcome killPairOutcome(int execId) {
         LocalJob job = activeJobs.get(execId);
         if (job == null) {
             log.debug("Cannot kill job " + execId + ": not found");
-            return false;
+            return null;
         }
 
         try {
@@ -1112,18 +1268,17 @@ public class LocalBackend implements Backend {
                 job.future.cancel(true);
             }
 
-            // Kill the process directly
-            if (job.process != null) {
-                killProcess(job.process);
-            }
+            // Kill the whole process tree, not only the bash wrapper
+            boolean treeGone = killTree(job);
 
             job.state = LocalJob.JobState.CANCELLED;
+            retainForIngestion(job);
             activeJobs.remove(execId, job);
 
-            return true;
+            return treeGone ? KillOutcome.CONFIRMED_SAFE : KillOutcome.UNPROVEN;
         } catch (Exception e) {
             log.error("Error killing job " + execId + ": " + e.getMessage(), e);
-            return false;
+            return null;
         }
     }
 
@@ -1174,9 +1329,27 @@ public class LocalBackend implements Backend {
         return sb.toString();
     }
 
+    /**
+     * Executions this backend still answers for: those running or queued, plus those that
+     * have exited but whose terminal result the monitor has not yet recorded (or has held
+     * for intervention). Without the second group, {@code Jobs.setBrokenPairsToErrorStatus}
+     * records a finished pair as {@code ERROR_SUBMIT_FAIL} in the window between process
+     * exit and ingestion, and the real result is then refused as a conflicting terminal
+     * status. An exited execution with no terminal {@code status.json} is not reported:
+     * nothing will complete it, so it is a genuine orphan.
+     */
     @Override
     public Set<Integer> getActiveExecutionIds() throws IOException {
-        return new HashSet<>(activeJobs.keySet());
+        Set<Integer> ids = new HashSet<>(activeJobs.keySet());
+        LocalJobMonitor monitor = jobMonitor;
+        for (Map.Entry<Integer, Integer> entry : awaitingIngestion.entrySet()) {
+            if (monitor != null && monitor.holdsUningestedResult(entry.getValue())) {
+                ids.add(entry.getKey());
+            } else {
+                awaitingIngestion.remove(entry.getKey(), entry.getValue());
+            }
+        }
+        return ids;
     }
 
     /**
@@ -1313,8 +1486,8 @@ public class LocalBackend implements Backend {
 
         // Kill any remaining processes
         for (LocalJob job : activeJobs.values()) {
-            if (job.process != null && job.process.isAlive()) {
-                killProcess(job.process);
+            if (job.process != null && isTreeAlive(job)) {
+                killTree(job);
             }
         }
         activeJobs.clear();

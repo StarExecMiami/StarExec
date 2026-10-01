@@ -1451,6 +1451,35 @@ public class LocalJobMonitor {
     }
 
     /**
+     * Whether this monitor still owns a result that has been produced but not yet recorded.
+     *
+     * <p>True when the pair is tracked and either its ingestion is held for intervention
+     * ({@code ingestionBlocked}) or its {@code status.json} parses, with Gson, to a terminal
+     * execution result. Such a pair has finished running; recording it is the monitor's job,
+     * and another component declaring it a submit failure would make the real result be
+     * refused as a conflicting terminal status. A tracked pair with no readable terminal
+     * status is not owned: its process is gone and nothing is going to complete it.
+     *
+     * @param pairId The pair ID
+     * @return true if a terminal result is waiting for this monitor to ingest it
+     */
+    public boolean holdsUningestedResult(int pairId) {
+        PairExecutionState state = pairs.get(pairId);
+        if (state == null) {
+            return false;
+        }
+        if (state.ingestionBlocked) {
+            return true;
+        }
+        try {
+            StatusAndStage ss = readStatusFile(Paths.get(state.logDir), pairId);
+            return ss != null && ss.status.isTerminalExecutionResult();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Container for runsolver statistics.
      */
     private static class RunSolverStats {
