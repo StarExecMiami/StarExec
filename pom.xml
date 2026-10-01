@@ -23,7 +23,7 @@
         <!-- Dependency Versions -->
         <flyway.version>11.13.1</flyway.version>
         <postgresql.connector.version>42.7.12</postgresql.connector.version>
-        <jackson.version>2.21.6</jackson.version>
+        <jackson.version>2.21.7</jackson.version>
         <jackson.annotations.version>2.21</jackson.annotations.version>
         <bouncycastle.version>1.85</bouncycastle.version>
         <beanutils.version>1.11.0</beanutils.version>
