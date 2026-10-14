@@ -641,7 +641,7 @@ public class ContainerJobMonitorTests {
             jobPairs.when(() -> JobPairs.setPairLevelStatusResult(
                     HELD_PAIR,
                     StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
-                    StatusCode.STATUS_NOT_REACHED.getVal()))
+                    StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()))
                 .thenReturn(PairStatusResult.APPLIED);
 
             invokeProcessCompletedJob(info);
@@ -649,7 +649,7 @@ public class ContainerJobMonitorTests {
             jobPairs.verify(() -> JobPairs.setPairLevelStatusResult(
                 HELD_PAIR,
                 StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal()));
+                StatusCode.ERROR_BENCH_DEPENDENCY_MISSING.getVal()));
         }
         assertFalse("an unfinished stage under a pair-level result is not a bad artifact",
             quarantine().contains(container));

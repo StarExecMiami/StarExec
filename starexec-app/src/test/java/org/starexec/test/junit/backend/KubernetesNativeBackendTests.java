@@ -3710,12 +3710,12 @@ public class KubernetesNativeBackendTests {
 
         try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
             stubOpenPair(jp, 631);
-            jp.when(() -> JobPairs.setPairLevelStatusResult(631, status, NOT_REACHED, 2))
+            jp.when(() -> JobPairs.setPairLevelStatusResult(631, status, status, 2))
                 .thenReturn(PairStatusResult.APPLIED);
 
             assertTrue(callback.onJobComplete(execution(63, "job-63")));
 
-            jp.verify(() -> JobPairs.setPairLevelStatusResult(631, status, NOT_REACHED, 2));
+            jp.verify(() -> JobPairs.setPairLevelStatusResult(631, status, status, 2));
             jp.verify(() -> JobPairs.setPairLevelStatusResult(
                 Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
         }

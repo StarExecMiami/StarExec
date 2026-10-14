@@ -2536,9 +2536,17 @@ public class JobPairs {
      * carry the result, so the status goes to the pair and every stage that had not finished is
      * marked with {@code notReachedStatus}.
      *
+     * <p>The backends pass {@code terminalStatus} itself, as the legacy job script did with
+     * {@code sendStatusToLaterStages "$ERROR_RUNSCRIPT" 0}. STATUS_NOT_REACHED means an
+     * earlier stage failed, which is not what happened, and every pair listing, status filter
+     * and statistic reads the stage: NOT_REACHED there showed a failed pair as "stage not
+     * reached" and counted it as incomplete, with the real error visible nowhere (#324).
+     * A duplicate delivery of the same status does not rewrite the stages, so rows recorded
+     * the old way are repaired by V0118, not by re-ingestion.
+     *
      * @param pairId the pair
      * @param terminalStatus the status to record; must be terminal
-     * @param notReachedStatus what unfinished stages become, normally STATUS_NOT_REACHED
+     * @param notReachedStatus what unfinished stages become
      * @return APPLIED, SUPERSEDED when the pair already held a different terminal status, or
      *         FAILED when the write could not be performed
      * @implNote the routine {@code starexec.UpdatePairStatusPairLevel} is defined in
