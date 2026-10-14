@@ -52,7 +52,7 @@ public class Mail {
 				return;
 			}
 			
-			log.info("Sending email: " + subject + " to " + to);
+			log.info("Sending email to " + to.size() + " recipient(s)");
 			
 			try {
 				// Try to send using normal SMTP with fast timeouts
@@ -79,17 +79,15 @@ public class Mail {
 				}
 
 				email.send();
-				log.info("Email sent successfully");
+				log.info("Email sent successfully to " + to.size() + " recipient(s)");
 			} catch (Exception e) {
-			// If email sending fails, log but don't throw exception
-			log.warn("Failed to send email via SMTP: " + e.getMessage());
-			log.info("Email would have been sent to: " + to);
-			log.info("Email subject: " + subject);
-			// Don't log email content as it might contain sensitive information
-			log.debug("Email sending failed - content not logged for security reasons");
-		}
+				// Transport failures can echo recipients; omit exception details.
+				log.warn("Failed to send email via SMTP");
+				log.debug("Email sending failed - content not logged for security reasons");
+			}
 		} catch (Exception e) {
-			log.warn("Error in mail function", e);
+			// Address parsing and collection failures can echo recipients; omit exception details.
+			log.warn("Error in mail function");
 		}
 	}
 
@@ -153,9 +151,9 @@ public class Mail {
 
 			// Send email
 			Mail.mail(email, "STAREXEC - Verify your account", user.getEmail());
-			log.info(String.format("Sent activation email to user [%s] at [%s]", user.getFullName(), user.getEmail()));
+			log.info(String.format("Sent activation email for user [%d]", user.getId()));
 		} catch (IOException e) {
-			log.warn("Could not send activation email because the template file could not be read.", e);
+			log.warn("Could not send activation email because the template file could not be read.");
 		}
 	}
 
@@ -168,7 +166,7 @@ public class Mail {
 			;
 			Mail.mail(email, "STAREXEC - Change Email", newEmail);
 		} catch (IOException e) {
-			log.warn("Could not send email change validation because the template file could not be read.", e);
+			log.warn("Could not send email change validation because the template file could not be read.");
 		}
 	}
 
@@ -391,10 +389,7 @@ public class Mail {
 		}
 		List<String> emails = usersToEmail.stream().map(User::getEmail).collect(Collectors.toList());
 
-		for (String email : emails) {
-			log.info("Emailing error log reports to: " + email);
-		}
-
+		log.info("Emailing error log reports to " + emails.size() + " recipient(s)");
 		Mail.mail(message.toString(), "Error Reports", emails);
 	}
 
