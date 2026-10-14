@@ -3975,6 +3975,11 @@ public class KubernetesNativeBackend implements Backend {
      * window with its awaiting-ingestion set; here the backend's own tracking is that set,
      * because every exit from the completion callbacks releases it.
      *
+     * <p>An ingestion that keeps failing keeps its Job active, and so out of the sweep, until
+     * the Job is reaped by {@code ttlSecondsAfterFinished} ({@code STAREXEC_K8S_JOB_TTL_SECONDS});
+     * after that it is reported as gone and the sweep resolves the pair as before. Tracking
+     * lost across a restart is rebuilt by {@code reconcileOrphanedPairs} during initialisation.
+     *
      * @return Set of active execution IDs
      */
     @Override
