@@ -739,11 +739,12 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertEquals("Should have one active container", 1, activeIds.size());
         assertTrue("Should contain running container ID", activeIds.contains(1001));
-        assertFalse("Should not contain stopped container ID", activeIds.contains(1002));
+        // An exited container that still exists has a result the monitor has not ingested yet
+        // (#324): it stays active so the broken-pair sweep cannot file it as a submit failure.
+        assertTrue("An exited, uningested container stays active", activeIds.contains(1002));
 
-        // Stopped container should be removed from tracking
+        // It no longer holds an execution slot, so it leaves slot tracking
         assertFalse("Stopped container should be removed from tracking", execIdMap.containsKey(1002));
     }
 
@@ -766,7 +767,7 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertTrue("Stopped container should not be active", activeIds.isEmpty());
+        assertTrue("Its result is still owed, so it stays active", activeIds.contains(TEST_EXEC_ID));
         assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
         assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
     }
@@ -788,6 +789,69 @@ public class PodmanBackendTests {
         // Verify
         assertTrue("Active IDs should be empty", activeIds.isEmpty());
         assertFalse("Deleted container should be removed from tracking", execIdMap.containsKey(1001));
+    }
+
+    /** Once the monitor has ingested and removed the container, the execution is over. */
+    @Test
+    public void testGetActiveExecutionIds_IngestedContainerIsNoLongerActive() throws Exception {
+        givenExitedTrackedContainer(1003, "ingested-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1003));
+
+        backend.removeCompletedContainer("ingested-container");
+
+        assertFalse(backend.getActiveExecutionIds().contains(1003));
+    }
+
+    /** A container the monitor quarantined will never be ingested: the sweep may act. */
+    @Test
+    public void testGetActiveExecutionIds_QuarantinedContainerIsNotActive() throws Exception {
+        givenExitedTrackedContainer(1004, "quarantined-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1004));
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        when(monitor.isQuarantined("quarantined-container")).thenReturn(true);
+        Field monitorField = PodmanBackend.class.getDeclaredField("jobMonitor");
+        monitorField.setAccessible(true);
+        monitorField.set(backend, monitor);
+
+        assertFalse(backend.getActiveExecutionIds().contains(1004));
+    }
+
+    /** An exited container that disappeared without ingestion is not kept alive. */
+    @Test
+    public void testGetActiveExecutionIds_VanishedExitedContainerIsNotActive() throws Exception {
+        InspectContainerCmd inspect = givenExitedTrackedContainer(1005, "vanished-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1005));
+        when(inspect.exec()).thenThrow(new NotFoundException("gone"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(1005));
+    }
+
+    /** The retry path releases the slot of an exited container; its result is still owed. */
+    @Test
+    public void testReleaseSlotForCompletedContainer_KeepsTheExecutionActive() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(1006, "retrying-container");
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("retrying-container")).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(mock(InspectContainerResponse.class));
+
+        backend.releaseSlotForCompletedContainer("retrying-container");
+
+        assertFalse(execIdMap.containsKey(1006));
+        assertTrue(backend.getActiveExecutionIds().contains(1006));
+    }
+
+    private InspectContainerCmd givenExitedTrackedContainer(int execId, String containerId)
+            throws Exception {
+        getExecIdMap().put(execId, containerId);
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState state = mock(InspectContainerResponse.ContainerState.class);
+        when(mockDockerClient.inspectContainerCmd(containerId)).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(response);
+        when(response.getState()).thenReturn(state);
+        when(state.getRunning()).thenReturn(false);
+        return inspect;
     }
 
     // ==================== No-op Method Tests ====================
