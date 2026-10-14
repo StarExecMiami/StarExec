@@ -958,6 +958,34 @@ public class KubernetesNativeBackendTests {
         assertTrue("accounting is retained", holdingSlot(backend).contains(43));
     }
 
+    /**
+     * A stop requested up front is waited for from that request, not from the confirmation's
+     * turn in the batch: N pods hanging in Terminating then cost one wait, not N.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aRequestedStopIsWaitedForFromTheRequest() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        setField(backend, "killConfirmWaitMillis", 2_000L);
+        setField(backend, "killConfirmPollMillis", 10L);
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(44, "job-44");
+        givenJobDeletion(backend, "job-44", true, jobWithNoConditions(44), podInPhase(44, "Running"));
+        restore(backend, 44);
+
+        backend.requestStop(44);
+        Thread.sleep(1_200L); // the confirmations ahead of this one in its batch
+        long start = System.nanoTime();
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 44));
+        long waitedMillis =
+            java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        assertTrue("waited " + waitedMillis + " ms, but the 2 s wait began at the request",
+            waitedMillis < 1_600L);
+        // The request itself started the deletion; the confirmation repeated it.
+        Mockito.verify(jobResource(backend, "job-44"), Mockito.atLeast(2))
+            .withPropagationPolicy(io.fabric8.kubernetes.api.model.DeletionPropagation.FOREGROUND);
+    }
+
     /** The mocked Job resource {@code givenJobDeletion} installed, to script its reads. */
     private ScalableResource<Job> jobResource(KubernetesNativeBackend backend, String jobName)
         throws Exception {

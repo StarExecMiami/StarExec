@@ -148,6 +148,20 @@ public interface Backend {
     }
 
     /**
+     * Asks the backend to start stopping an execution, without waiting to learn whether it
+     * stopped.
+     *
+     * <p>A caller stopping several executions requests every stop first and then confirms
+     * each with {@link #killPairConfirmed(int)}. Where confirmation has to wait for an
+     * execution to wind down (a Kubernetes pod's termination grace period), the waits then
+     * overlap instead of queueing one per execution. This is never evidence that anything
+     * stopped; only {@link #killPairConfirmed(int)} is. The default does nothing, so every
+     * stop starts at its confirmation, as before.
+     */
+    default void requestStop(int execId) {
+    }
+
+    /**
      * kills all pairs
      * @return true on success and false on error.
      */

@@ -426,6 +426,40 @@ public class JobsKillProtocolSqlTest extends Common {
         }
     }
 
+    /**
+     * Every stop of the batch is requested before any is confirmed, so the confirmations'
+     * waits overlap. Confirmed one at a time, a job whose pods hang in Terminating held its
+     * caller for the confirmation wait times the number of pairs.
+     */
+    @Test
+    public void aKillRequestsEveryStopBeforeConfirmingAny() throws Exception {
+        Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        R.BACKEND = backend;
+
+        assertTrue("the kill must report success", invokeKill(jobId));
+
+        org.mockito.Mockito.verify(backend).requestStop(771001);
+        org.mockito.Mockito.verify(backend).requestStop(771002);
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(backend);
+        order.verify(backend, org.mockito.Mockito.times(2))
+            .requestStop(org.mockito.ArgumentMatchers.anyInt());
+        order.verify(backend, org.mockito.Mockito.times(2))
+            .killPairConfirmed(org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    /** Pausing resets pairs through the same confirmation, so it requests the stop first too. */
+    @Test
+    public void pausingRequestsTheStopBeforeConfirmingIt() throws Exception {
+        Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        R.BACKEND = backend;
+
+        assertTrue(Jobs.setPairsToPending(jobId, StatusCode.STATUS_RUNNING.getVal()));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(backend);
+        order.verify(backend).requestStop(771001);
+        order.verify(backend).killPairConfirmed(771001);
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------

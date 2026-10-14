@@ -478,6 +478,15 @@ public class KubernetesNativeBackend implements Backend {
     /** How often that wait re-reads the Job; a field so tests need not sleep for real. */
     private volatile long killConfirmPollMillis = 1_000L;
 
+    /**
+     * When {@link #requestStop} asked for an execution to stop. Its confirmation measures the
+     * wait from then, not from when it gets its turn, so a batch whose stops were all
+     * requested up front shares one wait instead of queueing one per execution: a node whose
+     * pods hang in Terminating would otherwise hold the caller for the wait times the number
+     * of pods.
+     */
+    private final Map<Integer, Long> stopRequestedAtNanos = new ConcurrentHashMap<>();
+
     /** When a finished execution was first found without a visible status.json. */
     private final Map<ExecutionRef, Long> statusAbsentSince = new ConcurrentHashMap<>();
 
@@ -1424,6 +1433,7 @@ public class KubernetesNativeBackend implements Backend {
                 "Execution " + execId + " is now confirmed safe (" + record +
                     "); releasing its retained accounting."
             );
+            stopRequestedAtNanos.remove(execId);
             execIdToJobName.remove(execId);
             execIdToJobUid.remove(execId);
             execIdToPairId.remove(execId);
@@ -3483,6 +3493,21 @@ public class KubernetesNativeBackend implements Backend {
         if (kubernetesClient == null) {
             return false;
         }
+        requestForegroundDeletion(jobName);
+        // The delete RESULT is deliberately not consulted. A non-empty StatusDetails list
+        // means "the API accepted the request", and under Foreground propagation that is
+        // returned at the exact moment the Job is still present with its finalizer
+        // attached. This method used to return true on that result without reading, so it
+        // answered a different question from the one its name asks. Only a read can
+        // answer this one.
+        return !kubernetesJobExists(jobName);
+    }
+
+    /**
+     * Asks the API server to delete a Job with Foreground propagation, without reading back.
+     * Failures are logged, not thrown: whoever needs the outcome reads the Job afterwards.
+     */
+    private void requestForegroundDeletion(String jobName) {
         try {
             // Foreground, explicitly.
             //
@@ -3506,17 +3531,27 @@ public class KubernetesNativeBackend implements Backend {
         } catch (Exception e) {
             log.warn("Failed to delete Kubernetes Job: " + jobName, e);
         }
-        // The delete RESULT is deliberately not consulted. A non-empty StatusDetails list
-        // means "the API accepted the request", and under Foreground propagation that is
-        // returned at the exact moment the Job is still present with its finalizer
-        // attached. This method used to return true on that result without reading, so it
-        // answered a different question from the one its name asks. Only a read can
-        // answer this one.
-        return !kubernetesJobExists(jobName);
     }
 
     /**
-     * Waits, up to {@link #killConfirmWaitMillis}, for a Job whose foreground deletion has been
+     * Starts the foreground deletion of a tracked execution's Job and records when, so that
+     * its {@link #killPairConfirmed} waits from now rather than from its turn in the batch.
+     * Never evidence of anything: tracking and accounting are untouched until the
+     * confirmation establishes that the execution stopped.
+     */
+    @Override
+    public void requestStop(int execId) {
+        String jobName = execIdToJobName.get(execId);
+        if (jobName == null || kubernetesClient == null) {
+            // Nothing to name, or no client: the confirmation handles both, from scratch.
+            return;
+        }
+        stopRequestedAtNanos.putIfAbsent(execId, System.nanoTime());
+        requestForegroundDeletion(jobName);
+    }
+
+    /**
+     * Waits, until {@code deadlineNanos}, for a Job whose foreground deletion has been
      * requested to disappear. Reads fail closed exactly as {@link #kubernetesJobExists} does:
      * a read that cannot see the API counts as "still there".
      *
@@ -3526,9 +3561,8 @@ public class KubernetesNativeBackend implements Backend {
      * @return true once the Job is confirmed absent; false if it outlasted the wait or the
      *         thread was interrupted
      */
-    private boolean awaitKubernetesJobGone(String jobName) {
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(killConfirmWaitMillis);
-        while (System.nanoTime() < deadline) {
+    private boolean awaitKubernetesJobGone(String jobName, long deadlineNanos) {
+        while (System.nanoTime() < deadlineNanos) {
             try {
                 Thread.sleep(Math.max(1L, killConfirmPollMillis));
             } catch (InterruptedException e) {
@@ -3640,6 +3674,11 @@ public class KubernetesNativeBackend implements Backend {
      */
     @Override
     public KillOutcome killPairConfirmed(int execId) {
+        // From requestStop when the caller asked for every stop up front, so the batch shares
+        // one wait; otherwise from now.
+        Long stopRequested = stopRequestedAtNanos.remove(execId);
+        long waitDeadlineNanos = (stopRequested != null ? stopRequested : System.nanoTime())
+            + TimeUnit.MILLISECONDS.toNanos(killConfirmWaitMillis);
         String jobName = execIdToJobName.get(execId);
         if (jobName == null) {
             // Absent local bookkeeping is NOT proof that the execution stopped. This is
@@ -3729,12 +3768,13 @@ public class KubernetesNativeBackend implements Backend {
         // keeps it behind its finalizer until the pod is gone. So wait, bounded, for that to
         // happen before calling the kill unproven; the pod normally terminates well inside
         // its grace period.
-        if (!ensureKubernetesJobGone(jobName) && !awaitKubernetesJobGone(jobName)) {
+        if (!ensureKubernetesJobGone(jobName)
+                && !awaitKubernetesJobGone(jobName, waitDeadlineNanos)) {
             log.error(
                 "Kubernetes Job " + jobName + " (execId " + execId + ") is still present" +
-                " " + (killConfirmWaitMillis / 1000) + " s after a foreground delete;" +
-                " refusing to release its accounting because a pod for it may still" +
-                " execute and a replacement could then run twice."
+                " " + (killConfirmWaitMillis / 1000) + " s after its foreground delete was" +
+                " requested; refusing to release its accounting because a pod for it may" +
+                " still execute and a replacement could then run twice."
             );
             // Past the wait the pod has outlived its grace period, so the hold must have an
             // owner that comes back once it is gone, or the slot stays reserved until restart.
