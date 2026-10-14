@@ -112,6 +112,54 @@ public class SyncSgeScriptsTest {
 		assertNotEquals(r.output, 0, r.exit);
 	}
 
+	/** An empty source is refused: syncing nothing must not be reported as a match. */
+	@Test
+	public void anEmptySourceFails() throws Exception {
+		Path empty = tmp.newFolder("empty").toPath();
+
+		Result r = run(empty, volume);
+
+		assertNotEquals(r.output, 0, r.exit);
+		assertTrue(r.output, r.output.contains("contains no files"));
+	}
+
+	/** A symlink or a directory standing where the image has a file is moved aside, not followed. */
+	@Test
+	public void aLinkOrDirectoryInPlaceOfAHelperIsReplaced() throws Exception {
+		Path elsewhere = tmp.newFile("elsewhere").toPath();
+		Files.writeString(elsewhere, "not a helper\n");
+		Files.createDirectories(volume);
+		Files.createSymbolicLink(volume.resolve("functions.bash"), elsewhere);
+		Files.createDirectories(volume.resolve("jobscript"));
+
+		Result r = run();
+
+		assertEquals(r.output, 0, r.exit);
+		assertTrue(Files.isRegularFile(volume.resolve("functions.bash"),
+				java.nio.file.LinkOption.NOFOLLOW_LINKS));
+		assertSameBytes("functions.bash");
+		assertSameBytes("jobscript");
+		assertEquals("the link target is never written through", "not a helper\n",
+				Files.readString(elsewhere));
+	}
+
+	/** Directories are traversable by the sandbox users even when the container's umask is 077. */
+	@Test
+	public void directoriesAreTraversableUnderARestrictiveUmask() throws Exception {
+		Process p = new ProcessBuilder(Bash.PATH, "-c", "umask 077; exec \"$0\" \"$1\" \"$2\"",
+				SCRIPT.toString(), image.toString(), volume.toString())
+				.redirectErrorStream(true)
+				.start();
+		String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertTrue("sync-sge-scripts.sh did not finish", p.waitFor(60, TimeUnit.SECONDS));
+		assertEquals(out, 0, p.exitValue());
+
+		for (Path dir : List.of(volume, volume.resolve("RunSolverSource"))) {
+			assertEquals(dir.toString(), "rwxr-xr-x",
+					PosixFilePermissions.toString(Files.getPosixFilePermissions(dir)));
+		}
+	}
+
 	private void assertSameBytes(String rel) throws IOException {
 		assertArrayEquals(rel, Files.readAllBytes(image.resolve(rel)), Files.readAllBytes(volume.resolve(rel)));
 	}
