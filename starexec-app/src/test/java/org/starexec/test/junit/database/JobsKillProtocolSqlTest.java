@@ -281,6 +281,89 @@ public class JobsKillProtocolSqlTest extends Common {
                 StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
     }
 
+    // ------------------------------------------------------------------
+    // refused deletions: retried, and never purged around the stop check
+    // ------------------------------------------------------------------
+
+    /**
+     * The endpoints mark a job deleted at once and finish the deletion on a thread, after
+     * telling the user it is done. A deletion refused because a pair was not confirmed
+     * stopped was never tried again: the job stayed hidden with its pairs RUNNING.
+     */
+    @Test
+    public void aRefusedDeletionIsCompletedOnceTheStopIsConfirmed() throws Exception {
+        assertTrue("what the endpoints do first", Jobs.setDeletedColumn(jobId));
+        R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
+        assertFalse("the first deletion is refused", Jobs.delete(jobId));
+        assertEquals(2, pairCount());
+
+        R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        assertTrue("the retry must complete this deletion", Jobs.retryRefusedDeletions() >= 1);
+
+        assertEquals("no pair of the deleted job may remain", 0, pairCount());
+    }
+
+    @Test
+    public void theRetryLeavesADeletedJobAloneWhileItsStopIsUnproven() throws Exception {
+        assertTrue(Jobs.setDeletedColumn(jobId));
+        R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
+
+        Jobs.retryRefusedDeletions();
+
+        assertEquals("rows stay while an execution may still run", 2, pairCount());
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+    }
+
+    /** The retry is for deletions only: it must never kill a job nobody deleted. */
+    @Test
+    public void theRetryNeverTouchesAJobThatIsNotDeleted() throws Exception {
+        Backend backend = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        R.BACKEND = backend;
+
+        Jobs.retryRefusedDeletions();
+
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.never()).killPairConfirmed(771001);
+        org.mockito.Mockito.verify(backend, org.mockito.Mockito.never()).killPairConfirmed(771002);
+        assertEquals(2, pairCount());
+        assertEquals(StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+    }
+
+    /**
+     * CLEAN_DATABASE purged deleted jobs with no stop check at all: a job whose deletion had
+     * been refused lost its rows (and directory) while a pair might still be running.
+     */
+    @Test
+    public void cleaningDeletedJobsLeavesOneWithPairsInFlightToTheRetry() throws Exception {
+        assertTrue(Jobs.setDeletedColumn(jobId));
+
+        assertTrue(Jobs.cleanOrphanedDeletedJobs());
+
+        assertEquals("the job row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+        assertEquals("its in-flight pairs must remain", 2, pairCount());
+    }
+
+    /**
+     * The restraint, pinned: a deleted job with nothing in flight is still purged. Deciding
+     * through isJobComplete would have kept every deleted job forever, because
+     * GetJobStatusDetail answers DELETED for all of them.
+     */
+    @Test
+    public void cleaningDeletedJobsStillPurgesOneWithNothingInFlight() throws Exception {
+        exec("UPDATE starexec.job_pairs SET status_code = " + StatusCode.STATUS_COMPLETE.getVal()
+                + " WHERE job_id = " + jobId);
+        assertTrue(Jobs.setDeletedColumn(jobId));
+
+        assertTrue(Jobs.cleanOrphanedDeletedJobs());
+
+        assertEquals("a deleted, orphaned job with nothing in flight is purged", 0,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+    }
+
+    private int pairCount() throws SQLException {
+        return selectInt("SELECT count(*) FROM starexec.job_pairs WHERE job_id = " + jobId);
+    }
+
     @Test
     public void directDeletionStopsWhenTheDeletedMarkerCannotBeStored() throws Exception {
         R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);

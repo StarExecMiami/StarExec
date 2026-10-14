@@ -912,6 +912,20 @@ public class Jobs {
                     continue;
                 }
 
+                // A deleted job with pairs still in flight is delete()'s to finish, because
+                // delete() confirms every execution stopped before removing anything.
+                // Purging it here removed its directory and rows with no such check.
+                // Not isJobComplete: GetJobStatusDetail answers DELETED for every deleted
+                // job, so it would hold every one of them back.
+                if (hasPairsInFlight(jobId)) {
+                    log.info(
+                        "cleanOrphanedDeletedJobs",
+                        "Job " + jobId + " still has pairs in flight; leaving it to" +
+                            " retryRefusedDeletions."
+                    );
+                    continue;
+                }
+
                 File jobDir = new File(Jobs.getDirectory(jobId));
                 if (jobDir.exists()) {
                     log.warn(
@@ -1042,13 +1056,34 @@ public class Jobs {
     }
 
     /**
+     * Jobs whose deletion is running right now. The endpoints' deletion thread and
+     * {@link #retryRefusedDeletions()} can both reach the same job; two concurrent deletions
+     * would each try to record the same pair killed and delete the same rows.
+     */
+    private static final Set<Integer> DELETIONS_IN_PROGRESS =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * Deletes the job with the given id from disk, and sets the "deleted" column in
      * the database jobs table to true.
      *
      * @param jobId The ID of the job to delete
-     * @return True on success, false otherwise
+     * @return True on success, false otherwise (including while another deletion of the
+     *         same job is running)
      */
     public static boolean delete(int jobId) throws SQLException {
+        if (!DELETIONS_IN_PROGRESS.add(jobId)) {
+            log.info("delete: job " + jobId + " is already being deleted");
+            return false;
+        }
+        try {
+            return deleteOnce(jobId);
+        } finally {
+            DELETIONS_IN_PROGRESS.remove(jobId);
+        }
+    }
+
+    private static boolean deleteOnce(int jobId) throws SQLException {
         Connection con = null;
         PreparedStatement procedure = null;
 
@@ -1112,6 +1147,76 @@ public class Jobs {
         } finally {
             Common.safeClose(con);
             Common.safeClose(procedure);
+        }
+    }
+
+    /**
+     * Finishes deletions that {@link #delete(int)} refused.
+     *
+     * <p>The REST endpoints mark a job deleted at once and finish the deletion on another
+     * thread, after telling the user it is done. {@code delete} refuses while any pair cannot
+     * be confirmed stopped, and nothing tried again: the job stayed hidden with its pairs
+     * RUNNING until {@link #cleanOrphanedDeletedJobs()} purged it, without the stop check.
+     * This is the owner that comes back. A job qualifies while it is marked deleted and still
+     * has pairs in flight ({@link #hasPairsInFlight}); once {@code delete} has removed its
+     * pairs it no longer qualifies.
+     *
+     * @return how many deletions completed on this pass
+     */
+    public static int retryRefusedDeletions() {
+        List<Integer> pending = new ArrayList<>();
+        try (
+            Connection con = Common.getConnection();
+            PreparedStatement statement = con.prepareStatement(
+                "SELECT j.id FROM starexec.jobs j" +
+                    " WHERE j.deleted AND starexec.GetJobStatus(j.id) = 'incomplete'" +
+                    " ORDER BY j.id"
+            );
+            ResultSet results = statement.executeQuery()
+        ) {
+            while (results.next()) {
+                pending.add(results.getInt(1));
+            }
+        } catch (SQLException e) {
+            log.error("retryRefusedDeletions", e);
+            return 0;
+        }
+        int completed = 0;
+        for (int jobId : pending) {
+            try {
+                if (delete(jobId)) {
+                    completed++;
+                    log.info(
+                        "retryRefusedDeletions: deleted job " + jobId +
+                            ", whose earlier deletion had been refused"
+                    );
+                }
+            } catch (Exception e) {
+                log.warn("retryRefusedDeletions: job " + jobId, e);
+            }
+        }
+        return completed;
+    }
+
+    /**
+     * Whether any pair of the job is still in flight, by {@code GetJobStatus}'s definition
+     * (pending submit, enqueued, running, processing results, paused, processing). Unlike
+     * {@link #isJobComplete}, which goes through {@code GetJobStatusDetail}, it ignores the
+     * job's deleted and killed flags, which is the question a deleted job raises. Fails
+     * closed: an unreadable answer counts as in flight.
+     */
+    private static boolean hasPairsInFlight(int jobId) {
+        try (
+            Connection con = Common.getConnection();
+            PreparedStatement statement = con.prepareStatement("SELECT starexec.GetJobStatus(?)")
+        ) {
+            statement.setInt(1, jobId);
+            try (ResultSet results = statement.executeQuery()) {
+                return !results.next() || "incomplete".equals(results.getString(1));
+            }
+        } catch (SQLException e) {
+            log.error("hasPairsInFlight", e);
+            return true;
         }
     }
 
@@ -8178,10 +8283,14 @@ public class Jobs {
     public static boolean deleteOrphanedJobs(int userId) {
         List<Integer> ids = getOrphanedJobs(userId);
         try {
+            // A refused deletion (a pair not confirmed stopped) used to be reported as success.
+            boolean allDeleted = true;
             for (Integer id : ids) {
-                Jobs.delete(id);
+                if (!Jobs.delete(id)) {
+                    allDeleted = false;
+                }
             }
-            return true;
+            return allDeleted;
         } catch (Exception e) {
             log.error("deleteOrphanedJobs", e);
         }

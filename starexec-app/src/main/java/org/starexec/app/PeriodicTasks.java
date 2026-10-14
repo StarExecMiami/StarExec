@@ -168,6 +168,13 @@ class PeriodicTasks {
             0,
             () -> 5,
             TimeUnit.MINUTES
+        ),
+        RETRY_REFUSED_JOB_DELETIONS(
+            true,
+            RETRY_REFUSED_JOB_DELETIONS_TASK,
+            0,
+            () -> 5,
+            TimeUnit.MINUTES
         );
 
         //CLEAR_JOB_SCRIPTS(true, CLEAR_JOB_SCRIPTS_TASK, 0, () -> 7, TimeUnit.DAYS);
@@ -664,6 +671,17 @@ class PeriodicTasks {
                 Notifications.sendEmailNotifications();
             }
         };
+
+    // Finish job deletions that were refused because a pair could not be confirmed stopped
+    private static final String retryRefusedJobDeletionsTaskName = "retryRefusedJobDeletionsTask";
+    private static final Runnable RETRY_REFUSED_JOB_DELETIONS_TASK = new RobustRunnable(
+        retryRefusedJobDeletionsTaskName
+    ) {
+        @Override
+        protected void dorun() {
+            Jobs.retryRefusedDeletions();
+        }
+    };
 
     // Check for stuck jobs that have been incomplete for too long
     private static final String checkStuckJobsTaskName = "checkStuckJobsTask";
