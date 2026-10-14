@@ -56,8 +56,11 @@ services:
       # with the queue/job limits, so they currently have no effect. Cores come
       # from CPU partitions or STAREXEC_CONTAINER_CPU_QUOTA_CORES.
       STAREXEC_CONTAINER_DEFAULT_MEMORY_MB: 2048
-      STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT: 600
-      STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT: 600
+      # CPU and wallclock budgets come from each StarExec queue/job. For CPU
+      # placement, configure topology-aware partitions; an unpartitioned CFS
+      # safety cap can instead use STAREXEC_CONTAINER_CPU_QUOTA_CORES.
+      # STAREXEC_CPU_PARTITION_COUNT: 2 # Example only; choose from physical topology
+      # STAREXEC_CONTAINER_CPU_QUOTA_CORES: 1
     
     volumes:
       # Mount container socket for DooD pattern
@@ -71,4 +74,3 @@ services:
       #   2. Check UID matches: id -u (current) vs stat -c %U <socket>
       #   3. For rootless, use group_add to inject the socket's group ID
       - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
-

@@ -309,7 +309,8 @@ COPY --chown=starexec:starexec docker/loading.html ${CATALINA_HOME}/webapps/ROOT
 # Copy entrypoint and configuration scripts
 COPY --chown=starexec:starexec docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chown=starexec:starexec docker/migrations.sh /usr/local/bin/migrations.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/migrations.sh
+COPY --chown=starexec:starexec docker/sync-sge-scripts.sh /usr/local/bin/sync-sge-scripts.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/migrations.sh /usr/local/bin/sync-sge-scripts.sh
 
 # Create sandbox users for job execution
 RUN addgroup -g 2001 starexec1 && \

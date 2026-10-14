@@ -150,8 +150,6 @@ public class PodmanBackend implements Backend {
     private String jobImage;
     private boolean usePrebuiltImage;
     private long defaultMemoryMb;
-    private int defaultCpuLimit;
-    private int defaultWallclockLimit;
     private int maxConcurrentJobs = 1;
     private long exitedContainerCleanupAgeSeconds =
         EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
@@ -197,6 +195,15 @@ public class PodmanBackend implements Backend {
 
     // Thread-safe mapping of execution IDs to container IDs
     private final Map<Integer, String> execIdToContainerId =
+        new ConcurrentHashMap<>();
+
+    // Executions whose container has exited but whose result ContainerJobMonitor has not
+    // ingested yet (execId -> containerId). Reported by getActiveExecutionIds() so the
+    // broken-pair sweep does not file a finished pair as ERROR_SUBMIT_FAIL while the monitor
+    // still owns its result (#324; LocalBackend's awaitingIngestion, KubernetesNativeBackend's
+    // tracking). Released when the monitor removes the container, when the container is gone,
+    // or when the monitor quarantines it and nothing will record the pair any more.
+    private final Map<Integer, String> awaitingIngestion =
         new ConcurrentHashMap<>();
 
     // Atomic counter for execution IDs
@@ -779,9 +786,6 @@ public class PodmanBackend implements Backend {
         jobImage = EnvironmentConfig.getContainerJobImage();
         usePrebuiltImage = EnvironmentConfig.getContainerUsePrebuiltImage();
         defaultMemoryMb = EnvironmentConfig.getContainerDefaultMemoryMb();
-        defaultCpuLimit = EnvironmentConfig.getContainerDefaultCpuLimit();
-        defaultWallclockLimit =
-            EnvironmentConfig.getContainerDefaultWallclockLimit();
         maxConcurrentJobs = EnvironmentConfig.getContainerMaxConcurrentJobs();
         exitedContainerCleanupAgeSeconds =
             EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
@@ -2300,15 +2304,12 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String outputDir
     ) {
-        // NOTE (issue #284): STAREXEC_CPU_LIMIT and STAREXEC_WALLCLOCK_LIMIT below are
-        // overwritten by the job script (it exports them from the queue/job limits),
-        // so these defaults never reach the solver. STAREXEC_CPU_LIMIT is CPU seconds,
-        // not a core count. Only defaultMemoryMb has an effect (HostConfig memory limit).
+        // CPU-time and wallclock budgets deliberately do not come from the container
+        // environment. JobManager renders each pair's queue/job limits into jobscript,
+        // which exports the authoritative values before the solver runs.
         List<String> envVars = new ArrayList<>(
             Arrays.asList(
                 "STAREXEC_PAIR_ID=" + pairId,
-                "STAREXEC_CPU_LIMIT=" + defaultCpuLimit,
-                "STAREXEC_WALLCLOCK_LIMIT=" + defaultWallclockLimit,
                 "STAREXEC_MEM_LIMIT=" + defaultMemoryMb,
                 "CONTAINER_MODE=true", // Signal to job script to use file-based communication
                 "STAREXEC_OUTPUT_DIR=" + outputDir
@@ -3072,7 +3073,9 @@ public class PodmanBackend implements Backend {
                 if (state != null && Boolean.TRUE.equals(state.getRunning())) {
                     activeIds.add(entry.getKey());
                 } else {
-                    // Container finished, remove from tracking
+                    // Container finished: it no longer holds a slot, but its result is
+                    // still owed until the monitor has ingested it.
+                    awaitingIngestion.put(entry.getKey(), entry.getValue());
                     execIdToContainerId.remove(entry.getKey());
                     releaseSubmissionSlot(entry.getKey(), "container no longer running");
                 }
@@ -3080,6 +3083,23 @@ public class PodmanBackend implements Backend {
                 // Container no longer exists
                 execIdToContainerId.remove(entry.getKey());
                 releaseSubmissionSlot(entry.getKey(), "container missing during active scan");
+            }
+        }
+
+        for (Map.Entry<Integer, String> entry : new HashMap<>(awaitingIngestion).entrySet()) {
+            int execId = entry.getKey();
+            String containerId = entry.getValue();
+            ContainerJobMonitor monitor = jobMonitor;
+            if (monitor != null && monitor.isQuarantined(containerId)) {
+                awaitingIngestion.remove(execId, containerId);
+                continue;
+            }
+            try {
+                dockerClient.inspectContainerCmd(containerId).exec();
+                activeIds.add(execId);
+            } catch (NotFoundException e) {
+                // Gone without being ingested: nothing will complete this pair.
+                awaitingIngestion.remove(execId, containerId);
             }
         }
 
@@ -3544,6 +3564,7 @@ public class PodmanBackend implements Backend {
     public void releaseSlotForCompletedContainer(String containerId) {
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
+            awaitingIngestion.put(execId, containerId);
             releaseSubmissionSlot(execId, "container exited; results not yet ingested");
             log.debug(
                 "Released submission slot for exited container " + containerId +
@@ -3552,7 +3573,40 @@ public class PodmanBackend implements Backend {
         }
     }
 
+    /**
+     * Discards an exited container after its pair has been explicitly killed. This is
+     * different from normal result ingestion: the caller has already recorded a killed
+     * pair and is retiring its database row, so retaining the container would let the
+     * monitor retry writes against that missing row.
+     *
+     * @return true if the container is gone or was removed; false if it is running or
+     *         could not be inspected or removed
+     */
+    public boolean discardCompletedContainer(String containerId) {
+        try {
+            Boolean isRunning = inspectContainerRunningState(containerId);
+            if (!Boolean.FALSE.equals(isRunning)) {
+                log.warn(
+                    "Refusing to discard container " + containerId +
+                        " because its stopped state could not be established"
+                );
+                return false;
+            }
+            removeContainerArtifacts(containerId, false);
+        } catch (NotFoundException e) {
+            // A completion poll may have removed it just before this retire request.
+        } catch (Exception e) {
+            log.warn("Could not discard killed pair container " + containerId, e);
+            return false;
+        }
+
+        releaseSlotForCompletedContainer(containerId);
+        containerIdToPairId.invalidate(containerId);
+        return true;
+    }
+
     public void removeCompletedContainer(String containerId) {
+        awaitingIngestion.values().remove(containerId);
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
             releaseSubmissionSlot(execId, "container completed");
@@ -3657,7 +3711,12 @@ public class PodmanBackend implements Backend {
 
     @Override
     public void clearPairTracking(int pairId) {
-        // PodmanBackend does not track pair state - no-op
+        if (jobMonitor == null) {
+            throw new IllegalStateException(
+                "Cannot retire Podman result tracking before the monitor is initialized"
+            );
+        }
+        jobMonitor.clearPairTracking(pairId);
     }
 
     /**

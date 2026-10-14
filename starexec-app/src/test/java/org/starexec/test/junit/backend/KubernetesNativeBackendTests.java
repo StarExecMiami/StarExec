@@ -65,6 +65,103 @@ public class KubernetesNativeBackendTests {
     }
 
     @Test
+    public void missingKubernetesOutputParentHasDistinctDiagnostic() throws Exception {
+        assertMissingKubernetesOutputDiagnostic(java.nio.file.Files.createTempDirectory(
+            "k8s-missing-parent").resolve("absent"), "output directory is missing");
+    }
+
+    @Test
+    public void nonDirectoryKubernetesOutputParentHasDistinctDiagnostic() throws Exception {
+        assertMissingKubernetesOutputDiagnostic(java.nio.file.Files.createTempFile(
+            "k8s-output-file", ".tmp"), "output path is not a directory");
+    }
+
+    @Test
+    public void readableEmptyKubernetesOutputHasDistinctDiagnostic() throws Exception {
+        assertMissingKubernetesOutputDiagnostic(java.nio.file.Files.createTempDirectory(
+            "k8s-empty-parent"), "output directory is readable but status.json is missing");
+    }
+
+    @Test
+    public void deniedKubernetesOutputParentHasDistinctDiagnostic() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-denied-parent");
+        try (org.mockito.MockedStatic<java.nio.file.Files> files = org.mockito.Mockito.mockStatic(
+                java.nio.file.Files.class, org.mockito.Mockito.CALLS_REAL_METHODS)) {
+            files.when(() -> java.nio.file.Files.newDirectoryStream(dir))
+                .thenThrow(new java.nio.file.AccessDeniedException(dir.toString()));
+            assertMissingKubernetesOutputDiagnostic(dir,
+                "output directory cannot be read: AccessDeniedException");
+            files.verify(() -> java.nio.file.Files.newDirectoryStream(dir));
+        }
+    }
+
+    private void assertMissingKubernetesOutputDiagnostic(Path dir, String expected) throws Exception {
+        KubernetesNativeBackend backend = backendWithOutputDir(986, dir);
+        Class<?> type = Class.forName(
+            "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback");
+        Constructor<?> ctor = type.getDeclaredConstructor(KubernetesNativeBackend.class);
+        ctor.setAccessible(true);
+        Object callback = ctor.newInstance(backend);
+        Method read = type.getDeclaredMethod("readStatusRecord", ExecutionRef.class);
+        read.setAccessible(true);
+        ExecutionRef ref = execution(986, "job-986");
+        Object record = read.invoke(callback, ref);
+        assertNull(record);
+        Method stage = type.getDeclaredMethod("readStageNumber", ExecutionRef.class,
+            com.google.gson.JsonObject.class);
+        stage.setAccessible(true);
+        try {
+            stage.invoke(callback, ref, record);
+            org.junit.Assert.fail("absent terminal evidence must still be refused");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            assertTrue(e.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
+            assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains(expected));
+        }
+    }
+
+    @Test
+    public void ownedExecutionMissingOutputMappingIsNotReportedAsLostOwnership() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-owned-output");
+        KubernetesNativeBackend backend = backendWithOutputDir(987, dir);
+        ((Map<?, ?>) getField(backend, "execIdToOutputDir")).clear();
+        assertOutputMappingDiagnostic(backend, execution(987, "job-987"),
+            "execution owns its tracking but has no output directory mapping");
+    }
+
+    @Test
+    public void staleExecutionStillReportsLostOwnership() throws Exception {
+        assertOutputMappingDiagnostic(new KubernetesNativeBackend(), execution(987, "job-987"),
+            "this execution no longer owns its tracking");
+    }
+
+    private void assertOutputMappingDiagnostic(KubernetesNativeBackend backend,
+            ExecutionRef execution, String expected) throws Exception {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(KubernetesNativeBackend.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            Class<?> type = Class.forName(
+                "org.starexec.backend.KubernetesNativeBackend$KubernetesJobCompletionCallback");
+            Constructor<?> ctor = type.getDeclaredConstructor(KubernetesNativeBackend.class);
+            ctor.setAccessible(true);
+            Method method = type.getDeclaredMethod("ingestEarlierStageStatuses",
+                ExecutionRef.class, int.class, int.class, Integer.class);
+            method.setAccessible(true);
+            // Refused and retried, never recorded: the result is EarlierStages.RETRY.
+            assertEquals("RETRY",
+                String.valueOf(method.invoke(ctor.newInstance(backend), execution, 77, 1, null)));
+            assertTrue("expected diagnostic: " + expected,
+                appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains(expected)));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
     public void isErrorTreatsZeroAndNegativeAsError() {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
 
@@ -358,6 +455,85 @@ public class KubernetesNativeBackendTests {
         assertFalse((boolean) isTerminalJob.invoke(backend, runningJob));
         assertTrue((boolean) isTerminalJob.invoke(backend, succeededJob));
         assertTrue((boolean) isTerminalJob.invoke(backend, failedJob));
+    }
+
+    /**
+     * A status.json that shared storage has not exposed yet is retried, not declared absent
+     * (#324). On Quokka's NFS a cached negative lookup hid a just-written status.json for up
+     * to a minute; the monitor processed the completion 4 s after the Job finished, abandoned
+     * the pair, and the broken-pair sweep later filed it as ERROR_SUBMIT_FAIL.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aStatusJsonThatAppearsLateIsStillIngested() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        Path output = java.nio.file.Files.createTempDirectory("k8s-late-status");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(31, "job-31");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(31, 311);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(31, output);
+        givenSafeCluster(backend);
+        KubernetesJobMonitor.JobCompletionCallback callback = instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock.when(() -> JobPairs.getPairStatusLookup(311))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairsMock.when(() -> JobPairs.setPairStatusPreciseResult(
+                    311, 1, StatusCode.STATUS_COMPLETE.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal(), false))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            assertFalse("not visible yet: retry, do not abandon",
+                callback.onJobComplete(execution(31, "job-31")));
+            assertEquals("tracking is held while waiting", "job-31",
+                ((Map<Integer, String>) getField(backend, "execIdToJobName")).get(31));
+
+            // The file becomes visible on a later poll, well inside the window.
+            now.addAndGet(30_000L);
+            Path written = terminalOutput(StatusCode.STATUS_COMPLETE);
+            for (Path f : java.nio.file.Files.list(written).toList()) {
+                java.nio.file.Files.move(f, output.resolve(f.getFileName()));
+            }
+
+            assertTrue(callback.onJobComplete(execution(31, "job-31")));
+            jobPairsMock.verify(() -> JobPairs.setPairStatusPreciseResult(
+                311, 1, StatusCode.STATUS_COMPLETE.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(), false));
+        }
+    }
+
+    /** After the window, a status.json that never appeared is still treated as absent. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aStatusJsonStillMissingAfterTheWindowIsTreatedAsAbsent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        Path output = java.nio.file.Files.createTempDirectory("k8s-no-status");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(32, "job-32");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(32, 321);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(32, output);
+        givenSafeCluster(backend);
+        KubernetesJobMonitor.JobCompletionCallback callback = instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock.when(() -> JobPairs.getPairStatusLookup(321))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+
+            assertFalse(callback.onJobComplete(execution(32, "job-32")));
+            now.addAndGet(119_000L);
+            assertFalse("still inside the 120 s window", callback.onJobComplete(execution(32, "job-32")));
+
+            now.addAndGet(2_000L);
+            assertTrue("past the window: the existing intervention path, handled",
+                callback.onJobComplete(execution(32, "job-32")));
+            assertTrue("tracking released as before",
+                ((Map<Integer, String>) getField(backend, "execIdToJobName")).isEmpty());
+            jobPairsMock.verify(() -> JobPairs.setPairStatusPreciseResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean()), Mockito.never());
+        }
     }
 
     @Test
@@ -1579,6 +1755,103 @@ public class KubernetesNativeBackendTests {
 
         givenJobsFor(client);
         givenPodsFor(client);
+        setField(backend, "kubernetesClient", client);
+    }
+
+    // ---------------------------------------------------------------- active execution ids
+
+    /**
+     * A finished Job whose result the monitor has not ingested yet is still active (#324).
+     *
+     * <p>{@code Jobs.setBrokenPairsToErrorStatus} files every RUNNING pair whose execution is
+     * not active as ERROR_SUBMIT_FAIL. On Quokka 8,527 pairs that had run to completion, each
+     * with its status.json on disk, were filed that way because their Job had finished a
+     * moment before the sweep and the monitor had not reached it yet.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aFinishedJobAwaitingIngestionIsStillActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(31, "job-31");
+        ((Map<Integer, String>) getField(backend, "execIdToJobUid")).put(31, "uid-31");
+        givenManagedJobs(backend,
+            finishedJob(31, "uid-31"));
+
+        assertTrue("its pair still waits for the monitor",
+            backend.getActiveExecutionIds().contains(31));
+    }
+
+    /** Once ingestion released the execution, a finished Job is over: the sweep may act. */
+    @Test
+    public void aFinishedJobNoLongerTrackedIsNotActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        givenManagedJobs(backend,
+            finishedJob(32, "uid-32"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(32));
+    }
+
+    /**
+     * A finished Job that is not the execution occupying its id is not kept alive by the
+     * other one's tracking: execution ids repeat, Job UIDs never do.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aFinishedJobOfAnEarlierExecutionIsNotActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(33, "job-33");
+        ((Map<Integer, String>) getField(backend, "execIdToJobUid")).put(33, "uid-current");
+        givenManagedJobs(backend,
+            finishedJob(33, "uid-earlier"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(33));
+    }
+
+    /** Unchanged: a Job that has not finished is active, tracked or not. */
+    @Test
+    public void anUnfinishedJobIsActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        Job running = jobWithNoConditions(34);
+        running.getStatus().setActive(1);
+        givenManagedJobs(backend, running);
+
+        assertTrue(backend.getActiveExecutionIds().contains(34));
+    }
+
+    /** A Job with a UID that has finished successfully. */
+    private Job finishedJob(int execId, String uid) {
+        Job job = jobWithNoConditions(execId);
+        job.getMetadata().setUid(uid);
+        job.getStatus().setSucceeded(1);
+        return job;
+    }
+
+    /**
+     * Gives the backend a client whose managed-Job listing,
+     * {@code batch().v1().jobs().inNamespace(..).withLabel(..).list()}, returns {@code jobs}.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenManagedJobs(KubernetesNativeBackend backend, Job... jobs) throws Exception {
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
+        V1BatchAPIGroupDSL v1 = Mockito.mock(V1BatchAPIGroupDSL.class);
+        MixedOperation jobOps = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespaced = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        JobList listing = new JobList();
+        listing.setItems(List.of(jobs));
+        Mockito.when(client.batch()).thenReturn(batch);
+        Mockito.when(batch.v1()).thenReturn(v1);
+        Mockito.when(v1.jobs()).thenReturn(jobOps);
+        Mockito.when(jobOps.inNamespace(Mockito.anyString())).thenReturn(namespaced);
+        Mockito.when(namespaced.withLabel(Mockito.anyString(), Mockito.anyString()))
+            .thenReturn(filtered);
+        Mockito.when(filtered.list()).thenReturn(listing);
         setField(backend, "kubernetesClient", client);
     }
 
@@ -3710,12 +3983,12 @@ public class KubernetesNativeBackendTests {
 
         try (MockedStatic<JobPairs> jp = Mockito.mockStatic(JobPairs.class)) {
             stubOpenPair(jp, 631);
-            jp.when(() -> JobPairs.setPairLevelStatusResult(631, status, NOT_REACHED, 2))
+            jp.when(() -> JobPairs.setPairLevelStatusResult(631, status, status, 2))
                 .thenReturn(PairStatusResult.APPLIED);
 
             assertTrue(callback.onJobComplete(execution(63, "job-63")));
 
-            jp.verify(() -> JobPairs.setPairLevelStatusResult(631, status, NOT_REACHED, 2));
+            jp.verify(() -> JobPairs.setPairLevelStatusResult(631, status, status, 2));
             jp.verify(() -> JobPairs.setPairLevelStatusResult(
                 Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()), Mockito.never());
         }

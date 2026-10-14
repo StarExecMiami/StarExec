@@ -2031,15 +2031,17 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getPermissionDetails(@PathParam("id") int userid, @PathParam("spaceId") int spaceId,
 			@Context HttpServletRequest request) {
+		ValidatorStatusCode status = SpaceSecurity.canViewUserPermissions(spaceId, userid,
+				SessionUtil.getUserId(request));
+		if (!status.isSuccess()) {
+			return gson.toJson(status);
+		}
 		User requester = SessionUtil.getUser(request);
 		Permission perm = Permissions.get(userid, spaceId);
-		Space space = Spaces.get(spaceId);
 		Integer parentId = Spaces.getParentSpace(spaceId);
 		boolean isCommunity = parentId == 1;
-		User user = Users.get(userid);
 
-		return gson.toJson(new RESTHelpers.PermissionDetails(perm, space, user, requester, isCommunity));
-
+		return limitGson.toJson(new RESTHelpers.PermissionDetails(perm, requester, isCommunity));
 	}
 
 	/**
@@ -5296,6 +5298,10 @@ public class RESTServices {
 	 * structured fields only. No part of the underlying cause reaches the client.
 	 */
 	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED.equals(e.getReasonCode())) {
+			return "Cannot delete this user yet: one or more active jobs could not be safely stopped and retired. "
+					+ "Resolve the backend state and retry the deletion.";
+		}
 		if (UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE.equals(e.getReasonCode())) {
 			StringBuilder sb = new StringBuilder(
 					"Cannot delete this user: more than one personal space matches, so the "

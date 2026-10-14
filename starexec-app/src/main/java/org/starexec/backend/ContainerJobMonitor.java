@@ -148,6 +148,44 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Retires completed-container ingestion for a pair whose execution was confirmed
+     * stopped. Synchronizing with {@link #checkCompletedJobs()} makes this a drain: a
+     * poll already processing the pair finishes before the caller can delete its rows,
+     * and a later poll cannot rediscover the retained exited container.
+     *
+     * @throws IllegalStateException if the exited container could not be listed or removed
+     */
+    public synchronized void clearPairTracking(int pairId) {
+        final List<PodmanBackend.CompletedContainerInfo> completed;
+        try {
+            completed = backend.getCompletedContainers();
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "Could not inspect completed containers while retiring pair " + pairId,
+                e
+            );
+        }
+
+        boolean allRetired = true;
+        for (PodmanBackend.CompletedContainerInfo info : completed) {
+            if (info.pairId != pairId) {
+                continue;
+            }
+            if (backend.discardCompletedContainer(info.containerId)) {
+                ingestionAttempts.remove(info.containerId);
+                ingestionQuarantine.remove(info.containerId);
+            } else {
+                allRetired = false;
+            }
+        }
+        if (!allRetired) {
+            throw new IllegalStateException(
+                "Could not retire every completed container for pair " + pairId
+            );
+        }
+    }
+
+    /**
      * Cancels the currently scheduled poll (if any) and immediately schedules
      * a new poll at the current interval.
      *
@@ -411,6 +449,19 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Whether this monitor has stopped trying to ingest the container's result.
+     *
+     * <p>A quarantined container keeps its output for an operator, but nothing will record
+     * its pair, so the backend stops reporting it as active and the broken-pair sweep may act.
+     *
+     * @param containerId the exited container
+     * @return true once the container is quarantined
+     */
+    public boolean isQuarantined(String containerId) {
+        return ingestionQuarantine.contains(containerId);
+    }
+
+    /**
      * Counts an infrastructure failure against a container and decides whether to come back.
      *
      * <p>After {@link #MAX_INGESTION_ATTEMPTS} the container is quarantined rather than
@@ -485,6 +536,21 @@ public class ContainerJobMonitor {
         long nextAttemptMillis;
     }
 
+    /** Diagnose missing evidence without changing its existing refusal/retry policy. */
+    private String missingOutputDiagnostic(Path outputPath) {
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(outputPath)) {
+            // Opening alone may defer a filesystem error until iteration starts.
+            entries.iterator().hasNext();
+            return "output directory is readable but status.json is missing";
+        } catch (NoSuchFileException e) {
+            return "output directory is missing";
+        } catch (NotDirectoryException e) {
+            return "output path is not a directory";
+        } catch (IOException | DirectoryIteratorException | SecurityException e) {
+            return "output directory cannot be read: " + e.getClass().getSimpleName();
+        }
+    }
+
     /**
      * Processes a completed job by reading output files and updating the database.
      */
@@ -526,7 +592,8 @@ public class ContainerJobMonitor {
         if (!Files.exists(statusJson)) {
             throw new StageStatusSnapshots.InvalidSnapshotException(
                 "completed container " + info.containerId + " for pair " + info.pairId
-                    + " has no status.json, so neither its result nor stage is known"
+                    + " has no status.json, so neither its result nor stage is known; "
+                    + missingOutputDiagnostic(outputPath)
             );
         }
         JsonObject obj;
@@ -1067,11 +1134,13 @@ public class ContainerJobMonitor {
 
         // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
         // stage to carry the result and it is recorded against the pair itself (#165).
+        // A pair-level failure gives its own status to the stages it prevented, not
+        // NOT_REACHED: no earlier stage failed, and listings and statistics read the stage.
         PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
             ? FencedResultWrites.setPairLevelStatusResult(
                 pairId,
                 status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal(),
+                status.getVal(),
                 attemptNo)
             : FencedResultWrites.setPairStatusPreciseResult(
                 pairId,

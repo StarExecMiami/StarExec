@@ -27,6 +27,7 @@ import org.starexec.backend.PodmanBackend;
 import org.starexec.backend.exception.BackendTransientException;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
+import org.starexec.jobs.JobManager;
 
 /**
  * Unit tests for PodmanBackend container-based job execution.
@@ -382,10 +383,115 @@ public class PodmanBackendTests {
             "ghcr.io/starexecmiami/starexec-job-runner:latest"
         );
         setBackendField("defaultMemoryMb", 2048L);
-        setBackendField("defaultCpuLimit", 600);
-        setBackendField("defaultWallclockLimit", 600);
         setBackendField("containerDataPath", "/app/data");
         setBackendField("hostDataPath", "");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> createEnvironmentVariables(
+        long pairId,
+        String workingDirectory,
+        String outputDirectory
+    ) throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "createEnvironmentVariables",
+            long.class,
+            String.class,
+            String.class
+        );
+        method.setAccessible(true);
+        return (List<String>) method.invoke(
+            backend,
+            pairId,
+            workingDirectory,
+            outputDirectory
+        );
+    }
+
+    private HostConfig createHostConfig(
+        String workingDirectory,
+        String logPath,
+        CpuPartition partition
+    ) throws Exception {
+        Method method = PodmanBackend.class.getDeclaredMethod(
+            "createHostConfig",
+            String.class,
+            String.class,
+            CpuPartition.class
+        );
+        method.setAccessible(true);
+        return (HostConfig) method.invoke(
+            backend,
+            workingDirectory,
+            logPath,
+            partition
+        );
+    }
+
+    @Test
+    public void pairBudgetsComeFromTheGeneratedJobscriptNotContainerDefaults()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+
+        assertFalse(
+            "the container environment must not invent a CPU-time budget that the"
+                + " generated jobscript immediately replaces",
+            environment.stream().anyMatch(value ->
+                value.startsWith("STAREXEC_CPU_LIMIT="))
+        );
+        assertFalse(
+            "the container environment must not invent a wallclock budget that the"
+                + " generated jobscript immediately replaces",
+            environment.stream().anyMatch(value ->
+                value.startsWith("STAREXEC_WALLCLOCK_LIMIT="))
+        );
+
+        String jobscript = Files.readString(
+            Path.of("src/main/java/org/starexec/config/sge/jobscript")
+        );
+        String generated = JobManager.addParametersToJobscript(
+            jobscript,
+            Map.of("$$MAX_CPUTIME$$", "137", "$$MAX_RUNTIME$$", "251")
+        );
+        assertTrue(
+            "the per-pair CPU budget must remain a generated jobscript value",
+            generated.contains("export STAREXEC_CPU_LIMIT='137'")
+        );
+        assertTrue(
+            "the per-pair wallclock budget must remain a generated jobscript value",
+            generated.contains("export STAREXEC_WALLCLOCK_LIMIT='251'")
+        );
+    }
+
+    @Test
+    public void containerMemoryDefaultStillBoundsHostConfigAndIsExposed()
+        throws Exception {
+        configureBackendForSubmitScript();
+
+        HostConfig hostConfig = createHostConfig(
+            "/app/data/jobin/job_1",
+            tempDir.resolve("job.log").toString(),
+            new CpuPartition(0, "0", "0")
+        );
+        long expectedBytes = 2048L * 1024L * 1024L;
+        assertEquals(Long.valueOf(expectedBytes), hostConfig.getMemory());
+        assertEquals(Long.valueOf(expectedBytes), hostConfig.getMemorySwap());
+
+        List<String> environment = createEnvironmentVariables(
+            42L,
+            "/app/data/jobin/job_1",
+            "/app/data/joboutput/job_1"
+        );
+        assertTrue(
+            "GetComputerInfo must still receive the cgroup memory ceiling",
+            environment.contains("STAREXEC_MEM_LIMIT=2048")
+        );
     }
 
     private void configureCreateContainerSuccess(String containerId) {
@@ -739,11 +845,12 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertEquals("Should have one active container", 1, activeIds.size());
         assertTrue("Should contain running container ID", activeIds.contains(1001));
-        assertFalse("Should not contain stopped container ID", activeIds.contains(1002));
+        // An exited container that still exists has a result the monitor has not ingested yet
+        // (#324): it stays active so the broken-pair sweep cannot file it as a submit failure.
+        assertTrue("An exited, uningested container stays active", activeIds.contains(1002));
 
-        // Stopped container should be removed from tracking
+        // It no longer holds an execution slot, so it leaves slot tracking
         assertFalse("Stopped container should be removed from tracking", execIdMap.containsKey(1002));
     }
 
@@ -766,7 +873,7 @@ public class PodmanBackendTests {
         Set<Integer> activeIds = backend.getActiveExecutionIds();
 
         // Verify
-        assertTrue("Stopped container should not be active", activeIds.isEmpty());
+        assertTrue("Its result is still owed, so it stays active", activeIds.contains(TEST_EXEC_ID));
         assertFalse("Slot holder should be released", getSlotHolderSet().contains(TEST_EXEC_ID));
         assertEquals("Active submission slots should be decremented", 0, getActiveSubmissionSlots());
     }
@@ -788,6 +895,69 @@ public class PodmanBackendTests {
         // Verify
         assertTrue("Active IDs should be empty", activeIds.isEmpty());
         assertFalse("Deleted container should be removed from tracking", execIdMap.containsKey(1001));
+    }
+
+    /** Once the monitor has ingested and removed the container, the execution is over. */
+    @Test
+    public void testGetActiveExecutionIds_IngestedContainerIsNoLongerActive() throws Exception {
+        givenExitedTrackedContainer(1003, "ingested-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1003));
+
+        backend.removeCompletedContainer("ingested-container");
+
+        assertFalse(backend.getActiveExecutionIds().contains(1003));
+    }
+
+    /** A container the monitor quarantined will never be ingested: the sweep may act. */
+    @Test
+    public void testGetActiveExecutionIds_QuarantinedContainerIsNotActive() throws Exception {
+        givenExitedTrackedContainer(1004, "quarantined-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1004));
+        ContainerJobMonitor monitor = mock(ContainerJobMonitor.class);
+        when(monitor.isQuarantined("quarantined-container")).thenReturn(true);
+        Field monitorField = PodmanBackend.class.getDeclaredField("jobMonitor");
+        monitorField.setAccessible(true);
+        monitorField.set(backend, monitor);
+
+        assertFalse(backend.getActiveExecutionIds().contains(1004));
+    }
+
+    /** An exited container that disappeared without ingestion is not kept alive. */
+    @Test
+    public void testGetActiveExecutionIds_VanishedExitedContainerIsNotActive() throws Exception {
+        InspectContainerCmd inspect = givenExitedTrackedContainer(1005, "vanished-container");
+        assertTrue(backend.getActiveExecutionIds().contains(1005));
+        when(inspect.exec()).thenThrow(new NotFoundException("gone"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(1005));
+    }
+
+    /** The retry path releases the slot of an exited container; its result is still owed. */
+    @Test
+    public void testReleaseSlotForCompletedContainer_KeepsTheExecutionActive() throws Exception {
+        Map<Integer, String> execIdMap = getExecIdMap();
+        execIdMap.put(1006, "retrying-container");
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        when(mockDockerClient.inspectContainerCmd("retrying-container")).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(mock(InspectContainerResponse.class));
+
+        backend.releaseSlotForCompletedContainer("retrying-container");
+
+        assertFalse(execIdMap.containsKey(1006));
+        assertTrue(backend.getActiveExecutionIds().contains(1006));
+    }
+
+    private InspectContainerCmd givenExitedTrackedContainer(int execId, String containerId)
+            throws Exception {
+        getExecIdMap().put(execId, containerId);
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        InspectContainerResponse response = mock(InspectContainerResponse.class);
+        InspectContainerResponse.ContainerState state = mock(InspectContainerResponse.ContainerState.class);
+        when(mockDockerClient.inspectContainerCmd(containerId)).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(response);
+        when(response.getState()).thenReturn(state);
+        when(state.getRunning()).thenReturn(false);
+        return inspect;
     }
 
     // ==================== No-op Method Tests ====================
@@ -904,6 +1074,34 @@ public class PodmanBackendTests {
 
         verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
         verify(mockRemoveContainerCmd).withRemoveVolumes(true);
+    }
+
+    @Test
+    public void discardCompletedContainerRemovesOnlyAnInspectedExitedContainer() throws Exception {
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(false);
+
+        assertTrue(backend.discardCompletedContainer(TEST_CONTAINER_ID));
+
+        verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        verify(mockRemoveContainerCmd).withForce(false);
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
+    }
+
+    @Test
+    public void discardCompletedContainerRefusesWhenRunningStateIsUnknownOrActive() throws Exception {
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(true);
+
+        assertFalse(backend.discardCompletedContainer(TEST_CONTAINER_ID));
+
+        verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
     }
 
     @Test

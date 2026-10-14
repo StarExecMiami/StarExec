@@ -2707,20 +2707,32 @@ public class RESTHelpers {
 		@Expose
 		private final Permission perm;
 		@Expose
-		private final Space space;
-		@Expose
-		private final User user;
-		@Expose
-		private final User requester;
+		private final RequesterRole requester;
 		@Expose
 		private final boolean isCommunity;
 
-		public PermissionDetails(Permission p, Space s, User u, User r, boolean c) {
+		/**
+		 * @param p The permissions being described
+		 * @param r The user asking. Only their role is sent back; the page uses it to pick a tooltip layout.
+		 * @param c Whether the space is a community
+		 */
+		public PermissionDetails(Permission p, User r, boolean c) {
 			this.perm = p;
-			this.space = s;
-			this.user = u;
-			this.requester = r;
+			this.requester = new RequesterRole(r == null ? null : r.getRole());
 			this.isCommunity = c;
+		}
+	}
+
+	/**
+	 * The one attribute of the requesting user that a permission response carries. Deliberately not a
+	 * {@link User}, so e-mail addresses and quotas cannot leak through this response.
+	 */
+	protected static class RequesterRole {
+		@Expose
+		private final String role;
+
+		public RequesterRole(String role) {
+			this.role = role;
 		}
 	}
 }
