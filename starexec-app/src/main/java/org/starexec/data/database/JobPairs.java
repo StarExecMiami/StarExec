@@ -2541,6 +2541,8 @@ public class JobPairs {
      * earlier stage failed, which is not what happened, and every pair listing, status filter
      * and statistic reads the stage: NOT_REACHED there showed a failed pair as "stage not
      * reached" and counted it as incomplete, with the real error visible nowhere (#324).
+     * A duplicate delivery of the same status does not rewrite the stages, so rows recorded
+     * the old way are repaired by V0118, not by re-ingestion.
      *
      * @param pairId the pair
      * @param terminalStatus the status to record; must be terminal
