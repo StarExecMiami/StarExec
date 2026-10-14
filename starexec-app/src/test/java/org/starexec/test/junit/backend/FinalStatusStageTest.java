@@ -541,6 +541,16 @@ public class FinalStatusStageTest {
 			Method onComplete = callback.getClass().getDeclaredMethod(
 					"onJobComplete", ExecutionRef.class);
 			onComplete.setAccessible(true);
+			// A missing status.json is first given a bounded window to become visible on
+			// shared storage (#324); this test is about what happens once that has passed.
+			java.util.concurrent.atomic.AtomicLong now =
+					new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+			java.lang.reflect.Field clock = KubernetesNativeBackend.class.getDeclaredField("clock");
+			clock.setAccessible(true);
+			clock.set(backend, (java.util.function.LongSupplier) now::get);
+			assertFalse("inside the visibility window: retried",
+					(boolean) onComplete.invoke(callback, execution));
+			now.addAndGet(121_000L);
 			boolean handled = (boolean) onComplete.invoke(callback, execution);
 
 			assertTrue("the deterministic refusal must not be retried forever", handled);

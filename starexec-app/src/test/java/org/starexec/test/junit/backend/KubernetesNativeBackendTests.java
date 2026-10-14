@@ -360,6 +360,85 @@ public class KubernetesNativeBackendTests {
         assertTrue((boolean) isTerminalJob.invoke(backend, failedJob));
     }
 
+    /**
+     * A status.json that shared storage has not exposed yet is retried, not declared absent
+     * (#324). On Quokka's NFS a cached negative lookup hid a just-written status.json for up
+     * to a minute; the monitor processed the completion 4 s after the Job finished, abandoned
+     * the pair, and the broken-pair sweep later filed it as ERROR_SUBMIT_FAIL.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aStatusJsonThatAppearsLateIsStillIngested() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        Path output = java.nio.file.Files.createTempDirectory("k8s-late-status");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(31, "job-31");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(31, 311);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(31, output);
+        givenSafeCluster(backend);
+        KubernetesJobMonitor.JobCompletionCallback callback = instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock.when(() -> JobPairs.getPairStatusLookup(311))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+            jobPairsMock.when(() -> JobPairs.setPairStatusPreciseResult(
+                    311, 1, StatusCode.STATUS_COMPLETE.getVal(),
+                    StatusCode.STATUS_NOT_REACHED.getVal(), false))
+                .thenReturn(PairStatusResult.APPLIED);
+
+            assertFalse("not visible yet: retry, do not abandon",
+                callback.onJobComplete(execution(31, "job-31")));
+            assertEquals("tracking is held while waiting", "job-31",
+                ((Map<Integer, String>) getField(backend, "execIdToJobName")).get(31));
+
+            // The file becomes visible on a later poll, well inside the window.
+            now.addAndGet(30_000L);
+            Path written = terminalOutput(StatusCode.STATUS_COMPLETE);
+            for (Path f : java.nio.file.Files.list(written).toList()) {
+                java.nio.file.Files.move(f, output.resolve(f.getFileName()));
+            }
+
+            assertTrue(callback.onJobComplete(execution(31, "job-31")));
+            jobPairsMock.verify(() -> JobPairs.setPairStatusPreciseResult(
+                311, 1, StatusCode.STATUS_COMPLETE.getVal(),
+                StatusCode.STATUS_NOT_REACHED.getVal(), false));
+        }
+    }
+
+    /** After the window, a status.json that never appeared is still treated as absent. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aStatusJsonStillMissingAfterTheWindowIsTreatedAsAbsent() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+        setField(backend, "clock", (java.util.function.LongSupplier) now::get);
+        Path output = java.nio.file.Files.createTempDirectory("k8s-no-status");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(32, "job-32");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(32, 321);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(32, output);
+        givenSafeCluster(backend);
+        KubernetesJobMonitor.JobCompletionCallback callback = instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock.when(() -> JobPairs.getPairStatusLookup(321))
+                .thenReturn(foundLookup(StatusCode.STATUS_RUNNING.getVal()));
+
+            assertFalse(callback.onJobComplete(execution(32, "job-32")));
+            now.addAndGet(119_000L);
+            assertFalse("still inside the 120 s window", callback.onJobComplete(execution(32, "job-32")));
+
+            now.addAndGet(2_000L);
+            assertTrue("past the window: the existing intervention path, handled",
+                callback.onJobComplete(execution(32, "job-32")));
+            assertTrue("tracking released as before",
+                ((Map<Integer, String>) getField(backend, "execIdToJobName")).isEmpty());
+            jobPairsMock.verify(() -> JobPairs.setPairStatusPreciseResult(
+                Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                Mockito.anyBoolean()), Mockito.never());
+        }
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     public void completionCallbackRetriesWhenDatabaseUpdateFails() throws Exception {
