@@ -914,6 +914,57 @@ public class KubernetesNativeBackendTests {
         }
     }
 
+    /**
+     * A running pod's Job outlives its foreground delete by the time the pod takes to stop.
+     * The kill waits for that rather than calling it unproven on the first read. Reported at
+     * once, every kill of a running pod was unproven: deleting a running job left its pairs
+     * RUNNING with nothing to retire them, and deleting its owner was refused.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aKillWaitsForTheForegroundDeletionToFinish() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        setField(backend, "killConfirmWaitMillis", 5_000L);
+        setField(backend, "killConfirmPollMillis", 1L);
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(42, "job-42");
+        // By the time the Job is gone its pod has stopped: that is what Foreground waits for.
+        givenJobDeletion(backend, "job-42", true, null, podInPhase(42, "Succeeded"));
+        Job terminating = jobWithNoConditions(42);
+        Mockito.when(jobResource(backend, "job-42").get())
+            .thenReturn(terminating, terminating, null);
+        restore(backend, 42);
+
+        assertEquals(Backend.KillOutcome.CONFIRMED_SAFE, killConfirmed(backend, 42));
+        assertFalse("the slot is released once the Job is gone", holdingSlot(backend).contains(42));
+    }
+
+    /** The wait is bounded: a Job that outlives it still leaves the kill unproven and held. */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aKillStaysUnprovenWhenTheJobOutlivesTheWait() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        setField(backend, "killConfirmWaitMillis", 50L);
+        setField(backend, "killConfirmPollMillis", 5L);
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(43, "job-43");
+        givenJobDeletion(backend, "job-43", true, jobWithNoConditions(43), podInPhase(43, "Running"));
+        restore(backend, 43);
+
+        long start = System.nanoTime();
+        assertEquals(Backend.KillOutcome.UNPROVEN, killConfirmed(backend, 43));
+        assertTrue("the wait must be bounded",
+            System.nanoTime() - start < java.util.concurrent.TimeUnit.SECONDS.toNanos(5));
+        assertTrue("accounting is retained", holdingSlot(backend).contains(43));
+    }
+
+    /** The mocked Job resource {@code givenJobDeletion} installed, to script its reads. */
+    private ScalableResource<Job> jobResource(KubernetesNativeBackend backend, String jobName)
+        throws Exception {
+        KubernetesClient client = (KubernetesClient) getField(backend, "kubernetesClient");
+        return client.batch().v1().jobs().inNamespace("starexec").withName(jobName);
+    }
+
     // ------------------------------------------------------------------
     // controller safety: a batch/v1 Job can create a REPLACEMENT pod
     // ------------------------------------------------------------------

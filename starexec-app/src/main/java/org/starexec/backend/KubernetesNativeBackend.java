@@ -462,6 +462,22 @@ public class KubernetesNativeBackend implements Backend {
      */
     private volatile long statusVisibilityGraceMillis = 120_000L;
 
+    /**
+     * How long a kill waits for its foreground deletion to finish before reporting UNPROVEN.
+     *
+     * <p>Foreground propagation keeps a Job behind its finalizer until its pods are gone, so
+     * right after the delete a running pod's Job is always still there. Reporting that at once
+     * made every kill of a running pod unproven: deleting a running job left its pairs RUNNING
+     * with nothing coming back to retire them, and deleting a user with a running job was
+     * refused. Long enough for the default 30 s termination grace period plus API latency;
+     * {@code STAREXEC_K8S_KILL_CONFIRM_SECONDS}. Zero until {@code initialize} reads it, so a
+     * backend that was never initialised keeps the immediate check.
+     */
+    private volatile long killConfirmWaitMillis = 0L;
+
+    /** How often that wait re-reads the Job; a field so tests need not sleep for real. */
+    private volatile long killConfirmPollMillis = 1_000L;
+
     /** When a finished execution was first found without a visible status.json. */
     private final Map<ExecutionRef, Long> statusAbsentSince = new ConcurrentHashMap<>();
 
@@ -788,6 +804,8 @@ public class KubernetesNativeBackend implements Backend {
         ttlSecondsAfterFinished = getEnvInt("STAREXEC_K8S_JOB_TTL_SECONDS", 3600);
         statusVisibilityGraceMillis =
             1000L * Math.max(0, getEnvInt("STAREXEC_K8S_STATUS_GRACE_SECONDS", 120));
+        killConfirmWaitMillis =
+            1000L * Math.max(0, getEnvInt("STAREXEC_K8S_KILL_CONFIRM_SECONDS", 45));
         backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
         maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", 50);
         if (maxConcurrentJobs < 1) {
@@ -3497,6 +3515,33 @@ public class KubernetesNativeBackend implements Backend {
         return !kubernetesJobExists(jobName);
     }
 
+    /**
+     * Waits, up to {@link #killConfirmWaitMillis}, for a Job whose foreground deletion has been
+     * requested to disappear. Reads fail closed exactly as {@link #kubernetesJobExists} does:
+     * a read that cannot see the API counts as "still there".
+     *
+     * <p>Runs on real time, not {@code clock}: a test that freezes the clock must not be able
+     * to turn this into an endless loop.
+     *
+     * @return true once the Job is confirmed absent; false if it outlasted the wait or the
+     *         thread was interrupted
+     */
+    private boolean awaitKubernetesJobGone(String jobName) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(killConfirmWaitMillis);
+        while (System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(Math.max(1L, killConfirmPollMillis));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (!kubernetesJobExists(jobName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** A Job observation that keeps "absent" and "cannot tell" apart. */
     private enum JobPresence {
         PRESENT,
@@ -3680,15 +3725,19 @@ public class KubernetesNativeBackend implements Backend {
             return KillOutcome.UNPROVEN;
         }
 
-        if (!ensureKubernetesJobGone(jobName)) {
+        // A running pod's Job is still present right after the delete: foreground propagation
+        // keeps it behind its finalizer until the pod is gone. So wait, bounded, for that to
+        // happen before calling the kill unproven; the pod normally terminates well inside
+        // its grace period.
+        if (!ensureKubernetesJobGone(jobName) && !awaitKubernetesJobGone(jobName)) {
             log.error(
                 "Kubernetes Job " + jobName + " (execId " + execId + ") is still present" +
-                " after a foreground delete; refusing to release its accounting because a" +
-                " pod for it may still execute and a replacement could then run twice."
+                " " + (killConfirmWaitMillis / 1000) + " s after a foreground delete;" +
+                " refusing to release its accounting because a pod for it may still" +
+                " execute and a replacement could then run twice."
             );
-            // The normal case for a running pod, not an anomaly: foreground propagation keeps
-            // the Job behind its finalizer until its pods are gone. So the hold must have an
-            // owner that comes back once it is, or the slot stays reserved until restart.
+            // Past the wait the pod has outlived its grace period, so the hold must have an
+            // owner that comes back once it is gone, or the slot stays reserved until restart.
             recordUnverified(execId, "kill of " + jobName + ": Job still present after delete");
             return KillOutcome.UNPROVEN;
         }
