@@ -9,6 +9,7 @@ import org.starexec.backend.Backend;
 import org.starexec.constants.R;
 import org.starexec.data.database.Common;
 import org.starexec.data.database.Jobs;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.test.util.DatabaseTestSupport;
 
@@ -257,6 +258,104 @@ public class JobsKillProtocolSqlTest extends Common {
         assertEquals("a pair whose execution may still run must keep its status",
                 StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
         assertEquals(StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
+    }
+
+    @Test
+    public void directJobDeletionPreservesRowsWhenExecutionStopIsUnproven() throws Exception {
+        R.BACKEND = backendReturning(Backend.KillOutcome.UNPROVEN);
+
+        assertFalse("deletion must report that an active execution could not be retired",
+                Jobs.delete(jobId));
+
+        assertEquals("the job row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId));
+        assertEquals("the job must not be marked deleted", 0,
+                selectInt("SELECT count(*) FROM starexec.jobs WHERE id = " + jobId + " AND deleted"));
+        assertEquals("the running pair row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + runningPairId));
+        assertEquals("the unproven running pair must retain its active status",
+                StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        assertEquals("the enqueued pair row must remain", 1,
+                selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = " + enqueuedPairId));
+        assertEquals("the unproven enqueued pair must retain its active status",
+                StatusCode.STATUS_ENQUEUED.getVal(), statusOf(enqueuedPairId));
+    }
+
+    @Test
+    public void directDeletionStopsWhenTheDeletedMarkerCannotBeStored() throws Exception {
+        R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        String suffix = java.util.UUID.randomUUID().toString().replace("-", "");
+        String functionName = "kill_protocol_reject_delete_" + suffix;
+        String triggerName = functionName + "_trigger";
+
+        try {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("CREATE FUNCTION starexec." + functionName
+                        + "() RETURNS trigger AS $$ BEGIN"
+                        + " RAISE EXCEPTION 'injected deleted-marker failure';"
+                        + " END; $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER " + triggerName
+                        + " BEFORE UPDATE OF deleted ON starexec.jobs"
+                        + " FOR EACH ROW WHEN (NEW.deleted AND NOT OLD.deleted)"
+                        + " EXECUTE FUNCTION starexec." + functionName + "()");
+            }
+
+            assertFalse("deletion must stop if the database could not record the deleted marker",
+                    Jobs.delete(jobId));
+            assertEquals("the job remains available and undeleted", 0,
+                    selectInt("SELECT count(*) FROM starexec.jobs WHERE id = "
+                            + jobId + " AND deleted"));
+            assertEquals("the running pair row must remain", 1,
+                    selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
+                            + runningPairId));
+            assertEquals("the enqueued pair row must remain", 1,
+                    selectInt("SELECT count(*) FROM starexec.job_pairs WHERE id = "
+                            + enqueuedPairId));
+        } finally {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("DROP TRIGGER IF EXISTS " + triggerName
+                        + " ON starexec.jobs");
+                statement.execute("DROP FUNCTION IF EXISTS starexec." + functionName + "()");
+            }
+        }
+    }
+
+    @Test
+    public void confirmedBackendStopIsNotReportedWhenStatusPersistenceFails() throws Exception {
+        R.BACKEND = backendReturning(Backend.KillOutcome.CONFIRMED_SAFE);
+        String suffix = java.util.UUID.randomUUID().toString().replace("-", "");
+        String functionName = "kill_protocol_reject_status_" + suffix;
+        String triggerName = functionName + "_trigger";
+
+        try {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("CREATE FUNCTION starexec." + functionName
+                        + "() RETURNS trigger AS $$ BEGIN"
+                        + " RAISE EXCEPTION 'injected pair-status failure';"
+                        + " END; $$ LANGUAGE plpgsql");
+                statement.execute("CREATE TRIGGER " + triggerName
+                        + " BEFORE UPDATE OF status_code ON starexec.job_pairs"
+                        + " FOR EACH ROW WHEN (OLD.id = " + runningPairId
+                        + " AND NEW.status_code = "
+                        + StatusCode.STATUS_KILLED.getVal() + ")"
+                        + " EXECUTE FUNCTION starexec." + functionName + "()");
+            }
+
+            assertFalse("status persistence failure must not report a retired pair",
+                    JobPairs.killPairConfirmed(runningPairId, 771001));
+            assertEquals("the failed write leaves the pair visibly in flight",
+                    StatusCode.STATUS_RUNNING.getVal(), statusOf(runningPairId));
+        } finally {
+            try (Connection con = Common.getConnection();
+                    java.sql.Statement statement = con.createStatement()) {
+                statement.execute("DROP TRIGGER IF EXISTS " + triggerName
+                        + " ON starexec.job_pairs");
+                statement.execute("DROP FUNCTION IF EXISTS starexec." + functionName + "()");
+            }
+        }
     }
 
     // ------------------------------------------------------------------

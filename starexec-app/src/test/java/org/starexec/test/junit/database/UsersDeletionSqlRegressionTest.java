@@ -3,18 +3,33 @@ package org.starexec.test.junit.database;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
+import org.starexec.backend.Backend;
+import org.starexec.constants.R;
 import org.starexec.data.database.Common;
+import org.starexec.data.database.Jobs;
+import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.Spaces;
 import org.starexec.data.database.Users;
 import org.starexec.data.to.Space;
+import org.starexec.data.to.Status.StatusCode;
 import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -22,6 +37,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Regression tests for user deletion.
@@ -53,6 +71,8 @@ public class UsersDeletionSqlRegressionTest extends Common {
 	private Integer victimId;
 	private Integer bystanderId;
 	private String installedTrigger;
+	private int runningJobId;
+	private int runningPairId;
 
 	@BeforeClass
 	public static void requireDatabase() {
@@ -165,6 +185,38 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		}
 	}
 
+	private void addRunningJob(int userId, int execId) throws Exception {
+		try (Connection con = Common.getConnection()) {
+			runningJobId = insertId(con,
+					"INSERT INTO starexec.jobs (user_id, name, total_pairs, disk_size)"
+							+ " VALUES (?, ?, 1, 0) RETURNING id",
+					userId, "udel_" + TAG + "_running_job");
+			runningPairId = insertId(con,
+					"INSERT INTO starexec.job_pairs (job_id, sge_id, status_code, primary_jobpair_data)"
+							+ " VALUES (?, ?, ?, 1) RETURNING id",
+					runningJobId, execId, StatusCode.STATUS_RUNNING.getVal());
+			try (PreparedStatement ps = con.prepareStatement(
+					"INSERT INTO starexec.jobpair_stage_data"
+							+ " (jobpair_id, stage_number, status_code, disk_size) VALUES (?, 1, ?, 4096)")) {
+				ps.setInt(1, runningPairId);
+				ps.setInt(2, StatusCode.STATUS_RUNNING.getVal());
+				assertEquals(1, ps.executeUpdate());
+			}
+		}
+	}
+
+	private static int insertId(Connection con, String sql, Object... values) throws Exception {
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			for (int i = 0; i < values.length; i++) {
+				ps.setObject(i + 1, values[i]);
+			}
+			try (ResultSet rs = ps.executeQuery()) {
+				assertTrue("insert must return an id", rs.next());
+				return rs.getInt(1);
+			}
+		}
+	}
+
 	// ------------------------------------------------------------- DDL injection
 
 	/**
@@ -226,6 +278,42 @@ public class UsersDeletionSqlRegressionTest extends Common {
 		}
 	}
 
+	private int firstQueueId(Connection con) throws Exception {
+		try (Statement st = con.createStatement();
+			 ResultSet rs = st.executeQuery("SELECT id FROM starexec.queues ORDER BY id LIMIT 1")) {
+			assertTrue("the database fixture must provide at least one queue", rs.next());
+			return rs.getInt(1);
+		}
+	}
+
+	private int countJobsByName(String name) throws Exception {
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(
+				"SELECT count(*) FROM starexec.jobs WHERE name = ?")) {
+			ps.setString(1, name);
+			try (ResultSet rs = ps.executeQuery()) {
+				rs.next();
+				return rs.getInt(1);
+			}
+		}
+	}
+
+	private boolean awaitAdvisoryWait(String applicationName, long timeoutMillis) throws Exception {
+		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+		try (Connection con = Common.getConnection(); PreparedStatement ps = con.prepareStatement(
+				"SELECT wait_event_type, wait_event FROM pg_stat_activity WHERE application_name = ?")) {
+			while (System.nanoTime() < deadline) {
+				ps.setString(1, applicationName);
+				try (ResultSet rs = ps.executeQuery()) {
+					if (rs.next() && "Lock".equals(rs.getString(1)) && "advisory".equals(rs.getString(2))) {
+						return true;
+					}
+				}
+				Thread.sleep(50);
+			}
+		}
+		return false;
+	}
+
 	private int countUsers(int id) throws Exception {
 		return countWhere("SELECT count(*) FROM starexec.users WHERE id = ?", id);
 	}
@@ -256,6 +344,278 @@ public class UsersDeletionSqlRegressionTest extends Common {
 				countWhere("SELECT count(*) FROM starexec.analytics_users WHERE user_id = ?", victimId));
 		assertEquals("personal space must be gone", 0, countSpaces(personalSpaceId));
 		assertEquals("the membership's permission row must not leak", 0, countPermissions(perm));
+	}
+
+	@Test
+	public void deletionStopsAndRetiresOwnedRunningPairsBeforeCascadingRows() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771101;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		try {
+			assertTrue("user deletion should proceed after the execution is safely retired",
+					Users.deleteUser(victimId));
+			verify(backend).killPairConfirmed(execId);
+			verify(backend).clearPairTracking(runningPairId);
+			assertEquals("the owned job must be cascaded only after its pair was stopped", 0,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("the active pair must be gone after successful user deletion", 0,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionRetriesTrackingRetirementBeforeCascadingKilledRows() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771105;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		Mockito.doThrow(new IllegalStateException("injected one-time tracking failure"))
+				.doNothing().when(backend).clearPairTracking(runningPairId);
+		try {
+			try {
+				Users.deleteUser(victimId);
+				fail("a tracking failure must block user deletion");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+
+			assertEquals("user must remain after tracking cleanup fails", 1, countUsers(victimId));
+			assertEquals("job must remain after tracking cleanup fails", 1,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("pair must remain after tracking cleanup fails", 1,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals("confirmed stop must be persisted for a safe retry",
+					StatusCode.STATUS_KILLED.getVal(),
+					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			verify(backend).killPairConfirmed(execId);
+			verify(backend).clearPairTracking(runningPairId);
+
+			assertTrue("retry must retire tracking before deleting the retained rows",
+					Users.deleteUser(victimId));
+			assertEquals("user deletion should complete after tracking retirement", 0,
+					countUsers(victimId));
+			assertEquals("job must be cascaded only after tracking retirement", 0,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("pair must be cascaded only after tracking retirement", 0,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			verify(backend, Mockito.times(2)).clearPairTracking(runningPairId);
+			verify(backend, Mockito.times(1)).killPairConfirmed(execId);
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionRetriesTrackingRetirementForKilledPairInCompleteJob() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771106;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.CONFIRMED_SAFE);
+		try {
+			assertTrue("the pair should be marked killed only after a confirmed stop",
+					JobPairs.killPairConfirmed(runningPairId, execId));
+			assertTrue("a job containing only terminal pairs is complete", Jobs.isJobComplete(runningJobId));
+			Mockito.doThrow(new IllegalStateException("injected one-time tracking failure"))
+					.doNothing().when(backend).clearPairTracking(runningPairId);
+
+			try {
+				Users.deleteUser(victimId);
+				fail("a tracking failure must block deletion of a complete job");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+			assertEquals("the user must remain after tracking cleanup fails", 1, countUsers(victimId));
+			assertEquals("the complete job must remain", 1,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("the killed pair must remain", 1,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+
+			assertTrue("retry must clear tracking even though the job is already complete",
+					Users.deleteUser(victimId));
+			assertEquals("user deletion should complete after tracking retirement", 0,
+					countUsers(victimId));
+			verify(backend, Mockito.times(2)).clearPairTracking(runningPairId);
+			verify(backend, Mockito.times(1)).killPairConfirmed(execId);
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionPreservesRowsWhenAnOwnedExecutionCannotBeStopped() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771102;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		when(backend.killPairConfirmed(execId)).thenReturn(Backend.KillOutcome.UNPROVEN);
+		try {
+			try {
+				Users.deleteUser(victimId);
+				fail("deletion must stop when a backend execution cannot be confirmed stopped");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+			assertEquals("the user must remain after an unproven kill", 1, countUsers(victimId));
+			assertEquals("the job must remain after an unproven kill", 1,
+					countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("the pair must remain after an unproven kill", 1,
+					countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			assertEquals(StatusCode.STATUS_RUNNING.getVal(),
+					countWhere("SELECT status_code FROM starexec.job_pairs WHERE id = ?", runningPairId));
+			verify(backend, org.mockito.Mockito.never()).clearPairTracking(org.mockito.ArgumentMatchers.anyInt());
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionPreservesRowsWhenRunningPairEnumerationFails() throws Exception {
+		buildVictimWithAnalytics();
+		addRunningJob(victimId, 771104);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		try (MockedStatic<Jobs> jobs = Mockito.mockStatic(Jobs.class, Mockito.CALLS_REAL_METHODS)) {
+			jobs.when(() -> Jobs.getRunningPairs(runningJobId))
+					.thenThrow(new IllegalStateException("injected running-pair query failure"));
+
+			try {
+				Users.deleteUser(victimId);
+				fail("user deletion must stop when running pairs cannot be enumerated");
+			} catch (UserDeletionBlockedException expected) {
+				assertEquals(UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+						expected.getReasonCode());
+			}
+
+			assertEquals("the user must remain when active pairs could not be enumerated",
+					1, countUsers(victimId));
+			assertEquals("the job must remain when active pairs could not be enumerated",
+					1, countWhere("SELECT count(*) FROM starexec.jobs WHERE id = ?", runningJobId));
+			assertEquals("the running pair must remain when enumeration failed",
+					1, countWhere("SELECT count(*) FROM starexec.job_pairs WHERE id = ?"
+							+ " AND status_code = " + StatusCode.STATUS_RUNNING.getVal(), runningPairId));
+			Mockito.verify(backend, Mockito.never())
+					.killPairConfirmed(Mockito.anyInt());
+		} finally {
+			R.BACKEND = original;
+		}
+	}
+
+	@Test
+	public void deletionSerializesAgainstConcurrentJobCreation() throws Exception {
+		buildVictimWithAnalytics();
+		int execId = 771103;
+		addRunningJob(victimId, execId);
+		Backend original = R.BACKEND;
+		Backend backend = mock(Backend.class);
+		R.BACKEND = backend;
+		String concurrentJobName = "udel_" + TAG + "_concurrent";
+		String contenderApplicationName = "udel-addjob-" + TAG;
+		CountDownLatch killEntered = new CountDownLatch(1);
+		CountDownLatch allowKill = new CountDownLatch(1);
+		when(backend.killPairConfirmed(execId)).thenAnswer(invocation -> {
+			killEntered.countDown();
+			if (!allowKill.await(10, TimeUnit.SECONDS)) {
+				return Backend.KillOutcome.UNPROVEN;
+			}
+			return Backend.KillOutcome.CONFIRMED_SAFE;
+		});
+
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+		Future<Boolean> deletion = null;
+		Future<Integer> concurrentAdd = null;
+		try {
+			deletion = executor.submit(() -> Users.deleteUser(victimId));
+			assertTrue("deletion should reach the backend after acquiring the lifecycle lock",
+					killEntered.await(5, TimeUnit.SECONDS));
+
+			int queueId;
+			try (Connection con = Common.getConnection()) {
+				queueId = firstQueueId(con);
+			}
+			concurrentAdd = executor.submit(() -> {
+				try (Connection con = Common.getConnection();
+					 PreparedStatement app = con.prepareStatement("SELECT set_config('application_name', ?, false)")) {
+					app.setString(1, contenderApplicationName);
+					app.execute();
+					try (PreparedStatement ps = con.prepareStatement(
+							"SELECT starexec.AddJob(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+						ps.setInt(1, victimId);
+						ps.setString(2, concurrentJobName);
+						ps.setNull(3, Types.VARCHAR);
+						ps.setInt(4, queueId);
+						ps.setInt(5, personalSpaceId);
+						ps.setLong(6, 1L);
+						ps.setInt(7, 1);
+						ps.setInt(8, 1);
+						ps.setInt(9, 0);
+						ps.setInt(10, 0);
+						ps.setLong(11, 1L);
+						ps.setBoolean(12, false);
+						ps.setBoolean(13, false);
+						ps.setBoolean(14, false);
+						ps.setInt(15, 0);
+						ps.setString(16, "BENCHEXEC");
+						try (ResultSet rs = ps.executeQuery()) {
+							assertTrue("AddJob should return an id if it succeeds", rs.next());
+							return rs.getInt(1);
+						}
+					}
+				}
+			});
+
+			// Observe the database wait directly; once confirmed, release the backend
+			// stop so deletion can commit and the competing AddJob resumes afterward.
+			boolean addWaitedForDelete = awaitAdvisoryWait(contenderApplicationName, 5000);
+			allowKill.countDown();
+			assertTrue("AddJob must wait on the deletion transaction's advisory lock", addWaitedForDelete);
+			assertTrue("deletion should complete after the active pair is stopped",
+					deletion.get(15, TimeUnit.SECONDS));
+			try {
+				concurrentAdd.get(15, TimeUnit.SECONDS);
+				fail("AddJob must not create an owned job after its user has been deleted");
+			} catch (ExecutionException expected) {
+				assertTrue("the competing insert should fail with a foreign-key error",
+					expected.getCause() instanceof SQLException);
+				assertEquals("23503", ((SQLException) expected.getCause()).getSQLState());
+			}
+			assertEquals("no concurrent job may remain after deletion", 0,
+					countJobsByName(concurrentJobName));
+		} finally {
+			allowKill.countDown();
+			awaitFutureForCleanup(deletion);
+			awaitFutureForCleanup(concurrentAdd);
+			executor.shutdownNow();
+			R.BACKEND = original;
+		}
+	}
+
+	private void awaitFutureForCleanup(Future<?> future) {
+		if (future == null) {
+			return;
+		}
+		try {
+			future.get(15, TimeUnit.SECONDS);
+		} catch (Exception ignored) {
+			future.cancel(true);
+		}
 	}
 
 	/**

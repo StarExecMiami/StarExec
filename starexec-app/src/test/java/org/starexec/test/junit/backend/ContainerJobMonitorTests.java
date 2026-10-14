@@ -127,6 +127,38 @@ public class ContainerJobMonitorTests {
         verify(backend).cleanupStaleExitedContainers(anySet());
     }
 
+    @Test
+    public void clearPairTrackingDiscardsOnlyThatPairsExitedContainers() throws Exception {
+        String matching = "exited-pair-77";
+        String other = "exited-pair-78";
+        when(backend.getCompletedContainers()).thenReturn(java.util.Arrays.asList(
+            new PodmanBackend.CompletedContainerInfo(matching, 77, "/tmp/77", 0),
+            new PodmanBackend.CompletedContainerInfo(other, 78, "/tmp/78", 0)
+        ));
+        when(backend.discardCompletedContainer(matching)).thenReturn(true);
+
+        monitor.clearPairTracking(77);
+
+        verify(backend).discardCompletedContainer(matching);
+        verify(backend, never()).discardCompletedContainer(other);
+    }
+
+    @Test
+    public void clearPairTrackingFailsClosedWhenExitedContainerCannotBeDiscarded() throws Exception {
+        String container = "exited-pair-77";
+        when(backend.getCompletedContainers()).thenReturn(java.util.Collections.singletonList(
+            new PodmanBackend.CompletedContainerInfo(container, 77, "/tmp/77", 0)
+        ));
+        when(backend.discardCompletedContainer(container)).thenReturn(false);
+
+        try {
+            monitor.clearPairTracking(77);
+            fail("pair retirement must fail if an exited container remains discoverable");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage().contains("pair 77"));
+        }
+    }
+
     private AdaptivePollInterval getPollInterval() throws Exception {
         Field field = ContainerJobMonitor.class.getDeclaredField("pollInterval");
         field.setAccessible(true);

@@ -971,6 +971,34 @@ public class PodmanBackendTests {
     }
 
     @Test
+    public void discardCompletedContainerRemovesOnlyAnInspectedExitedContainer() throws Exception {
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(false);
+
+        assertTrue(backend.discardCompletedContainer(TEST_CONTAINER_ID));
+
+        verify(mockDockerClient).removeContainerCmd(TEST_CONTAINER_ID);
+        verify(mockRemoveContainerCmd).withForce(false);
+        verify(mockRemoveContainerCmd).withRemoveVolumes(true);
+    }
+
+    @Test
+    public void discardCompletedContainerRefusesWhenRunningStateIsUnknownOrActive() throws Exception {
+        when(mockDockerClient.inspectContainerCmd(TEST_CONTAINER_ID))
+            .thenReturn(mockInspectContainerCmd);
+        when(mockInspectContainerCmd.exec()).thenReturn(mockInspectContainerResponse);
+        when(mockInspectContainerResponse.getState()).thenReturn(mockContainerState);
+        when(mockContainerState.getRunning()).thenReturn(true);
+
+        assertFalse(backend.discardCompletedContainer(TEST_CONTAINER_ID));
+
+        verify(mockDockerClient, never()).removeContainerCmd(TEST_CONTAINER_ID);
+    }
+
+    @Test
     public void testRemoveCompletedContainer_ReleasesSubmissionSlotForTrackedExec() throws Exception {
         // Setup: tracked container with held submission slot
         Map<Integer, String> execIdMap = getExecIdMap();
