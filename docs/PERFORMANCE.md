@@ -224,14 +224,12 @@ generated job script and never changed the effective budgets.
 
 ### Resource Limit Profiles
 
-These profiles set the container memory limit and the batch size. They do not set cores,
-CPU time or wallclock time: the CPU-time and wallclock budgets come from the queue and
-the job, and cores come from CPU partitions. Earlier versions of these profiles also set
-`STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` (as a core count) and
+These profiles set the container memory limit, the batch size and the CPU partition count,
+which is what decides a pair's cores (the width of its partition). They do not set CPU
+time or wallclock time: those budgets come from the queue and the job. Earlier versions of
+these profiles set `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` (described as a core count) and
 `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT`; those lines never changed the solver's
-limits and were removed. The "Parallel Solvers" profile in particular only differed from
-the others through that (mis-described) variable for its core count, so it now differs only
-in memory and batch size; a parallel solver's cores are the width of its CPU partition.
+limits. The partition counts below assume a 16-physical-core host.
 
 #### Lightweight Solvers (SMT QF_BV)
 
