@@ -199,6 +199,15 @@ public class PodmanBackend implements Backend {
     private final Map<Integer, String> execIdToContainerId =
         new ConcurrentHashMap<>();
 
+    // Executions whose container has exited but whose result ContainerJobMonitor has not
+    // ingested yet (execId -> containerId). Reported by getActiveExecutionIds() so the
+    // broken-pair sweep does not file a finished pair as ERROR_SUBMIT_FAIL while the monitor
+    // still owns its result (#324; LocalBackend's awaitingIngestion, KubernetesNativeBackend's
+    // tracking). Released when the monitor removes the container, when the container is gone,
+    // or when the monitor quarantines it and nothing will record the pair any more.
+    private final Map<Integer, String> awaitingIngestion =
+        new ConcurrentHashMap<>();
+
     // Atomic counter for execution IDs
     private int nextExecId = 1000;
     private final Object execIdLock = new Object();
@@ -3072,7 +3081,9 @@ public class PodmanBackend implements Backend {
                 if (state != null && Boolean.TRUE.equals(state.getRunning())) {
                     activeIds.add(entry.getKey());
                 } else {
-                    // Container finished, remove from tracking
+                    // Container finished: it no longer holds a slot, but its result is
+                    // still owed until the monitor has ingested it.
+                    awaitingIngestion.put(entry.getKey(), entry.getValue());
                     execIdToContainerId.remove(entry.getKey());
                     releaseSubmissionSlot(entry.getKey(), "container no longer running");
                 }
@@ -3080,6 +3091,23 @@ public class PodmanBackend implements Backend {
                 // Container no longer exists
                 execIdToContainerId.remove(entry.getKey());
                 releaseSubmissionSlot(entry.getKey(), "container missing during active scan");
+            }
+        }
+
+        for (Map.Entry<Integer, String> entry : new HashMap<>(awaitingIngestion).entrySet()) {
+            int execId = entry.getKey();
+            String containerId = entry.getValue();
+            ContainerJobMonitor monitor = jobMonitor;
+            if (monitor != null && monitor.isQuarantined(containerId)) {
+                awaitingIngestion.remove(execId, containerId);
+                continue;
+            }
+            try {
+                dockerClient.inspectContainerCmd(containerId).exec();
+                activeIds.add(execId);
+            } catch (NotFoundException e) {
+                // Gone without being ingested: nothing will complete this pair.
+                awaitingIngestion.remove(execId, containerId);
             }
         }
 
@@ -3544,6 +3572,7 @@ public class PodmanBackend implements Backend {
     public void releaseSlotForCompletedContainer(String containerId) {
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
+            awaitingIngestion.put(execId, containerId);
             releaseSubmissionSlot(execId, "container exited; results not yet ingested");
             log.debug(
                 "Released submission slot for exited container " + containerId +
@@ -3553,6 +3582,7 @@ public class PodmanBackend implements Backend {
     }
 
     public void removeCompletedContainer(String containerId) {
+        awaitingIngestion.values().remove(containerId);
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
             releaseSubmissionSlot(execId, "container completed");

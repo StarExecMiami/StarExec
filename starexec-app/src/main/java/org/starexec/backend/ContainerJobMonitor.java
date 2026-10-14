@@ -411,6 +411,19 @@ public class ContainerJobMonitor {
     }
 
     /**
+     * Whether this monitor has stopped trying to ingest the container's result.
+     *
+     * <p>A quarantined container keeps its output for an operator, but nothing will record
+     * its pair, so the backend stops reporting it as active and the broken-pair sweep may act.
+     *
+     * @param containerId the exited container
+     * @return true once the container is quarantined
+     */
+    public boolean isQuarantined(String containerId) {
+        return ingestionQuarantine.contains(containerId);
+    }
+
+    /**
      * Counts an infrastructure failure against a container and decides whether to come back.
      *
      * <p>After {@link #MAX_INGESTION_ATTEMPTS} the container is quarantined rather than
