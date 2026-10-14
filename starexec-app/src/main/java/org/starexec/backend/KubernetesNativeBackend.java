@@ -446,6 +446,25 @@ public class KubernetesNativeBackend implements Backend {
      */
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
 
+    /**
+     * How long a finished execution's missing status.json is taken to be not visible yet,
+     * rather than absent (#324).
+     *
+     * <p>Job output lands on shared storage that the job pod writes from one node and this
+     * process reads on another. On Quokka that is NFS 4.1 with default caching. At submit,
+     * {@code clearStaleAttemptArtifacts} deletes the previous status.json from this process,
+     * which leaves a negative entry in this client's directory cache; the pod then creates the
+     * file on another node, and this process keeps seeing it as absent until the directory is
+     * revalidated ({@code acdirmin}..{@code acdirmax}, 30 to 60 s by default). A pair that
+     * finished faster than that (observed: 16 s) was declared to have no status.json, abandoned
+     * as an intervention, and later swept into ERROR_SUBMIT_FAIL although its result was on
+     * disk. Twice the NFS maximum; {@code STAREXEC_K8S_STATUS_GRACE_SECONDS}.
+     */
+    private volatile long statusVisibilityGraceMillis = 120_000L;
+
+    /** When a finished execution was first found without a visible status.json. */
+    private final Map<ExecutionRef, Long> statusAbsentSince = new ConcurrentHashMap<>();
+
     /** Tracks active K8s Jobs against the concurrency cap */
     private final AtomicInteger activeJobCount = new AtomicInteger(0);
 
@@ -767,6 +786,8 @@ public class KubernetesNativeBackend implements Backend {
         memoryLimit = getEnv("STAREXEC_K8S_MEMORY_LIMIT", "2Gi");
         cpuLimit = getEnv("STAREXEC_K8S_CPU_LIMIT", "1");
         ttlSecondsAfterFinished = getEnvInt("STAREXEC_K8S_JOB_TTL_SECONDS", 3600);
+        statusVisibilityGraceMillis =
+            1000L * Math.max(0, getEnvInt("STAREXEC_K8S_STATUS_GRACE_SECONDS", 120));
         backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
         maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", 50);
         if (maxConcurrentJobs < 1) {
@@ -3963,7 +3984,22 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
-     * Get all active execution IDs.
+     * Get all active execution IDs: every execution that is running, waiting to run, or
+     * finished with a result the monitor has not ingested yet.
+     *
+     * <p>{@code Jobs.setBrokenPairsToErrorStatus} declares every RUNNING or ENQUEUED pair whose
+     * execution is not in this set a submit failure. A finished Job used to drop out of it at
+     * once, while its result still waited for {@code KubernetesJobMonitor}, so a sweep landing
+     * in that window filed a pair that had run to completion as ERROR_SUBMIT_FAIL, and the
+     * real result was then refused as a conflicting terminal status. On Quokka that was 8,527
+     * pairs of one job, each with its status.json on disk (#324). LocalBackend closed the same
+     * window with its awaiting-ingestion set; here the backend's own tracking is that set,
+     * because every exit from the completion callbacks releases it.
+     *
+     * <p>An ingestion that keeps failing keeps its Job active, and so out of the sweep, until
+     * the Job is reaped by {@code ttlSecondsAfterFinished} ({@code STAREXEC_K8S_JOB_TTL_SECONDS});
+     * after that it is reported as gone and the sweep resolves the pair as before. Tracking
+     * lost across a restart is rebuilt by {@code reconcileOrphanedPairs} during initialisation.
      *
      * @return Set of active execution IDs
      */
@@ -3981,14 +4017,6 @@ public class KubernetesNativeBackend implements Backend {
                 .list();
 
             for (Job job : jobs.getItems()) {
-                if (job.getStatus() != null) {
-                    Integer succeeded = job.getStatus().getSucceeded();
-                    Integer failed = job.getStatus().getFailed();
-                    if ((succeeded != null && succeeded > 0) || (failed != null && failed > 0)) {
-                        continue;
-                    }
-                }
-
                 if (job.getMetadata() == null || job.getMetadata().getLabels() == null) {
                     continue;
                 }
@@ -3998,11 +4026,27 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
+                int execId;
                 try {
-                    activeIds.add(Integer.parseInt(execIdValue));
+                    execId = Integer.parseInt(execIdValue);
                 } catch (NumberFormatException e) {
                     log.warn("Skipping job with malformed exec ID label: " + execIdValue);
+                    continue;
                 }
+
+                boolean finished = false;
+                if (job.getStatus() != null) {
+                    Integer succeeded = job.getStatus().getSucceeded();
+                    Integer failed = job.getStatus().getFailed();
+                    finished = (succeeded != null && succeeded > 0) || (failed != null && failed > 0);
+                }
+                // A finished Job still owes its pair an ingestion for as long as this
+                // execution is tracked. One that is not tracked is a genuine orphan: nothing
+                // will complete its pair, and the sweep is right to.
+                if (finished && !ownsTracking(ExecutionRef.fromJob(execId, job))) {
+                    continue;
+                }
+                activeIds.add(execId);
             }
             return activeIds;
         } catch (Exception e) {
@@ -4389,6 +4433,17 @@ public class KubernetesNativeBackend implements Backend {
 
         @Override
         public boolean onJobComplete(ExecutionRef execution) {
+            return ingestCompletion(execution, true);
+        }
+
+        /**
+         * Records a finished execution's result from its retained output.
+         *
+         * @param statusMayBeLate whether a missing status.json may only be not visible yet:
+         *        true for an execution that ran, false for one whose pod never started and
+         *        so cannot have written one (see {@link #awaitingStatusVisibility})
+         */
+        private boolean ingestCompletion(ExecutionRef execution, boolean statusMayBeLate) {
             // Skip processing if THIS execution was stopped — the kill path already removed
             // its tracking maps and released its concurrency slot. Another execution having
             // been stopped under the same number is not this one's business.
@@ -4452,6 +4507,16 @@ public class KubernetesNativeBackend implements Backend {
                 // One parse feeds both fields, so they cannot come from two different
                 // writes of a file each stage truncates.
                 JsonObject statusRecord = readStatusRecord(execution);
+                // Only when there is an output directory to look in: without one the file
+                // cannot appear later, however long this waits.
+                if (statusRecord == null && statusMayBeLate
+                        && resolveStatusPath(execution) != null
+                        && awaitingStatusVisibility(execution)) {
+                    // Not absent yet: shared storage may expose it late. Retried next poll,
+                    // with tracking and accounting held, which is exactly what false means.
+                    return false;
+                }
+                statusAbsentSince.remove(execution);
                 if (statusRecord == null) {
                     throw new StageStatusSnapshots.InvalidSnapshotException(
                         "completed " + execution + " has no status.json, so neither its"
@@ -4601,6 +4666,29 @@ public class KubernetesNativeBackend implements Backend {
 
             releaseAccountingIfSafe(execution, "completion of " + jobName);
             return true;
+        }
+
+        /**
+         * Whether a missing status.json is still inside its visibility window.
+         *
+         * <p>The window starts the first time the file is found missing, not when the Job
+         * finished: that is when this process could first have cached the negative lookup.
+         * Once it has passed the absence is taken as real and the existing intervention
+         * path applies unchanged.
+         */
+        private boolean awaitingStatusVisibility(ExecutionRef execution) {
+            long now = clock.getAsLong();
+            Long first = statusAbsentSince.putIfAbsent(execution, now);
+            long since = first == null ? now : first;
+            if (now - since < statusVisibilityGraceMillis) {
+                log.info(
+                    "status.json for " + execution + " is not visible yet; retrying for up to " +
+                    ((statusVisibilityGraceMillis - (now - since)) / 1000) +
+                    "s more before treating it as absent"
+                );
+                return true;
+            }
+            return false;
         }
 
         /** Outcome of recording the earlier stages of a finished execution. */
@@ -4771,7 +4859,9 @@ public class KubernetesNativeBackend implements Backend {
                     " Kubernetes Job has been removed. The lifecycle failure is logged but" +
                     " is not converted into a solver result or stage. " + reason
                 );
-                return onJobComplete(execution);
+                // The pod never started, so it cannot have written a status.json that is
+                // merely not visible yet: no visibility window.
+                return ingestCompletion(execution, false);
             } catch (Exception e) {
                 log.error(
                     "Failed handling stuck-pending lifecycle for pair " + pairId,
@@ -5079,10 +5169,15 @@ public class KubernetesNativeBackend implements Backend {
             // directory is exactly the case this must refuse.
             Path outputDir = ownedOutputDir(execution);
             if (outputDir == null) {
-                log.info(
-                    "Not ingesting stage snapshots for " + execution +
-                        ": this execution no longer owns its tracking"
-                );
+                // Both states still refuse ingestion. Only the diagnostic differs:
+                // missing artifacts for an owned execution are not a stale callback.
+                if (ownsTracking(execution)) {
+                    log.warn("Not ingesting stage snapshots for " + execution +
+                        ": execution owns its tracking but has no output directory mapping");
+                } else {
+                    log.info("Not ingesting stage snapshots for " + execution +
+                        ": this execution no longer owns its tracking");
+                }
                 return EarlierStages.RETRY;
             }
 
@@ -5175,18 +5270,20 @@ public class KubernetesNativeBackend implements Backend {
         ) {
             // Stage 0 is the pair-level channel: the pair failed outside any stage, so there
             // is no stage to carry the result and it is recorded against the pair (#165).
+            // The stages it prevented take the same status rather than NOT_REACHED: no
+            // earlier stage failed, and listings and statistics read the stage.
             // A null attempt (a Job from before #185) keeps the unfenced overloads.
             if (stageNumber == FinalStatusStage.PAIR_LEVEL) {
                 return attemptNo == null
                     ? JobPairs.setPairLevelStatusResult(
                         pairId,
                         terminalStatus,
-                        StatusCode.STATUS_NOT_REACHED.getVal()
+                        terminalStatus
                     )
                     : JobPairs.setPairLevelStatusResult(
                         pairId,
                         terminalStatus,
-                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        terminalStatus,
                         attemptNo
                     );
             }
@@ -5224,10 +5321,32 @@ public class KubernetesNativeBackend implements Backend {
                 throws StageStatusSnapshots.InvalidSnapshotException {
             if (record == null) {
                 throw new StageStatusSnapshots.InvalidSnapshotException(
-                    "status.json for " + execution + " is absent, so its stage is unknown"
+                    "status.json for " + execution + " is absent, so its stage is unknown; "
+                        + missingOutputDiagnostic(execution)
                 );
             }
             return FinalStatusStage.requireStageOrPairLevel(record, String.valueOf(execution));
+        }
+
+        /** Diagnose the existing absent-record refusal without changing its classification. */
+        private String missingOutputDiagnostic(ExecutionRef execution) {
+            Path outputDir = ownedOutputDir(execution);
+            if (outputDir == null) {
+                return ownsTracking(execution)
+                    ? "execution owns its tracking but has no output directory mapping"
+                    : "this execution no longer owns its tracking";
+            }
+            try (java.nio.file.DirectoryStream<Path> entries = Files.newDirectoryStream(outputDir)) {
+                // Some providers defer access failures until iteration starts.
+                entries.iterator().hasNext();
+                return "output directory is readable but status.json is missing";
+            } catch (java.nio.file.NoSuchFileException e) {
+                return "output directory is missing";
+            } catch (java.nio.file.NotDirectoryException e) {
+                return "output path is not a directory";
+            } catch (IOException | java.nio.file.DirectoryIteratorException | SecurityException e) {
+                return "output directory cannot be read: " + e.getClass().getSimpleName();
+            }
         }
 
         private Path resolveStatusPath(ExecutionRef execution) {

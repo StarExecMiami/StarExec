@@ -93,6 +93,11 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check-chart-quota-resources.py
 
+      - name: Check the database port is not published by a Service
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-chart-service-exposure.py
+
       - name: Check chart version
         id: chart-info
         run: |

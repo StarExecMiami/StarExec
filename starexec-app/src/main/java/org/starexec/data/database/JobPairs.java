@@ -2536,9 +2536,17 @@ public class JobPairs {
      * carry the result, so the status goes to the pair and every stage that had not finished is
      * marked with {@code notReachedStatus}.
      *
+     * <p>The backends pass {@code terminalStatus} itself, as the legacy job script did with
+     * {@code sendStatusToLaterStages "$ERROR_RUNSCRIPT" 0}. STATUS_NOT_REACHED means an
+     * earlier stage failed, which is not what happened, and every pair listing, status filter
+     * and statistic reads the stage: NOT_REACHED there showed a failed pair as "stage not
+     * reached" and counted it as incomplete, with the real error visible nowhere (#324).
+     * A duplicate delivery of the same status does not rewrite the stages, so rows recorded
+     * the old way are repaired by V0118, not by re-ingestion.
+     *
      * @param pairId the pair
      * @param terminalStatus the status to record; must be terminal
-     * @param notReachedStatus what unfinished stages become, normally STATUS_NOT_REACHED
+     * @param notReachedStatus what unfinished stages become
      * @return APPLIED, SUPERSEDED when the pair already held a different terminal status, or
      *         FAILED when the write could not be performed
      * @implNote the routine {@code starexec.UpdatePairStatusPairLevel} is defined in
@@ -4009,10 +4017,16 @@ public class JobPairs {
                 return false;
             }
             JobPairs.setJobPairDiskSizeToZero(pairId);
-            JobPairs.UpdateStatus(
-                pairId,
-                Status.StatusCode.STATUS_KILLED.getVal()
-            );
+            if (!JobPairs.updateStatusAndReport(
+                    pairId,
+                    Status.StatusCode.STATUS_KILLED.getVal()
+            )) {
+                log.warn(
+                    "Not recording pair " + pairId +
+                        " as killed: its status could not be persisted"
+                );
+                return false;
+            }
             return true;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
@@ -4027,23 +4041,37 @@ public class JobPairs {
      * @param jobPairId   The ID of the job pair in question
      * @param status_code The new status code to assign to the job pair
      */
-    public static void UpdateStatus(int jobPairId, int status_code) {
+    private static boolean updateStatusAndReport(int jobPairId, int status_code) {
         Connection con = null;
         PreparedStatement ps = null;
         try {
             con = Common.getConnection();
+            if (!con.getAutoCommit()) {
+                // This helper owns its connection. Do not claim durable persistence when
+                // a previous borrower left an open transaction on the pooled connection.
+                con.rollback();
+                con.setAutoCommit(true);
+                log.error("UpdateStatus received a pooled connection with autoCommit=false");
+                return false;
+            }
             ps = con.prepareStatement(
                 "SELECT starexec.UpdateJobPairStatus(?, ?)"
             );
             ps.setInt(1, jobPairId);
             ps.setInt(2, status_code);
             Common.executeAndDrain(ps);
+            return true;
         } catch (Exception e) {
             log.error(e.getMessage(), e);
+            return false;
         } finally {
             Common.safeClose(con);
             Common.safeClose(ps);
         }
+    }
+
+    public static void UpdateStatus(int jobPairId, int status_code) {
+        updateStatusAndReport(jobPairId, status_code);
     }
 
     /**

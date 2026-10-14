@@ -390,7 +390,9 @@ server:
 StarExec enforces Cross-Site Request Forgery (CSRF) protection via a centralized
 `CsrfFilter` registered in `WEB-INF/web.xml`.
 
-**Coverage:** All `POST` requests to `/secure/*` and `/public/registration/*`.
+**Coverage:** All `POST` requests to `/secure/*`, `/public/registration/*`, and
+`/services/*`. This includes REST operations such as user deletion that are
+outside `/secure/*`.
 
 **How it works:**
 

@@ -39,12 +39,11 @@ public class Requests {
 			ps.setInt(1, user.getId());
 			ps.setString(2, code);
 			Common.executeAndDrain(ps);
-			log.info(String.format("New email activation code [%s] added to VERIFY for user [%s]", code,
-			                       user.getFullName()
-			));
+			log.info(String.format("Email activation record added for user %d", user.getId()));
 			return true;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the activation value; omit exception details.
+			log.error(String.format("Adding email activation record failed for user %d", user.getId()));
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -79,7 +78,9 @@ public class Requests {
 			log.debug(String.format("Added invitation record for user [%s] on community %d", user, communityId));
 			return true;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the request code; omit exception details.
+			log.error(String.format("Adding community request failed for user %d and community %d",
+					user.getId(), communityId));
 		} finally {
 			Common.safeClose(ps);
 		}
@@ -133,7 +134,8 @@ public class Requests {
 			Common.executeAndDrain(ps);
 			return true;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the reset code; omit exception details.
+			log.error(String.format("Adding password reset request failed for user %d", userId));
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -280,7 +282,8 @@ public class Requests {
 
 			return resultsToCommunityRequest(results);
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the request code; omit exception details.
+			log.error("Retrieving community request by code failed");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(results);
@@ -462,10 +465,11 @@ public class Requests {
 			rs = stmt.executeQuery();
 			rs.next();
 			int userId = rs.getInt(1);
-			log.info(String.format("Activation code %s redeemed by user %d", codeFromUser, userId));
+			log.info(String.format("Email activation redemption returned user %d", userId));
 			return userId;
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the activation value; omit exception details.
+			log.error("Email activation redemption failed");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(rs);
@@ -495,7 +499,8 @@ public class Requests {
 			rs.next();
 			return rs.getInt(1);
 		} catch (Exception e) {
-			log.error(e.getMessage(), e);
+			// Database errors can echo the reset code; omit exception details.
+			log.error("Password reset request redemption failed");
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(rs);
@@ -527,9 +532,9 @@ public class Requests {
 			ps.setString(3, code);
 			Common.executeAndDrain(ps);
 		} catch (Exception e) {
+			// Database errors can echo the new address or verification code; omit exception details.
 			throw new StarExecDatabaseException(
-					"There was an error while trying to add a change email request for user with id=" + userId +
-							" newEmail=" + newEmail + " and code=" + code, e);
+					"There was an error while trying to add a change email request for user with id=" + userId);
 		} finally {
 			Common.safeClose(con);
 			Common.safeClose(ps);
@@ -571,8 +576,9 @@ public class Requests {
 			rs = ps.executeQuery();
 			return rs.next();
 		} catch (SQLException e) {
+			// Database errors can echo the new address or verification code; omit exception details.
 			throw new StarExecDatabaseException(
-					"Error in tryAddChangeEmailRequest for user id=" + userId, e);
+					"Error in tryAddChangeEmailRequest for user id=" + userId);
 		} finally {
 			Common.safeClose(rs);
 			Common.safeClose(ps);

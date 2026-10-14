@@ -3812,6 +3812,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Serializes job creation with deletion of that job owner's rows. Both AddJob and
+-- Users.deleteUser acquire the same transaction-scoped advisory lock before reading
+-- or changing the user's jobs. Unlike FOR UPDATE on users, this does not interfere
+-- with the foreign-key checks performed while a running job is being stopped.
+CREATE OR REPLACE FUNCTION starexec.LockUserJobLifecycle(_userId INT)
+RETURNS VOID AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(1398030674, _userId); -- 0x53544152 ('STAR')
+END;
+$$ LANGUAGE plpgsql;
+
 -- Adds a new job record to the database
 -- Author: Tyler Jensen
 DROP FUNCTION IF EXISTS starexec.AddJob CASCADE;
@@ -3837,6 +3848,8 @@ RETURNS INT AS $$
 DECLARE
     _id INT;
 BEGIN
+    PERFORM starexec.LockUserJobLifecycle(_userId);
+
     INSERT INTO jobs (user_id, name, description, queue_id, primary_space,
             seed, cpuTimeout, clockTimeout, maximum_memory, paused,
             suppress_timestamp, using_dependencies, buildJob, total_pairs,

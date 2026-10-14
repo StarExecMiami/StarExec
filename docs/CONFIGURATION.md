@@ -141,11 +141,19 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 |----------|---------|-------------|
 | `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU_cores)` | Max parallel jobs (local backend) |
 | `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `2048` | Hard cgroup memory limit (and swap limit) of each Podman job container, in MB. This is the only one of the three `STAREXEC_CONTAINER_DEFAULT_*` limits that changes the container. The solver's own memory limit comes from the job (`MAX_MEM`) |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `600` | **CPU seconds, not cores.** Injected into the container as `STAREXEC_CPU_LIMIT`, but the job script overwrites it with the queue/job CPU timeout before the solver runs, so it currently has no effect. Do not use it to size cores; see `STAREXEC_CONTAINER_CPU_QUOTA_CORES` and the CPU partition settings (`docs/cpu-partition-scheduling.md`) |
-| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | `600` | **Seconds.** Injected as `STAREXEC_WALLCLOCK_LIMIT` and overwritten by the job script with the queue/job wallclock timeout, so it currently has no effect |
-| `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | `0` | Cores' worth of CFS bandwidth for a job container, applied only when no CPU partition is configured. `0` applies no quota. When a partition exists its cpuset is the boundary and no quota is set |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `2048` | Podman cgroup memory ceiling per container (MiB) |
+| `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware Podman partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
+| `STAREXEC_CPU_PARTITIONS` | unset | Explicit Podman cpusets; overrides the partition count |
+| `STAREXEC_PARTITION_MAX_JOBS` | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs in each CPU partition |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | `0` | CFS bandwidth cap, in cores, only for unpartitioned Podman containers; it does not provide affinity |
 | `STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS` | `86400` | Minimum age before sweeping an exited managed Podman container that was not processed by the normal completion monitor (`0` disables the sweep) |
+
+CPU-time and wallclock budgets are generated from the selected StarExec queue and
+job. The former `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` settings never controlled those
+budgets and have been removed. For reproducible CPU placement, follow
+[CPU partition scheduling](cpu-partition-scheduling.md); use a CFS quota only as
+an operational bound on an unpartitioned host.
 
 ### Live Log Streaming (SSE)
 
