@@ -1582,6 +1582,103 @@ public class KubernetesNativeBackendTests {
         setField(backend, "kubernetesClient", client);
     }
 
+    // ---------------------------------------------------------------- active execution ids
+
+    /**
+     * A finished Job whose result the monitor has not ingested yet is still active (#324).
+     *
+     * <p>{@code Jobs.setBrokenPairsToErrorStatus} files every RUNNING pair whose execution is
+     * not active as ERROR_SUBMIT_FAIL. On Quokka 8,527 pairs that had run to completion, each
+     * with its status.json on disk, were filed that way because their Job had finished a
+     * moment before the sweep and the monitor had not reached it yet.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aFinishedJobAwaitingIngestionIsStillActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(31, "job-31");
+        ((Map<Integer, String>) getField(backend, "execIdToJobUid")).put(31, "uid-31");
+        givenManagedJobs(backend,
+            finishedJob(31, "uid-31"));
+
+        assertTrue("its pair still waits for the monitor",
+            backend.getActiveExecutionIds().contains(31));
+    }
+
+    /** Once ingestion released the execution, a finished Job is over: the sweep may act. */
+    @Test
+    public void aFinishedJobNoLongerTrackedIsNotActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        givenManagedJobs(backend,
+            finishedJob(32, "uid-32"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(32));
+    }
+
+    /**
+     * A finished Job that is not the execution occupying its id is not kept alive by the
+     * other one's tracking: execution ids repeat, Job UIDs never do.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aFinishedJobOfAnEarlierExecutionIsNotActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(33, "job-33");
+        ((Map<Integer, String>) getField(backend, "execIdToJobUid")).put(33, "uid-current");
+        givenManagedJobs(backend,
+            finishedJob(33, "uid-earlier"));
+
+        assertFalse(backend.getActiveExecutionIds().contains(33));
+    }
+
+    /** Unchanged: a Job that has not finished is active, tracked or not. */
+    @Test
+    public void anUnfinishedJobIsActive() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        Job running = jobWithNoConditions(34);
+        running.getStatus().setActive(1);
+        givenManagedJobs(backend, running);
+
+        assertTrue(backend.getActiveExecutionIds().contains(34));
+    }
+
+    /** A Job with a UID that has finished successfully. */
+    private Job finishedJob(int execId, String uid) {
+        Job job = jobWithNoConditions(execId);
+        job.getMetadata().setUid(uid);
+        job.getStatus().setSucceeded(1);
+        return job;
+    }
+
+    /**
+     * Gives the backend a client whose managed-Job listing,
+     * {@code batch().v1().jobs().inNamespace(..).withLabel(..).list()}, returns {@code jobs}.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void givenManagedJobs(KubernetesNativeBackend backend, Job... jobs) throws Exception {
+        KubernetesClient client = Mockito.mock(KubernetesClient.class);
+        BatchAPIGroupDSL batch = Mockito.mock(BatchAPIGroupDSL.class);
+        V1BatchAPIGroupDSL v1 = Mockito.mock(V1BatchAPIGroupDSL.class);
+        MixedOperation jobOps = Mockito.mock(MixedOperation.class);
+        NonNamespaceOperation namespaced = Mockito.mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable filtered =
+            Mockito.mock(io.fabric8.kubernetes.client.dsl.FilterWatchListDeletable.class);
+        JobList listing = new JobList();
+        listing.setItems(List.of(jobs));
+        Mockito.when(client.batch()).thenReturn(batch);
+        Mockito.when(batch.v1()).thenReturn(v1);
+        Mockito.when(v1.jobs()).thenReturn(jobOps);
+        Mockito.when(jobOps.inNamespace(Mockito.anyString())).thenReturn(namespaced);
+        Mockito.when(namespaced.withLabel(Mockito.anyString(), Mockito.anyString()))
+            .thenReturn(filtered);
+        Mockito.when(filtered.list()).thenReturn(listing);
+        setField(backend, "kubernetesClient", client);
+    }
+
     /**
      * Stubs {@code client.batch().v1().jobs().inNamespace(..).withLabels(..).list()}.
      *

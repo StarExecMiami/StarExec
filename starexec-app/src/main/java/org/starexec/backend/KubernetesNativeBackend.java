@@ -3963,7 +3963,22 @@ public class KubernetesNativeBackend implements Backend {
     }
 
     /**
-     * Get all active execution IDs.
+     * Get all active execution IDs: every execution that is running, waiting to run, or
+     * finished with a result the monitor has not ingested yet.
+     *
+     * <p>{@code Jobs.setBrokenPairsToErrorStatus} declares every RUNNING or ENQUEUED pair whose
+     * execution is not in this set a submit failure. A finished Job used to drop out of it at
+     * once, while its result still waited for {@code KubernetesJobMonitor}, so a sweep landing
+     * in that window filed a pair that had run to completion as ERROR_SUBMIT_FAIL, and the
+     * real result was then refused as a conflicting terminal status. On Quokka that was 8,527
+     * pairs of one job, each with its status.json on disk (#324). LocalBackend closed the same
+     * window with its awaiting-ingestion set; here the backend's own tracking is that set,
+     * because every exit from the completion callbacks releases it.
+     *
+     * <p>An ingestion that keeps failing keeps its Job active, and so out of the sweep, until
+     * the Job is reaped by {@code ttlSecondsAfterFinished} ({@code STAREXEC_K8S_JOB_TTL_SECONDS});
+     * after that it is reported as gone and the sweep resolves the pair as before. Tracking
+     * lost across a restart is rebuilt by {@code reconcileOrphanedPairs} during initialisation.
      *
      * @return Set of active execution IDs
      */
@@ -3981,14 +3996,6 @@ public class KubernetesNativeBackend implements Backend {
                 .list();
 
             for (Job job : jobs.getItems()) {
-                if (job.getStatus() != null) {
-                    Integer succeeded = job.getStatus().getSucceeded();
-                    Integer failed = job.getStatus().getFailed();
-                    if ((succeeded != null && succeeded > 0) || (failed != null && failed > 0)) {
-                        continue;
-                    }
-                }
-
                 if (job.getMetadata() == null || job.getMetadata().getLabels() == null) {
                     continue;
                 }
@@ -3998,11 +4005,27 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
+                int execId;
                 try {
-                    activeIds.add(Integer.parseInt(execIdValue));
+                    execId = Integer.parseInt(execIdValue);
                 } catch (NumberFormatException e) {
                     log.warn("Skipping job with malformed exec ID label: " + execIdValue);
+                    continue;
                 }
+
+                boolean finished = false;
+                if (job.getStatus() != null) {
+                    Integer succeeded = job.getStatus().getSucceeded();
+                    Integer failed = job.getStatus().getFailed();
+                    finished = (succeeded != null && succeeded > 0) || (failed != null && failed > 0);
+                }
+                // A finished Job still owes its pair an ingestion for as long as this
+                // execution is tracked. One that is not tracked is a genuine orphan: nothing
+                // will complete its pair, and the sweep is right to.
+                if (finished && !ownsTracking(ExecutionRef.fromJob(execId, job))) {
+                    continue;
+                }
+                activeIds.add(execId);
             }
             return activeIds;
         } catch (Exception e) {
