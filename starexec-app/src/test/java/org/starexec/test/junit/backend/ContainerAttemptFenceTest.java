@@ -134,7 +134,7 @@ public class ContainerAttemptFenceTest {
 
             db.verify(() -> JobPairs.setPairLevelStatusResult(eq(PAIR),
                 eq(StatusCode.ERROR_RUNSCRIPT.getVal()),
-                eq(StatusCode.STATUS_NOT_REACHED.getVal()), eq(ATTEMPT)));
+                eq(StatusCode.ERROR_RUNSCRIPT.getVal()), eq(ATTEMPT)));
         }
     }
 

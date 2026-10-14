@@ -5175,18 +5175,20 @@ public class KubernetesNativeBackend implements Backend {
         ) {
             // Stage 0 is the pair-level channel: the pair failed outside any stage, so there
             // is no stage to carry the result and it is recorded against the pair (#165).
+            // The stages it prevented take the same status rather than NOT_REACHED: no
+            // earlier stage failed, and listings and statistics read the stage.
             // A null attempt (a Job from before #185) keeps the unfenced overloads.
             if (stageNumber == FinalStatusStage.PAIR_LEVEL) {
                 return attemptNo == null
                     ? JobPairs.setPairLevelStatusResult(
                         pairId,
                         terminalStatus,
-                        StatusCode.STATUS_NOT_REACHED.getVal()
+                        terminalStatus
                     )
                     : JobPairs.setPairLevelStatusResult(
                         pairId,
                         terminalStatus,
-                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        terminalStatus,
                         attemptNo
                     );
             }

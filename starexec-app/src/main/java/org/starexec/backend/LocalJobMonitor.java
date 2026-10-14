@@ -1256,11 +1256,13 @@ public class LocalJobMonitor {
             log.debug("Pair " + pairId + " reports RUNNING with no stage; nothing to record");
             return false;
         }
+        // A pair-level failure gives its own status to the stages it prevented, not
+        // NOT_REACHED: no earlier stage failed, and listings and statistics read the stage.
         PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
                 ? FencedResultWrites.setPairLevelStatusResult(
                         pairId,
                         status.getVal(),
-                        StatusCode.STATUS_NOT_REACHED.getVal(),
+                        status.getVal(),
                         attemptNo)
                 : FencedResultWrites.setPairStatusPreciseResult(
                         pairId,

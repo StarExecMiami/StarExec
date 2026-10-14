@@ -1067,11 +1067,13 @@ public class ContainerJobMonitor {
 
         // Stage 0 is the pair-level channel: the pair failed outside any stage, so there is no
         // stage to carry the result and it is recorded against the pair itself (#165).
+        // A pair-level failure gives its own status to the stages it prevented, not
+        // NOT_REACHED: no earlier stage failed, and listings and statistics read the stage.
         PairStatusResult statusResult = stageNumber == FinalStatusStage.PAIR_LEVEL
             ? FencedResultWrites.setPairLevelStatusResult(
                 pairId,
                 status.getVal(),
-                StatusCode.STATUS_NOT_REACHED.getVal(),
+                status.getVal(),
                 attemptNo)
             : FencedResultWrites.setPairStatusPreciseResult(
                 pairId,
