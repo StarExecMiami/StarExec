@@ -11,8 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 /**
- * Servlet filter that enforces CSRF token validation on POST requests to
- * /secure/* paths, the public registration endpoint, and REST services.
+ * Servlet filter that enforces CSRF token validation on all state-modifying
+ * POST requests to /secure/* paths and the public registration endpoint.
  *
  * <p>The StarExecCommand CLI client is exempted because it sends the custom
  * {@code StarExecCommand: StarExecCommand} header on every request.  Browsers
@@ -75,9 +75,8 @@ public class CsrfFilter implements Filter {
 
             boolean isSecure      = uri.startsWith(ctx + "/secure/");
             boolean isRegistration = uri.startsWith(ctx + "/public/registration/");
-            boolean isService = uri.startsWith(ctx + "/services/");
 
-            if (isSecure || isRegistration || isService) {
+            if (isSecure || isRegistration) {
                 if (!isApiClient(request) && !isTokenValid(request)) {
                     log.warn("doFilter",
                             "CSRF token validation failed for " + uri
