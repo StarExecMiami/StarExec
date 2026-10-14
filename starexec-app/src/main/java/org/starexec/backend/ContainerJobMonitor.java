@@ -498,6 +498,21 @@ public class ContainerJobMonitor {
         long nextAttemptMillis;
     }
 
+    /** Diagnose missing evidence without changing its existing refusal/retry policy. */
+    private String missingOutputDiagnostic(Path outputPath) {
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(outputPath)) {
+            // Opening alone may defer a filesystem error until iteration starts.
+            entries.iterator().hasNext();
+            return "output directory is readable but status.json is missing";
+        } catch (NoSuchFileException e) {
+            return "output directory is missing";
+        } catch (NotDirectoryException e) {
+            return "output path is not a directory";
+        } catch (IOException | DirectoryIteratorException | SecurityException e) {
+            return "output directory cannot be read: " + e.getClass().getSimpleName();
+        }
+    }
+
     /**
      * Processes a completed job by reading output files and updating the database.
      */
@@ -539,7 +554,8 @@ public class ContainerJobMonitor {
         if (!Files.exists(statusJson)) {
             throw new StageStatusSnapshots.InvalidSnapshotException(
                 "completed container " + info.containerId + " for pair " + info.pairId
-                    + " has no status.json, so neither its result nor stage is known"
+                    + " has no status.json, so neither its result nor stage is known; "
+                    + missingOutputDiagnostic(outputPath)
             );
         }
         JsonObject obj;

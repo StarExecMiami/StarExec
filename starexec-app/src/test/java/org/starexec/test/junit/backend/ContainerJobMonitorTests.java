@@ -3,6 +3,7 @@ package org.starexec.test.junit.backend;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -38,6 +39,50 @@ public class ContainerJobMonitorTests {
     public void setUp() {
         MockitoAnnotations.openMocks(this);
         monitor = new ContainerJobMonitor(backend);
+    }
+
+    @Test
+    public void missingOutputParentHasDistinctDiagnostic() throws Exception {
+        java.nio.file.Path parent = java.nio.file.Files.createTempDirectory("missing-output");
+        assertOutputDiagnostic(parent.resolve("absent"), "output directory is missing");
+    }
+
+    @Test
+    public void nonDirectoryOutputParentHasDistinctDiagnostic() throws Exception {
+        assertOutputDiagnostic(java.nio.file.Files.createTempFile("output-file", ".tmp"),
+            "output path is not a directory");
+    }
+
+    @Test
+    public void emptyReadableOutputParentHasDistinctDiagnostic() throws Exception {
+        assertOutputDiagnostic(java.nio.file.Files.createTempDirectory("empty-output"),
+            "output directory is readable but status.json is missing");
+    }
+
+    @Test
+    public void deniedOutputParentHasDistinctDiagnostic() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("denied-output");
+        try (MockedStatic<java.nio.file.Files> files = Mockito.mockStatic(
+                java.nio.file.Files.class, Mockito.CALLS_REAL_METHODS)) {
+            files.when(() -> java.nio.file.Files.newDirectoryStream(dir))
+                .thenThrow(new java.nio.file.AccessDeniedException(dir.toString()));
+            assertOutputDiagnostic(dir, "output directory cannot be read: AccessDeniedException");
+            files.verify(() -> java.nio.file.Files.newDirectoryStream(dir));
+        }
+    }
+
+    private void assertOutputDiagnostic(java.nio.file.Path dir, String expected) throws Exception {
+        try (MockedStatic<JobPairs> pairs = Mockito.mockStatic(JobPairs.class)) {
+            try {
+                invokeProcessCompletedJob(new PodmanBackend.CompletedContainerInfo(
+                    "diagnostic-container", 77, dir.toString(), 0));
+                fail("missing evidence must still be refused");
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                assertTrue(e.getCause() instanceof org.starexec.backend.StageStatusSnapshots.InvalidSnapshotException);
+                assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains(expected));
+            }
+            pairs.verifyNoInteractions();
+        }
     }
 
     @Test
