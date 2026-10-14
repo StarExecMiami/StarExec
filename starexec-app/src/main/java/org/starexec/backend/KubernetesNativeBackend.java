@@ -446,6 +446,25 @@ public class KubernetesNativeBackend implements Backend {
      */
     private volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
 
+    /**
+     * How long a finished execution's missing status.json is taken to be not visible yet,
+     * rather than absent (#324).
+     *
+     * <p>Job output lands on shared storage that the job pod writes from one node and this
+     * process reads on another. On Quokka that is NFS 4.1 with default caching. At submit,
+     * {@code clearStaleAttemptArtifacts} deletes the previous status.json from this process,
+     * which leaves a negative entry in this client's directory cache; the pod then creates the
+     * file on another node, and this process keeps seeing it as absent until the directory is
+     * revalidated ({@code acdirmin}..{@code acdirmax}, 30 to 60 s by default). A pair that
+     * finished faster than that (observed: 16 s) was declared to have no status.json, abandoned
+     * as an intervention, and later swept into ERROR_SUBMIT_FAIL although its result was on
+     * disk. Twice the NFS maximum; {@code STAREXEC_K8S_STATUS_GRACE_SECONDS}.
+     */
+    private volatile long statusVisibilityGraceMillis = 120_000L;
+
+    /** When a finished execution was first found without a visible status.json. */
+    private final Map<ExecutionRef, Long> statusAbsentSince = new ConcurrentHashMap<>();
+
     /** Tracks active K8s Jobs against the concurrency cap */
     private final AtomicInteger activeJobCount = new AtomicInteger(0);
 
@@ -767,6 +786,8 @@ public class KubernetesNativeBackend implements Backend {
         memoryLimit = getEnv("STAREXEC_K8S_MEMORY_LIMIT", "2Gi");
         cpuLimit = getEnv("STAREXEC_K8S_CPU_LIMIT", "1");
         ttlSecondsAfterFinished = getEnvInt("STAREXEC_K8S_JOB_TTL_SECONDS", 3600);
+        statusVisibilityGraceMillis =
+            1000L * Math.max(0, getEnvInt("STAREXEC_K8S_STATUS_GRACE_SECONDS", 120));
         backoffLimit = getEnvInt("STAREXEC_K8S_JOB_BACKOFF_LIMIT", 0);
         maxConcurrentJobs = getEnvInt("STAREXEC_K8S_MAX_CONCURRENT_JOBS", 50);
         if (maxConcurrentJobs < 1) {
@@ -4412,6 +4433,17 @@ public class KubernetesNativeBackend implements Backend {
 
         @Override
         public boolean onJobComplete(ExecutionRef execution) {
+            return ingestCompletion(execution, true);
+        }
+
+        /**
+         * Records a finished execution's result from its retained output.
+         *
+         * @param statusMayBeLate whether a missing status.json may only be not visible yet:
+         *        true for an execution that ran, false for one whose pod never started and
+         *        so cannot have written one (see {@link #awaitingStatusVisibility})
+         */
+        private boolean ingestCompletion(ExecutionRef execution, boolean statusMayBeLate) {
             // Skip processing if THIS execution was stopped — the kill path already removed
             // its tracking maps and released its concurrency slot. Another execution having
             // been stopped under the same number is not this one's business.
@@ -4475,6 +4507,16 @@ public class KubernetesNativeBackend implements Backend {
                 // One parse feeds both fields, so they cannot come from two different
                 // writes of a file each stage truncates.
                 JsonObject statusRecord = readStatusRecord(execution);
+                // Only when there is an output directory to look in: without one the file
+                // cannot appear later, however long this waits.
+                if (statusRecord == null && statusMayBeLate
+                        && resolveStatusPath(execution) != null
+                        && awaitingStatusVisibility(execution)) {
+                    // Not absent yet: shared storage may expose it late. Retried next poll,
+                    // with tracking and accounting held, which is exactly what false means.
+                    return false;
+                }
+                statusAbsentSince.remove(execution);
                 if (statusRecord == null) {
                     throw new StageStatusSnapshots.InvalidSnapshotException(
                         "completed " + execution + " has no status.json, so neither its"
@@ -4624,6 +4666,29 @@ public class KubernetesNativeBackend implements Backend {
 
             releaseAccountingIfSafe(execution, "completion of " + jobName);
             return true;
+        }
+
+        /**
+         * Whether a missing status.json is still inside its visibility window.
+         *
+         * <p>The window starts the first time the file is found missing, not when the Job
+         * finished: that is when this process could first have cached the negative lookup.
+         * Once it has passed the absence is taken as real and the existing intervention
+         * path applies unchanged.
+         */
+        private boolean awaitingStatusVisibility(ExecutionRef execution) {
+            long now = clock.getAsLong();
+            Long first = statusAbsentSince.putIfAbsent(execution, now);
+            long since = first == null ? now : first;
+            if (now - since < statusVisibilityGraceMillis) {
+                log.info(
+                    "status.json for " + execution + " is not visible yet; retrying for up to " +
+                    ((statusVisibilityGraceMillis - (now - since)) / 1000) +
+                    "s more before treating it as absent"
+                );
+                return true;
+            }
+            return false;
         }
 
         /** Outcome of recording the earlier stages of a finished execution. */
@@ -4794,7 +4859,9 @@ public class KubernetesNativeBackend implements Backend {
                     " Kubernetes Job has been removed. The lifecycle failure is logged but" +
                     " is not converted into a solver result or stage. " + reason
                 );
-                return onJobComplete(execution);
+                // The pod never started, so it cannot have written a status.json that is
+                // merely not visible yet: no visibility window.
+                return ingestCompletion(execution, false);
             } catch (Exception e) {
                 log.error(
                     "Failed handling stuck-pending lifecycle for pair " + pairId,
