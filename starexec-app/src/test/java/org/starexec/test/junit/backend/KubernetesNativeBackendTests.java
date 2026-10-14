@@ -148,9 +148,11 @@ public class KubernetesNativeBackendTests {
             Constructor<?> ctor = type.getDeclaredConstructor(KubernetesNativeBackend.class);
             ctor.setAccessible(true);
             Method method = type.getDeclaredMethod("ingestEarlierStageStatuses",
-                ExecutionRef.class, int.class, int.class);
+                ExecutionRef.class, int.class, int.class, Integer.class);
             method.setAccessible(true);
-            assertEquals(false, method.invoke(ctor.newInstance(backend), execution, 77, 1));
+            // Refused and retried, never recorded: the result is EarlierStages.RETRY.
+            assertEquals("RETRY",
+                String.valueOf(method.invoke(ctor.newInstance(backend), execution, 77, 1, null)));
             assertTrue("expected diagnostic: " + expected,
                 appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains(expected)));
         } finally {
