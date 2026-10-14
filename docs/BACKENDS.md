@@ -317,10 +317,12 @@ The job script clears `stage-stats/` at pair start the same way it clears
 stage whose statistics cannot be published fails with `ERROR_GENERAL`, as one whose attributes
 cannot be published does.
 
-These writes live in `functions.bash`. `docker/entrypoint.sh` copies that helper into
-`/app/data/sge_scripts/` only when no copy exists yet, so upgrading the image does not
-replace an already persisted helper. Refresh `/app/data/sge_scripts/functions.bash` from
-`/config/sge/` when deploying a change to it, or the running pairs keep the old behaviour.
+These writes live in `functions.bash`. The generated job script comes from the image's
+template but sources the helper from `/app/data/sge_scripts/` on the data volume, so the two
+must come from the same release. `docker/entrypoint.sh` therefore synchronises
+`/app/data/sge_scripts/` with the image's `/config/sge/` on every start. A persisted file that
+differs is moved to `/app/data/sge_scripts/.replaced-<UTC timestamp>/` before it is replaced, so
+a hand-applied patch is recoverable, but it does not survive a restart: put it in the image.
 
 ### Tuning for Performance
 

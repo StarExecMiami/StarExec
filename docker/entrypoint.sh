@@ -560,15 +560,11 @@ if [ -f "${LOGBACK_XML}" ]; then
 fi
 echo ""
 
-# Initialize SGE scripts in the persisted data directory on first start only.
-# Do not overwrite files that operators may have patched in the data volume.
-if [ ! -f /app/data/sge_scripts/functions.bash ]; then
-    echo "Initializing SGE scripts in /app/data/sge_scripts..."
-    mkdir -p /app/data/sge_scripts
-    cp -r /config/sge/* /app/data/sge_scripts/ 2>/dev/null || true
-    chmod -R 755 /app/data/sge_scripts || true
-    echo "✓ SGE scripts initialized successfully"
-fi
+# Synchronise the job helpers on the data volume with this image, on every start (#324).
+# The reasons, and the guarantees, are in sync-sge-scripts.sh. Startup aborts if it fails:
+# dispatching jobs with a helper that could not be installed is the failure it prevents.
+echo "Synchronising SGE scripts in /app/data/sge_scripts with this image..."
+/usr/local/bin/sync-sge-scripts.sh /config/sge /app/data/sge_scripts
 echo ""
 
 # Update loading page to redirect to StarExec home page
