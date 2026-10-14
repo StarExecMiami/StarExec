@@ -1,6 +1,7 @@
 <%@page contentType="text/html" pageEncoding="UTF-8"
         import="org.starexec.data.database.Analytics, org.starexec.util.SessionUtil, org.starexec.util.Util" %>
 <%@taglib prefix="star" tagdir="/WEB-INF/tags" %>
+<%@taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%
 	try {
 		String reference = request.getParameter("ref");
@@ -31,7 +32,7 @@
                js="lib/jquery.dataTables.min, lib/jquery.jstree, help/help, lib/jquery.qtip.min, lib/jquery.heatcolor.0.0.1.min, lib/jquery.ba-throttle-debounce.min"
                css="help/support-hub, components/card, components/badge">
 
-	<span id="reference" href="${ref}"></span>
+	<span id="reference" href="<c:out value='${ref}'/>"></span>
 
 	<main role="main" class="support-hub">
 		<!-- Hero Section -->
