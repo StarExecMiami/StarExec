@@ -210,22 +210,37 @@ The Podman Backend executes jobs in isolated containers. It provides strong isol
 export STAREXEC_BACKEND_TYPE=podman
 
 # Optional (with defaults)
-export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096      # 4GB per job
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1         # 1 CPU per job
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300 # 5 minutes
+export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048      # 2 GiB cgroup ceiling per container
+export STAREXEC_CPU_PARTITION_COUNT=auto              # Multi-NUMA partitions; single-NUMA stays unpinned
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=5000       # Poll every 5s
 export STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS=86400 # Sweep stale exited managed containers after 24h
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5             # Batch size
 ```
 
+The CPU-time and wallclock budgets used by the solver come from the selected
+StarExec queue and job. `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` were removed because the generated
+job script replaced both values before execution. They never selected cores or
+changed the effective solver budgets.
+
+For scientific measurements, configure topology-aware cpusets with
+`STAREXEC_CPU_PARTITION_COUNT` or `STAREXEC_CPU_PARTITIONS`; see
+[CPU partition scheduling](cpu-partition-scheduling.md). On an unpartitioned
+host, `STAREXEC_CONTAINER_CPU_QUOTA_CORES` can impose a CFS bandwidth cap, but it
+does not pin a solver or make measurements publication-grade.
+
+An explicit partition count greater than one groups whole physical cores but
+uses every online CPU. For publication runs, use explicit, topology-checked
+cpusets when the operating system or application needs reserved cores.
+
 ### Resource Limits
 
-| Solver Type              | Memory   | CPU | Wallclock |
-| ------------------------ | -------- | --- | --------- |
-| Lightweight (SMT, QF_BV) | 2048 MB  | 1   | 300s      |
-| Standard (SAT, LIA)      | 4096 MB  | 1   | 600s      |
-| Heavy (QF_NIA)           | 8192 MB  | 2   | 1200s     |
-| Industry (Z3, CVC5)      | 16384 MB | 4   | 3600s     |
+| Solver Type              | Container memory | CPU partition width | Queue/job wallclock budget |
+| ------------------------ | ---------------- | ------------------- | -------------------------- |
+| Lightweight (SMT, QF_BV) | 2048 MB          | 1 physical core     | 300s                       |
+| Standard (SAT, LIA)      | 4096 MB          | 1 physical core     | 600s                       |
+| Heavy (QF_NIA)           | 8192 MB          | 2 physical cores    | 1200s                      |
+| Industry (Z3, CVC5)      | 16384 MB         | 4 physical cores    | 3600s                      |
 
 ### Architecture
 
@@ -318,24 +333,26 @@ The job script clears `stage-stats/` at pair start the same way it clears
 stage whose statistics cannot be published fails with `ERROR_GENERAL`, as one whose attributes
 cannot be published does.
 
-These writes live in `functions.bash`. `docker/entrypoint.sh` copies that helper into
-`/app/data/sge_scripts/` only when no copy exists yet, so upgrading the image does not
-replace an already persisted helper. Refresh `/app/data/sge_scripts/functions.bash` from
-`/config/sge/` when deploying a change to it, or the running pairs keep the old behaviour.
+These writes live in `functions.bash`. The generated job script comes from the image's
+template but sources the helper from `/app/data/sge_scripts/` on the data volume, so the two
+must come from the same release. `docker/entrypoint.sh` therefore synchronises
+`/app/data/sge_scripts/` with the image's `/config/sge/` on every start. A persisted file that
+differs is moved to `/app/data/sge_scripts/.replaced-<UTC timestamp>/` before it is replaced, so
+a hand-applied patch is recoverable, but it does not survive a restart: put it in the image.
 
 ### Tuning for Performance
 
 ```bash
-# High-throughput cluster (32-core, 256GB RAM)
+# High-throughput cluster (32 physical cores, 256GB RAM; 2 cores per partition)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=8
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
+export STAREXEC_CPU_PARTITION_COUNT=16
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=2000
 
-# Memory-constrained (16GB RAM)
+# Memory-constrained host (16 physical cores, 16GB RAM; 1 core per partition)
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=3
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=2048
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
+export STAREXEC_CPU_PARTITION_COUNT=16
 export STAREXEC_CONTAINER_POLL_INTERVAL_MS=10000
 ```
 
@@ -621,14 +638,15 @@ export OAR_SERVER=oar-server.example.com
 
 ### Key Parameters
 
-| Parameter                                    | Default | Description                      |
-| -------------------------------------------- | ------- | -------------------------------- |
-| `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`           | 5       | Batch size per submission cycle  |
-| `STAREXEC_NODE_MULTIPLIER`                   | 16      | Queue depth = multiplier × nodes |
-| `STAREXEC_CONTAINER_POLL_INTERVAL_MS`        | 5000    | Poll interval for job completion |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB`       | 4096    | Memory limit per container       |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT`       | 1       | CPU cores per container          |
-| `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` | 300     | Wallclock timeout (seconds)      |
+| Parameter                              | Default | Description                                              |
+| -------------------------------------- | ------- | -------------------------------------------------------- |
+| `STAREXEC_NUM_JOB_PAIRS_AT_A_TIME`     | 5       | Batch size per submission cycle                          |
+| `STAREXEC_NODE_MULTIPLIER`             | 16      | Queue depth = multiplier × nodes                         |
+| `STAREXEC_CONTAINER_POLL_INTERVAL_MS`  | 5000    | Poll interval for job completion                         |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | 2048    | Podman cgroup memory ceiling per container               |
+| `STAREXEC_CPU_PARTITION_COUNT`         | `auto`  | `N > 1` creates topology-aware partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
+| `STAREXEC_CPU_PARTITIONS`              | unset   | Explicit cpusets; overrides the partition count          |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES`   | 0       | Unpartitioned CFS cap; does not provide CPU affinity     |
 
 ### Tuning by Workload
 
@@ -636,28 +654,32 @@ export OAR_SERVER=oar-server.example.com
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=4096
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=300
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=5
+# Configure the 300s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### SMT-LIB Benchmarks
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=1
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=1200
+export STAREXEC_CPU_PARTITION_COUNT=16 # Example: 16 physical cores, one per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=4
+# Configure the 1200s CPU/wallclock budgets in the StarExec queue/job.
 ```
 
 #### Parallel Solvers
 
 ```bash
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=16384
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=8
-export STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT=3600
+export STAREXEC_CPU_PARTITION_COUNT=4 # Example: 16 physical cores, four per partition
 export STAREXEC_NUM_JOB_PAIRS_AT_A_TIME=2
+# Configure the 3600s CPU/wallclock budgets in the StarExec queue/job.
 ```
+
+The per-workload wallclock and CPU-time values that earlier versions of these profiles
+set through `STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` / `..._CPU_LIMIT` were never
+applied; configure them on the queue or the job instead.
 
 ### Monitoring
 
@@ -666,9 +688,9 @@ Track these metrics:
 | Metric             | Healthy Range | Action if Out of Range           |
 | ------------------ | ------------- | -------------------------------- |
 | Queue depth        | 50-100        | Adjust `NUM_JOB_PAIRS_AT_A_TIME` |
-| CPU utilization    | 70-90%        | Adjust `CPU_LIMIT`               |
+| CPU utilization    | 70-90%        | Review partition width and concurrency |
 | Memory utilization | 60-80%        | Adjust `MEMORY_MB`               |
-| Job timeout rate   | < 1%          | Increase `WALLCLOCK_LIMIT`       |
+| Job timeout rate   | < 1%          | Review the queue/job wallclock budget |
 | OOM kill rate      | 0%            | Increase `MEMORY_MB`             |
 
 ---

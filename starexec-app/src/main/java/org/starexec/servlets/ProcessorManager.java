@@ -122,7 +122,7 @@ public class ProcessorManager extends HttpServlet {
 
 			// Redirect based on the results of the addition
 			if (result != null) {
-				response.addCookie(new Cookie("New_ID", String.valueOf(result.getId())));
+				response.addCookie(Util.createIdCookie("New_ID", String.valueOf(result.getId())));
 				response.sendRedirect(Util.docRoot("secure/edit/community.jsp?cid=" + result.getCommunityId()));
 			} else {
 				response.sendError(

@@ -21,6 +21,8 @@ public class UserDeletionBlockedException extends StarExecDatabaseException {
 
 	/** More than one candidate personal space matched, so no subtree can be chosen. */
 	public static final String AMBIGUOUS_PERSONAL_SPACE = "AMBIGUOUS_PERSONAL_SPACE";
+	/** At least one active job execution could not be safely stopped and retired. */
+	public static final String ACTIVE_JOB_NOT_RETIRED = "ACTIVE_JOB_NOT_RETIRED";
 
 	private final String reasonCode;
 	private final List<Integer> blockingSpaceIds;

@@ -2031,15 +2031,17 @@ public class RESTServices {
 	@Produces("application/json")
 	public String getPermissionDetails(@PathParam("id") int userid, @PathParam("spaceId") int spaceId,
 			@Context HttpServletRequest request) {
+		ValidatorStatusCode status = SpaceSecurity.canViewUserPermissions(spaceId, userid,
+				SessionUtil.getUserId(request));
+		if (!status.isSuccess()) {
+			return gson.toJson(status);
+		}
 		User requester = SessionUtil.getUser(request);
 		Permission perm = Permissions.get(userid, spaceId);
-		Space space = Spaces.get(spaceId);
 		Integer parentId = Spaces.getParentSpace(spaceId);
 		boolean isCommunity = parentId == 1;
-		User user = Users.get(userid);
 
-		return gson.toJson(new RESTHelpers.PermissionDetails(perm, space, user, requester, isCommunity));
-
+		return limitGson.toJson(new RESTHelpers.PermissionDetails(perm, requester, isCommunity));
 	}
 
 	/**
@@ -4849,7 +4851,7 @@ public class RESTServices {
 				// comma it never wrote for an empty list, and the exception would be reported as a
 				// database error instead of the failure that actually happened.
 				if (!selectedSolvers.isEmpty()) {
-					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(selectedSolvers)));
 				}
 			}
 
@@ -4939,13 +4941,13 @@ public class RESTServices {
 							"Failed to copy all " + failed.size() + " benchmark(s). "
 							+ "The source files may be missing on disk. Check the server logs for details."));
 				} else {
-					response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+					response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 					return gson.toJson(new ValidatorStatusCode(false,
 							succeeded.size() + " benchmark(s) copied successfully, but "
 							+ failed.size() + " failed. Check the server logs for details."));
 				}
 			}
-			response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
+			response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(succeeded)));
 			return gson.toJson(new ValidatorStatusCode(true, "The selected benchmark(s) were copied successfully"));
 		} else {
 			// Return a value based on results from database operation
@@ -5344,6 +5346,10 @@ public class RESTServices {
 	 * structured fields only. No part of the underlying cause reaches the client.
 	 */
 	private static String describeDeletionBlocker(UserDeletionBlockedException e) {
+		if (UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED.equals(e.getReasonCode())) {
+			return "Cannot delete this user yet: one or more active jobs could not be safely stopped and retired. "
+					+ "Resolve the backend state and retry the deletion.";
+		}
 		if (UserDeletionBlockedException.AMBIGUOUS_PERSONAL_SPACE.equals(e.getReasonCode())) {
 			StringBuilder sb = new StringBuilder(
 					"Cannot delete this user: more than one personal space matches, so the "
@@ -6502,7 +6508,7 @@ public class RESTServices {
 				return gson.toJson(new ValidatorStatusCode(false, e.getMessage()));
 			}
 		}
-		response.addCookie(new Cookie("New_ID", Util.makeCommaSeparatedList(newSpaceIds)));
+		response.addCookie(Util.createIdCookie("New_ID", Util.makeCommaSeparatedList(newSpaceIds)));
 		return gson.toJson(new ValidatorStatusCode(true, "Space copied successfully"));
 	}
 

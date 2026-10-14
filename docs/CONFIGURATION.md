@@ -141,9 +141,19 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 |----------|---------|-------------|
 | `STAREXEC_LOCAL_CONCURRENCY` | `min(4, CPU_cores)` | Max parallel jobs (local backend) |
 | `STAREXEC_LOCAL_JOB_TIMEOUT_SECONDS` | `3600` | Job timeout (1 hour) |
-| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `4096` | Memory per container (4GB) |
-| `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` | `1` | CPU cores per container |
+| `STAREXEC_CONTAINER_DEFAULT_MEMORY_MB` | `2048` | Podman cgroup memory ceiling per container (MiB) |
+| `STAREXEC_CPU_PARTITION_COUNT` | `auto` | `N > 1` creates topology-aware Podman partitions; `auto` uses multiple NUMA nodes and otherwise remains unpinned |
+| `STAREXEC_CPU_PARTITIONS` | unset | Explicit Podman cpusets; overrides the partition count |
+| `STAREXEC_PARTITION_MAX_JOBS` | `STAREXEC_CONTAINER_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs in each CPU partition |
+| `STAREXEC_CONTAINER_CPU_QUOTA_CORES` | `0` | CFS bandwidth cap, in cores, only for unpartitioned Podman containers; it does not provide affinity |
 | `STAREXEC_CONTAINER_EXITED_CLEANUP_AGE_SECONDS` | `86400` | Minimum age before sweeping an exited managed Podman container that was not processed by the normal completion monitor (`0` disables the sweep) |
+
+CPU-time and wallclock budgets are generated from the selected StarExec queue and
+job. The former `STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT` and
+`STAREXEC_CONTAINER_DEFAULT_WALLCLOCK_LIMIT` settings never controlled those
+budgets and have been removed. For reproducible CPU placement, follow
+[CPU partition scheduling](cpu-partition-scheduling.md); use a CFS quota only as
+an operational bound on an unpartitioned host.
 
 ### Live Log Streaming (SSE)
 

@@ -217,7 +217,7 @@
                   required
                   aria-required="true"
                   aria-label="I agree to the Terms of Service and Legal Notice"
-                  oninput="$('#submit').prop('disabled', !this.checked);">
+                  oninput="$('#submit').button('option', 'disabled', !this.checked);">
                 <label for="termsOfService">
                   I have read and agree to the 
                   <a href="/starexec/public/TermsOfService2019.pdf" target="_blank" rel="external">Terms of Service</a>

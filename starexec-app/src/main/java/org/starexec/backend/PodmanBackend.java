@@ -33,6 +33,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import org.starexec.backend.exception.BackendTransientException;
+import org.starexec.backend.exception.SubmissionDeferredException;
 import org.starexec.config.EnvironmentConfig;
 import org.starexec.data.database.Cluster;
 import org.starexec.data.database.JobPairs;
@@ -124,6 +125,12 @@ public class PodmanBackend implements Backend {
     // Label keys for container management
     private static final String LABEL_PAIR_ID = "starexec.pair.id";
     private static final String LABEL_EXEC_ID = "starexec.exec.id";
+    /**
+     * The pair's attempt number when the container was created (#185). Containers created
+     * before this label existed, and maintenance containers, do not carry it: it reads back
+     * as null and their result writes are unfenced, exactly as they were before.
+     */
+    private static final String LABEL_ATTEMPT = "starexec.attempt";
     private static final String LABEL_MANAGED = "starexec.managed";
     private static final String LABEL_VERSION = "starexec.label.version";
     private static final String LABEL_PARTITION_INDEX = "starexec.partition.index";
@@ -143,8 +150,6 @@ public class PodmanBackend implements Backend {
     private String jobImage;
     private boolean usePrebuiltImage;
     private long defaultMemoryMb;
-    private int defaultCpuLimit;
-    private int defaultWallclockLimit;
     private int maxConcurrentJobs = 1;
     private long exitedContainerCleanupAgeSeconds =
         EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
@@ -190,6 +195,15 @@ public class PodmanBackend implements Backend {
 
     // Thread-safe mapping of execution IDs to container IDs
     private final Map<Integer, String> execIdToContainerId =
+        new ConcurrentHashMap<>();
+
+    // Executions whose container has exited but whose result ContainerJobMonitor has not
+    // ingested yet (execId -> containerId). Reported by getActiveExecutionIds() so the
+    // broken-pair sweep does not file a finished pair as ERROR_SUBMIT_FAIL while the monitor
+    // still owns its result (#324; LocalBackend's awaitingIngestion, KubernetesNativeBackend's
+    // tracking). Released when the monitor removes the container, when the container is gone,
+    // or when the monitor quarantines it and nothing will record the pair any more.
+    private final Map<Integer, String> awaitingIngestion =
         new ConcurrentHashMap<>();
 
     // Atomic counter for execution IDs
@@ -772,9 +786,6 @@ public class PodmanBackend implements Backend {
         jobImage = EnvironmentConfig.getContainerJobImage();
         usePrebuiltImage = EnvironmentConfig.getContainerUsePrebuiltImage();
         defaultMemoryMb = EnvironmentConfig.getContainerDefaultMemoryMb();
-        defaultCpuLimit = EnvironmentConfig.getContainerDefaultCpuLimit();
-        defaultWallclockLimit =
-            EnvironmentConfig.getContainerDefaultWallclockLimit();
         maxConcurrentJobs = EnvironmentConfig.getContainerMaxConcurrentJobs();
         exitedContainerCleanupAgeSeconds =
             EnvironmentConfig.getContainerExitedCleanupAgeSeconds();
@@ -1345,6 +1356,9 @@ public class PodmanBackend implements Backend {
                     );
                     submissionAccepted = true;
                     return execId;
+                } catch (SubmissionDeferredException e) {
+                    // Not a failure: the pair stays queued; the finally releases the slot.
+                    throw e;
                 } catch (Exception e) {
                     boolean isRetryable =
                         e.getMessage() != null &&
@@ -1416,6 +1430,26 @@ public class PodmanBackend implements Backend {
         int execId,
         CpuPartition selectedPartition
     ) throws Exception {
+        // Capture the attempt this container belongs to (#185), after JobManager has claimed
+        // the pair and so after any rerun reset. It travels as a label so a monitor that
+        // finds the container later -- including after a restart -- fences its writes on it.
+        // Read first, before any image is built or directory made: a failed read is not
+        // guessed at (an unfenced container could overwrite a rerun) and is not the pair's
+        // fault, so it defers instead of returning -1, which JobManager would turn into a
+        // terminal ERROR_SGE_REJECT. submitScript's finally releases the partition slot.
+        // Maintenance jobs (pairId <= 0) carry no attempt.
+        Integer attemptNo = null;
+        if (pairId > 0) {
+            try {
+                attemptNo = JobPairs.getCurrentAttemptNo(pairId);
+            } catch (java.sql.SQLException e) {
+                throw new SubmissionDeferredException(
+                    "Could not read the current attempt of pair " + pairId +
+                        " (" + e.getMessage() + "); pair stays queued"
+                );
+            }
+        }
+
         log.info("Submitting job: " + jobName);
         log.debug("Working directory: " + workingDirectory);
         log.debug("Script path: " + scriptPath);
@@ -1459,7 +1493,8 @@ public class PodmanBackend implements Backend {
         Map<String, String> labels = createContainerLabels(
             pairId,
             execId,
-            selectedPartition
+            selectedPartition,
+            attemptNo
         );
 
         // Log container creation parameters for debugging
@@ -2269,11 +2304,12 @@ public class PodmanBackend implements Backend {
         String workingDirectory,
         String outputDir
     ) {
+        // CPU-time and wallclock budgets deliberately do not come from the container
+        // environment. JobManager renders each pair's queue/job limits into jobscript,
+        // which exports the authoritative values before the solver runs.
         List<String> envVars = new ArrayList<>(
             Arrays.asList(
                 "STAREXEC_PAIR_ID=" + pairId,
-                "STAREXEC_CPU_LIMIT=" + defaultCpuLimit,
-                "STAREXEC_WALLCLOCK_LIMIT=" + defaultWallclockLimit,
                 "STAREXEC_MEM_LIMIT=" + defaultMemoryMb,
                 "CONTAINER_MODE=true", // Signal to job script to use file-based communication
                 "STAREXEC_OUTPUT_DIR=" + outputDir
@@ -2296,6 +2332,21 @@ public class PodmanBackend implements Backend {
         return envVars;
     }
 
+    /** Reads {@code starexec.attempt}; null when absent or malformed (unfenced). */
+    static Integer parseAttemptLabel(Map<String, String> labels) {
+        String value = labels == null ? null : labels.get(LABEL_ATTEMPT);
+        if (value == null) {
+            return null;
+        }
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            log.warn("Ignoring malformed " + LABEL_ATTEMPT + " label: " + value);
+            return null;
+        }
+    }
+
     /**
      * Creates labels for container management.
      *
@@ -2308,10 +2359,27 @@ public class PodmanBackend implements Backend {
         int execId,
         CpuPartition partition
     ) {
+        return createContainerLabels(pairId, execId, partition, null);
+    }
+
+    /**
+     * As above, also stamping {@code starexec.attempt} when the attempt is known.
+     *
+     * @param attemptNo The pair's attempt at submit, or null for none (#185)
+     */
+    private Map<String, String> createContainerLabels(
+        int pairId,
+        int execId,
+        CpuPartition partition,
+        Integer attemptNo
+    ) {
         Map<String, String> labels = new HashMap<>();
         labels.put(LABEL_MANAGED, "true");
         labels.put(LABEL_PAIR_ID, String.valueOf(pairId));
         labels.put(LABEL_EXEC_ID, String.valueOf(execId));
+        if (attemptNo != null) {
+            labels.put(LABEL_ATTEMPT, String.valueOf(attemptNo));
+        }
         labels.put(LABEL_VERSION, CURRENT_LABEL_VERSION);
         labels.put(LABEL_KIND, pairId > 0 ? KIND_JOB_PAIR : KIND_MAINTENANCE);
         CpuPartition effectivePartition = partition == null
@@ -2731,7 +2799,8 @@ public class PodmanBackend implements Backend {
                     pairId,
                     info.outputDir,
                     info.exitCode,
-                    info.partitionIndex);
+                    info.partitionIndex,
+                    info.attemptNo);
             }
 
             // Delegate to ContainerJobMonitor for full processing
@@ -2834,7 +2903,8 @@ public class PodmanBackend implements Backend {
                             pairId,
                             outputDir,
                             exitCode,
-                            Math.max(0, parsePartitionIndex(container.getLabels()))));
+                            Math.max(0, parsePartitionIndex(container.getLabels())),
+                            parseAttemptLabel(container.getLabels())));
                     }
                 }
             }
@@ -3003,7 +3073,9 @@ public class PodmanBackend implements Backend {
                 if (state != null && Boolean.TRUE.equals(state.getRunning())) {
                     activeIds.add(entry.getKey());
                 } else {
-                    // Container finished, remove from tracking
+                    // Container finished: it no longer holds a slot, but its result is
+                    // still owed until the monitor has ingested it.
+                    awaitingIngestion.put(entry.getKey(), entry.getValue());
                     execIdToContainerId.remove(entry.getKey());
                     releaseSubmissionSlot(entry.getKey(), "container no longer running");
                 }
@@ -3011,6 +3083,23 @@ public class PodmanBackend implements Backend {
                 // Container no longer exists
                 execIdToContainerId.remove(entry.getKey());
                 releaseSubmissionSlot(entry.getKey(), "container missing during active scan");
+            }
+        }
+
+        for (Map.Entry<Integer, String> entry : new HashMap<>(awaitingIngestion).entrySet()) {
+            int execId = entry.getKey();
+            String containerId = entry.getValue();
+            ContainerJobMonitor monitor = jobMonitor;
+            if (monitor != null && monitor.isQuarantined(containerId)) {
+                awaitingIngestion.remove(execId, containerId);
+                continue;
+            }
+            try {
+                dockerClient.inspectContainerCmd(containerId).exec();
+                activeIds.add(execId);
+            } catch (NotFoundException e) {
+                // Gone without being ingested: nothing will complete this pair.
+                awaitingIngestion.remove(execId, containerId);
             }
         }
 
@@ -3028,6 +3117,13 @@ public class PodmanBackend implements Backend {
         public final int exitCode;
         public final int partitionIndex;
 
+        /**
+         * The attempt the container was created for (#185), or null when it carries no
+         * {@code starexec.attempt} label -- a container created before the label existed.
+         * Null means its writes are unfenced, as they were before the label.
+         */
+        public final Integer attemptNo;
+
         public CompletedContainerInfo(
             String containerId,
             int pairId,
@@ -3044,6 +3140,18 @@ public class PodmanBackend implements Backend {
             int exitCode,
             int partitionIndex
         ) {
+            this(containerId, pairId, outputDir, exitCode, partitionIndex, null);
+        }
+
+        public CompletedContainerInfo(
+            String containerId,
+            int pairId,
+            String outputDir,
+            int exitCode,
+            int partitionIndex,
+            Integer attemptNo
+        ) {
+            this.attemptNo = attemptNo;
             this.containerId = containerId;
             this.pairId = pairId;
             this.outputDir = outputDir;
@@ -3229,7 +3337,10 @@ public class PodmanBackend implements Backend {
                             pairId,
                             outputDir,
                             exitCode,
-                            Math.max(0, parsePartitionIndex(container.getLabels()))
+                            Math.max(0, parsePartitionIndex(container.getLabels())),
+                            isV2Label
+                                ? parseAttemptLabel(container.getLabels())
+                                : null
                         )
                     );
                     log.debug(
@@ -3453,6 +3564,7 @@ public class PodmanBackend implements Backend {
     public void releaseSlotForCompletedContainer(String containerId) {
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
+            awaitingIngestion.put(execId, containerId);
             releaseSubmissionSlot(execId, "container exited; results not yet ingested");
             log.debug(
                 "Released submission slot for exited container " + containerId +
@@ -3461,7 +3573,40 @@ public class PodmanBackend implements Backend {
         }
     }
 
+    /**
+     * Discards an exited container after its pair has been explicitly killed. This is
+     * different from normal result ingestion: the caller has already recorded a killed
+     * pair and is retiring its database row, so retaining the container would let the
+     * monitor retry writes against that missing row.
+     *
+     * @return true if the container is gone or was removed; false if it is running or
+     *         could not be inspected or removed
+     */
+    public boolean discardCompletedContainer(String containerId) {
+        try {
+            Boolean isRunning = inspectContainerRunningState(containerId);
+            if (!Boolean.FALSE.equals(isRunning)) {
+                log.warn(
+                    "Refusing to discard container " + containerId +
+                        " because its stopped state could not be established"
+                );
+                return false;
+            }
+            removeContainerArtifacts(containerId, false);
+        } catch (NotFoundException e) {
+            // A completion poll may have removed it just before this retire request.
+        } catch (Exception e) {
+            log.warn("Could not discard killed pair container " + containerId, e);
+            return false;
+        }
+
+        releaseSlotForCompletedContainer(containerId);
+        containerIdToPairId.invalidate(containerId);
+        return true;
+    }
+
     public void removeCompletedContainer(String containerId) {
+        awaitingIngestion.values().remove(containerId);
         Integer execId = removeTrackedExecutionByContainerId(containerId);
         if (execId != null) {
             releaseSubmissionSlot(execId, "container completed");
@@ -3566,7 +3711,12 @@ public class PodmanBackend implements Backend {
 
     @Override
     public void clearPairTracking(int pairId) {
-        // PodmanBackend does not track pair state - no-op
+        if (jobMonitor == null) {
+            throw new IllegalStateException(
+                "Cannot retire Podman result tracking before the monitor is initialized"
+            );
+        }
+        jobMonitor.clearPairTracking(pairId);
     }
 
     /**

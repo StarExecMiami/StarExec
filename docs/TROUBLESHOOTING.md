@@ -300,7 +300,7 @@ podman pull ghcr.io/starexecmiami/starexec:latest
 
 **Problem:** `make build` or `make start` fails with:
 ```
-Error: creating build container: initializing source docker://node:20-alpine: 
+Error: creating build container: initializing source docker://node:24-alpine: 
 pinging container registry registry-1.docker.io: Get "https://registry-1.docker.io/v2/": 
 dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: server misbehaving
 make: *** [Makefile:231: build] Error 125
@@ -1096,11 +1096,19 @@ podman stats
 **Solution:**
 
 ```bash
-# Increase container resources
+# Increase the Podman cgroup memory ceiling
 export STAREXEC_CONTAINER_DEFAULT_MEMORY_MB=8192
-export STAREXEC_CONTAINER_DEFAULT_CPU_LIMIT=2
+
+# Example for a 16-physical-core host: four cores per solver partition
+export STAREXEC_CPU_PARTITION_COUNT=4
 make stop && make start
 ```
+
+CPU-time and wallclock budgets must be changed in the StarExec queue/job. For
+scientific runs, derive partitions from the host topology as described in
+[CPU partition scheduling](cpu-partition-scheduling.md). On an unpartitioned
+host, `STAREXEC_CONTAINER_CPU_QUOTA_CORES` is only a CFS safety cap and does not
+provide affinity.
 
 ## Volume and Backup Issues
 

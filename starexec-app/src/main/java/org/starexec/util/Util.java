@@ -2126,7 +2126,34 @@ public class Util {
      * @return A new Cookie with the encoded value and security attributes
      */
     public static Cookie createEncodedCookie(String name, String value) {
-        Cookie cookie = new Cookie(name, encodeCookieValue(value));
+        return withSecurityAttributes(new Cookie(name, encodeCookieValue(value)));
+    }
+
+    /**
+     * Creates a cookie carrying an id or a comma-separated list of ids, with the same
+     * security attributes as {@link #createEncodedCookie(String, String)} but with the value
+     * left exactly as given.
+     *
+     * <p>The value is not URL-encoded: StarexecCommand reads these cookies straight from the
+     * response headers and splits them on commas ({@code HTMLParser.extractMultipartCookie}),
+     * so encoding the separator would change what the client parses.
+     *
+     * @param name  The cookie name
+     * @param value The cookie value, used verbatim
+     * @return A new Cookie with the value unchanged and the security attributes applied
+     */
+    public static Cookie createIdCookie(String name, String value) {
+        return withSecurityAttributes(new Cookie(name, value));
+    }
+
+    /**
+     * Applies the attributes every cookie this application sets should carry: HttpOnly, the
+     * application's path, and Secure when the deployment is served over HTTPS.
+     *
+     * @param cookie The cookie to configure
+     * @return The same cookie, configured
+     */
+    private static Cookie withSecurityAttributes(Cookie cookie) {
         cookie.setHttpOnly(true);
         cookie.setPath("/" + R.STAREXEC_APPNAME);
         // Enable secure flag when running over HTTPS

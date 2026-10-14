@@ -28,6 +28,7 @@ import org.starexec.data.to.tuples.AttributesTableData;
 import org.starexec.data.to.tuples.TimePair;
 import org.starexec.exceptions.StarExecDatabaseException;
 import org.starexec.exceptions.StarExecException;
+import org.starexec.exceptions.UserDeletionBlockedException;
 import org.starexec.logger.StarLogger;
 import org.starexec.util.DataTablesQuery;
 import org.starexec.util.NamedParameterStatement;
@@ -1054,11 +1055,41 @@ public class Jobs {
         if (Jobs.isReadOnly(jobId)) return false;
 
         try {
+            List<Integer> previouslyKilledPairIds = getKilledPairIds(jobId);
+            if (previouslyKilledPairIds == null) {
+                return false;
+            }
             // we should kill jobs before deleting them so no additional pairs are run
             if (!Jobs.isJobComplete(jobId)) {
-                Jobs.kill(jobId);
+                try (Connection killCon = Common.getConnection()) {
+                    if (!killCon.getAutoCommit()) {
+                        throw new SQLException(
+                            "Cannot delete job using a pooled connection with an open transaction"
+                        );
+                    }
+                    if (!kill(jobId, killCon)) {
+                        log.warn(
+                            "delete: refusing to delete job " + jobId +
+                                " because every active pair was not confirmed stopped and retired"
+                        );
+                        return false;
+                    }
+                }
             }
-            Jobs.setDeletedColumn(jobId);
+            if (!clearTrackingForKilledPairs(previouslyKilledPairIds)) {
+                log.warn(
+                    "delete: refusing to delete job " + jobId +
+                        " because tracking for a confirmed-stopped pair could not be retired"
+                );
+                return false;
+            }
+            if (!Jobs.setDeletedColumn(jobId)) {
+                log.warn(
+                    "delete: refusing to delete job " + jobId +
+                        " because its deleted marker could not be stored"
+                );
+                return false;
+            }
             con = Common.getConnection();
 
             // Remove the jobs stats from the database.
@@ -6028,6 +6059,7 @@ public class Jobs {
      *
      * @param jobId The id of the job to get pairs for
      * @return A list of job pair objects that are running.
+     * @throws IllegalStateException if running pairs could not be enumerated
      * @author Wyatt Kaiser
      */
     public static List<JobPair> getRunningPairs(int jobId) {
@@ -6038,11 +6070,13 @@ public class Jobs {
             return Jobs.getRunningPairs(con, jobId);
         } catch (Exception e) {
             log.error("getRunningPairs", "jobId: " + jobId, e);
+            throw new IllegalStateException(
+                "Could not enumerate running pairs for job " + jobId,
+                e
+            );
         } finally {
             Common.safeClose(con);
         }
-
-        return null;
     }
 
     /**
@@ -6513,13 +6547,19 @@ public class Jobs {
             // already walks both lists; this now matches it.
             List<JobPair> toStop = new ArrayList<>();
             List<JobPair> enqueued = Jobs.getEnqueuedPairs(jobId);
-            if (enqueued != null) {
-                toStop.addAll(enqueued);
+            if (enqueued == null) {
+                throw new SQLException(
+                    "Could not enumerate enqueued pairs for job " + jobId
+                );
             }
+            toStop.addAll(enqueued);
             List<JobPair> running = Jobs.getRunningPairs(jobId);
-            if (running != null) {
-                toStop.addAll(running);
+            if (running == null) {
+                throw new SQLException(
+                    "Could not enumerate running pairs for job " + jobId
+                );
             }
+            toStop.addAll(running);
 
             int unproven = 0;
             for (JobPair jp : toStop) {
@@ -6536,6 +6576,16 @@ public class Jobs {
                 }
                 if (!JobPairs.killPairConfirmed(jp.getId(), jp.getBackendExecId())) {
                     unproven++;
+                    continue;
+                }
+                try {
+                    R.BACKEND.clearPairTracking(jp.getId());
+                } catch (Exception clearException) {
+                    log.warn(
+                        "kill: could not retire backend tracking for pairId=" + jp.getId(),
+                        clearException
+                    );
+                    unproven++;
                 }
             }
 
@@ -6543,7 +6593,7 @@ public class Jobs {
                 log.warn(
                     "kill: job " + jobId + " is marked killed, but " + unproven +
                         " of its " + toStop.size() + " in-flight pair(s) could not be" +
-                        " confirmed stopped and were left unchanged"
+                        " stopped and retired from backend tracking"
                 );
                 return false;
             }
@@ -6573,13 +6623,50 @@ public class Jobs {
         try {
             con = Common.getConnection();
             List<Job> usersJobs = Jobs.getByUserId(userId);
+            if (usersJobs == null) {
+                throw new StarExecDatabaseException(
+                    "Could not enumerate jobs owned by user with id=" + userId
+                );
+            }
             for (Job job : usersJobs) {
                 int jobId = job.getId();
+                List<Integer> previouslyKilledPairIds = getKilledPairIds(jobId);
+                if (previouslyKilledPairIds == null) {
+                    throw new UserDeletionBlockedException(
+                        UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                        "Could not enumerate safely stopped pairs for job " + jobId +
+                            " before deleting user " + userId,
+                        null,
+                        null
+                    );
+                }
                 // Kill any jobs that are still running.
                 if (!Jobs.isJobComplete(jobId)) {
-                    Jobs.kill(jobId, con);
+                    if (!con.getAutoCommit()) {
+                        throw new StarExecDatabaseException(
+                            "Cannot kill user jobs using a pooled connection with an open transaction"
+                        );
+                    }
+                    if (!Jobs.kill(jobId, con)) {
+                        throw new UserDeletionBlockedException(
+                            UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                            "Could not confirm that every active job pair was stopped and retired for user " + userId,
+                            null,
+                            null
+                        );
+                    }
+                }
+                if (!clearTrackingForKilledPairs(previouslyKilledPairIds)) {
+                    throw new UserDeletionBlockedException(
+                        UserDeletionBlockedException.ACTIVE_JOB_NOT_RETIRED,
+                        "Could not retire backend tracking for a confirmed-stopped pair in job " + jobId,
+                        null,
+                        null
+                    );
                 }
             }
+        } catch (UserDeletionBlockedException e) {
+            throw e;
         } catch (Exception e) {
             throw new StarExecDatabaseException(
                 "Database error while deleting all jobs owned by user with id=" +
@@ -6589,6 +6676,62 @@ public class Jobs {
         } finally {
             Common.safeClose(con);
         }
+    }
+
+    /**
+     * Loads pairs whose persisted KILLED status lets deletion retry backend cleanup
+     * without issuing another stop request. This query is deliberately independent of
+     * the job status: the job may read KILLED or COMPLETE.
+     *
+     * @return pair ids, or {@code null} if the query failed
+     */
+    private static List<Integer> getKilledPairIds(int jobId) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        List<Integer> pairIds = new ArrayList<>();
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement(
+                "SELECT id FROM starexec.job_pairs WHERE job_id = ? AND status_code = ? ORDER BY id"
+            );
+            ps.setInt(1, jobId);
+            ps.setInt(2, StatusCode.STATUS_KILLED.getVal());
+            rs = ps.executeQuery();
+            while (rs.next()) {
+                pairIds.add(rs.getInt("id"));
+            }
+        } catch (Exception e) {
+            log.error("getKilledPairIds: could not enumerate job " + jobId, e);
+            return null;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+        return pairIds;
+    }
+
+    /**
+     * Retries backend cleanup for pairs whose persisted KILLED status proves there is
+     * no execution to stop. A failed cleanup must withhold deletion until a later retry
+     * succeeds.
+     *
+     * @return false if any backend cleanup failed
+     */
+    private static boolean clearTrackingForKilledPairs(List<Integer> pairIds) {
+        for (Integer pairId : pairIds) {
+            try {
+                R.BACKEND.clearPairTracking(pairId);
+            } catch (Exception e) {
+                log.warn(
+                    "clearTrackingForKilledPairs: could not retire tracking for pairId=" + pairId,
+                    e
+                );
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

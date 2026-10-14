@@ -29,6 +29,35 @@ import java.util.UUID;
 public class Registration extends HttpServlet {
 	private static final StarLogger log = StarLogger.getLogger(Registration.class);
 
+	/** The floor this servlet wants for an admin's session after they create a user. */
+	static final int ADMIN_MINIMUM_SESSION_SECONDS = 30 * 60;
+
+	/**
+	 * The interval to set when a caller wants a session to last AT LEAST {@code minimumSeconds}:
+	 * the current interval when it is already longer, the minimum otherwise.
+	 *
+	 * <p>Named for what it guarantees because the obvious spelling is wrong. This used to be
+	 * {@code setMaxInactiveInterval(30 * 60)}, described in its own comment as extending the
+	 * session, and the deployment configures 60 minutes (web.xml session-timeout), so creating a
+	 * user HALVED the administrator's own session. An admin who then spent half an hour on an
+	 * upload or a job form was logged out and lost it. Anyone needing to extend a session should
+	 * call this rather than setting an interval directly.
+	 *
+	 * <p>A current interval of zero or less is left alone: the servlet contract gives that the
+	 * meaning "never times out", so raising it to the minimum would impose an expiry on a session
+	 * that had none -- the same defect this method exists to prevent, in its worst form.
+	 *
+	 * @param currentSeconds the session's current maximum inactive interval, in seconds
+	 * @param minimumSeconds the floor the caller wants, in seconds
+	 * @return the current interval when it never expires or is already longer, else the minimum
+	 */
+	static int atLeastWithoutShortening(int currentSeconds, int minimumSeconds) {
+		if (currentSeconds <= 0) {
+			return currentSeconds;
+		}
+		return Math.max(currentSeconds, minimumSeconds);
+	}
+
 	// Param strings for processing
 	public static final String USER_COMMUNITY = "cm";
 	public static final String USER_PASSWORD = "pwd";
@@ -96,8 +125,10 @@ public class Registration extends HttpServlet {
 
 				// Preserve session for admin users
 				if (isAdmin && session != null) {
-					session.setMaxInactiveInterval(30 * 60); // Extend session to 30 minutes
-					log.debug("Extended admin session after user creation");
+					session.setMaxInactiveInterval(
+							atLeastWithoutShortening(session.getMaxInactiveInterval(), ADMIN_MINIMUM_SESSION_SECONDS));
+					log.debug("Ensured admin session is at least " + ADMIN_MINIMUM_SESSION_SECONDS
+							+ "s after user creation");
 				}
 
 				String url = Util.docRoot(redirectUrl);
