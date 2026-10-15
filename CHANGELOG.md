@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Benchmark uploads**: The asynchronous upload path now satisfies the same invariants as the synchronous one, creating the space association and charging disk usage. Uploaded benchmarks were previously invisible in their space, and deleting them could drive recorded disk usage negative.
 - **Result recording**: A write refused because another writer already recorded a result is now distinguished from a write that failed, so a finished pair releases its container and an unfinished one stays discoverable.
 - **Job pair locking**: Normalized job pair lock ordering and repaired stored procedures that returned only the first matching row.
+- **Job page links behind a proxy**: The job page no longer builds its links from `X-Forwarded-Host` / `X-Forwarded-Proto`. Each proxy appends to those headers, so behind two of them the matrix view, attributes, solver comparison, panel view, downloads and every pair link pointed at `https://host, host/...`. The live page now links relative to the context root, as every other page does; the offline copy uses the configured server address.
 
 ### Security
 - **Servlet authorization**: Corrected authorization checks that reported a failure without returning, so the privileged work ran anyway. The most serious allowed any authenticated user to rewrite the queue-to-community access list.
