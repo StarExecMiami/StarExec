@@ -15,6 +15,7 @@ import org.starexec.util.ArchiveExtractor;
 import org.starexec.util.ArchiveUtil;
 import org.starexec.util.UploadArtifactFileSystem;
 import org.starexec.util.UploadArtifactPathGuard;
+import org.starexec.util.Util;
 
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
@@ -31,6 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -70,6 +72,27 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
      * advance time explicitly rather than sleeping.
      */
     java.util.function.LongSupplier nanoTime = System::nanoTime;
+
+    /** Downloads an archive of at most maxBytes to a file; true on success. Tests replace it. */
+    interface ArchiveFetcher {
+        boolean fetch(java.net.URL url, File target, long maxBytes);
+    }
+
+    /**
+     * How an upload by URL gets its archive. Package-private and replaceable so tests need no
+     * server; the real one applies ArchiveUrlDownloader's policy (http or https only, every
+     * redirect hop checked, a size cap and a deadline).
+     */
+    ArchiveFetcher archiveFetcher = Util::copyFileFromURLUsingProxy;
+
+    /** Keeps a job's heartbeat fresh while its archive downloads; nothing else writes it then. */
+    private static final ScheduledExecutorService DOWNLOAD_HEARTBEAT =
+        Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "upload-download-heartbeat");
+            t.setDaemon(true);
+            return t;
+        });
+    private static final long DOWNLOAD_HEARTBEAT_SECONDS = 60;
     static final String TEMP_EXTRACTION_SUFFIX = ".extracting";
     
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -712,6 +735,65 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         };
     }
 
+    /**
+     * Downloads the archive of an upload by URL to the path the job was enqueued with (#139).
+     *
+     * <p>Done here rather than in the request: an archive can take minutes to fetch, and the
+     * request would hold the proxy in front of it open that long. The job's heartbeat is kept
+     * fresh meanwhile, because the upload page marks a job stale after five minutes without
+     * one. The address is left out of the error: it is the uploader's own input, and the
+     * download has already logged why it failed.
+     */
+    void fetchArchive(UploadJob job, File archiveFile) throws IOException {
+        java.net.URL url;
+        try {
+            url = new java.net.URI(job.getSourceUrl()).toURL();
+        } catch (Exception e) {
+            throw new IOException("The archive URL is not a valid URL", e);
+        }
+        // The quota is otherwise checked only at extraction, after the download: without this,
+        // a user with no room left could still write a full-size archive to the shared volume,
+        // again on every attempt.
+        User user = Users.get(job.getUserId());
+        if (user == null) {
+            throw new IOException("Failed to load upload user for quota validation");
+        }
+        long remainingQuotaBytes = Math.max(0L, user.getDiskQuota() - user.getDiskUsage());
+        if (remainingQuotaBytes <= 0L) {
+            throw new IOException("Not enough disk quota to download this archive: no bytes remain in"
+                + " your quota. Empty your recycle bin to reclaim space, or ask an administrator to"
+                + " raise your quota.");
+        }
+        long maxBytes = Math.min(remainingQuotaBytes, Util.ARCHIVE_DOWNLOAD_MAX_BYTES);
+        log.info("fetchArchive", "Downloading the archive of upload job " + job.getId() + " from "
+            + redacted(url) + ", at most " + maxBytes + " bytes");
+        ScheduledFuture<?> heartbeat = DOWNLOAD_HEARTBEAT.scheduleAtFixedRate(
+            () -> UploadJobQueue.touchJob(job.getId()),
+            DOWNLOAD_HEARTBEAT_SECONDS, DOWNLOAD_HEARTBEAT_SECONDS, TimeUnit.SECONDS);
+        boolean fetched;
+        try {
+            fetched = archiveFetcher.fetch(url, archiveFile, maxBytes);
+        } finally {
+            heartbeat.cancel(false);
+        }
+        if (!fetched) {
+            throw new IOException("Could not download the archive from its URL: check that the address"
+                + " is reachable over http or https, and that the archive fits both the "
+                + remainingQuotaBytes + " bytes left in your quota and the "
+                + Util.ARCHIVE_DOWNLOAD_MAX_BYTES + "-byte download limit");
+        }
+    }
+
+    /**
+     * The URL without the parts that can carry a secret: no user, no query, no fragment. A
+     * presigned archive URL puts its signature in the query, and the log is read more widely
+     * than the upload it came from.
+     */
+    static String redacted(java.net.URL url) {
+        String port = url.getPort() == -1 ? "" : ":" + url.getPort();
+        return url.getProtocol() + "://" + url.getHost() + port + url.getPath();
+    }
+
     File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
         String method = "prepareExtraction";
         UploadArtifactPathGuard pathGuard = getUploadPathGuard();
@@ -734,6 +816,11 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
         }
 
         archiveFile = safeArchivePath.toFile();
+        // An upload by URL arrives without its archive: the request only recorded where to
+        // fetch it. A retry finds the file already there and does not download it again.
+        if (job.getSourceUrl() != null && !archiveFile.exists()) {
+            fetchArchive(job, archiveFile);
+        }
         if (!archiveFile.exists()) {
             throw new IOException("Archive file not found: " + job.getArchivePath());
         }

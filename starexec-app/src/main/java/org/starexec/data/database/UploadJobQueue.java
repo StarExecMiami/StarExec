@@ -49,8 +49,8 @@ public class UploadJobQueue {
     private static final String INSERT_JOB_SQL = 
         "INSERT INTO upload_jobs (archive_path, user_id, space_id, upload_method, " +
         "benchmark_type_id, downloadable, priority, archive_size, " +
-        "has_dependencies, dep_root_space_id, linked, upload_session_id) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
     private static final String CLAIM_JOB_SQL = 
         "UPDATE upload_jobs " +
@@ -183,6 +183,7 @@ public class UploadJobQueue {
         ps.setObject(10, request.getDepRootSpaceId().orElse(null), java.sql.Types.INTEGER);
         ps.setBoolean(11, request.isLinked());
         ps.setObject(12, request.getUploadSessionId().orElse(null), java.sql.Types.BIGINT);
+        ps.setString(13, request.getSourceUrl().orElse(null));
     }
     
     /**
@@ -875,6 +876,7 @@ public class UploadJobQueue {
         job.setLinked(rs.getBoolean("linked"));
         long uploadSessionId = rs.getLong("upload_session_id");
         job.setUploadSessionId(rs.wasNull() ? null : uploadSessionId);
+        job.setSourceUrl(rs.getString("source_url"));
         job.setLastProcessedPath(rs.getString("last_processed_path"));
         job.setLastProcessedIndex(rs.getInt("last_processed_index"));
         job.setExtractPath(rs.getString("extract_path"));

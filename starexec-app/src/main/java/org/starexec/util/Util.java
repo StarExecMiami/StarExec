@@ -1942,6 +1942,9 @@ public class Util {
      * @param archiveFile the file to write
      * @return True on success and false otherwise
      */
+    /** The largest archive a URL download accepts, whatever the caller's own limit. */
+    public static final long ARCHIVE_DOWNLOAD_MAX_BYTES = ArchiveUrlDownloader.MAX_BYTES;
+
     public static boolean copyFileFromURLUsingProxy(URL url, File archiveFile) {
         return ArchiveUrlDownloader.download(
             url,

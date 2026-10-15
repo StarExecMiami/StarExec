@@ -27,6 +27,7 @@ public class UploadJob {
         private final Integer depRootSpaceId; // Nullable internally
         private final boolean linked;
         private final Long uploadSessionId;
+        private final String sourceUrl; // Set only for an upload by URL
 
         private UploadJobRequest(Builder builder) {
             this.archivePath = builder.archivePath;
@@ -41,6 +42,7 @@ public class UploadJob {
             this.depRootSpaceId = builder.depRootSpaceId;
             this.linked = builder.linked;
             this.uploadSessionId = builder.uploadSessionId;
+            this.sourceUrl = builder.sourceUrl;
         }
 
         public String getArchivePath() { return archivePath; }
@@ -55,6 +57,7 @@ public class UploadJob {
         public Optional<Integer> getDepRootSpaceId() { return Optional.ofNullable(depRootSpaceId); }
         public boolean isLinked() { return linked; }
         public Optional<Long> getUploadSessionId() { return Optional.ofNullable(uploadSessionId); }
+        public Optional<String> getSourceUrl() { return Optional.ofNullable(sourceUrl); }
 
         public static class Builder {
             private String archivePath;
@@ -69,6 +72,7 @@ public class UploadJob {
             private Integer depRootSpaceId;
             private boolean linked = false;
             private Long uploadSessionId;
+            private String sourceUrl;
 
             public Builder archivePath(String val) { this.archivePath = val; return this; }
             public Builder userId(int val) { this.userId = val; return this; }
@@ -82,6 +86,7 @@ public class UploadJob {
             public Builder depRootSpaceId(Integer val) { this.depRootSpaceId = val; return this; }
             public Builder linked(boolean val) { this.linked = val; return this; }
             public Builder uploadSessionId(Long val) { this.uploadSessionId = val; return this; }
+            public Builder sourceUrl(String val) { this.sourceUrl = val; return this; }
 
             public UploadJobRequest build() {
                 if (archivePath == null) throw new IllegalStateException("archivePath required");
@@ -103,6 +108,7 @@ public class UploadJob {
     private Integer depRootSpaceId;
     private boolean linked;
     private Long uploadSessionId;
+    private String sourceUrl;
     
     private String status; // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
     private int totalFilesFound;
@@ -158,6 +164,9 @@ public class UploadJob {
 
     public Long getUploadSessionId() { return uploadSessionId; }
     public void setUploadSessionId(Long uploadSessionId) { this.uploadSessionId = uploadSessionId; }
+    /** Where an upload by URL is downloaded from; null for every other upload. */
+    public String getSourceUrl() { return sourceUrl; }
+    public void setSourceUrl(String sourceUrl) { this.sourceUrl = sourceUrl; }
     
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
