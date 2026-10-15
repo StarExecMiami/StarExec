@@ -790,6 +790,17 @@ public class UploadBenchmark extends HttpServlet {
 						false, "You do not have permission to upload benchmarks and subspaces to this space");
 			}
 
+			// The dependency root is a second space this upload reads from: includes resolve against
+			// the benchmarks in it. Only the target space was checked above. When the root is absent
+			// it defaults to the target space, which was.
+			if (Boolean.parseBoolean((String) form.get(HAS_DEPENDENCIES))) {
+				String depRoot = (String) form.get(DEP_ROOT_SPACE_ID);
+				if (Validator.isValidPosInteger(depRoot)
+						&& !Permissions.canUserSeeSpace(Integer.parseInt(depRoot), SessionUtil.getUserId(request))) {
+					return new ValidatorStatusCode(false, "You do not have permission to see the dependency root space");
+				}
+			}
+
 			return new ValidatorStatusCode(true);
 		} catch (Exception e) {
 			log.warn(e.getMessage(), e);

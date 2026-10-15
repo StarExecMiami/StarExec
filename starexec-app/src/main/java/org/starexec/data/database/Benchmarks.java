@@ -2769,7 +2769,9 @@ public class Benchmarks {
 				includePath = path;
 				log.debug("validateIndBenchDependencies", "Dependency Path is " + includePath);
 
-				int axiomId = findDependentBench(depRootSpaceId, includePath, linked, 0);
+				// As the uploader, so that a subspace is entered only if they belong to it. This passed
+				// 0 from ba5a5b38a (2026-03) on, which takes GetSubSpaceByName's unfiltered branch.
+				int axiomId = findDependentBench(depRootSpaceId, includePath, linked, bench.getUserId());
 				if (axiomId < 0) {
 					log.warn("validateIndBenchDependencies", "Dependent Bench not found for " + bench.getName());
 					return includePath;
