@@ -4594,6 +4594,29 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
+                // An execution this process does not track, whose pair already holds a
+                // terminal status, was recorded before: by the process that ran before a
+                // restart, whose finished Job the cluster keeps for ttlSecondsAfterFinished.
+                // No output directory is tracked for it, so there is nothing to read, and
+                // nothing to write; an intervention report would be false. A deploy during the
+                // job 5 rerun on Quokka (2026-10-15) raised 122 of them, for pairs that already
+                // held their results. An untracked execution whose pair is not terminal is
+                // still reported below: that one did lose its result.
+                if (resolveStatusPath(execution) == null
+                        && StatusCode.toStatusCode(lookup.getStatusCode())
+                            .isTerminalExecutionResult()) {
+                    log.info(
+                        "Not ingesting " + execution + " again: pair " + pairId +
+                        " already holds terminal status " + lookup.getStatusCode() +
+                        " and this process does not track the execution, which finished" +
+                        " before it started"
+                    );
+                    releaseAccountingIfSafe(
+                        execution, "already-recorded completion of " + execution
+                    );
+                    return true;
+                }
+
                 // One parse feeds both fields, so they cannot come from two different
                 // writes of a file each stage truncates.
                 JsonObject statusRecord = readStatusRecord(execution);
