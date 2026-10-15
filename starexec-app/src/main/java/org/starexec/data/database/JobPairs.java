@@ -4187,6 +4187,77 @@ public class JobPairs {
         }
     }
 
+    /** What {@link #retryNeverStartedPair} did, as the database reported it. */
+    public enum NeverStartedRetryResult {
+        /** Queued again; the pair's one automatic retry is now spent. */
+        REQUEUED,
+        /** The automatic retry was already spent, so the pair is now ERROR_SUBMIT_FAIL. */
+        FILED,
+        /**
+         * The pair is no longer ENQUEUED on this execution and attempt -- rerun, killed,
+         * deleted or taken by another execution. Nothing was written.
+         */
+        STALE,
+        /** The outcome is unknown. Nothing can be assumed; the caller retries. */
+        ERROR
+    }
+
+    /**
+     * Decides the pair of a Kubernetes pod that never started, once its Job is deleted and
+     * the execution is proven unable to run: queued again once, or filed ERROR_SUBMIT_FAIL
+     * when its automatic retry is already spent. No solver result or stage is written,
+     * because nothing ran. One statement, so the reset and the {@code pairs_rerun} record
+     * commit together; the fences are in {@code starexec.RetryNeverStartedPair}.
+     *
+     * @param pairId    the pair the execution was submitted for
+     * @param execId    the execution that never started; the pair must still carry it
+     * @param attemptNo the attempt it was submitted for. Required: a re-dispatched pair
+     *                  keeps its previous execution id until the new one is persisted, so
+     *                  only the attempt tells the two apart
+     * @return what the database did; {@link NeverStartedRetryResult#ERROR} when unknown
+     */
+    public static NeverStartedRetryResult retryNeverStartedPair(
+        int pairId,
+        int execId,
+        int attemptNo
+    ) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        ResultSet rs = null;
+        try {
+            con = Common.getConnection();
+            ps = con.prepareStatement("SELECT starexec.RetryNeverStartedPair(?, ?, ?)");
+            ps.setInt(1, pairId);
+            ps.setInt(2, execId);
+            ps.setInt(3, attemptNo);
+            rs = ps.executeQuery();
+            String result = rs.next() ? rs.getString(1) : null;
+            if ("REQUEUED".equals(result)) {
+                return NeverStartedRetryResult.REQUEUED;
+            }
+            if ("FILED".equals(result)) {
+                return NeverStartedRetryResult.FILED;
+            }
+            if ("STALE".equals(result)) {
+                return NeverStartedRetryResult.STALE;
+            }
+            log.error(
+                "retryNeverStartedPair: unrecognised result '" + result + "' for pairId=" + pairId
+            );
+            return NeverStartedRetryResult.ERROR;
+        } catch (Exception e) {
+            // Whether it committed is unknown and does not matter: if it did, the pair is no
+            // longer ENQUEUED on this execution and the retry reports STALE; if it did not,
+            // nothing changed and the retry decides it.
+            log.error("retryNeverStartedPair: failed for pairId=" + pairId, e);
+            return NeverStartedRetryResult.ERROR;
+        } finally {
+            Common.safeClose(rs);
+            Common.safeClose(ps);
+            Common.safeClose(con);
+        }
+    }
+
     /**
      * Gets all job pairs are currently under the jurisdiction of the backend. These
      * are the pairs with status codes

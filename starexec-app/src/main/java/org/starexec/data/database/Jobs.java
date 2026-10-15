@@ -5490,8 +5490,10 @@ public class Jobs {
      *
      * <p>Distinct from {@link #rerunPair(int)}, which is the manual/admin entry point, and
      * the distinction is load-bearing rather than cosmetic. The {@code pairs_rerun} table
-     * does not record "this pair was rerun" — its only production writer has ever been the
-     * automatic sweep, so it records "the automatic rerun allowance was consumed". Routing
+     * does not record "this pair was rerun" — its production writers are this sweep and the
+     * Kubernetes retry of a pod that never started ({@code starexec.RetryNeverStartedPair}),
+     * which spend the same allowance, so it records "the automatic rerun allowance was
+     * consumed". Routing
      * a human's rerun through this method would silently spend that allowance.
      *
      * <p>Two things happen here that the old two-statement sequence could not guarantee:

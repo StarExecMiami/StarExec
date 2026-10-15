@@ -41,6 +41,7 @@ import org.starexec.backend.KubernetesJobMonitor;
 import org.starexec.backend.PodPhaseView;
 import org.starexec.backend.StageStatusSnapshots;
 import org.starexec.data.database.JobPairs;
+import org.starexec.data.database.JobPairs.NeverStartedRetryResult;
 import org.starexec.data.database.JobPairs.PairStatusLookupState;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.StageStatusBatchResult;
@@ -2124,6 +2125,7 @@ public class KubernetesNativeBackendTests {
 
         ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(41, "job-41");
         ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(41, 441);
+        givenNeverStartedEvidence(backend, 41, 1);
         restore(backend, 41);
 
         // Named Job deleted, but a pod carrying the exec-id label is still Pending.
@@ -2140,6 +2142,11 @@ public class KubernetesNativeBackendTests {
             assertFalse(
                 "the escalation must report incomplete so the monitor retries it",
                 callback.onJobStuckPending(execution(41, "job-41"), "not scheduled")
+            );
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never()
             );
 
             jobPairsMock.verify(
@@ -2166,9 +2173,16 @@ public class KubernetesNativeBackendTests {
         );
     }
 
+    /**
+     * A pod that never started wrote nothing, so there is nothing to ingest and no result to
+     * record: the pair is queued again once. This used to go through ingestion, find no
+     * status.json, report an ingestion intervention and leave the pair ENQUEUED until
+     * FIND_BROKEN_JOB_PAIRS filed it ERROR_SUBMIT_FAIL -- which the automatic rerun never
+     * selects, so the retry docs/BACKENDS.md promises never happened.
+     */
     @Test
     @SuppressWarnings("unchecked")
-    public void stuckPendingWithoutStatusRemainsUnresolvedAfterJobIsGone() throws Exception {
+    public void stuckPendingWithoutStatusIsQueuedAgainOnce() throws Exception {
         KubernetesNativeBackend backend = new KubernetesNativeBackend();
 
         Map<Integer, String> execToJob =
@@ -2186,6 +2200,7 @@ public class KubernetesNativeBackendTests {
         execToJob.put(31, "job-31");
         execToPair.put(31, 431);
         execToOut.put(31, output);
+        ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(31, 1);
         holdingSlot.add(31);
         activeJobCount.set(1);
         givenJobDeletion(backend, "job-31", true, null);
@@ -2197,6 +2212,9 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(431))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(431, 31, 1))
+                .thenReturn(NeverStartedRetryResult.REQUEUED);
             assertTrue(
                 callback.onJobStuckPending(
                     execution(31, "job-31"),
@@ -2204,6 +2222,10 @@ public class KubernetesNativeBackendTests {
                 )
             );
 
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(431, 31, 1), Mockito.times(1)
+            );
+            // Nothing ran: no solver result, stage or end time is written for it.
             jobPairsMock.verify(
                 () -> JobPairs.setPairStatusPreciseResult(
                     Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
@@ -2216,8 +2238,400 @@ public class KubernetesNativeBackendTests {
         assertTrue(execToJob.isEmpty());
         assertTrue(execToPair.isEmpty());
         assertTrue(execToOut.isEmpty());
-        assertTrue("the unresolved execution's output must be retained",
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+        assertTrue("nothing the execution owned is deleted",
             java.nio.file.Files.isDirectory(output));
+    }
+
+    /**
+     * The retry is spent once. A pod that fails to start a second time is filed as the
+     * submit failure it is, now, instead of sitting ENQUEUED for the hours until
+     * FIND_BROKEN_JOB_PAIRS -- holding its place in the queue the whole time.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingWhoseRetryIsSpentIsFiledNotLeftEnqueued() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(37, "job-37");
+        execToPair.put(37, 437);
+        givenNeverStartedEvidence(backend, 37, 1);
+        holdingSlot.add(37);
+        activeJobCount.set(1);
+        givenJobDeletion(backend, "job-37", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(437))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(437, 37, 1))
+                .thenReturn(NeverStartedRetryResult.FILED);
+
+            assertTrue(callback.onJobStuckPending(execution(37, "job-37"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(437, 37, 1), Mockito.times(1)
+            );
+            jobPairsMock.verify(
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
+            );
+        }
+
+        assertTrue(execToJob.isEmpty());
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+    }
+
+    /**
+     * A pair that moved on -- rerun, killed, deleted, or taken by another execution -- is
+     * not this execution's to settle. The database reports it and changes nothing; the
+     * execution is still over, so its accounting is released.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingForAPairThatMovedOnChangesNothing() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(38, "job-38");
+        execToPair.put(38, 438);
+        givenNeverStartedEvidence(backend, 38, 1);
+        holdingSlot.add(38);
+        activeJobCount.set(1);
+        givenJobDeletion(backend, "job-38", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(438))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(438, 38, 1))
+                .thenReturn(NeverStartedRetryResult.STALE);
+
+            assertTrue(callback.onJobStuckPending(execution(38, "job-38"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(438, 38, 1), Mockito.times(1)
+            );
+        }
+
+        assertTrue(execToJob.isEmpty());
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+    }
+
+    /**
+     * An unknown outcome proves nothing about the pair, so nothing is released: the
+     * tracking and the slot stay, and the monitor's cleanup-pending record brings the
+     * execution back until the database answers.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingIsRetriedWhileItsSettlementIsUnknown() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Map<Integer, String> execToJob =
+            (Map<Integer, String>) getField(backend, "execIdToJobName");
+        Map<Integer, Integer> execToPair =
+            (Map<Integer, Integer>) getField(backend, "execIdToPairId");
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        AtomicInteger activeJobCount =
+            (AtomicInteger) getField(backend, "activeJobCount");
+
+        execToJob.put(39, "job-39");
+        execToPair.put(39, 439);
+        givenNeverStartedEvidence(backend, 39, 1);
+        holdingSlot.add(39);
+        activeJobCount.set(1);
+        givenJobDeletion(backend, "job-39", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(439))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(439, 39, 1))
+                .thenReturn(NeverStartedRetryResult.ERROR, NeverStartedRetryResult.REQUEUED);
+
+            assertFalse(callback.onJobStuckPending(execution(39, "job-39"), "Unschedulable"));
+            assertEquals("job-39", execToJob.get(39));
+            assertEquals(Integer.valueOf(439), execToPair.get(39));
+            assertEquals(1, activeJobCount.get());
+            assertTrue(holdingSlot.contains(39));
+
+            assertTrue(callback.onJobStuckPending(execution(39, "job-39"), "Unschedulable"));
+        }
+
+        assertTrue(execToJob.isEmpty());
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+    }
+
+    /**
+     * The database fences the retry on the attempt this execution was submitted for, so the
+     * attempt it is given must be that one: a rerun that took the pair since has a later
+     * attempt and must not be reset by an execution that no longer owns it.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingRetryCarriesTheExecutionsAttempt() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(40, "job-40");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(40, 440);
+        ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(40, 3);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(40, emptyOutputDir());
+        ((Set<Integer>) getField(backend, "jobsHoldingSlot")).add(40);
+        ((AtomicInteger) getField(backend, "activeJobCount")).set(1);
+        givenJobDeletion(backend, "job-40", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(440))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(440, 40, 3))
+                .thenReturn(NeverStartedRetryResult.REQUEUED);
+
+            assertTrue(callback.onJobStuckPending(execution(40, "job-40"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(440, 40, 3), Mockito.times(1)
+            );
+        }
+    }
+
+    /**
+     * A status.json means the pod did start, between the last observation and the delete.
+     * What it recorded is evidence, and evidence is ingested -- never discarded by queueing
+     * the pair again.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingThatWroteAStatusIsIngestedNotQueuedAgain() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+
+        Path output = terminalOutput(StatusCode.ERROR_RUNSCRIPT);
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(42, "job-42");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(42, 442);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(42, output);
+        ((Set<Integer>) getField(backend, "jobsHoldingSlot")).add(42);
+        ((AtomicInteger) getField(backend, "activeJobCount")).set(1);
+        givenJobDeletion(backend, "job-42", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(442))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(
+                    () ->
+                        JobPairs.setPairStatusPreciseResult(
+                            442,
+                            1,
+                            StatusCode.ERROR_RUNSCRIPT.getVal(),
+                            StatusCode.STATUS_NOT_REACHED.getVal(),
+                            false
+                        )
+                )
+                .thenReturn(PairStatusResult.APPLIED);
+
+            assertTrue(callback.onJobStuckPending(execution(42, "job-42"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never()
+            );
+        }
+    }
+
+    /**
+     * An output directory this backend does not own proves nothing about status.json, so the
+     * pair is not queued again: that would spend its one retry, and the next attempt would
+     * clear whatever evidence is there. It goes through completion ingestion instead.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingWithNoOwnedOutputDirectoryIsNotQueuedAgain() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(45, "job-45");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(45, 445);
+        ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(45, 1);
+        ((Set<Integer>) getField(backend, "jobsHoldingSlot")).add(45);
+        ((AtomicInteger) getField(backend, "activeJobCount")).set(1);
+        givenJobDeletion(backend, "job-45", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(445))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+
+            callback.onJobStuckPending(execution(45, "job-45"), "Unschedulable");
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never()
+            );
+        }
+    }
+
+    /**
+     * An output directory that cannot be read is "cannot tell", not "absent": the same
+     * conflation confirmedAbsent exists to avoid. The pair is not queued again.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingWhoseOutputCannotBeReadIsNotQueuedAgain() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        Path output = emptyOutputDir();
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(46, "job-46");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(46, 446);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(46, output);
+        ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(46, 1);
+        ((Set<Integer>) getField(backend, "jobsHoldingSlot")).add(46);
+        ((AtomicInteger) getField(backend, "activeJobCount")).set(1);
+        givenJobDeletion(backend, "job-46", true, null);
+
+        try {
+            java.nio.file.Files.setPosixFilePermissions(
+                output, java.nio.file.attribute.PosixFilePermissions.fromString("---------")
+            );
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            org.junit.Assume.assumeNoException("POSIX permissions unavailable", e);
+        }
+        try {
+            // Root ignores the permission bits; confirm the barrier is real first.
+            boolean barrierHolds;
+            try {
+                java.nio.file.Files.readAttributes(
+                    output.resolve("status.json"),
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS
+                );
+                barrierHolds = false;
+            } catch (java.nio.file.NoSuchFileException e) {
+                barrierHolds = false;
+            } catch (java.io.IOException e) {
+                barrierHolds = true;
+            }
+            org.junit.Assume.assumeTrue(
+                "this JVM can read through a 000 directory (running as root?)", barrierHolds
+            );
+
+            KubernetesJobMonitor.JobCompletionCallback callback =
+                instantiateCompletionCallback(backend);
+
+            try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+                jobPairsMock
+                    .when(() -> JobPairs.getPairStatusLookup(446))
+                    .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+
+                callback.onJobStuckPending(execution(46, "job-46"), "Unschedulable");
+                jobPairsMock.verify(
+                    () -> JobPairs.retryNeverStartedPair(
+                        Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                    Mockito.never()
+                );
+            }
+        } finally {
+            java.nio.file.Files.setPosixFilePermissions(
+                output, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")
+            );
+        }
+    }
+
+    /**
+     * Without the attempt it was submitted for, an execution cannot fence a retry: a
+     * re-dispatched pair keeps the previous execution id until the new one is persisted. The
+     * pair is left to FIND_BROKEN_JOB_PAIRS, and the execution is still released.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stuckPendingWithoutAnAttemptIsLeftForTheSweep() throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        ((Map<Integer, String>) getField(backend, "execIdToJobName")).put(47, "job-47");
+        ((Map<Integer, Integer>) getField(backend, "execIdToPairId")).put(47, 447);
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(47, emptyOutputDir());
+        Set<Integer> holdingSlot = (Set<Integer>) getField(backend, "jobsHoldingSlot");
+        holdingSlot.add(47);
+        AtomicInteger activeJobCount = (AtomicInteger) getField(backend, "activeJobCount");
+        activeJobCount.set(1);
+        givenJobDeletion(backend, "job-47", true, null);
+
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(447))
+                .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+
+            assertTrue(callback.onJobStuckPending(execution(47, "job-47"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never()
+            );
+        }
+
+        assertEquals(0, activeJobCount.get());
+        assertTrue(holdingSlot.isEmpty());
+    }
+
+    /** An output directory a pod that never started leaves behind: there, and empty. */
+    private static Path emptyOutputDir() throws Exception {
+        Path dir = java.nio.file.Files.createTempDirectory("k8s-never-started");
+        dir.toFile().deleteOnExit();
+        return dir;
+    }
+
+    /**
+     * What a pod that never started leaves for its execution: an empty output directory,
+     * which proves status.json absent, beside the attempt the execution was submitted for.
+     */
+    @SuppressWarnings("unchecked")
+    private void givenNeverStartedEvidence(
+        KubernetesNativeBackend backend,
+        int execId,
+        int attempt
+    ) throws Exception {
+        ((Map<Integer, Path>) getField(backend, "execIdToOutputDir")).put(execId, emptyOutputDir());
+        ((Map<Integer, Integer>) getField(backend, "execIdToAttemptNo")).put(execId, attempt);
     }
 
     /**
@@ -2240,6 +2654,7 @@ public class KubernetesNativeBackendTests {
 
         execToJob.put(32, "job-32");
         execToPair.put(32, 432);
+        givenNeverStartedEvidence(backend, 32, 1);
         holdingSlot.add(32);
         activeJobCount.set(1);
         givenJobDeletion(backend, "job-32", true, null);
@@ -2251,6 +2666,9 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(432))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(432, 32, 1))
+                .thenReturn(NeverStartedRetryResult.REQUEUED);
 
             assertTrue(callback.onJobStuckPending(execution(32, "job-32"), "Unschedulable"));
             jobPairsMock.verify(
@@ -2393,6 +2811,7 @@ public class KubernetesNativeBackendTests {
 
         execToJob.put(35, "job-35");
         execToPair.put(35, 435);
+        givenNeverStartedEvidence(backend, 35, 1);
         holdingSlot.add(35);
         activeJobCount.set(1);
         // Delete reports nothing, and the Job is still there afterwards.
@@ -2406,6 +2825,11 @@ public class KubernetesNativeBackendTests {
                 .when(() -> JobPairs.getPairStatusLookup(435))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
             assertFalse(callback.onJobStuckPending(execution(35, "job-35"), "Unschedulable"));
+            jobPairsMock.verify(
+                () -> JobPairs.retryNeverStartedPair(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt()),
+                Mockito.never()
+            );
 
             jobPairsMock.verify(
                 () -> JobPairs.setPairStatusPreciseResult(
@@ -2439,6 +2863,7 @@ public class KubernetesNativeBackendTests {
 
         execToJob.put(36, "job-36");
         execToPair.put(36, 436);
+        givenNeverStartedEvidence(backend, 36, 1);
         holdingSlot.add(36);
         activeJobCount.set(1);
         // Delete reports nothing because it was already gone; the read confirms it.
@@ -2451,6 +2876,9 @@ public class KubernetesNativeBackendTests {
             jobPairsMock
                 .when(() -> JobPairs.getPairStatusLookup(436))
                 .thenReturn(foundLookup(StatusCode.STATUS_ENQUEUED.getVal()));
+            jobPairsMock
+                .when(() -> JobPairs.retryNeverStartedPair(436, 36, 1))
+                .thenReturn(NeverStartedRetryResult.REQUEUED);
             assertTrue(callback.onJobStuckPending(execution(36, "job-36"), "Unschedulable"));
             jobPairsMock.verify(
                 () -> JobPairs.setPairStatusPreciseResult(

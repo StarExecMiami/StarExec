@@ -122,7 +122,8 @@ public class KubernetesJobMonitor {
     public static final int DEFAULT_PENDING_WARN_MINUTES = 5;
 
     /**
-     * How long a pod may stay Pending before its pair is failed for rerun.
+     * How long a pod may stay Pending before its Job is deleted and its pair settled:
+     * queued again once, or filed ERROR_SUBMIT_FAIL when that retry is spent.
      *
      * <p>An hour rides out a short drain but surfaces a mislabelled queue the same working
      * day. Zero disables the transition and leaves only the warning.
@@ -179,7 +180,8 @@ public class KubernetesJobMonitor {
     private final long pendingWarnMillis;
 
     /**
-     * How long a pod may be Pending before its pair is failed for rerun, in milliseconds.
+     * How long a pod may be Pending before its Job is deleted and its pair settled, in
+     * milliseconds.
      * Zero means never.
      */
     private final long pendingTimeoutMillis;
@@ -223,8 +225,8 @@ public class KubernetesJobMonitor {
      *
      * @param pendingWarnMinutes    minutes a pod may be Pending before it is logged;
      *                              zero or less disables the warning
-     * @param pendingTimeoutMinutes minutes a pod may be Pending before its pair is failed
-     *                              for rerun; zero or less disables the transition, which
+     * @param pendingTimeoutMinutes minutes a pod may be Pending before its Job is deleted
+     *                              and its pair settled; zero or less disables the transition, which
      *                              leaves the monitor reporting only
      */
     public KubernetesJobMonitor(
