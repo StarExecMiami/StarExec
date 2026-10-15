@@ -317,9 +317,9 @@ public class LocalBackend implements Backend {
      * Removes the previous attempt's results so this one cannot be judged on them.
      *
      * <p>Output directories are keyed by pair, not by attempt --
-     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} comes from
-     * {@code JobPairs.getStdout(pairId)} -- so a rerun writes into exactly the tree its
-     * predecessor left behind.
+     * {@code new File(job.logPath).getParentFile()}, where {@code logPath} is the
+     * {@code JobPairs.getLogFilePath(pair)} JobManager submits with -- so a rerun writes into
+     * exactly the tree its predecessor left behind.
      *
      * @return true when nothing from a previous attempt can still be read
      */

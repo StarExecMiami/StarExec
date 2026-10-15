@@ -129,6 +129,7 @@ import org.starexec.constants.R;
 import org.starexec.data.database.JobPairs;
 import org.starexec.data.database.PairStatusResult;
 import org.starexec.data.database.StageStatusBatchResult;
+import org.starexec.data.to.JobPair;
 import org.starexec.data.to.Status.StatusCode;
 import org.starexec.logger.StarLogger;
 
@@ -2059,8 +2060,8 @@ public class KubernetesNativeBackend implements Backend {
         try {
             execIdToOutputDir.put(execId, resolveOutputDirectory(logPath));
         } catch (Exception ignored) {
-            // The output dir is recoverable later from the pair's stdout path; not having
-            // it must not cost us the accounting.
+            // Tracking rebuilt after a restart reads it back from the Job's output-dir
+            // annotation; not having it must not cost us the accounting.
         }
         restoreSubmissionSlot(execId);
         // Register a retry owner. Neither the job monitor nor the orphan inventory can
@@ -2190,6 +2191,9 @@ public class KubernetesNativeBackend implements Backend {
                 .withName(jobName)
                 .withNamespace(namespace)
                 .addToLabels(labels)
+                // Survives a restart, as the labels do: tracking rebuilt from this Job
+                // reads the output directory back instead of recomputing it.
+                .addToAnnotations(OUTPUT_DIR_ANNOTATION, outputDir.toString())
             .endMetadata()
             .withNewSpec()
                 .withBackoffLimit(backoffLimit)
@@ -3246,14 +3250,27 @@ public class KubernetesNativeBackend implements Backend {
             }
         }
 
+        // A Job submitted before the annotation existed. Submission took the parent of the
+        // pair's log file (JobManager passes JobPairs.getLogFilePath as the log path), which
+        // is where the pod writes status.json, its snapshots and stats. This used to take the
+        // parent of the pair's stdout instead -- a directory in a different tree -- so every
+        // execution in flight across a restart had its status.json looked for in the wrong
+        // place, and its result was reported as an ingestion intervention instead of being
+        // recorded: 48 pairs of the job 5 rerun after one deploy on Quokka (2026-10-15).
         try {
-            return resolveOutputDirectory(JobPairs.getStdout(pairId));
+            JobPair pair = JobPairs.getPair(pairId);
+            if (pair != null) {
+                return resolveOutputDirectory(JobPairs.getLogFilePath(pair));
+            }
         } catch (Exception e) {
             log.warn(
                 "Could not reconstruct output directory for pair " + pairId +
                 "; using default", e);
             return Paths.get(R.JOB_OUTPUT_DIRECTORY);
         }
+        log.warn("Could not reconstruct output directory for pair " + pairId +
+            ": the pair was not found; using default");
+        return Paths.get(R.JOB_OUTPUT_DIRECTORY);
     }
 
     /**
