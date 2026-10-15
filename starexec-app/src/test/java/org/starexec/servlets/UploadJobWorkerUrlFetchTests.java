@@ -161,20 +161,25 @@ public class UploadJobWorkerUrlFetchTests {
     /** The log keeps where the archive came from, not what could authorise fetching it. */
     @Test
     public void theLoggedAddressCarriesNoSecret() throws Exception {
-        assertEquals("https://example.org:8443/.../probe.tar.gz", UploadJobWorker.redacted(
+        assertEquals("https://example.org:8443", UploadJobWorker.redacted(
             new URL("https://user:secret@example.org:8443/archives/probe.tar.gz?X-Amz-Signature=abc#part")));
-        assertEquals("http://example.org/.../probe.tar.gz",
-            UploadJobWorker.redacted(new URL(URL)));
+        assertEquals("http://example.org", UploadJobWorker.redacted(new URL(URL)));
     }
 
-    /** A share link can carry its token in a directory of the path, not only in the query. */
+    /**
+     * Any part of the path can carry a token: a share link's directory, a path parameter in the
+     * file name. None of it is logged.
+     */
     @Test
     public void aTokenInThePathIsNotLogged() throws Exception {
-        String logged = UploadJobWorker.redacted(new URL("https://files.example/d/Zx81-secret-token/bench.zip"));
-        assertEquals("https://files.example/.../bench.zip", logged);
-        assertFalse(logged.contains("Zx81-secret-token"));
-        assertEquals("https://files.example/bench.zip",
-            UploadJobWorker.redacted(new URL("https://files.example/bench.zip")));
+        for (String address : new String[] {
+                "https://files.example/d/Zx81-secret-token/bench.zip",
+                "https://files.example/archive;token=Zx81-secret-token.tgz",
+                "https://files.example/Zx81%2Dsecret%2Dtoken/bench.zip"}) {
+            String logged = UploadJobWorker.redacted(new URL(address));
+            assertEquals(address, "https://files.example", logged);
+            assertFalse(address, logged.contains("Zx81"));
+        }
     }
 
     /** The quota is otherwise checked only after the download, at extraction. */

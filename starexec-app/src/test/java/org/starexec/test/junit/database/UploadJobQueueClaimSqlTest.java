@@ -92,6 +92,22 @@ public class UploadJobQueueClaimSqlTest extends Common {
 		assertEquals("PENDING", status(second));
 	}
 
+	/**
+	 * A URL upload left PROCESSING by a failure nobody recorded -- its worker gone, its heartbeat
+	 * stale -- must not hold back every later upload by URL until a restart reconciles it.
+	 */
+	@Test
+	public void aUrlUploadThatWentQuietNoLongerBlocks() throws SQLException {
+		long orphan = insertJob("PROCESSING", "https://example.org/orphan.tgz", 5);
+		try (Connection con = Common.getConnection(); Statement s = con.createStatement()) {
+			s.execute("UPDATE starexec.upload_jobs SET started_at = CURRENT_TIMESTAMP - INTERVAL '1 hour', "
+					+ "last_heartbeat = CURRENT_TIMESTAMP - INTERVAL '30 minutes' WHERE id = " + orphan);
+		}
+		long next = insertJob("PENDING", "https://example.org/next.tgz", 1);
+
+		assertEquals(next, claimed());
+	}
+
 	/** Once the running URL upload ends, the next one is claimed. */
 	@Test
 	public void aFinishedUrlUploadNoLongerBlocks() throws SQLException {
@@ -103,13 +119,17 @@ public class UploadJobQueueClaimSqlTest extends Common {
 		assertEquals("PROCESSING", status(next));
 	}
 
+	/** A PROCESSING row starts with a fresh heartbeat, as a live worker keeps it. */
 	private long insertJob(String status, String sourceUrl, long archiveSize) throws SQLException {
+		String alive = "PROCESSING".equals(status) ? "CURRENT_TIMESTAMP" : "NULL";
 		try (Connection con = Common.getConnection(); Statement s = con.createStatement();
 			 ResultSet rs = s.executeQuery("INSERT INTO starexec.upload_jobs (archive_path, user_id, "
-					 + "space_id, upload_method, benchmark_type_id, priority, archive_size, status, source_url) "
+					 + "space_id, upload_method, benchmark_type_id, priority, archive_size, status, source_url, "
+					 + "started_at, last_heartbeat) "
 					 + "VALUES ('/tmp/" + TAG + "', " + USER_ID + ", " + SPACE_ID + ", 'convert', 1, "
 					 + PRIORITY + ", " + archiveSize + ", '" + status + "', "
-					 + (sourceUrl == null ? "NULL" : "'" + sourceUrl + "'") + ") RETURNING id")) {
+					 + (sourceUrl == null ? "NULL" : "'" + sourceUrl + "'") + ", " + alive + ", " + alive
+					 + ") RETURNING id")) {
 			rs.next();
 			return rs.getLong(1);
 		}

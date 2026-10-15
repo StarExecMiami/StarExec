@@ -55,6 +55,12 @@ public class UploadJobQueue {
     // An upload by URL holds its worker for as long as the download takes, up to the downloader's
     // deadline, so at most one runs at a time: slow downloads can never occupy every worker and
     // leave uploaded files waiting behind them (#139).
+    //
+    // Only a running one that is still alive counts. Its worker refreshes last_heartbeat at least
+    // every minute while it downloads and on every progress update; one quiet for ten minutes was
+    // left PROCESSING by a failure nobody recorded, and must not hold back every later upload by
+    // URL until a restart reconciles it. The check runs inside one claim statement, so it holds for
+    // the single app instance the chart deploys, not across several claiming at the same moment.
     private static final String CLAIM_JOB_SQL =
         "UPDATE upload_jobs " +
         "SET status = 'PROCESSING', started_at = CURRENT_TIMESTAMP " +
@@ -63,7 +69,9 @@ public class UploadJobQueue {
         "   WHERE status = 'PENDING' " +
         "     AND (source_url IS NULL OR NOT EXISTS (" +
         "       SELECT 1 FROM upload_jobs running " +
-        "       WHERE running.status = 'PROCESSING' AND running.source_url IS NOT NULL)) " +
+        "       WHERE running.status = 'PROCESSING' AND running.source_url IS NOT NULL " +
+        "         AND GREATEST(running.last_heartbeat, running.started_at) " +
+        "             > CURRENT_TIMESTAMP - INTERVAL '10 minutes')) " +
         "   ORDER BY priority DESC, archive_size ASC, created_at ASC " +
         "   LIMIT 1 FOR UPDATE SKIP LOCKED" +
         ") RETURNING *";
