@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Admission and dispatch**: A managed pod that cannot be accounted for defers new admission for its queue until it is resolved, instead of allowing unrelated pairs to be scheduled beside it.
 - **Rerun semantics**: Manual reruns now require the previous execution to be confirmed stopped and report how many pairs were actually reset. Automatic reruns reset the pair and consume the automatic-rerun allowance in one atomic step, and execution identity is revalidated under the database row lock so a reset cannot land on a newer execution.
 - **Measurement fidelity**: Timeout and memory-limit classification now uses runsolver's own `TIMEOUT=` and `MEMOUT=` verdicts rather than substring-matching its English output, all three runsolver output sources are read, and a run whose measurements cannot be read is no longer recorded as zero.
-- **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts fails its pair instead of waiting indefinitely.
+- **Job status accuracy**: Pairs are recorded against the node they actually ran on, queues with no nodes report why dispatch stopped, and a pod that never starts no longer holds its pair indefinitely.
 
 ### Removed
 - **Dead stress-test endpoint**: Removed the `/secure/add/stressTest` mapping and the admin UI that reached it. The mapping pointed at a class in `src/test/java`, so it was never packaged into the WAR and every request returned HTTP 500. The stress-test capability itself is unchanged; it is driven by `TestManager` in the test harness.

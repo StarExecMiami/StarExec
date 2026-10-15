@@ -502,8 +502,10 @@ export STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS=300000
 # allowance RERUN_FAILED_PAIRS also spends, recorded in pairs_rerun, surviving a
 # restart. Nothing ran, so no result or stage is recorded and no measurement is
 # affected by the retry. A pair whose allowance is already spent is filed as
-# ERROR_SUBMIT_FAIL, which only a manual rerun retries. A pod that did start
-# after all, and wrote a status.json before the delete, is ingested instead.
+# ERROR_SUBMIT_FAIL, which only a manual rerun retries. The pair is queued again
+# only once the absence of a status.json is proven: if the pod did start after
+# all, or its output directory cannot be read, the execution goes through
+# completion ingestion instead and its evidence is kept.
 #
 # Set the timeout to 0 to warn without ever changing a pair's status.
 export STAREXEC_K8S_PENDING_WARN_MINUTES=5

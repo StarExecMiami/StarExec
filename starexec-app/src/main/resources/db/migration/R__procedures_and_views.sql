@@ -1935,7 +1935,7 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 --
 -- The invariant it enforces: a job pair with a terminal status always carries an
 -- end_time. GetJobPairIdsWithStatusNotRerunAfterDate -- the query behind
--- RERUN_FAILED_PAIRS, the only automatic retry path -- selects on
+-- RERUN_FAILED_PAIRS, the only automatic retry of a terminal pair -- selects on
 -- (end_time >= _cutoff OR end_time < '1970-01-01'), and a NULL satisfies neither under
 -- three-valued logic, so a terminal pair without one is invisible to it and to
 -- reconciliation, which looks only at ENQUEUED and RUNNING. Terminal statuses are written
@@ -10319,7 +10319,7 @@ BEGIN
 		-- same transaction as the status. GetJobPairIdsWithStatusNotRerunAfterDate
 		-- selects on (end_time >= _earliestEndTime OR end_time < '1970-01-01'), and a
 		-- NULL end_time satisfies neither under three-valued logic -- so a terminal pair
-		-- without one is invisible to RERUN_FAILED_PAIRS, the only automatic retry path
+		-- without one is invisible to RERUN_FAILED_PAIRS, the only automatic retry of a terminal pair
 		-- in the system, and to every reconciliation query (which look at ENQUEUED and
 		-- RUNNING only). It is unrecoverable by any code path that exists.
 		--
@@ -10470,7 +10470,7 @@ BEGIN
 		-- same transaction as the status. GetJobPairIdsWithStatusNotRerunAfterDate
 		-- selects on (end_time >= _earliestEndTime OR end_time < '1970-01-01'), and a
 		-- NULL end_time satisfies neither under three-valued logic -- so a terminal pair
-		-- without one is invisible to RERUN_FAILED_PAIRS, the only automatic retry path
+		-- without one is invisible to RERUN_FAILED_PAIRS, the only automatic retry of a terminal pair
 		-- in the system, and to every reconciliation query (which look at ENQUEUED and
 		-- RUNNING only). It is unrecoverable by any code path that exists.
 		--
@@ -10714,15 +10714,21 @@ $$ LANGUAGE plpgsql;
 -- Fenced under the row lock on everything the caller's proof was about: the pair is still
 -- ENQUEUED, still carries this execution's id (RerunJobPairsBatchCore never clears sge_id;
 -- see RerunJobPairsBatchChecked), and is still on this execution's attempt (the rule of
--- EnforcePairAttempt, returned here instead of raised; NULL means unfenced). Anything else
--- means the pair has moved on -- rerun, killed, deleted or taken by another execution --
--- and nothing is written.
+-- EnforcePairAttempt, returned here instead of raised). Anything else means the pair has
+-- moved on -- rerun, killed, deleted or taken by another execution -- and nothing is
+-- written.
+--
+-- The attempt is required, not optional as in EnforcePairAttempt. A re-dispatched pair is
+-- ENQUEUED under its previous sge_id until JobManager persists the new execution's, so
+-- the execution id alone cannot tell this execution's claim from the one that replaced it.
+-- Only the attempt, which the reset advanced, can.
 --
 -- Returns REQUEUED, FILED or STALE.
+DROP FUNCTION IF EXISTS starexec.RetryNeverStartedPair(INT, INT, INT) CASCADE;
 CREATE OR REPLACE FUNCTION starexec.RetryNeverStartedPair(
     _pairId INT,
     _execId INT,
-    _attemptNo INT DEFAULT NULL
+    _attemptNo INT
 )
 RETURNS TEXT AS $$
 DECLARE
@@ -10730,26 +10736,29 @@ DECLARE
     _owner INT;
     _currentAttempt INT;
 BEGIN
+    -- A NULL fence compares as unknown, which IF reads as passed.
+    IF _execId IS NULL OR _attemptNo IS NULL THEN
+        RETURN 'STALE';
+    END IF;
+
     SELECT jp.status_code, COALESCE(jp.sge_id, 0)
       INTO _status, _owner
       FROM starexec.job_pairs jp
      WHERE jp.id = _pairId
        FOR UPDATE;
     -- 2 is ENQUEUED: a pod that never started was never reported as running.
-    IF NOT FOUND OR _status <> 2 OR _owner <> _execId THEN
+    IF NOT FOUND OR _status IS DISTINCT FROM 2 OR _owner IS DISTINCT FROM _execId THEN
         RETURN 'STALE';
     END IF;
 
-    IF _attemptNo IS NOT NULL THEN
-        SELECT current_attempt_no INTO _currentAttempt
-          FROM starexec.job_pair_attempts
-         WHERE pair_id = _pairId;
-        IF NOT FOUND THEN
-            _currentAttempt := 1;
-        END IF;
-        IF _attemptNo <> _currentAttempt THEN
-            RETURN 'STALE';
-        END IF;
+    SELECT current_attempt_no INTO _currentAttempt
+      FROM starexec.job_pair_attempts
+     WHERE pair_id = _pairId;
+    IF NOT FOUND THEN
+        _currentAttempt := 1;
+    END IF;
+    IF _attemptNo <> _currentAttempt THEN
+        RETURN 'STALE';
     END IF;
 
     IF EXISTS (SELECT 1 FROM starexec.pairs_rerun pr WHERE pr.pair_id = _pairId) THEN

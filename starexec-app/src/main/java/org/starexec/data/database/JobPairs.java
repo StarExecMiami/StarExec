@@ -4211,13 +4211,15 @@ public class JobPairs {
      *
      * @param pairId    the pair the execution was submitted for
      * @param execId    the execution that never started; the pair must still carry it
-     * @param attemptNo the attempt it was submitted for, or null when it is unfenced
+     * @param attemptNo the attempt it was submitted for. Required: a re-dispatched pair
+     *                  keeps its previous execution id until the new one is persisted, so
+     *                  only the attempt tells the two apart
      * @return what the database did; {@link NeverStartedRetryResult#ERROR} when unknown
      */
     public static NeverStartedRetryResult retryNeverStartedPair(
         int pairId,
         int execId,
-        Integer attemptNo
+        int attemptNo
     ) {
         Connection con = null;
         PreparedStatement ps = null;
@@ -4227,11 +4229,7 @@ public class JobPairs {
             ps = con.prepareStatement("SELECT starexec.RetryNeverStartedPair(?, ?, ?)");
             ps.setInt(1, pairId);
             ps.setInt(2, execId);
-            if (attemptNo == null) {
-                ps.setNull(3, Types.INTEGER);
-            } else {
-                ps.setInt(3, attemptNo);
-            }
+            ps.setInt(3, attemptNo);
             rs = ps.executeQuery();
             String result = rs.next() ? rs.getString(1) : null;
             if ("REQUEUED".equals(result)) {

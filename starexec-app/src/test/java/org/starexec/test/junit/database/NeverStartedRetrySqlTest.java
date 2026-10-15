@@ -5,12 +5,18 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -104,7 +110,7 @@ public class NeverStartedRetrySqlTest extends Common {
     @Test
     public void aPairWhosePodNeverStartedIsQueuedAgainAndSpendsItsAllowance() throws SQLException {
         assertEquals(NeverStartedRetryResult.REQUEUED,
-            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, null));
+            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
 
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), pairStatus());
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), stageStatus());
@@ -117,7 +123,7 @@ public class NeverStartedRetrySqlTest extends Common {
     @Test
     public void theAllowanceIsTheOneTheAutomaticRerunSpends() throws SQLException {
         assertEquals(NeverStartedRetryResult.REQUEUED,
-            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, null));
+            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
 
         // Had it run and failed this time, RERUN_FAILED_PAIRS would find nothing to spend.
         setPairStatus(StatusCode.ERROR_RUNSCRIPT.getVal(), EXEC_ID + 1);
@@ -147,12 +153,13 @@ public class NeverStartedRetrySqlTest extends Common {
         assertEquals(StatusCode.ERROR_SUBMIT_FAIL.getVal(), stageStatus());
         assertNotNull("a terminal pair carries an end time", endTime());
         assertTrue("and a completion row", completionRecorded());
+        assertEquals("filing it starts no new attempt", 2, currentAttempt());
     }
 
     @Test
     public void aPairAnotherExecutionOwnsIsNotTouched() throws SQLException {
         assertEquals(NeverStartedRetryResult.STALE,
-            JobPairs.retryNeverStartedPair(pairId, EXEC_ID + 1, null));
+            JobPairs.retryNeverStartedPair(pairId, EXEC_ID + 1, 1));
         assertUntouched();
     }
 
@@ -165,7 +172,7 @@ public class NeverStartedRetrySqlTest extends Common {
                 StatusCode.STATUS_KILLED, StatusCode.STATUS_PAUSED}) {
             setPairStatus(moved.getVal(), EXEC_ID);
             assertEquals(moved.name(), NeverStartedRetryResult.STALE,
-                JobPairs.retryNeverStartedPair(pairId, EXEC_ID, null));
+                JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
             assertEquals(moved.name(), moved.getVal(), pairStatus());
             assertFalse(moved.name(), allowanceSpent());
         }
@@ -214,9 +221,9 @@ public class NeverStartedRetrySqlTest extends Common {
     public void repeatingTheCallAfterItCommittedChangesNothing() throws SQLException {
         // What the backend does when it cannot tell whether its first call committed.
         assertEquals(NeverStartedRetryResult.REQUEUED,
-            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, null));
+            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
         assertEquals(NeverStartedRetryResult.STALE,
-            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, null));
+            JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
         assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), pairStatus());
         assertEquals(2, currentAttempt());
     }
@@ -224,7 +231,55 @@ public class NeverStartedRetrySqlTest extends Common {
     @Test
     public void aDeletedPairIsStale() throws SQLException {
         assertEquals(NeverStartedRetryResult.STALE,
-            JobPairs.retryNeverStartedPair(Integer.MAX_VALUE, EXEC_ID, null));
+            JobPairs.retryNeverStartedPair(Integer.MAX_VALUE, EXEC_ID, 1));
+    }
+
+    /** A NULL fence would compare as unknown, which IF reads as passed. */
+    @Test
+    public void aMissingExecutionOrAttemptIsRefused() throws SQLException {
+        assertEquals("STALE", callRetry(null, 1));
+        assertEquals("STALE", callRetry(EXEC_ID, null));
+        assertUntouched();
+    }
+
+    /**
+     * The row lock is what keeps a concurrent rerun from being undone. A manual rerun takes
+     * the same lock to reset the pair; the retry has to wait for it and then see the reset,
+     * not act on the ENQUEUED it would otherwise have read before the rerun committed.
+     */
+    @Test
+    public void aConcurrentResetHoldsTheRetryAndWins() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try (Connection blocker = Common.getConnection();
+             Connection observer = Common.getConnection()) {
+            int blockerPid = queryInt(blocker, "SELECT pg_backend_pid()");
+            blocker.setAutoCommit(false);
+            boolean finished = false;
+            try {
+                try (PreparedStatement ps = blocker.prepareStatement(
+                        "UPDATE starexec.job_pairs SET status_code = ? WHERE id = ?")) {
+                    ps.setInt(1, StatusCode.STATUS_PENDING_SUBMIT.getVal());
+                    ps.setInt(2, pairId);
+                    assertEquals(1, ps.executeUpdate());
+                }
+                Future<NeverStartedRetryResult> retry =
+                    executor.submit(() -> JobPairs.retryNeverStartedPair(pairId, EXEC_ID, 1));
+                awaitBlockedBy(observer, blockerPid, retry);
+                blocker.commit();
+                finished = true;
+                assertEquals(NeverStartedRetryResult.STALE, retry.get(30, TimeUnit.SECONDS));
+            } finally {
+                if (!finished) {
+                    blocker.rollback();
+                }
+                blocker.setAutoCommit(true);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals(StatusCode.STATUS_PENDING_SUBMIT.getVal(), pairStatus());
+        assertFalse("the rerun is not spent as the automatic retry", allowanceSpent());
+        assertEquals("and starts no attempt of its own", 1, currentAttempt());
     }
 
     private void assertUntouched() throws SQLException {
@@ -284,6 +339,54 @@ public class NeverStartedRetrySqlTest extends Common {
              PreparedStatement ps = con.prepareStatement(sql)) {
             ps.setInt(1, pairId);
             return singleInt(ps);
+        }
+    }
+
+    /** Waits until a call of RetryNeverStartedPair is blocked by the given backend. */
+    private static void awaitBlockedBy(Connection observer, int blockerPid, Future<?> worker)
+            throws Exception {
+        String sql = "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a"
+            + " WHERE a.pid <> pg_backend_pid() AND a.query LIKE '%RetryNeverStartedPair%'"
+            + " AND a.wait_event_type = 'Lock' AND ? = ANY(pg_blocking_pids(a.pid)))";
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10L);
+        try (PreparedStatement ps = observer.prepareStatement(sql)) {
+            ps.setInt(1, blockerPid);
+            while (System.nanoTime() < deadline) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertTrue(rs.next());
+                    if (rs.getBoolean(1)) {
+                        return;
+                    }
+                }
+                if (worker.isDone()) {
+                    fail("the retry finished without waiting for the concurrent reset: "
+                        + worker.get());
+                }
+                Thread.sleep(20L);
+            }
+        }
+        fail("the retry never waited on the concurrent reset");
+    }
+
+    private String callRetry(Integer execId, Integer attemptNo) throws SQLException {
+        try (Connection con = Common.getConnection();
+             PreparedStatement ps = con.prepareStatement(
+                 "SELECT starexec.RetryNeverStartedPair(?, ?, ?)")) {
+            ps.setInt(1, pairId);
+            if (execId == null) {
+                ps.setNull(2, Types.INTEGER);
+            } else {
+                ps.setInt(2, execId);
+            }
+            if (attemptNo == null) {
+                ps.setNull(3, Types.INTEGER);
+            } else {
+                ps.setInt(3, attemptNo);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next());
+                return rs.getString(1);
+            }
         }
     }
 

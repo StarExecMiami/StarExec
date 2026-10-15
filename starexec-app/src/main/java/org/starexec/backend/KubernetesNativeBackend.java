@@ -4836,9 +4836,10 @@ public class KubernetesNativeBackend implements Backend {
          * A pod that has waited past the timeout without starting.
          *
          * <p>This is lifecycle evidence that the pod did not start, not scientific evidence
-         * of a run-script result or stage. The Job is removed so it cannot start later, but
-         * the pair remains unresolved unless retained output independently supplies a valid
-         * terminal status and stage.
+         * of a run-script result or stage. The Job is removed so it cannot start later. Once
+         * the absence of a status.json is proven, the pair is queued again once, or filed
+         * ERROR_SUBMIT_FAIL when its automatic retry is spent; no result or stage is written.
+         * If a status.json may exist, it goes through completion ingestion instead.
          *
          * <p>The Kubernetes Job is deleted first. Left alone it would keep the pod pending,
          * and if capacity later appeared the pod would run and write results for a pair
@@ -4942,15 +4943,23 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                // A status file means the pod did start after all, between the last
-                // observation and the delete, and its evidence is ingested as any
-                // completion's would be. Nothing ran long enough to write one that is merely
+                // Queued again only once the absence of a status.json is proven. One that
+                // exists means the pod did start after all, between the last observation and
+                // the delete, and its evidence goes through ingestion as any completion's
+                // would. So does an output directory this execution does not own or cannot
+                // read: "cannot tell" is not "absent" (see confirmedAbsent), and queueing on it
+                // would spend the pair's one retry and let the next attempt clear whatever
+                // evidence is there. Nothing ran long enough to write a file that is merely
                 // not visible yet, so no visibility window.
                 Path statusPath = resolveStatusPath(execution);
-                if (statusPath != null && Files.exists(statusPath)) {
+                if (statusPath == null || !confirmedAbsent(statusPath)) {
                     log.info(
                         "Pair " + pairId + " looked stuck pending, but " + execution +
-                        " wrote a status.json before its Job was removed; ingesting it. " + reason
+                        (statusPath == null
+                            ? " has no output directory this backend owns"
+                            : " may have written " + statusPath) +
+                        "; handing it to completion ingestion instead of queueing it again. " +
+                        reason
                     );
                     return ingestCompletion(execution, false);
                 }
@@ -4982,15 +4991,26 @@ public class KubernetesNativeBackend implements Backend {
          * brings the pair back.
          */
         private boolean settleNeverStarted(ExecutionRef execution, int pairId, String reason) {
-            JobPairs.NeverStartedRetryResult result = JobPairs.retryNeverStartedPair(
-                pairId, execution.execId(), resolveAttemptNo(execution)
-            );
-            if (result == null || result == JobPairs.NeverStartedRetryResult.ERROR) {
+            Integer attemptNo = resolveAttemptNo(execution);
+            if (attemptNo == null) {
+                // Without its attempt, this execution's claim cannot be told from a
+                // re-dispatch's, which keeps the previous execution id until the new one is
+                // persisted (see starexec.RetryNeverStartedPair). The pair is not touched;
+                // ENQUEUED with no execution, FIND_BROKEN_JOB_PAIRS files it.
                 log.warn(
-                    "Could not settle pair " + pairId + ", whose pod never started (" +
-                    execution + "); retrying"
+                    "Pair " + pairId + " never started, but " + execution + " carries no" +
+                    " attempt to fence a retry on; leaving it for FIND_BROKEN_JOB_PAIRS," +
+                    " which files it ERROR_SUBMIT_FAIL. " + reason
                 );
-                return false;
+                releaseAccountingIfSafe(
+                    execution, "never-started " + execution + " without an attempt"
+                );
+                return true;
+            }
+            JobPairs.NeverStartedRetryResult result =
+                JobPairs.retryNeverStartedPair(pairId, execution.execId(), attemptNo);
+            if (result == null) {
+                result = JobPairs.NeverStartedRetryResult.ERROR;
             }
             switch (result) {
                 case REQUEUED:
@@ -5008,12 +5028,19 @@ public class KubernetesNativeBackend implements Backend {
                         " try it again. " + reason
                     );
                     break;
-                default:
+                case STALE:
                     log.info(
                         "Pair " + pairId + " is no longer waiting on " + execution +
                         ", whose pod never started; nothing changed. " + reason
                     );
                     break;
+                default:
+                    // ERROR, and anything else this method cannot know to be final.
+                    log.warn(
+                        "Could not settle pair " + pairId + ", whose pod never started (" +
+                        execution + "); retrying"
+                    );
+                    return false;
             }
             releaseAccountingIfSafe(execution, "settling never-started " + execution);
             return true;
