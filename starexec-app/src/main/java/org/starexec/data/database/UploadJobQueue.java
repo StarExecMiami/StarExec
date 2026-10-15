@@ -52,12 +52,18 @@ public class UploadJobQueue {
         "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
-    private static final String CLAIM_JOB_SQL = 
+    // An upload by URL holds its worker for as long as the download takes, up to the downloader's
+    // deadline, so at most one runs at a time: slow downloads can never occupy every worker and
+    // leave uploaded files waiting behind them (#139).
+    private static final String CLAIM_JOB_SQL =
         "UPDATE upload_jobs " +
         "SET status = 'PROCESSING', started_at = CURRENT_TIMESTAMP " +
         "WHERE id = (" +
         "   SELECT id FROM upload_jobs " +
         "   WHERE status = 'PENDING' " +
+        "     AND (source_url IS NULL OR NOT EXISTS (" +
+        "       SELECT 1 FROM upload_jobs running " +
+        "       WHERE running.status = 'PROCESSING' AND running.source_url IS NOT NULL)) " +
         "   ORDER BY priority DESC, archive_size ASC, created_at ASC " +
         "   LIMIT 1 FOR UPDATE SKIP LOCKED" +
         ") RETURNING *";

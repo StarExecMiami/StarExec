@@ -785,13 +785,16 @@ public class UploadJobWorker implements ServletContextListener, Runnable {
     }
 
     /**
-     * The URL without the parts that can carry a secret: no user, no query, no fragment. A
-     * presigned archive URL puts its signature in the query, and the log is read more widely
-     * than the upload it came from.
+     * The URL without the parts that can carry a secret: the host and the archive's file name
+     * only. A presigned archive URL puts its signature in the query, and a share link can put
+     * its token in a directory of the path; the log is read more widely than the upload it came
+     * from.
      */
     static String redacted(java.net.URL url) {
         String port = url.getPort() == -1 ? "" : ":" + url.getPort();
-        return url.getProtocol() + "://" + url.getHost() + port + url.getPath();
+        String name = Util.archiveNameFromUrl(url);
+        String path = name == null ? "/..." : url.getPath().equals("/" + name) ? "/" + name : "/.../" + name;
+        return url.getProtocol() + "://" + url.getHost() + port + path;
     }
 
     File prepareExtraction(UploadJob job, File archiveFile, AtomicInteger extractedCount) throws Exception {
