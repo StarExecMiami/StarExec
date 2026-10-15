@@ -3,13 +3,17 @@ package org.starexec.app;
 import com.google.common.collect.ImmutableSet;
 import java.io.File;
 import java.io.IOException;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -694,69 +698,174 @@ class PeriodicTasks {
         }
     };
 
+    /** Grace beyond a job's own wallclock limit before a silent job is reported as stuck. */
+    private static final int STUCK_JOB_GRACE_SECONDS = 600;
+    /** The shortest silence reported as stuck, whatever the job's wallclock limit. */
+    private static final int STUCK_JOB_MIN_SILENCE_SECONDS = 1800;
+    /** How long a job that stays stuck goes before it is reported again. */
+    public static final long STUCK_JOB_REPEAT_MILLIS = TimeUnit.HOURS.toMillis(6);
+    /** Job id to when it was last reported, for the jobs currently stuck. */
+    private static final Map<Integer, Long> stuckJobsLastReported = new ConcurrentHashMap<>();
+
+    /** A job with unfinished pairs that has stopped making progress, as the database shows it. */
+    public static final class StuckJob {
+        public final int jobId;
+        public final String name;
+        /** The job's queue, or null when it no longer exists. */
+        public final String queueName;
+        public final String queueStatus;
+        public final int pending;
+        public final int enqueued;
+        public final int running;
+        public final int processing;
+        /** Minutes since a pair of the job last started or finished, or since it was created. */
+        public final long idleMinutes;
+
+        public StuckJob(
+            int jobId,
+            String name,
+            String queueName,
+            String queueStatus,
+            int pending,
+            int enqueued,
+            int running,
+            int processing,
+            long idleMinutes
+        ) {
+            this.jobId = jobId;
+            this.name = name;
+            this.queueName = queueName;
+            this.queueStatus = queueStatus;
+            this.pending = pending;
+            this.enqueued = enqueued;
+            this.running = running;
+            this.processing = processing;
+            this.idleMinutes = idleMinutes;
+        }
+    }
+
     /**
-     * Detects jobs that have been incomplete for more than 10 minutes and logs them for investigation.
-     * This helps identify jobs that may be stuck due to backend failures.
+     * Reports jobs that have stopped making progress.
+     *
+     * <p>This used to report every job older than ten minutes that still had unfinished pairs:
+     * a healthy job running for hours as much as one that cannot run at all. It named no cause,
+     * only advice about LocalBackend and LocalJobMonitor whatever the backend, and it wrote five
+     * WARN lines, so five error_logs rows, per job every five minutes. On Quokka it reported a
+     * job that way around the clock without saying why it was stuck: its queue was inactive.
+     *
+     * <p>Now a job is reported only when no pair of it has started or finished for longer than
+     * its own wallclock limit plus {@link #STUCK_JOB_GRACE_SECONDS}, and for at least
+     * {@link #STUCK_JOB_MIN_SILENCE_SECONDS}. Paused, killed and deleted jobs are not stuck.
+     * The report is one line naming what the database shows, and a job that stays stuck is
+     * reported again only after {@link #STUCK_JOB_REPEAT_MILLIS}.
      */
     private static void checkForStuckJobs() {
         try {
-            // Find jobs that are > 10 minutes old and still have incomplete pairs
-            String query =
-                "SELECT DISTINCT j.id, j.name, j.created, " +
-                "COUNT(jp.id) as incomplete_pairs " +
-                "FROM jobs j " +
-                "JOIN job_pairs jp ON j.id = jp.job_id " +
-                "WHERE j.completed IS NULL " +
-                "AND j.created < NOW() - INTERVAL '10 minutes' " +
-                "AND (jp.status_code IN (1, 2, 4, 19, 20, 22)) " +
-                "GROUP BY j.id, j.name, j.created " +
-                "HAVING COUNT(jp.id) > 0";
-
-            List<String> stuckJobs = Common.runInTransaction(con -> {
-                List<String> jobs = new ArrayList<>();
-                try (
-                    Statement stmt = con.createStatement();
-                    ResultSet rs = stmt.executeQuery(query)
-                ) {
-                    while (rs.next()) {
-                        int jobId = rs.getInt("id");
-                        String jobName = rs.getString("name");
-                        java.sql.Timestamp created = rs.getTimestamp("created");
-                        int incompletePairs = rs.getInt("incomplete_pairs");
-
-                        jobs.add(
-                            String.format(
-                                "Job %d (%s) created %s with %d incomplete pairs",
-                                jobId,
-                                jobName,
-                                created,
-                                incompletePairs
-                            )
-                        );
-                    }
-                }
-                return jobs;
-            });
-
-            if (!stuckJobs.isEmpty()) {
-                log.warn(
-                    "Found " + stuckJobs.size() + " potentially stuck jobs:"
-                );
-                for (String jobInfo : stuckJobs) {
-                    log.warn("  - " + jobInfo);
-                    log.warn(
-                        "    Check LocalBackend logs for execution errors"
-                    );
-                    log.warn(
-                        "    Check output directory for missing status.json files"
-                    );
-                    log.warn(
-                        "    Monitor LocalJobMonitor logs for processing failures"
-                    );
+            List<StuckJob> stuck = findStuckJobs();
+            long now = System.currentTimeMillis();
+            Set<Integer> stuckIds = new HashSet<>();
+            for (StuckJob job : stuck) {
+                stuckIds.add(job.jobId);
+                if (shouldReportStuckJob(stuckJobsLastReported, job.jobId, now)) {
+                    log.warn(describeStuckJob(job));
                 }
             }
+            // A job that is no longer stuck is reported afresh if it gets stuck again.
+            stuckJobsLastReported.keySet().retainAll(stuckIds);
         } catch (Exception e) {
             log.error("Error checking for stuck jobs", e);
         }
+    }
+
+    /** The jobs that have stopped making progress; see {@link #checkForStuckJobs}. */
+    public static List<StuckJob> findStuckJobs() throws SQLException {
+        // Unfinished means 1 PENDING_SUBMIT, 2 ENQUEUED, 4 RUNNING, 19 PROCESSING_RESULTS or
+        // 22 PROCESSING. PAUSED (20) is left out: a paused pair is waiting on purpose.
+        final String query =
+            "WITH unfinished AS (" +
+            "  SELECT DISTINCT job_id FROM starexec.job_pairs" +
+            "  WHERE status_code IN (1, 2, 4, 19, 22)" +
+            ") " +
+            "SELECT j.id, j.name, q.name AS queue_name, q.status AS queue_status, " +
+            "  count(*) FILTER (WHERE jp.status_code = 1) AS pending, " +
+            "  count(*) FILTER (WHERE jp.status_code = 2) AS enqueued, " +
+            "  count(*) FILTER (WHERE jp.status_code = 4) AS running, " +
+            "  count(*) FILTER (WHERE jp.status_code IN (19, 22)) AS processing, " +
+            "  floor(extract(epoch FROM now() - greatest(max(jp.start_time), max(jp.end_time)," +
+            "    j.created)) / 60)::bigint AS idle_minutes " +
+            "FROM unfinished u " +
+            "JOIN starexec.jobs j ON j.id = u.job_id " +
+            "JOIN starexec.job_pairs jp ON jp.job_id = j.id " +
+            "LEFT JOIN starexec.queues q ON q.id = j.queue_id " +
+            "WHERE NOT coalesce(j.paused, false) AND NOT coalesce(j.killed, false)" +
+            "  AND NOT coalesce(j.deleted, false) " +
+            "GROUP BY j.id, j.name, q.name, q.status, j.created, j.clocktimeout " +
+            "HAVING now() - greatest(max(jp.start_time), max(jp.end_time), j.created)" +
+            "  > make_interval(secs => greatest(coalesce(j.clocktimeout, 0) + ?, ?)) " +
+            "ORDER BY j.id";
+        return Common.runInTransaction(con -> {
+            List<StuckJob> jobs = new ArrayList<>();
+            try (PreparedStatement ps = con.prepareStatement(query)) {
+                ps.setInt(1, STUCK_JOB_GRACE_SECONDS);
+                ps.setInt(2, STUCK_JOB_MIN_SILENCE_SECONDS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        jobs.add(new StuckJob(
+                            rs.getInt("id"),
+                            rs.getString("name"),
+                            rs.getString("queue_name"),
+                            rs.getString("queue_status"),
+                            rs.getInt("pending"),
+                            rs.getInt("enqueued"),
+                            rs.getInt("running"),
+                            rs.getInt("processing"),
+                            rs.getLong("idle_minutes")
+                        ));
+                    }
+                }
+            }
+            return jobs;
+        });
+    }
+
+    /** One line naming what the database shows about a stuck job, and the likely cause. */
+    public static String describeStuckJob(StuckJob job) {
+        String state = String.format(
+            "%d pending, %d enqueued, %d running, %d awaiting result processing",
+            job.pending, job.enqueued, job.running, job.processing
+        );
+        String cause;
+        if (job.pending > 0 && job.queueName == null) {
+            cause = "its queue no longer exists, so nothing can dispatch its pending pairs";
+        } else if (job.pending > 0 && !R.QUEUE_STATUS_ACTIVE.equals(job.queueStatus)) {
+            cause = "its queue '" + job.queueName + "' is " + job.queueStatus +
+                ", so its pending pairs cannot be dispatched";
+        } else if (job.enqueued + job.running > 0) {
+            cause = "pairs are in flight but none has started or finished; check the backend" +
+                " and its job monitor";
+        } else if (job.pending > 0) {
+            cause = "nothing is being dispatched from queue '" + job.queueName + "'; check that" +
+                " the queue has nodes the backend can use";
+        } else {
+            cause = "its pairs are waiting for result processing";
+        }
+        return String.format(
+            "Job %d (%s) has made no progress for %d minutes (%s): %s",
+            job.jobId, job.name, job.idleMinutes, state, cause
+        );
+    }
+
+    /** Whether a stuck job is due a report now; records the report when it is. */
+    public static boolean shouldReportStuckJob(
+        Map<Integer, Long> lastReported,
+        int jobId,
+        long now
+    ) {
+        Long last = lastReported.get(jobId);
+        if (last != null && now - last < STUCK_JOB_REPEAT_MILLIS) {
+            return false;
+        }
+        lastReported.put(jobId, now);
+        return true;
     }
 }
