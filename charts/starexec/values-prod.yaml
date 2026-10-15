@@ -59,7 +59,20 @@ kubernetes:
   jobImage: ghcr.io/starexecmiami/starexec-job-runner@sha256:63ae82d539f7c26bc70f42036f968897fc110416043d2fedc8a917b828537cdd
   jobImagePullPolicy: IfNotPresent
   jobServiceAccount: starexec-job
-  maxConcurrentJobs: 50
+  # How many job pods may exist at once: what the workers can run at the same time, and no
+  # more. Each job pod requests its full limits (resources below), so a worker with 32
+  # allocatable CPUs and ~251Gi allocatable memory runs exactly one, and Quokka has six
+  # workers labelled starexec.org/worker=true (all in kubernetes.q). Raise this with the
+  # worker count, or if the job size below shrinks.
+  #
+  # A Job created beyond that capacity does not wait in StarExec's queue but as a Pending
+  # pod, and Pending is also what a pod that will never start looks like: it covers both
+  # waiting to be scheduled and failing to start. The backend warns about each such pod
+  # after STAREXEC_K8S_PENDING_WARN_MINUTES and treats it as never started after
+  # STAREXEC_K8S_PENDING_TIMEOUT_MINUTES. Deferred pairs stay PENDING_SUBMIT in the
+  # database instead, at no cost. At 50, with three healthy workers, 47 pods sat Pending
+  # at once during the job 5 rerun on 2026-10-15.
+  maxConcurrentJobs: 6
   nodeSelector:
     starexec.org/worker: "true"
   dataPvc:
@@ -70,9 +83,10 @@ kubernetes:
     accessModes:
       - ReadWriteMany
   resources:
-    requests:
-      cpu: "100m"
-      memory: "256Mi"
+    # Job pods request exactly these limits. KubernetesNativeBackend sets requests equal to
+    # limits (Guaranteed QoS, which the static CPU manager needs before it grants exclusive
+    # cores), and no template reads a separate requests block, so none is set here: the
+    # 100m/256Mi that used to be here never reached a pod.
     limits:
       cpu: "31"
       memory: "250Gi"

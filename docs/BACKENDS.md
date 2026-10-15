@@ -486,6 +486,10 @@ export STAREXEC_K8S_JOB_TTL_SECONDS=3600
 export STAREXEC_K8S_JOB_BACKOFF_LIMIT=0
 
 # Capacity and reconciliation
+# Size the cap to the job pods the workers can run at once (workers x pods that fit
+# per worker at the cpu/memory limits). A Job above it waits as a Pending pod, which
+# the pending timeout below cannot tell apart from one that will never start; a pair
+# deferred by the cap waits in StarExec's queue instead.
 export STAREXEC_K8S_MAX_CONCURRENT_JOBS=50
 export STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS=300000
 
