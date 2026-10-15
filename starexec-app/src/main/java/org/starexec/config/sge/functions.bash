@@ -866,7 +866,23 @@ function killDeadlockedJobPair {
 	log "Extra time given to jobpair on top of wallclock timeout before we kill it = $EXTRA" || true
 	log "User whose job will be killed if it exceeds it's runtime = $CURRENT_USER" || true
 
-	sleep $(( TIMEOUT + EXTRA ))
+	# Backgrounded and waited on, rather than run in the foreground, so the TERM that
+	# stopDeadlockWatchdog sends at the end of the stage can take it down too. A foreground
+	# sleep outlived the watchdog it belonged to: it was reparented and sat idle until its
+	# own timer ran out, one per stage on Local, where the jobscript is not in a container
+	# that takes them with it.
+	#
+	# The trap goes in before the sleep is started, not after: a TERM landing between the two
+	# would leak exactly the orphan this avoids. ${WATCHDOG_SLEEP_PID:-} is empty until the
+	# assignment runs, and `kill ""` is refused harmlessly.
+	#
+	# It is removed as soon as the sleep is over, so the reap below starts from a default TERM
+	# disposition and reapJobPairProcessTree's own `trap '' TERM` window is exactly what it was.
+	trap 'kill "${WATCHDOG_SLEEP_PID:-}" 2>/dev/null || true; exit 0' TERM
+	sleep $(( TIMEOUT + EXTRA )) &
+	WATCHDOG_SLEEP_PID=$!
+	wait "$WATCHDOG_SLEEP_PID" || true
+	trap - TERM
 
 	log "killDeadlockedJobPair: About to kill jobpair run by $CURRENT_USER because it has exceeded it's total allotted runtime." || true
 
@@ -1599,7 +1615,6 @@ function copyOutput {
 		fi
 
 		log "processing attributes"
-		atts=$(<$OUT_DIR/attributes.txt)
 		processAttributes $OUT_DIR/attributes.txt $1
 
 		# In CONTAINER_MODE, copy attributes.txt to STAREXEC_OUTPUT_DIR for LocalJobMonitor to find
