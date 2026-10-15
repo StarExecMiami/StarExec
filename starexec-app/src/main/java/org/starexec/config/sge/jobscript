@@ -698,6 +698,12 @@ for (( STAGE_INDEX = 0; STAGE_INDEX < NUM_STAGES; ++STAGE_INDEX )); do
 		copySolverBack
 	fi
 
+	# The last stage's completion is the pair's result, and a build job's solver is back: only
+	# cleanup follows, and a cleanup failure must not turn a finished pair into ERROR_RUNSCRIPT.
+	if ((STAGE_INDEX == NUM_STAGES - 1)); then
+		claimResult
+	fi
+
 	cleanForNextStage
 
 	# update the path to the input to the output of the last stage

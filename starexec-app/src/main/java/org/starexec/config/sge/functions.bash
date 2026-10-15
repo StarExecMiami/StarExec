@@ -1219,6 +1219,19 @@ function sendStageFailure {
 		sendStatus "$1"
 		sendStageStatus "$1" "$2"
 	fi
+	# The failure is the pair's result: the stage loop ends on it, and only cleanup follows.
+	claimResult
+}
+
+# Marks the pair's result as recorded, so the EXIT trap's fail-closed fallback leaves it alone,
+# as limitExceeded does for its own.
+#
+# Called once the result is written: under set -e a cleanup command that fails afterwards (an
+# rm -rf racing the solver a breach just killed) ends the script, and the fallback then replaced
+# the recorded result with ERROR_RUNSCRIPT. A write that fails ends the script before this is
+# reached, so the fallback still covers a result that was never recorded.
+function claimResult {
+	STATUS_SENT=true
 }
 
 function sendWallclockExceededStatus {

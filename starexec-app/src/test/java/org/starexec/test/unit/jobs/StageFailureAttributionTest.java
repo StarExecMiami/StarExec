@@ -35,6 +35,8 @@ public class StageFailureAttributionTest {
 	/** ERROR_RUNSCRIPT, the code the other failures on this path already report. */
 	private static final int ERROR_RUNSCRIPT = 11;
 	private static final int ERROR_BENCHMARK = 12;
+	private static final int EXCEED_RUNTIME = 14;
+	private static final int EXCEED_CPU = 15;
 	private static final int EXCEED_MEM = 17;
 
 	@Rule
@@ -132,6 +134,66 @@ public class StageFailureAttributionTest {
 
 		assertEquals(2, probe.stage());
 		assertEquals(EXCEED_MEM, probe.status());
+	}
+
+	// ---------------------------------------------------- a recorded verdict survives cleanup
+
+	/**
+	 * A breach is the pair's result, and only cleanup follows it. Under set -e a cleanup command
+	 * that fails -- an rm -rf racing the solver the breach just killed -- ends the script, and the
+	 * EXIT trap's fail-closed fallback replaced the recorded breach with ERROR_RUNSCRIPT: a
+	 * wallclock breach was recorded as 11 in a local end-to-end run.
+	 */
+	@Test
+	public void aWallclockBreachSurvivesAFailingCleanup() throws Exception {
+		Probe probe = new Probe(folder);
+		probe.runToExit("CURRENT_STAGE_NUMBER=1\n" + "sendWallclockExceededStatus\n" + "false\n");
+		assertEquals("the breach, not the cleanup failure after it", EXCEED_RUNTIME, probe.status());
+		assertEquals(1, probe.stage());
+	}
+
+	/** The same holds for the other breaches the epilog records. */
+	@Test
+	public void cpuAndMemoryBreachesSurviveAFailingCleanup() throws Exception {
+		Probe cpu = new Probe(folder);
+		cpu.runToExit("CURRENT_STAGE_NUMBER=1\n" + "sendCpuExceededStatus\n" + "false\n");
+		assertEquals(EXCEED_CPU, cpu.status());
+		Probe memory = new Probe(folder);
+		memory.runToExit("CURRENT_STAGE_NUMBER=1\n" + "sendExceedMemStatus\n" + "false\n");
+		assertEquals(EXCEED_MEM, memory.status());
+	}
+
+	/**
+	 * The last stage's completion is the pair's result too. The loop claims it once a build job's
+	 * solver is back, and before the cleanup that can fail.
+	 */
+	@Test
+	public void theLastStagesCompletionIsClaimedBeforeCleanup() throws Exception {
+		List<String> loop = stageLoop();
+		int complete = indexOfLineStartingWith(loop, "sendStatus \"$STATUS_COMPLETE\"");
+		int copyBack = indexOfLineStartingWith(loop, "copySolverBack");
+		int claim = indexOfLineStartingWith(loop, "claimResult");
+		int cleanup = -1;
+		for (int i = 0; i < loop.size(); i++) {
+			if (loop.get(i).strip().startsWith("cleanForNextStage")) {
+				cleanup = i;
+			}
+		}
+		assertTrue("the loop must send the final completion", complete >= 0);
+		assertTrue("the loop must copy a build job's solver back", copyBack >= 0);
+		assertTrue("the loop must claim the last stage's completion", claim >= 0);
+		assertTrue("claimed after the completion is sent", complete < claim);
+		assertTrue("and after a build job's solver is back", copyBack < claim);
+		assertTrue("and before the cleanup that follows it", claim < cleanup);
+		String guard = "";
+		for (int i = claim - 1; i >= 0; i--) {
+			String line = loop.get(i).strip();
+			if (!line.isEmpty() && !line.startsWith("#")) {
+				guard = line;
+				break;
+			}
+		}
+		assertEquals("claimed for the last stage only", "if ((STAGE_INDEX == NUM_STAGES - 1)); then", guard);
 	}
 
 	// ------------------------------------------------------------------ the jobscript
