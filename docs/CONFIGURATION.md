@@ -117,6 +117,8 @@ These variables configure the KubernetesNativeBackend when `STAREXEC_BACKEND_TYP
 | `STAREXEC_K8S_MEMORY_LIMIT` | `2Gi` | No | `4Gi` | Memory limit per job pod |
 | `STAREXEC_K8S_CPU_LIMIT` | `1` | No | `2` | CPU core limit per job pod |
 | `STAREXEC_K8S_JOB_TTL_SECONDS` | `3600` | No | `7200` | Job cleanup TTL after completion |
+| `STAREXEC_K8S_KILL_CONFIRM_SECONDS` | `45` | No | `90` | How long a kill waits for the foreground deletion of a running pod's Job to finish before it reports the stop as unproven. Keep it above the job pods' termination grace period (30 s by default): below it, deleting a running job leaves its pairs running and deleting its owner is refused. `0` checks once, immediately. |
+| `STAREXEC_K8S_STATUS_GRACE_SECONDS` | `120` | No | `180` | How long a finished execution's missing `status.json` is treated as not yet visible on shared storage (NFS directory caching) rather than absent. Keep it above the NFS `acdirmax` of the app's mount. |
 | `STAREXEC_K8S_JOB_BACKOFF_LIMIT` | `0` | No | `3` | Kubernetes job retry limit |
 | `STAREXEC_K8S_MAX_CONCURRENT_JOBS` | `50` | No | `100` | Soft cap on concurrently tracked Kubernetes jobs. New submissions above the cap are rejected until an existing job completes, is killed, or is reconciled away. |
 | `STAREXEC_K8S_ORPHAN_SWEEP_INTERVAL_MS` | `300000` | No | `60000` | Periodic sweep interval for deleting managed Kubernetes Jobs whose DB pair rows disappeared while StarExec stayed online. Set to `0` to disable the sweep. |

@@ -4947,6 +4947,26 @@ public class Jobs {
     }
 
     /**
+     * Asks the backend to start stopping every execution of a batch before any of them is
+     * confirmed. The confirmations that follow then overlap instead of queueing: on Kubernetes
+     * each one waits for its pod to terminate, and requested together they terminate at once,
+     * so a batch costs one wait rather than one per pair. Best effort: a failure here only
+     * means that execution's stop starts when its confirmation does.
+     */
+    private static void requestStops(Collection<Integer> execIds) {
+        for (int execId : execIds) {
+            if (execId <= 0) {
+                continue;
+            }
+            try {
+                R.BACKEND.requestStop(execId);
+            } catch (Exception e) {
+                log.warn("requestStops: could not request the stop of execId=" + execId, e);
+            }
+        }
+    }
+
+    /**
      * Whether a pair's previous backend execution is provably incapable of running or
      * writing, and may therefore be replaced.
      *
@@ -5089,6 +5109,13 @@ public class Jobs {
         //    write. A pair already at PENDING_SUBMIT never had one.
         List<JobPair> resettable = new ArrayList<>();
         int withheld = 0;
+        List<Integer> toStop = new ArrayList<>();
+        for (JobPair p : pairs) {
+            if (p.getStatus().getCode().getVal() != StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
+                toStop.add(p.getBackendExecId());
+            }
+        }
+        requestStops(toStop);
         for (JobPair p : pairs) {
             if (p.getStatus().getCode().getVal()
                     == StatusCode.STATUS_PENDING_SUBMIT.getVal()) {
@@ -5663,6 +5690,13 @@ public class Jobs {
             List<Integer> pairIds = new ArrayList<>();
             List<Integer> expectedExecIds = new ArrayList<>();
             int withheld = 0;
+            if (needsKill) {
+                List<Integer> toStop = new ArrayList<>();
+                for (PairExecution pair : selected) {
+                    toStop.add(pair.execId);
+                }
+                requestStops(toStop);
+            }
             for (PairExecution pair : selected) {
                 if (!needsKill) {
                     pairIds.add(pair.pairId);
@@ -6560,6 +6594,12 @@ public class Jobs {
                 );
             }
             toStop.addAll(running);
+
+            List<Integer> execIds = new ArrayList<>();
+            for (JobPair jp : toStop) {
+                execIds.add(jp.getBackendExecId());
+            }
+            requestStops(execIds);
 
             int unproven = 0;
             for (JobPair jp : toStop) {
