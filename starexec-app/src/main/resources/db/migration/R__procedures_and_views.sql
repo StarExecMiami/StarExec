@@ -10567,7 +10567,8 @@ $$ LANGUAGE plpgsql;
 --
 -- Internal. Callers must already hold the row locks and have revalidated eligibility; this
 -- function deliberately makes no decisions of its own. Its lock order is job_pairs (callers),
--- then jobs, users, jobpair_stage_data and job_attributes. UpdatePairRunSolverStats updates
+-- then jobs (disk accounting, then the completion time), users, jobpair_stage_data and
+-- job_attributes. UpdatePairRunSolverStats updates
 -- jobs before users too, so its shared disk-accounting locks cannot invert against a rerun
 -- of another pair owned by the same user. AddJobAttr's insert takes only a key-share lock on
 -- job_pairs, so it waits behind a rerun rather than deadlocking.
@@ -10585,6 +10586,18 @@ BEGIN
         GROUP BY jp.job_id
     ) sub
     WHERE j.id = sub.job_id AND sub.reclaim > 0;
+
+    -- 1b. The jobs these pairs belong to are no longer complete. jobs.completed is stamped
+    --     once, COALESCE-guarded, by the routines that see a job's last pair finish, and
+    --     nothing cleared it: a rerun job kept its first completion time while its pairs ran
+    --     again, and kept it after they finished. Cleared here, in the jobs step of the lock
+    --     order documented above, it is stamped afresh when the rerun's last pair finishes. A
+    --     pair of the same job finishing concurrently waits on this row lock, then counts the
+    --     reset pairs as unfinished, so it cannot stamp the job complete in between.
+    UPDATE starexec.jobs j
+       SET completed = NULL
+     WHERE j.completed IS NOT NULL
+       AND j.id IN (SELECT jp.job_id FROM starexec.job_pairs jp WHERE jp.id = ANY(_pairIds));
 
     -- 2. Reclaim disk size from users
     UPDATE starexec.users u
