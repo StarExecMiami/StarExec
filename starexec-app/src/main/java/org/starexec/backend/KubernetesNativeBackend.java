@@ -4529,8 +4529,9 @@ public class KubernetesNativeBackend implements Backend {
          * Records a finished execution's result from its retained output.
          *
          * @param statusMayBeLate whether a missing status.json may only be not visible yet:
-         *        true for an execution that ran, false for one whose pod never started and
-         *        so cannot have written one (see {@link #awaitingStatusVisibility})
+         *        true for an execution that ran, false for one that looked stuck pending
+         *        but wrote one before its Job was removed (see
+         *        {@link #awaitingStatusVisibility})
          */
         private boolean ingestCompletion(ExecutionRef execution, boolean statusMayBeLate) {
             // Skip processing if THIS execution was stopped — the kill path already removed
@@ -4941,16 +4942,19 @@ public class KubernetesNativeBackend implements Backend {
                     return false;
                 }
 
-                log.warn(
-                    "Pair " +
-                    pairId +
-                    " never started: its pod waited past the configured timeout and its" +
-                    " Kubernetes Job has been removed. The lifecycle failure is logged but" +
-                    " is not converted into a solver result or stage. " + reason
-                );
-                // The pod never started, so it cannot have written a status.json that is
-                // merely not visible yet: no visibility window.
-                return ingestCompletion(execution, false);
+                // A status file means the pod did start after all, between the last
+                // observation and the delete, and its evidence is ingested as any
+                // completion's would be. Nothing ran long enough to write one that is merely
+                // not visible yet, so no visibility window.
+                Path statusPath = resolveStatusPath(execution);
+                if (statusPath != null && Files.exists(statusPath)) {
+                    log.info(
+                        "Pair " + pairId + " looked stuck pending, but " + execution +
+                        " wrote a status.json before its Job was removed; ingesting it. " + reason
+                    );
+                    return ingestCompletion(execution, false);
+                }
+                return settleNeverStarted(execution, pairId, reason);
             } catch (Exception e) {
                 log.error(
                     "Failed handling stuck-pending lifecycle for pair " + pairId,
@@ -4958,6 +4962,61 @@ public class KubernetesNativeBackend implements Backend {
                 );
                 return false;
             }
+        }
+
+        /**
+         * Settles the pair of a pod that never started, once its Job is gone and the
+         * execution is proven unable to run: queued again once, or filed ERROR_SUBMIT_FAIL
+         * when its automatic retry is already spent (see
+         * {@code starexec.RetryNeverStartedPair}). Nothing ran, so no solver result, stage or
+         * measurement is recorded.
+         *
+         * <p>This used to go through completion ingestion, which found no status.json -- the
+         * pod cannot have written one -- and reported an ingestion intervention for output
+         * that does not exist. The pair stayed ENQUEUED with no execution until
+         * FIND_BROKEN_JOB_PAIRS filed it ERROR_SUBMIT_FAIL hours later, a status
+         * RERUN_FAILED_PAIRS never selects, so it was never retried at all.
+         *
+         * <p>Any outcome the database reports is final for this execution, so its accounting
+         * is released. An unknown one keeps it, and the monitor's cleanup-pending record
+         * brings the pair back.
+         */
+        private boolean settleNeverStarted(ExecutionRef execution, int pairId, String reason) {
+            JobPairs.NeverStartedRetryResult result = JobPairs.retryNeverStartedPair(
+                pairId, execution.execId(), resolveAttemptNo(execution)
+            );
+            if (result == null || result == JobPairs.NeverStartedRetryResult.ERROR) {
+                log.warn(
+                    "Could not settle pair " + pairId + ", whose pod never started (" +
+                    execution + "); retrying"
+                );
+                return false;
+            }
+            switch (result) {
+                case REQUEUED:
+                    log.warn(
+                        "Pair " + pairId + " never started: its pod waited past the configured" +
+                        " timeout and its Kubernetes Job has been removed. Queued again, which" +
+                        " spends its one automatic retry; nothing ran, so no result or stage" +
+                        " is recorded. " + reason
+                    );
+                    break;
+                case FILED:
+                    log.warn(
+                        "Pair " + pairId + " never started again, and its one automatic retry" +
+                        " is already spent: filed as ERROR_SUBMIT_FAIL. A manual rerun can" +
+                        " try it again. " + reason
+                    );
+                    break;
+                default:
+                    log.info(
+                        "Pair " + pairId + " is no longer waiting on " + execution +
+                        ", whose pod never started; nothing changed. " + reason
+                    );
+                    break;
+            }
+            releaseAccountingIfSafe(execution, "settling never-started " + execution);
+            return true;
         }
 
         /**

@@ -10698,3 +10698,71 @@ BEGIN
     RETURN cardinality(_eligible);
 END;
 $$ LANGUAGE plpgsql;
+
+-- The fate of a pair whose Kubernetes pod never started. KubernetesNativeBackend calls it
+-- once the pod has waited past STAREXEC_K8S_PENDING_TIMEOUT_MINUTES, its Job is deleted,
+-- the execution is proven unable to run, and no status.json exists.
+--
+-- The pair is queued again once -- the automatic-rerun allowance RERUN_FAILED_PAIRS also
+-- spends, recorded in pairs_rerun in this same transaction -- and filed ERROR_SUBMIT_FAIL
+-- when that allowance is already spent. Nothing ran, so there is no result, stage or
+-- measurement to keep or to invent, and no solver status is written. Before this the pair
+-- stayed ENQUEUED with no execution until FIND_BROKEN_JOB_PAIRS filed it ERROR_SUBMIT_FAIL
+-- up to three hours later: a status RERUN_FAILED_PAIRS never selects, so the retry
+-- docs/BACKENDS.md promises for such a pod never happened.
+--
+-- Fenced under the row lock on everything the caller's proof was about: the pair is still
+-- ENQUEUED, still carries this execution's id (RerunJobPairsBatchCore never clears sge_id;
+-- see RerunJobPairsBatchChecked), and is still on this execution's attempt (the rule of
+-- EnforcePairAttempt, returned here instead of raised; NULL means unfenced). Anything else
+-- means the pair has moved on -- rerun, killed, deleted or taken by another execution --
+-- and nothing is written.
+--
+-- Returns REQUEUED, FILED or STALE.
+CREATE OR REPLACE FUNCTION starexec.RetryNeverStartedPair(
+    _pairId INT,
+    _execId INT,
+    _attemptNo INT DEFAULT NULL
+)
+RETURNS TEXT AS $$
+DECLARE
+    _status INT;
+    _owner INT;
+    _currentAttempt INT;
+BEGIN
+    SELECT jp.status_code, COALESCE(jp.sge_id, 0)
+      INTO _status, _owner
+      FROM starexec.job_pairs jp
+     WHERE jp.id = _pairId
+       FOR UPDATE;
+    -- 2 is ENQUEUED: a pod that never started was never reported as running.
+    IF NOT FOUND OR _status <> 2 OR _owner <> _execId THEN
+        RETURN 'STALE';
+    END IF;
+
+    IF _attemptNo IS NOT NULL THEN
+        SELECT current_attempt_no INTO _currentAttempt
+          FROM starexec.job_pair_attempts
+         WHERE pair_id = _pairId;
+        IF NOT FOUND THEN
+            _currentAttempt := 1;
+        END IF;
+        IF _attemptNo <> _currentAttempt THEN
+            RETURN 'STALE';
+        END IF;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM starexec.pairs_rerun pr WHERE pr.pair_id = _pairId) THEN
+        -- 9 is ERROR_SUBMIT_FAIL, what FIND_BROKEN_JOB_PAIRS would file it as, through the
+        -- same routine, without the wait.
+        PERFORM starexec.SetBrokenPairStatus(_pairId, 2, 9);
+        RETURN 'FILED';
+    END IF;
+
+    PERFORM starexec.RerunJobPairsBatchCore(ARRAY[_pairId]);
+    -- Plain INSERT, as in RerunJobPairAutomatic: the EXISTS test above ruled the row out
+    -- under the lock, so a conflict means the invariant is broken and must abort.
+    INSERT INTO starexec.pairs_rerun (pair_id) VALUES (_pairId);
+    RETURN 'REQUEUED';
+END;
+$$ LANGUAGE plpgsql;
