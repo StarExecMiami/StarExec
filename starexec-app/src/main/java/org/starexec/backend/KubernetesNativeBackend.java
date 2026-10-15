@@ -86,6 +86,9 @@
 
 package org.starexec.backend;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.fabric8.kubernetes.api.model.Affinity;
@@ -111,6 +114,8 @@ import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.api.model.batch.v1.JobList;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+import io.fabric8.kubernetes.client.dsl.base.PatchContext;
+import io.fabric8.kubernetes.client.dsl.base.PatchType;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -4311,15 +4316,11 @@ public class KubernetesNativeBackend implements Backend {
                 }
                 NodeSpec spec = node.getSpec();
                 if (spec != null && Boolean.TRUE.equals(spec.getUnschedulable())) {
-                    kubernetesClient
-                        .nodes()
-                        .withName(node.getMetadata().getName())
-                        .edit(n -> {
-                            if (n.getSpec() != null) {
-                                n.getSpec().setUnschedulable(false);
-                            }
-                            return n;
-                        });
+                    JsonObject uncordon = new JsonObject();
+                    uncordon.addProperty("unschedulable", false);
+                    JsonObject patch = new JsonObject();
+                    patch.add("spec", uncordon);
+                    mergePatchNode(node.getMetadata().getName(), patch);
                 }
             }
 
@@ -4351,15 +4352,9 @@ public class KubernetesNativeBackend implements Backend {
                     continue;
                 }
 
-                kubernetesClient
-                    .nodes()
-                    .withName(node.getMetadata().getName())
-                    .edit(n -> {
-                        if (n.getMetadata() != null && n.getMetadata().getLabels() != null) {
-                            n.getMetadata().getLabels().remove(queueLabelKey);
-                        }
-                        return n;
-                    });
+                mergePatchNode(
+                    node.getMetadata().getName(),
+                    labelPatch(Collections.singletonMap(queueLabelKey, null)));
             }
         } catch (Exception e) {
             log.error("Failed to delete queue from Kubernetes nodes: " + queueName, e);
@@ -4419,24 +4414,14 @@ public class KubernetesNativeBackend implements Backend {
                 " slots"
         );
 
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put(queueLabelKey, newQueueName);
+        if (slots != null) {
+            labels.put(LABEL_PREFIX + "slots", String.valueOf(slots));
+        }
         try {
             for (String nodeName : nodeNames) {
-                kubernetesClient
-                    .nodes()
-                    .withName(nodeName)
-                    .edit(n -> {
-                        if (n.getMetadata() == null) {
-                            return n;
-                        }
-                        if (n.getMetadata().getLabels() == null) {
-                            n.getMetadata().setLabels(new HashMap<>());
-                        }
-                        n.getMetadata().getLabels().put(queueLabelKey, newQueueName);
-                        if (slots != null) {
-                            n.getMetadata().getLabels().put(LABEL_PREFIX + "slots", String.valueOf(slots));
-                        }
-                        return n;
-                    });
+                mergePatchNode(nodeName, labelPatch(labels));
             }
             return true;
         } catch (Exception e) {
@@ -4470,33 +4455,55 @@ public class KubernetesNativeBackend implements Backend {
                 "'"
         );
 
+        // Accepts either spelling of the default queue. Queues.removeQueue passes the SGE
+        // short form "all", which previously failed this test and was written as a literal
+        // label value. A default-queue node carries no queue label, so the label is removed.
+        String label = isDefaultQueueName(destQueueName) ? null : destQueueName;
+        JsonObject patch = labelPatch(Collections.singletonMap(queueLabelKey, label));
         for (String nodeName : nodeNames) {
             try {
-                kubernetesClient
-                    .nodes()
-                    .withName(nodeName)
-                    .edit(n -> {
-                        if (n.getMetadata() == null) {
-                            return n;
-                        }
-                        if (n.getMetadata().getLabels() == null) {
-                            n.getMetadata().setLabels(new HashMap<>());
-                        }
-
-                        // Accepts either spelling of the default queue. Queues.removeQueue
-                        // passes the SGE short form "all", which previously failed this
-                        // test and was written as a literal label value.
-                        if (isDefaultQueueName(destQueueName)) {
-                            n.getMetadata().getLabels().remove(queueLabelKey);
-                        } else {
-                            n.getMetadata().getLabels().put(queueLabelKey, destQueueName);
-                        }
-                        return n;
-                    });
+                mergePatchNode(nodeName, patch);
             } catch (Exception e) {
                 log.error("Failed to move node to queue: node=" + nodeName + ", queue=" + destQueueName, e);
             }
         }
+    }
+
+    /** Writes merge patches. Nulls must survive: a null is how a merge patch removes a label. */
+    private static final Gson MERGE_PATCH_GSON = new GsonBuilder().serializeNulls().create();
+
+    /**
+     * Applies a JSON merge patch (RFC 7386) to a node.
+     *
+     * <p>Every change to a node goes through here rather than {@code edit()}. fabric8 6.10's
+     * {@code edit()} first clones the live Node through Jackson, and with the Jackson this
+     * build ships (2.21, raised for CVE fixes) that clone throws on the node's managedFields
+     * ("keySerializer" is null). Every queue operation therefore failed before a request
+     * left the application (Quokka, 2026-10-15). A merge patch carries only the fields it
+     * names and never serializes an object the server returned.
+     */
+    private void mergePatchNode(String nodeName, JsonObject patch) {
+        kubernetesClient
+            .nodes()
+            .withName(nodeName)
+            .patch(PatchContext.of(PatchType.JSON_MERGE), MERGE_PATCH_GSON.toJson(patch));
+    }
+
+    /** A merge patch of a node's labels, in which a null value removes that label. */
+    private static JsonObject labelPatch(Map<String, String> labels) {
+        JsonObject values = new JsonObject();
+        for (Map.Entry<String, String> label : labels.entrySet()) {
+            if (label.getValue() == null) {
+                values.add(label.getKey(), JsonNull.INSTANCE);
+            } else {
+                values.addProperty(label.getKey(), label.getValue());
+            }
+        }
+        JsonObject metadata = new JsonObject();
+        metadata.add("labels", values);
+        JsonObject patch = new JsonObject();
+        patch.add("metadata", metadata);
+        return patch;
     }
 
     /**
