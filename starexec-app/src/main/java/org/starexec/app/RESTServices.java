@@ -6441,6 +6441,12 @@ public class RESTServices {
 
 		// Convert the subSpaces to copy to an int list
 		List<Integer> selectedSubSpaces = Util.toIntegerList(request.getParameterValues("selectedIds[]"));
+		// Refused rather than reported as a copy of nothing. canCopySpace iterates the
+		// selection, so an empty one passes every check, the copy loop runs zero times, and
+		// the handler used to answer "Space copied successfully" for spaces it never copied.
+		if (selectedSubSpaces.isEmpty()) {
+			return gson.toJson(new ValidatorStatusCode(false, "No spaces were selected to copy"));
+		}
 		ValidatorStatusCode status = SpaceSecurity.canCopySpace(spaceId, requestUserId, selectedSubSpaces);
 		if (!status.isSuccess()) {
 			return gson.toJson(status);
