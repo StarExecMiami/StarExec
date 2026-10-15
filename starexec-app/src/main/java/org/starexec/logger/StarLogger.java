@@ -7,6 +7,26 @@ import org.starexec.util.Util;
 
 import java.util.Optional;
 
+/**
+ * The application's logger, which also PERSISTS warnings and errors to the database.
+ *
+ * <h2>Choosing WARN or ERROR chooses a database write</h2>
+ *
+ * <p>{@link #log} routes every WARN and ERROR through {@code reportError} into
+ * {@code ErrorLogs.add}, which opens a connection and inserts an {@code error_logs} row. That is
+ * deliberate -- it is how an operator finds problems without shell access to the logs -- but it
+ * is invisible at the call site: nothing about {@code log.warn("...")} suggests a round-trip,
+ * and there is no dedup or rate limiting on the insert.
+ *
+ * <p>So: <b>prefer INFO for anything that can fire per poll, per pair or per file.</b> INFO and
+ * DEBUG are not persisted. A WARN inside a monitor's poll loop, a per-file loop, or a retry path
+ * is one insert per iteration, and it will keep inserting for as long as the condition lasts.
+ *
+ * <p>The corollary matters for design, not just performance: a class documented as holding no
+ * database connection cannot log at WARN. If such a class needs to report something, it should
+ * return it and let a caller that may touch the database do the logging -- as
+ * {@code StageStatusSnapshots} does with {@code lastContradiction()}.
+ */
 public class StarLogger extends BaseStarLogger {
 
     private StarLogger(Class<?> clazz) { super(clazz); }

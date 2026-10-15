@@ -274,6 +274,11 @@ public class LocalJobMonitor {
                 terminalStage == FinalStatusStage.PAIR_LEVEL
                         ? StageStatusSnapshots.readForPairLevelResult(outputDir, pairId)
                         : StageStatusSnapshots.read(outputDir, pairId, terminalStage);
+        // Reported here rather than by the reader: that class holds no database connection by
+        // contract, and in this codebase a log.warn is one -- StarLogger routes WARN through
+        // ErrorLogs.add. One line per pair, only when the pair's own records contradict
+        // each other, which no producer path should ever create.
+        StageStatusSnapshots.lastContradiction().ifPresent(log::warn);
 
         if (earlier.isEmpty()) {
             return false;

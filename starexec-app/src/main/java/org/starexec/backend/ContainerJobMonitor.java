@@ -660,6 +660,9 @@ public class ContainerJobMonitor {
             stageSnapshots = stageNumber == FinalStatusStage.PAIR_LEVEL
                 ? StageStatusSnapshots.readForPairLevelResult(outputPath, pairId)
                 : StageStatusSnapshots.read(outputPath, pairId, stageNumber);
+            // See LocalJobMonitor: the reader reports the contradiction, the monitor logs it,
+            // because a WARN here is a database write and that class must not make one.
+            StageStatusSnapshots.lastContradiction().ifPresent(log::warn);
         } catch (IOException e) {
             // The filesystem, not the contents: retried, as the other monitors classify it.
             throw new RetryableIngestionException(
