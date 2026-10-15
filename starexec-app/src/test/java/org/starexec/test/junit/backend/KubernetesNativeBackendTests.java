@@ -2635,6 +2635,84 @@ public class KubernetesNativeBackendTests {
     }
 
     /**
+     * After a restart the cluster still holds the finished Jobs of pairs the previous process
+     * already recorded (they live for ttlSecondsAfterFinished), and this process tracks none
+     * of them. Re-ingesting one used to report an ingestion intervention for a pair that
+     * already held its result: 122 of them after one deploy on Quokka during the job 5 rerun.
+     */
+    @Test
+    public void aJobRecordedBeforeARestartIsNotReportedAgain() throws Exception {
+        List<String> messages = completeUntrackedJob(61, StatusCode.STATUS_COMPLETE);
+        assertTrue(messages.toString(),
+            messages.stream().noneMatch(m -> m.contains("INTERVENTION")));
+        assertTrue(messages.toString(), messages.stream().anyMatch(
+            m -> m.contains("Not ingesting") && m.contains("already holds terminal status 7")));
+    }
+
+    /** Any terminal status means the pair was settled, by whichever writer settled it. */
+    @Test
+    public void aJobWhosePairWasFiledAsASubmitFailureIsNotReportedAgain() throws Exception {
+        List<String> messages = completeUntrackedJob(63, StatusCode.ERROR_SUBMIT_FAIL);
+        assertTrue(messages.toString(),
+            messages.stream().noneMatch(m -> m.contains("INTERVENTION")));
+    }
+
+    /**
+     * The same untracked Job whose pair is still waiting did lose its result, and that is
+     * worth an intervention: the guard is for settled pairs only.
+     */
+    @Test
+    public void anUntrackedJobWhosePairIsUnresolvedIsStillReported() throws Exception {
+        List<String> messages = completeUntrackedJob(62, StatusCode.STATUS_ENQUEUED);
+        assertTrue(messages.toString(), messages.stream()
+            .anyMatch(m -> m.contains("INGESTION INTERVENTION REQUIRED")));
+    }
+
+    /**
+     * Completes a finished Job this process does not track, as after a restart: no tracking
+     * maps, so the pair comes from the Job's own label (pair id = exec id x 10). Returns
+     * everything the backend logged meanwhile.
+     */
+    private List<String> completeUntrackedJob(int execId, StatusCode pairStatus) throws Exception {
+        KubernetesNativeBackend backend = new KubernetesNativeBackend();
+        setField(backend, "namespace", "starexec");
+        givenJobDeletion(backend, "job-" + execId, true, jobWithNoConditions(execId));
+        KubernetesJobMonitor.JobCompletionCallback callback =
+            instantiateCompletionCallback(backend);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+            org.slf4j.LoggerFactory.getLogger(KubernetesNativeBackend.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        ch.qos.logback.classic.Level original = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        logger.addAppender(appender);
+        try (MockedStatic<JobPairs> jobPairsMock = Mockito.mockStatic(JobPairs.class)) {
+            jobPairsMock
+                .when(() -> JobPairs.getPairStatusLookup(execId * 10))
+                .thenReturn(foundLookup(pairStatus.getVal()));
+
+            assertTrue("handled, not retried forever",
+                callback.onJobComplete(execution(execId, "job-" + execId)));
+            // Nothing is written either way: no evidence is read for an untracked execution.
+            jobPairsMock.verify(
+                () -> JobPairs.setPairStatusPreciseResult(
+                    Mockito.anyInt(), Mockito.anyInt(), Mockito.anyInt(),
+                    Mockito.anyInt(), Mockito.anyBoolean()),
+                Mockito.never()
+            );
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(original);
+            appender.stop();
+        }
+        return appender.list.stream()
+            .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+            .toList();
+    }
+
+    /**
      * The slot a stuck pair holds is the reason one mislabelled queue can wedge the whole
      * backend: at maxConcurrentJobs held slots, submitScript rejects everything and
      * JobManager turns each rejection into a terminal error.
