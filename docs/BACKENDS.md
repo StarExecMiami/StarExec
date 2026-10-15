@@ -703,8 +703,8 @@ Track these metrics:
 # Check backend logs
 make logs-app | grep Backend
 
-# Verify backend is initialized
-grep "Backend initialized" logs/starexec.log
+# Verify backend is initialized (`podman ps` shows the app container's name)
+podman exec <app-container> grep "Backend initialized" /var/log/starexec/starexec.log
 
 # Check configuration
 echo $STAREXEC_BACKEND_TYPE

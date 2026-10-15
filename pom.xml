@@ -40,8 +40,8 @@
         <junit-jupiter.version>5.10.1</junit-jupiter.version>
         <junit-platform.version>1.10.1</junit-platform.version>
 
-        <!-- Application Logging -->
-        <STAREXEC_LOG>/usr/local/tomcat/logs/starexec.log</STAREXEC_LOG>
+        <!-- Application Logging. The log file's location is resolved at runtime from
+             STAREXEC_LOG_DIR; see starexec-app/src/main/resources/logback.xml. -->
         <LOGGING_LEVEL>INFO</LOGGING_LEVEL>
     </properties>
 
