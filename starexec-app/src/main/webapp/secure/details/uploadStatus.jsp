@@ -433,7 +433,7 @@
 					</tr>
 					<tr id="errorMessageRow" style="${(not empty newJob.errorMessage or newJob.status eq 'COMPLETED_WITH_ERRORS') ? '' : 'display: none;'}">
 						<td>error log</td>
-						<td id="errorMessageValue">${newJob.errorMessage}</td>
+						<td id="errorMessageValue"><c:out value="${newJob.errorMessage}"/></td>
 					</tr>
 				</c:when>
 				<c:otherwise>
@@ -484,7 +484,7 @@
 					</tr>
 					<tr>
 						<td>upload error message</td>
-						<td>${status.errorMessage}</td>
+						<td><c:out value="${status.errorMessage}"/></td>
 					</tr>
 				</c:otherwise>
 			</c:choose>
@@ -506,7 +506,7 @@
 					<tbody>
 					<c:forEach var="bench" items="${badBenches}">
 						<tr>
-							<td>${bench.name}</td>
+							<td><c:out value="${bench.name}"/></td>
 							<td>
 								<a href="${starexecRoot}/services/uploads/stdout/${bench.id}">view</a>
 							</td>
