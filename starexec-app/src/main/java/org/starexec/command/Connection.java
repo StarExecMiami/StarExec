@@ -3,6 +3,7 @@ package org.starexec.command;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.utils.IOUtils;
@@ -359,6 +360,15 @@ public class Connection {
 			text.append(" | ").append(error);
 		}
 		return text.toString();
+	}
+
+	private static JsonObject parseObject(String body) {
+		try {
+			JsonElement parsed = JsonParser.parseString(body);
+			return parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
+		} catch (RuntimeException e) {
+			return null;
+		}
 	}
 
 	private static String field(JsonObject obj, String name) {
@@ -2454,22 +2464,31 @@ public class Connection {
 	 */
 	public String getBenchmarkUploadStatus(Integer statusId) {
 		// The id pushbenchmarks returns is an upload job's on a server that processes uploads in the
-		// background; ask for that first. An older server has no such route and answers 404, and
-		// so does a newer one for a job this user cannot see: then ask the older endpoint, which
-		// still says why.
+		// background, so ask for that first. Such a server answers the route even for a job this
+		// user cannot see, with 200 and "not available" (RESTException.NOT_FOUND); only an older
+		// server, which has no such route, answers 404. Fall back to its upload statuses on a 404
+		// alone: they are numbered separately from upload jobs, so asking them about this id on a
+		// newer server could describe an unrelated upload.
 		HttpResponse response = null;
 		try {
 			HttpGet get = new HttpGet(baseURL + C.URL_GET_UPLOAD_JOB_STATUS.replace("{jobId}", statusId.toString()));
 			get = (HttpGet) setHeaders(get);
 			response = executeGetOrPost(get);
-			if (response.getStatusLine().getStatusCode() == HttpServletResponse.SC_OK) {
-				JsonObject job = JsonHandler.getJsonObject(response);
+			int code = response.getStatusLine().getStatusCode();
+			if (code != HttpServletResponse.SC_NOT_FOUND) {
+				String body = response.getEntity() == null ? "" : EntityUtils.toString(response.getEntity());
+				JsonObject job = code == HttpServletResponse.SC_OK ? parseObject(body) : null;
 				if (job != null && job.has("status")) {
 					return describeUploadJob(job);
 				}
+				setLastError(code == HttpServletResponse.SC_OK && "not available".equals(body.trim())
+						? "No upload job " + statusId + " is visible to you"
+						: "Unexpected answer (HTTP " + code + ") about upload job " + statusId);
+				return null;
 			}
 		} catch (Exception e) {
-			// Fall through to the older endpoint, which reports its own error.
+			setLastError("Internal error getting benchmark upload details");
+			return null;
 		} finally {
 			safeCloseResponse(response);
 		}

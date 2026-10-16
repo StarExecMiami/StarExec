@@ -17,6 +17,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -32,6 +33,7 @@ public class StarexecCommandUploadTest {
 	private String base;
 	private Path archive;
 	private final List<String> uploadsReceived = new ArrayList<>();
+	private final List<String> requested = new ArrayList<>();
 
 	// What the stub answers to an upload, and to a status request for upload job 17.
 	private int uploadStatus = 202;
@@ -48,6 +50,7 @@ public class StarexecCommandUploadTest {
 		server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
 		server.createContext("/starexec/", exchange -> {
 			String path = exchange.getRequestURI().getPath();
+			requested.add(path);
 			int status = 404;
 			String body = "";
 			if (path.endsWith("secure/upload/benchmarks")) {
@@ -131,6 +134,18 @@ public class StarexecCommandUploadTest {
 				+ " \"totalSpacesCreated\": 0, \"errorMessage\": \"Quota exceeded\"}";
 		assertEquals("status: FAILED | benchmarks: 1 / 2 | spaces created: 0 | Quota exceeded",
 				new Connection("u", "p", base).getBenchmarkUploadStatus(17));
+	}
+
+	@Test
+	public void anUploadJobThisUserCannotSeeIsNotLookedUpElsewhere() {
+		// This server's answer for a job that does not exist or is not the user's
+		// (RESTException.NOT_FOUND): HTTP 200, "not available". Older upload statuses are numbered
+		// separately, so falling back would describe an unrelated upload with the same number.
+		jobBody = "not available";
+		Connection con = new Connection("u", "p", base);
+		assertNull(con.getBenchmarkUploadStatus(17));
+		assertEquals("No upload job 17 is visible to you", con.getLastError());
+		assertFalse(requested.toString(), requested.stream().anyMatch(p -> p.contains("uploadDescription")));
 	}
 
 	@Test
