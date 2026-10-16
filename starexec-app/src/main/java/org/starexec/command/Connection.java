@@ -316,6 +316,20 @@ public class Connection {
 		}
 	}
 
+	/**
+	 * The id of an accepted space XML upload, from the redirect to its status page.
+	 *
+	 * @return The id, or 0 when the redirect names none: the upload was still accepted
+	 */
+	static int xmlUploadStatusIdOf(Header location) {
+		if (location == null) {
+			return 0;
+		}
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("XMLuploadStatus\\.jsp\\?id=(\\d+)")
+				.matcher(location.getValue());
+		return m.find() ? Integer.parseInt(m.group(1)) : 0;
+	}
+
 	public void logAddTextBody(MultipartEntityBuilder entity, String name, String text) {
 		log.log("Adding text body for multipart entity: name=" + name + ", text=" + text);
 		entity.addTextBody(name, text);
@@ -551,7 +565,7 @@ public class Connection {
 			response = executeGetOrPost(post);
 
 			int code = response.getStatusLine().getStatusCode();
-			// if space, gives 200 code. if job, gives 302
+			// Both answer an accepted upload with a redirect; a job XML names the new jobs in New_ID.
 			if (code != HttpServletResponse.SC_OK && code != HttpServletResponse.SC_FOUND) {
 				setLastError(HTMLParser.extractCookie(response.getAllHeaders(), C.STATUS_MESSAGE_COOKIE));
 				ids.add(Status.ERROR_SERVER);
@@ -559,6 +573,14 @@ public class Connection {
 			}
 
 			String[] newIds = HTMLParser.extractMultipartCookie(response.getAllHeaders(), "New_ID");
+			if (newIds == null) {
+				// A space XML upload is processed in the background: the server redirects to its
+				// status page, XMLuploadStatus.jsp?id=N, and names no new space yet. That id is
+				// what there is to report. Reading the missing cookie threw, and an upload that
+				// had been accepted was reported as an internal error.
+				ids.add(xmlUploadStatusIdOf(response.getFirstHeader("Location")));
+				return ids;
+			}
 			for (String s : newIds) {
 				ids.add(Integer.parseInt(s));
 			}
@@ -653,7 +675,8 @@ public class Connection {
 			logAddTextBody(entity, "runTestJob", runTestJob.toString());
 			logAddTextBody(entity, "type", type.toString());
 			if (settingId != null) {
-				logAddTextBody(entity, "setting", settingId.toString());
+				// The name UploadSolver reads; sent as "setting", the profile was dropped.
+				logAddTextBody(entity, "settingId", settingId.toString());
 
 			}
 			post.setEntity(entity.build());
@@ -987,9 +1010,16 @@ public class Connection {
 			post = (HttpPost) setHeaders(post);
 			response = executeGetOrPost(post);
 
-			// we should get back an HTTP OK if we're allowed to change the visibility
 			if (response.getStatusLine().getStatusCode() != HttpServletResponse.SC_OK) {
 				return Status.ERROR_BAD_PARENT_SPACE;
+			}
+			// The server answers 200 whether or not it changed anything, with success=false when it
+			// refused: no permission, or a database error. Taking the 200 alone as success reported
+			// every refusal as done.
+			JsonObject answer = JsonHandler.getJsonObject(response);
+			if (answer != null && answer.has("success") && !answer.get("success").getAsBoolean()) {
+				setLastError(JsonHandler.getMessageOfResponse(answer));
+				return Status.ERROR_SERVER;
 			}
 			return 0;
 		} catch (Exception e) {

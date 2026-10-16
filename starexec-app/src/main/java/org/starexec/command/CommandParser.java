@@ -225,7 +225,10 @@ class CommandParser {
 			}
 			if (ids != null && serverStatus == 0 && returnIDsOnUpload) {
 				for (Integer id : ids) {
-					printID(id);
+					// 0 is an accepted upload whose answer named no id.
+					if (id > 0) {
+						printID(id);
+					}
 				}
 			}
 			return serverStatus;
