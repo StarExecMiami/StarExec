@@ -37,8 +37,10 @@ public class StarexecCommandContractTest {
 	private final List<String> received = new ArrayList<>();
 
 	// What the stub answers to a space XML upload, a solver upload and a visibility change.
+	private int xmlStatus = 302;
 	private String xmlLocation = "/starexec/secure/details/XMLuploadStatus.jsp?id=12";
 	private String xmlCookie = null;
+	private String xmlBody = "";
 	private String visibilityBody = "{\"success\": true, \"message\": \"Space successfully made public\"}";
 
 	@Before
@@ -52,8 +54,11 @@ public class StarexecCommandContractTest {
 			int status = 404;
 			String body = "";
 			if (path.endsWith("secure/upload/space") || path.endsWith("secure/upload/jobXML")) {
-				status = 302;
-				exchange.getResponseHeaders().add("Location", xmlLocation);
+				status = xmlStatus;
+				body = xmlBody;
+				if (xmlLocation != null) {
+					exchange.getResponseHeaders().add("Location", xmlLocation);
+				}
 				if (xmlCookie != null) {
 					exchange.getResponseHeaders().add("Set-Cookie", xmlCookie);
 				}
@@ -105,9 +110,28 @@ public class StarexecCommandContractTest {
 	}
 
 	@Test
-	public void anAcceptedSpaceXmlUploadWithoutAnIdIsStillAccepted() {
-		xmlLocation = "/starexec/secure/explore/spaces.jsp";
-		assertEquals(Collections.singletonList(0), new Connection("u", "p", base).uploadXML(archive.toString(), 3, false));
+	public void aRedirectToTheLoginPageIsNotAnUpload() {
+		// An expired session: form login answers before the upload servlet runs.
+		xmlLocation = "/starexec/secure/index.jsp";
+		Connection con = new Connection("u", "p", base);
+		assertEquals(Collections.singletonList(Status.ERROR_SERVER), con.uploadXML(archive.toString(), 3, false));
+		assertTrue(con.getLastError(), con.getLastError().contains("did not accept the upload"));
+	}
+
+	@Test
+	public void theLoginPageIsNotAnUpload() {
+		xmlStatus = 200;
+		xmlLocation = null;
+		xmlBody = "<html><head><title>Login - StarExec</title></head><body>Login</body></html>";
+		assertEquals(Collections.singletonList(Status.ERROR_SERVER),
+				new Connection("u", "p", base).uploadXML(archive.toString(), 3, false));
+	}
+
+	@Test
+	public void aJobXmlAnswerWithoutNewJobsIsAnError() {
+		// A job XML upload names its jobs in New_ID; a status-page redirect is not its answer.
+		assertEquals(Collections.singletonList(Status.ERROR_SERVER),
+				new Connection("u", "p", base).uploadXML(archive.toString(), 3, true));
 	}
 
 	@Test

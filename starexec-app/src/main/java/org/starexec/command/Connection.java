@@ -563,8 +563,17 @@ public class Connection {
 				// A space XML upload is processed in the background: the server redirects to its
 				// status page, XMLuploadStatus.jsp?id=N, and names no new space yet. That id is
 				// what there is to report. Reading the missing cookie threw, and an upload that
-				// had been accepted was reported as an internal error.
-				ids.add(xmlUploadStatusIdOf(response.getFirstHeader("Location")));
+				// had been accepted was reported as an internal error. Any other answer without
+				// New_ID created nothing: the login page, or a redirect to it, after the session
+				// expired.
+				int statusId = isJobXML ? 0 : xmlUploadStatusIdOf(response.getFirstHeader("Location"));
+				if (statusId > 0) {
+					ids.add(statusId);
+				} else {
+					setLastError("The server did not accept the upload; the session may have expired."
+							+ " Log in again and retry.");
+					ids.add(Status.ERROR_SERVER);
+				}
 				return ids;
 			}
 			for (String s : newIds) {
@@ -583,7 +592,7 @@ public class Connection {
 	/**
 	 * The id of an accepted space XML upload, from the redirect to its status page.
 	 *
-	 * @return The id, or 0 when the redirect names none: the upload was still accepted
+	 * @return The id, or 0 when the answer is not that redirect
 	 */
 	static int xmlUploadStatusIdOf(Header location) {
 		if (location == null) {
