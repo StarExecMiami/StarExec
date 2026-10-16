@@ -96,11 +96,25 @@
             <version>3.20.0</version>
         </dependency>
 
-        <!-- Kubernetes client for native Kubernetes backend -->
+        <!-- Kubernetes client for the native Kubernetes backend. 7.x needs Jackson 2.19 or
+             later, and 7.9.0 is built against 2.21; 6.10 could not serialize objects the API
+             server returns under the Jackson pinned in the root pom. OkHttp stays the HTTP
+             client: 7.x defaults to Vert.x, which is excluded so only one is on the classpath. -->
         <dependency>
             <groupId>io.fabric8</groupId>
             <artifactId>kubernetes-client</artifactId>
-            <version>6.10.0</version>
+            <version>${fabric8.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.fabric8</groupId>
+                    <artifactId>kubernetes-httpclient-vertx</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-httpclient-okhttp</artifactId>
+            <version>${fabric8.version}</version>
         </dependency>
         <dependency>
             <groupId>commons-logging</groupId>
