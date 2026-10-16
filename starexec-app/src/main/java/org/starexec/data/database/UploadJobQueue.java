@@ -49,8 +49,8 @@ public class UploadJobQueue {
     private static final String INSERT_JOB_SQL = 
         "INSERT INTO upload_jobs (archive_path, user_id, space_id, upload_method, " +
         "benchmark_type_id, downloadable, priority, archive_size, " +
-        "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url, space_permissions) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
     // An upload by URL holds its worker for as long as the download takes, up to the downloader's
     // deadline, so at most one runs at a time: slow downloads can never occupy every worker and
@@ -198,6 +198,7 @@ public class UploadJobQueue {
         ps.setBoolean(11, request.isLinked());
         ps.setObject(12, request.getUploadSessionId().orElse(null), java.sql.Types.BIGINT);
         ps.setString(13, request.getSourceUrl().orElse(null));
+        ps.setString(14, request.getSpacePermissions().orElse(null));
     }
     
     /**
@@ -891,6 +892,7 @@ public class UploadJobQueue {
         long uploadSessionId = rs.getLong("upload_session_id");
         job.setUploadSessionId(rs.wasNull() ? null : uploadSessionId);
         job.setSourceUrl(rs.getString("source_url"));
+        job.setSpacePermissions(UploadJob.decodeSpacePermissions(rs.getString("space_permissions")));
         job.setLastProcessedPath(rs.getString("last_processed_path"));
         job.setLastProcessedIndex(rs.getInt("last_processed_index"));
         job.setExtractPath(rs.getString("extract_path"));

@@ -803,6 +803,7 @@ public class RESTServices {
 			.depRootSpaceId(session.getDepRootSpaceId())
 			.linked(session.isLinked())
 			.uploadSessionId(session.getId())
+			.spacePermissions(UploadJob.decodeSpacePermissions(session.getSpacePermissions()))
 			.build();
 
 		Optional<Long> jobId = UploadSessions.finalizeSessionWithUploadJob(

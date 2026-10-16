@@ -209,6 +209,8 @@ public class UploadBenchmark extends HttpServlet {
 		.depRootSpaceId(depRootSpaceId)
 		.linked(linked)
 		.sourceUrl(sourceUrl)
+		// The default permissions of the spaces a "convert" upload creates, as the form chose them.
+		.spacePermissions(perm)
 		.build();
 
 	long jobId = UploadJobQueue.enqueueJob(uploadRequest);
@@ -704,18 +706,28 @@ public class UploadBenchmark extends HttpServlet {
 	 */
 	private Permission extractPermissions(HashMap<String, Object> form) {
 		Permission p = new Permission();
-		p.setAddBenchmark(form.containsKey(addBench));
-		p.setAddSolver(form.containsKey(addSolver));
-		p.setAddSpace(form.containsKey(addSpace));
-		p.setAddUser(form.containsKey(addUser));
-		p.setAddJob(form.containsKey(addJob));
-		p.setRemoveBench(form.containsKey(removeBench));
-		p.setRemoveSolver(form.containsKey(removeSolver));
-		p.setRemoveSpace(form.containsKey(removeSpace));
-		p.setRemoveUser(form.containsKey(removeUser));
-		p.setRemoveJob(form.containsKey(removeJob));
+		p.setAddBenchmark(granted(form, addBench));
+		p.setAddSolver(granted(form, addSolver));
+		p.setAddSpace(granted(form, addSpace));
+		p.setAddUser(granted(form, addUser));
+		p.setAddJob(granted(form, addJob));
+		p.setRemoveBench(granted(form, removeBench));
+		p.setRemoveSolver(granted(form, removeSolver));
+		p.setRemoveSpace(granted(form, removeSpace));
+		p.setRemoveUser(granted(form, removeUser));
+		p.setRemoveJob(granted(form, removeJob));
 
 		return p;
+	}
+
+	/**
+	 * Whether the form grants a permission. A checkbox is sent only when checked, as "on";
+	 * StarexecCommand sends every permission, as "true" or "false", so presence alone is not
+	 * enough: it turned every permission StarexecCommand withheld into one it granted.
+	 */
+	static boolean granted(HashMap<String, Object> form, String name) {
+		Object value = form.get(name);
+		return value != null && !"false".equalsIgnoreCase(value.toString().trim());
 	}
 
 	/**
