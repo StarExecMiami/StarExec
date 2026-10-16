@@ -10,6 +10,7 @@ import org.starexec.data.to.UploadJob;
 import org.starexec.test.util.DatabaseTestSupport;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -121,17 +122,26 @@ public class UploadJobQueueClaimSqlTest extends Common {
 
 	/** A PROCESSING row starts with a fresh heartbeat, as a live worker keeps it. */
 	private long insertJob(String status, String sourceUrl, long archiveSize) throws SQLException {
-		String alive = "PROCESSING".equals(status) ? "CURRENT_TIMESTAMP" : "NULL";
-		try (Connection con = Common.getConnection(); Statement s = con.createStatement();
-			 ResultSet rs = s.executeQuery("INSERT INTO starexec.upload_jobs (archive_path, user_id, "
-					 + "space_id, upload_method, benchmark_type_id, priority, archive_size, status, source_url, "
-					 + "started_at, last_heartbeat) "
-					 + "VALUES ('/tmp/" + TAG + "', " + USER_ID + ", " + SPACE_ID + ", 'convert', 1, "
-					 + PRIORITY + ", " + archiveSize + ", '" + status + "', "
-					 + (sourceUrl == null ? "NULL" : "'" + sourceUrl + "'") + ", " + alive + ", " + alive
-					 + ") RETURNING id")) {
-			rs.next();
-			return rs.getLong(1);
+		boolean alive = "PROCESSING".equals(status);
+		try (Connection con = Common.getConnection();
+			 PreparedStatement ps = con.prepareStatement("INSERT INTO starexec.upload_jobs (archive_path, "
+					 + "user_id, space_id, upload_method, benchmark_type_id, priority, archive_size, status, "
+					 + "source_url, started_at, last_heartbeat) VALUES (?, ?, ?, 'convert', 1, ?, ?, ?, ?, "
+					 + "CASE WHEN ? THEN CURRENT_TIMESTAMP END, CASE WHEN ? THEN CURRENT_TIMESTAMP END) "
+					 + "RETURNING id")) {
+			ps.setString(1, "/tmp/" + TAG);
+			ps.setInt(2, USER_ID);
+			ps.setInt(3, SPACE_ID);
+			ps.setInt(4, PRIORITY);
+			ps.setLong(5, archiveSize);
+			ps.setString(6, status);
+			ps.setString(7, sourceUrl);
+			ps.setBoolean(8, alive);
+			ps.setBoolean(9, alive);
+			try (ResultSet rs = ps.executeQuery()) {
+				rs.next();
+				return rs.getLong(1);
+			}
 		}
 	}
 
