@@ -49,15 +49,29 @@ public class UploadJobQueue {
     private static final String INSERT_JOB_SQL = 
         "INSERT INTO upload_jobs (archive_path, user_id, space_id, upload_method, " +
         "benchmark_type_id, downloadable, priority, archive_size, " +
-        "has_dependencies, dep_root_space_id, linked, upload_session_id) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "has_dependencies, dep_root_space_id, linked, upload_session_id, source_url) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     
-    private static final String CLAIM_JOB_SQL = 
+    // An upload by URL holds its worker for as long as the download takes, up to the downloader's
+    // deadline, so at most one runs at a time: slow downloads can never occupy every worker and
+    // leave uploaded files waiting behind them (#139).
+    //
+    // Only a running one that is still alive counts. Its worker refreshes last_heartbeat at least
+    // every minute while it downloads and on every progress update; one quiet for ten minutes was
+    // left PROCESSING by a failure nobody recorded, and must not hold back every later upload by
+    // URL until a restart reconciles it. The check runs inside one claim statement, so it holds for
+    // the single app instance the chart deploys, not across several claiming at the same moment.
+    private static final String CLAIM_JOB_SQL =
         "UPDATE upload_jobs " +
         "SET status = 'PROCESSING', started_at = CURRENT_TIMESTAMP " +
         "WHERE id = (" +
         "   SELECT id FROM upload_jobs " +
         "   WHERE status = 'PENDING' " +
+        "     AND (source_url IS NULL OR NOT EXISTS (" +
+        "       SELECT 1 FROM upload_jobs running " +
+        "       WHERE running.status = 'PROCESSING' AND running.source_url IS NOT NULL " +
+        "         AND GREATEST(running.last_heartbeat, running.started_at) " +
+        "             > CURRENT_TIMESTAMP - INTERVAL '10 minutes')) " +
         "   ORDER BY priority DESC, archive_size ASC, created_at ASC " +
         "   LIMIT 1 FOR UPDATE SKIP LOCKED" +
         ") RETURNING *";
@@ -183,6 +197,7 @@ public class UploadJobQueue {
         ps.setObject(10, request.getDepRootSpaceId().orElse(null), java.sql.Types.INTEGER);
         ps.setBoolean(11, request.isLinked());
         ps.setObject(12, request.getUploadSessionId().orElse(null), java.sql.Types.BIGINT);
+        ps.setString(13, request.getSourceUrl().orElse(null));
     }
     
     /**
@@ -875,6 +890,7 @@ public class UploadJobQueue {
         job.setLinked(rs.getBoolean("linked"));
         long uploadSessionId = rs.getLong("upload_session_id");
         job.setUploadSessionId(rs.wasNull() ? null : uploadSessionId);
+        job.setSourceUrl(rs.getString("source_url"));
         job.setLastProcessedPath(rs.getString("last_processed_path"));
         job.setLastProcessedIndex(rs.getInt("last_processed_index"));
         job.setExtractPath(rs.getString("extract_path"));

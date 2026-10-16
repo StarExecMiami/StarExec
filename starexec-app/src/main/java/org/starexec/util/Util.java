@@ -1925,6 +1925,9 @@ public class Util {
         return cookieStringBuilder.toString();
     }
 
+    /** The largest archive a URL download accepts, whatever the caller's own limit. */
+    public static final long ARCHIVE_DOWNLOAD_MAX_BYTES = ArchiveUrlDownloader.MAX_BYTES;
+
     /**
      * Attempts to copy the file at the end of the given http or https URL to the
      * given file. Any other scheme is refused before a connection is opened.
