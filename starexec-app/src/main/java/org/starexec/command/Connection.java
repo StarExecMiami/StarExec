@@ -316,20 +316,6 @@ public class Connection {
 		}
 	}
 
-	/**
-	 * The id of an accepted space XML upload, from the redirect to its status page.
-	 *
-	 * @return The id, or 0 when the redirect names none: the upload was still accepted
-	 */
-	static int xmlUploadStatusIdOf(Header location) {
-		if (location == null) {
-			return 0;
-		}
-		java.util.regex.Matcher m = java.util.regex.Pattern.compile("XMLuploadStatus\\.jsp\\?id=(\\d+)")
-				.matcher(location.getValue());
-		return m.find() ? Integer.parseInt(m.group(1)) : 0;
-	}
-
 	public void logAddTextBody(MultipartEntityBuilder entity, String name, String text) {
 		log.log("Adding text body for multipart entity: name=" + name + ", text=" + text);
 		entity.addTextBody(name, text);
@@ -592,6 +578,20 @@ public class Connection {
 			safeCloseResponse(response);
 		}
 
+	}
+
+	/**
+	 * The id of an accepted space XML upload, from the redirect to its status page.
+	 *
+	 * @return The id, or 0 when the redirect names none: the upload was still accepted
+	 */
+	static int xmlUploadStatusIdOf(Header location) {
+		if (location == null) {
+			return 0;
+		}
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("XMLuploadStatus\\.jsp\\?id=(\\d+)")
+				.matcher(location.getValue());
+		return m.find() ? Integer.parseInt(m.group(1)) : 0;
 	}
 
 	/**
