@@ -11,6 +11,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'dependency-check-suppressions.xml'
+      - '.github/npm-audit-exceptions.json'
+      - '.github/scripts/npm_audit_gate.py'
       - '.github/workflows/security-scan.yml'
   push:
     branches: [UMprod, dev, containerised, fb1]
@@ -19,6 +21,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'dependency-check-suppressions.xml'
+      - '.github/npm-audit-exceptions.json'
+      - '.github/scripts/npm_audit_gate.py'
       - 'starexec-app/**'
       - '.github/workflows/security-scan.yml'
   workflow_dispatch:
@@ -46,8 +50,21 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      # Every npm package here is a devDependency, jQuery included, which does ship, so the
+      # audit cannot simply omit dev dependencies. npm audit cannot set one advisory aside
+      # either; the gate fails on high and critical advisories except the documented ones in
+      # .github/npm-audit-exceptions.json, each only while it is build tooling, unfixed and
+      # inside its review date.
+      #
+      # continue-on-error, so a failure here no longer skips the OWASP scan of the Java
+      # dependencies below (it did from 2026-10-14 on). The job still fails at the end.
       - name: Audit Node build dependencies
-        run: npm audit --audit-level=high --package-lock-only
+        id: npm-audit
+        continue-on-error: true
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_npm_audit_gate.py'
+          npm audit --package-lock-only --json > npm-audit.json || true
+          python3 .github/scripts/npm_audit_gate.py npm-audit.json package-lock.json .github/npm-audit-exceptions.json
       
       - name: Set Dependency-Check cache key
         run: echo "CACHE_EPOCH=$(date +'%Y-W%V')" >> "$GITHUB_ENV"
@@ -109,6 +126,14 @@ jobs:
           path: |
             **/target/dependency-check-report.*
           retention-days: 30
+
+      # The Node audit above continues on error so the Java scan always runs; the job must
+      # still fail when it did.
+      - name: Fail on the Node audit
+        if: ${{ steps.npm-audit.outcome == 'failure' }}
+        run: |
+          echo "::error::The Node dependency audit failed; see its step above. The Java scan ran regardless."
+          exit 1
       
   sast-scan:
     name: SAST Analysis (CodeQL)

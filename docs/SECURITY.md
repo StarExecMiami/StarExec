@@ -607,6 +607,21 @@ sudo usermod -aG backup starexec
 - FERPA (education)
 - Export control (solver distribution)
 
+## Dependency Scanning
+
+`.github/workflows/security-scan.yml` scans dependencies on every pull request:
+
+- **Java**: OWASP Dependency-Check fails on CVSS 7 or higher. Suppressions live in
+  `dependency-check-suppressions.xml`, each with a note saying why the finding does not apply.
+- **Node** (build tooling, and the jQuery files the web app ships): `npm audit`, passed through
+  `.github/scripts/npm_audit_gate.py`, fails on high and critical advisories. `npm audit` cannot
+  set one advisory aside, so an advisory is excepted in `.github/npm-audit-exceptions.json`, with
+  a reason and a `review_by` date. An exception holds only while the package is reached through
+  development dependencies alone, npm reports no fix for it, and its date has not passed;
+  otherwise the scan fails again.
+- Both scans always run: a failing Node audit no longer skips the Java scan, and the job fails
+  if either fails.
+
 ## Security Checklist
 
 ### Pre-Production
