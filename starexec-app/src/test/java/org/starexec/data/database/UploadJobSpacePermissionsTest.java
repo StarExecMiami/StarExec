@@ -9,6 +9,7 @@ import org.starexec.data.to.UploadSession;
 import java.lang.reflect.Method;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -16,6 +17,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.fail;
 
 /**
  * The permissions chosen on the benchmark upload form travel with the upload, as
@@ -123,6 +125,46 @@ public class UploadJobSpacePermissionsTest {
         Method map = UploadJobQueue.class.getDeclaredMethod("mapResultSetToJob", ResultSet.class);
         map.setAccessible(true);
         assertNull(((UploadJob) map.invoke(null, rs)).getSpacePermissions());
+    }
+
+    @Test
+    public void aClaimedJobStillMapsBeforeTheMigrationHasRun() throws Exception {
+        // Jenkins starts the new application before it applies the migrations. The claim has
+        // already marked the row PROCESSING, so a mapping failure would strand it.
+        ResultSet rs = Mockito.mock(ResultSet.class);
+        Mockito.when(rs.getLong("id")).thenReturn(42L);
+        Mockito.when(rs.getString("source_url"))
+            .thenThrow(new SQLException("column \"source_url\" does not exist", "42703"));
+        Mockito.when(rs.getString("space_permissions"))
+            .thenThrow(new SQLException("column \"space_permissions\" does not exist", "42703"));
+        Method map = UploadJobQueue.class.getDeclaredMethod("mapResultSetToJob", ResultSet.class);
+        map.setAccessible(true);
+        UploadJob job = (UploadJob) map.invoke(null, rs);
+        assertEquals(42L, job.getId());
+        assertNull(job.getSourceUrl());
+        assertNull("the old default applies", job.getSpacePermissions());
+    }
+
+    @Test
+    public void aSessionStillMapsBeforeTheMigrationHasRun() throws Exception {
+        ResultSet rs = Mockito.mock(ResultSet.class);
+        Mockito.when(rs.getString("space_permissions"))
+            .thenThrow(new SQLException("column \"space_permissions\" does not exist", "42703"));
+        Method map = UploadSessions.class.getDeclaredMethod("mapResultSet", ResultSet.class);
+        map.setAccessible(true);
+        assertNull(((UploadSession) map.invoke(null, rs)).getSpacePermissions());
+    }
+
+    @Test
+    public void anyOtherDatabaseFailureStillPropagates() throws Exception {
+        ResultSet rs = Mockito.mock(ResultSet.class);
+        Mockito.when(rs.getString("space_permissions")).thenThrow(new SQLException("connection lost", "08006"));
+        try {
+            UploadJobQueue.columnAddedByMigration(rs, "space_permissions");
+            fail("a lost connection is not a missing column");
+        } catch (SQLException e) {
+            assertEquals("08006", e.getSQLState());
+        }
     }
 
     @Test

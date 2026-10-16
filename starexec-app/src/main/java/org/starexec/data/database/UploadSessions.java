@@ -519,7 +519,7 @@ public class UploadSessions {
         int depRootSpaceId = rs.getInt("dep_root_space_id");
         session.setDepRootSpaceId(rs.wasNull() ? null : depRootSpaceId);
         session.setLinked(rs.getBoolean("linked"));
-        session.setSpacePermissions(rs.getString("space_permissions"));
+        session.setSpacePermissions(UploadJobQueue.columnAddedByMigration(rs, "space_permissions"));
         session.setStatus(rs.getString("status"));
         long jobId = rs.getLong("job_id");
         session.setJobId(rs.wasNull() ? null : jobId);
