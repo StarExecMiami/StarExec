@@ -454,7 +454,13 @@ class PeriodicTasks {
     ) {
         @Override
         protected void dorun() {
-            Util.clearOldFiles(R.JOBGRAPH_FILE_DIR, 7, true);
+            // Statistics writes graphs under the web root; R.JOBGRAPH_FILE_DIR alone is "/jobgraphs" at the
+            // filesystem root, which does not exist, so the task used to delete nothing.
+            Util.clearOldFiles(
+                new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR).getAbsolutePath(),
+                7,
+                true
+            );
         }
     };
     /*  Create a task that deletes job scripts older than 3 days */
@@ -467,16 +473,6 @@ class PeriodicTasks {
             Util.clearOldFiles(R.getJobInboxDir(), 1, false);
         }
     };
-    /* Create a task that deletes job graphs older than 7 days old */
-    /*private static final String clearJobGraphsTaskName = "clearJobGraphsTask";
-    private static final runnable CLEAR_JOB_GRAPHS_TASK = new RobustRunnable(clearJobGraphsTaskName) {
-	@Override
-	protected void doRun() {
-	    File f = new File(R.STAREXEC_ROOT, R.JOBGRAPH_FILE_DIR);
-	    Util.clearOldFiles(f.getPath(), 7, false);
-	}
-    };*/
-
     /**
      * Removes solvers and benchmarks from the database that are both orphaned (unaffiliated
      * with any spaces or job pairs) AND have already been deleted on disk.
