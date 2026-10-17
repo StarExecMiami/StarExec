@@ -1314,7 +1314,7 @@ public class RESTServices {
 				}
 				if (!pair.getStatus().getCode().incomplete()) {
 					if (logFile.exists()) {
-						offset = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+						offset = drainAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
 						if (offset < 0L) {
 							return;
 						}
@@ -1326,7 +1326,7 @@ public class RESTServices {
 			}
 
 			if (logFile.exists()) {
-				offset = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+				offset = drainAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
 				if (offset < 0L) {
 					return;
 				}
@@ -1427,6 +1427,33 @@ public class RESTServices {
 		}
 	}
 
+	/**
+	 * Sends everything appended to the log since {@code currentOffset}, up to the log's size when the
+	 * call starts, as consecutive chunk events of at most {@code maxChunkBytes} each. The chunk size
+	 * bounds one event, not one poll (docs/CONFIGURATION.md): a single chunk per poll let a fast log
+	 * fall behind, and cut a finished pair's log off after its first chunk, because {@code complete}
+	 * followed it.
+	 *
+	 * @return the offset after the last byte sent, or -1 if sending failed
+	 */
+	private static long drainAvailableBytesSse(int pairId, SseEventSink eventSink, Sse sse, File logFile,
+			long currentOffset, int maxChunkBytes) {
+		final long target = logFile.length();
+		long offset = currentOffset;
+		while (offset != target) {
+			long next = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+			if (next < 0L || next == offset) {
+				return next;
+			}
+			offset = next;
+			if (offset > target) {
+				// The log grew while it was being sent; the next poll sends the rest.
+				return offset;
+			}
+		}
+		return offset;
+	}
+
 	private static final class PairLogStreamSession {
 		private final int pairId;
 		private final SseEventSink eventSink;
@@ -1511,7 +1538,7 @@ public class RESTServices {
 					}
 					if (!pair.getStatus().getCode().incomplete()) {
 						if (logFile != null && logFile.exists()) {
-							offset = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+							offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
 							if (offset < 0L) {
 								closeAndRelease();
 								return;
@@ -1528,7 +1555,7 @@ public class RESTServices {
 				}
 
 				if (logFile != null && logFile.exists()) {
-					offset = streamAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
+					offset = drainAvailableBytesSse(pairId, eventSink, sse, logFile, offset, maxChunkBytes);
 					if (offset < 0L) {
 						closeAndRelease();
 						return;
@@ -1634,6 +1661,29 @@ public class RESTServices {
 			writeSseEvent(output, "error", "{\"code\":\"LOG_READ_FAILED\",\"message\":\"log read failed\"}");
 			return -1L;
 		}
+	}
+
+	/**
+	 * The synchronous counterpart of {@link #drainAvailableBytesSse}, for the legacy stream wrapper.
+	 *
+	 * @return the offset after the last byte sent, or -1 if writing failed
+	 */
+	private static long drainAvailableBytes(int pairId, OutputStream output, File logFile, long currentOffset,
+			int maxChunkBytes) {
+		final long target = logFile.length();
+		long offset = currentOffset;
+		while (offset != target) {
+			long next = streamAvailableBytes(pairId, output, logFile, offset, maxChunkBytes);
+			if (next < 0L || next == offset) {
+				return next;
+			}
+			offset = next;
+			if (offset > target) {
+				// The log grew while it was being sent; the next poll sends the rest.
+				return offset;
+			}
+		}
+		return offset;
 	}
 
 	private static boolean writeSseComment(OutputStream output, String comment) {
