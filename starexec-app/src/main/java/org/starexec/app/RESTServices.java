@@ -1103,7 +1103,9 @@ public class RESTServices {
 	/**
 	 * @param id      the ID of the job pair
 	 * @param request HTTP Request
-	 * @return a text string that holds the log of job pair with the given id
+	 * @return a text string that holds the log of job pair with the given id, or
+	 *         "not available" (HTTP 200, see RESTException) when the pair has no
+	 *         log or the user may not see it
 	 * @author Tyler Jensen
 	 */
 	@GET
@@ -1113,7 +1115,8 @@ public class RESTServices {
 		int userId = SessionUtil.getUserId(request);
 		ValidatorStatusCode status = JobSecurity.canUserSeeJobWithPair(id, userId);
 		if (!status.isSuccess()) {
-			return ("user " + userId + " does not have access to see job " + id);
+			// The answer to a missing log, which the REST layer gives for every refusal (RESTException).
+			throw RESTException.FORBIDDEN;
 		}
 
 		String log = JobPairs.getJobLog(id);
