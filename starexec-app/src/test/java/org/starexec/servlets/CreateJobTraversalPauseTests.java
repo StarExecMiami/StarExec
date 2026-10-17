@@ -27,8 +27,10 @@ import org.starexec.util.Validator;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -53,8 +55,9 @@ import static org.mockito.Mockito.verify;
  * </ul>
  *
  * <p>The database and session are replaced at their static boundaries; {@code JobManager.setupJob}
- * runs for real. A present-but-invalid value must be rejected with HTTP 400 before any job is
- * created; an absent value must take the documented default (depth-first, not paused).
+ * and the depth-first / round-robin builders run for real. A present-but-invalid value must be
+ * rejected with HTTP 400 before any job is created; an absent value must take the documented
+ * default (depth-first, not paused).
  */
 public class CreateJobTraversalPauseTests {
 
@@ -123,20 +126,72 @@ public class CreateJobTraversalPauseTests {
 	 * The regression that mattered most: with no {@code pause} parameter the job must still be created,
 	 * must not be paused, and the client must get a redirect -- never the old HTTP 500 that left a job
 	 * behind. Uses "choose a benchmark from this space", which reaches {@code Jobs.add} without walking
-	 * a space hierarchy. No {@code traversal} either, so the depth-first default is exercised too.
+	 * a space hierarchy; that path never reads {@code traversal}, so the traversal default is pinned by
+	 * the hierarchy tests below instead.
 	 */
 	@Test
 	public void missingPauseCreatesTheJobWithoutPausingItOrFailing() throws Exception {
-		Map<String, String> params = baseParams();
-		params.put("runChoice", "choose");
-		params.put("benchChoice", "runChosenFromSpace");
-		params.put("preProcess", "-1");
-		params.put("postProcess", "-1");
-
+		Map<String, String> params = choiceParams("runChosenFromSpace");
 		HttpServletRequest req = request(params);
 		Mockito.when(req.getParameterValues("bench")).thenReturn(new String[]{String.valueOf(BENCH_ID)});
-		Mockito.when(req.getParameterValues("configs")).thenReturn(new String[]{String.valueOf(CONFIG_ID)});
 
+		createJob(req, (response, jobs, jobManager) -> {
+			verify(response, never()).sendError(anyInt(), anyString());
+			verify(response).sendRedirect(contains("job.jsp"));
+			jobs.verify(() -> Jobs.add(Mockito.any(Job.class), eq(SPACE_ID)));
+			jobs.verify(() -> Jobs.pause(anyInt()), never());
+		});
+	}
+
+	/**
+	 * Without {@code traversal}, a hierarchy job is built depth-first, as the web form and the manual
+	 * default to. This path reads the traversal method, so it fails with the old NullPointerException
+	 * if the default is removed.
+	 */
+	@Test
+	public void missingTraversalBuildsTheHierarchyDepthFirst() throws Exception {
+		Map<String, String> params = choiceParams("runAllBenchInHierarchy");
+		params.put("pause", "no");
+
+		createJob(request(params), (response, jobs, jobManager) -> {
+			verify(response, never()).sendError(anyInt(), anyString());
+			verify(response).sendRedirect(contains("job.jsp"));
+			jobManager.verify(() -> JobManager.addJobPairsDepthFirst(Mockito.any(Job.class), Mockito.anyMap()));
+			jobManager.verify(() -> JobManager.addJobPairsRoundRobin(Mockito.any(Job.class), Mockito.anyMap()),
+					never());
+			jobs.verify(() -> Jobs.add(Mockito.any(Job.class), eq(SPACE_ID)));
+		});
+	}
+
+	/** The control for the test above: an explicit {@code robin} is still honored. */
+	@Test
+	public void robinTraversalBuildsTheHierarchyRoundRobin() throws Exception {
+		Map<String, String> params = choiceParams("runAllBenchInHierarchy");
+		params.put("pause", "no");
+		params.put("traversal", "robin");
+
+		createJob(request(params), (response, jobs, jobManager) -> {
+			verify(response, never()).sendError(anyInt(), anyString());
+			jobManager.verify(() -> JobManager.addJobPairsRoundRobin(Mockito.any(Job.class), Mockito.anyMap()));
+			jobManager.verify(() -> JobManager.addJobPairsDepthFirst(Mockito.any(Job.class), Mockito.anyMap()),
+					never());
+		});
+	}
+
+	/** Assertions run while the static mocks of a successful creation are still open. */
+	@FunctionalInterface
+	private interface CreationChecks {
+		void check(HttpServletResponse response, MockedStatic<Jobs> jobs, MockedStatic<JobManager> jobManager)
+				throws Exception;
+	}
+
+	/**
+	 * Runs {@code doPost} with every static boundary a successful "choose" creation reaches stubbed to
+	 * succeed, then hands the response and the job mocks to {@code checks}. Each pair builder yields one
+	 * pair, so the job passes the "no pairs" and quota guards and reaches {@code Jobs.add}.
+	 */
+	private static void createJob(HttpServletRequest req, CreationChecks checks) throws Exception {
+		Mockito.when(req.getParameterValues("configs")).thenReturn(new String[]{String.valueOf(CONFIG_ID)});
 		HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
 		try (MockedStatic<RESTHelpers> rest = Mockito.mockStatic(RESTHelpers.class);
 				MockedStatic<SessionUtil> session = Mockito.mockStatic(SessionUtil.class);
@@ -165,12 +220,22 @@ public class CreateJobTraversalPauseTests {
 			solver.setId(SOLVER_ID);
 			solvers.when(() -> Solvers.getSolverByConfig(CONFIG_ID, false)).thenReturn(solver);
 
-			// buildJob is the backend step; give the job one pair so it passes the "no pairs" guard.
+			// The backend pair builders: one pair each, so the job is not empty.
 			jobManager.when(() -> JobManager.buildJob(
 					Mockito.any(Job.class), Mockito.anyList(), Mockito.anyList(), Mockito.any()))
 					.thenAnswer(call -> {
 						call.<Job>getArgument(0).addJobPair(new JobPair());
 						return null;
+					});
+			jobManager.when(() -> JobManager.addBenchmarksFromHierarchy(
+					anyInt(), anyInt(), Mockito.anyList(), Mockito.any()))
+					.thenAnswer(call -> {
+						// Mutable: the round-robin builder removes spaces from the map as it drains them.
+						List<JobPair> pairs = new ArrayList<>();
+						pairs.add(new JobPair());
+						Map<Integer, List<JobPair>> spaceToPairs = new HashMap<>();
+						spaceToPairs.put(SPACE_ID, pairs);
+						return spaceToPairs;
 					});
 
 			User user = new User();
@@ -181,10 +246,7 @@ public class CreateJobTraversalPauseTests {
 
 			new CreateJob().doPost(req, response);
 
-			verify(response, never()).sendError(anyInt(), anyString());
-			verify(response).sendRedirect(contains("job.jsp"));
-			jobs.verify(() -> Jobs.add(Mockito.any(Job.class), eq(SPACE_ID)));
-			jobs.verify(() -> Jobs.pause(anyInt()), never());
+			checks.check(response, jobs, jobManager);
 		}
 	}
 
@@ -196,6 +258,16 @@ public class CreateJobTraversalPauseTests {
 		params.put("queue", String.valueOf(QUEUE_ID));
 		params.put("desc", "regression test");
 		params.put("seed", "0");
+		return params;
+	}
+
+	/** A "choose" request with the given benchmark choice and no traversal or pause. */
+	private static Map<String, String> choiceParams(String benchChoice) {
+		Map<String, String> params = baseParams();
+		params.put("runChoice", "choose");
+		params.put("benchChoice", benchChoice);
+		params.put("preProcess", "-1");
+		params.put("postProcess", "-1");
 		return params;
 	}
 
