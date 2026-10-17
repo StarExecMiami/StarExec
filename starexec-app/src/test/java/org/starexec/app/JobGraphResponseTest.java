@@ -90,9 +90,12 @@ public class JobGraphResponseTest {
 
 	@Test
 	public void anOverviewThatFailsToDrawAnswersADatabaseError() {
-		// The stubbed builder returns null, as makeSpaceOverviewChart does when its query fails.
-		String json = answer(statistics ->
-				new RESTServices().getSpaceOverviewGraph(STAGE, JOB_SPACE_ID, overviewRequest("5")));
+		// makeSpaceOverviewChart returns null when its query fails.
+		String json = answer(statistics -> {
+			statistics.when(() -> Statistics.makeSpaceOverviewChart(anyInt(), anyBoolean(), anyBoolean(), anyList(),
+					anyInt(), any())).thenReturn(null);
+			return new RESTServices().getSpaceOverviewGraph(STAGE, JOB_SPACE_ID, overviewRequest("5"));
+		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
 	}
 
@@ -109,8 +112,11 @@ public class JobGraphResponseTest {
 
 	@Test
 	public void aPairTimeGraphThatFailsToDrawAnswersADatabaseError() {
-		String json = answer(statistics ->
-				new RESTServices().getPairTimeGraph(JOB_ID, Mockito.mock(HttpServletRequest.class)));
+		// makeJobTimeGraph returns null whenever drawing fails.
+		String json = answer(statistics -> {
+			statistics.when(() -> Statistics.makeJobTimeGraph(anyInt())).thenReturn(null);
+			return new RESTServices().getPairTimeGraph(JOB_ID, Mockito.mock(HttpServletRequest.class));
+		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
 	}
 
@@ -126,7 +132,12 @@ public class JobGraphResponseTest {
 
 	@Test
 	public void aComparisonThatFailsStillAnswersADatabaseError() {
-		String json = answer(statistics -> comparison());
+		String json = answer(statistics -> {
+			// Stubbed explicitly: an unstubbed static mock answers a List method with an empty list, not null.
+			statistics.when(() -> Statistics.makeSolverComparisonChart(anyInt(), anyInt(), anyInt(), anyInt(), any(),
+					anyInt(), any())).thenReturn(null);
+			return comparison();
+		});
 		assertRefusedWith(RESTServices.ERROR_DATABASE.getMessage(), json);
 	}
 
