@@ -1161,6 +1161,45 @@ function setupPostProcessButton() {
 	});
 }
 
+// The graph services answer a chart as text (a path, or JSON holding the path and an image map),
+// and a refusal as a JSON status code. Given the text, parseReturnCode finds no "success" field
+// and reports success, so a refusal showed no message and left a broken or stale chart.
+function parseGraphResponse(text) {
+	if (typeof text === "string" && text.charAt(0) === "{") {
+		try {
+			return JSON.parse(text);
+		} catch (e) {
+			return text;
+		}
+	}
+	return text;
+}
+
+// An HTTP error never reaches the success callback, which left the previous chart up.
+function onGraphRequestError(clearGraph) {
+	return function(xhr, textStatus) {
+		if (textStatus === "abort") {
+			return;
+		}
+		clearGraph();
+		showMessage("error", "The graph could not be drawn (HTTP " + xhr.status + ").", 5000);
+	};
+}
+
+function clearPairTimeGraph() {
+	$("#pairTimeGraph, #bigPairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.png");
+}
+
+function clearSpaceOverviewGraph() {
+	$("#spaceOverview, #bigSpaceOverview").attr("src", starexecRoot + "images/noDisplayGraph.png");
+}
+
+// Clears both sizes and their image maps, so that no link points at a benchmark of an earlier chart.
+function clearSolverComparison() {
+	$("#solverComparison300, #solverComparison800").attr("src", starexecRoot + "images/noDisplayGraph.png");
+	$("#solverComparisonMap300, #solverComparisonMap800").remove();
+}
+
 function updatePairJobTimeGraph() {
 	var postUrl = null;
 
@@ -1175,16 +1214,17 @@ function updatePairJobTimeGraph() {
 			postUrl,
 			{},
 			function(returnCode) {
-				var s = parseReturnCode(returnCode);
+				var s = parseReturnCode(parseGraphResponse(returnCode));
 				if(s) {
 					$("#pairTimeGraph").attr("src", returnCode);
 					$("#bigPairTimeGraph").attr("src", returnCode + "800");
 				} else {
-					$("#pairTimeGraph").attr("src", starexecRoot + "images/noDisplayGraph.png");
+					clearPairTimeGraph();
 				}
 			},
 			"text"
 		);
+		xhr.fail(onGraphRequestError(clearPairTimeGraph));
 		openAjaxRequests.push(xhr);
 }
 
@@ -1212,7 +1252,7 @@ function updateSpaceOverviewGraph() {
 		postUrl,
 		{logY: logY, selectedIds: configs},
 		function(returnCode) {
-			var s = parseReturnCode(returnCode);
+			var s = parseReturnCode(parseGraphResponse(returnCode));
 			if (s) {
 				var currentConfigs = [];
 				$("#spaceOverviewSelections option:selected").each(function() {
@@ -1226,12 +1266,12 @@ function updateSpaceOverviewGraph() {
 					$("#bigSpaceOverview").attr("src", returnCode + "800");
 				}
 			} else {
-			$("#spaceOverview")
-			.attr("src", starexecRoot + "images/noDisplayGraph.png");
+				clearSpaceOverviewGraph();
 			}
 		},
 		"text"
 	);
+	xhr.fail(onGraphRequestError(clearSpaceOverviewGraph));
 	openAjaxRequests.push(xhr);
 }
 
@@ -1252,7 +1292,7 @@ function updateSolverComparison(size, color) {
 		postUrl,
 		{},
 		function(returnCode) {
-			var s = parseReturnCode(returnCode);
+			var s = parseReturnCode(parseGraphResponse(returnCode));
 			if (s) {
 				var jsonObject = $.parseJSON(returnCode);
 				var src = jsonObject.src;
@@ -1266,13 +1306,13 @@ function updateSolverComparison(size, color) {
 					updateSolverComparison(800, "black");
 				}
 			} else {
-			$("#solverComparison300")
-			.attr("src", starexecRoot + "images/noDisplayGraph.png");
+				clearSolverComparison();
 			}
 		},
 		"text"
 	);
 
+	xhr.fail(onGraphRequestError(clearSolverComparison));
 	openAjaxRequests.push(xhr);
 }
 
