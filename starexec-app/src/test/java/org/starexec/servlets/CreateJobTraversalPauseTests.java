@@ -57,7 +57,7 @@ import static org.mockito.Mockito.verify;
  * <p>The database and session are replaced at their static boundaries; {@code JobManager.setupJob}
  * and the depth-first / round-robin builders run for real. A present-but-invalid value must be
  * rejected with HTTP 400 before any job is created; an absent value must take the documented
- * default (depth-first, not paused).
+ * default (depth-first, not paused), and a blank value counts as absent.
  */
 public class CreateJobTraversalPauseTests {
 
@@ -67,6 +67,8 @@ public class CreateJobTraversalPauseTests {
 	private static final int BENCH_ID = 7;
 	private static final int CONFIG_ID = 9;
 	private static final int SOLVER_ID = 11;
+	/** The id the stubbed {@code Jobs.add} assigns, so a later {@code Jobs.pause} can be traced to it. */
+	private static final int JOB_ID = 77;
 
 	/** The request validator's patterns are compiled at application start, not statically. */
 	@BeforeClass
@@ -178,6 +180,52 @@ public class CreateJobTraversalPauseTests {
 		});
 	}
 
+	/**
+	 * {@code pause=yes} is accepted, and the job is paused once it exists: {@code Jobs.pause} receives
+	 * the id that {@code Jobs.add} assigned.
+	 */
+	@Test
+	public void pauseYesPausesTheJobOnceItIsCreated() throws Exception {
+		Map<String, String> params = choiceParams("runChosenFromSpace");
+		params.put("pause", "yes");
+		HttpServletRequest req = request(params);
+		Mockito.when(req.getParameterValues("bench")).thenReturn(new String[]{String.valueOf(BENCH_ID)});
+
+		createJob(req, (response, jobs, jobManager) -> {
+			verify(response, never()).sendError(anyInt(), anyString());
+			verify(response).sendRedirect(contains("job.jsp"));
+			jobs.verify(() -> Jobs.pause(JOB_ID));
+		});
+	}
+
+	/** An empty value counts as absent. Before the fix, an empty traversal silently meant round-robin. */
+	@Test
+	public void emptyTraversalAndPauseTakeTheDefaults() throws Exception {
+		assertBlankTakesTheDefaults("");
+	}
+
+	/** Whitespace counts as absent too, in validation and in the defaults alike. */
+	@Test
+	public void whitespaceTraversalAndPauseTakeTheDefaults() throws Exception {
+		assertBlankTakesTheDefaults("   ");
+	}
+
+	/** A hierarchy job whose traversal and pause are {@code blank} is built depth-first and not paused. */
+	private static void assertBlankTakesTheDefaults(String blank) throws Exception {
+		Map<String, String> params = choiceParams("runAllBenchInHierarchy");
+		params.put("traversal", blank);
+		params.put("pause", blank);
+
+		createJob(request(params), (response, jobs, jobManager) -> {
+			verify(response, never()).sendError(anyInt(), anyString());
+			verify(response).sendRedirect(contains("job.jsp"));
+			jobManager.verify(() -> JobManager.addJobPairsDepthFirst(Mockito.any(Job.class), Mockito.anyMap()));
+			jobManager.verify(() -> JobManager.addJobPairsRoundRobin(Mockito.any(Job.class), Mockito.anyMap()),
+					never());
+			jobs.verify(() -> Jobs.pause(anyInt()), never());
+		});
+	}
+
 	/** Assertions run while the static mocks of a successful creation are still open. */
 	@FunctionalInterface
 	private interface CreationChecks {
@@ -242,7 +290,10 @@ public class CreateJobTraversalPauseTests {
 			user.setPairQuota(1000);
 			users.when(() -> Users.get(USER_ID)).thenReturn(user);
 			jobs.when(() -> Jobs.countPairsByUser(USER_ID)).thenReturn(0);
-			jobs.when(() -> Jobs.add(Mockito.any(Job.class), eq(SPACE_ID))).thenReturn(true);
+			jobs.when(() -> Jobs.add(Mockito.any(Job.class), eq(SPACE_ID))).thenAnswer(call -> {
+				call.<Job>getArgument(0).setId(JOB_ID);
+				return true;
+			});
 
 			new CreateJob().doPost(req, response);
 
