@@ -25,6 +25,7 @@ public class UploadSession implements Serializable {
     private boolean hasDependencies;
     private Integer depRootSpaceId;
     private boolean linked;
+    private String spacePermissions;
     private String status;
     private Long jobId;
     private String errorMessage;
@@ -80,6 +81,9 @@ public class UploadSession implements Serializable {
 
     public boolean isLinked() { return linked; }
     public void setLinked(boolean linked) { this.linked = linked; }
+    /** The form's permissions, encoded as upload_jobs stores them; null when none were sent. */
+    public String getSpacePermissions() { return spacePermissions; }
+    public void setSpacePermissions(String spacePermissions) { this.spacePermissions = spacePermissions; }
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
