@@ -58,9 +58,13 @@ public class UploadSpacePermissionsTest {
         return names;
     }
 
+    /** A multipart form from name/value pairs: form("addBench", "on", ...). */
     private static HashMap<String, Object> form(String... pairs) {
+        if (pairs.length % 2 != 0) {
+            throw new IllegalArgumentException("form() takes name/value pairs, got " + pairs.length + " strings");
+        }
         HashMap<String, Object> form = new HashMap<>();
-        for (int i = 0; i < pairs.length; i += 2) {
+        for (int i = 0; i + 1 < pairs.length; i += 2) {
             form.put(pairs[i], pairs[i + 1]);
         }
         return form;
