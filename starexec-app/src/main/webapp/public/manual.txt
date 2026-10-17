@@ -219,7 +219,10 @@ OPTIONAL: None
 
 --viewuploadstatus -Instructs StarexecCommand to print the status of the benchmark upload request
 					specified by the given ID. "id" refers to a benchmark upload ID, which is returned
-					whenever you upload benchmarks with the "returnids" option enabled
+					whenever you upload benchmarks with the "returnids" option enabled. A server that
+					processes uploads in the background reports the upload's status (PENDING,
+					PROCESSING, COMPLETED or FAILED), the benchmarks processed out of those found,
+					the spaces created, and the error if the upload failed
 REQUIRED: "id"
 OPTIONAL: None
 
