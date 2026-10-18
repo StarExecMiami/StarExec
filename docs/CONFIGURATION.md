@@ -75,6 +75,8 @@ export STAREXEC_DB_PASSWORD_FILE=/run/secrets/starexec-db-password
 | `STAREXEC_EMAIL_PORT` | `25` | No | `587` | SMTP port |
 | `STAREXEC_EMAIL_USER` | *(empty)* | No | `mailer@example.org` | ⚠️ **Sensitive** |
 | `STAREXEC_EMAIL_PASSWORD` | *(empty)* | No | `...` | ⚠️ **Sensitive** |
+| `STAREXEC_EMAIL_FROM` | `starexec@localhost` | No | `starexec@example.org` | Sender address. When `STAREXEC_EMAIL_USER` is set, that value is the sender instead |
+| `STAREXEC_CONTACT_EMAIL` | `admin@starexec.org` | No | `support@example.org` | Shown to users who need help, including when an email could not be sent |
 
 ### Backend / System Configuration
 

@@ -34,9 +34,14 @@ public class Mail {
 	public static final String CHANGE_EMAIL_CODE = "changeEmail";
 	public static final String LEADER_RESPONSE = "lead";    // Param string for leader response decisions
 
-	public static void mail(String message, String subject, String to) {
+	/**
+	 * Sends an e-mail to one address. See {@link #mail(String, String, Collection)}.
+	 *
+	 * @return true if the SMTP server accepted the message, false if nothing was sent
+	 */
+	public static boolean mail(String message, String subject, String to) {
 		final List<String> toList = Collections.singletonList(to);
-		mail(message, subject, toList);
+		return mail(message, subject, toList);
 	}
 
 	/**
@@ -45,11 +50,14 @@ public class Mail {
 	 * @param message The body of the message
 	 * @param subject The subject of the message
 	 * @param to The list of e-mail addresses to send the message to
+	 * @return true if the SMTP server accepted the message, false if nothing was sent. Acceptance is
+	 *     all SMTP reports: an accepted message can still bounce later, and the bounce goes to the
+	 *     sender address, not back to this call (RFC 5321, section 6.1).
 	 */
-	public static void mail(String message, String subject, Collection<String> to) {
+	public static boolean mail(String message, String subject, Collection<String> to) {
 		try {
 			if (to == null || to.isEmpty()) {
-				return;
+				return false;
 			}
 			
 			log.info("Sending email to " + to.size() + " recipient(s)");
@@ -80,6 +88,7 @@ public class Mail {
 
 				email.send();
 				log.info("Email sent successfully to " + to.size() + " recipient(s)");
+				return true;
 			} catch (Exception e) {
 				// Transport failures can echo recipients; omit exception details.
 				log.warn("Failed to send email via SMTP");
@@ -89,6 +98,7 @@ public class Mail {
 			// Address parsing and collection failures can echo recipients; omit exception details.
 			log.warn("Error in mail function");
 		}
+		return false;
 	}
 
 	/**
@@ -139,9 +149,11 @@ public class Mail {
 	 *
 	 * @param user the user to send the email to
 	 * @param code the activation code to send
+	 * @return true if the SMTP server accepted the email; false if it was not sent, including when
+	 *     the template cannot be read
 	 * @author Todd Elvers
 	 */
-	public static void sendActivationCode(User user, String code) {
+	public static boolean sendActivationCode(User user, String code) {
 		try {
 			final String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/activation_email.txt"), StandardCharsets.UTF_8)
 				.replace("$$USER$$", user.getFullName())
@@ -150,10 +162,14 @@ public class Mail {
 			;
 
 			// Send email
-			Mail.mail(email, "STAREXEC - Verify your account", user.getEmail());
-			log.info(String.format("Sent activation email for user [%d]", user.getId()));
+			boolean sent = Mail.mail(email, "STAREXEC - Verify your account", user.getEmail());
+			if (sent) {
+				log.info(String.format("Sent activation email for user [%d]", user.getId()));
+			}
+			return sent;
 		} catch (IOException e) {
 			log.warn("Could not send activation email because the template file could not be read.");
+			return false;
 		}
 	}
 
@@ -228,10 +244,11 @@ public class Mail {
 	 *
 	 * @param newUser the user requesting to reset their password
 	 * @param code the UUID code used to create a safe hyperlink to email to the user
+	 * @return true if the SMTP server accepted the email, false if it was not sent
 	 * @throws IOException if password_reset_email cannot be found
 	 * @author Todd Elvers
 	 */
-	public static void sendPasswordReset(User newUser, String code) throws IOException {
+	public static boolean sendPasswordReset(User newUser, String code) throws IOException {
 		String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/password_reset_email.txt"), StandardCharsets.UTF_8)
 			.replace("$$USER$$", newUser.getFullName())
 			.replace("$$LINK$$", Util.url(String.format("public/reset_password?%s=%s",
@@ -241,11 +258,22 @@ public class Mail {
 		;
 
 		// Send email
-		Mail.mail(email, "STAREXEC - Password reset", newUser.getEmail());
-		log.info(String.format("Password reset email sent to user [%s].", newUser.getFullName()));
+		boolean sent = Mail.mail(email, "STAREXEC - Password reset", newUser.getEmail());
+		if (sent) {
+			log.info(String.format("Password reset email sent to user [%s].", newUser.getFullName()));
+		}
+		return sent;
 	}
 
-	public static void sendPassword(User user, String password) {
+	/**
+	 * Emails a user an administrator created, with the password the administrator chose
+	 *
+	 * @param user the new user
+	 * @param password the password the administrator set
+	 * @return true if the SMTP server accepted the email; false if it was not sent, including when
+	 *     the template cannot be read
+	 */
+	public static boolean sendPassword(User user, String password) {
 		try {
 			String email = FileUtils.readFileToString(new File(R.CONFIG_PATH, "/email/new_user_password.txt"), StandardCharsets.UTF_8)
 					.replace("$$USER$$", user.getFullName())
@@ -254,10 +282,14 @@ public class Mail {
 					;
 
 			// Send email
-			Mail.mail(email, "STAREXEC - new user password", user.getEmail());
-			log.info(String.format("Password reset email sent to user [%s].", user.getFullName()));
+			boolean sent = Mail.mail(email, "STAREXEC - new user password", user.getEmail());
+			if (sent) {
+				log.info(String.format("New user password email sent to user [%s].", user.getFullName()));
+			}
+			return sent;
 		} catch (IOException e) {
 			log.warn("Could not send password email because the template file could not be read.", e);
+			return false;
 		}
 	}
 
