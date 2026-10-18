@@ -13,6 +13,9 @@ import org.starexec.logger.StarLevel;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.AbstractCollection;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,6 +47,16 @@ public class MailSendResultTest {
 		try (MockedStatic<ErrorLogs> logs = quietErrorLogs();
 		     MockedConstruction<SimpleEmail> emails = mockConstruction(SimpleEmail.class)) {
 			assertTrue(Mail.mail("body", "subject", TO));
+			verify(emails.constructed().get(0)).send();
+		}
+	}
+
+	/** Only send() decides: a recipient list that fails once the message is accepted changes nothing. */
+	@Test
+	public void anAcceptedMessageIsReportedSentWhateverTheRecipientListDoesAfterwards() throws Exception {
+		try (MockedStatic<ErrorLogs> logs = quietErrorLogs();
+		     MockedConstruction<SimpleEmail> emails = mockConstruction(SimpleEmail.class)) {
+			assertTrue(Mail.mail("body", "subject", sizeWorksOnce(TO)));
 			verify(emails.constructed().get(0)).send();
 		}
 	}
@@ -122,6 +135,31 @@ public class MailSendResultTest {
 				assertFalse(Mail.sendPasswordReset(user(), "code"));
 			}
 		}
+	}
+
+	/** One address whose size() answers once and then throws, so only a call after send() can fail. */
+	private static Collection<String> sizeWorksOnce(String address) {
+		return new AbstractCollection<String>() {
+			private int sizeCalls;
+
+			@Override
+			public boolean isEmpty() {
+				return false;
+			}
+
+			@Override
+			public int size() {
+				if (++sizeCalls > 1) {
+					throw new IllegalStateException("synthetic failure after the first size()");
+				}
+				return 1;
+			}
+
+			@Override
+			public Iterator<String> iterator() {
+				return List.of(address).iterator();
+			}
+		};
 	}
 
 	private static MockedConstruction<SimpleEmail> refusingEmails() {

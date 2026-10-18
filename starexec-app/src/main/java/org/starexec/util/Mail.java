@@ -60,8 +60,11 @@ public class Mail {
 				return false;
 			}
 			
-			log.info("Sending email to " + to.size() + " recipient(s)");
-			
+			// Counted once, before sending: a collection call after send() could throw and turn an
+			// accepted message into a reported failure.
+			final int recipients = to.size();
+			log.info("Sending email to " + recipients + " recipient(s)");
+
 			try {
 				// Try to send using normal SMTP with fast timeouts
 				final Email email = new SimpleEmail();
@@ -87,7 +90,7 @@ public class Mail {
 				}
 
 				email.send();
-				log.info("Email sent successfully to " + to.size() + " recipient(s)");
+				log.info("Email sent successfully to " + recipients + " recipient(s)");
 				return true;
 			} catch (Exception e) {
 				// Transport failures can echo recipients; omit exception details.
