@@ -227,6 +227,11 @@ public class UploadSolver extends HttpServlet {
 		log.info("handleSolver begins");
 
 		File sandboxDir = null;
+		// The directories this upload creates for the solver. Unless the solver is added, they are
+		// deleted however the upload ends, so that a failed upload leaves no files behind (#275).
+		File solverDir = null;
+		File srcDir = null;
+		boolean added = false;
 
 		try {
 			sandboxDir = Util.getRandomSandboxDirectory();
@@ -260,12 +265,11 @@ public class UploadSolver extends HttpServlet {
 			log.info("Handling upload of solver " + newSolver.getName());
 
 			//Set up the unique directory to store the solver
-			File uniqueDir = Solvers.solverDirectory(
-					new File(R.getSolverPath()), userId, newSolver.getName(), shortDate.format(new Date()));
+			solverDir = Solvers.claimNewDirectory(Solvers.solverDirectory(
+					new File(R.getSolverPath()), userId, newSolver.getName(), shortDate.format(new Date())));
+			File uniqueDir = solverDir;
 
 			newSolver.setPath(uniqueDir.getAbsolutePath());
-
-			uniqueDir.mkdirs();
 
 			//Process the archive file and extract
 			File archiveFile = null;
@@ -288,6 +292,10 @@ public class UploadSolver extends HttpServlet {
 			long fileSize = ArchiveUtil.getArchiveSize(archiveFile.getAbsolutePath());
 
 			User currentUser = Users.get(userId);
+			if (currentUser == null) {
+				// Deleted while the archive was on its way, or unreadable.
+				throw new IllegalStateException("Could not find the user uploading this solver");
+			}
 			long allowedBytes = currentUser.getDiskQuota();
 			long usedBytes = currentUser.getDiskUsage();
 
@@ -312,7 +320,6 @@ public class UploadSolver extends HttpServlet {
 			if (!extracted) {
 				log.warn("Error extracting the new solver archive");
 				FileUtils.deleteDirectory(sandboxDir);
-				FileUtils.deleteDirectory(uniqueDir);
 				FileUtils.deleteQuietly(archiveFile);
 				return new UploadSolverResult(UploadSolverStatus.EXTRACTING_ERROR, -1, false, false);
 			}
@@ -323,9 +330,9 @@ public class UploadSolver extends HttpServlet {
 				newSolver.setBuildStatus(status);
 
 				isBuildJob = true;
-				uniqueDir = new File(newSolver.getPath() + "_src");
+				srcDir = Solvers.claimSourceDirectory(solverDir);
+				uniqueDir = srcDir;
 				newSolver.setPath(uniqueDir.getAbsolutePath());
-				uniqueDir.mkdirs();
 			} else {
 				SolverBuildStatus status = new SolverBuildStatus();
 				status.setCode(1);
@@ -338,7 +345,6 @@ public class UploadSolver extends HttpServlet {
 			if (files == null) {
 				log.error("Unable to list files in sandbox directory: " + sandboxDir.getAbsolutePath());
 				FileUtils.deleteDirectory(sandboxDir);
-				FileUtils.deleteDirectory(uniqueDir);
 				return new UploadSolverResult(UploadSolverStatus.EXTRACTING_ERROR, -1, false, isBuildJob);
 			}
 
@@ -390,6 +396,7 @@ public class UploadSolver extends HttpServlet {
 
 			newSolver.setType(ExecutableType.valueOf(Integer.parseInt((String) form.get(SOLVER_TYPE))));
 			int solverId = Solvers.add(newSolver, spaceId);
+			added = true;
 
 			UploadSolverStatus status = UploadSolverStatus.SUCCESS;
 			UploadSolverResult result = new UploadSolverResult(status, solverId, hadConfigs, isBuildJob);
@@ -406,6 +413,9 @@ public class UploadSolver extends HttpServlet {
 
 			return result;
 		} finally {
+			if (!added) {
+				Solvers.deleteDirectoriesOfUnaddedSolver(userId, solverDir, srcDir);
+			}
 			try {
 				if (sandboxDir != null) {
 					FileUtils.deleteDirectory(sandboxDir);

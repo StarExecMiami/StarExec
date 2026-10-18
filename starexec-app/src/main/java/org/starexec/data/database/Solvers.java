@@ -19,6 +19,12 @@ import org.starexec.util.Validator;
 import org.postgresql.util.PSQLException;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.sql.*;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
@@ -41,33 +47,35 @@ public class Solvers {
 	 *
 	 * @param s the Solver to be added
 	 * @param spaceId the ID of the space we associate this solver with
-	 * @return The solverID of the new solver, or -1 on failure
+	 * @return The solverID of the new solver
+	 * @throws SQLException if any insert fails, in which case none of them is committed
 	 * @author Skylar Stark
 	 */
 	public static int add(Solver s, int spaceId) throws SQLException {
-		// final String methodName = "add";
-		Connection con = null;
-		PreparedStatement procedure = null;
-		ResultSet results = null;
-		try {
-			con = Common.getConnection();
-			long diskUsage = FileUtils.sizeOf(new File(s.getPath()));
-			s.setDiskSize(diskUsage);
-			// Add the solver
-			procedure = con.prepareStatement("SELECT AddSolver(?, ?, ?, ?, ?, ?, ?, ?)");
-			procedure.setInt(1, s.getUserId());
-			procedure.setString(2, s.getName());
-			procedure.setBoolean(3, s.isDownloadable());
-			procedure.setString(4, s.getPath());
-			procedure.setString(5, s.getDescription());
-			procedure.setLong(6, diskUsage);
-			procedure.setInt(7, s.getType().getVal());
-			procedure.setInt(8, s.buildStatus().getCode().getVal());
-			results = procedure.executeQuery();
-
+		long diskUsage = FileUtils.sizeOf(new File(s.getPath()));
+		s.setDiskSize(diskUsage);
+		// One transaction. These statements used to commit one by one, so a failed space
+		// association or configuration left the solver row, and the disk usage AddSolver
+		// charged to its owner, committed without it (#275). inTransaction, unlike
+		// endTransaction, reports a failed commit, and it returns the connection to the pool
+		// with auto-commit restored.
+		return Common.inTransaction(con -> {
 			int solverId = -1;
-			if (results.next()) {
-				solverId = results.getInt(1);
+			// Add the solver
+			try (PreparedStatement procedure = con.prepareStatement("SELECT AddSolver(?, ?, ?, ?, ?, ?, ?, ?)")) {
+				procedure.setInt(1, s.getUserId());
+				procedure.setString(2, s.getName());
+				procedure.setBoolean(3, s.isDownloadable());
+				procedure.setString(4, s.getPath());
+				procedure.setString(5, s.getDescription());
+				procedure.setLong(6, diskUsage);
+				procedure.setInt(7, s.getType().getVal());
+				procedure.setInt(8, s.buildStatus().getCode().getVal());
+				try (ResultSet results = procedure.executeQuery()) {
+					if (results.next()) {
+						solverId = results.getInt(1);
+					}
+				}
 			}
 
 			// Associate the solver with the given space
@@ -78,12 +86,109 @@ public class Solvers {
 				c.setSolverId(solverId);
 				addConfiguration(con, c);
 			}
-
 			return solverId;
-		} finally {
-			Common.safeClose(con);
-			Common.safeClose(procedure);
-			Common.safeClose(results);
+		});
+	}
+
+	/** How many suffixed names claimNewDirectory tries after the one it was given. */
+	static final int MAX_DIRECTORY_SUFFIX = 100;
+
+	/**
+	 * Creates a new, empty directory that belongs to one solver upload or copy, creating its
+	 * parents as needed. A directory that already exists is never reused: then dir-1, dir-2, ...
+	 * are tried. Solver directories are named by the time to the millisecond, so two uploads of
+	 * one solver name by one user can be given the same name. Sharing it would mix their files,
+	 * and the one that failed would delete the other's when it cleaned up.
+	 *
+	 * @param dir the directory to create
+	 * @return the directory created: dir, or dir with a suffix
+	 * @throws IOException if no directory could be created
+	 */
+	public static File claimNewDirectory(File dir) throws IOException {
+		Files.createDirectories(dir.toPath().getParent());
+		for (int suffix = 0; ; suffix++) {
+			File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
+			try {
+				Files.createDirectory(candidate.toPath());
+				return candidate;
+			} catch (FileAlreadyExistsException e) {
+				if (suffix == MAX_DIRECTORY_SUFFIX) {
+					throw e;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Creates the directory where a solver that is built on StarExec keeps its sources: the
+	 * solver's directory with "_src" appended, which is where the rest of StarExec looks for it.
+	 * It must not exist yet, for the same reason as in {@link #claimNewDirectory}.
+	 *
+	 * @param solverDir a directory returned by {@link #claimNewDirectory}
+	 * @return the directory created
+	 * @throws IOException if it exists already or cannot be created
+	 */
+	public static File claimSourceDirectory(File solverDir) throws IOException {
+		return Files.createDirectory(Path.of(solverDir.getPath() + "_src")).toFile();
+	}
+
+	/**
+	 * Deletes the directories that an upload or copy claimed for a solver it did not add, so
+	 * that a failed upload leaves no files behind (#275). Never throws, so it cannot replace the
+	 * exception that caused the cleanup.
+	 *
+	 * <p>If the owner no longer exists, a user deletion ran during the upload. It removed the
+	 * owner's whole solver directory, and the upload may have created the directories above its
+	 * own again. Those are then deleted too, while empty. For an owner who still exists they are
+	 * left alone, as before.
+	 *
+	 * @param ownerId the user the solver was being added for
+	 * @param claimed directories returned by {@link #claimNewDirectory}; null entries are skipped
+	 */
+	public static void deleteDirectoriesOfUnaddedSolver(int ownerId, File... claimed) {
+		try {
+			boolean any = false;
+			for (File dir : claimed) {
+				if (dir == null) {
+					continue;
+				}
+				any = true;
+				if (!Util.safeDeleteDirectory(dir.getAbsolutePath())) {
+					log.warn("Could not delete the directory of a solver that was not added: " + dir);
+				}
+			}
+			if (!any || Users.get(ownerId) != null) {
+				return;
+			}
+			Path root = new File(R.getSolverPath()).toPath().toAbsolutePath().normalize();
+			for (File dir : claimed) {
+				if (dir != null) {
+					deleteEmptyParents(root, dir.toPath().toAbsolutePath().normalize());
+				}
+			}
+		} catch (RuntimeException e) {
+			log.warn("Could not clean up after a solver that was not added", e);
+		}
+	}
+
+	/**
+	 * Deletes the parents of dir, nearest first, while they are empty and strictly inside root.
+	 * Only an empty directory can be deleted this way, so nothing else is ever removed.
+	 */
+	static void deleteEmptyParents(Path root, Path dir) {
+		for (Path parent = dir.getParent();
+		     parent != null && parent.startsWith(root) && !parent.equals(root);
+		     parent = parent.getParent()) {
+			try {
+				Files.delete(parent);
+			} catch (NoSuchFileException e) {
+				// Already gone; the one above may still be empty.
+			} catch (DirectoryNotEmptyException e) {
+				return;
+			} catch (IOException e) {
+				log.warn("Could not delete the empty directory " + parent, e);
+				return;
+			}
 		}
 	}
 
@@ -473,11 +578,14 @@ public class Solvers {
 		newSolver.setDownloadable(s.isDownloadable());
 		newSolver.setType(s.getType());
 		newSolver.setBuildStatus(s.buildStatus());
+		File uniqueDir = null;
+		File newSrcDir = null;
+		boolean added = false;
 		try {
 			File solverDirectory = new File(s.getPath());
 			String date = shortDate.format(new Date());
-			File uniqueDir = solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date);
-			uniqueDir.mkdirs();
+			uniqueDir = claimNewDirectory(
+					solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date));
 			newSolver.setPath(uniqueDir.getAbsolutePath());
 
 			//we need to check if the solver has a src dir. If it does, we also need to 
@@ -486,8 +594,7 @@ public class Solvers {
 			boolean hasSrc = maybeSrc.exists();
 			if (hasSrc) {
 				File originalSrcDir = maybeSrc;
-				File newSrcDir = new File(uniqueDir.getAbsolutePath() + "_src");
-				newSrcDir.mkdirs();
+				newSrcDir = claimSourceDirectory(uniqueDir);
 				FileUtils.copyDirectory(originalSrcDir, newSrcDir);
 			}
 			
@@ -495,10 +602,16 @@ public class Solvers {
 			for (Configuration c : findConfigs(uniqueDir.getAbsolutePath())) {
 				newSolver.addConfiguration(c);
 			}
-			return Solvers.add(newSolver, spaceId);
+			int newSolverId = Solvers.add(newSolver, spaceId);
+			added = true;
+			return newSolverId;
 		} catch (Exception e) {
 			log.error(methodName, e.getMessage(), e);
 			return -1;
+		} finally {
+			if (!added) {
+				deleteDirectoriesOfUnaddedSolver(userId, uniqueDir, newSrcDir);
+			}
 		}
 	}
 
