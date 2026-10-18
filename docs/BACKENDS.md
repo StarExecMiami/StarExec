@@ -456,7 +456,52 @@ For local execution, follow the repository's CPU-pinning guidance: exclude
 logical CPU 0, use exactly one logical CPU per physical core, and derive
 concurrency from the selected core list. For Kubernetes, keep
 `STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` unless you have workload-specific
-validation that relaxing it preserves benchmark integrity.
+validation that relaxing it preserves benchmark integrity, and check the worker
+nodes as described below: on Kubernetes the isolation comes from the kubelet,
+not from StarExec.
+
+#### What Kubernetes needs for exclusive cores
+
+StarExec controls the pod. Job pods request exactly their limits, so they are
+in the `Guaranteed` QoS class, and with
+`STAREXEC_K8S_STRICT_ONE_PAIR_PER_CPU=true` StarExec refuses a
+`STAREXEC_K8S_CPU_LIMIT` that is not a whole number of CPUs. The kubelet on each
+worker decides the rest
+([Kubernetes: node resource managers](https://kubernetes.io/docs/concepts/resource-management/resource-managers/)).
+StarExec does not check it: reading a kubelet's configuration needs the
+`nodes/proxy` permission, which the chart does not grant.
+
+- **`cpuManagerPolicy: static`.** Only then does a container of a `Guaranteed`
+  pod with an integer CPU request get exclusive CPUs. Under the default `none`
+  policy its limit is enforced with a CFS quota, and it runs on every CPU of
+  the node, alongside other pods. The static policy also requires a CPU
+  reservation (`reservedSystemCPUs`, `kubeReserved` or `systemReserved`).
+- **`cpuManagerPolicyOptions: {full-pcpus-only: "true"}`, or SMT turned off.**
+  Without it, on an SMT machine the static policy can give two containers the
+  two hardware threads of one physical core. With it, the kubelet admits a pod
+  only if its CPUs fill whole physical cores, and fails any other pod with
+  `SMTAlignmentError`. `STAREXEC_K8S_CPU_LIMIT` must then be a multiple of the
+  threads per core, typically 2 on x86 machines with SMT on.
+
+Changing the policy of a node means draining it and removing the kubelet's
+`cpu_manager_state` file; follow
+[Changing the CPU Manager Policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#changing-the-cpu-manager-policy).
+
+To check a node, read the configuration its kubelet is running with. This
+needs `nodes/proxy` access, which a cluster administrator has:
+
+```bash
+kubectl get --raw "/api/v1/nodes/<node>/proxy/configz" \
+  | jq '.kubeletconfig | {cpuManagerPolicy, cpuManagerPolicyOptions, reservedSystemCPUs, kubeReserved, systemReserved}'
+```
+
+To check a run, read the pairs' job logs. Each log records the CPUs its pod was
+allowed to use, in the message
+`Container mode: using the CPUs this container is allowed: <list>`. Pairs that
+ran at the same time on one node must show disjoint lists, and with SMT on,
+each list must hold whole cores: compare it with
+`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list` on the node.
+Under the `none` policy, every list is the node's full CPU set.
 
 ### Configuration
 

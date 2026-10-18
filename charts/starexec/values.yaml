@@ -179,10 +179,12 @@ kubernetes:
   workerSelectorKey: "starexec.org/worker"
   workerSelectorValue: "true"
 
-  # Academic reproducibility mode:
-  # requests one Kubernetes CPU per job pair to reduce oversubscription.
-  # Physical-core exclusivity still depends on cluster/node CPU-manager and
-  # SMT configuration outside this chart.
+  # Academic reproducibility mode: refuse a fractional resources.limits.cpu,
+  # so that job pods (always Guaranteed: requests = limits) can be given
+  # exclusive CPUs. It pins nothing itself. Exclusive CPUs need the kubelet's
+  # static CPU manager policy on every worker, and whole physical cores also
+  # need its full-pcpus-only option or SMT off; this chart cannot set either.
+  # See "What Kubernetes needs for exclusive cores" in docs/BACKENDS.md.
   strictOnePairPerCpu: true
 
   # Job lifecycle management
