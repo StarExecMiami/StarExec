@@ -771,15 +771,15 @@ function initUI() {
 
 		$("#spaceOverviewUpdate")
 		.click(function() {
-			updateSpaceOverviewGraph();
+			updateSpaceOverviewGraph(true);
 		});
 		$("#solverComparisonUpdate")
 		.click(function() {
-			updateSolverComparison(300, "white");
+			updateSolverComparison(300, "white", true);
 		});
 		$("#pairTimeUpdate")
 		.click(function() {
-			updatePairJobTimeGraph();
+			updatePairJobTimeGraph(true);
 		});
 
 		if (star.isUserSubscribedToJob !== undefined) {
@@ -1176,13 +1176,17 @@ function parseGraphResponse(text) {
 }
 
 // An HTTP error never reaches the success callback, which left the previous chart up.
-function onGraphRequestError(clearGraph) {
+// Only a graph the user asked for (announce) says why it is missing: the page also draws the
+// solver comparison by itself whenever its statistics load, and that draw must stay silent.
+function onGraphRequestError(clearGraph, announce) {
 	return function(xhr, textStatus) {
 		if (textStatus === "abort") {
 			return;
 		}
 		clearGraph();
-		showMessage("error", "The graph could not be drawn (HTTP " + xhr.status + ").", 5000);
+		if (announce) {
+			showMessage("error", "The graph could not be drawn (HTTP " + xhr.status + ").", 5000);
+		}
 	};
 }
 
@@ -1200,7 +1204,8 @@ function clearSolverComparison() {
 	$("#solverComparisonMap300, #solverComparisonMap800").remove();
 }
 
-function updatePairJobTimeGraph() {
+// announce: true when the user pressed Update, so that a graph that cannot be drawn says why.
+function updatePairJobTimeGraph(announce) {
 	var postUrl = null;
 
 	if(DETAILS_JOB.isAnonymousPage) {
@@ -1214,7 +1219,7 @@ function updatePairJobTimeGraph() {
 			postUrl,
 			{},
 			function(returnCode) {
-				var s = parseReturnCode(parseGraphResponse(returnCode));
+				var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 				if(s) {
 					$("#pairTimeGraph").attr("src", returnCode);
 					$("#bigPairTimeGraph").attr("src", returnCode + "800");
@@ -1224,12 +1229,13 @@ function updatePairJobTimeGraph() {
 			},
 			"text"
 		);
-		xhr.fail(onGraphRequestError(clearPairTimeGraph));
+		xhr.fail(onGraphRequestError(clearPairTimeGraph, announce === true));
 		openAjaxRequests.push(xhr);
 }
 
 
-function updateSpaceOverviewGraph() {
+// announce: true when the user pressed Update, so that a graph that cannot be drawn says why.
+function updateSpaceOverviewGraph(announce) {
 	var configs = [];
 	var logY = false;
 	$("#spaceOverviewSelections option:selected").each(function() {
@@ -1252,7 +1258,7 @@ function updateSpaceOverviewGraph() {
 		postUrl,
 		{logY: logY, selectedIds: configs},
 		function(returnCode) {
-			var s = parseReturnCode(parseGraphResponse(returnCode));
+			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
 				var currentConfigs = [];
 				$("#spaceOverviewSelections option:selected").each(function() {
@@ -1271,12 +1277,13 @@ function updateSpaceOverviewGraph() {
 		},
 		"text"
 	);
-	xhr.fail(onGraphRequestError(clearSpaceOverviewGraph));
+	xhr.fail(onGraphRequestError(clearSpaceOverviewGraph, announce === true));
 	openAjaxRequests.push(xhr);
 }
 
-//size is in pixels and color is a string
-function updateSolverComparison(size, color) {
+//size is in pixels and color is a string. announce: true when the user pressed Update, so that a
+//comparison that cannot be drawn says why; the draw that follows each statistics load passes nothing.
+function updateSolverComparison(size, color, announce) {
 	var config1 = $("#solverChoice1 option:selected").attr("value");
 	var config2 = $("#solverChoice2 option:selected").attr("value");
 
@@ -1292,7 +1299,7 @@ function updateSolverComparison(size, color) {
 		postUrl,
 		{},
 		function(returnCode) {
-			var s = parseReturnCode(parseGraphResponse(returnCode));
+			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
 				var jsonObject = $.parseJSON(returnCode);
 				var src = jsonObject.src;
@@ -1303,7 +1310,7 @@ function updateSolverComparison(size, color) {
 					$("#dialog-solverComparison").append(map);
 				} else {
 					$("#graphField").append(map);
-					updateSolverComparison(800, "black");
+					updateSolverComparison(800, "black", announce);
 				}
 			} else {
 				clearSolverComparison();
@@ -1312,7 +1319,7 @@ function updateSolverComparison(size, color) {
 		"text"
 	);
 
-	xhr.fail(onGraphRequestError(clearSolverComparison));
+	xhr.fail(onGraphRequestError(clearSolverComparison, announce === true));
 	openAjaxRequests.push(xhr);
 }
 
