@@ -1806,7 +1806,7 @@ public class Util {
     }
 
     /** How many suffixed names {@link #claimNewDirectory} tries after the one it was given. */
-    static final int MAX_DIRECTORY_SUFFIX = 100;
+    public static final int MAX_DIRECTORY_SUFFIX = 100;
 
     /**
      * Creates a new, empty directory that belongs to one upload or copy, creating its parents as
