@@ -13,6 +13,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -1802,6 +1803,35 @@ public class Util {
     /** {@link #pathDate()} for the given time. */
     static String pathDate(LocalDateTime time) {
         return PATH_DATE.format(time);
+    }
+
+    /** How many suffixed names {@link #claimNewDirectory} tries after the one it was given. */
+    static final int MAX_DIRECTORY_SUFFIX = 100;
+
+    /**
+     * Creates a new, empty directory that belongs to one upload or copy, creating its parents as
+     * needed. A directory that already exists is never reused: then dir-1, dir-2, ... are tried.
+     * These directories are named by the time to the millisecond, so two uploads by one user can be
+     * given the same name. Sharing it would mix their files, and the first to clean up would delete
+     * the other's.
+     *
+     * @param dir the directory to create
+     * @return the directory created: dir, or dir with a suffix
+     * @throws IOException if no directory could be created
+     */
+    public static File claimNewDirectory(File dir) throws IOException {
+        Files.createDirectories(dir.toPath().getParent());
+        for (int suffix = 0; ; suffix++) {
+            File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
+            try {
+                Files.createDirectory(candidate.toPath());
+                return candidate;
+            } catch (FileAlreadyExistsException e) {
+                if (suffix == MAX_DIRECTORY_SUFFIX) {
+                    throw e;
+                }
+            }
+        }
     }
 
     /**

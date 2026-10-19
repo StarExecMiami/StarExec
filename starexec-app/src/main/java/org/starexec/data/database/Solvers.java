@@ -21,7 +21,6 @@ import org.postgresql.util.PSQLException;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -86,41 +85,12 @@ public class Solvers {
 		});
 	}
 
-	/** How many suffixed names claimNewDirectory tries after the one it was given. */
-	static final int MAX_DIRECTORY_SUFFIX = 100;
-
-	/**
-	 * Creates a new, empty directory that belongs to one solver upload or copy, creating its
-	 * parents as needed. A directory that already exists is never reused: then dir-1, dir-2, ...
-	 * are tried. Solver directories are named by the time to the millisecond, so two uploads of
-	 * one solver name by one user can be given the same name. Sharing it would mix their files,
-	 * and the one that failed would delete the other's when it cleaned up.
-	 *
-	 * @param dir the directory to create
-	 * @return the directory created: dir, or dir with a suffix
-	 * @throws IOException if no directory could be created
-	 */
-	public static File claimNewDirectory(File dir) throws IOException {
-		Files.createDirectories(dir.toPath().getParent());
-		for (int suffix = 0; ; suffix++) {
-			File candidate = suffix == 0 ? dir : new File(dir.getPath() + "-" + suffix);
-			try {
-				Files.createDirectory(candidate.toPath());
-				return candidate;
-			} catch (FileAlreadyExistsException e) {
-				if (suffix == MAX_DIRECTORY_SUFFIX) {
-					throw e;
-				}
-			}
-		}
-	}
-
 	/**
 	 * Creates the directory where a solver that is built on StarExec keeps its sources: the
 	 * solver's directory with "_src" appended, which is where the rest of StarExec looks for it.
-	 * It must not exist yet, for the same reason as in {@link #claimNewDirectory}.
+	 * It must not exist yet, for the same reason as in {@link Util#claimNewDirectory}.
 	 *
-	 * @param solverDir a directory returned by {@link #claimNewDirectory}
+	 * @param solverDir a directory returned by {@link Util#claimNewDirectory}
 	 * @return the directory created
 	 * @throws IOException if it exists already or cannot be created
 	 */
@@ -139,7 +109,7 @@ public class Solvers {
 	 * left alone, as before.
 	 *
 	 * @param ownerId the user the solver was being added for
-	 * @param claimed directories returned by {@link #claimNewDirectory}; null entries are skipped
+	 * @param claimed directories returned by {@link Util#claimNewDirectory}; null entries are skipped
 	 */
 	public static void deleteDirectoriesOfUnaddedSolver(int ownerId, File... claimed) {
 		try {
@@ -580,7 +550,7 @@ public class Solvers {
 		try {
 			File solverDirectory = new File(s.getPath());
 			String date = Util.pathDate();
-			uniqueDir = claimNewDirectory(
+			uniqueDir = Util.claimNewDirectory(
 					solverDirectory(new File(R.getSolverPath()), userId, newSolver.getName(), date));
 			newSolver.setPath(uniqueDir.getAbsolutePath());
 
