@@ -1175,12 +1175,26 @@ function parseGraphResponse(text) {
 	return text;
 }
 
+// Nothing aborts a graph request when the user asks for the same graph again, so two can be in
+// flight and the older one can answer last. Only the latest request for a graph may draw it, clear
+// it or say why it could not be drawn: an older answer would replace or clear the newer chart.
+var latestGraphRequests = {};
+
+// Starts a request for graph; the function returned tells whether it is still the latest one.
+function startGraphRequest(graph) {
+	var request = (latestGraphRequests[graph] || 0) + 1;
+	latestGraphRequests[graph] = request;
+	return function() {
+		return latestGraphRequests[graph] === request;
+	};
+}
+
 // An HTTP error never reaches the success callback, which left the previous chart up.
 // Only a graph the user asked for (announce) says why it is missing: the page also draws the
 // solver comparison by itself whenever its statistics load, and that draw must stay silent.
-function onGraphRequestError(clearGraph, announce) {
+function onGraphRequestError(isLatest, clearGraph, announce) {
 	return function(xhr, textStatus) {
-		if (textStatus === "abort") {
+		if (textStatus === "abort" || !isLatest()) {
 			return;
 		}
 		clearGraph();
@@ -1215,10 +1229,14 @@ function updatePairJobTimeGraph(announce) {
 	}
 	log('updatePairJobTimeGraph postUrl: ' + postUrl);
 
+	var isLatest = startGraphRequest("pairTime");
 	var xhr = $.post(
 			postUrl,
 			{},
 			function(returnCode) {
+				if (!isLatest()) {
+					return;
+				}
 				var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 				if(s) {
 					$("#pairTimeGraph").attr("src", returnCode);
@@ -1229,7 +1247,7 @@ function updatePairJobTimeGraph(announce) {
 			},
 			"text"
 		);
-		xhr.fail(onGraphRequestError(clearPairTimeGraph, announce === true));
+		xhr.fail(onGraphRequestError(isLatest, clearPairTimeGraph, announce === true));
 		openAjaxRequests.push(xhr);
 }
 
@@ -1254,10 +1272,14 @@ function updateSpaceOverviewGraph(announce) {
 	}
 	log('updateSpaceOverviewGraph postUrl: ' + postUrl);
 
+	var isLatest = startGraphRequest("spaceOverview");
 	var xhr = $.post(
 		postUrl,
 		{logY: logY, selectedIds: configs},
 		function(returnCode) {
+			if (!isLatest()) {
+				return;
+			}
 			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
 				var currentConfigs = [];
@@ -1277,13 +1299,15 @@ function updateSpaceOverviewGraph(announce) {
 		},
 		"text"
 	);
-	xhr.fail(onGraphRequestError(clearSpaceOverviewGraph, announce === true));
+	xhr.fail(onGraphRequestError(isLatest, clearSpaceOverviewGraph, announce === true));
 	openAjaxRequests.push(xhr);
 }
 
 //size is in pixels and color is a string. announce: true when the user pressed Update, so that a
 //comparison that cannot be drawn says why; the draw that follows each statistics load passes nothing.
-function updateSolverComparison(size, color, announce) {
+//isLatest: passed only by the small chart's request for the large one, which belongs to its request.
+function updateSolverComparison(size, color, announce, isLatest) {
+	isLatest = isLatest || startGraphRequest("solverComparison");
 	var config1 = $("#solverChoice1 option:selected").attr("value");
 	var config2 = $("#solverChoice2 option:selected").attr("value");
 
@@ -1299,6 +1323,9 @@ function updateSolverComparison(size, color, announce) {
 		postUrl,
 		{},
 		function(returnCode) {
+			if (!isLatest()) {
+				return;
+			}
 			var s = parseReturnCode(parseGraphResponse(returnCode), announce === true);
 			if (s) {
 				var jsonObject = $.parseJSON(returnCode);
@@ -1310,7 +1337,7 @@ function updateSolverComparison(size, color, announce) {
 					$("#dialog-solverComparison").append(map);
 				} else {
 					$("#graphField").append(map);
-					updateSolverComparison(800, "black", announce);
+					updateSolverComparison(800, "black", announce, isLatest);
 				}
 			} else {
 				clearSolverComparison();
@@ -1319,7 +1346,7 @@ function updateSolverComparison(size, color, announce) {
 		"text"
 	);
 
-	xhr.fail(onGraphRequestError(clearSolverComparison, announce === true));
+	xhr.fail(onGraphRequestError(isLatest, clearSolverComparison, announce === true));
 	openAjaxRequests.push(xhr);
 }
 
